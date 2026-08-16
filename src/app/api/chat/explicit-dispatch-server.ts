@@ -550,15 +550,18 @@ export async function serverSideExplicitDispatch(input: {
     // A chat-started run may PARK before it dispatches: the server evaluates
     // the run-start recommendation hold, and a held run stays `pending_input`
     // with nothing queued behind it. Saying "the agent is running" there is
-    // simply false, and it is the line that would send the reader off to wait
-    // for progress that cannot arrive until they decide. The card is already in
-    // this conversation — the run card above this text draws the recommendation
-    // card and carries its Confirm and Skip — so the text points AT the card
-    // rather than describing a run.
+    // simply false.
+    //
+    // The text also does NOT direct the reader anywhere. THE CARD IS THE
+    // AFFORDANCE: this same assistant turn carries the §V recommendation card,
+    // with its own Confirm and Skip, on the `chat_thread` host. A sentence that
+    // sent the reader to another surface would be a pointer standing in for an
+    // implementation, which is the very thing this slice exists to remove. So
+    // the line states the run's condition and stops.
     const heldForRecommendation = status === "pending_input";
     send("text", {
       content: heldForRecommendation
-        ? `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The run is paused for your decision — confirm or skip the recommended skills on the run card above, and it starts.`
+        ? `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The run is paused for your decision on the recommended skills.`
         : `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The agent is running — I'll keep polling for its progress.`,
     });
 

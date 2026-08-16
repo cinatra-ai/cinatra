@@ -53,6 +53,7 @@ import { AppRouteLink } from "./app-route-link";
 import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
+import { RecommendationHoldCard } from "@cinatra-ai/agents/client-entry";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -246,6 +247,38 @@ function OrderedPartsSection({
         if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
           return (
             <div key={`agent-run-${part.runId}`}>
+              {/* THE §V RECOMMENDATION HOLD, ON THE chat_thread HOST.
+                  A chat-started run can PARK on the run-start recommendation
+                  hold, and the decision belongs where the person is: in the
+                  conversation. This mounts the ONE §V renderer
+                  (`RecommendationHoldCard`, which composes the chip row) keyed
+                  by the server-produced `agent_run` tool-result runId, under
+                  the outer `chat_thread` LifecycleCardSurfaceProvider this view
+                  already declares. It resolves through the card's own
+                  cookie-bound state action.
+
+                  A SIBLING of the inline run panel, never a child of it. The
+                  panel is the separate `run_card` host and mounts its own copy;
+                  nesting these would put one card inside another host's subtree
+                  and make "which host drew it" unanswerable.
+
+                  NOT a DATA_PART and NOT registered in `renderable-views`: a
+                  registry entry would create a second dispatch path for the
+                  same interaction and would reach the shared widget transcript,
+                  which this host is not authorized to decide on.
+
+                  Mounted for every `agent_run` part rather than gated on the
+                  tool result's status, exactly as the run panel mounts it: the
+                  card self-gates (no live hold ⇒ it renders nothing), which is
+                  also what makes it survive a transcript reload and what lets
+                  it settle IN PLACE into its confirmed/skipped summary after a
+                  decision instead of disappearing. */}
+              <div
+                data-chat-thread-recommendation-hold=""
+                data-run-id={part.runId}
+              >
+                <RecommendationHoldCard runId={part.runId} wireRef={null} />
+              </div>
               <InlineAgentRunCard
                 runId={part.runId}
                 onActiveGateChange={onActiveGateChange}

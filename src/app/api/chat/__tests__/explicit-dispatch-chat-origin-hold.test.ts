@@ -5,7 +5,7 @@
  * made, because every dispatch it made really did queue a run. A chat-started
  * run can now PAUSE on the run-start recommendation hold instead: the primitive
  * leaves it `pending_input`, with nothing queued behind it, waiting for a person
- * to confirm or skip the recommended skills.
+ * and states the run's condition without routing the reader anywhere.
  *
  * On that path the old sentence is simply false, and it is the sentence that
  * would send the reader off to wait for progress that cannot arrive until they
@@ -112,15 +112,31 @@ afterEach(() => {
 });
 
 describe("a held dispatch does not claim the agent is running", () => {
-  it("drops the running sentence and points at the card the reader must act on", async () => {
+  it("drops the running sentence and states the run's condition", async () => {
     const { text } = await dispatchWithStatus("pending_input");
 
     expect(text).not.toContain("The agent is running");
     expect(text).not.toContain("keep polling");
     expect(text).toMatch(/paused/i);
-    // The next action is named, and it is the one the card actually offers.
-    expect(text).toMatch(/confirm/i);
-    expect(text).toMatch(/skip/i);
+  });
+
+  it("points the reader at NO other surface — the card in this turn is the affordance", async () => {
+    // A sentence that sends the reader to the run card, the Agents page or any
+    // link is a pointer standing in for an implementation. The §V card rides
+    // this same assistant turn, so the text must not route anywhere.
+    const { text } = await dispatchWithStatus("pending_input");
+
+    for (const pointer of [
+      "run card",
+      "Agents page",
+      "above",
+      "below",
+      "open the run",
+      "/agents/",
+      "http",
+    ]) {
+      expect(text.toLowerCase()).not.toContain(pointer.toLowerCase());
+    }
   });
 
   it("still carries the run id and the honest status on the wire", async () => {

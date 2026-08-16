@@ -1,109 +1,142 @@
-# chat-hitl S9b — the chat-origin recommendation hold, photographed
+# chat-hitl S9b — the §V recommendation hold, decided inside the conversation
 
-Captured 2026-08-16 on the DEVELOPMENT RUNTIME against this branch's own worktree.
+Captured 2026-08-16 on the DEVELOPMENT RUNTIME, against this branch, on the real
+application. These four cells REPLACE the earlier round's captures.
 
-## The runtime, said first, because the capture rule turns on it
+## Correction to the previous round, stated first
 
-This is a **DEV-RUNTIME round**, and it is labelled as one on every cell below.
-`pnpm dev` (Next.js 16.2.10, Turbopack), `CINATRA_RUNTIME_MODE=development`,
-`NODE_ENV != production`, `CINATRA_TEST_LLM_PROVIDER=scripted`.
+The earlier round photographed the §V card on the run page and bridged the
+conversation with a sentence. That was wrong, and the reason is not that the
+capture was driven badly.
 
-That follows the standing rule for this program unchanged: production-build
-screenshots for deterministic and card-fixture cells, explicitly labelled
-development-runtime screenshots for **dispatch-dependent** cells. This cell is
-dispatch-dependent by construction — it needs a real chat turn to create a real
-run — and the two fences that make a production build and an LLM-backed dispatch
-mutually exclusive (`assertScriptedProviderNotProduction`, and
-`lifecycleSeedEnvVerdict` FENCE 1a answering 404 on `NODE_ENV === "production"`)
-were **not weakened**. Neither fence was touched by this branch.
+**The slice set as filed contradicted itself.** This slice's acceptance demanded
+the card in the conversation while the epic's host-ownership table assigned the
+§V `chat_thread` mount to a later slice. The branch followed the table: it built
+the hold, left the card on the run surface, and pointed at it in prose. The owner
+has since ruled the chat mount into THIS slice, and this round implements it.
 
-## The stack, and what it was not
+Two earlier claims are withdrawn:
 
-A throwaway, fully isolated Compose project: **`s9b2786cap`**, Postgres on
-`127.0.0.1:55432`, Redis on `127.0.0.1:56379`, its own volumes and network, and
-a dev server on port **3100** with its own BullMQ queue name
-(`cinatra-s9b2786cap-jobs`). The operator's `cinatra_cinatra` project was never
-started, stopped, written to, or read from. The stack was destroyed after the
-capture (containers, volumes, network).
+- **"The recommendation card has no chat_thread mount in this build"** — withdrawn.
+  There was no mount because none had been ruled or built. There is one now, and
+  it is in this branch.
+- **The diagnosis-round conclusion that the held state should be "the inline run
+  card carrying the §V card"** — withdrawn. The ruled shape is the opposite: the
+  §V card is its OWN mount in the assistant dispatch turn, under the
+  `chat_thread` provider, OUTSIDE the inline run panel's subtree. The panel stays
+  the separate `run_card` host. One §V component, two authorized mounts.
 
-Schema: `scripts/apply-public-schema.mjs` + `pnpm auth:migrate` on an empty
-database. `CINATRA_E2E_SETUP_BYPASS=true` was set to pass the **setup wizard**
-only; it is not in the path of anything asserted below.
+The Slack-layout finding from that round still stands as a fact about the
+transcript: Slack layout suppresses `parts`, and `parts` is the only mount point
+at a tool-call position. It is why this round asserts the layout BEFORE
+photographing anything. It was never the fix; the fix was to build the mount.
 
-## What is real, and the four fixtures, stated exactly
+## The runtime and the stack
+
+DEV RUNTIME, labelled on every cell, which is the standing rule for a
+dispatch-dependent capture: `pnpm dev`, `CINATRA_RUNTIME_MODE=development`,
+`NODE_ENV != production`, `CINATRA_TEST_LLM_PROVIDER=scripted`. Neither
+production fence (`assertScriptedProviderNotProduction`, `lifecycleSeedEnvVerdict`
+FENCE 1a) was weakened; this branch does not touch them.
+
+Throwaway Compose project `s9b2786cap` — own ports (Postgres 55432, Redis 56379),
+own volumes, own network, dev server on 3100, own BullMQ queue name. The
+operator's `cinatra_cinatra` project was never started, stopped, read or written.
+The stack was destroyed after the capture.
+
+## The driving message, and why it matters
+
+> `run cinatra_blog-draft-writer-agent to draft a blog post about onboarding`
+
+ZERO mention tokens. Two mentions flip the thread into Slack layout, which
+suppresses `parts` and therefore suppresses every part-level mount. The
+pre-router accepts this legacy `cinatra_<slug>` form, so the turn streams in the
+default layout. Both facts are ASSERTED in the log before any screenshot.
+
+## What is real, and the four fixtures
 
 **Real:** the application, the chat surface, the pre-router, the `agent_run`
-primitive, the recommendation hold, the park store, the run card, the
-Confirm/Skip release, BullMQ, and Postgres. The message was typed into the real
-composer and sent with Enter. Confirm was pressed on the real card.
+primitive, the hold, the park store, the §V card, its Confirm and Skip, the
+canonical release, BullMQ and Postgres. The message was typed into the real
+composer. The skill chip was ticked and the buttons pressed in the transcript.
 
-**Fixtures**, all four DB-level, none of them in the decision under test:
-
-1. `cinatra.agent_assigned_skills` — one row
-   (`@cinatra-ai/blog-draft-writer-agent` → `@cinatra-ai/chat:blog-content`,
-   position 1, `created_by` = the actor), in the shape the shipped store writes.
-   The scorer only returns candidates bounded to the agent's assigned set, and a
-   fresh instance has none. This supplies the assignment a settings screen would
-   have written, and nothing else.
-2. `cinatra.agent_templates.org_id` / `owner_id` for that one agent, set to the
-   capturing org. Boot registration leaves `owner_level='organization'` with both
-   org anchors NULL, which the run-scope guard correctly refuses as
-   `unknown_scope`. This anchors the template the install screen would have
-   anchored.
-3. `connector_config:openai_connection` — a **presence placeholder** key, a
-   fixed non-secret literal naming itself as a placeholder. The runtime binds a provider
-   adapter before the pre-router runs, so a provider must resolve. It is not a
-   credential: the real generation is served by the scripted provider, and the
-   one call that did reach OpenAI (the optional input-extraction round) was
-   rejected 401 and degraded exactly as designed. No real key was read, used, or
-   stored anywhere.
-4. `connector_config:mcp_server.publicBaseUrl = http://localhost:3100` and
-   `WAYFLOW_BASE_URL` pointing at an unused local port. The first makes the self
-   MCP tool assemble; the second makes the WayFlow preflight answer
-   `PREFLIGHT_UNAVAILABLE`, which proceeds. Neither is consulted by the hold.
+**Fixtures**, none inside the decision under test: one `agent_assigned_skills`
+row (the scorer only offers an agent's assigned set; a fresh instance has none);
+the agent template's org anchor (boot registration leaves it NULL and the scope
+guard correctly refuses); an OpenAI **presence placeholder** so a provider
+adapter binds before the pre-router runs (the scripted provider serves
+generation; no real key was read, used or stored); and a local MCP public URL
+plus an unused WayFlow port so the preflight answers `PREFLIGHT_UNAVAILABLE` and
+proceeds.
 
 ## The cells
 
-| cell | host | runtime | what it shows |
+| cell | runtime | what it shows |
+|---|---|---|
+| `S9b-1__chat_thread__recommendation-hold-held.png` | **development** | The held §V card in the conversation: heading, the skill chip, **Confirm** and **Skip** — with the thread and the composer in frame, ABOVE the inline run panel rather than inside it. The dispatch line reads `status: pending_input` and points nowhere. |
+| `S9b-2__chat_thread__hold-wrapper-anchors.png` | **development** | The `data-chat-thread-recommendation-hold` wrapper itself, close up. |
+| `S9b-2b__chat_thread__skill-selected-in-chat.png` | **development** | The skill ticked inside the conversation, before Confirm. |
+| `S9b-3__chat_thread__confirmed-settled-in-place.png` | **development** | After Confirm IN CHAT: the same card settled in place to "Skills confirmed (1)", same position, same conversation, no navigation — and the run panel below has advanced to its actionable form. |
+| `S9b-4__chat_thread__skipped-settled-in-place.png` | **development** | After Skip IN CHAT on a second run: the release and dispatch succeed. See the finding below on what the row settles into. |
+
+`capture-log.txt` is the unedited machine output, including the DOM anchor
+readouts and the queue probes.
+
+## The structural anchors, read off the live DOM
+
+HELD (`S9b-1` / `S9b-2`):
+
+```
+conversationList:                 true
+wrapperInsideConversationList:    true
+wrapperRunId:                     eebd31cb-0b9c-480b-8661-8de00bda97ec
+chipRowInsideWrapper:             true
+confirmAnchorInsideWrapper:       true
+skipAnchorInsideWrapper:          true
+outsideInlineRunCardSubtree:      true
+composerVisible:                  true
+```
+
+CONFIRMED (`S9b-3`) — the same wrapper, settled:
+
+```
+wrapperInsideConversationList:    true
+decisionSummary:                  "confirmed"
+chipRowInsideWrapper:             false     (controls replaced, in place)
+outsideInlineRunCardSubtree:      true
+url unchanged (no navigation):    true
+```
+
+## The state proofs, by command
+
+| moment | run row | park | queue |
 |---|---|---|---|
-| `S9b-1__chat_thread__held-dispatch-paused.png` | chat_thread | **development** | The real conversation after a real dispatch. The assistant turn reads `status: pending_input` and **"The run is paused for your decision — confirm or skip the recommended skills on the run card above, and it starts."** |
-| `S9b-2__run_card__recommendation-hold-held.png` | run_card | **development** | The §V recommendation card drawn for that held run, with **Confirm** and **Skip**. |
-| `S9b-3__run_card__card-closeup-confirm-skip.png` | run_card | **development** | The same card, close up: heading, the recommended skill chip, Confirm and Skip. |
-| `S9b-4__run_card__after-confirm-released.png` | run_card | **development** | The same surface after Confirm was pressed. |
+| held | `pending_input` / `human_present=true` | `parked` | `jobs_ever_created=<unset>`, `job_keys=<none>`, `jobs_naming_this_run=0` |
+| after Confirm in chat | advanced off `pending_input` | `released` | `jobs_ever_created=1`, exactly one job key, and it IS the run id |
+| after Skip in chat (second run) | advanced off `pending_input` | `released` | `jobs_ever_created=2` (one per run), exactly one job naming the second run |
 
-`capture-log.txt` is the machine output of the same session, unedited.
+While held there is NO queue job at all. That is the assertion separating a real
+hold from a card drawn over a run that was dispatched anyway.
 
-## The seven recorded assertions
+## FINDING — Skip releases and dispatches, but renders no settled summary here
 
-| # | assertion | verdict | how |
-|---|---|---|---|
-| 1 | The §V card is drawn for the held run, with Confirm and Skip | **PROVEN** | S9b-2 / S9b-3; `Confirm visible=true Skip visible=true` |
-| 2 | The run is `pending_input`, and the surface says so | **PROVEN** | S9b-1 prints `status: pending_input`; DB: `pending_input\|true` |
-| 3 | The conversation does NOT claim the agent is running | **PROVEN** | S9b-1 shows the paused wording; `"The agent is running" absent = true` |
-| 4 | DB while held: `status=pending_input`, `human_present=true`, a `parked` recommendation park | **PROVEN** | `agent_runs status\|human_present = pending_input\|true`; `recommendation park = parked` |
-| 5 | **No queue job exists for the run while held** | **PROVEN** | `jobs_ever_created=<empty>`, `job_keys: <none>`, `jobs_naming_this_run=0` |
-| 6 | **After Confirm: park released, run dispatched, exactly one job** | **PROVEN** | `park after Confirm = released`; `jobs_ever_created=1`; exactly one job key, and it IS the run id; the run advanced off `pending_input` |
-| 7 | The captured host, and what belongs to a later slice | **RECORDED** — see below |
+Confirm settles exactly as ruled. **Skip does not, on this fixture, and the cause
+is in the core action rather than in the mount.**
 
-Assertions 5 and 6 are the pair that separates a real hold from a card drawn
-over a run that was dispatched anyway, so they are stated in full. While held the
-queue has **no job at all** and its "jobs ever created" counter is unset. After
-Confirm the counter is **1**, and the single job key is the run id itself. The
-job key survives completion here, so "exactly once" stays checkable after the
-worker has run.
+`skipRunRecommendationAction` writes its durable skip evidence only for
+candidates the scorer marked `recommended`. This capture's single candidate is
+offered but NOT recommended — the row shows `Skills (0/1)` and the chip carries
+`data-forced="true"` — because the run's extracted `inputParams` are empty on a
+scripted-provider stack, so the intent text the scorer matches against is `{}`.
+With no recommended candidate, Skip writes no `run_rejected_recommendations` row;
+`getRunRecommendationHoldStateAction` then finds neither selected revisions nor a
+skip marker and answers `none`, so the card clears instead of settling into a
+"skipped" summary.
 
-## Assertion 7 — the finding, recorded rather than rounded up
+Confirm is unaffected because it persists the SELECTED skill, recommended or
+forced, which is why `S9b-3` settles.
 
-The §V card is photographed on the **run_card** host, not inside the conversation
-transcript, because **the recommendation card has no chat_thread mount in this
-build**. Measured, not assumed: the dispatch's `agent_run` tool result emits its
-`DATA_PART { kind: "agent_run", runId }` correctly, and the conversation renders
-the turn with a collapsed "Used 1 tool" group; no inline run card mounts, live or
-after a reload, expanded or collapsed.
-
-That is exactly the gap the epic assigns to a later slice — the host-ownership
-table names the recommendation kind's `chat_thread` mount as S9f's to define, and
-says the inline run card counts as `run_card`, not `chat_thread`. So this slice
-proves what it owns: **a chat-started run pauses, reports itself honestly in the
-conversation, and is releasable through the canonical path**. The card's
-conversation mount is S9f's, and this round is the measurement that says so.
+This is recorded, not resolved. It is stated as a contradiction for the owner in
+the PR: the ruling says a successful Skip settles the card into its skipped
+summary, and the shipped action makes that outcome conditional on a recommended
+candidate existing.

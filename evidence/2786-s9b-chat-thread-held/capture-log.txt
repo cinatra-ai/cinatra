@@ -1,26 +1,73 @@
-sent a real dispatch message in the conversation
-ASSERTION 3 (visual): the conversation says the run is PAUSED, not running
-runId=764eb973-3f5f-4592-96c2-891f160a92d6
-ASSERTION 2+4 (command): agent_runs status|human_present = pending_input|true
-ASSERTION 4 (command): recommendation park = parked
-ASSERTION 5 (command): queue WHILE HELD:
-  jobs_ever_created(bull:cinatra-s9b2786cap-jobs:id)=
-  job_keys:
-    <none>
-  jobs_naming_this_run=0
-ASSERTION 3 (command): "The agent is running" absent = true
-ASSERTION 2 (visual): the thread prints status: pending_input = true
-captured S9b-1 (chat thread, held)
-ASSERTION 1 (visual): the §V recommendation card is drawn, with the run held
-ASSERTION 1 (visual): Confirm visible=true Skip visible=true
-captured S9b-2 + S9b-3 (§V card with Confirm/Skip)
-pressed Confirm on the card
-ASSERTION 6 (command): agent_runs after Confirm = pending_approval|true
-ASSERTION 6 (command): park after Confirm = released
-ASSERTION 6 (command): queue AFTER CONFIRM:
-  jobs_ever_created(bull:cinatra-s9b2786cap-jobs:id)=1
-  job_keys:
-    bull:cinatra-s9b2786cap-jobs:764eb973-3f5f-4592-96c2-891f160a92d6
-  jobs_naming_this_run=1
-ASSERTION 6 (command): the run advanced off pending_input = true
-captured S9b-4 (after Confirm)
+[held] sent, zero mention tokens: "run cinatra_blog-draft-writer-agent to draft a blog post about onboarding"
+[held] slackMode===false (no collapsed tool group): true
+[held] parts.length>0 (a part-level card mounted in the turn): true
+runId=eebd31cb-0b9c-480b-8661-8de00bda97ec
+HELD anchors: {
+ "conversationList": true,
+ "wrapperInsideConversationList": true,
+ "wrapperRunId": "eebd31cb-0b9c-480b-8661-8de00bda97ec",
+ "chipRowInsideWrapper": true,
+ "confirmAnchorInsideWrapper": true,
+ "skipAnchorInsideWrapper": true,
+ "decisionSummary": null,
+ "outsideInlineRunCardSubtree": true,
+ "composerVisible": true
+}
+HELD db: status|human_present = pending_input|true; park = parked
+HELD queue:
+    jobs_ever_created=
+    job_keys=<none>
+    jobs_naming_this_run=0
+HELD text: "The agent is running" absent = true
+HELD text: no surface pointer = true
+captured S9b-1 + S9b-2
+row buttons: ["Skills (0/1)","blog-content","Confirm","Skip"]
+skills disclosure already open
+chip before select: data-selected=false data-forced=true
+chip after select: data-selected=true
+pressed Confirm INSIDE the conversation
+CONFIRMED anchors: {
+ "conversationList": true,
+ "wrapperInsideConversationList": true,
+ "wrapperRunId": "eebd31cb-0b9c-480b-8661-8de00bda97ec",
+ "chipRowInsideWrapper": false,
+ "confirmAnchorInsideWrapper": false,
+ "skipAnchorInsideWrapper": false,
+ "decisionSummary": "confirmed",
+ "outsideInlineRunCardSubtree": true,
+ "composerVisible": true
+}
+CONFIRMED db: status|human_present = pending_approval|true; park = released
+CONFIRMED queue:
+    jobs_ever_created=1
+    job_keys=bull:cinatra-s9b2786cap-jobs:eebd31cb-0b9c-480b-8661-8de00bda97ec
+    jobs_naming_this_run=1
+CONFIRMED url unchanged (no navigation): true
+captured S9b-3
+[skip] sent, zero mention tokens: "run cinatra_blog-draft-writer-agent to draft a blog post about onboarding"
+[skip] slackMode===false (no collapsed tool group): true
+[skip] parts.length>0 (a part-level card mounted in the turn): true
+second runId=585e89a5-49c1-4dca-b1ed-f151a76f90ee
+SKIP queue before decision:
+    jobs_ever_created=1
+    job_keys=bull:cinatra-s9b2786cap-jobs:eebd31cb-0b9c-480b-8661-8de00bda97ec
+    jobs_naming_this_run=0
+pressed Skip INSIDE the conversation
+NOTE: no skipped summary rendered (see the README finding)
+SKIPPED anchors: {
+ "conversationList": true,
+ "wrapperInsideConversationList": true,
+ "wrapperRunId": "585e89a5-49c1-4dca-b1ed-f151a76f90ee",
+ "chipRowInsideWrapper": false,
+ "confirmAnchorInsideWrapper": false,
+ "skipAnchorInsideWrapper": false,
+ "decisionSummary": null,
+ "outsideInlineRunCardSubtree": true,
+ "composerVisible": true
+}
+SKIPPED db: pending_approval; park = released
+SKIPPED queue:
+    jobs_ever_created=2
+    job_keys=bull:cinatra-s9b2786cap-jobs:585e89a5-49c1-4dca-b1ed-f151a76f90ee bull:cinatra-s9b2786cap-jobs:eebd31cb-0b9c-480b-8661-8de00bda97ec
+    jobs_naming_this_run=1
+captured S9b-4
