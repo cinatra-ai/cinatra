@@ -69,6 +69,7 @@ import {
   chatThreadRequirementsFor,
   hashFile,
   hostTokenInCell,
+  kindTokenInCell,
   validateCaptureIndex,
 } from "./lib/chat-hitl-capture-recorder.mjs";
 
@@ -269,10 +270,46 @@ export function chatThreadCellClaims(manifest) {
   for (const [i, row] of (manifest.rows ?? []).entries()) {
     for (const proof of proofsOf(row)) {
       if (hostTokenInCell(proof.testName) !== "chat_thread") continue;
-      claims.push({ row: i + 1, cell: cellKey(proof.testName), file: proof.file, kind: proof.kind });
+      claims.push({
+        row: i + 1,
+        cell: cellKey(proof.testName),
+        file: proof.file,
+        // The PROOF TIER (unitProofs / e2eProofs / …), not a lifecycle kind.
+        // Named plainly because the earlier spelling read like the latter and
+        // invited a reader to think it was being checked against the record.
+        proofTier: proof.kind,
+        // The lifecycle kind the CELL NAME claims, when it names one. This is
+        // what the record must agree with — otherwise a record's self-declared
+        // kind would be authoritative over the row that cites it.
+        claimedKind: kindTokenInCell(proof.testName),
+      });
     }
   }
   return claims;
+}
+
+/**
+ * EVERY screenshot-like proof in the manifest, with the host its name declares.
+ *
+ * The binding below is keyed off a host token in the cell name, which makes it
+ * opt-in: renaming `__chat_thread__` to `__chat__` would drop the claim and the
+ * evidence requirement with it. This inventory is the answer — the pinned suite
+ * asserts the exact list, so a rename changes it and fails there, whatever the
+ * binding then computes. A capture cannot be un-claimed by relabelling it.
+ */
+export function screenshotProofInventory(manifest = loadManifest()) {
+  const out = [];
+  for (const [i, row] of (manifest.rows ?? []).entries()) {
+    for (const proof of proofsOf(row)) {
+      if (!/\.(png|jpe?g|webp)$/i.test(String(proof.testName ?? ""))) continue;
+      out.push({
+        row: i + 1,
+        cell: cellKey(proof.testName),
+        host: hostTokenInCell(proof.testName),
+      });
+    }
+  }
+  return out.sort((a, b) => a.cell.localeCompare(b.cell) || a.row - b.row);
 }
 
 /**
@@ -305,6 +342,16 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
     if (record.declaredHost !== "chat_thread") {
       violations.push(
         `manifest row ${claim.row} claims "${claim.cell}" as chat_thread; its record declares "${record.declaredHost}"`,
+      );
+      continue;
+    }
+    // The row's own claim wins over the record's self-declaration. Without
+    // this, a proof cited for one kind binds happily to a record photographing
+    // another, and the record decides what the row proved.
+    if (claim.claimedKind !== null && claim.claimedKind !== record.kind) {
+      violations.push(
+        `manifest row ${claim.row} cites "${claim.cell}" for ${claim.claimedKind}; ` +
+          `its record photographs ${record.kind}`,
       );
       continue;
     }

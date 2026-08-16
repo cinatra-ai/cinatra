@@ -39,6 +39,7 @@ import {
   classifyUrl,
   collectAssertions,
   hostTokenInCell,
+  kindTokenInCell,
   observeCapture,
   validateCaptureIndex,
   validateCaptureRecord,
@@ -48,6 +49,7 @@ import {
   auditCaptureIndex,
   auditManifestIndexBinding,
   chatThreadCellClaims,
+  screenshotProofInventory,
 } from "../chat-hitl-acceptance-gate.mjs";
 import { CHAT_THREAD_CARRIAGE_CONTRACT } from "@/lib/lifecycle/held-turn-card-contract";
 
@@ -600,6 +602,29 @@ describe("the manifest to capture-index binding", () => {
     ).toEqual([]);
   });
 
+  it("REFUSES a record whose kind disagrees with the kind the row cites", () => {
+    // The row's claim wins. Otherwise a proof cited for the review card binds
+    // to a record photographing the hold card, and the record decides what the
+    // row proved.
+    const violations = auditManifestIndexBinding({
+      manifest: manifestClaiming("Z1__review-card__chat_thread__pending.png"),
+      index: indexOf([
+        chatRecord({ cell: "Z1__review-card__chat_thread__pending" }), // kind: recommendation_hold
+      ]),
+    });
+    expect(violations.join("\n")).toMatch(
+      /cites .* for artifact_review_gate; its record photographs recommendation_hold/,
+    );
+  });
+
+  it("reads the kind a cell name claims, through the closed label map", () => {
+    expect(kindTokenInCell("C1__review-card__chat_thread__pending")).toBe("artifact_review_gate");
+    expect(kindTokenInCell("S9x__recommendation-hold__chat_thread__held")).toBe(
+      "recommendation_hold",
+    );
+    expect(kindTokenInCell("A1__chat_thread__something")).toBeNull();
+  });
+
   it("keeps the capture requirements in step with the held-turn contract", () => {
     // One authority for what an operable hold card looks like. The contract's
     // owner anchors drive the transcript gate; these drive the capture gate.
@@ -620,6 +645,43 @@ describe("the committed index and the gate CLI", () => {
     expect(index.recorder).toBe(RECORDER_ID);
     expect(index.schemaVersion).toBe(CAPTURE_INDEX_SCHEMA_VERSION);
     expect(Array.isArray(index.records)).toBe(true);
+  });
+
+  it("RATCHET: exactly these screenshot proofs exist, with these declared hosts", () => {
+    // The binding is keyed off a host token in the cell name, which makes it
+    // opt-in: renaming `__chat_thread__` to `__chat__` would drop the claim and
+    // the evidence requirement with it. This inventory closes that door. A
+    // rename, an addition or a deletion changes this list and fails HERE, so a
+    // capture cannot be un-claimed by relabelling it.
+    expect(screenshotProofInventory().map((p) => `${p.cell} :: ${p.host ?? "-"}`)).toEqual([
+      "A1__run-detail__held-at-recommendation-checkpoint :: -",
+      "A1__run-detail__held-at-recommendation-checkpoint :: -",
+      "A1__run-detail__held-at-recommendation-checkpoint :: -",
+      "A2__run-detail__decided-summary-exactly-once :: -",
+      "A2__run-detail__decided-summary-exactly-once :: -",
+      "A2__run-detail__decided-summary-exactly-once :: -",
+      "B2__chat__comment-typed-while-bound-lands-on-the-gate :: -",
+      "B3__chat__two-open-gates-no-focus-the-pick-a-card-refusal :: -",
+      "B3b__chat__the-ambiguous-send-is-refused-and-goes-nowhere :: -",
+      "B4a__chat__explicit-focus-binds-that-card-only :: -",
+      "B4b__chat__moving-the-focus-moves-where-the-comment-lands :: -",
+      "C1__review-card__chat_thread__pending :: chat_thread",
+      "C1__review-card__chat_thread__pending :: chat_thread",
+      "C2__review-card__chat_thread__decided :: chat_thread",
+      "C2__review-card__chat_thread__decided :: chat_thread",
+      "island__first_party__server_rendered :: -",
+      "island__forged_ref__empty :: -",
+      "review-card__page_gate_region__pending :: page_gate_region",
+      "s2-06-settled-no-longer-open :: -",
+      "V2r-widget-review-card-island-painting :: -",
+      "V4-widget-review-card :: -",
+      "V6-widget-card-decided :: -",
+      "V7-db-readback :: -",
+    ]);
+    // Five `__chat__` cells carry NO recognized host token. That is the rename
+    // bypass sitting in the tree already, visible instead of silent: relabelling
+    // a chat_thread cell to `__chat__` would land it in this list, not out of
+    // sight. Binding them is the capture round's work, not a rename away.
   });
 
   it("RATCHET: exactly these chat_thread cells are unbound today", () => {

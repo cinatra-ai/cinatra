@@ -123,8 +123,13 @@ export const DECISION_PATH_POINTER_PATTERNS: readonly DecisionPathPointerPattern
     {
       id: "go-elsewhere-to-decide",
       why: "sends the human to another screen to make the decision the chat should carry",
+      // `continue` and `proceed` are deliberately NOT in this arm's trailing
+      // verb set. They are weak: "open the agent page and then continue reading
+      // here" is navigation, not a relocated decision, and matching it would
+      // train readers to ignore this ban. They stay in the arm below, where a
+      // surface is named explicitly.
       pattern: new RegExp(
-        `\\b(open|go\\s+to|head\\s+to|visit|navigate\\s+to|switch\\s+to|jump\\s+to|see|check|view|use)\\b[^.?!]{0,60}\\b(${SURFACE_NOUNS})\\b[^.?!]{0,60}\\b(to|and|then)\\b[^.?!]{0,40}\\b(${DECIDE_VERBS})\\b`,
+        `\\b(open|go\\s+to|head\\s+to|visit|navigate\\s+to|switch\\s+to|jump\\s+to|see|check|view|use)\\b[^.?!]{0,60}\\b(${SURFACE_NOUNS})\\b[^.?!]{0,60}\\b(to|and|then)\\b[^.?!]{0,40}\\b(confirm|approve|accept|decide|choose|select|pick|respond|reply|answer|resume|skip|reject|dismiss|adjust)\\b`,
         "i",
       ),
     },
@@ -350,6 +355,33 @@ export const HELD_TURN_MOUNT_OBLIGATIONS: readonly LifecycleCardKind[] = Object.
  */
 export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
   "recommendation_hold",
+]);
+
+/**
+ * VOCABULARY-INDEPENDENT probes for "a lifecycle card of ANY spelling is mounted
+ * here".
+ *
+ * The mount ratchet above compares the anchors this contract KNOWS. That alone
+ * couples the obligation to today's selector names: a mount that landed with
+ * renamed actions would satisfy a reader and still read as unmounted, leaving
+ * the obligation stale and CI green. These selectors are deliberately generic —
+ * they match the ATTRIBUTE, not its value — so any lifecycle card, any chip row
+ * and any confirm/skip control in the triggering container is seen, whatever it
+ * is called.
+ */
+export const ANY_LIFECYCLE_MOUNT_PROBES: readonly string[] = Object.freeze([
+  "[data-lifecycle-card]",
+  "[data-lifecycle-card-host]",
+  "[data-lifecycle-card-state]",
+  "[data-run-recommendation-chip-row]",
+  "[data-run-recommendation-decision]",
+  '[data-conformance-id*="chip-row"]',
+  '[data-conformance-id*="card"]',
+  '[data-action^="confirm"]',
+  '[data-action^="skip"]',
+  '[data-action^="approve"]',
+  '[data-action^="release"]',
+  '[data-action^="cancel"]',
 ]);
 
 // ---------------------------------------------------------------------------

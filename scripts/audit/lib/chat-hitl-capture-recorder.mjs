@@ -29,6 +29,25 @@
  * module through a tiny `CapturePage` port (`url`, `count`, `frame`,
  * `screenshot`), so the audit tier stays dependency-free and runnable without an
  * install while the real driver is Playwright.
+ *
+ * ---------------------------------------------------------------------------
+ * THE HONEST LIMIT, stated because a gate that overclaims is worse than none.
+ * ---------------------------------------------------------------------------
+ * `recordedBy` is a STRING, not provenance. Nothing here can stop a committer
+ * hand-writing a record with the recorder's id, a real screenshot's real hash,
+ * and fabricated counts of one. Binding pixels to assertions would need an
+ * attested capture run, which this repo does not have for ANY committed
+ * evidence file — the same trust boundary already applies to every screenshot in
+ * `evidence/`.
+ *
+ * So be exact about what IS closed. This gate catches the mislabel and the
+ * omission: a capture whose recorded URL contradicts its declared host, a
+ * required anchor that was never looked for, one that was looked for and not
+ * found, a cell name that contradicts its own record, a hash that does not match
+ * the file, and — since the duplicate check below — one image doing duty as the
+ * proof of several different cells. Those are the failures that actually
+ * happened. Deliberate fabrication is a review and trust problem, and this
+ * module does not pretend to solve it.
  */
 
 import { createHash } from "node:crypto";
@@ -326,6 +345,35 @@ export function hostTokenInCell(cell) {
   return null;
 }
 
+/**
+ * The lifecycle KIND a cell name claims, when its label maps to one.
+ *
+ * Cell names carry a card label rather than the wire kind (`review-card`, not
+ * `artifact_review_gate`), so the mapping is explicit and closed. A name that
+ * claims no kind returns null and the record's own declaration stands; a name
+ * that DOES claim one must agree with the record.
+ */
+const CELL_KIND_LABELS = Object.freeze({
+  "review-card": "artifact_review_gate",
+  "recommendation-hold": "recommendation_hold",
+  "recommendation-card": "recommendation_hold",
+  "schedule-proposal": "trigger_schedule_proposal",
+  "schedule-card": "trigger_schedule_proposal",
+  "verification-card": "verification_summary",
+  "verification-summary": "verification_summary",
+});
+
+export function kindTokenInCell(cell) {
+  if (typeof cell !== "string") return null;
+  for (const [label, kind] of Object.entries(CELL_KIND_LABELS)) {
+    if (cell.includes(label)) return kind;
+  }
+  for (const kind of LIFECYCLE_KINDS) {
+    if (cell.includes(kind)) return kind;
+  }
+  return null;
+}
+
 function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
@@ -519,10 +567,35 @@ export function validateCaptureIndex({ index, hashOf } = {}) {
     return v;
   }
   const seen = new Set();
+  // One image cannot be the proof of several cells. Without this, a single
+  // screenshot plus a set of hand-written assertion blocks "proves" every cell
+  // and every kind at once — the cheapest way to make a full index out of one
+  // picture, and a shape no honest capture run produces.
+  const byPath = new Map();
+  const byHash = new Map();
   for (const record of index.records) {
     if (isNonEmptyString(record?.cell)) {
       if (seen.has(record.cell)) v.push(`duplicate cell name "${record.cell}"`);
       seen.add(record.cell);
+    }
+    const cell = record?.cell ?? "(unnamed)";
+    if (isNonEmptyString(record?.screenshot)) {
+      const first = byPath.get(record.screenshot);
+      if (first !== undefined) {
+        v.push(
+          `"${cell}" reuses the screenshot ${record.screenshot} already claimed by "${first}" — ` +
+            "one image cannot be the evidence for two cells",
+        );
+      } else byPath.set(record.screenshot, cell);
+    }
+    if (SHA256_RE.test(record?.sha256 ?? "")) {
+      const first = byHash.get(record.sha256);
+      if (first !== undefined) {
+        v.push(
+          `"${cell}" records the same image bytes as "${first}" (sha256 ${record.sha256}) — ` +
+            "two cells cannot be the same photograph",
+        );
+      } else byHash.set(record.sha256, cell);
     }
     v.push(...validateCaptureRecord(record, { hashOf }));
   }

@@ -40,10 +40,16 @@
  */
 
 import React from "react";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 import {
+  ANY_LIFECYCLE_MOUNT_PROBES,
   CHAT_THREAD_CARRIAGE_CONTRACT,
   HELD_TURN_MOUNT_OBLIGATIONS,
   HELD_TURN_ROW,
@@ -272,6 +278,22 @@ function projectionFromProductionTurn(
     });
   }
   return { projection: { parts, nodes }, triggerContainer };
+}
+
+/**
+ * Which vocabulary-independent probes match INSIDE the triggering container but
+ * OUTSIDE the inline run card's own subtree.
+ *
+ * The run card is a ruled run_card mount and legitimately declares its host
+ * there, so its subtree is excluded; anything else that matches is a lifecycle
+ * card in the chat's own slot under a name this contract does not know.
+ */
+function probeOutsideRunCard(container: HTMLElement): string[] {
+  return ANY_LIFECYCLE_MOUNT_PROBES.filter((sel) =>
+    Array.from(container.querySelectorAll(sel)).some(
+      (el) => !HELD_TURN_ROW.foreignHostSubtrees.some((f) => el.closest(f) !== null),
+    ),
+  );
 }
 
 /** Mount the production `/chat` column on a held transcript. */
@@ -551,8 +573,8 @@ describe("the structural invariant — a decision keeps the URL and settles in p
   });
 });
 
-describe("the root-declaration obligation, measured on the real card", () => {
-  it("records that the held card does not yet declare its kind and host", async () => {
+describe("the root-declaration obligation, measured on the real card's own root", () => {
+  it("records that the held card's ROOT declares neither its kind nor its host", async () => {
     holdStateMock.mockImplementation(async () => HELD);
     const { root } = await mountHeldChat();
     const { triggerContainer } = projectionFromProductionTurn(root, {
@@ -567,13 +589,120 @@ describe("the root-declaration obligation, measured on the real card", () => {
     const owed: string[] = [];
     for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
       if (row.enforcer !== "held-turn-card-contract") continue;
-      const missing = row.ruledRootAnchors.filter((a) => root.querySelector(a) === null);
-      if (missing.length > 0) owed.push(row.kind);
+      // ONE element, inside the triggering container, carrying BOTH ruled
+      // selectors. Querying the whole surface would let an unrelated card supply
+      // the kind and an unrelated wrapper supply the host, and the obligation
+      // would read as met by two strangers.
+      const declared = Array.from(
+        triggerContainer.querySelectorAll(row.ruledRootAnchors[0] ?? "[data-lifecycle-card]"),
+      ).some((el) => row.ruledRootAnchors.every((a) => el.matches(a)));
+      if (!declared) owed.push(row.kind);
     }
     expect(
       owed,
       "the real card's root declaration drifted from ROOT_DECLARATION_OBLIGATIONS — " +
         "strike the row when the declaration lands, and never before",
-    ).toEqual(ROOT_DECLARATION_OBLIGATIONS.filter((k) => k === "recommendation_hold"));
+    ).toEqual([...ROOT_DECLARATION_OBLIGATIONS]);
+  });
+
+  it("REFUSES a declaration split across two elements", async () => {
+    // The bypass the check above closes, stated as a case: the kind on one
+    // element and the host on another satisfies neither reader nor contract.
+    holdStateMock.mockImplementation(async () => HELD);
+    const { root } = await mountHeldChat();
+    const { triggerContainer } = projectionFromProductionTurn(root, {
+      name: "agent_run",
+      result: DURABLE_RESULT,
+    });
+    const a = document.createElement("div");
+    a.setAttribute("data-lifecycle-card", "recommendation_hold");
+    const b = document.createElement("div");
+    b.setAttribute("data-lifecycle-card-host", "chat_thread");
+    triggerContainer.append(a, b);
+
+    const row = HELD_TURN_ROW;
+    const declared = Array.from(
+      triggerContainer.querySelectorAll(row.ruledRootAnchors[0]!),
+    ).some((el) => row.ruledRootAnchors.every((sel) => el.matches(sel)));
+    expect(declared).toBe(false);
+  });
+});
+
+describe("the mount ratchet does not depend on today's selector NAMES", () => {
+  it("sees no lifecycle mount of ANY spelling in the triggering container", async () => {
+    // The vocabulary-independent probe. A mount that landed with renamed
+    // actions would satisfy a reader while the anchor-based ratchet still read
+    // "unmounted"; these selectors match the ATTRIBUTE, not its value, so any
+    // card, chip row or decision control in that container is seen.
+    const { root } = await mountHeldChat();
+    const { triggerContainer } = projectionFromProductionTurn(root, {
+      name: "agent_run",
+      result: DURABLE_RESULT,
+    });
+    expect(
+      probeOutsideRunCard(triggerContainer),
+      "a lifecycle card appeared in the held turn's container under a name this " +
+        "contract does not know — add it to the row's anchors and strike the obligation",
+    ).toEqual([]);
+  });
+
+  it("the probe FIRES on a card that uses none of the contract's anchor names", async () => {
+    // The negative control: without this, the check above could be green
+    // because the probe matches nothing at all.
+    const { root } = await mountHeldChat();
+    const { triggerContainer } = projectionFromProductionTurn(root, {
+      name: "agent_run",
+      result: DURABLE_RESULT,
+    });
+    const renamed = document.createElement("div");
+    renamed.setAttribute("data-lifecycle-card", "recommendation_hold");
+    renamed.innerHTML =
+      '<span data-action="confirm-recommendations">Confirm</span>' +
+      '<span data-action="skip-recommendations">Skip</span>';
+    triggerContainer.appendChild(renamed);
+
+    expect(probeOutsideRunCard(triggerContainer).length).toBeGreaterThan(0);
+    // …and the anchor-based arm alone would have missed it, which is the point.
+    const { projection } = projectionFromProductionTurn(root, {
+      name: "agent_run",
+      result: DURABLE_RESULT,
+    });
+    expect(projectsOwnerCard(projection)).toBe(false);
+  });
+});
+
+describe("the production mount points, read from source", () => {
+  // WHY SOURCE. The inline run panel is replaced in this suite (its graph
+  // reaches the server runtime), so a hold card mounted INSIDE that panel would
+  // be invisible to every DOM assertion here — the one blind spot of the mock
+  // boundary. These checks watch that spot in the production source instead of
+  // pretending the DOM covers it.
+  const readSource = (rel: string) =>
+    readFileSync(join(__dirname, "..", "..", "..", "..", rel), "utf8");
+
+  it("the transcript's agent_run branch mounts the run card and the undo chip, and nothing else", () => {
+    const view = readSource("packages/chat/src/chat-messages-view.tsx");
+    const branch = view.slice(
+      view.indexOf('part.name === "agent_run"'),
+      view.indexOf('part.name === "agent_run"') + 800,
+    );
+    expect(branch).toContain("<InlineAgentRunCard");
+    expect(branch).toContain("<UndoActionChip");
+    // A lifecycle card mounted here would be a chat_thread mount landing in the
+    // transcript. When it lands, this expectation is what forces the obligation
+    // row to be revisited.
+    for (const owner of ["RecommendationHoldCard", "RunRecommendationChipRow"]) {
+      expect(branch, `${owner} is mounted in the transcript's agent_run branch`).not.toContain(
+        owner,
+      );
+    }
+  });
+
+  it("the inline run card does not draw the hold card inside its own subtree", () => {
+    // The forbidden arrangement the mock hides: a chat mount nested in the
+    // run_card host. Caught here rather than not at all.
+    const card = readSource("packages/chat/src/inline-agent-run-card.tsx");
+    expect(card).not.toContain("RecommendationHoldCard");
+    expect(card).not.toContain("RunRecommendationChipRow");
   });
 });
