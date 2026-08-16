@@ -163,7 +163,12 @@ describe("makeDefaultInstallAnchorResolver — 'org-then-workspace' (the #2697 c
     }
   });
 
-  it("the ORG's own row WINS where both exist — byte-identical to exact-org", async () => {
+  it("the LIVE WORKSPACE row WINS where both exist — it supersedes the org row", async () => {
+    // cinatra#2698 (change 1, owner ruling 2026-08-16). S3 preferred the
+    // organization's own row here; a live workspace row now supersedes it, so
+    // this seam binds the SAME row the lifecycle resolver and the screens do.
+    // The `exact-org` scope is deliberately NOT changed — it answers a different
+    // question ("this org's own row") and the boot/install paths rely on it.
     canonicalRows = [orgRow(ORG_A), workspaceRow()];
     grants = [{ status: "approved", approvedPorts: ["a"], orgId: ORG_A }];
     ops = [
@@ -172,13 +177,14 @@ describe("makeDefaultInstallAnchorResolver — 'org-then-workspace' (the #2697 c
     ];
 
     const viaFallbackScope = await (await makeDefaultInstallAnchorResolver(ORG_A, "org-then-workspace"))(PKG);
+    expect(viaFallbackScope?.installId).toBe("iext_ws");
+    expect(viaFallbackScope?.orgId).toBeNull();
+
     const viaExactOrg = await (await makeDefaultInstallAnchorResolver(ORG_A, "exact-org"))(PKG);
-    expect(viaFallbackScope?.installId).toBe(`iext_${ORG_A}`);
-    expect(viaFallbackScope?.orgId).toBe(ORG_A);
-    expect(viaFallbackScope).toEqual(viaExactOrg);
+    expect(viaExactOrg?.installId).toBe(`iext_${ORG_A}`);
   });
 
-  it("…while the OTHER organization gets the workspace row", async () => {
+  it("…and so does the OTHER organization — one row, app-wide", async () => {
     canonicalRows = [orgRow(ORG_A), workspaceRow()];
     ops = [
       { phase: "finalized", orgId: ORG_A },

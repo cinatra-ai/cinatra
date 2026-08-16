@@ -37,21 +37,29 @@ function toOwnerContext(row: InstalledExtension): ExtensionOwnerContext {
 }
 
 /**
- * Resolve the canonical connector install row → resource identity, ORG-ROW
- * FIRST WITH A WORKSPACE FALLBACK (cinatra#2694 / S3 #2697).
+ * Resolve the canonical connector install row → resource identity, THE
+ * EFFECTIVE ROW (cinatra#2694 / S3 #2697, re-grounded by S4 #2698 change 1).
  *
  * Resolution order — the rule shared by all three connector-resolution seams:
- *   1. the ORGANIZATION's own row `(organizationId, 'organization',
- *      organizationId, packageName)` — where it exists it WINS for that org,
- *      byte-identically to the pre-#2697 behavior;
- *   2. otherwise the WORKSPACE-ANCHORED row `(NULL, 'workspace',
- *      '__platform__', packageName)` — one row that serves EVERY organization,
- *      because it names no owning org for the cross-org guard to fence.
+ *   1. the LIVE WORKSPACE-ANCHORED row `(NULL, 'workspace', '__platform__',
+ *      packageName)` — one row that serves EVERY organization, because it names
+ *      no owning org for the cross-org guard to fence. While it lives it
+ *      SUPERSEDES the organization's own row (owner ruling 2026-08-16), so it is
+ *      consulted FIRST;
+ *   2. otherwise the ORGANIZATION's own row `(organizationId, 'organization',
+ *      organizationId, packageName)`.
+ *
+ * S3 shipped this pair in the opposite order. The inversion is load-bearing, not
+ * cosmetic: identity reads return ARCHIVED rows too, and a workspace install now
+ * archives the organization's row in place — so an org-first order would resolve
+ * the SUPERSEDED, archived row and bind the connector's permissions and owner
+ * context to an install that is no longer in force. Where no live workspace row
+ * exists the organization arm runs exactly as before, byte-identically.
  *
  * A row of the wrong KIND fails closed at whichever arm resolved it (the auth
- * gate must never evaluate a non-connector as a connector), and an org row of
- * the wrong kind does NOT fall through to the workspace arm: the org's own
- * identity already answered for that package name.
+ * gate must never evaluate a non-connector as a connector); a live workspace row
+ * of the wrong kind does NOT fall through to the org arm — the effective row
+ * already answered for that package name.
  *
  * Returns null when neither row exists (the connector shim then falls back to
  * the legacy connector_access_policy read — absence-only fallback).
@@ -67,6 +75,13 @@ export async function resolveConnectorResource(
   packageName: string,
 ): Promise<ResolvedExtensionResource | null> {
   if (!organizationId) return null;
+  const workspaceRow = await readInstalledExtensionByIdentity(
+    workspaceAnchorIdentity(packageName),
+  );
+  if (workspaceRow && (workspaceRow.status === "active" || workspaceRow.status === "locked")) {
+    if (workspaceRow.kind !== "connector") return null;
+    return { resourceId: workspaceRow.id, owner: toOwnerContext(workspaceRow) };
+  }
   const orgRow = await readInstalledExtensionByIdentity({
     organizationId,
     ownerLevel: "organization",
@@ -77,9 +92,6 @@ export async function resolveConnectorResource(
     if (orgRow.kind !== "connector") return null;
     return { resourceId: orgRow.id, owner: toOwnerContext(orgRow) };
   }
-  const workspaceRow = await readInstalledExtensionByIdentity(
-    workspaceAnchorIdentity(packageName),
-  );
   if (!workspaceRow || workspaceRow.kind !== "connector") return null;
   return { resourceId: workspaceRow.id, owner: toOwnerContext(workspaceRow) };
 }

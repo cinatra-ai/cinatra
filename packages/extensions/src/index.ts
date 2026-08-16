@@ -27,7 +27,7 @@ import type { ExtensionDataTeardownContext } from "./data-teardown-hook";
 import type { InstalledExtension } from "./canonical-types";
 // cinatra#2696: the planned row anchor an install writes at (PURE module — the
 // dispatcher-side half of S1's target→ownership contract).
-import { resolveInstallRowAnchor } from "./canonical-types";
+import { isWorkspaceRowAnchor, resolveInstallRowAnchor } from "./canonical-types";
 import type { InstallRowOwnership } from "./canonical-types";
 // cinatra#2698 (S4): the operator's explicit row choice, threaded from the
 // lifecycle actions into every row-targeting op. TYPE-ONLY — the resolver module
@@ -923,6 +923,24 @@ async function syncCanonicalManifestInstall(
     return { needsPipeline: false, rowId: null, ownsRollback: false };
   }
 
+  // cinatra#2698 (S4, change 3) — THE SERVER INSTALL BOUNDARY. While a live
+  // workspace row exists the package is already installed for every
+  // organization, so an ORGANIZATION-anchored install of it is refused here:
+  // both a fresh organization row and the re-activation of an archived one (the
+  // very rows the workspace install superseded) are creations of a second,
+  // redundant copy. The refusal is typed and it is deliberately placed ABOVE the
+  // ensure/transition block, so a refused install mutates nothing at all. The
+  // marketplace never offers the action (the card reads "Installed (Workspace:
+  // All)" / "Installed (Workspace: Admins only)"), so reaching this line means a
+  // caller went around the screen.
+  //
+  // OUTSIDE the try/catch below on purpose: that catch classifies STORE failures
+  // and must not swallow a policy refusal into a placeholder success.
+  {
+    const { assertNoWorkspaceSupersession } = await import("./lifecycle-target-resolver");
+    assertNoWorkspaceSupersession(packageName, all, rowAnchor);
+  }
+
   try {
     const { installExtensionManifest, transitionExtensionLifecycle } = await import(
       "./lifecycle-primitive"
@@ -1410,9 +1428,31 @@ class ExtensionRegistryImpl {
     // acquire (same package, same async context) runs inline — no deadlock.
     // Dynamic import: @cinatra-ai/agents → @cinatra-ai/extensions is a static cycle.
     const { withInstallLock } = await import("@cinatra-ai/agents");
-    return withInstallLock(ref.packageName, () =>
-      this.runHostInstallLocked(typeId, ref, actor, op, options),
-    );
+    return withInstallLock(ref.packageName, async () => {
+      await this.runHostInstallLocked(typeId, ref, actor, op, options);
+      // cinatra#2698 (S4, change 2) — SUPERSESSION ON INSTALL. A "Workspace:
+      // All" / "Workspace: Admins only" install has now FINALIZED, so the
+      // package's organization rows are redundant: archive them IN PLACE. It
+      // runs HERE — inside the same per-package install lock, after the whole
+      // install sequence succeeded (any failure above threw and left the
+      // organization rows untouched) — so no concurrent install can interleave
+      // and a failed install never supersedes anything. The primitive
+      // compensates its own partial work, so the package is never left
+      // half-superseded.
+      //
+      // `install` only: an UPDATE rewrites an existing row's version, it does
+      // not widen anything's reach, so it has nothing to supersede.
+      if (op !== "install") return;
+      const anchor = resolveInstallRowAnchor(actor.orgId ?? null, options?.rowOwnership);
+      if (!isWorkspaceRowAnchor(anchor)) return;
+      const { supersedeOrganizationRowsForWorkspaceInstall } = await import(
+        "./lifecycle-primitive"
+      );
+      await supersedeOrganizationRowsForWorkspaceInstall(ref.packageName, {
+        source: actor.source ?? "dispatcher",
+        userId: actor.userId,
+      });
+    });
   }
 
   private async runHostInstallLocked(

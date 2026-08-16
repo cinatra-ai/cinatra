@@ -62,31 +62,37 @@ export type ConnectorCanonicalResult =
 
 /**
  * Resolve the canonical connector access inputs for (orgId, packageId)
- * synchronously, ORG-ROW FIRST WITH A WORKSPACE FALLBACK (cinatra#2694 /
- * S3 #2697). Never throws in the sync render path — DB failures surface as
- * `{status:"error"}` so the caller can fail closed.
+ * synchronously — THE EFFECTIVE ROW (cinatra#2694 / S3 #2697, re-grounded by
+ * S4 #2698 change 1). Never throws in the sync render path — DB failures surface
+ * as `{status:"error"}` so the caller can fail closed.
  *
  * Resolution order (identical to the async resolver's, see
  * `resolveConnectorResource` in @cinatra-ai/extensions):
- *   1. the ORGANIZATION's own row `(organization_id = orgId, owner_level
- *      'organization', owner_id = orgId)` — where it exists it WINS for that
- *      org, byte-identically to the pre-#2697 behavior;
- *   2. otherwise the WORKSPACE-ANCHORED row `(organization_id IS NULL,
- *      owner_level 'workspace', owner_id '__platform__')` — one row that serves
- *      EVERY organization, since it names no owning org to be fenced by.
+ *   1. the LIVE WORKSPACE-ANCHORED row `(organization_id IS NULL, owner_level
+ *      'workspace', owner_id '__platform__')` — one row that serves EVERY
+ *      organization, since it names no owning org to be fenced by. While it
+ *      lives it SUPERSEDES the organization's own row (owner ruling 2026-08-16);
+ *   2. otherwise the ORGANIZATION's own row `(organization_id = orgId,
+ *      owner_level 'organization', owner_id = orgId)`;
+ *   3. otherwise a non-live workspace row (unchanged from #2697 — status is not
+ *      a filter here, only a preference).
  *
- * Both arms are ONE query with a deterministic preference ordering rather than
- * two round trips: this runs inside a SYNCHRONOUS render/filter path, where a
- * second sequential round trip would be paid on every miss. `ORDER BY
- * (organization_id IS NULL)` puts the org row (false) ahead of the workspace row
- * (true); `LIMIT 1` then yields exactly the winner.
+ * S3 preferred the organization row. The inversion matters because a workspace
+ * install now archives the organization's row IN PLACE: an org-first order would
+ * govern the connector by the SUPERSEDED row's access declaration. Where no live
+ * workspace row exists the organization arm wins exactly as before.
+ *
+ * All arms are ONE query with a deterministic preference ordering rather than
+ * sequential round trips: this runs inside a SYNCHRONOUS render/filter path,
+ * where a second round trip would be paid on every miss. The `ORDER BY` ranks
+ * the three cases and `LIMIT 1` yields exactly the winner.
  *
  * The org-LESS caller is unchanged (`absent`): S3's contract is that the
  * workspace row serves every ORGANIZATION.
  *
- * Status is NOT filtered here — exactly as before #2697. The row's lifecycle
- * state is the caller's concern; this resolver answers "which row's access
- * governs this package for this org".
+ * Status is still NOT a FILTER — a package whose only row is archived resolves
+ * exactly as it did before. The row's lifecycle state is the caller's concern;
+ * this resolver answers "which row's access governs this package for this org".
  */
 export function resolveConnectorCanonicalAccessSync(
   orgId: string | undefined,
@@ -107,7 +113,12 @@ export function resolveConnectorCanonicalAccessSync(
                      (organization_id = $1 AND owner_level = 'organization' AND owner_id = $1)
                      OR (organization_id IS NULL AND owner_level = 'workspace' AND owner_id = $3)
                    )
-                 ORDER BY (organization_id IS NULL)
+                 ORDER BY CASE
+                     WHEN organization_id IS NULL
+                       AND status IN ('active', 'locked') THEN 0
+                     WHEN organization_id IS NOT NULL THEN 1
+                     ELSE 2
+                   END
                  LIMIT 1`,
           values: [orgId, packageId, PLATFORM_OWNER_SENTINEL],
         },

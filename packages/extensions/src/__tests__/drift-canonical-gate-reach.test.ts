@@ -88,6 +88,12 @@ const ALLOWED_FILES = [
   // exercise the uninstall TOMBSTONE path through the public primitive. They
   // never perform a real write — same pattern as the tests above.
   "packages/extensions/src/__tests__/static-bundle-anchor.test.ts",
+  // Workspace-supersession test (cinatra#2698) — same fixture class again: it
+  // mocks the canonical-store writers (incl.
+  // _internalUpdateInstalledExtensionStatus) so a store refusal can be forced
+  // mid-supersession and the compensation observed. The supersession itself
+  // goes through `transitionExtensionLifecycle`; this file never writes.
+  "packages/extensions/src/__tests__/workspace-supersession.test.ts",
 ];
 
 function findFilesWithPattern(pattern: RegExp): string[] {

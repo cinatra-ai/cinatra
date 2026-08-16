@@ -14,11 +14,22 @@
  *     row without re-anchoring it (one fixture per operation);
  *   - the same four operations on an ORG-anchored row are byte-identical to
  *     today (regression fixtures, run through the SAME code path);
- *   - with an org row and a workspace row COEXISTING for one package, each
- *     operation targets exactly the selected row and leaves the other untouched;
- *   - the operator's row selector — `owner_level`, the identity's discriminator
- *     — separates a product-installed workspace row from a bundled platform
- *     anchor at the same org-NULL scope.
+ *   - THE EFFECTIVE ROW (owner ruling 2026-08-16): a live workspace row
+ *     supersedes every organization row — a platform admin resolves it with no
+ *     selector at all, an organization owner resolves nothing, and an archived
+ *     organization row is never a candidate;
+ *   - SUPERSESSION ON INSTALL: the organization row is archived IN PLACE, with
+ *     its id, anchor, provenance, dependency edges and access policy retained
+ *     (byte-level column comparison) — the ordinary uninstall/teardown hooks
+ *     never run;
+ *   - REVERSE INSTALLS REFUSED: the install boundary refuses an
+ *     organization-anchored install while a live workspace row exists;
+ *   - NO AUTOMATIC REVIVAL: removing the workspace install leaves the
+ *     organization row archived, and only then addressable for an ordinary
+ *     guarded restore;
+ *   - the SERVER-MINTED anchor-tier selector still separates a product-installed
+ *     workspace row from a bundled platform anchor at the same org-NULL scope —
+ *     the one genuine same-scope identity ambiguity that survives.
  *
  * Each operation is expressed exactly as the dispatcher expresses it:
  *   archive   → transitionExtensionLifecycle(resolvedRow.id, "archive")
@@ -398,65 +409,67 @@ describe.skipIf(!HAS_DB)("cinatra#2698 — an org-anchored row behaves exactly a
 });
 
 // ---------------------------------------------------------------------------
-describe.skipIf(!HAS_DB)("cinatra#2698 — coexisting rows: each op hits exactly the selected row", () => {
-  it("ARCHIVE of the org row leaves the workspace row byte-identical", async () => {
-    const orgId = await installAtAnchor(ORG_ANCHOR);
-    const wsId = await installAtAnchor(WORKSPACE_ANCHOR);
-    const wsBefore = await rawRowById(wsId);
-
-    // The org actor's OWN scope wins with no selector at all.
-    expect(await archiveOp(orgOwner)).toBe(orgId);
-
-    expect((await rawRowById(orgId))?.status).toBe("archived");
-    expect(await rawRowById(wsId)).toEqual(wsBefore);
-  });
-
-  it("ARCHIVE of the workspace row leaves the org row byte-identical", async () => {
+// THE EFFECTIVE ROW + SUPERSESSION (cinatra#2698 rework, owner ruling
+// 2026-08-16). This block replaces the earlier "coexisting rows: each op hits
+// exactly the selected row" fixtures: coexistence is no longer a state the
+// product presents, so an operator picking between two rows is no longer a
+// behaviour to pin. What is pinned instead is that a live workspace row
+// SUPERSEDES the organization rows, that the supersession is an in-place
+// archive which retains everything, that a reverse install is refused, and that
+// removing the workspace install revives nothing.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("cinatra#2698 — a live workspace row is the package's effective row", () => {
+  it("a platform admin with an active organization resolves the WORKSPACE row — no selector", async () => {
     const orgRowId = await installAtAnchor(ORG_ANCHOR);
     const wsId = await installAtAnchor(WORKSPACE_ANCHOR);
     const orgBefore = await rawRowById(orgRowId);
 
-    // A platform admin in the SAME org must name the tier — their own scope has
-    // a row, so the selector is what reaches across to the app-wide one.
-    expect(await archiveOp(platformAdmin, { ownerLevel: "workspace" })).toBe(wsId);
+    // Before this rework the platform admin's OWN scope (their organization's
+    // row) won and reaching the app-wide row required naming a tier. The
+    // organization row is superseded now, so the workspace row resolves alone.
+    expect(await archiveOp(platformAdmin)).toBe(wsId);
 
     expect((await rawRowById(wsId))?.status).toBe("archived");
     expect(await rawRowById(orgRowId)).toEqual(orgBefore);
   });
 
-  it("UPDATE of the workspace row leaves the org row byte-identical", async () => {
-    const orgRowId = await installAtAnchor(ORG_ANCHOR, { version: "1.0.0" });
-    const wsId = await installAtAnchor(WORKSPACE_ANCHOR, { version: "1.0.0" });
+  it("an organization owner is refused — their own row is superseded", async () => {
+    const orgRowId = await installAtAnchor(ORG_ANCHOR);
+    const wsId = await installAtAnchor(WORKSPACE_ANCHOR);
     const orgBefore = await rawRowById(orgRowId);
+    const wsBefore = await rawRowById(wsId);
 
-    expect(await updateOp(platformAdmin, "3.0.0", { ownerLevel: "workspace" })).toBe(wsId);
+    await expect(archiveOp(orgOwner)).rejects.toMatchObject({
+      code: "NO_ADDRESSABLE_ROW",
+    });
 
+    // Nothing moved — the refusal is fail-closed, not a partial op.
     expect(await rawRowById(orgRowId)).toEqual(orgBefore);
-    expect(await rawRows(PKG)).toHaveLength(2);
-    const stored = await canonicalStore.readInstalledExtensionsByPackageName(PKG);
-    const ws = stored.find((r) => r.id === wsId)!;
-    expect((ws.source as { version?: string }).version).toBe("3.0.0");
+    expect(await rawRowById(wsId)).toEqual(wsBefore);
   });
 
-  it("REINSTALL of the workspace row leaves the org row byte-identical", async () => {
-    const orgRowId = await installAtAnchor(ORG_ANCHOR, { version: "1.0.0" });
-    await installAtAnchor(WORKSPACE_ANCHOR, { version: "1.0.0" });
-    const orgBefore = await rawRowById(orgRowId);
+  it("an ARCHIVED organization row is never a candidate either", async () => {
+    const orgRowId = await installAtAnchor(ORG_ANCHOR);
+    const wsId = await installAtAnchor(WORKSPACE_ANCHOR);
+    await lifecycle.transitionExtensionLifecycle(orgRowId, "archive", {
+      actor: { source: "dispatcher", userId: "u-2698" },
+      reason: "cinatra#2698 fixture — superseded",
+    });
 
-    await reinstallOp(platformAdmin, "3.0.0", { ownerLevel: "workspace" });
-
-    expect(await rawRowById(orgRowId)).toEqual(orgBefore);
-    const rows = await rawRows(PKG);
-    expect(rows).toHaveLength(2);
-    const ws = rows.find((r) => r.owner_level === "workspace")!;
-    expect(ws.organization_id).toBeNull();
-    expect(ws.owner_id).toBe("__platform__");
+    // The org owner cannot restore the superseded row while the workspace row
+    // lives — the reverse install, refused at the addressing rule.
+    await expect(restoreOp(orgOwner)).rejects.toMatchObject({
+      code: "NO_ADDRESSABLE_ROW",
+    });
+    // And the platform admin still lands on the workspace row, not the archived
+    // organization one.
+    expect(await archiveOp(platformAdmin)).toBe(wsId);
   });
 
-  it("the selector separates a WORKSPACE row from a bundled PLATFORM anchor at the same scope", async () => {
-    // The DB permits this coexistence: the org-NULL identity index keys on
-    // owner_level. Without a selector the resolver refuses; with one it hits
-    // exactly the named tier.
+  it("the selector still separates a WORKSPACE row from a bundled PLATFORM anchor", async () => {
+    // The one genuine same-scope identity ambiguity the store permits: the
+    // org-NULL identity index keys on owner_level. This is what the selector
+    // machinery survives FOR — it is server-minted, never operator-supplied.
     const bundledId = await installAtAnchor(PLATFORM_ANCHOR);
     const wsId = await installAtAnchor(WORKSPACE_ANCHOR);
     const nullOrgAdmin = { ...platformAdmin, orgId: null } as Actor;
@@ -469,5 +482,163 @@ describe.skipIf(!HAS_DB)("cinatra#2698 — coexisting rows: each op hits exactly
     expect(await archiveOp(nullOrgAdmin, { ownerLevel: "workspace" })).toBe(wsId);
     expect((await rawRowById(wsId))?.status).toBe("archived");
     expect(await rawRowById(bundledId)).toEqual(bundledBefore);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("cinatra#2698 — supersession on install archives IN PLACE", () => {
+  it("archives the organization row keeping id, anchor, provenance and dependency edges", async () => {
+    const orgRowId = await installAtAnchor(ORG_ANCHOR, { version: "1.4.2" });
+    // Row-bound data the ordinary uninstall path would destroy: an access-policy
+    // row and a permission grant, BOTH keyed on installed_extension.id, plus the
+    // dependency edge rows the hard delete cascades away.
+    await lifecycle.recordExtensionDependencies(
+      orgRowId,
+      [
+        {
+          packageName: "@cinatra-ai/dep-2698",
+          edgeType: "runtime",
+          requirement: "required",
+          versionConstraint: { kind: "semver-range", range: "^1.0.0" },
+        },
+      ] as never,
+      { actor: { source: "dispatcher", userId: "u-2698" }, reason: "cinatra#2698 fixture" },
+    );
+    await client.query(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."extension_access_policy" (resource_kind, resource_id, policy)
+       VALUES ($1, $2, $3::jsonb)`,
+      ["artifact", orgRowId, JSON.stringify({ runListVisibility: ["organization"] })],
+    );
+    const before = await rawRowById(orgRowId);
+    const edgesBefore = (
+      await client.query(
+        `SELECT * FROM "${q(TEST_SCHEMA)}"."extension_dependency_edge" WHERE dependent_install_id = $1 ORDER BY id`,
+        [orgRowId],
+      )
+    ).rows;
+    expect(edgesBefore.length).toBeGreaterThan(0);
+
+    // The workspace install lands, then supersedes.
+    const wsId = await installAtAnchor(WORKSPACE_ANCHOR, { version: "2.0.0" });
+    const archived = await lifecycle.supersedeOrganizationRowsForWorkspaceInstall(PKG, {
+      source: "dispatcher",
+      userId: "u-2698",
+    });
+    expect(archived).toEqual([orgRowId]);
+
+    const after = await rawRowById(orgRowId);
+    // SAME ROW: only `status` moved. Everything else is byte-identical, which is
+    // what "archived in place, nothing torn down" means at the DB layer.
+    expect(after?.id).toBe(orgRowId);
+    expect(after?.status).toBe("archived");
+    for (const column of Object.keys(before ?? {})) {
+      if (column === "status" || column === "updated_at") continue;
+      expect({ [column]: after?.[column] }).toEqual({ [column]: before?.[column] });
+    }
+    // Dependency provenance retained (a hard delete would have cascaded it away).
+    const edgesAfter = (
+      await client.query(
+        `SELECT * FROM "${q(TEST_SCHEMA)}"."extension_dependency_edge" WHERE dependent_install_id = $1 ORDER BY id`,
+        [orgRowId],
+      )
+    ).rows;
+    expect(edgesAfter).toEqual(edgesBefore);
+    // Access policy retained (it is keyed on the row id the archive preserved).
+    const policyAfter = (
+      await client.query(
+        `SELECT policy FROM "${q(TEST_SCHEMA)}"."extension_access_policy" WHERE resource_id = $1`,
+        [orgRowId],
+      )
+    ).rows;
+    expect(policyAfter).toHaveLength(1);
+    // And the workspace row is untouched and live.
+    expect((await rawRowById(wsId))?.status).toBe("active");
+  });
+
+  it("is idempotent — an already-archived organization row is left exactly as it is", async () => {
+    const orgRowId = await installAtAnchor(ORG_ANCHOR);
+    await lifecycle.transitionExtensionLifecycle(orgRowId, "archive", {
+      actor: { source: "dispatcher", userId: "u-2698" },
+      reason: "cinatra#2698 fixture",
+    });
+    const before = await rawRowById(orgRowId);
+    await installAtAnchor(WORKSPACE_ANCHOR);
+
+    const archived = await lifecycle.supersedeOrganizationRowsForWorkspaceInstall(PKG, {
+      source: "dispatcher",
+      userId: "u-2698",
+    });
+
+    expect(archived).toEqual([]);
+    expect(await rawRowById(orgRowId)).toEqual(before);
+  });
+
+  it("no organization rows → nothing happens", async () => {
+    await installAtAnchor(WORKSPACE_ANCHOR);
+    expect(
+      await lifecycle.supersedeOrganizationRowsForWorkspaceInstall(PKG, {
+        source: "dispatcher",
+        userId: "u-2698",
+      }),
+    ).toEqual([]);
+    expect(await rawRows(PKG)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("cinatra#2698 — reverse installs are refused", () => {
+  it("the install boundary refuses an ORGANIZATION anchor while a live workspace row exists", async () => {
+    await installAtAnchor(WORKSPACE_ANCHOR);
+    const rows = await canonicalStore.readInstalledExtensionsByPackageName(PKG);
+
+    expect(() => resolver.assertNoWorkspaceSupersession(PKG, rows, ORG_ANCHOR)).toThrow(
+      /already installed for the whole workspace/,
+    );
+    try {
+      resolver.assertNoWorkspaceSupersession(PKG, rows, ORG_ANCHOR);
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("WORKSPACE_INSTALL_SUPERSEDES");
+    }
+    // The workspace install itself passes through untouched.
+    expect(() =>
+      resolver.assertNoWorkspaceSupersession(PKG, rows, WORKSPACE_ANCHOR),
+    ).not.toThrow();
+  });
+
+  it("an ARCHIVED workspace row supersedes nothing — the organization install is allowed again", async () => {
+    const wsId = await installAtAnchor(WORKSPACE_ANCHOR);
+    await lifecycle.transitionExtensionLifecycle(wsId, "archive", {
+      actor: { source: "dispatcher", userId: "u-2698" },
+      reason: "cinatra#2698 fixture",
+    });
+    const rows = await canonicalStore.readInstalledExtensionsByPackageName(PKG);
+    expect(() => resolver.assertNoWorkspaceSupersession(PKG, rows, ORG_ANCHOR)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("cinatra#2698 — removing the workspace install revives nothing", () => {
+  it("the organization row stays archived, and only THEN becomes restorable", async () => {
+    const orgRowId = await installAtAnchor(ORG_ANCHOR);
+    const wsId = await installAtAnchor(WORKSPACE_ANCHOR);
+    await lifecycle.supersedeOrganizationRowsForWorkspaceInstall(PKG, {
+      source: "dispatcher",
+      userId: "u-2698",
+    });
+    expect((await rawRowById(orgRowId))?.status).toBe("archived");
+
+    // Remove the workspace install — a row-scoped archive, exactly as the
+    // dispatcher performs it.
+    expect(await archiveOp(platformAdmin)).toBe(wsId);
+
+    // NO AUTOMATIC REVIVAL: the organization row is still archived.
+    expect((await rawRowById(orgRowId))?.status).toBe("archived");
+
+    // It is now addressable again, so an authorized admin restores it through
+    // the ORDINARY guarded path — nothing special, no supersession bookkeeping.
+    expect(await restoreOp(orgOwner)).toBe(orgRowId);
+    expect((await rawRowById(orgRowId))?.status).toBe("active");
+    // And the workspace row stayed archived — the restore touched one row.
+    expect((await rawRowById(wsId))?.status).toBe("archived");
   });
 });
