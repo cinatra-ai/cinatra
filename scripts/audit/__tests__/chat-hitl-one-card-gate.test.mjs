@@ -50,6 +50,9 @@ import {
   collectViolations,
   emitsAnchor,
   extractComponentBody,
+  openRequirements,
+  proofAssertsAnchor,
+  REQUIRED_ROOT_ATTRIBUTES,
   isExempt,
   placeholderKinds,
   scanHostMounts,
@@ -195,7 +198,8 @@ const PROPER_OWNER = [
   "  const state = useCardState({ ref: view.ref });",
   "  if (state === null) return null;",
   "  return (",
-  '    <div data-conformance-id="proper-card" data-state={state.state}>',
+  '    <div data-conformance-id="proper-card" data-lifecycle-card="fixture"',
+  '      data-lifecycle-card-host={host} data-lifecycle-card-state={state.state}>',
   "      {state.title}",
   '      <div data-conformance-id="proper-floor">{state.actions}</div>',
   "    </div>",
@@ -207,18 +211,38 @@ const PROPER_CONTRACT = {
   status: "DRAWN",
   design: "§X (a fixture)",
   component: "ProperCard",
+  wireCarriage: "data_part",
   owner: "packages/fixture/proper-card.tsx",
   composes: [],
   body: { validator: "useCardState", params: ["view"], fields: ["state", "title", "actions"] },
-  anchors: ["proper-card", "proper-floor"],
+  anchors: ["proper-card", "proper-floor", '[data-lifecycle-card="fixture"]'],
   hosts: {
-    chat_thread: [{ module: "packages/fixture/registry.tsx", kind: "registry", why: "the fixture transcript dispatch, named here" }],
+    chat_thread: [{ module: "packages/fixture/registry.tsx", adapter: "registry", surface: "production", why: "the fixture transcript dispatch, named here" }],
     site_widget: null,
-    run_card: [{ module: "packages/fixture/panel.tsx", kind: "mount", why: "the fixture run card, named here so a second one is visible" }],
+    run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "the fixture run card, named here so a second one is visible" }],
     page_gate_region: null,
   },
   hostGap: "The fixture declares two hosts only; the other two are out of the fixture's scope on purpose.",
   renderedProof: { file: "packages/fixture/__tests__/proper-card.test.tsx", testName: "draws" },
+};
+
+/** Two adapters on one host, with the picker that makes them exclusive. */
+const TWO_ADAPTER_CONTRACT = {
+  ...PROPER_CONTRACT,
+  hosts: {
+    ...PROPER_CONTRACT.hosts,
+    run_card: [
+      { module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "the leaf-run panel branch of this host" },
+      { module: "packages/fixture/screen.tsx", adapter: "mount", surface: "production", why: "the stepped-run screen branch of the same host" },
+    ],
+  },
+  exclusions: {
+    run_card: {
+      selector: "pickPanel",
+      module: "packages/fixture/screen.tsx",
+      proof: { file: "packages/fixture/__tests__/pick.test.ts", testName: "covers every branch" },
+    },
+  },
 };
 
 const own = (source) => ({ [PROPER_CONTRACT.owner]: source });
@@ -372,10 +396,23 @@ describe("R7 — the owner emits its ratified anchors, from code that runs", () 
       if (c.status !== "DRAWN") continue;
       const proof = read(c.renderedProof.file);
       expect(proof, `${kind}: the rendered owner test is gone`).toContain(c.renderedProof.testName);
+      const open = openRequirements(c);
       for (const anchor of c.anchors) {
-        expect(proof, `${kind}: ${anchor} is never read back in the rendered test`).toContain(anchor);
+        // An anchor the contract records as an OPEN OBLIGATION is not emitted
+        // yet, so no rendered test can read it back. The done-check carries it.
+        if (open.has(anchor)) continue;
+        expect(
+          proofAssertsAnchor(proof, anchor),
+          `${kind}: ${anchor} is never read back in the rendered test`,
+        ).toBe(true);
       }
     }
+  });
+
+  it("a rendered proof may assert an anchor as a selector OR as rendered markup", () => {
+    expect(proofAssertsAnchor('querySelector(\'[data-action="skip-x"]\')', '[data-action="skip-x"]')).toBe(true);
+    expect(proofAssertsAnchor('toContain(\'data-action="skip-x"\')', '[data-action="skip-x"]')).toBe(true);
+    expect(proofAssertsAnchor("it('renders')", '[data-action="skip-x"]')).toBe(false);
   });
 });
 
@@ -387,14 +424,88 @@ describe("R8 — one declared mount set per host", () => {
     expect(hits).toEqual([]);
   });
 
-  it("REJECTS a DUPLICATE host mount — a second production mount nobody declared", () => {
+  it("REJECTS an UNENUMERATED callsite — a second rendered instance nobody chose", () => {
     const hits = scanHostMounts(
       "fixture",
       PROPER_CONTRACT,
       ["packages/fixture/panel.tsx", "packages/fixture/second-panel.tsx"],
       registry,
     );
-    expect(hits.map((h) => h.detail).join(" ")).toMatch(/duplicate host mount/);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/not an enumerated adapter/);
+  });
+
+  it("PASSES two adapters on one host when a proven picker chooses between them", () => {
+    const sources = {
+      "packages/fixture/screen.tsx": "export function pickPanel(x) { return 'leaf'; }",
+      "packages/fixture/__tests__/pick.test.ts": "it('covers every branch', () => {});",
+    };
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => sources[rel] ?? null,
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it("REJECTS two adapters on one host with NO named picker — two instances waiting to happen", () => {
+    const noPicker = { ...TWO_ADAPTER_CONTRACT, exclusions: undefined };
+    const hits = scanHostMounts(
+      "fixture",
+      noPicker,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      () => null,
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/no named mutual-exclusion selector/);
+  });
+
+  it("REJECTS a picker that is not exported where the contract says it is", () => {
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => (rel.includes("__tests__") ? "it('covers every branch', () => {});" : "function pickPanel() {}"),
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/does not export the exclusion selector/);
+  });
+
+  it("REJECTS a picker whose proof test is gone — an unproven picker is an assumption", () => {
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => (rel.includes("__tests__") ? "it('something else', () => {});" : "export function pickPanel() {}"),
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/is not in packages\/fixture\/__tests__\/pick\.test\.ts/);
+  });
+
+  it("a DEV-PREVIEW adapter is enumerated and does not count as a production one", () => {
+    const withPreview = {
+      ...PROPER_CONTRACT,
+      hosts: {
+        ...PROPER_CONTRACT.hosts,
+        run_card: [
+          ...PROPER_CONTRACT.hosts.run_card,
+          { module: "packages/fixture/dev-preview.tsx", adapter: "mount", surface: "dev_preview", why: "the dev preview row, which draws only inside an opened preview" },
+        ],
+      },
+    };
+    // Two adapters, but only ONE production adapter, so no picker is demanded…
+    const hits = scanHostMounts(
+      "fixture",
+      withPreview,
+      ["packages/fixture/panel.tsx", "packages/fixture/dev-preview.tsx"],
+      registry,
+      () => null,
+    );
+    expect(hits).toEqual([]);
+    // …and it is still enumerated, so dropping it from the tree is a finding.
+    const missing = scanHostMounts("fixture", withPreview, ["packages/fixture/panel.tsx"], registry, () => null);
+    expect(missing.map((h) => h.detail).join(" ")).toMatch(/missing host adapter/);
   });
 
   it("REJECTS a MISSING host adapter — a declared module that stopped mounting", () => {
@@ -408,19 +519,28 @@ describe("R8 — one declared mount set per host", () => {
     expect(hits.map((h) => h.detail).join(" ")).toMatch(/does not dispatch this kind to ProperCard/);
   });
 
-  it("REJECTS more than one module on a host when an entry gives no reason", () => {
+  it("REJECTS an enumerated adapter that does not say what it is", () => {
     const vague = {
       ...PROPER_CONTRACT,
       hosts: {
         ...PROPER_CONTRACT.hosts,
-        run_card: [
-          { module: "packages/fixture/panel.tsx", kind: "mount", why: "the fixture run card, named here" },
-          { module: "packages/fixture/other.tsx", kind: "mount", why: "" },
-        ],
+        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "" }],
       },
     };
-    const hits = scanHostMounts("fixture", vague, ["packages/fixture/panel.tsx", "packages/fixture/other.tsx"], registry);
-    expect(hits.map((h) => h.detail).join(" ")).toMatch(/does not say why/);
+    const hits = scanHostMounts("fixture", vague, ["packages/fixture/panel.tsx"], registry, () => null);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/does not say what it is/);
+  });
+
+  it("REJECTS an adapter that declares no surface", () => {
+    const vague = {
+      ...PROPER_CONTRACT,
+      hosts: {
+        ...PROPER_CONTRACT.hosts,
+        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", why: "the fixture run card, named here" }],
+      },
+    };
+    const hits = scanHostMounts("fixture", vague, ["packages/fixture/panel.tsx"], registry, () => null);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/declares no surface/);
   });
 
   it("every real host key is one of the protocol's four", () => {
@@ -457,6 +577,146 @@ describe("R9 — the parallel core renderer is banned, and its exception expires
     const hits = auditContracts({ verification_summary: drawn });
     expect(hits.map((h) => h.rule)).toContain("R9");
     expect(hits.find((h) => h.rule === "R9").detail).toMatch(/must be gone/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The RATIFIED contract, pinned
+// ---------------------------------------------------------------------------
+//
+// The anchor sets are CLOSED. Pinning them here as literals is the point: a
+// slice that finds an anchor inconvenient has to change this test on purpose,
+// in a diff a reader can see, rather than quietly widening the set it must meet.
+
+describe("the closed anchor sets are the ratified ones, verbatim", () => {
+  const RATIFIED = {
+    artifact_review_gate: [
+      '[data-lifecycle-card="artifact_review_gate"]',
+      "review-gate-card",
+      "review-decision-bar",
+      "review-decision-disabled",
+    ],
+    recommendation_hold: [
+      '[data-lifecycle-card="recommendation_hold"]',
+      "[data-run-recommendation-chip-row]",
+      '[data-action="confirm-run-recommendation"]',
+      '[data-action="skip-run-recommendation"]',
+    ],
+    trigger_schedule_proposal: [
+      "schedule-option-rows",
+      "schedule-proposal-floor",
+      "scheduled-run-chrome",
+    ],
+    verification_summary: ["verification-in-thread"],
+  };
+
+  for (const [kind, anchors] of Object.entries(RATIFIED)) {
+    it(`'${kind}' requires exactly its ratified anchors`, () => {
+      expect(LIFECYCLE_CARD_CONTRACTS[kind].anchors).toEqual(anchors);
+    });
+  }
+
+  it("the verification outcome pill is a one-of group, and all three are reachable", () => {
+    expect(LIFECYCLE_CARD_CONTRACTS.verification_summary.anchorsOneOf.of).toEqual([
+      "verification-verified",
+      "verification-drift",
+      "verification-findings-not-met",
+    ]);
+  });
+
+  it("every owner root must carry its host and its state", () => {
+    expect(REQUIRED_ROOT_ATTRIBUTES).toEqual([
+      "data-lifecycle-card-host",
+      "data-lifecycle-card-state",
+    ]);
+    const hits = scanOwnerModule(
+      "fixture",
+      PROPER_CONTRACT,
+      own(PROPER_OWNER.replace("data-lifecycle-card-host={host} ", "")),
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/never emits 'data-lifecycle-card-host'/);
+  });
+
+  it("matches an attribute anchor with a value, and one without", () => {
+    expect(emitsAnchor('<i data-lifecycle-card="recommendation_hold" />', '[data-lifecycle-card="recommendation_hold"]')).toBe(true);
+    expect(emitsAnchor('<i data-lifecycle-card="artifact_review_gate" />', '[data-lifecycle-card="recommendation_hold"]')).toBe(false);
+    expect(emitsAnchor("<i data-run-recommendation-chip-row />", "[data-run-recommendation-chip-row]")).toBe(true);
+    expect(emitsAnchor("<i data-other />", "[data-run-recommendation-chip-row]")).toBe(false);
+  });
+
+  it("an OPEN OBLIGATION may only defer a ratified requirement, never invent one", () => {
+    const invented = {
+      ...PROPER_CONTRACT,
+      openObligations: [
+        { id: "x", requires: ["not-in-the-set"], why: "y".repeat(50), closedBy: "somebody else entirely" },
+      ],
+    };
+    const hits = auditContracts({ artifact_review_gate: invented });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/never invent one/);
+  });
+
+  it("an OPEN OBLIGATION must name what is absent and who closes it", () => {
+    const bare = {
+      ...PROPER_CONTRACT,
+      openObligations: [{ id: "x", requires: ["proper-floor"], why: "todo", closedBy: "" }],
+    };
+    const hits = auditContracts({ artifact_review_gate: bare }).map((h) => h.detail).join(" ");
+    expect(hits).toMatch(/does not say what is absent/);
+    expect(hits).toMatch(/does not say who closes it/);
+  });
+
+  it("a STALE open obligation fails — a requirement that started being met stops hiding", () => {
+    const stale = {
+      ...PROPER_CONTRACT,
+      openObligations: [
+        {
+          id: "stale",
+          requires: ["proper-floor"],
+          why: "z".repeat(50),
+          closedBy: "the slice that draws the floor",
+        },
+      ],
+    };
+    const sources = { "/repo/packages/fixture/proper-card.tsx": PROPER_OWNER };
+    const hits = collectContractViolations({
+      contracts: { artifact_review_gate: stale },
+      files: ["packages/fixture/proper-card.tsx"],
+      repoRoot: "/repo",
+      readFileImpl: (p) => sources[p] ?? "",
+    });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/delete the record/);
+  });
+
+  it("an OPEN ANCHOR NAME is recorded, not chosen — and the done-check stays red on it", () => {
+    const open = LIFECYCLE_CARD_CONTRACTS.trigger_schedule_proposal.openAnchors;
+    expect(open.map((a) => a.id)).toEqual(["schedule-settled-cancel", "schedule-settled-release"]);
+    for (const a of open) {
+      // The record describes the control; it does not name an anchor for it.
+      expect(a.describedAs.length).toBeGreaterThan(10);
+      expect(a).not.toHaveProperty("anchor");
+    }
+  });
+});
+
+describe("the contract mirrors the epic table's shape", () => {
+  it("every row carries a component owner and a wire carriage", () => {
+    for (const [kind, c] of Object.entries(LIFECYCLE_CARD_CONTRACTS)) {
+      expect(c.component, kind).toBeTruthy();
+      expect(["data_part", "interrupt"], kind).toContain(c.wireCarriage);
+    }
+  });
+
+  it("the carriage is checked against the PROTOCOL, not against the prose", () => {
+    const wrong = { ...PROPER_CONTRACT, wireCarriage: "interrupt" };
+    const hits = auditContracts({ artifact_review_gate: wrong });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/the protocol says data_part/);
+  });
+
+  it("the recommendation kind rides a typed interrupt and the other three a data part", () => {
+    expect(LIFECYCLE_CARD_CONTRACTS.recommendation_hold.wireCarriage).toBe("interrupt");
+    for (const kind of ["artifact_review_gate", "verification_summary", "trigger_schedule_proposal"]) {
+      expect(LIFECYCLE_CARD_CONTRACTS[kind].wireCarriage, kind).toBe("data_part");
+    }
   });
 });
 

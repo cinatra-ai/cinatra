@@ -67,17 +67,24 @@
  *      body and ignores it is drawing something other than what the server
  *      authorized.
  *
- *   R7 THE OWNER EMITS ITS RATIFIED ANCHOR SET. Every anchor in the contract is
- *      emitted as a literal `data-conformance-id` by the owner or by a module
- *      the owner composes, from code that is REACHABLE — an anchor inside a
- *      statically dead branch does not count, and a component whose only return
- *      is `null` emits nothing at all.
+ *   R7 THE OWNER EMITS ITS RATIFIED ANCHOR SET. The anchor set per kind is
+ *      CLOSED: it is the ratified list, copied here verbatim, and an anchor an
+ *      implementer chose does not satisfy it. Each one is emitted by the owner
+ *      or by a module the owner composes, from code that is REACHABLE — an
+ *      anchor inside a statically dead branch does not count, and a component
+ *      whose only return is `null` emits nothing at all. Every owner ROOT also
+ *      carries `data-lifecycle-card-host` and its state, so a card can be
+ *      addressed by the host it drew on and the state it drew in.
  *
- *   R8 ONE PRODUCTION MOUNT SET PER HOST. Each DRAWN kind declares, per host,
- *      the production modules that mount it. The declared set must equal the
- *      set found in the tree: an undeclared mount is a duplicate host mount, a
- *      declared module that no longer mounts is a missing host adapter, and a
- *      host with more than one module must say WHY on each entry.
+ *   R8 ONE RENDERED INSTANCE PER KIND × HOST. Not a callsite count: the rule is
+ *      that at runtime exactly one instance draws. So every production callsite
+ *      is ENUMERATED here, each is HOST-DECLARED, and a host served by more than
+ *      one adapter names the selector that picks between them plus the test that
+ *      proves the selector covers every branch. A literal one-mount rule would
+ *      reject a correct tree — the run card is legitimately served by two
+ *      exclusive panels — and a gate that rejects correct trees gets disabled.
+ *      A dev-preview adapter is enumerated and marked, never counted as
+ *      production and never hidden.
  *
  *   R9 THE RETIRED PARALLEL CORE RENDERERS. `VerificationView` — the route-bound
  *      page component that draws the §VII reading outside the card — is banned
@@ -93,13 +100,31 @@
  *                and every host to be mounted. It names the kinds that are still
  *                placeholders, which is what the epic's finished tree must clear.
  *
- * WHERE THE ANCHOR SETS COME FROM. Each contract's `anchors` are read off the
- * ratified drawing — `specs/app-lifecycle-cards.html` at design commit
- * 92c1be7c6f864dec6382a9ef01e7b2e1c38aa871, the same commit the acceptance
- * manifest pins — section by section: §II for the review card, §V for the
- * recommendation row, §VI for the schedule proposal, §VII for the verification
- * reading. They are written down HERE, ahead of the drawing, so a slice cannot
- * decide after the fact that whatever it drew was the requirement.
+ * WHERE THE ANCHOR SETS COME FROM. They are RATIFIED and CLOSED, and this table
+ * copies them rather than deriving them. An earlier round of this gate read them
+ * off the drawing itself; that reading was replaced by the ratified list, so no
+ * slice has to guess and no slice may decide after the fact that whatever it
+ * drew was the requirement. Two entries in that list name a control in prose and
+ * give it no anchor id. Those are recorded as OPEN ANCHOR NAMES rather than
+ * filled in, because filling them in is exactly the implementer choice a closed
+ * set forbids, and the done-check stays red until they are named.
+ *
+ * AND WHERE THE TABLE SHAPE COMES FROM. The epic's host-ownership table carries
+ * a component-owner column and a wire-carriage column; each row below mirrors
+ * both, and the carriage is checked against the protocol module rather than
+ * against the prose. This gate does NOT parse the epic text — the table lives in
+ * an issue, not in the repository, so parsing it would make CI depend on a
+ * document CI cannot read. What the gate can do is hold the same shape and fail
+ * when the repository disagrees with itself, which it does.
+ *
+ * AN OPEN OBLIGATION is the third recording device, beside the placeholder row
+ * and the open anchor name. It is a ratified requirement the tree does not meet,
+ * on a kind that IS drawn. It names what it requires, why the requirement is
+ * unmet, and who closes it; the done-check fails on it; and it is checked for
+ * staleness in the other direction, so a requirement that quietly starts being
+ * met cannot keep hiding behind its own exemption. It is not a waiver. It exists
+ * so a gate can carry a requirement whose FIX belongs to a different slice,
+ * without either lying about the tree or blocking on somebody else's work.
  *
  * THE HONEST LIMIT, stated because a gate that overclaims is worse than none.
  * This scanner reads source text. Source text can be arranged to satisfy a
@@ -198,8 +223,10 @@ export const S1_SHELL = Object.freeze({
 export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
   artifact_review_gate: {
     status: "DRAWN",
-    design: "§II (the review card in the thread) with §VIII chips",
+    design: "§II (the review card in the thread)",
+    // The epic's table columns, mirrored: component owner, then wire carriage.
     component: "ReviewGateCard",
+    wireCarriage: "data_part",
     owner: "packages/agents/src/review-gate-card.tsx",
     // The floor lives in its own module and is composed by the card. Anchors it
     // emits count as the card's, because the card is what mounts it.
@@ -209,51 +236,73 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       params: ["view"],
       fields: ["state", "canDecide", "canComment", "suggestions"],
     },
+    // CLOSED SET. "the applicable decision-floor anchors" is read against the
+    // shipped floor, which emits exactly these two ids — the open floor and its
+    // disabled form. That is a reading of the ratified list, not an invention:
+    // both names already exist in the tree and in the conformance record.
     anchors: [
+      '[data-lifecycle-card="artifact_review_gate"]',
       "review-gate-card",
-      "review-target-island",
       "review-decision-bar",
-      "suggestion-chips",
+      "review-decision-disabled",
     ],
     hosts: {
       chat_thread: [
         {
           module: "packages/chat/src/renderable-views/registry.tsx",
-          kind: "registry",
+          adapter: "registry",
+          surface: "production",
           why: "the transcript dispatch — the chat column declares the host once and every turn resolves inside it",
         },
       ],
       site_widget: [
         {
           module: "packages/chat/src/renderable-views/registry.tsx",
-          kind: "registry",
+          adapter: "registry",
+          surface: "production",
           why: "the SAME registry row serves the widget transcript; a second table would be a parallel registry",
         },
       ],
       run_card: [
         {
           module: "packages/agents/src/agentic-run-panel.tsx",
-          kind: "mount",
-          why: "the epic's named run_card mount",
+          adapter: "mount",
+          surface: "production",
+          why: "the agentic panel branch of the run card",
         },
         {
           module: "packages/agents/src/orchestrator-stepper-panel.tsx",
-          kind: "mount",
-          why: "the stepper branch of the same host — the run card is drawn by branch-exclusive panels, and each is named so a further one cannot appear silently",
+          adapter: "mount",
+          surface: "production",
+          why: "the stepper branch of the same host: the run-detail review branch, which composes the shared card and defines no drawing of its own",
         },
       ],
       page_gate_region: [
         {
           module:
             "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
-          kind: "mount",
+          adapter: "mount",
+          surface: "production",
           why: "the review page mounts the card in its gate region; the page composes no floor of its own",
         },
       ],
     },
+    // Where two adapters serve ONE host, exclusivity is a property somebody can
+    // read, not a hope. The branch selector decides which panel the run-detail
+    // screen draws, so exactly one of the two can be mounted for a given run.
+    exclusions: {
+      run_card: {
+        selector: "runDetailPanelKind",
+        module: "packages/agents/src/instance-screens.tsx",
+        proof: {
+          file: "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
+          testName: "covers every branch — no shape is left without an answer",
+        },
+      },
+    },
     renderedProof: {
       file: "packages/agents/src/__tests__/review-gate-card.test.tsx",
-      testName: "draws the SAME card on every first-party host, differing only in the frame",
+      testName: "the root carries its lifecycle-card identity, its host and its state",
     },
   },
 
@@ -261,6 +310,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     status: "DRAWN",
     design: "§V (the recommendation card) — the chip row IS the whole card",
     component: "RecommendationHoldCard",
+    wireCarriage: "interrupt",
     owner: "packages/agents/src/run-recommendation-chip-row.tsx",
     composes: [],
     body: {
@@ -277,34 +327,73 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "skillNames",
       ],
     },
-    anchors: ["run-chip-row"],
+    anchors: [
+      '[data-lifecycle-card="recommendation_hold"]',
+      "[data-run-recommendation-chip-row]",
+      '[data-action="confirm-run-recommendation"]',
+      '[data-action="skip-run-recommendation"]',
+    ],
+    // THREE of the four anchors are emitted today. The lifecycle-card identity
+    // attribute is not, and neither is the root's host/state pair: this owner
+    // returns the shipped chip row, whose root carries the row's own attributes
+    // and no lifecycle-card ones at all. Recorded rather than enforced, because
+    // closing it edits a product module this slice does not own — see the entry.
+    openObligations: [
+      {
+        id: "recommendation-root-identity",
+        requires: [
+          '[data-lifecycle-card="recommendation_hold"]',
+          "data-lifecycle-card-host",
+          "data-lifecycle-card-state",
+        ],
+        why: "The owner returns the shipped chip row directly, and that row's root carries no lifecycle-card identity, host or state attribute. So the card cannot be addressed on a host the way every other lifecycle card can, and a capture cannot assert which host or state it photographed.",
+        closedBy:
+          "The slice that owns this card's reachability and host parity, or an owner ruling assigning the attribute change to this contracts slice. Naming the owner of the edit is an open question, not a decision this gate may take.",
+      },
+    ],
     hosts: {
       chat_thread: null,
       site_widget: null,
       run_card: [
         {
           module: "packages/agents/src/agentic-run-panel.tsx",
-          kind: "mount",
-          why: "the epic's named run_card mount",
-        },
-        {
-          module: "packages/agents/src/orchestrator-stepper-panel.tsx",
-          kind: "mount",
-          why: "the stepper branch of the same host",
+          adapter: "mount",
+          surface: "production",
+          why: "the agentic panel branch of the run card",
         },
         {
           module: "packages/agents/src/instance-screens.tsx",
-          kind: "mount",
-          why: "the run-detail branch: the agentic panel does not render for a run that is pending_input, and a HELD run is exactly that, so this branch draws the held state",
+          adapter: "mount",
+          surface: "production",
+          why: "the run screen branch: the agentic panel does not render for a run that is pending_input, and a HELD run is exactly that, so this branch draws the held state",
+        },
+        {
+          module: "packages/agents/src/orchestrator-stepper-panel.tsx",
+          adapter: "mount",
+          surface: "dev_preview",
+          why: "the Dev Stepper's child-run preview row, which draws only while a dev preview child is open and addresses that child's own run — enumerated because it is a real callsite, and marked dev_preview because it is not one of the production adapters",
         },
       ],
       page_gate_region: null,
     },
+    exclusions: {
+      run_card: {
+        selector: "screenHostsRecommendationCard",
+        module: "packages/agents/src/instance-screens.tsx",
+        proof: {
+          file: "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
+          testName: "stands down on the branch whose panel already declares the host",
+        },
+      },
+    },
     hostGap:
-      "Three of the four hosts are undefined for this kind: the card is reachable only from the run card today. The chat thread, the site widget and the page gate region are named by the parity slice that follows this one.",
+      "Three of the four hosts carry no mount. The chat thread is RULED and belongs to the chat-origin slice: the card mounts in the assistant dispatch turn, keyed by the run identity off the tool result, and NOT through the renderable-view registry. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.",
     renderedProof: {
-      file: "packages/agents/src/__tests__/agentic-run-panel.chat-lifecycle.test.tsx",
-      testName: "draws the core recommendation card when skills match",
+      // The OWNER's own rendered suite: it mounts RecommendationHoldCard, feeds
+      // it a validated hold state and reads the row and its two decisions back
+      // out of real DOM.
+      file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
+      testName: "draws the shipped chip-row for a held run and the shipped summaries for a decided one",
     },
   },
 
@@ -312,6 +401,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     status: "PLACEHOLDER",
     design: "§VI (the schedule proposal card)",
     component: "ScheduleProposalCard",
+    wireCarriage: "data_part",
     owner: null,
     composes: [],
     body: {
@@ -319,12 +409,22 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       params: ["view"],
       fields: ["state", "proposal", "options", "estimatedDuration"],
     },
-    anchors: [
-      "schedule-proposal-card",
-      "schedule-option-rows",
-      "schedule-estimated-duration",
-      "schedule-proposal-floor",
-      "trigger-configuration-summary",
+    anchors: ["schedule-option-rows", "schedule-proposal-floor", "scheduled-run-chrome"],
+    // The settled card's two quiet controls are ratified in PROSE and not by
+    // name. A closed set means an implementer may not choose the missing names,
+    // so they stay OPEN here until the owner names them. The done-check fails
+    // while any open anchor name remains, which is what keeps the hole visible.
+    openAnchors: [
+      {
+        id: "schedule-settled-cancel",
+        describedAs: "the settled card's Cancel trigger control",
+        why: "The ratified list names this control in prose and gives no anchor id. The drawing slice may not choose one, because an implementer-chosen anchor does not satisfy a closed set.",
+      },
+      {
+        id: "schedule-settled-release",
+        describedAs: "the settled card's Release now control, for an administrator",
+        why: "Same: named in prose, no anchor id, and not the drawing slice's to invent.",
+      },
     ],
     hosts: {
       chat_thread: null,
@@ -333,7 +433,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       page_gate_region: null,
     },
     hostGap:
-      "No host mounts this kind, because no component draws it. The registry still dispatches the kind to the S1 shell.",
+      "No host mounts this kind, because no component draws it. The registry still dispatches the kind to the S1 shell. The drawing slice names the run_card adapter and binds route, identity and authorization reader for the page gate region before it implements either.",
     renderedProof: null,
     gap: "The card is not drawn. The registry dispatches this kind to the S1 shell, which calls itself not-yet-drawn; the server already returns the proposal body and the client parses only the state name; the confirm action has no user interface caller. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.",
   },
@@ -342,6 +442,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     status: "PLACEHOLDER",
     design: "§VII (the verification card) — advisory, no floor",
     component: "VerificationSummaryCard",
+    wireCarriage: "data_part",
     owner: null,
     composes: [],
     body: {
@@ -349,13 +450,15 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       params: ["view"],
       fields: ["state", "outcome", "revisions", "fields", "comments"],
     },
-    anchors: [
-      "verification-summary-card",
-      "verification-outcome-pill",
-      "verification-revision-pins",
-      "verification-field-table",
-      "verification-advisory-comments",
-    ],
+    anchors: ["verification-in-thread"],
+    // "plus exactly one outcome anchor of …" — read as: the card must be able to
+    // draw each outcome, and any one rendering shows exactly one of them. So the
+    // owner emits all three and the rendered proof asserts the exactly-one.
+    anchorsOneOf: {
+      id: "verification-outcome",
+      of: ["verification-verified", "verification-drift", "verification-findings-not-met"],
+      why: "The outcome pill is the only place this card carries state colour, so exactly one of the three is drawn at a time and all three must be reachable.",
+    },
     hosts: {
       chat_thread: null,
       site_widget: null,
@@ -363,7 +466,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       page_gate_region: null,
     },
     hostGap:
-      "No host mounts this kind, because no component draws it. The rich reading exists only as a route-bound page component, which R9 records as a pending retirement.",
+      "No host mounts this kind, because no component draws it. The rich reading exists only as a route-bound page component, which R9 records as a pending retirement, and the review page reuses the card once it is drawn.",
     renderedProof: null,
     gap: "The card is not drawn. The registry dispatches this kind to the S1 shell; the resolver answers with an advisory state name and no body; the rich reading of the same facts lives in a route-bound page component that is not a lifecycle card. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.",
   },
@@ -726,9 +829,60 @@ export function extractComponentBody(code, component) {
   return code.slice(bodyOpen, bodyEnd);
 }
 
-/** Is `anchor` emitted as a literal conformance id anywhere in `code`? */
+/**
+ * Is `anchor` emitted anywhere in `code`?
+ *
+ * The ratified list is written in TWO forms and both are kept verbatim, because
+ * a closed set stops being closed the moment it is paraphrased:
+ *   `[data-lifecycle-card="recommendation_hold"]` — an attribute selector, with
+ *       or without a value (`[data-run-recommendation-chip-row]`);
+ *   `review-gate-card` — a bare conformance id.
+ */
 export function emitsAnchor(code, anchor) {
-  return new RegExp(String.raw`data-conformance-id=["']${anchor}["']`).test(code);
+  const selector = /^\[([a-zA-Z0-9-]+)(?:=["']([^"']+)["'])?\]$/.exec(anchor);
+  if (selector === null) {
+    return new RegExp(String.raw`data-conformance-id=["']${anchor}["']`).test(code);
+  }
+  const [, attr, value] = selector;
+  return value === undefined
+    ? new RegExp(String.raw`\b${attr}(?==|\s|>|$)`, "m").test(code)
+    : new RegExp(String.raw`\b${attr}=["']${value}["']`).test(code);
+}
+
+/**
+ * The attributes every owner ROOT must carry, so a card can be addressed by the
+ * host it drew on and the state it drew in. Ratified with the closed anchor
+ * sets; a capture that cannot say which host and which state it photographed is
+ * not evidence of a matrix cell.
+ */
+export const REQUIRED_ROOT_ATTRIBUTES = Object.freeze([
+  "data-lifecycle-card-host",
+  "data-lifecycle-card-state",
+]);
+
+/**
+ * Does the RENDERED owner test read `anchor` back out of the DOM?
+ *
+ * A test may address an anchor as a selector (`[data-action="skip-…"]`) or as an
+ * attribute in rendered HTML (`toContain('data-action="skip-…"')`). Both are the
+ * same assertion about the same pixels, so both count. What does NOT count is a
+ * test that never names the anchor at all.
+ */
+export function proofAssertsAnchor(proofSource, anchor) {
+  const selector = /^\[([a-zA-Z0-9-]+)(?:=["']([^"']+)["'])?\]$/.exec(anchor);
+  if (selector === null) return proofSource.includes(anchor);
+  const [, attr, value] = selector;
+  if (value === undefined) return proofSource.includes(attr);
+  return (
+    proofSource.includes(`${attr}="${value}"`) || proofSource.includes(`${attr}='${value}'`)
+  );
+}
+
+/** Every requirement a kind has recorded as open, flattened to plain strings. */
+export function openRequirements(contract) {
+  const out = new Set();
+  for (const o of contract.openObligations ?? []) for (const r of o.requires) out.add(r);
+  return out;
 }
 
 /**
@@ -805,8 +959,10 @@ export function scanOwnerModule(kind, contract, sourcesByRel) {
       push("R6", `'${kind}': the authorized body field '${field}' is never consumed`);
     }
   }
+  const open = openRequirements(contract);
   for (const anchor of contract.anchors) {
     if (emitsAnchor(drawn, anchor)) continue;
+    if (open.has(anchor)) continue; // recorded as an open obligation, not hidden
     const dead = parts.some((p) => emitsAnchor(p, anchor));
     push(
       "R7",
@@ -815,18 +971,54 @@ export function scanOwnerModule(kind, contract, sourcesByRel) {
         : `'${kind}': the ratified anchor '${anchor}' is never emitted`,
     );
   }
+  // "plus exactly one outcome anchor of A / B / C" — every branch must be
+  // reachable, so the owner emits all of them and draws one at a time.
+  for (const alt of contract.anchorsOneOf?.of ?? []) {
+    if (emitsAnchor(drawn, alt) || open.has(alt)) continue;
+    push("R7", `'${kind}': the ratified '${contract.anchorsOneOf.id}' anchor '${alt}' is never emitted, so that outcome cannot be drawn`);
+  }
+  // Every owner ROOT carries its host and its state.
+  for (const attr of REQUIRED_ROOT_ATTRIBUTES) {
+    if (new RegExp(String.raw`\b${attr}\b`).test(drawn) || open.has(attr)) continue;
+    push("R7", `'${kind}': the owner root never emits '${attr}' — a card that cannot say which host and state it drew on cannot be captured as a matrix cell`);
+  }
   return findings;
 }
 
 /**
- * R8 for ONE drawn kind: the declared mount set equals the mounts in the tree.
+ * R8 for ONE drawn kind — the RUNTIME instance rule, not a callsite count.
+ *
+ * The rule the epic states is: exactly ONE rendered card instance per kind ×
+ * host at runtime; every production callsite enumerated, host-declared, and
+ * proven mutually exclusive where more than one adapter serves the same host.
+ *
+ * A literal one-mount-per-host rule would be WRONG here, and rejecting a correct
+ * tree is how a gate gets disabled. The run card is legitimately served by two
+ * exclusive adapters, chosen by a branch selector: one panel draws for a leaf
+ * run, the other for a stepped one, and never both. So this rule checks the
+ * three properties that actually make "one instance" true:
+ *
+ *   ENUMERATED   every callsite in the tree is declared here, and every declared
+ *                module really mounts the component.
+ *   HOST-DECLARED each adapter sits under a host declaration (R3 proves the file
+ *                carries the provider; this rule proves the adapter was claimed).
+ *   EXCLUSIVE    a host with more than one adapter names the selector that picks
+ *                between them, and a test that proves the selector covers every
+ *                branch. Two adapters and no named selector is two instances
+ *                waiting to happen.
+ *
+ * A DEV-PREVIEW adapter is enumerated like any other and does NOT count as a
+ * production adapter: it draws only inside an explicitly opened preview and
+ * addresses a different run. Hiding it would leave a real callsite unenumerated;
+ * counting it as production would claim a host mount nobody ships.
  *
  * @param {string} kind
  * @param {object} contract
- * @param {string[]} mountedIn  production modules where the component is mounted
+ * @param {string[]} mountedIn  modules where the component is mounted
  * @param {string} registrySource  the renderable-view registry's source
+ * @param {(rel: string) => string|null} readModule  for the exclusion check
  */
-export function scanHostMounts(kind, contract, mountedIn, registrySource) {
+export function scanHostMounts(kind, contract, mountedIn, registrySource, readModule = () => null) {
   const findings = [];
   const push = (detail, file = contract.owner) =>
     findings.push({ rule: "R8", file, line: 1, detail });
@@ -836,31 +1028,48 @@ export function scanHostMounts(kind, contract, mountedIn, registrySource) {
   for (const host of LIFECYCLE_CARD_HOSTS) {
     const entries = contract.hosts[host];
     if (entries === null || entries === undefined) continue;
-    if (entries.length > 1) {
-      for (const e of entries) {
-        if (!e.why || e.why.length < 20) {
-          push(
-            `'${kind}' declares ${entries.length} modules on host '${host}' and ${e.module} does not say why — more than one drawing per host needs a reason on every entry`,
-            e.module,
-          );
+    const production = entries.filter((e) => e.surface !== "dev_preview");
+    for (const e of entries) {
+      if (!e.why || e.why.length < 20) {
+        push(`'${kind}': the adapter ${e.module} on host '${host}' does not say what it is — every enumerated callsite states its own reason`, e.module);
+      }
+      if (e.surface !== "production" && e.surface !== "dev_preview") {
+        push(`'${kind}': the adapter ${e.module} on host '${host}' declares no surface — production or dev_preview`, e.module);
+      }
+      if (e.adapter === "registry") registryModules.add(e.module);
+      else declaredMounts.add(e.module);
+    }
+    // More than one PRODUCTION adapter on one host needs a proven picker.
+    if (production.length > 1) {
+      const exclusion = (contract.exclusions ?? {})[host];
+      if (!exclusion || !exclusion.selector || !exclusion.module || !exclusion.proof) {
+        push(
+          `'${kind}': host '${host}' has ${production.length} production adapters and no named mutual-exclusion selector — two adapters with nothing choosing between them is two rendered instances`,
+        );
+      } else {
+        const source = readModule(exclusion.module);
+        if (source === null) {
+          push(`'${kind}': the exclusion selector's module ${exclusion.module} is not readable`, exclusion.module);
+        } else if (!new RegExp(String.raw`\bexport\s+(?:function|const)\s+${exclusion.selector}\b`).test(stripComments(source))) {
+          push(`'${kind}': ${exclusion.module} does not export the exclusion selector '${exclusion.selector}' — the picker must be readable, not implied`, exclusion.module);
+        }
+        const proof = readModule(exclusion.proof.file);
+        if (proof === null || !proof.includes(exclusion.proof.testName)) {
+          push(`'${kind}': the exclusion proof "${exclusion.proof.testName}" is not in ${exclusion.proof.file} — an unproven picker is an assumption`, exclusion.proof.file);
         }
       }
-    }
-    for (const e of entries) {
-      if (e.kind === "registry") registryModules.add(e.module);
-      else declaredMounts.add(e.module);
     }
   }
 
   const found = new Set(mountedIn);
   for (const rel of declaredMounts) {
     if (!found.has(rel)) {
-      push(`'${kind}': ${rel} is declared as a host mount and does not mount ${contract.component} — a missing host adapter`, rel);
+      push(`'${kind}': ${rel} is declared as a host adapter and does not mount ${contract.component} — a missing host adapter`, rel);
     }
   }
   for (const rel of found) {
     if (declaredMounts.has(rel) || registryModules.has(rel)) continue;
-    push(`'${kind}': ${rel} mounts ${contract.component} and is not a declared host mount — a second production mount is a duplicate host mount`, rel);
+    push(`'${kind}': ${rel} mounts ${contract.component} and is not an enumerated adapter — an unenumerated callsite is a second rendered instance nobody chose`, rel);
   }
 
   // A registry-served host is served by the registry ROW, not by a JSX mount.
@@ -900,8 +1109,42 @@ export function auditContracts(contracts = LIFECYCLE_CARD_CONTRACTS) {
       push("R5", `'${kind}': status "${c.status}" is neither DRAWN nor PLACEHOLDER`);
       continue;
     }
-    if (LIFECYCLE_CARD_CARRIAGE[kind] !== undefined && c.carriage !== undefined && c.carriage !== LIFECYCLE_CARD_CARRIAGE[kind]) {
-      push("R5", `'${kind}': the contract carries it as ${c.carriage}; the protocol says ${LIFECYCLE_CARD_CARRIAGE[kind]}`);
+    // The epic's table gained two columns — component owner and wire carriage.
+    // The contract mirrors that shape, and the carriage is checked against the
+    // protocol rather than against the prose, so the two can never disagree.
+    if (LIFECYCLE_CARD_CARRIAGE[kind] !== undefined && c.wireCarriage !== LIFECYCLE_CARD_CARRIAGE[kind]) {
+      push("R5", `'${kind}': the contract carries it as ${c.wireCarriage ?? "nothing"}; the protocol says ${LIFECYCLE_CARD_CARRIAGE[kind]}`);
+    }
+    // An OPEN OBLIGATION is a ratified requirement the tree does not meet yet.
+    // It must name what it requires, why it is open, and who closes it — a bare
+    // exemption is the shape this whole round exists to end.
+    for (const o of c.openObligations ?? []) {
+      if (!Array.isArray(o.requires) || o.requires.length === 0) {
+        push("R7", `'${kind}': the open obligation '${o.id}' names no requirement`);
+      }
+      for (const r of o.requires ?? []) {
+        const known =
+          (c.anchors ?? []).includes(r) ||
+          (c.anchorsOneOf?.of ?? []).includes(r) ||
+          REQUIRED_ROOT_ATTRIBUTES.includes(r);
+        if (!known) {
+          push("R7", `'${kind}': the open obligation '${o.id}' defers '${r}', which is not part of the ratified set — an obligation may only defer a requirement, never invent one`);
+        }
+      }
+      if (!o.why || o.why.length < 40) push("R7", `'${kind}': the open obligation '${o.id}' does not say what is absent`);
+      if (!o.closedBy || o.closedBy.length < 20) push("R7", `'${kind}': the open obligation '${o.id}' does not say who closes it`);
+    }
+    // An OPEN ANCHOR NAME is a control the ratified list names in prose only.
+    // The set is closed, so nobody here may choose the missing name.
+    for (const a of c.openAnchors ?? []) {
+      if (!a.id || !a.describedAs || !a.why || a.why.length < 40) {
+        push("R7", `'${kind}': the open anchor '${a.id ?? "?"}' must say what control it is and why it has no name yet`);
+      }
+    }
+    if (c.anchorsOneOf !== undefined) {
+      if (!Array.isArray(c.anchorsOneOf.of) || c.anchorsOneOf.of.length < 2) {
+        push("R7", `'${kind}': a one-of anchor group needs at least two alternatives`);
+      }
     }
     if (!c.component) push("R5", `'${kind}': no component name`);
     if (!Array.isArray(c.anchors) || c.anchors.length === 0) {
@@ -1011,7 +1254,7 @@ export function collectContractViolations({
       }
       violations.push(...scanOwnerModule(kind, c, sources));
       violations.push(
-        ...scanHostMounts(kind, c, mountsByComponent.get(c.component) ?? [], registrySource),
+        ...scanHostMounts(kind, c, mountsByComponent.get(c.component) ?? [], registrySource, read),
       );
       if (c.renderedProof) {
         const proof = read(c.renderedProof.file);
@@ -1021,8 +1264,16 @@ export function collectContractViolations({
           if (!proof.includes(c.renderedProof.testName)) {
             violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the rendered owner test "${c.renderedProof.testName}" is not in this file` });
           }
-          for (const anchor of c.anchors) {
-            if (!proof.includes(anchor)) {
+          const openHere = openRequirements(c);
+          const assertable = [
+            ...c.anchors,
+            ...(c.anchorsOneOf?.of ?? []),
+            ...REQUIRED_ROOT_ATTRIBUTES.map((a) => `[${a}]`),
+          ];
+          for (const anchor of assertable) {
+            const bare = /^\[([a-zA-Z0-9-]+)\]$/.exec(anchor);
+            if (openHere.has(anchor) || (bare !== null && openHere.has(bare[1]))) continue;
+            if (!proofAssertsAnchor(proof, anchor)) {
               violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the rendered owner test never reads the anchor '${anchor}' back out of the DOM` });
             }
           }
@@ -1051,8 +1302,48 @@ export function collectContractViolations({
     }
   }
 
+  // An open obligation must still be OPEN. If the tree now satisfies it, the
+  // record is stale and hides a requirement that is actually met — the same
+  // both-directions honesty the placeholder rows carry.
+  for (const [kind, c] of Object.entries(contracts)) {
+    if (c.status !== "DRAWN" || !c.owner) continue;
+    const parts = [c.owner, ...c.composes].map((rel) => stripComments(read(rel) ?? ""));
+    const drawn = parts.map(stripUnreachable).join("\n");
+    for (const o of c.openObligations ?? []) {
+      const met = o.requires.every((r) =>
+        REQUIRED_ROOT_ATTRIBUTES.includes(r)
+          ? new RegExp(String.raw`\b${r}\b`).test(drawn)
+          : emitsAnchor(drawn, r),
+      );
+      if (met) {
+        violations.push({
+          rule: "R7",
+          file: c.owner,
+          line: 1,
+          detail: `'${kind}': the open obligation '${o.id}' is recorded as unmet and the owner now emits every part of it — delete the record`,
+        });
+      }
+    }
+  }
+
   if (complete) {
     for (const [kind, c] of Object.entries(contracts)) {
+      for (const o of c.openObligations ?? []) {
+        violations.push({
+          rule: "R7",
+          file: c.owner ?? "scripts/audit/chat-hitl-one-card-gate.mjs",
+          line: 1,
+          detail: `'${kind}': ${o.requires.join(", ")} — ${o.why} Closed by: ${o.closedBy}`,
+        });
+      }
+      for (const a of c.openAnchors ?? []) {
+        violations.push({
+          rule: "R7",
+          file: "scripts/audit/chat-hitl-one-card-gate.mjs",
+          line: 1,
+          detail: `'${kind}': ${a.describedAs} has no ratified anchor name — ${a.why}`,
+        });
+      }
       if (c.status !== "DRAWN") continue;
       for (const host of LIFECYCLE_CARD_HOSTS) {
         if ((c.hosts ?? {})[host] !== null) continue;

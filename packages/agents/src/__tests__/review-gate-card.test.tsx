@@ -268,6 +268,38 @@ describe("one renderer, three first-party hosts", () => {
     expect(drawn.page_gate_region).toBe(drawn.chat_thread);
   });
 
+  // The ratified root contract, asserted on real DOM: the card's own identity,
+  // the host it drew on, and the state it drew in. A capture that cannot say
+  // which host and which state it photographed is not evidence of a cell, and a
+  // card that does not name its kind cannot be addressed on a host at all. Each
+  // value comes from a VALIDATED body field or the host declaration, never from
+  // a literal in the markup.
+  it("the root carries its lifecycle-card identity, its host and its state", async () => {
+    for (const host of HOSTS) {
+      mockResolve({ state: "pending", canDecide: true, canComment: true });
+      const { container, unmount } = renderOn(host);
+      await waitFor(() =>
+        expect(container.querySelector('[data-lifecycle-card="artifact_review_gate"]')).not.toBeNull(),
+      );
+      const root = container.querySelector('[data-conformance-id="review-gate-card"]')!;
+      expect(root.getAttribute("data-lifecycle-card")).toBe("artifact_review_gate");
+      expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
+      expect(root.getAttribute("data-lifecycle-card-state")).toBe("pending");
+      unmount();
+      cleanup();
+    }
+    // …and the state really tracks the resolve rather than a constant.
+    mockResolve({ state: "settled" });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        container
+          .querySelector('[data-conformance-id="review-gate-card"]')
+          ?.getAttribute("data-lifecycle-card-state"),
+      ).toBe("settled"),
+    );
+  });
+
   it("every host addresses the same island with the same ref", async () => {
     for (const host of HOSTS) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
