@@ -1420,24 +1420,46 @@ jobs:
       # The floor is the anti-vacuum guard: a filter that matches nothing, or
       # fewer files than the program ships, fails here rather than reporting a
       # green run over an empty set.
+      #
+      # The count comes from the JSON REPORT, not from the human summary. The
+      # first cut of this step scraped "Test Files N passed" and read zero on the
+      # runner, because that line is wrapped in ANSI colour codes there and is
+      # not on a local non-TTY run — a green suite reported as an empty one,
+      # which is precisely the false signal this floor exists to prevent.
       - name: chat-HITL gate suites (root/audit tier)
         env:
           MIN_GATE_FILES: '3'
+          GATE_REPORT: ${{ runner.temp }}/chat-hitl-gates.json
         run: |
           set -uo pipefail
           pnpm exec vitest run --config vitest.config.ts --no-coverage \
-            chat-hitl held-turn held-dispatch 2>&1 | tee /tmp/chat-hitl-gates.log
-          status=${PIPESTATUS[0]}
+            --reporter=default --reporter=json --outputFile.json="$GATE_REPORT" \
+            chat-hitl held-turn held-dispatch
+          status=$?
           if [ "$status" -ne 0 ]; then
             echo "::error::chat-HITL gate suites failed."
             exit "$status"
           fi
-          files=$(sed -n 's/.*Test Files  *\([0-9][0-9]*\) passed.*/\1/p' /tmp/chat-hitl-gates.log | tail -1)
-          if [ -z "$files" ] || [ "$files" -lt "$MIN_GATE_FILES" ]; then
-            echo "::error::the chat-HITL filter matched ${files:-0} test files, below the floor of $MIN_GATE_FILES — a renamed or deleted gate suite would otherwise pass silently."
-            exit 1
-          fi
-          echo "chat-HITL gate suites: $files file(s) executed."
+          node -e '
+            const fs = require("node:fs");
+            const path = process.env.GATE_REPORT;
+            const floor = Number(process.env.MIN_GATE_FILES);
+            if (!fs.existsSync(path)) {
+              console.log(`::error::vitest wrote no JSON report to ${path} — the file count cannot be verified.`);
+              process.exit(1);
+            }
+            const report = JSON.parse(fs.readFileSync(path, "utf8"));
+            const files = new Set((report.testResults ?? []).map((t) => t.name));
+            if (report.success !== true) {
+              console.log("::error::the JSON report says the run did not succeed.");
+              process.exit(1);
+            }
+            if (files.size < floor) {
+              console.log(`::error::the chat-HITL filter matched ${files.size} test files, below the floor of ${floor} — a renamed or deleted gate suite would otherwise pass silently.`);
+              process.exit(1);
+            }
+            console.log(`chat-HITL gate suites: ${files.size} file(s), ${report.numTotalTests} test(s).`);
+          '
 
   package-unit-suites:
     name: Workspace package unit suites
