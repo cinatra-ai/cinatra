@@ -1,0 +1,44 @@
+{
+  "origin": "a lane host, port 3030",
+  "capturedAt": "2026-08-16T11:29:20.294Z",
+  "shots": [
+    {
+      "case": "a — a change set that is not there",
+      "requestedUrl": "http://localhost:3030/configuration/artifacts/restore/no-such-change-set",
+      "finalUrl": "http://localhost:3030/configuration/artifacts/restore/no-such-change-set",
+      "httpStatus": 200,
+      "title": "Restore change | Cinatra",
+      "h1": "Restore this change?",
+      "restoreTestIds": [
+        "artifacts-restore-route-missing"
+      ],
+      "panelText": "This change set does not exist or can no longer be restored\n\nThe link may be out of date. Back to Restore objects",
+      "screenshot": "a-not-found.png",
+      "consoleErrors": []
+    },
+    {
+      "case": "b — a real restorable change set",
+      "requestedUrl": "http://localhost:3030/configuration/artifacts/restore/cs_5c230d58-aabd-46fa-9a47-772bcc0852ce",
+      "finalUrl": "http://localhost:3030/configuration/artifacts/restore/cs_5c230d58-aabd-46fa-9a47-772bcc0852ce",
+      "httpStatus": 200,
+      "title": "Restore change | Cinatra",
+      "h1": "Restore this change?",
+      "restoreTestIds": [
+        "artifacts-restore-route",
+        "artifacts-targeted-restore"
+      ],
+      "panelText": "You are authorized to restore every affected object.\n\nCreated 1 object@cinatra-ai/text-artifact:artifact\n\nless than a minute ago\n\nRestore",
+      "screenshot": "b-confirmation.png",
+      "consoleErrors": []
+    }
+  ],
+  "seededChangeSet": "cs_5c230d58-aabd-46fa-9a47-772bcc0852ce",
+  "unauthorizedCaseNotCaptured": {
+    "why": "A change set made by another member of the same org did NOT deny this admin: as org owner they hold restore authority over that object, so the page correctly showed the confirmation. The authorization panel is covered by the route test instead.",
+    "changeSetId": "cs_1acf8e01-6819-4fc8-aa75-e07bd0d50fdf",
+    "renderedInstead": [
+      "artifacts-restore-route",
+      "artifacts-targeted-restore"
+    ]
+  }
+}
