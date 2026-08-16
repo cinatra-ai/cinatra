@@ -381,4 +381,72 @@ describe("the recommendation hold stays outside the DATA_PART envelope", () => {
     const forbidden: LifecycleResolveEnvelope["kind"] = "recommendation_hold";
     expect(forbidden).toBe("recommendation_hold");
   });
+
+  // -------------------------------------------------------------------------
+  // The explicit REJECTION fixture
+  // -------------------------------------------------------------------------
+  //
+  // Being unrouted is not the same as being refused. A kind that no arm happens
+  // to handle today can start being handled by accident tomorrow; a kind the
+  // parse REFUSES stays refused until somebody deletes the refusal. The hold is
+  // the second kind, and these are the four ways an envelope could try to claim
+  // it.
+
+  it("REFUSES an envelope claiming the hold, whatever kind was asked for", () => {
+    const claiming = {
+      kind: "recommendation_hold",
+      state: { state: "pending", canDecide: true, canComment: false },
+      body: null,
+    };
+    // Asked for as itself.
+    expect(
+      parseLifecycleResolveEnvelope(
+        "recommendation_hold" as unknown as LifecycleDataPartViewType,
+        claiming,
+      ),
+    ).toBeNull();
+    // Asked for as any DECLARED kind — the hold cannot ride in on another
+    // kind's request, which is the shape a confused producer would take.
+    for (const asked of LIFECYCLE_DATA_PART_VIEW_TYPES) {
+      expect(parseLifecycleResolveEnvelope(asked, claiming), asked).toBeNull();
+    }
+  });
+
+  it("REFUSES the hold on every state the ladder defines, and with any body", () => {
+    // The refusal is on the KIND. It does not depend on the state being
+    // undrawable, or on the body being absent — an `absent` hold and a hold
+    // carrying somebody else's authorized body are refused alike.
+    const states = [
+      { state: "loading" },
+      { state: "pending", canDecide: true, canComment: false },
+      { state: "restricted", canDecide: false, canComment: false, reason: "no" },
+      { state: "settled" },
+      { state: "advisory" },
+      { state: "absent" },
+    ];
+    for (const state of states) {
+      for (const body of [null, undefined, VERIFICATION_BODY, SCHEDULE_SETTLED_BODY]) {
+        expect(
+          parseLifecycleResolveEnvelope(
+            "recommendation_hold" as unknown as LifecycleDataPartViewType,
+            { kind: "recommendation_hold", state, body },
+          ),
+          `${state.state}`,
+        ).toBeNull();
+      }
+    }
+  });
+
+  it("has NO body schema of its own — the registry cannot grow one by accident", () => {
+    // The registry is keyed by the DATA_PART kinds, so the hold has no entry to
+    // fill. If a later slice adds one, this fails and names the slice that must
+    // instead be extending the hold's own resolver.
+    const declared = [...LIFECYCLE_DATA_PART_VIEW_TYPES].sort();
+    expect(declared).toEqual([
+      "artifact_review_gate",
+      "trigger_schedule_proposal",
+      "verification_summary",
+    ]);
+    expect(declared).not.toContain("recommendation_hold");
+  });
 });

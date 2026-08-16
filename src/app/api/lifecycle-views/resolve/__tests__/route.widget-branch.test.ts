@@ -221,6 +221,20 @@ describe("SURFACE PARITY — the widget resolves the SAME view set as first-part
     });
   });
 
+  it("REFUSES the recommendation hold at the door — it is not a DATA_PART kind", async () => {
+    // The hold is the sole typed-interrupt kind: the run BLOCKS on it, and it is
+    // resolved by its own hold action against the run, never by this endpoint.
+    // The request schema is keyed by the DATA_PART kinds, so a caller naming the
+    // hold is refused before any resolver is consulted — the endpoint half of
+    // the parse seam's refusal.
+    resolveLifecycleCardState.mockClear();
+    resolveTriggerScheduleProposalCard.mockClear();
+    const res = await POST(widgetPost("recommendation_hold"));
+    expect(res.status).toBe(400);
+    expect(resolveLifecycleCardState).not.toHaveBeenCalled();
+    expect(resolveTriggerScheduleProposalCard).not.toHaveBeenCalled();
+  });
+
   it("answers `absent` with NO body — the privacy contract, on the wire", async () => {
     resolveLifecycleCardState.mockResolvedValue({
       kind: "verification_summary",
