@@ -1,7 +1,10 @@
 cinatra#2701 (d) — the chat 'Undo last action' chip's candidate read, live.
 The chip renders ONLY when this answers with a change-set id, and that id is
-what becomes the /configuration/artifacts/restore/... deep link. A non-admin
-must get the empty answer, which is byte-identical to 'nothing to undo'.
+what becomes the /configuration/artifacts/restore/... deep link.
 
-member: HTTP 200  body: {"changeSetId":null}
-admin: HTTP 200  body: {"changeSetId":null}
+Both roles ask about THEIR OWN run, and BOTH runs really did leave a closed,
+restorable change set with a real member event. So the member's empty answer
+is the admin gate (cinatra#2701) and nothing else — not 'nothing to undo'.
+
+member (run s2-uat-run-member): HTTP 200  body: {"changeSetId":null}
+admin (run s2-uat-run-admin): HTTP 200  body: {"changeSetId":"cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f"}
