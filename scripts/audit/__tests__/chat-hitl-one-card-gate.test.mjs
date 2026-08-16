@@ -50,6 +50,8 @@ import {
   collectViolations,
   emitsAnchor,
   extractComponentBody,
+  assertsExactlyOneInstance,
+  extractTestBlock,
   openRequirements,
   proofAssertsAnchor,
   REQUIRED_ROOT_ATTRIBUTES,
@@ -606,6 +608,8 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
       "schedule-option-rows",
       "schedule-proposal-floor",
       "scheduled-run-chrome",
+      '[data-action="cancel-trigger-schedule"]',
+      '[data-action="release-trigger-now"]',
     ],
     verification_summary: ["verification-in-thread"],
   };
@@ -684,16 +688,76 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
       repoRoot: "/repo",
       readFileImpl: (p) => sources[p] ?? "",
     });
-    expect(hits.map((h) => h.detail).join(" ")).toMatch(/delete the record/);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/strike the record here/);
   });
 
-  it("an OPEN ANCHOR NAME is recorded, not chosen — and the done-check stays red on it", () => {
-    const open = LIFECYCLE_CARD_CONTRACTS.trigger_schedule_proposal.openAnchors;
-    expect(open.map((a) => a.id)).toEqual(["schedule-settled-cancel", "schedule-settled-release"]);
-    for (const a of open) {
-      // The record describes the control; it does not name an anchor for it.
-      expect(a.describedAs.length).toBeGreaterThan(10);
-      expect(a).not.toHaveProperty("anchor");
+  it("the settled schedule controls are NAMED now, so nothing is left open there", () => {
+    const c = LIFECYCLE_CARD_CONTRACTS.trigger_schedule_proposal;
+    expect(c.openAnchors ?? []).toEqual([]);
+    expect(c.anchors).toContain('[data-action="cancel-trigger-schedule"]');
+    expect(c.anchors).toContain('[data-action="release-trigger-now"]');
+  });
+});
+
+describe("a proof is tied to its NAMED test, and counts what it rendered", () => {
+  const FILE = [
+    'it("an unrelated case", async () => {',
+    '  expect(c.querySelectorAll(\'[data-lifecycle-card="k"]\')).toHaveLength(1);',
+    '  expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);',
+    "});",
+    'it("the empty one", async () => {});',
+    'it("the real one", async () => {',
+    '  expect(c.querySelectorAll(\'[data-lifecycle-card="k"]\')).toHaveLength(1);',
+    "});",
+  ].join("\n");
+
+  it("reads out ONLY the named test's body", () => {
+    expect(extractTestBlock(FILE, "the empty one")).not.toContain("toHaveLength");
+    expect(extractTestBlock(FILE, "the real one")).toContain("toHaveLength(1)");
+    expect(extractTestBlock(FILE, "no such test")).toBeNull();
+  });
+
+  it("an EMPTY proof test can no longer borrow the file's other assertions", () => {
+    const empty = extractTestBlock(FILE, "the empty one");
+    expect(assertsExactlyOneInstance(empty, '[data-lifecycle-card="k"]')).toBe(false);
+    expect(/getAttribute\(\s*["']data-lifecycle-card-host["']\s*\)/.test(empty)).toBe(false);
+    // …while the file as a whole would have matched both, which is the hole.
+    expect(assertsExactlyOneInstance(FILE, '[data-lifecycle-card="k"]')).toBe(true);
+  });
+
+  it("a PRESENCE check is not an instance proof — only a count is", () => {
+    const presence = 'querySelector(\'[data-lifecycle-card="k"]\')).not.toBeNull()';
+    expect(assertsExactlyOneInstance(presence, '[data-lifecycle-card="k"]')).toBe(false);
+    const counted = 'querySelectorAll(\'[data-lifecycle-card="k"]\')).toHaveLength(1)';
+    expect(assertsExactlyOneInstance(counted, '[data-lifecycle-card="k"]')).toBe(true);
+    // …and a count of the WRONG root does not count for this kind.
+    expect(assertsExactlyOneInstance(counted, "[data-run-recommendation-chip-row]")).toBe(false);
+  });
+
+  it("every DRAWN kind's instance proof counts its own root, inside its own test", () => {
+    for (const [kind, c] of Object.entries(LIFECYCLE_CARD_CONTRACTS)) {
+      if (c.status !== "DRAWN") continue;
+      const block = extractTestBlock(read(c.instanceProof.file), c.instanceProof.testName);
+      expect(block, `${kind}: the instance proof is gone`).not.toBeNull();
+      expect(
+        assertsExactlyOneInstance(block, c.instanceRootSelector),
+        `${kind}: the instance proof does not count ${c.instanceRootSelector}`,
+      ).toBe(true);
+      for (const host of c.instanceProof.hosts) {
+        expect(block, `${kind}: host ${host} is claimed and never driven`).toContain(host);
+      }
+    }
+  });
+
+  it("every host with a production adapter has a rendered instance proof", () => {
+    for (const [kind, c] of Object.entries(LIFECYCLE_CARD_CONTRACTS)) {
+      if (c.status !== "DRAWN") continue;
+      const jsxHosts = LIFECYCLE_CARD_HOSTS.filter((h) =>
+        (c.hosts[h] ?? []).some((e) => e.adapter !== "registry" && e.surface === "production"),
+      );
+      for (const host of jsxHosts) {
+        expect(c.instanceProof.hosts, `${kind}: ${host}`).toContain(host);
+      }
     }
   });
 });
@@ -732,12 +796,23 @@ describe("the two modes on the real tree", () => {
     expect(collectContractViolations()).toEqual([]);
   });
 
-  it("--complete FAILS today and NAMES both undrawn kinds", () => {
-    const res = spawnSync(process.execPath, [GATE, "--complete"], { cwd: REPO_ROOT, encoding: "utf8" });
+  it("the REQUIRED gate — no flag at all — FAILS today and NAMES both undrawn kinds", () => {
+    // The ordinary run is the done-check. This is the claim "the gate fails on
+    // main": it has to be true of the run somebody actually makes, not of an
+    // opt-in flag nobody passes.
+    const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
     expect(res.status).toBe(1);
     expect(out).toMatch(/'trigger_schedule_proposal' has no card of its own/);
     expect(out).toMatch(/'verification_summary' has no card of its own/);
+  });
+
+  it("the lenient read is the one that needs a flag, and says so", () => {
+    const res = spawnSync(process.execPath, [GATE, "--audit"], { cwd: REPO_ROOT, encoding: "utf8" });
+    const out = res.stdout + res.stderr;
+    expect(res.status).toBe(0);
+    expect(out).toMatch(/no NEW false claim/);
+    expect(out).toMatch(/the REQUIRED gate \(no flag\) fails on these/);
   });
 });
 
@@ -758,12 +833,10 @@ describe("exemptions and the live tree", () => {
     expect(collectViolations()).toEqual([]);
   });
 
-  it("the CLI's default mode exits 0 on the real tree — no false claim", () => {
-    const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
+  it("the CLI's lenient read exits 0 on the real tree and still names the gaps", () => {
+    const res = spawnSync(process.execPath, [GATE, "--audit"], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
-    expect(out).toMatch(/no false claim/);
-    // Exit 0 means "nothing overclaimed", never "the program is finished": the
-    // same run says out loud which kinds are still placeholders.
+    expect(out).toMatch(/no NEW false claim/);
     expect(out).toMatch(/STILL A PLACEHOLDER/);
     expect(res.status).toBe(0);
   });

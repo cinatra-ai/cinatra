@@ -275,19 +275,44 @@ describe("one renderer, three first-party hosts", () => {
   // value comes from a VALIDATED body field or the host declaration, never from
   // a literal in the markup.
   it("the root carries its lifecycle-card identity, its host and its state", async () => {
-    for (const host of HOSTS) {
+    // The hosts are named as literals, one per line, because this test IS the
+    // record of which hosts were actually driven.
+    for (const host of ["chat_thread", "run_card", "page_gate_region"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
       const { container, unmount } = renderOn(host);
       await waitFor(() =>
         expect(container.querySelector('[data-lifecycle-card="artifact_review_gate"]')).not.toBeNull(),
       );
+      // EXACTLY ONE instance on this host. A second adapter drawing beside this
+      // one is the failure the whole one-card rule exists to prevent, and it is
+      // only visible as a COUNT on rendered DOM.
+      expect(container.querySelectorAll('[data-lifecycle-card="artifact_review_gate"]')).toHaveLength(1);
       const root = container.querySelector('[data-conformance-id="review-gate-card"]')!;
       expect(root.getAttribute("data-lifecycle-card")).toBe("artifact_review_gate");
       expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
       expect(root.getAttribute("data-lifecycle-card-state")).toBe("pending");
+      expect(root.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull();
       unmount();
       cleanup();
     }
+
+    // The RESTRICTED marker, off the same root: a reader who may see the gate
+    // and not decide it gets the disabled floor, never a withheld card.
+    mockResolve({ state: "restricted", canDecide: false, canComment: false, reason: "not yours" });
+    const restricted = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        restricted.container.querySelector('[data-conformance-id="review-decision-disabled"]'),
+      ).not.toBeNull(),
+    );
+    expect(
+      restricted.container
+        .querySelector('[data-conformance-id="review-gate-card"]')!
+        .getAttribute("data-lifecycle-card-state"),
+    ).toBe("restricted");
+    restricted.unmount();
+    cleanup();
+
     // …and the state really tracks the resolve rather than a constant.
     mockResolve({ state: "settled" });
     const { container } = renderOn("chat_thread");

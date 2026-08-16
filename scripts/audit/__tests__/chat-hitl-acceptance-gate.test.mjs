@@ -188,7 +188,7 @@ describe("the REAL manifest", () => {
     }
   });
 
-  it("the CLI's audit mode exits 0", () => {
+  it("the CLI's manifest-audit mode exits 0", () => {
     const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
     expect(res.stdout + res.stderr).toMatch(/manifest honest/);
     expect(res.status).toBe(0);

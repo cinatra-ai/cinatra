@@ -286,7 +286,7 @@
     "gate:chat-hitl-acceptance": "node scripts/audit/chat-hitl-acceptance-gate.mjs",
     "gate:chat-hitl-acceptance:strict": "node scripts/audit/chat-hitl-acceptance-gate.mjs --strict",
     "gate:chat-hitl-one-card": "node scripts/audit/chat-hitl-one-card-gate.mjs",
-    "gate:chat-hitl-one-card:complete": "node scripts/audit/chat-hitl-one-card-gate.mjs --complete",
+    "gate:chat-hitl-one-card:audit": "node scripts/audit/chat-hitl-one-card-gate.mjs --audit",
     "gate:chat-hitl-retirement": "node scripts/audit/chat-hitl-retirement-gate.mjs",
     "gate:archive-acceptance": "node scripts/audit/archive-acceptance-gate.mjs",
     "gate:archive-acceptance:strict": "node scripts/audit/archive-acceptance-gate.mjs --strict",

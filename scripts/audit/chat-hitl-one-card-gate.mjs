@@ -92,13 +92,16 @@
  *      record is valid ONLY while the verification kind is a placeholder: the
  *      slice that draws the card must delete the parallel renderer with it.
  *
- * TWO MODES, the same shape as the sibling acceptance gate:
- *   default    — the HONESTY check. Every DRAWN kind is fully enforced and every
- *                PLACEHOLDER kind is honestly recorded. Exit 0 means "no false
- *                claim", never "the program is finished".
- *   --complete — the DONE check. Additionally requires every kind to be DRAWN
- *                and every host to be mounted. It names the kinds that are still
- *                placeholders, which is what the epic's finished tree must clear.
+ * TWO MODES, and the DEFAULT is the required one:
+ *   (no flag) — the DONE check, and the gate this repository runs. Every kind
+ *               DRAWN, every host mounted, every ratified anchor emitted and
+ *               proven, every open item closed. It fails today and names what is
+ *               missing. A gate whose ordinary run passes while two kinds are
+ *               placeholders does not "fail on main" in any run anybody makes.
+ *   --audit   — the lenient read: every DRAWN kind fully enforced, and the
+ *               recorded placeholders and open items tolerated. It answers "did
+ *               I add a NEW dishonesty", which is useful to a lane mid-flight
+ *               and is not the gate.
  *
  * WHERE THE ANCHOR SETS COME FROM. They are RATIFIED and CLOSED, and this table
  * copies them rather than deriving them. An earlier round of this gate read them
@@ -109,13 +112,13 @@
  * filled in, because filling them in is exactly the implementer choice a closed
  * set forbids, and the done-check stays red until they are named.
  *
- * AND WHERE THE TABLE SHAPE COMES FROM. The epic's host-ownership table carries
- * a component-owner column and a wire-carriage column; each row below mirrors
- * both, and the carriage is checked against the protocol module rather than
- * against the prose. This gate does NOT parse the epic text — the table lives in
- * an issue, not in the repository, so parsing it would make CI depend on a
- * document CI cannot read. What the gate can do is hold the same shape and fail
- * when the repository disagrees with itself, which it does.
+ * AND WHERE THE TABLE SHAPE COMES FROM. The host-ownership table carries a
+ * component-owner column and a wire-carriage column, and each row below carries
+ * the same two fields. That is a HAND-KEPT correspondence, and it is stated as
+ * one: this gate does NOT read the table, which lives in a document CI cannot
+ * open, so nothing here is synchronized with it by any mechanism. What IS
+ * mechanical is narrower and worth having on its own: the carriage is checked
+ * against the protocol module, so the repository cannot disagree with itself.
  *
  * AN OPEN OBLIGATION is the third recording device, beside the placeholder row
  * and the open anchor name. It is a ratified requirement the tree does not meet,
@@ -300,9 +303,18 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         },
       },
     },
+    instanceRootSelector: '[data-lifecycle-card="artifact_review_gate"]',
     renderedProof: {
       file: "packages/agents/src/__tests__/review-gate-card.test.tsx",
       testName: "the root carries its lifecycle-card identity, its host and its state",
+    },
+    // The SAME rendered test counts the roots on each host it drives, so the
+    // anchors, the root attributes and the one-instance property are all read
+    // off one mounted card rather than off three separate claims.
+    instanceProof: {
+      file: "packages/agents/src/__tests__/review-gate-card.test.tsx",
+      testName: "the root carries its lifecycle-card identity, its host and its state",
+      hosts: ["chat_thread", "run_card", "page_gate_region"],
     },
   },
 
@@ -388,12 +400,21 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     },
     hostGap:
       "Three of the four hosts carry no mount. The chat thread is RULED and belongs to the chat-origin slice: the card mounts in the assistant dispatch turn, keyed by the run identity off the tool result, and NOT through the renderable-view registry. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.",
+    // The row's own root, because the lifecycle-card identity is the open
+    // obligation below. When that obligation closes, this becomes
+    // `[data-lifecycle-card="recommendation_hold"]` in the same change.
+    instanceRootSelector: "[data-run-recommendation-chip-row]",
     renderedProof: {
-      // The OWNER's own rendered suite: it mounts RecommendationHoldCard, feeds
-      // it a validated hold state and reads the row and its two decisions back
-      // out of real DOM.
+      // The OWNER's own rendered suite: it mounts RecommendationHoldCard on a
+      // declared host, feeds it a validated hold state, and reads the row, its
+      // two ratified decisions and the count back out of real DOM.
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-      testName: "draws the shipped chip-row for a held run and the shipped summaries for a decided one",
+      testName: "host run_card draws EXACTLY ONE chip row, carrying both ratified decisions",
+    },
+    instanceProof: {
+      file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
+      testName: "host run_card draws EXACTLY ONE chip row, carrying both ratified decisions",
+      hosts: ["run_card"],
     },
   },
 
@@ -409,23 +430,17 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       params: ["view"],
       fields: ["state", "proposal", "options", "estimatedDuration"],
     },
-    anchors: ["schedule-option-rows", "schedule-proposal-floor", "scheduled-run-chrome"],
-    // The settled card's two quiet controls are ratified in PROSE and not by
-    // name. A closed set means an implementer may not choose the missing names,
-    // so they stay OPEN here until the owner names them. The done-check fails
-    // while any open anchor name remains, which is what keeps the hole visible.
-    openAnchors: [
-      {
-        id: "schedule-settled-cancel",
-        describedAs: "the settled card's Cancel trigger control",
-        why: "The ratified list names this control in prose and gives no anchor id. The drawing slice may not choose one, because an implementer-chosen anchor does not satisfy a closed set.",
-      },
-      {
-        id: "schedule-settled-release",
-        describedAs: "the settled card's Release now control, for an administrator",
-        why: "Same: named in prose, no anchor id, and not the drawing slice's to invent.",
-      },
+    // The settled card's two quiet controls were ratified in prose and are now
+    // named, in the existing verb-object convention. The set is complete.
+    anchors: [
+      "schedule-option-rows",
+      "schedule-proposal-floor",
+      "scheduled-run-chrome",
+      '[data-action="cancel-trigger-schedule"]',
+      '[data-action="release-trigger-now"]',
     ],
+    instanceRootSelector: '[data-lifecycle-card="trigger_schedule_proposal"]',
+    instanceProof: null,
     hosts: {
       chat_thread: null,
       site_widget: null,
@@ -451,6 +466,8 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       fields: ["state", "outcome", "revisions", "fields", "comments"],
     },
     anchors: ["verification-in-thread"],
+    instanceRootSelector: '[data-lifecycle-card="verification_summary"]',
+    instanceProof: null,
     // "plus exactly one outcome anchor of …" — read as: the card must be able to
     // draw each outcome, and any one rendering shows exactly one of them. So the
     // owner emits all three and the rendered proof asserts the exactly-one.
@@ -878,6 +895,41 @@ export function proofAssertsAnchor(proofSource, anchor) {
   );
 }
 
+/**
+ * The body of ONE named test, or `null` when that test is not in this file.
+ *
+ * This is what stops a proof from being a file-wide substring match. A rendered
+ * assertion counts only when it sits INSIDE the test the contract names, so a
+ * card cannot borrow the assertions of some unrelated case that happens to live
+ * in the same file — which is exactly how an empty proof test passed before.
+ */
+export function extractTestBlock(source, testName) {
+  for (const quote of ['"', "'", "`"]) {
+    const at = source.indexOf(`${quote}${testName}${quote}`);
+    if (at < 0) continue;
+    const open = source.lastIndexOf("(", at);
+    if (open < 0) continue;
+    const end = matchBlock(source, open);
+    if (end < 0) continue;
+    return source.slice(open, end);
+  }
+  return null;
+}
+
+/**
+ * Does `block` COUNT the rendered roots and require exactly one?
+ *
+ * The runtime property the epic states is "one rendered instance per kind ×
+ * host". A presence check cannot see a second instance; only a count can. So
+ * the named test must select every root and assert the length is one.
+ */
+export function assertsExactlyOneInstance(block, rootSelector) {
+  const selector = rootSelector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    String.raw`querySelectorAll\(\s*["'\`][^"'\`]*${selector}[^"'\`]*["'\`]\s*\)[\s\S]{0,200}?(?:toHaveLength\(\s*1\s*\)|length\s*\)?\s*\)?\s*\.toBe\(\s*1\s*\))`,
+  ).test(block);
+}
+
 /** Every requirement a kind has recorded as open, flattened to plain strings. */
 export function openRequirements(contract) {
   const out = new Set();
@@ -1257,24 +1309,55 @@ export function collectContractViolations({
         ...scanHostMounts(kind, c, mountsByComponent.get(c.component) ?? [], registrySource, read),
       );
       if (c.renderedProof) {
-        const proof = read(c.renderedProof.file);
-        if (proof === null) {
-          violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the rendered owner test is gone` });
+        const proofFile = read(c.renderedProof.file);
+        // The assertions must live INSIDE the named test, not merely in the
+        // same file. A file-wide match lets one card borrow another case's
+        // assertions, which is how an empty proof test passed before.
+        const block = proofFile === null ? null : extractTestBlock(proofFile, c.renderedProof.testName);
+        if (block === null) {
+          violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the rendered owner test "${c.renderedProof.testName}" is not in this file` });
         } else {
-          if (!proof.includes(c.renderedProof.testName)) {
-            violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the rendered owner test "${c.renderedProof.testName}" is not in this file` });
-          }
           const openHere = openRequirements(c);
-          const assertable = [
-            ...c.anchors,
-            ...(c.anchorsOneOf?.of ?? []),
-            ...REQUIRED_ROOT_ATTRIBUTES.map((a) => `[${a}]`),
-          ];
-          for (const anchor of assertable) {
-            const bare = /^\[([a-zA-Z0-9-]+)\]$/.exec(anchor);
-            if (openHere.has(anchor) || (bare !== null && openHere.has(bare[1]))) continue;
-            if (!proofAssertsAnchor(proof, anchor)) {
-              violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the rendered owner test never reads the anchor '${anchor}' back out of the DOM` });
+          for (const anchor of [...c.anchors, ...(c.anchorsOneOf?.of ?? [])]) {
+            if (openHere.has(anchor)) continue;
+            if (!proofAssertsAnchor(block, anchor)) {
+              violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the named rendered test never reads the anchor '${anchor}' off the card it mounted` });
+            }
+          }
+          for (const attr of REQUIRED_ROOT_ATTRIBUTES) {
+            if (openHere.has(attr)) continue;
+            // Read OFF THE ROOT, not merely mentioned: the test must pull the
+            // attribute from an element it selected.
+            if (!new RegExp(String.raw`getAttribute\(\s*["']${attr}["']\s*\)`).test(block)) {
+              violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the named rendered test never reads '${attr}' off the rendered root` });
+            }
+          }
+        }
+      }
+
+      // The RUNTIME instance property: one rendered instance per kind × host.
+      const jsxHosts = LIFECYCLE_CARD_HOSTS.filter((h) =>
+        (c.hosts[h] ?? []).some((e) => e.adapter !== "registry" && e.surface === "production"),
+      );
+      if (!c.instanceProof) {
+        violations.push({ rule: "R8", file: c.owner ?? REGISTRY_MODULE, line: 1, detail: `'${kind}': no rendered instance proof — module enumeration cannot show that exactly ONE card draws` });
+      } else {
+        const src = read(c.instanceProof.file);
+        const block = src === null ? null : extractTestBlock(src, c.instanceProof.testName);
+        if (block === null) {
+          violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': the instance proof "${c.instanceProof.testName}" is not in this file` });
+        } else {
+          if (!assertsExactlyOneInstance(block, c.instanceRootSelector)) {
+            violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': the instance proof never COUNTS the rendered roots (${c.instanceRootSelector}) and requires exactly one — a presence check cannot see a second instance` });
+          }
+          for (const host of c.instanceProof.hosts) {
+            if (!block.includes(host)) {
+              violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': the instance proof claims host '${host}' and never drives it` });
+            }
+          }
+          for (const host of jsxHosts) {
+            if (!c.instanceProof.hosts.includes(host)) {
+              violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': host '${host}' has a production adapter and no rendered instance proof` });
             }
           }
         }
@@ -1320,7 +1403,7 @@ export function collectContractViolations({
           rule: "R7",
           file: c.owner,
           line: 1,
-          detail: `'${kind}': the open obligation '${o.id}' is recorded as unmet and the owner now emits every part of it — delete the record`,
+          detail: `'${kind}': the open obligation '${o.id}' is recorded as unmet and the owner now emits every part of it — strike the record here, in whichever change lands second`,
         });
       }
     }
@@ -1380,7 +1463,13 @@ export function collectViolations({
 }
 
 function main(argv = []) {
-  const complete = argv.includes("--complete");
+  // THE REQUIRED GATE IS THE DONE-CHECK. It used to be opt-in, with the lenient
+  // mode as the default — and a default that passes while two kinds are
+  // placeholders makes "this gate fails on main" untrue in the only run anybody
+  // actually makes. So the done-check is what you get when you run this script.
+  // `--audit` is the lenient read, for a lane that wants to see whether it has
+  // added a NEW dishonesty on top of the recorded ones. It is not the gate.
+  const complete = !argv.includes("--audit");
   const violations = [
     ...collectViolations(),
     ...collectContractViolations({ complete }),
@@ -1389,17 +1478,17 @@ function main(argv = []) {
 
   if (violations.length === 0) {
     if (complete) {
-      console.log(`[${LABEL}] --complete: every lifecycle card kind is drawn, consumed and mounted.`);
+      console.log(`[${LABEL}] clean — every lifecycle card kind is drawn, consumed, mounted and proven.`);
       return 0;
     }
     console.log(
-      `[${LABEL}] no false claim — ${Object.keys(LIFECYCLE_CARD_CONTRACTS).length - placeholders.length}/` +
+      `[${LABEL}] --audit: no NEW false claim — ${Object.keys(LIFECYCLE_CARD_CONTRACTS).length - placeholders.length}/` +
         `${Object.keys(LIFECYCLE_CARD_CONTRACTS).length} kinds drawn by a named owner, ` +
         `every mount host-declared, every placeholder recorded.`,
     );
     if (placeholders.length > 0) {
       console.log(
-        `\nSTILL A PLACEHOLDER (run with --complete for the done-check): ` +
+        `\nSTILL A PLACEHOLDER — the REQUIRED gate (no flag) fails on these: ` +
           placeholders.map((p) => `${p.kind} ${p.design}`).join("; "),
       );
     }
@@ -1407,7 +1496,7 @@ function main(argv = []) {
   }
 
   console.error(
-    `[${LABEL}]${complete ? " --complete:" : ""} ${violations.length} violation(s):\n`,
+    `[${LABEL}]${complete ? "" : " --audit:"} ${violations.length} violation(s):\n`,
   );
   for (const v of violations) {
     console.error(`  ${v.file}:${v.line}  [${v.rule}]  ${v.detail}`);

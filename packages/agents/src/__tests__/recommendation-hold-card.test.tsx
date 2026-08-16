@@ -478,6 +478,25 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     );
   });
 
+  // The RUNTIME instance contract for this kind on its declared host, asserted
+  // on real DOM rather than on source text: ONE row draws, and it carries the
+  // two decision affordances the ratified set names. The count is the point —
+  // a second adapter drawing beside this one would make it two.
+  it("host run_card draws EXACTLY ONE chip row, carrying both ratified decisions", async () => {
+    holdStateMock.mockImplementation(async () => HELD);
+    const { container } = await mountCard({ wireRef: "hold-ref-1", host: "run_card" });
+    await waitFor(() =>
+      expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull(),
+    );
+    expect(container.querySelectorAll("[data-run-recommendation-chip-row]")).toHaveLength(1);
+    const root = container.querySelector("[data-run-recommendation-chip-row]")!;
+    expect(root.querySelector('[data-action="confirm-run-recommendation"]')).not.toBeNull();
+    expect(root.querySelector('[data-action="skip-run-recommendation"]')).not.toBeNull();
+    // Every value above came from the VALIDATED hold state, not from a literal:
+    // drop the skills the state carried and the row draws nothing to press.
+    expect(root.textContent).toContain("Skill A");
+  });
+
   it("draws nothing at all for a run that was never held", async () => {
     holdStateMock.mockImplementation(async () => ({ state: "none" }));
     const { container } = await mountCard({ wireRef: null });
