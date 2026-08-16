@@ -1727,6 +1727,25 @@ export async function createAgentRunForLaunchFrame(input: {
     //   3. failing that too, the process cannot land the run in any honest
     //      state, so the error says the run is STRANDED and names it, instead
     //      of reporting only the enqueue failure that started it.
+    //
+    // WHY REVERTING IS SAFE EVEN WHEN THE ENQUEUE ERROR WAS AMBIGUOUS. A Redis
+    // failure can surface after the job was already accepted, so this branch
+    // may not assume no job exists. It does not need to. Exactly-once dispatch
+    // is enforced by the RUN ROW, not by the queue: the execution worker's
+    // first act is `if (run.status !== "queued") … skipping`
+    // (`packages/agents/src/execution.ts`), and the work itself sits behind a
+    // `queued → running` CAS. A job that outlived an ambiguous enqueue finds
+    // this run back on `pending_input` and quietly skips; if it instead arrives
+    // after the person retried, either it wins the CAS and the retry's job then
+    // finds `running` and skips, or it loses and skips. One execution, either
+    // way, and no jobId dedup is relied on for it (this path passes no `jobId`,
+    // so BullMQ assigns its own — job-level dedup is not available here and is
+    // not what the invariant rests on).
+    //
+    // The residual runs the OTHER direction, and it is the benign one: an
+    // enqueue that actually succeeded but reported ambiguously is compensated
+    // away, so the run waits on `pending_input` for a person to retry it. A
+    // lost dispatch on a visible, decidable run — never a duplicate one.
     if (launchedFromChat) {
       let recovered: "pending_input" | "failed" | null = null;
       try {

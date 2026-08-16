@@ -209,6 +209,18 @@ export async function getRunRecommendationHoldStateAction(input: {
  * leaves an un-dispatched run with no live hold and no row to decide) — so it
  * belongs with the park store's own transaction, not here.
  *
+ * The SHAPE that race leaves behind, named so the disclosure is not merely
+ * implied: a Confirm and a Skip racing the same live hold write into two
+ * different tables — the authoritative per-run selection rows, and
+ * `user_skipped` rejected rows. Both survive. The SURFACE stays single-valued
+ * and deterministic (`getRunRecommendationHoldStateAction` reads selections
+ * first and answers `confirmed`, so the settled card never shows two
+ * decisions), and the RUN is single-valued too (it executes the confirmed
+ * selection). What carries both is the recommendation-efficacy telemetry, which
+ * then counts one run as accepted and skipped. That is the residual: a
+ * double-counted telemetry row, not a contradictory run and not a contradictory
+ * card. Removing it means the atomic claim above, at the price named above.
+ *
  * IDEMPOTENT RETRY IS NOT A STALE DECISION. A decision whose response was lost
  * and is retried names a hold that is now RELEASED — and that is still THIS
  * run's hold, so it is accepted and the downstream path is idempotent (the
@@ -308,10 +320,27 @@ export async function skipRunRecommendationAction(input: {
 
   const run = await readAgentRunById(input.runId).catch(() => null);
   if (!run) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
-  // Ownership check — the same gate `triggerAgentRun` (the dispatch, below)
-  // enforces. A run with no owner (runBy null) is triggerable by any session,
-  // matching the existing trigger semantics.
-  if (run.runBy && run.runBy !== userId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+
+  // OWNERSHIP, FAIL-CLOSED. Skip is a `runBy`-owner decision, so the run must
+  // NAME this session as its owner — an unowned run is refused, not admitted.
+  //
+  // This deliberately does NOT copy `triggerAgentRun`'s `run.runBy && run.runBy
+  // !== userId`, which admits a null owner. That form reads as "nobody claimed
+  // it, so anybody may", and on THIS path a null owner is reachable: the chat
+  // dispatch boundary stamps the launch origin as a constant while carrying a
+  // user id only for a human principal (`chatActorToPrimitive` in
+  // `src/app/api/chat/explicit-dispatch-server.ts`), so a non-human principal
+  // reaching the pre-router creates a chat-origin run with no `runBy` — and the
+  // recommendation hold still fires on it. Fail-open there would let any
+  // authenticated session release and dispatch that run.
+  //
+  // Skip being stricter than the dispatch it precedes is the intended
+  // direction: the tighter gate is the one that decides, and `triggerAgentRun`
+  // re-checks afterwards. Confirm is unaffected — it carries its own
+  // execute-tier authorization inside `confirmRunSkillSelectionAction`.
+  if (!run.runBy || run.runBy !== userId) {
+    return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+  }
 
   // DURABLE SKIP EVIDENCE, AND IT IS NOT BEST-EFFORT.
   //
@@ -330,12 +359,26 @@ export async function skipRunRecommendationAction(input: {
   // rank n" in the same table.
   //
   // (The cleaner home for this is a single run-level skip record rather than one
-  // row per candidate — the zero-candidate case below is the seam that shows
+  // row per candidate — the drifted-to-empty case below is the seam that shows
   // why. That needs a schema change, so this carries it on the sanctioned
   // fallback: the existing rejection table, with a nullable rank.)
+  //
+  // A READ FAILURE IS A FAILURE, NOT AN ANSWER. The template read is INSIDE the
+  // try and carries no `.catch(() => null)`: swallowing it would turn "the
+  // database did not answer" into "this run has no package", walk past the
+  // evidence write, and release — the same lost decision a failed write
+  // produces, arriving by a quieter route. A template that genuinely reads back
+  // WITHOUT a package name is a different fact and is handled on its own branch
+  // below, next to the other case that leaves nothing to name.
   try {
-    const template = await readAgentTemplateById(run.templateId).catch(() => null);
+    const template = await readAgentTemplateById(run.templateId);
     const packageName = template?.packageName;
+    let rejectedRows: Array<{
+      skillId: string;
+      skillRevisionId: string | null;
+      recommendationSource: string;
+      recommendedRank: number | null;
+    }> = [];
     if (packageName) {
       // The evidence must name the SAME candidates the row offered (cinatra#2148
       // finding 1) — resolved through the shared run-actor seam.
@@ -354,19 +397,63 @@ export async function skipRunRecommendationAction(input: {
         intent: { promptText: intentPromptText },
         restrictToSkillIds: assignedSkillIds,
       });
-      const rejectedRows = recommendations.map((r) => ({
+      rejectedRows = recommendations.map((r) => ({
         skillId: r.skillId,
         skillRevisionId: r.skillRevisionId,
         recommendationSource: SKIP_RECOMMENDATION_SOURCE,
         // NULL for a forced candidate: it was offered, never ranked.
         recommendedRank: r.recommended ? r.rank : null,
       }));
-      // Zero candidates is not a failed write — it is a row with nothing on it
-      // to skip. The release proceeds, exactly as before: refusing there would
-      // leave a person holding a card they cannot dismiss.
-      if (rejectedRows.length > 0) {
-        writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
+
+      // THE OFFERED SET IS RE-DERIVED HERE, AND RE-DERIVATION CAN DRIFT.
+      //
+      // The hold parks only when the scorer returned at least one candidate
+      // (`maybeHoldRunForRecommendation`), so a LIVE hold proves a non-empty
+      // offered set existed. An empty set at decision time therefore never means
+      // "the row had nothing on it" — it means something moved while the run sat
+      // parked: a revision was published, the scorer changed its mind, an
+      // assignment or entitlement was withdrawn.
+      //
+      // The FALLBACK recovers the common half of that drift. The assigned
+      // candidate ids come from the same run-actor seam that bounded the hold's
+      // own candidates, so when the scorer drifts to empty but the assignments
+      // survive, those ids ARE the offered set, and the skip is recorded against
+      // them with a NULL rank (offered, never ranked) and no pinned revision.
+      // The card settles, which is the whole point of the evidence.
+      if (rejectedRows.length === 0 && assignedSkillIds.length > 0) {
+        rejectedRows = assignedSkillIds.map((skillId) => ({
+          skillId,
+          skillRevisionId: null,
+          recommendationSource: SKIP_RECOMMENDATION_SOURCE,
+          recommendedRank: null,
+        }));
       }
+    }
+
+    if (rejectedRows.length > 0) {
+      writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
+    } else {
+      // BOUNDED RESIDUAL, STATED PLAINLY. Nothing is left to name: the template
+      // reads back with no package, or every assignment behind the offered set
+      // is gone. The rejection table is keyed by skill id, so a decision about
+      // no skills has no row to occupy, and this release records nothing — the
+      // settled card falls back to `none` for this run.
+      //
+      // The release still proceeds, and that is the deliberate trade. Refusing
+      // would leave a person holding a card that no retry can ever dismiss,
+      // because the drift that emptied the set is durable, not transient.
+      // Between an unrecorded decision and an undismissable card, the ruling on
+      // this slice takes the release.
+      //
+      // Closing the residual needs a run-level skip record — one row that says
+      // "this run was skipped" without naming a skill — which is a schema
+      // change and is deliberately NOT made here. Logged at error level so the
+      // occurrence is observable rather than silent.
+      console.error(
+        "[skipRunRecommendationAction] skip released with NO evidence for run",
+        input.runId,
+        "— the offered set re-derived empty and the rejection table has no run-level row to carry it",
+      );
     }
   } catch (err) {
     // A FAILED WRITE, on the other hand, is fatal to the decision. The run id is

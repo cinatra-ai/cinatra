@@ -156,17 +156,107 @@ describe("the evidence write is not best-effort", () => {
     expect(triggerAgentRun).not.toHaveBeenCalled();
   });
 
-  it("still RELEASES when the row had nothing on it to skip", async () => {
-    // Zero candidates is not a failed write. Refusing here would leave a person
-    // holding a card they cannot dismiss, so the release proceeds as before —
-    // the refusal is aimed at losing a decision, not at an empty row.
+  it("REFUSES the skip when the TEMPLATE READ throws — a read failure is not 'no package'", async () => {
+    // The read used to be wrapped in `.catch(() => null)`, which answered "this
+    // run has no package" whenever the database did not answer at all. The skip
+    // then walked past the evidence write and released — the same lost decision
+    // a failed write produces, arriving by a quieter route.
+    readAgentTemplateById.mockRejectedValue(new Error("template store down"));
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(result.ok).toBe(false);
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("records the skip against the ASSIGNED set when the scorer drifted to empty", async () => {
+    // A live hold proves a non-empty offered set existed, so an empty scorer
+    // result at decision time is DRIFT, not an empty row. The assignments behind
+    // the hold are still the offered set, so the skip is recorded against them
+    // and the card settles.
     getRunRecommendations.mockResolvedValue([]);
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    const written = writeRunRejectedRecommendations.mock.calls[0][0] as {
+      rejected: Array<{ skillId: string; skillRevisionId: string | null; recommendedRank: number | null }>;
+    };
+    expect(written.rejected.map((r) => r.skillId)).toEqual(["skill-ranked", "skill-forced"]);
+    // Offered, never ranked, and no revision the scorer could pin.
+    expect(written.rejected.every((r) => r.recommendedRank === null)).toBe(true);
+    expect(written.rejected.every((r) => r.skillRevisionId === null)).toBe(true);
+    expect(result.ok).toBe(true);
+    expect(triggerAgentRun).toHaveBeenCalled();
+  });
+
+  it("still RELEASES when the drift left nothing at all to name", async () => {
+    // Both the scorer AND the assignments came back empty — the bounded
+    // residual. Refusing here would leave a person holding a card no retry can
+    // dismiss, because the drift is durable, so the release proceeds and the
+    // decision goes unrecorded.
+    getRunRecommendations.mockResolvedValue([]);
+    resolveRecommendationCandidateSkillIds.mockResolvedValue([]);
 
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
     expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(triggerAgentRun).toHaveBeenCalled();
+  });
+
+  it("still RELEASES when the template reads back with no package name", async () => {
+    // A template that genuinely carries no package is a fact, not a fault — it
+    // is the other branch that leaves nothing to name, and it takes the same
+    // release.
+    readAgentTemplateById.mockResolvedValue({ id: "tpl-1", packageName: null });
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(triggerAgentRun).toHaveBeenCalled();
+  });
+});
+
+describe("skip is a runBy-owner decision, fail-closed", () => {
+  it("REFUSES a run this session does not own", async () => {
+    readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      runBy: "someone-else",
+      templateId: "tpl-1",
+      status: "pending_input",
+      inputParams: {},
+    });
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(result.ok).toBe(false);
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES an UNOWNED run instead of admitting every session", async () => {
+    // The reachable case, not a hypothetical: the chat dispatch boundary stamps
+    // the launch origin as a constant but carries a user id only for a human
+    // principal, so a chat-origin run can be created with no `runBy` and the
+    // hold still fires on it. A guard that reads "nobody claimed it, so anybody
+    // may" would let any authenticated session release and dispatch that run.
+    readAgentRunById.mockResolvedValue({
+      id: RUN_ID,
+      runBy: null,
+      templateId: "tpl-1",
+      status: "pending_input",
+      inputParams: {},
+    });
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(result.ok).toBe(false);
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
   });
 
   it("releases and dispatches once the evidence IS written", async () => {
