@@ -1,6 +1,0 @@
-Dev server log lines for the archive and the restore of the
-workspace-anchored row. Both ran from the page own buttons, on the branch.
-
-[connectorExtensionHandler] archive recorded for "@cinatra-ai/youtube-connector" (workspace-compiled - connector remains live)
-[connectorExtensionHandler] restore recorded for "@cinatra-ai/youtube-connector" (workspace-compiled - already live)
-[marketplace-install] restore failed for @cinatra-ai/youtube-connector (category=unrecoverable): restore of @cinatra-ai/youtube-connector re-activated the canonical row but did NOT re-register in-process (non-verdaccio-source) — the package will load on the next boot but did not load without a restart this call. The restored install was left active.
