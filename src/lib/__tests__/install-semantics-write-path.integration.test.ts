@@ -21,11 +21,13 @@
  *   - rollback of a fresh workspace-anchored install leaves no row behind,
  *     while a pre-existing live row survives.
  *
- * KIND NOTE (epic sequencing, not a gap): the fixtures use the ARTIFACT kind.
- * The lifecycle primitive still REFUSES a non-bundled workspace-anchored
- * CONNECTOR (`connector install must be organization-anchored …`) — relaxing
- * that is S3 (#2697), explicitly. The refusal is asserted here so S3 inherits a
- * live pin rather than a claim.
+ * KIND NOTE (epic sequencing): the fixtures use the ARTIFACT kind. At S2 the
+ * lifecycle primitive still REFUSED a non-bundled workspace-anchored CONNECTOR,
+ * and that refusal was asserted at the bottom of this file so S3 (#2697) would
+ * inherit a live pin rather than a claim. S3 has since relaxed it for the
+ * PRODUCT-INSTALL workspace anchor, so that pin is now FLIPPED (it asserts the
+ * admit + the narrowness of the relaxation); the connector substrate's own
+ * acceptance lives in install-semantics-connector-substrate.integration.test.ts.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
  *   SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5634/postgres \
@@ -334,11 +336,43 @@ describe.skipIf(!HAS_DB)("cinatra#2696 — rollback of a workspace-anchored inst
   });
 });
 
-describe.skipIf(!HAS_DB)("cinatra#2696 — the connector substrate is still S3's (sequencing pin)", () => {
-  it("a non-bundled WORKSPACE-anchored connector is still refused by the lifecycle primitive", async () => {
+describe.skipIf(!HAS_DB)("cinatra#2697 — the connector substrate admits the workspace anchor (S3 flipped this pin)", () => {
+  // S2 left this describe as a live SEQUENCING PIN: it asserted that the
+  // lifecycle primitive still REFUSED a non-bundled workspace-anchored
+  // connector, so S3 would inherit a failing-by-design fact rather than a
+  // claim. S3 (#2697) relaxes exactly that refusal for the PRODUCT-INSTALL
+  // workspace anchor, so the pin is FLIPPED here — same fixture, inverted
+  // expectation — and the bundled/system path is pinned unchanged alongside it.
+  it("a non-bundled WORKSPACE-anchored connector is now ADMITTED at the exact S1 tuple", async () => {
     const wsAnchor = anchors.resolveInstallRowAnchor(ORG, contract.WORKSPACE_ANCHOR_ROW_OWNERSHIP);
+    const id = await installAtAnchor(wsAnchor, {
+      packageName: "@cinatra-ai/ws-connector-2696",
+      kind: "connector",
+    });
+    const raw = await rawRows("@cinatra-ai/ws-connector-2696");
+    expect(raw).toHaveLength(1);
+    expect(raw[0]!.id).toBe(id);
+    expect({
+      owner_level: raw[0]!.owner_level,
+      organization_id: raw[0]!.organization_id,
+      owner_id: raw[0]!.owner_id,
+      kind: raw[0]!.kind,
+    }).toEqual({
+      owner_level: "workspace",
+      organization_id: null,
+      owner_id: "__platform__",
+      kind: "connector",
+    });
+  });
+
+  it("a NON-contract non-org connector anchor is still refused (the relaxation is narrow)", async () => {
+    // owner_level='platform' with a verdaccio source is NOT the S1 contract and
+    // NOT a static-bundle anchor — the #1125 refusal stands for it.
     await expect(
-      installAtAnchor(wsAnchor, { packageName: "@cinatra-ai/ws-connector-2696", kind: "connector" }),
+      installAtAnchor(
+        { ownerLevel: "platform", ownerId: "__platform__", organizationId: null },
+        { packageName: "@cinatra-ai/ws-connector-2696", kind: "connector" },
+      ),
     ).rejects.toThrow(/connector install must be organization-anchored/);
     expect(await rawRows("@cinatra-ai/ws-connector-2696")).toHaveLength(0);
   });

@@ -12,6 +12,10 @@
 import { describe, it, expect } from "vitest";
 import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
 import { pickSingleLiveRowAcrossOrgs } from "@/lib/extension-install-anchor";
+import {
+  pickActiveInstall,
+  type InstallRowForPick,
+} from "@/lib/extension-install-resolution";
 
 const bundled = (id: string, over: Record<string, unknown> = {}) => ({
   id,
@@ -114,5 +118,78 @@ describe("pickSingleLiveRowAcrossOrgs: the boot resolver seam", () => {
       marketplace("org", { status: "locked" }),
     ]);
     expect(picked?.id).toBe("org");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SUPERSESSION COMES FIRST, PRECEDENCE SECOND.
+//
+// A live workspace install is the one row in force and supersedes every
+// organization row of the same package. The install path archives those org
+// rows, but it deliberately SKIPS a LOCKED one, so a live locked org row can
+// still stand beside the live workspace row.
+//
+// Precedence must not see that pair. Both rows are product-installed defaults,
+// so to precedence alone they look like competing peers and its fail-closed arm
+// would drop both, leaving the seam with no row to address. Which
+// product-installed row is in force is supersession's question; precedence only
+// answers product-install versus the copy bundled in the image.
+// ---------------------------------------------------------------------------
+describe("supersession is applied before precedence", () => {
+  /** The pick type plus the provenance the precedence policy reads: real rows
+   *  always carry `source`, the narrowed pick type simply does not name it. */
+  type PickRow = InstallRowForPick & {
+    source: { type: string; packageName?: string; version?: string };
+  };
+  const workspaceRow: PickRow = {
+    id: "ws",
+    status: "active",
+    organizationId: null,
+    ownerLevel: "workspace",
+    ownerId: "__platform__",
+    isDefault: true,
+    source: { type: "verdaccio", packageName: "@x/y", version: "0.1.1" },
+  };
+  const lockedOrgRow: PickRow = {
+    id: "org-locked",
+    status: "locked",
+    organizationId: "org-1",
+    ownerLevel: "organization",
+    ownerId: "org-1",
+    isDefault: true,
+    source: { type: "verdaccio", packageName: "@x/y", version: "0.1.0" },
+  };
+  const actor = {
+    organizationId: "org-1",
+    ownerId: "user-1",
+    teamIds: [] as string[],
+    orgRole: "org_owner" as const,
+  };
+
+  it("addresses the workspace row when a superseded LOCKED org row is still live", () => {
+    const picked = pickActiveInstall([lockedOrgRow, workspaceRow], actor);
+    // Not null, and specifically the row in force.
+    expect(picked?.id).toBe("ws");
+  });
+
+  it("is order-independent", () => {
+    expect(pickActiveInstall([workspaceRow, lockedOrgRow], actor)?.id).toBe("ws");
+  });
+
+  it("with NO workspace row the org row still resolves, unchanged", () => {
+    expect(pickActiveInstall([lockedOrgRow], actor)?.id).toBe("org-locked");
+  });
+
+  it("a bundled row beside the workspace row still loses to it", () => {
+    const bundledPlatform: PickRow = {
+      id: "plat",
+      status: "active",
+      organizationId: null,
+      ownerLevel: "platform",
+      ownerId: null,
+      isDefault: true,
+      source: { type: "bundled", packageName: "@x/y", version: "0.1.0" },
+    };
+    expect(pickActiveInstall([bundledPlatform, workspaceRow], actor)?.id).toBe("ws");
   });
 });

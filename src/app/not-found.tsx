@@ -4,10 +4,16 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
 import { CrumbContributionsClear } from "@/components/crumb-contributions";
+import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 
 export const metadata: Metadata = { title: "Page not found" };
 
-export default function NotFoundPage() {
+export default async function NotFoundPage() {
+  // `/configuration` is the platform-admin area (cinatra#2700, epic #2699), and
+  // this page is reached by anyone who mistypes a URL — including the non-admin
+  // who has just been bounced OFF a configuration route. Offering them the same
+  // door again would be the dead link this slice removes.
+  const viewerIsAdmin = isPlatformAdmin(await getAuthSession().catch(() => null));
   return (
     <Main className="min-h-screen">
       {/* Negative crumb clearing (cinatra#1737): a previously-authorized
@@ -29,12 +35,14 @@ export default function NotFoundPage() {
             >
               Back to app
             </Link>
-            <Link
-              href="/configuration"
-              className="inline-flex items-center justify-center rounded-control border border-line bg-surface-strong px-5 py-3 text-sm font-semibold text-foreground transition hover:border-primary"
-            >
-              Open configuration
-            </Link>
+            {viewerIsAdmin ? (
+              <Link
+                href="/configuration"
+                className="inline-flex items-center justify-center rounded-control border border-line bg-surface-strong px-5 py-3 text-sm font-semibold text-foreground transition hover:border-primary"
+              >
+                Open configuration
+              </Link>
+            ) : null}
           </div>
         </div>
       </PageContent>

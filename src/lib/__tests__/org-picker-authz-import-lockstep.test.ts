@@ -44,6 +44,13 @@ const EXCLUDE_DIR_NAMES = new Set([
 const AUTHZ_ALLOWLIST = new Set<string>([
   "src/lib/authz/build-actor-context-from-run.ts",
   "packages/extensions/src/permissions-kind-hooks.ts",
+  // The §V re-anchor destination check (cinatra#2802): the saved audience names
+  // a locus, and the server validates it against the actor's REAL memberships
+  // before moving the install row's anchor. An authz reader, not a picker — an
+  // archived organization's membership must still resolve, or a row that
+  // organization already holds could not have its policy edited at its own
+  // anchor.
+  "packages/extensions/src/permissions-actions.ts",
 ]);
 
 // UI scope pickers: MUST be on `readOrgsWithTeamsForUserActiveOnly` — an

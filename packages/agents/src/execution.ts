@@ -3150,7 +3150,12 @@ async function runAgentBuilderExecutionJobInner(
           ? { cause: (err as { cause?: unknown }).cause }
           : "",
       );
-      const runError = describeWayflowDispatchError(err, wayflowUrl);
+      const runError = describeWayflowDispatchError(err, wayflowUrl, {
+        // Read here (the single I/O point) and threaded in: the guidance
+        // must match what THIS install recorded, not assume every install
+        // owns a local runtime it can "start".
+        runtimeMode: process.env.CINATRA_WAYFLOW_RUNTIME,
+      });
       // Terminal-consistency for the durable AG-UI log (cinatra#809):
       // RUN_STARTED was already published before sendTask, so a dispatch
       // failure must also publish RUN_ERROR — otherwise the log ends on

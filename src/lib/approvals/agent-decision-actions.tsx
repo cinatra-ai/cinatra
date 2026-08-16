@@ -63,7 +63,12 @@ export function AgentDecisionActions({
   sourceId: string;
   rowId: string;
   expectedVersion: string;
-  detailsHref: string;
+  /** OPTIONAL since cinatra#2701 (epic #2699 S2). The approval-detail page it
+   *  points at lives under the admin-only `/configuration` segment, so a
+   *  non-admin viewer's row arrives with the href already suppressed
+   *  (feed-view-model.ts) and this actions menu simply renders no Details link
+   *  — never a link that bounces, and never a substitute destination. */
+  detailsHref?: string;
   /** OPTIONAL — fired once when the decision succeeds. The unified
    *  `/notifications` feed (E7) uses it to drop the decided row optimistically;
    *  the `/configuration/approvals` page omits it and relies on revalidation. */
@@ -204,12 +209,14 @@ export function AgentDecisionActions({
           >
             Reject
           </Button>
-          <Link
-            href={detailsHref}
-            className="text-xs text-muted-foreground underline hover:text-foreground"
-          >
-            Details
-          </Link>
+          {detailsHref ? (
+            <Link
+              href={detailsHref}
+              className="text-xs text-muted-foreground underline hover:text-foreground"
+            >
+              Details
+            </Link>
+          ) : null}
         </div>
       )}
 

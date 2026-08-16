@@ -192,8 +192,17 @@ type ScreenProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-function buildExtensionHeaderLink(packageName: string | null | undefined) {
-  if (!packageName) return null;
+/**
+ * The header's "this run came from extension X" link, which addresses the
+ * marketplace listing under `/configuration` — admin-only since cinatra#2700
+ * (epic #2699). `viewerIsAdmin` is therefore required: a member sees the run
+ * screen unchanged, minus a link that would land on not-authorized.
+ */
+function buildExtensionHeaderLink(
+  packageName: string | null | undefined,
+  viewerIsAdmin: boolean,
+) {
+  if (!packageName || !viewerIsAdmin) return null;
   const match = /^@([^/]+)\/(.+)$/.exec(packageName);
   if (!match) return null;
   return {
@@ -422,7 +431,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     run && run.status !== "pending_input"
       ? await ensureRunTitle(run, template.name)
       : run?.title ?? "";
-  const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
+  const extensionHeaderLink = buildExtensionHeaderLink(
+    template.packageName,
+    isPlatformAdmin(await getAuthSession().catch(() => null)),
+  );
 
   // ── Canonical run view LEFT RAIL (cinatra#2066, C1) ──────────────────────
   // ONE run-detail contract for BOTH template classes: the merged step rail on
@@ -711,7 +723,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
 export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   const template = await resolveTemplateForActor(agentId);
   if (!template) notFound();
-  const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
+  const extensionHeaderLink = buildExtensionHeaderLink(
+    template.packageName,
+    isPlatformAdmin(await getAuthSession().catch(() => null)),
+  );
 
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
@@ -1020,7 +1035,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
     includeNonPublished: true,
   });
   if (!template) notFound();
-  const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
+  const extensionHeaderLink = buildExtensionHeaderLink(
+    template.packageName,
+    isPlatformAdmin(await getAuthSession().catch(() => null)),
+  );
 
   // Pass actor + roles so readAgentRunById
   // enforces effectivePolicy (runDataVisibility). The manual co-owner gate

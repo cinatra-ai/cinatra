@@ -95,13 +95,31 @@ const ROW_SCOPED_OPS = ["archive", "activate", "uninstall"] as const;
 
 describe("evaluateLifecycleCapability — platform-anchored row, org-active session", () => {
   const rows = [row("iext-platform", null)];
+  // cinatra#2698 dropped the "with no active organization" clause: a platform
+  // admin now addresses an org-NULL row from ANY session, so telling an
+  // administrator to clear their active organization would be a false
+  // instruction. The principal named is unchanged.
   const PLATFORM_ROW_REASON =
-    "Installed for the whole platform. Only a platform administrator with no active organization can act on it.";
+    "Installed for the whole platform. Only a platform administrator can act on it.";
 
+  // cinatra#2698 (S4): the org-active PLATFORM ADMIN is the case that FLIPPED.
+  // Before this slice they were refused `no_addressable_row` on an org-NULL
+  // row, which left the app-wide "Workspace: All" row they had installed
+  // unmanageable from the very session they installed it in. `#2416`'s point —
+  // that the rendered affordance and the enforced refusal come from ONE
+  // implementation — is unaffected: both moved together.
   it.each(ROW_SCOPED_OPS)(
-    "%s is DENIED with the true-discriminator reason (the exact refusal case #2416 reports)",
+    "%s is ALLOWED for an org-active PLATFORM ADMIN — the org-NULL fallback",
     (op) => {
       const cap = evaluateLifecycleCapability(rows, platformAdmin("org-x"), op);
+      expect(cap).toEqual({ op, allowed: true, code: "ok", reason: null });
+    },
+  );
+
+  it.each(ROW_SCOPED_OPS)(
+    "%s is DENIED for an org-active session WITHOUT platform standing (the #2416 refusal)",
+    (op) => {
+      const cap = evaluateLifecycleCapability(rows, orgAdmin("org-x"), op);
       expect(cap).toEqual({
         op,
         allowed: false,

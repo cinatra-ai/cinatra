@@ -11,6 +11,7 @@ import { AgentBuilderRunScreen, AgentBuilderImportScreen } from "./screens";
 import { AgentRunClient, type AgentRunRowModel } from "./agent-run-client";
 import type { AgentRunAvailability } from "./runtime-install-gate";
 import { AgentsTabNav } from "@/components/agents-tab-nav";
+import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 
 // ---------------------------------------------------------------------------
 // AgentBuilder page exports
@@ -77,10 +78,23 @@ function buildUnavailableAction(
   detailHref: string | null,
 ): AgentRunRowModel["unavailable"] {
   if (availability.state !== "missing-required-dependency") return null;
-  const marketplaceHref = detailHref ?? "/configuration/marketplace";
+  // No marketplace fallback for a viewer who cannot reach it (cinatra#2701,
+  // epic #2699 S2): `detailHref` is already null for a non-admin (the caller
+  // withholds it), and the bare `/configuration/marketplace` substitute would
+  // reintroduce exactly the dead link this slice removes. Without a
+  // destination the row still states the truth — it just states it without a CTA.
+  const marketplaceHref = detailHref;
   const missing = availability.missing
     .map((m) => m.displayName ?? m.packageName)
     .join(", ");
+  if (!marketplaceHref) {
+    return {
+      reason: `This agent cannot run: ${missing} ${availability.missing.length === 1 ? "is" : "are"} not installed.`,
+      ctaLabel: null,
+      ctaHref: null,
+      ctaAriaLabel: `${name} cannot run — ${missing} not installed.`,
+    };
+  }
   return {
     reason: `This agent cannot run: ${missing} ${availability.missing.length === 1 ? "is" : "are"} not installed.`,
     ctaLabel: "View requirements",
@@ -90,6 +104,13 @@ function buildUnavailableAction(
 }
 
 export async function NewAgentPage() {
+  // The marketplace lives under `/configuration`, which answers only to a
+  // platform-admin session (cinatra#2700, epic #2699). `/agents` is a member
+  // page, so its marketplace-bound affordances — the per-card "More details"
+  // listing link, the missing-dependency CTA built above, and the empty-state
+  // "Browse marketplace" button — are offered to admins only. The rows, the
+  // Run action and the truthful unavailable REASON are unchanged for everyone.
+  const viewerIsAdmin = isPlatformAdmin(await getAuthSession().catch(() => null));
   const allTemplates = await readInstalledAgentTemplates();
   // RUNTIME-LIFECYCLE + PROVISIONING GATE (cinatra#659, cinatra#2605,
   // cinatra#2679): `readInstalledAgentTemplates` filters by the agent-builder
@@ -163,7 +184,8 @@ export async function NewAgentPage() {
     // detailHref (and thus the §V modal + its loader key packageName) exists
     // ONLY for a scoped listing — agentDetailHref returns null for unscoped /
     // legacy packages, so those render Run only, in lockstep with A2A above.
-    const detailHref = t.packageName ? agentDetailHref(t.packageName) : null;
+    const detailHref =
+      viewerIsAdmin && t.packageName ? agentDetailHref(t.packageName) : null;
     return {
       key: `local:${t.id}`,
       name: t.name,
@@ -199,9 +221,11 @@ export async function NewAgentPage() {
               Install an agent with review or approval steps from the marketplace, or connect an external A2A server.
             </p>
             <div className="flex flex-wrap gap-2 justify-center">
-              <Button asChild>
-                <Link href="/configuration/marketplace">Browse marketplace</Link>
-              </Button>
+              {viewerIsAdmin ? (
+                <Button asChild>
+                  <Link href="/configuration/marketplace">Browse marketplace</Link>
+                </Button>
+              ) : null}
               <Button asChild variant="outline">
                 <Link href="/connectors?tool=a2a-server">Connect A2A server</Link>
               </Button>

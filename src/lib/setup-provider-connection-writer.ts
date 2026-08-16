@@ -30,6 +30,7 @@ import "server-only";
 import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
 import { canExtensionAccess } from "@cinatra-ai/extensions/enforce-extension-access";
 import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
+import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/canonical-types";
 import { dispatchExtensionUiAction } from "@/lib/extension-action-dispatch";
 import { resolveExtensionUiAction } from "@/lib/extension-ui-registry";
 import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
@@ -158,9 +159,23 @@ export async function saveSetupProviderConnection(
   // would write the connection against whichever of the bundled and marketplace
   // rows the query returned first. The writer must target the same row setup and
   // settings resolve, so the override wins here too.
-  const install = applyInstallRowPrecedence(
-    rows.filter((row) => LIVE_STATUSES.has(row.status)),
-  ).find((row) => row.isDefault !== false);
+  // SUPERSESSION FIRST (cinatra#2698 S4), then source precedence over what it
+  // leaves. A live workspace install is the one row in force, so its superseded
+  // organization rows never reach the precedence policy: which product-installed
+  // row is in force is supersession's answer, and this writer only consumes it.
+  const liveRows = rows.filter((row) => LIVE_STATUSES.has(row.status));
+  const effectiveRows = liveRows.some((row) =>
+    isWorkspaceAnchoredRow({
+      ownerLevel: row.ownerLevel ?? "",
+      ownerId: row.ownerId ?? null,
+      organizationId: row.organizationId ?? null,
+    }),
+  )
+    ? liveRows.filter((row) => (row.organizationId ?? null) === null)
+    : liveRows;
+  const install = applyInstallRowPrecedence(effectiveRows).find(
+    (row) => row.isDefault !== false,
+  );
   if (!install) {
     return {
       ok: false,

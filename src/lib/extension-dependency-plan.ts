@@ -697,7 +697,7 @@ export async function planDependencyInstall(
   // reused verbatim whenever the anchors agree — which is EVERY member of every
   // non-workspace install, keeping those plans byte-identical.
   const chainByAnchorOrg = new Map<string, ResolvedScopeLevel[]>();
-  const chainKey = (o: string | null): string => o ?? " platform";
+  const chainKey = (o: string | null): string => o ?? "\0platform";
   chainByAnchorOrg.set(chainKey(rowOwnership.organizationId ?? null), scopeChain);
   const scopeChainFor = async (member: RowOwnership): Promise<ResolvedScopeLevel[]> => {
     const key = chainKey(member.organizationId ?? null);
