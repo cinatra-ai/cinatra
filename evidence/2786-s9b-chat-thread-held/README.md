@@ -1,7 +1,11 @@
 # chat-hitl S9b — the §V recommendation hold, decided inside the conversation
 
 Captured 2026-08-16 on the DEVELOPMENT RUNTIME, against this branch, on the real
-application. These four cells REPLACE the earlier round's captures.
+application. These FIVE cells REPLACE the earlier round's captures.
+
+The Skip cell was RE-CAPTURED after the skip-evidence fix landed — the earlier
+version of it showed no card, because a skip of forced-only candidates left no
+evidence for the card to settle into.
 
 ## Correction to the previous round, stated first
 
@@ -77,7 +81,7 @@ proceeds.
 | `S9b-2__chat_thread__hold-wrapper-anchors.png` | **development** | The `data-chat-thread-recommendation-hold` wrapper itself, close up. |
 | `S9b-2b__chat_thread__skill-selected-in-chat.png` | **development** | The skill ticked inside the conversation, before Confirm. |
 | `S9b-3__chat_thread__confirmed-settled-in-place.png` | **development** | After Confirm IN CHAT: the same card settled in place to "Skills confirmed (1)", same position, same conversation, no navigation — and the run panel below has advanced to its actionable form. |
-| `S9b-4__chat_thread__skipped-settled-in-place.png` | **development** | After Skip IN CHAT on a second run: the release and dispatch succeed. See the finding below on what the row settles into. |
+| `S9b-4__chat_thread__skipped-settled-in-place.png` | **development** | After Skip IN CHAT, re-read after a full transcript RELOAD: the same card settled to "Skill recommendation skipped — running with the default set.", controls gone, still inside the conversation list. Its root reads `kind=recommendation_hold`, `host=chat_thread`, `state=skipped`. |
 
 `capture-log.txt` is the unedited machine output, including the DOM anchor
 readouts and the queue probes.
@@ -132,25 +136,33 @@ authorized mounts (this `chat_thread` mount and the run panel's `run_card`
 mount) are labelled host-correct by construction, from the provider each mount
 declared. The root is `display: contents`, so the identity costs no layout.
 
-## FINDING — Skip releases and dispatches, but renders no settled summary here
+## The Skip finding is RESOLVED
 
-Confirm settles exactly as ruled. **Skip does not, on this fixture, and the cause
-is in the core action rather than in the mount.**
+The earlier round recorded that Skip released and dispatched but rendered no
+settled summary. The owner ruled option (a), and it is implemented:
 
-`skipRunRecommendationAction` writes its durable skip evidence only for
-candidates the scorer marked `recommended`. This capture's single candidate is
-offered but NOT recommended — the row shows `Skills (0/1)` and the chip carries
-`data-forced="true"` — because the run's extracted `inputParams` are empty on a
-scripted-provider stack, so the intent text the scorer matches against is `{}`.
-With no recommended candidate, Skip writes no `run_rejected_recommendations` row;
-`getRunRecommendationHoldStateAction` then finds neither selected revisions nor a
-skip marker and answers `none`, so the card clears instead of settling into a
-"skipped" summary.
+- skip evidence is now written for EVERY candidate the row offered, not only the
+  scorer-recommended ones, with a NULL rank for the ones that were offered but
+  never ranked. This capture's evidence row reads
+  `@cinatra-ai/chat:blog-content:user_skipped:NULL` — the forced candidate,
+  recorded;
+- the evidence write is no longer best-effort. A failed write refuses the
+  decision and leaves the run parked and retryable, because releasing while
+  losing the record is exactly what made the card vanish. An EMPTY row is not a
+  failed write and still releases, so nobody is left holding a card they cannot
+  dismiss.
 
-Confirm is unaffected because it persists the SELECTED skill, recommended or
-forced, which is why `S9b-3` settles.
+Measured in this capture: `decisionSummary: "skipped"`, controls gone, park
+`released`, run advanced off `pending_input`, and exactly one queue job naming
+that run. `skip-recapture-log.txt` is the unedited machine output.
 
-This is recorded, not resolved. It is stated as a contradiction for the owner in
-the PR: the ruling says a successful Skip settles the card into its skipped
-summary, and the shipped action makes that outcome conditional on a recommended
-candidate existing.
+The cleaner home for this evidence is a single run-level skip record rather than
+one row per candidate; that needs a schema change, so this carries it on the
+sanctioned fallback — the existing rejection table, with a nullable rank.
+
+## Re-record planned through the canonical capture index
+
+These cells predate the canonical capture index. Once the gates PR lands, they
+are to be re-recorded through it so the cell names and the index agree; the
+names here are provisional and chosen to be as close to the eventual ones as
+possible.
