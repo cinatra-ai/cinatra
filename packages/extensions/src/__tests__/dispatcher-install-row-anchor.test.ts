@@ -70,13 +70,13 @@ vi.mock("../canonical-store", () => ({
   listInstalledExtensions: (...a: unknown[]) => listInstalledExtensions(...(a as [])),
   readEffectiveStatusByPackageNames: vi.fn(async () => new Map()),
 }));
-const supersedeOrganizationRowsForWorkspaceInstall = vi.fn(async () => [] as string[]);
+const supersedeOrganizationRowsForWorkspaceInstall = vi.fn(async (..._args: unknown[]) => [] as string[]);
 vi.mock("../lifecycle-primitive", () => ({
   installExtensionManifest: (...a: unknown[]) => installExtensionManifest(...(a as [Row])),
   // cinatra#2698 (S4, change 2): the dispatcher runs the supersession inside the
   // install lock, after the whole install sequence succeeded.
   supersedeOrganizationRowsForWorkspaceInstall: (...a: unknown[]) =>
-    supersedeOrganizationRowsForWorkspaceInstall(...(a as [])),
+    supersedeOrganizationRowsForWorkspaceInstall(...a),
   transitionExtensionLifecycle: (...a: unknown[]) => transitionExtensionLifecycle(...(a as [])),
   deleteNonFinalizedCanonicalRow: async (id: string) => {
     const row = rows.find((r) => r.id === id);
