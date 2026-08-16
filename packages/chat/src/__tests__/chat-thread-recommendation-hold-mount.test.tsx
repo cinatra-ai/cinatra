@@ -206,6 +206,34 @@ describe("the §V card is mounted in the conversation transcript", () => {
     expect(wrapper?.contains(panel as Node)).toBe(false);
   });
 
+  it("carries the three §V root attributes, host-correct for THIS mount", async () => {
+    // The identity lives on the CARD's own root, not on either mount's wrapper,
+    // so both authorized mounts get host-correct values by construction. Here
+    // the declared host is the transcript's, so the card must say so itself.
+    const { container } = await mountHeldTurn();
+    const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
+    const root = wrapper?.querySelector('[data-lifecycle-card="recommendation_hold"]');
+
+    expect(root).not.toBeNull();
+    expect(root?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+    expect(root?.getAttribute("data-lifecycle-card-state")).toBe("held");
+    // The chip row is INSIDE that root, so the anchor set reads as one card.
+    expect(root?.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull();
+  });
+
+  it("moves the root's state attribute with the decision", async () => {
+    holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
+    const result = await mountSurface("chat", { messages: dispatchTurn() });
+
+    await waitFor(() => {
+      if (!result.container.querySelector('[data-lifecycle-card-state="confirmed"]')) {
+        throw new Error("root state did not settle to confirmed");
+      }
+    });
+    const root = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+    expect(root?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+
   it("asks the card's own authority for THIS run", async () => {
     await mountHeldTurn();
     expect(holdState.calls).toContainEqual({ runId: RUN_ID });

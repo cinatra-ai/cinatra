@@ -118,6 +118,20 @@ url unchanged (no navigation):    true
 While held there is NO queue job at all. That is the assertion separating a real
 hold from a card drawn over a run that was dispatched anyway.
 
+## Note on the three §V root attributes
+
+The card root carries `data-lifecycle-card="recommendation_hold"`,
+`data-lifecycle-card-host` and `data-lifecycle-card-state`. They were ruled in
+AFTER these screenshots were taken, so they are not visible in the pixels here;
+they are DOM attributes and are pinned by test instead — the chat mount asserts
+all three with `host="chat_thread"` and a state that moves with the decision, and
+the card suite asserts the host label is correct on each authorized mount.
+
+They live on the CARD's own root rather than on either mount's wrapper, so both
+authorized mounts (this `chat_thread` mount and the run panel's `run_card`
+mount) are labelled host-correct by construction, from the provider each mount
+declared. The root is `display: contents`, so the identity costs no layout.
+
 ## FINDING — Skip releases and dispatches, but renders no settled summary here
 
 Confirm settles exactly as ruled. **Skip does not, on this fixture, and the cause

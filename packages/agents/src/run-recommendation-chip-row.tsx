@@ -640,6 +640,25 @@ export function RecommendationHoldCard({
   if (state === null || state.state === "none") return null;
 
   return (
+    // THE CARD'S OWN IDENTITY ROOT — kind, host and state, on the one component
+    // rather than on either mount's wrapper.
+    //
+    // Both authorized mounts (the chat transcript's `chat_thread` mount and the
+    // run panel's `run_card` mount) render THIS component, so putting the
+    // attributes here is what makes each mount's values host-CORRECT by
+    // construction: the host is read from the provider the mount declared, so a
+    // mount cannot label itself as a host it is not, and a third mount cannot
+    // appear without one. Putting them on a wrapper instead would have meant two
+    // wrappers to keep in agreement, and the run panel would have carried none.
+    //
+    // `display: contents` so the identity costs no box: the element is in the
+    // DOM for the anchor set to read, and neither mount's layout moves.
+    <div
+      className="contents"
+      data-lifecycle-card="recommendation_hold"
+      data-lifecycle-card-host={host}
+      data-lifecycle-card-state={state.state}
+    >
     <RunRecommendationChipRow
       runId={runId}
       agentPackageName={
@@ -658,5 +677,6 @@ export function RecommendationHoldCard({
       variant="inline"
       onDecided={onDecided}
     />
+    </div>
   );
 }

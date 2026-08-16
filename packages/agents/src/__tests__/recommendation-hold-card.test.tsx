@@ -426,14 +426,29 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     });
     expect(holdStateMock).toHaveBeenCalled();
     // React mints a fresh `useId` per mount, so the two renders differ in their
-    // generated ARIA ids and in nothing else. Normalising them is what makes
-    // "the same drawing" a byte comparison instead of a spot check.
+    // generated ARIA ids. Normalising them is what makes "the same drawing" a
+    // byte comparison instead of a spot check.
+    //
+    // The card root also carries `data-lifecycle-card-host`, which by
+    // definition differs per host — it is the mount's IDENTITY, required on the
+    // §V root so each authorized mount is labelled with the host it actually
+    // declared. That is not the thing this pin guards. The guarantee here is
+    // that what a host DRAWS — its content, its affordances, its state — is not
+    // a property of which host it is, so the label is normalised and everything
+    // else still compares byte for byte, including both action anchors.
     const stripGeneratedIds = (html: string) =>
-      html.replaceAll(/radix-_r_[0-9a-z]+_/g, "radix-_r_ID_");
+      html
+        .replaceAll(/radix-_r_[0-9a-z]+_/g, "radix-_r_ID_")
+        .replaceAll(/data-lifecycle-card-host="[^"]*"/g, 'data-lifecycle-card-host="HOST"');
     const widgetHtml = stripGeneratedIds(widget.container.innerHTML);
     expect(widgetHtml).not.toBe("");
     expect(widgetHtml).toContain('data-action="confirm-run-recommendation"');
     expect(widgetHtml).toContain('data-action="skip-run-recommendation"');
+    // The label is normalised above, so assert it is REALLY there and really
+    // host-correct on each mount — otherwise the normalisation could hide a
+    // missing or wrong identity.
+    expect(widget.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
+      ?.getAttribute("data-lifecycle-card-host")).toBe("page_gate_region");
 
     cleanup();
     holdStateMock.mockClear();
@@ -441,6 +456,8 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     await act(async () => {
       await Promise.resolve();
     });
+    expect(chat.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
+      ?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
     expect(stripGeneratedIds(chat.container.innerHTML)).toBe(widgetHtml);
   });
 
