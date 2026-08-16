@@ -439,7 +439,11 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     const stripGeneratedIds = (html: string) =>
       html
         .replaceAll(/radix-_r_[0-9a-z]+_/g, "radix-_r_ID_")
-        .replaceAll(/data-lifecycle-card-host="[^"]*"/g, 'data-lifecycle-card-host="HOST"');
+        .replaceAll(/data-lifecycle-card-host="[^"]*"/g, 'data-lifecycle-card-host="HOST"')
+        // The chat host also stamps its own evidence marker on the same root —
+        // again an identity, not a drawing. Normalised for the same reason, and
+        // asserted explicitly below so its presence is still pinned.
+        .replaceAll(/ ?data-chat-thread-recommendation-hold=""/g, "");
     const widgetHtml = stripGeneratedIds(widget.container.innerHTML);
     expect(widgetHtml).not.toBe("");
     expect(widgetHtml).toContain('data-action="confirm-run-recommendation"');
@@ -458,6 +462,10 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     });
     expect(chat.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
       ?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+    // The chat mount's evidence marker rides that same root, and no other host
+    // carries it.
+    expect(chat.container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expect(widget.container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
     expect(stripGeneratedIds(chat.container.innerHTML)).toBe(widgetHtml);
   });
 

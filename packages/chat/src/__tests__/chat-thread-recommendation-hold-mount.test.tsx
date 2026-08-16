@@ -174,9 +174,11 @@ describe("the §V card is mounted in the conversation transcript", () => {
 
     const list = container.querySelector("[data-conversation-list]");
     expect(list).not.toBeNull();
+    // The marker rides the card's OWN root, so it exists exactly when the card
+    // draws — there is no wrapper of the transcript's to find when unheld.
     const wrapper = list?.querySelector("[data-chat-thread-recommendation-hold]");
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.getAttribute("data-run-id")).toBe(RUN_ID);
+    expect(wrapper?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
   });
 
   it("puts the chip row and BOTH action anchors inside that wrapper", async () => {
@@ -211,10 +213,11 @@ describe("the §V card is mounted in the conversation transcript", () => {
     // so both authorized mounts get host-correct values by construction. Here
     // the declared host is the transcript's, so the card must say so itself.
     const { container } = await mountHeldTurn();
-    const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
-    const root = wrapper?.querySelector('[data-lifecycle-card="recommendation_hold"]');
+    // The marker and the identity are the SAME element: the card's root.
+    const root = container.querySelector("[data-chat-thread-recommendation-hold]");
 
     expect(root).not.toBeNull();
+    expect(root?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
     expect(root?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
     expect(root?.getAttribute("data-lifecycle-card-state")).toBe("held");
     // The chip row is INSIDE that root, so the anchor set reads as one card.
@@ -239,19 +242,21 @@ describe("the §V card is mounted in the conversation transcript", () => {
     expect(holdState.calls).toContainEqual({ runId: RUN_ID });
   });
 
-  it("draws NOTHING when the run carries no live hold", async () => {
-    // The negative control. Every `agent_run` turn mounts the card; a run that
-    // is not held must add no card DOM at all, or the wrapper would be a
-    // permanent empty fixture rather than evidence of a hold.
+  it("FAILS OPEN: an unheld turn adds no node at all", async () => {
+    // The load-bearing negative control. Every `agent_run` turn mounts the card,
+    // so a run that is NOT held must leave the transcript byte-identical to what
+    // it drew before this mount existed. If the marker were a wrapper the
+    // transcript rendered, it would sit in every such turn as an empty fixture
+    // and every DOM-shape pin on this column would move.
     holdState.current = { state: "none" };
     const result = await mountSurface("chat", { messages: dispatchTurn() });
 
     await waitFor(() => {
       if (holdState.calls.length === 0) throw new Error("hold state not resolved");
     });
-    expect(
-      result.container.querySelector("[data-run-recommendation-chip-row]"),
-    ).toBeNull();
+    expect(result.container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
+    expect(result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')).toBeNull();
+    expect(result.container.querySelector("[data-run-recommendation-chip-row]")).toBeNull();
   });
 });
 

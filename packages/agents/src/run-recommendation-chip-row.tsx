@@ -658,6 +658,13 @@ export function RecommendationHoldCard({
       data-lifecycle-card="recommendation_hold"
       data-lifecycle-card-host={host}
       data-lifecycle-card-state={state.state}
+      // The chat transcript's evidence anchor rides the card's OWN root rather
+      // than a wrapper the transcript renders. That is what makes the mount
+      // FAIL OPEN: a turn with no live hold draws no card, so it adds no marker
+      // and no node, and a conversation without a hold is byte-identical to one
+      // from before this mount existed. A wrapper rendered by the transcript
+      // would have been there whether or not anything was inside it.
+      {...(host === "chat_thread" ? { "data-chat-thread-recommendation-hold": "" } : {})}
     >
     <RunRecommendationChipRow
       runId={runId}

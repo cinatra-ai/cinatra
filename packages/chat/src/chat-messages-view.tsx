@@ -278,12 +278,7 @@ function OrderedPartsSection({
                   also what makes it survive a transcript reload and what lets
                   it settle IN PLACE into its confirmed/skipped summary after a
                   decision instead of disappearing. */}
-              <div
-                data-chat-thread-recommendation-hold=""
-                data-run-id={part.runId}
-              >
-                <RecommendationHoldCard runId={part.runId} wireRef={null} />
-              </div>
+              <RecommendationHoldCard runId={part.runId} wireRef={null} />
               <InlineAgentRunCard
                 runId={part.runId}
                 onActiveGateChange={onActiveGateChange}
