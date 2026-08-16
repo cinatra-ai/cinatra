@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import {
   describeWayflowDispatchError,
   normalizeWayflowRuntimeMode,
+  wayflowComposeCommand,
 } from "../wayflow-url";
 
 const URL = "http://localhost:8001/agents/cinatra/blog-idea-generator/";
@@ -149,6 +150,22 @@ describe("describeWayflowDispatchError (#562), mode-aware by recorded runtime", 
       });
       expect(out).toContain("cinatra instance wayflow start");
     });
+  });
+});
+
+describe("wayflowComposeCommand", () => {
+  it("pins the project flag and both compose files ahead of the given action", () => {
+    const out = wayflowComposeCommand("up -d --build wayflow");
+    expect(out).toBe(
+      "docker compose -p cinatra_cinatra -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d --build wayflow",
+    );
+  });
+
+  it("carries the same project pin for a different action (the preflight rebuild case)", () => {
+    const out = wayflowComposeCommand("build wayflow");
+    expect(out).toContain("-p cinatra_cinatra");
+    expect(out).toContain("--profile wayflow");
+    expect(out.endsWith("build wayflow")).toBe(true);
   });
 });
 

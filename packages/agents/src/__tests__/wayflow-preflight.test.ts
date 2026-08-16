@@ -64,6 +64,21 @@ describe("preflightWayflowAgent", () => {
     // failure.
     expect(result.error).toContain("auto-recovery attempted a reload");
     expect(result.error).toMatch(/build wayflow.*force-recreate wayflow/);
+    // A 404 means the runtime IS up — the guidance must be about the agent
+    // not being mounted (rebuild the container), never about starting a
+    // dead runtime.
+    expect(result.error).not.toMatch(/\bstart\b/i);
+    // The rebuild fallback must be complete and pinned to the live stack's
+    // compose project, or it forks a separate `cinatra` project that can't
+    // see the running network — the same defect class the runtime-unreachable
+    // message fix corrected on the sibling surface. Both compose
+    // invocations (build, then up --force-recreate) need the flags.
+    expect(result.error).toMatch(
+      /-p cinatra_cinatra -f docker-compose\.yml -f docker-compose\.dev\.yml --profile wayflow build wayflow/,
+    );
+    expect(result.error).toMatch(
+      /-p cinatra_cinatra -f docker-compose\.yml -f docker-compose\.dev\.yml --profile wayflow up -d --force-recreate wayflow/,
+    );
     expect(result.reloadAttempt).toBeDefined();
     if (result.reloadAttempt && result.reloadAttempt.ok === false) {
       expect(result.reloadAttempt.reason).toBe("no_token");

@@ -90,6 +90,27 @@ export function normalizeWayflowRuntimeMode(
 }
 
 /**
+ * Build a `docker compose` invocation pinned to the live stack's compose
+ * project (`-p cinatra_cinatra`) and its two compose files, with `action`
+ * appended verbatim (e.g. `"up -d --build wayflow"`, `"build wayflow"`).
+ *
+ * Every WayFlow-recovery message in this module goes through this one
+ * builder so the project flag and profile can never drift between surfaces
+ * again — an unpinned invocation forks a SEPARATE compose project that
+ * can't see the running network. Exported so other surfaces that need a
+ * WayFlow compose command (e.g. the agent-not-registered preflight in
+ * `wayflow-preflight.ts`, whose recovery action differs — rebuild + force
+ * recreate rather than a plain `up`) build it from the same source instead
+ * of hand-writing the project/profile flags again.
+ */
+export function wayflowComposeCommand(action: string): string {
+  return (
+    `docker compose -p cinatra_cinatra -f docker-compose.yml -f docker-compose.dev.yml ` +
+    `--profile wayflow ${action}`
+  );
+}
+
+/**
  * The complete, project-pinned docker fallback for bringing the WayFlow
  * service up directly, without the CLI. Pinned to the live stack's compose
  * project (`-p cinatra_cinatra`) so it never forks a second, network-isolated
@@ -98,8 +119,7 @@ export function normalizeWayflowRuntimeMode(
  */
 const DOCKER_FALLBACK =
   "`source .env.local && node scripts/gen-wayflow-env.mjs --require-bridge-token " +
-  "&& docker compose -p cinatra_cinatra -f docker-compose.yml -f docker-compose.dev.yml " +
-  "--profile wayflow up -d --build wayflow`";
+  `&& ${wayflowComposeCommand("up -d --build wayflow")}\``;
 
 /** `cinatra instance wayflow start`, always caveated: it is not on every
  *  released CLI yet (a fresh install runs the released CLI), so a bare
