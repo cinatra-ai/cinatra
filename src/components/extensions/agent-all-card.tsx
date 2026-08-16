@@ -53,8 +53,11 @@ export type AgentAllCardRow = {
    */
   unavailable?: {
     reason: string;
-    ctaLabel: string;
-    ctaHref: string;
+    /** `null` when this viewer has no reachable recourse (cinatra#2701) — the
+     *  destination is admin-only, so the card states the reason and offers no
+     *  button. */
+    ctaLabel: string | null;
+    ctaHref: string | null;
     ctaAriaLabel: string;
   } | null;
 };
@@ -101,7 +104,18 @@ export function AgentAllCard({
       accentInert={!hasDetail}
       actions={
         <>
-          {row.unavailable ? (
+          {row.unavailable && !row.unavailable.ctaHref ? (
+            /* cinatra#2701 — same truth, no recourse this viewer can reach:
+               the reason is still stated (title + accessible text), the button
+               is not offered. */
+            <span
+              className="text-xs text-muted-foreground"
+              title={row.unavailable.reason}
+              data-slot="agent-card-unavailable-reason"
+            >
+              Unavailable
+            </span>
+          ) : row.unavailable ? (
             /* cinatra#2605 — the agent cannot run (not installed, or a required
                dependency is not installed), so the primary slot carries the
                recourse instead of a Run that would fail. No play icon (it would
@@ -109,7 +123,7 @@ export function AgentAllCard({
                reason because the short visible label cannot. */
             <Button asChild size="sm" variant="outline">
               <Link
-                href={row.unavailable.ctaHref}
+                href={row.unavailable.ctaHref!}
                 aria-label={row.unavailable.ctaAriaLabel}
                 title={row.unavailable.reason}
                 data-slot="agent-card-unavailable-action"

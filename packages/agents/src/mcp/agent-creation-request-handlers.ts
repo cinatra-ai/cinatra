@@ -20,7 +20,7 @@ import {
 import {
   readConnectorConfigFromDatabase,
 } from "@/lib/database";
-import { countOtherPlatformAdmins } from "@/lib/better-auth-db";
+import { countOtherPlatformAdmins, readUserIsPlatformAdmin } from "@/lib/better-auth-db";
 import { logAuditEventStrict } from "@/lib/authz/audit";
 import {
   AgentApprovalAccessTargetSchema,
@@ -415,6 +415,17 @@ async function notifyAuthorOfDecision(after: AgentCreationRequestRow): Promise<v
     const { createNotificationForRecipient } = await import(
       "@cinatra-ai/notifications/server"
     );
+    // ALIGNED AFFORDANCE (cinatra#2701, epic #2699 S2). The deep link below
+    // addresses `/configuration/agents/approvals/<id>`, and E2's author-readable
+    // carve-out on that page is gone — the whole segment answers only to a
+    // platform-admin session now (S1, #2700). A NEW row therefore carries the
+    // href only when the recipient (the author, server-derived) is themselves an
+    // admin. Rows written BEFORE this keep their stored href untouched; the
+    // feed's render-time suppression is what stops those from dead-ending.
+    // Fail-closed: an unreadable role means no href, never a href that bounces.
+    const recipientIsAdmin = await readUserIsPlatformAdmin(after.authorId).catch(
+      () => false,
+    );
     await createNotificationForRecipient(
       // Recipient is server-derived from the persisted author row — never
       // caller-controlled (no fanout escalation).
@@ -425,11 +436,13 @@ async function notifyAuthorOfDecision(after: AgentCreationRequestRow): Promise<v
           `Your agent creation request '${after.packageName}' was ${decided}.` +
           (reason ? ` Reason: ${reason}` : ""),
         kind: decided === "approved" ? "success" : "warning",
-        // Deep-link to the request detail route. E2 (#1552) opened this page to
-        // author-or-admin read access (it no longer calls requireAdminSession),
-        // so the author who receives this notification can now follow the href;
-        // the unified /notifications surface uses it for mark-read-on-navigate.
-        href: `/configuration/agents/approvals/${after.id}`,
+        // Deep-link to the request detail route — for an ADMIN recipient only
+        // (see above). A member author still receives the notification, still
+        // learns the outcome and the reason from the body, and simply gets a
+        // card with no link rather than one that lands on not-authorized.
+        ...(recipientIsAdmin
+          ? { href: `/configuration/agents/approvals/${after.id}` }
+          : {}),
         dedupeKey: `agent-creation-request:${after.id}:${decided}:${after.decidedAt ?? ""}`,
       },
     );
