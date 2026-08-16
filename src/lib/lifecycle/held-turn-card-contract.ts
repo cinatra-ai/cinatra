@@ -402,12 +402,16 @@ export const ANY_LIFECYCLE_MOUNT_PROBES: readonly string[] = Object.freeze([
 
 /**
  * THE FLOOR OF THAT PROBE, stated so it is not read as more than it is: a card
- * rendered with NO data attribute at all is invisible to it. Such a card also
- * fails the one-card gate, which requires each kind's named anchors on its
- * rendered root, so the case is covered — by a sibling gate, not by this one.
+ * rendered with NO data attribute at all is invisible to these selectors.
+ *
+ * That case is not left to a sibling gate on faith. The transcript suite checks
+ * the triggering container for INTERACTIVITY itself — a button, a link, a
+ * control — outside the run card's subtree, because an operable card has to
+ * offer the reader something to click whatever its markup is called. Attributes
+ * catch the named mount; interactivity catches the unnamed one.
  */
 export const ANY_LIFECYCLE_MOUNT_PROBE_LIMIT =
-  "a card carrying no data-* attribute is not detected here; the one-card gate owns that case";
+  "attribute probes miss a card with no data-* markers; the transcript suite's interactive-affordance check is the floor under them";
 
 // ---------------------------------------------------------------------------
 // The projection model

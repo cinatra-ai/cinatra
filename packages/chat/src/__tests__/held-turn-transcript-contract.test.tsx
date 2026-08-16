@@ -646,6 +646,44 @@ describe("the mount ratchet does not depend on today's selector NAMES", () => {
     ).toEqual([]);
   });
 
+  it("sees NO interactive affordance of any kind in the held turn's own slot", async () => {
+    // The anchorless case, which no attribute probe can reach: a card built from
+    // plain elements with no data-* at all. An OPERABLE card must still offer
+    // something to click, so the container is checked for interactivity itself.
+    // This is the floor under the attribute probes, not a duplicate of them.
+    const { root } = await mountHeldChat();
+    const { triggerContainer } = projectionFromProductionTurn(root, {
+      name: "agent_run",
+      result: DURABLE_RESULT,
+    });
+    const interactive = Array.from(
+      triggerContainer.querySelectorAll('button, [role="button"], a[href], input, select'),
+    ).filter((el) => !HELD_TURN_ROW.foreignHostSubtrees.some((f) => el.closest(f) !== null));
+    expect(
+      interactive.map((el) => el.tagName.toLowerCase()),
+      "something clickable appeared in the held turn's own slot — if a card landed " +
+        "there, strike the obligation row; the attribute probes cannot see a card " +
+        "built from plain elements, and this is what does",
+    ).toEqual([]);
+  });
+
+  it("the interactive floor FIRES on a card with no data attributes at all", async () => {
+    const { root } = await mountHeldChat();
+    const { triggerContainer } = projectionFromProductionTurn(root, {
+      name: "agent_run",
+      result: DURABLE_RESULT,
+    });
+    const anchorless = document.createElement("section");
+    anchorless.innerHTML = "<button>Decide</button>";
+    triggerContainer.appendChild(anchorless);
+
+    expect(probeOutsideRunCard(triggerContainer)).toEqual([]); // invisible to attributes
+    const interactive = Array.from(
+      triggerContainer.querySelectorAll('button, [role="button"], a[href], input, select'),
+    ).filter((el) => !HELD_TURN_ROW.foreignHostSubtrees.some((f) => el.closest(f) !== null));
+    expect(interactive.length).toBeGreaterThan(0); // …and caught by this
+  });
+
   it("the probe FIRES on a card that uses none of the contract's anchor names", async () => {
     // The negative control: without this, the check above could be green
     // because the probe matches nothing at all.
@@ -684,11 +722,16 @@ describe("the production mount points, read from the import graph", () => {
   // both: the drawing code has to name the module it comes from, wherever in
   // this package it ends up living.
   const CHAT_SRC = join(__dirname, "..");
+  const AGENTS_SRC = join(__dirname, "..", "..", "..", "agents", "src");
   // ONLY the modules of kinds whose chat mount is still owed. `review-gate-card`
   // is deliberately absent: the review kind's chat mount has LANDED, through the
   // renderable-views registry, and forbidding it would be forbidding the thing
   // this program is trying to achieve.
   const OWED_OWNER_MODULES = ["run-recommendation-chip-row"];
+  const OWED_OWNER_SYMBOLS = ["RecommendationHoldCard", "RunRecommendationChipRow"];
+  // The barrels a chat import could reach the card through without ever naming
+  // its module. Watched below, which is what closes the re-export route.
+  const AGENTS_BARRELS = ["index.ts", "client-entry.ts"];
 
   function chatSourceFiles(dir: string, out: string[] = []): string[] {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -718,6 +761,39 @@ describe("the production mount points, read from the import graph", () => {
       "a lifecycle card's drawing module is now imported by chat production code — " +
         "if that is the chat mount landing, strike the obligation row",
     ).toEqual([]);
+  });
+
+  it("the agents barrels do not re-export an owed card, so the module scan cannot be routed around", () => {
+    // THE RE-EXPORT ROUTE, closed. Without this, chat could import the card from
+    // `@cinatra-ai/agents` and name neither its module nor, if the barrel
+    // renamed it, its symbol. A barrel that re-exports it has to write the
+    // original name at the export site, so watching the barrels closes the
+    // chain: module specifier, symbol name, or barrel export — all three are
+    // seen, and there is no fourth way in.
+    for (const barrel of AGENTS_BARRELS) {
+      const source = readFileSync(join(AGENTS_SRC, barrel), "utf8");
+      for (const symbol of OWED_OWNER_SYMBOLS) {
+        expect(
+          source.includes(symbol),
+          `packages/agents/src/${barrel} now re-exports ${symbol} — the owed chat mount may be ` +
+            "landing through the barrel; check the obligation row",
+        ).toBe(false);
+      }
+      expect(source).not.toContain("run-recommendation-chip-row");
+    }
+  });
+
+  it("no production file in the chat package names an owed card's SYMBOL either", () => {
+    // The alias case is covered by construction: `import { RecommendationHoldCard
+    // as RHC }` still writes the original name at the import site.
+    const offenders: string[] = [];
+    for (const file of chatSourceFiles(CHAT_SRC)) {
+      const source = readFileSync(file, "utf8");
+      for (const symbol of OWED_OWNER_SYMBOLS) {
+        if (source.includes(symbol)) offenders.push(`${file.slice(CHAT_SRC.length + 1)} → ${symbol}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it("the transcript's agent_run branch still names the inline run card", () => {
