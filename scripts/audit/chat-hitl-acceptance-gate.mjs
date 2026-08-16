@@ -49,6 +49,11 @@
  * here; what THIS gate catches is the silent rename, the quiet deletion, and the
  * green claim with nothing behind it.
  *
+ * THE CAPTURE INDEX rides the same entrypoint. A criterion row names a proof;
+ * a capture record names a SCREEN. The manifest half catches the proof that was
+ * renamed away; the capture half catches the screenshot filed under a host it
+ * does not show. Both run on every invocation, and both must be clean.
+ *
  * Usage:
  *   node scripts/audit/chat-hitl-acceptance-gate.mjs            # audit
  *   node scripts/audit/chat-hitl-acceptance-gate.mjs --strict   # done-check
@@ -60,12 +65,15 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { hashFile, validateCaptureIndex } from "./lib/chat-hitl-capture-recorder.mjs";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
 const LABEL = "chat-hitl-acceptance";
 
 export const MANIFEST_PATH = join(__dirname, "chat-hitl-acceptance-manifest.json");
+export const CAPTURE_INDEX_PATH = join(__dirname, "chat-hitl-capture-index.json");
 
 /** The valid dispositions. See the header for what each one claims. */
 export const DISPOSITIONS = ["MAPPED", "BUILT", "MISSING"];
@@ -221,6 +229,24 @@ export function strictReport({ manifest = loadManifest(), ...rest } = {}) {
   return { violations, unproven, partial, total: rows.length };
 }
 
+/** The committed capture index. */
+export function loadCaptureIndex(indexPath = CAPTURE_INDEX_PATH) {
+  return JSON.parse(readFileSync(indexPath, "utf8"));
+}
+
+/**
+ * Audit the capture index: schema, hashes, URL class, required host assertions
+ * and their observed counts. Pure over injected IO, like `auditManifest`, so the
+ * pinned fixtures drive the same validator CI runs.
+ */
+export function auditCaptureIndex({
+  index = loadCaptureIndex(),
+  repoRoot = DEFAULT_REPO_ROOT,
+  hashOf = (rel) => hashFile(resolve(repoRoot, rel)),
+} = {}) {
+  return validateCaptureIndex({ index, hashOf });
+}
+
 function summarise(rows) {
   const counts = { MAPPED: 0, BUILT: 0, MISSING: 0 };
   for (const r of rows) counts[r.disposition] = (counts[r.disposition] ?? 0) + 1;
@@ -237,13 +263,32 @@ function main(argv) {
   const rows = manifest.rows ?? [];
   const counts = summarise(rows);
 
+  // The capture half runs on EVERY invocation. A mislabeled capture is a false
+  // green whether or not the manifest is being asked whether it is done.
+  if (!existsSync(CAPTURE_INDEX_PATH)) {
+    console.error(`[${LABEL}] capture index not found at ${CAPTURE_INDEX_PATH}`);
+    return 2;
+  }
+  const captureIndex = loadCaptureIndex();
+  const captureViolations = auditCaptureIndex({ index: captureIndex });
+  if (captureViolations.length > 0) {
+    console.error(
+      `[${LABEL}] ${captureViolations.length} capture-index violation(s) — a capture's ` +
+        "declared host must match its recorded anchors; file names carry no authority:\n",
+    );
+    for (const v of captureViolations) console.error(`  ${v}`);
+    return 1;
+  }
+  const captureCount = (captureIndex.records ?? []).length;
+
   if (!strict) {
     const violations = auditManifest({ manifest });
     if (violations.length === 0) {
       console.log(
         `[${LABEL}] manifest honest — ${rows.length} rows ` +
           `(${counts.MAPPED} MAPPED, ${counts.BUILT} BUILT, ${counts.MISSING} MISSING); ` +
-          "every named proof exists in the tree.",
+          "every named proof exists in the tree. " +
+          `Capture index host-anchored — ${captureCount} record(s).`,
       );
       return 0;
     }
@@ -267,7 +312,10 @@ function main(argv) {
     for (const r of partial) console.error(`  PARTIAL  ${r.criterion}\n           gap: ${r.gap}`);
     return 1;
   }
-  console.log(`[${LABEL}] READY — ${total}/${total} criteria proven, none partial.`);
+  console.log(
+    `[${LABEL}] READY — ${total}/${total} criteria proven, none partial; ` +
+      `capture index host-anchored (${captureCount} record(s)).`,
+  );
   return 0;
 }
 
