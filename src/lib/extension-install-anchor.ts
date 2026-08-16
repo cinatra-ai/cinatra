@@ -190,17 +190,41 @@ export function pickSingleLiveRowAcrossOrgs<
   T extends {
     status: string;
     organizationId: string | null;
+    ownerLevel?: string;
+    ownerId?: string | null;
     isDefault?: boolean;
     source?: { type?: string } | null;
   },
 >(rows: readonly T[]): T | null {
-  const matching = rows.filter((r) => r.status === "active" || r.status === "locked");
-  // SOURCE PRECEDENCE (the shared policy): a package that ships in the image AND
-  // has a marketplace install holds two live default rows at once. That pair used
-  // to read as ambiguity and return null, so the boot loader resolved no anchor,
-  // logged "no trusted install record", and NEITHER version activated. The
-  // marketplace row is the override and wins; the bundled row remains the
-  // fallback underneath it. Two competing marketplace defaults still fail closed.
+  const live = rows.filter((r) => r.status === "active" || r.status === "locked");
+  // SUPERSESSION FIRST (cinatra#2698 S4). A live workspace install is the one row
+  // in force and supersedes every organization row of the package, so those rows
+  // are dropped before anything else looks at them. This mirrors
+  // `effectiveInstallRows` rather than re-deriving it.
+  //
+  // It is load-bearing at BOOT, not only in theory. The install path archives the
+  // superseded organization rows AFTER the workspace install finalizes, and it
+  // deliberately SKIPS a locked one, so a live organization row can stand beside
+  // the live workspace row both transiently (a reader inside that window) and
+  // durably (the locked row). Without this filter the pair reaches precedence as
+  // two product-installed peers, precedence refuses to guess, and boot resolves
+  // no anchor at all.
+  const matching = live.some((r) =>
+    isWorkspaceAnchoredRow({
+      ownerLevel: r.ownerLevel ?? "",
+      ownerId: r.ownerId ?? null,
+      organizationId: r.organizationId ?? null,
+    }),
+  )
+    ? live.filter((r) => (r.organizationId ?? null) === null)
+    : live;
+  // SOURCE PRECEDENCE (the shared policy) runs over what supersession leaves: a
+  // package that ships in the image AND has a product install holds two live
+  // default rows at once. That pair used to read as ambiguity and return null, so
+  // the boot loader resolved no anchor, logged "no trusted install record", and
+  // NEITHER version activated. The product install is the override and wins; the
+  // bundled row remains the fallback underneath it. Rows that are genuinely peers
+  // still fail closed.
   const ranked = applyInstallRowPrecedence(matching);
   // Same exact-one-default rule as pickSingleActiveRow (cinatra#1040 S3): a
   // non-default side-by-side version row must not un-anchor (or replace) the

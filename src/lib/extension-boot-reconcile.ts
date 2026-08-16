@@ -67,6 +67,8 @@ export type ReconcilableRow = {
   id: string;
   packageName: string;
   organizationId: string | null;
+  /** Present so supersession can tell a workspace anchor from an org row. */
+  ownerLevel?: string;
   status: string;
   isDefault?: boolean;
   source?: { type?: string } | null;
@@ -128,7 +130,19 @@ export async function reconcileStrandedInstall(
     }
 
     const rows = await deps.readRows(packageName);
-    const live = rows.filter((r) => r.status === "active" || r.status === "locked");
+    const allLive = rows.filter((r) => r.status === "active" || r.status === "locked");
+    // SUPERSESSION FIRST (cinatra#2698 S4): a live workspace install is the one
+    // row in force, so its superseded organization rows are not candidates. The
+    // install path archives them, but it skips a LOCKED one and it archives only
+    // after the workspace install finalizes, so a live organization row can still
+    // stand beside the workspace row. Without this filter reconciliation would
+    // read that pair as two competing installs and skip the very row it exists to
+    // activate, leaving the package stranded for good.
+    const live = allLive.some(
+      (r) => r.ownerLevel === "workspace" && (r.organizationId ?? null) === null,
+    )
+      ? allLive.filter((r) => (r.organizationId ?? null) === null)
+      : allLive;
     const overrides = live.filter(
       (r) => r.isDefault !== false && r.source?.type === "verdaccio",
     );

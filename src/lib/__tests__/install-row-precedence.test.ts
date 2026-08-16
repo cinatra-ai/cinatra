@@ -193,3 +193,62 @@ describe("supersession is applied before precedence", () => {
     expect(pickActiveInstall([bundledPlatform, workspaceRow], actor)?.id).toBe("ws");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The BOOT resolver must apply supersession too.
+//
+// The install path archives the superseded organization rows AFTER the workspace
+// install finalizes, and it deliberately skips a LOCKED one. So a live
+// organization row stands beside the live workspace row both transiently (a
+// reader inside that window) and durably (the locked row). Boot must resolve the
+// row in force in both cases, not read the pair as two competing installs.
+// ---------------------------------------------------------------------------
+describe("pickSingleLiveRowAcrossOrgs applies supersession before precedence", () => {
+  const ws = {
+    id: "ws",
+    status: "active",
+    organizationId: null,
+    ownerLevel: "workspace",
+    ownerId: "__platform__",
+    isDefault: true,
+    source: { type: "verdaccio" },
+  };
+  const orgRow = (over: Record<string, unknown> = {}) => ({
+    id: "org",
+    status: "active",
+    organizationId: "org-1",
+    ownerLevel: "organization",
+    ownerId: "org-1",
+    isDefault: true,
+    source: { type: "verdaccio" },
+    ...over,
+  });
+
+  it("resolves the workspace row while a LOCKED org row is still live", () => {
+    expect(pickSingleLiveRowAcrossOrgs([orgRow({ status: "locked" }), ws])?.id).toBe("ws");
+  });
+
+  it("resolves the workspace row inside the finalize-then-archive window", () => {
+    // Both live: the archival has not run yet. A reader must not see ambiguity.
+    expect(pickSingleLiveRowAcrossOrgs([orgRow(), ws])?.id).toBe("ws");
+  });
+
+  it("a bundled row under the workspace row still loses to it", () => {
+    const bundled = {
+      id: "plat",
+      status: "active",
+      organizationId: null,
+      ownerLevel: "platform",
+      ownerId: null,
+      isDefault: true,
+      source: { type: "bundled" },
+    };
+    expect(pickSingleLiveRowAcrossOrgs([bundled, ws])?.id).toBe("ws");
+  });
+
+  it("with NO workspace row two competing org installs still fail closed", () => {
+    const a = orgRow({ id: "a" });
+    const b = orgRow({ id: "b", organizationId: "org-2", ownerId: "org-2" });
+    expect(pickSingleLiveRowAcrossOrgs([a, b])).toBeNull();
+  });
+});

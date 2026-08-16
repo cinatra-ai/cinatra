@@ -519,12 +519,19 @@ export class UntrustedInstallRefusedError extends Error {
     public readonly packageVersion: string,
     public readonly verdictReason: string,
     public readonly operation: "install" | "update",
+    /** Whether the materialized store dir was actually removed. False when the
+     *  cleanup failed, or when the dir IS the live install's (a same-digest
+     *  re-install), so the message never claims a removal that did not happen. */
+    public readonly bytesRemoved: boolean = true,
   ) {
     super(
       `${operation} of ${packageName}@${packageVersion} was refused before anything was ` +
         `committed: ${verdictReason}. No install-op journal, host-port grant or provenance ` +
-        `was written, the materialized bytes were removed, and the version bundled in the ` +
-        `image stays in service.`,
+        `was written, ` +
+        (bytesRemoved
+          ? `the materialized bytes were removed, `
+          : `the materialized bytes are still on disk and need clearing, `) +
+        `and the version bundled in the image stays in service.`,
     );
     this.name = "UntrustedInstallRefusedError";
   }
@@ -796,11 +803,23 @@ export async function installExtensionFromRegistry(
   // decision for the new bytes.
   if (!verdict.trusted) {
     const isLiveDigest = priorOp?.phase === "finalized" && priorOp.digest === mat.digest;
+    // Whether the materialized bytes are actually gone. The refusal SAYS what it
+    // did, so a swallowed GC failure must not be reported as a removal: a
+    // leftover dir is real state a later boot can trip over, and telling an
+    // operator it was cleaned up when it was not is the kind of small lie that
+    // costs an hour. A same-digest re-install never GCs (that dir IS the live
+    // install's), so it is reported as retained too.
+    let bytesRemoved = false;
     if (deps.gcStoreDir && !isLiveDigest) {
       try {
         await deps.gcStoreDir(mat.storeDir);
-      } catch {
-        /* best-effort GC: a leftover dir is recovered by a later retry's gate. */
+        bytesRemoved = true;
+      } catch (gcErr) {
+        console.warn(
+          "[extension-install-pipeline] refused install left its materialized dir in place for %s: %s",
+          input.packageName,
+          gcErr instanceof Error ? gcErr.message : String(gcErr),
+        );
       }
     }
     throw new UntrustedInstallRefusedError(
@@ -808,6 +827,7 @@ export async function installExtensionFromRegistry(
       resolvedVersion,
       verdict.reason,
       priorOp?.phase === "finalized" ? "update" : "install",
+      bytesRemoved,
     );
   }
 

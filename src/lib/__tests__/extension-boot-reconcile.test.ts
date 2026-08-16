@@ -30,6 +30,14 @@ const bundledRow: ReconcilableRow = {
   status: "active",
   source: { type: "bundled" },
 };
+const workspaceRow: ReconcilableRow = {
+  id: "ws",
+  packageName: PKG,
+  organizationId: null,
+  ownerLevel: "workspace",
+  status: "active",
+  source: { type: "verdaccio" },
+};
 const overrideRow: ReconcilableRow = {
   id: "org",
   packageName: PKG,
@@ -242,5 +250,41 @@ describe("reconcileStrandedInstall", () => {
     });
     await reconcileStrandedInstall(PKG, deps);
     expect(order).toEqual([`lock:${PKG}`, "activate", "unlock"]);
+  });
+});
+
+describe("reconcileStrandedInstall applies supersession before precedence", () => {
+  it("activates the WORKSPACE row while a superseded org row is still live", async () => {
+    // The org row is locked, so the install path deliberately left it live. The
+    // reconciler must still act on the row in force instead of reading the pair
+    // as two competing installs and skipping.
+    const activated: string[] = [];
+    let serving = false;
+    const { deps } = makeDeps({
+      readRows: async () => [{ ...overrideRow, status: "locked" }, workspaceRow],
+      isServing: () => serving,
+      activateOverride: async (row) => {
+        activated.push(row.id);
+        serving = true;
+        return { ok: true };
+      },
+    });
+    const out = await reconcileStrandedInstall(PKG, deps);
+    expect(activated).toEqual(["ws"]);
+    expect(out).toEqual({ kind: "activated", packageName: PKG });
+  });
+
+  it("still refuses to choose between two competing ORG installs", async () => {
+    const activate = vi.fn();
+    const { deps } = makeDeps({
+      readRows: async () => [
+        overrideRow,
+        { ...overrideRow, id: "org-b", organizationId: "org-2" },
+      ],
+      activateOverride: activate as never,
+    });
+    const out = await reconcileStrandedInstall(PKG, deps);
+    expect(out.kind).toBe("skipped");
+    expect(activate).not.toHaveBeenCalled();
   });
 });
