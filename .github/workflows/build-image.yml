@@ -1442,23 +1442,65 @@ jobs:
           fi
           node -e '
             const fs = require("node:fs");
-            const path = process.env.GATE_REPORT;
+            const path = require("node:path");
+            const reportPath = process.env.GATE_REPORT;
             const floor = Number(process.env.MIN_GATE_FILES);
-            if (!fs.existsSync(path)) {
-              console.log(`::error::vitest wrote no JSON report to ${path} — the file count cannot be verified.`);
+            if (!fs.existsSync(reportPath)) {
+              console.log(`::error::vitest wrote no JSON report to ${reportPath} — the file count cannot be verified.`);
               process.exit(1);
             }
-            const report = JSON.parse(fs.readFileSync(path, "utf8"));
-            const files = new Set((report.testResults ?? []).map((t) => t.name));
+            const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
             if (report.success !== true) {
               console.log("::error::the JSON report says the run did not succeed.");
               process.exit(1);
             }
-            if (files.size < floor) {
-              console.log(`::error::the chat-HITL filter matched ${files.size} test files, below the floor of ${floor} — a renamed or deleted gate suite would otherwise pass silently.`);
+            const ran = new Set(
+              (report.testResults ?? []).map((t) => path.relative(process.cwd(), t.name)),
+            );
+
+            // A floor alone only proves that SOME files matched. These two
+            // checks prove the right ones did.
+            //
+            // 1. NAMED IDENTITIES. The gates that exist today are required by
+            //    path, so deleting one fails here instead of being covered by
+            //    an unrelated file that happens to match the filter.
+            const required = [
+              "scripts/audit/__tests__/chat-hitl-acceptance-gate.test.mjs",
+              "scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs",
+              "scripts/audit/__tests__/chat-hitl-retirement-gate.test.mjs",
+            ];
+            const missing = required.filter((f) => !ran.has(f));
+            if (missing.length > 0) {
+              console.log(`::error::required chat-HITL gate suites did not run: ${missing.join(", ")}`);
               process.exit(1);
             }
-            console.log(`chat-HITL gate suites: ${files.size} file(s), ${report.numTotalTests} test(s).`);
+
+            // 2. DISCOVERY, both ways. Every file ON DISK whose name matches the
+            //    program must also have RUN. This is what keeps the named list
+            //    from rotting: a new gate suite is required the moment it is
+            //    committed, with no edit to this workflow, and a suite that
+            //    exists but is skipped (a stale exclude, a filter that stopped
+            //    matching) fails rather than disappearing quietly.
+            const roots = ["scripts/audit/__tests__", "src/lib/lifecycle/__tests__", "src/app/api/chat/__tests__"];
+            const onDisk = [];
+            for (const root of roots) {
+              if (!fs.existsSync(root)) continue;
+              for (const name of fs.readdirSync(root)) {
+                if (!/^(chat-hitl|held-turn|held-dispatch).*\.test\.(mjs|ts|tsx)$/.test(name)) continue;
+                onDisk.push(path.join(root, name));
+              }
+            }
+            const unrun = onDisk.filter((f) => !ran.has(f));
+            if (unrun.length > 0) {
+              console.log(`::error::these chat-HITL suites exist but did not run: ${unrun.join(", ")}`);
+              process.exit(1);
+            }
+
+            if (ran.size < floor) {
+              console.log(`::error::the chat-HITL filter matched ${ran.size} test files, below the floor of ${floor} — a renamed or deleted gate suite would otherwise pass silently.`);
+              process.exit(1);
+            }
+            console.log(`chat-HITL gate suites: ${ran.size} file(s), ${report.numTotalTests} test(s); ${onDisk.length} discovered on disk, all executed.`);
           '
 
   package-unit-suites:
