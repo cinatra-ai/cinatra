@@ -150,218 +150,110 @@ export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;
 export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
 
 // ---------------------------------------------------------------------------
-// Canonical self-MCP tool-name projection for the chat surface.
+// State-derived self-MCP catalog for the chat surface.
 //
-// WHY. Every chat turn ships one hosted-MCP reference, and the provider bills
-// the catalog it fetches on our behalf as input tokens. The delegated-chat
-// policy makes 83 primitives reachable, so a turn that needs none of them
-// still pays for all 83 schemas. That fixed prefix sets the COLD-TURN FLOOR:
-// caching amortizes a warm turn, it never makes the first one cheap. The only
-// deterministic, zero-model-cost way to lower the floor is to expose fewer
-// primitives on the SAME hosted reference, never by inlining schemas.
+// WHY DERIVED AND NOT LISTED. Cinatra is extensible: a user installs
+// connectors and each connector brings its own MCP primitives. Any fixed table
+// of primitive names is wrong the moment a connector ships one the table does
+// not know, because an unlisted primitive is simply invisible. So the catalog
+// is COMPUTED per turn from what this instance can actually serve, filtered by
+// what this actor is actually authorized to use.
 //
-// TIERS, NOT PER-TURN RELEVANCE. The tool block is part of the cacheable
-// prefix, so an allowlist that moves per turn fragments the cache and trades a
-// smaller prefix for a worse hit rate. The tiers below are therefore STATIC
-// and CANONICAL: a stable core an arbitrary turn plausibly needs, plus
-// long-tail tiers that are enabled by workspace state, not by the question
-// being asked. Two turns with the same enabled tiers produce a byte-identical
-// tool block.
+// WHAT NARROWS THE CATALOG, in order:
+//   1. HOST ADMISSION. The authoritative delegated-chat policy decides whether
+//      a name is reachable at all. It stays the only thing that can ADMIT.
+//   2. DECLARED CLASS. A registration may declare how it means to be used on
+//      the chat surface. A declaration can only ever NARROW: a connector
+//      self-classifying is not authorization, so a declaration the host has
+//      not admitted grants nothing, and an absent declaration changes nothing.
+//   3. CAPABILITY AVAILABILITY. A primitive behind a capability that this
+//      actor has no authorized connection for is not offered, because offering
+//      it only buys a failed call and the tokens to describe it.
 //
-// AUTHORITY. This projection is an ADVISORY narrowing hint carried on the
-// provider request. It never widens anything: the authoritative gate stays
-// server-side at MCP-runtime-server construction (registration-time filtering
-// plus a call-time handler guard keyed off the VERIFIED actor), so a provider
-// that ignores the hint changes nothing about what is callable. Every name
-// here is asserted to be chat-reachable under that authoritative policy by
-// the projection parity test. A name that drifts out of the policy fails CI
-// rather than silently becoming an unresolvable hint.
+// WHY THIS IS STILL CACHE-FRIENDLY. The result changes with package,
+// connection and verified-actor authorization state. It does not change with
+// the question being asked, so for one actor in one state the bytes are
+// stable. That is the property the prefix needs; it is not a claim that the
+// provider reuses the prefix today, which the per-turn bearer token in the
+// tool block still prevents.
+//
+// AUTHORITY IS UNCHANGED. This is an advisory narrowing hint on the provider
+// request. The authoritative gate stays server-side at MCP runtime server
+// construction: registration-time filtering plus a call-time guard keyed off
+// the verified actor. A provider that ignores the hint changes nothing about
+// what is callable, and nothing here can widen the perimeter.
 // ---------------------------------------------------------------------------
 
 /**
- * A named, static slice of the delegated-chat primitive surface.
+ * How a registration means its primitive to be used on the delegated chat
+ * surface. Structural only. Never sufficient authorization on its own.
+ */
+export type DelegatedChatToolClass = "read" | "discovery" | "dispatch";
+
+/** The chat-eligible classes. A declaration outside this set narrows to nothing. */
+const CHAT_ELIGIBLE_CLASSES: ReadonlySet<string> = new Set<DelegatedChatToolClass>([
+  "read",
+  "discovery",
+  "dispatch",
+]);
+
+/** One primitive this instance can currently serve. */
+export type ServableChatPrimitive = {
+  name: string;
+  /**
+   * The class the registration declared, when it declared one. Absent means
+   * undeclared, which is neutral: host admission alone decides.
+   */
+  declaredClass?: string | null;
+  /**
+   * The capability whose availability gates this primitive, when one does.
+   * Absent means the primitive is not connection-gated.
+   */
+  capabilityKey?: string | null;
+};
+
+/**
+ * Everything the resolver needs, injected. This module is `@/`-free by rule,
+ * so the host resolves state and passes it in, exactly as it already injects
+ * the actor-token issuer.
+ */
+export type ChatMcpCatalogState = {
+  /** Primitives currently registered and servable on this instance. */
+  servable: readonly ServableChatPrimitive[];
+  /** Host admission. The only predicate that may admit a name. */
+  isHostApproved: (name: string) => boolean;
+  /**
+   * Whether the VERIFIED actor holds an authorized connection for a
+   * capability. Called only for primitives that declare a capability key.
+   */
+  isCapabilityAvailable: (capabilityKey: string) => boolean;
+};
+
+/**
+ * Derive the advisory allowlist for one turn.
  *
- * `core` is always on. Every other tier is long-tail: deep per-connector or
- * per-domain operational primitives that a turn only needs when the matching
- * capability is actually live in the workspace.
+ * Deduplicated and lexicographically sorted, so the same instance state and
+ * the same actor authorization always produce a byte-identical array whatever
+ * order the registry enumerated in.
  */
-export type ChatMcpToolTier =
-  | "core"
-  | "artifact_lifecycle"
-  | "agent_authoring"
-  | "metrics_detail"
-  | "crm"
-  | "dashboard_analytics"
-  | "site_content"
-  | "connector_accounts"
-  | "skills_detail"
-  | "platform_admin";
-
-/**
- * The stable core tier: discovery, dispatch, run polling, and the shallow
- * reads an arbitrary chat turn plausibly needs. Deliberately excludes every
- * deep per-connector operational primitive.
- */
-const CHAT_MCP_TIER_CORE: readonly string[] = [
-  // Generic screen / extension / connector discovery.
-  "system_screen_lookup",
-  "extensions_search",
-  "connector_inventory_list",
-  // Agent discovery + dispatch + run status (the chat's core purpose).
-  "agent_list",
-  "agent_get",
-  "agent_run",
-  "agent_run_get",
-  "agent_run_list",
-  "agent_run_messages_list",
-  "agent_run_stop",
-  // Declared as a chat dependency by the shipped chat skills, so it belongs in
-  // core rather than behind a tier the host has not learned to enable yet.
-  "agent_registry_list",
-  // Artifact authoring + the shallow reads that confirm an emission back.
-  "artifact_extension_search",
-  "artifact_extension_get",
-  "artifact_authoring_emit",
-  "artifacts_list",
-  "artifacts_get",
-  // The conversational lifecycle PULL (render-only; resolves nothing).
-  "artifact_review_gates_list",
-  "artifact_review_gate_render",
-  "verification_record_render",
-  "schedule_proposal_render",
-  // Shallow shared-object context surfaced in conversation.
-  "objects_list",
-  "objects_get",
-  "projects_list",
-  "projects_get",
-  "campaigns_list",
-  "campaigns_get",
-  "blog_project_list",
-  "blog_project_get",
-  // A read-only per-connector list the chat skills declare a dependency on.
-  "drupal_instances_list",
-  // Skill discovery (catalog level only).
-  "skills_catalog_list",
-  "skills_library_list",
-  "skills_installed_list",
-  "skills_personal_list",
-  // Dashboard catalog + the two headline cost/usage reads.
-  "dashboards_list",
-  "dashboards_get",
-  "metric_cost_summary",
-  "metric_usage_summary",
-];
-
-/**
- * The long-tail tiers. Each is enabled by workspace state (a connector family
- * being connected, installed and authorized; an operator holding platform
- * admin), never by per-turn relevance.
- */
-const CHAT_MCP_TIERS: Readonly<Record<ChatMcpToolTier, readonly string[]>> = Object.freeze({
-  core: CHAT_MCP_TIER_CORE,
-  artifact_lifecycle: [
-    "artifact_authoring_chain_get",
-    "artifact_assertion_list",
-    "artifact_assertion_get",
-    "artifact_representation_list",
-    "artifact_representation_get",
-    "artifact_representation_latest",
-  ],
-  agent_authoring: [
-    "agent_version_list",
-    "agent_version_get",
-    "agent_version_diff",
-    "agent_creation_request_propose",
-    "agent_creation_request_edit",
-    "agent_creation_request_list",
-    "agent_creation_request_get",
-  ],
-  metrics_detail: [
-    "metric_cost_by_provider",
-    "metric_cost_by_agent",
-    "metric_cost_recent_events",
-    "metric_cost_budget_get",
-    "metric_cost_timeseries",
-    "metric_usage_events",
-  ],
-  crm: [
-    "crm_list_search",
-    "crm_list_get",
-    "crm_list_members_get",
-    "crm_account_search",
-    "crm_account_get",
-    "crm_contact_search",
-    "crm_contact_get",
-    "crm_contact_find_by_email",
-    "email_outreach_campaign_list",
-    "email_outreach_campaign_get",
-    "media_feeds_list",
-  ],
-  dashboard_analytics: [
-    "dashboards_cube_discover",
-    "dashboards_cube_validate",
-    "dashboards_cube_load",
-    "dashboards_cube_chart",
-    "dashboards_create",
-    "dashboards_update",
-  ],
-  site_content: ["wordpress_site_tool_call", "wordpress_site_tools_list"],
-  connector_accounts: ["gmail_aliases_list", "linkedin_accounts_list"],
-  skills_detail: [
-    "skills_installed_get",
-    "skills_installed_resolve_for_agent",
-    "skills_personal_list_for_agent",
-    "skills_personal_get",
-  ],
-  platform_admin: ["extensions_purge", "extensions_purge_execute"],
-});
-
-/** Every tier name, in a fixed order, so callers can enumerate deterministically. */
-export const CHAT_MCP_TOOL_TIER_NAMES: readonly ChatMcpToolTier[] = Object.freeze([
-  "core",
-  "artifact_lifecycle",
-  "agent_authoring",
-  "metrics_detail",
-  "crm",
-  "dashboard_analytics",
-  "site_content",
-  "connector_accounts",
-  "skills_detail",
-  "platform_admin",
-] as const);
-
-/** The names in one tier, for parity tests and host-side tier resolution. */
-export function chatMcpToolTierNames(tier: ChatMcpToolTier): readonly string[] {
-  return CHAT_MCP_TIERS[tier];
-}
-
-/**
- * Project the enabled tiers to the canonical allowlist carried on the hosted
- * MCP reference.
- *
- * DETERMINISTIC BY CONSTRUCTION: `core` is always included, the result is
- * deduplicated and sorted lexicographically, and the input tier order is
- * irrelevant. The same enabled-tier SET therefore always yields a
- * byte-identical array, which is the precondition for the tool block being a
- * stable cacheable prefix across turns.
- */
-export function projectChatMcpAllowedTools(
-  enabledTiers: Iterable<ChatMcpToolTier> = [],
-): string[] {
-  const names = new Set<string>(CHAT_MCP_TIERS.core);
-  for (const tier of enabledTiers) {
-    const tierNames = CHAT_MCP_TIERS[tier];
-    // Ignore an unknown tier rather than throwing: a narrowing hint must never
-    // be able to fail a turn.
-    if (!tierNames) continue;
-    for (const name of tierNames) names.add(name);
+export function resolveChatMcpAllowedTools(state: ChatMcpCatalogState): string[] {
+  const admitted = new Set<string>();
+  for (const primitive of state.servable) {
+    const name = primitive.name;
+    if (typeof name !== "string" || name.length === 0) continue;
+    // 1. Host admission is the only thing that admits.
+    if (!state.isHostApproved(name)) continue;
+    // 2. A declaration may narrow, never widen.
+    const declared = primitive.declaredClass;
+    if (declared != null && !CHAT_ELIGIBLE_CLASSES.has(declared)) continue;
+    // 3. A connection-gated primitive needs an authorized connection.
+    const capability = primitive.capabilityKey;
+    if (capability != null && capability !== "" && !state.isCapabilityAvailable(capability)) {
+      continue;
+    }
+    admitted.add(name);
   }
-  return [...names].sort();
-}
-
-/** The union of every tier: the full chat-reachable projection. */
-export function projectAllChatMcpAllowedTools(): string[] {
-  return projectChatMcpAllowedTools(CHAT_MCP_TOOL_TIER_NAMES);
+  return [...admitted].sort();
 }
 
 /**
@@ -524,23 +416,28 @@ export async function buildLlmMcpServerToolForChat(
   provider: Extract<LlmProvider, "openai" | "anthropic">,
   actor: ChatMcpActor,
   issueActorToken: ChatMcpActorTokenIssuer,
-  // The long-tail tiers this workspace has earned, on top of the always-on
-  // core. Resolved from state the host already holds (a connector family that
-  // is connected AND installed AND authorized; an actor holding platform
-  // admin), never from the question being asked, so the tool block stays a
-  // stable cacheable prefix across turns. Defaulting to no extra tiers means a
-  // caller that passes nothing gets the core tier, which is the narrowest
-  // correct answer rather than the widest.
-  options: { enabledTiers?: Iterable<ChatMcpToolTier> } = {},
+  // The instance and actor state the catalog is derived from. Omitting it
+  // leaves the reference unrestricted, which is the pre-existing behavior and
+  // stays safe because the authoritative transport gate still decides what is
+  // callable. The host passes state whenever it can resolve it.
+  options: { catalogState?: ChatMcpCatalogState } = {},
 ): Promise<LlmMcpServerTool | null> {
   const serverUrl = getPublicMcpServerUrl();
   if (!serverUrl) return null;
 
   try {
+    const derived = options.catalogState
+      ? resolveChatMcpAllowedTools(options.catalogState)
+      : null;
     return buildCinatraMcpServerTool(
       serverUrl,
       `Bearer ${issueActorToken(actor)}`,
-      projectChatMcpAllowedTools(options.enabledTiers ?? []),
+      // An EMPTY derivation must never be sent: both adapters read an empty
+      // allowlist as unrestricted, so it would widen rather than narrow. An
+      // empty result also means the resolver found nothing admissible, which
+      // is a host state bug. Fall back to unrestricted and let the
+      // authoritative gate hold rather than encode a bug as a hint.
+      derived && derived.length > 0 ? derived : null,
     );
   } catch (err) {
     console.warn(

@@ -38,54 +38,17 @@
 // ---------------------------------------------------------------------------
 
 import { argv, env, exit } from "node:process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 
-// The canonical core tier. Kept as a literal so the script runs standalone
-// (no build step, no workspace resolution); the parity test in
-// packages/llm/src/__tests__/chat-mcp-tool-projection.test.ts is what keeps
-// the real projection honest, and `--print-tiers` below cross-checks this copy
-// against it when the workspace is available.
-const CORE_TIER = [
-  "agent_get",
-  "agent_list",
-  "agent_registry_list",
-  "agent_run",
-  "agent_run_get",
-  "agent_run_list",
-  "agent_run_messages_list",
-  "agent_run_stop",
-  "artifact_authoring_emit",
-  "artifact_extension_get",
-  "artifact_extension_search",
-  "artifact_review_gate_render",
-  "artifact_review_gates_list",
-  "artifacts_get",
-  "artifacts_list",
-  "blog_project_get",
-  "blog_project_list",
-  "campaigns_get",
-  "campaigns_list",
-  "connector_inventory_list",
-  "dashboards_get",
-  "dashboards_list",
-  "drupal_instances_list",
-  "extensions_search",
-  "metric_cost_summary",
-  "metric_usage_summary",
-  "objects_get",
-  "objects_list",
-  "projects_get",
-  "projects_list",
-  "schedule_proposal_render",
-  "skills_catalog_list",
-  "skills_installed_list",
-  "skills_library_list",
-  "skills_personal_list",
-  "system_screen_lookup",
-  "verification_record_render",
-];
+// The restricted arm's allowlist is SUPPLIED, never hardcoded here.
+//
+// The exposed catalog is derived per turn from what the instance can serve and
+// what the actor is authorized for, so there is no fixed list to copy. Capture
+// the derived list from the instance under measurement and pass it in with
+// --allowed-tools-file or --allowed-tools, so the arm measures the catalog
+// that instance actually sends rather than one this script imagined.
 
 const DEFAULT_PROMPTS = [
   "which connectors are active?",
@@ -99,6 +62,23 @@ function parseArgs() {
     args.set(key, value ?? "true");
   }
   return args;
+}
+
+// The restricted arm's list comes from the operator, because the real catalog
+// is derived from instance and actor state rather than from any fixed table.
+function readRestrictedAllowlist(args) {
+  const inline = args.get("allowed-tools");
+  if (inline && inline !== "true") {
+    return [...new Set(inline.split(",").map((s) => s.trim()).filter(Boolean))].sort();
+  }
+  const path = args.get("allowed-tools-file");
+  if (!path) return [];
+  const parsed = JSON.parse(readFileSync(path, "utf8"));
+  if (!Array.isArray(parsed)) {
+    console.error(`${path} must contain a JSON array of primitive names.`);
+    exit(2);
+  }
+  return [...new Set(parsed.filter((n) => typeof n === "string" && n))].sort();
 }
 
 function requireEnv(name) {
@@ -233,14 +213,16 @@ async function main() {
         "  --gap-ms=N      pause between turns (default 0; raise to probe cache expiry)",
         "  --repeat=N      turns per prompt per arm (default 2, so a cache read is visible)",
         "  --out=PATH      write the full JSON record here",
-        "  --print-tiers   print the core tier this script measures, then exit",
+        "  --allowed-tools-file=PATH  JSON array of names for the restricted arm",
+        "  --allowed-tools=a,b,c      same, inline",
+        "  --print-allowlist          print the restricted allowlist, then exit",
       ].join("\n"),
     );
     return;
   }
 
-  if (args.has("print-tiers")) {
-    console.log(JSON.stringify({ coreTier: CORE_TIER, size: CORE_TIER.length }, null, 2));
+  if (args.has("print-allowlist")) {
+    console.log(JSON.stringify(readRestrictedAllowlist(args), null, 2));
     return;
   }
 
@@ -248,6 +230,7 @@ async function main() {
   const gapMs = Number(args.get("gap-ms") ?? 0);
   const repeat = Number(args.get("repeat") ?? 2);
   const prompts = args.has("prompt") ? [args.get("prompt")] : DEFAULT_PROMPTS;
+  const restrictedTools = readRestrictedAllowlist(args);
   const rates = {
     input: Number(args.get("rate-input") ?? 5),
     cachedInput: Number(args.get("rate-cached-input") ?? 0.5),
@@ -277,6 +260,15 @@ async function main() {
     return;
   }
 
+  if (restrictedTools.length === 0) {
+    console.error(
+      "The restricted arm needs an allowlist. Pass --allowed-tools-file=PATH " +
+        "(a JSON array of primitive names) or --allowed-tools=a,b,c. Capture it " +
+        "from the instance under measurement so the arm reflects its real catalog.",
+    );
+    exit(2);
+  }
+
   const apiKey = requireEnv("OPENAI_API_KEY");
   const bearer = requireEnv("CINATRA_MCP_BEARER");
   const serverUrl = requireEnv("CINATRA_MCP_URL");
@@ -284,7 +276,7 @@ async function main() {
 
   const rows = [];
   for (const arm of ["full", "restricted"]) {
-    const allowedTools = arm === "restricted" ? CORE_TIER : null;
+    const allowedTools = arm === "restricted" ? restrictedTools : null;
     for (const prompt of prompts) {
       for (let i = 0; i < repeat; i += 1) {
         const request = buildRequest({

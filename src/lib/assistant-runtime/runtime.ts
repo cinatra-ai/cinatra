@@ -28,6 +28,16 @@ import "@/lib/register-host-connector-services";
 import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
+  buildConnectorInventory,
+  DEFAULT_CONNECTOR_INVENTORY_DEPS,
+} from "@/lib/connector-inventory.server";
+import { connectionSubjectUserId } from "@/lib/connection-use-gate";
+import {
+  delegatedChatAllowedToolNames,
+  isDelegatedChatMcpToolAllowed,
+} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
+import {
   detectExplicitDispatchDirective,
   detectExplicitDispatchPackage,
 } from "@/app/api/chat/explicit-dispatch";
@@ -548,6 +558,76 @@ function warnOnUnclassifiedVehicles(
       `— recorded as delivered/vehicle=unknown: ` +
       unclassified.map((r) => `${r.skillId} (mode=${r.deliveryMode})`).join(", "),
   );
+}
+
+// ---------------------------------------------------------------------------
+// The chat surface's self-MCP catalog state (cinatra#2771).
+//
+// The catalog the model is offered is DERIVED, never listed. Three inputs, all
+// already available to this turn:
+//
+//   SERVABLE      every primitive the delegated-chat perimeter can serve.
+//   ADMISSION     the authoritative policy predicate, the only thing that may
+//                 admit a name.
+//   AVAILABILITY  the connector keys this VERIFIED actor holds an authorized
+//                 connection for, read through the same per-row `use` gate the
+//                 connector inventory uses.
+//
+// The capability key for a primitive is derived from the LIVE connector
+// catalog rather than from a table: a primitive whose name is prefixed with a
+// catalog connector's key is gated on that connector. A connector installed
+// tomorrow gates its own primitives with no code change here, and a primitive
+// whose prefix matches no catalog connector is never gated.
+//
+// Failure posture is fail-OPEN to the authoritative gate, never fail-closed
+// onto the user. If state cannot be resolved the turn runs unrestricted and
+// the transport still decides what is callable. A narrowing hint must never be
+// the reason a turn loses its tools.
+// ---------------------------------------------------------------------------
+async function resolveChatMcpCatalogState(input: {
+  actorContext: ActorContext;
+  userId: string;
+  sessionOrgId: string | null;
+}): Promise<ChatMcpCatalogState | undefined> {
+  try {
+    const inventory = await buildConnectorInventory({
+      ...DEFAULT_CONNECTOR_INVENTORY_DEPS,
+      // The turn already holds a verified actor. The default resolver reads an
+      // MCP request frame, which does not exist on a chat turn, so the turn's
+      // own actor is supplied instead.
+      resolveActor: async () => ({
+        actor: input.actorContext,
+        subjectUserId: connectionSubjectUserId(input.actorContext) ?? input.userId,
+        organizationId: input.sessionOrgId,
+      }),
+    });
+
+    const authorizedKeys = new Set(
+      inventory.connectors
+        .filter((row) => row.hasAuthorizedConnection)
+        .map((row) => row.connectorKey),
+    );
+    // Longest key first so a more specific connector key wins over a prefix of
+    // itself, making the derivation independent of catalog order.
+    const orderedKeys = inventory.connectors
+      .map((row) => row.connectorKey)
+      .sort((a, b) => b.length - a.length);
+    const capabilityKeyFor = (name: string): string | null =>
+      orderedKeys.find((key) => name.startsWith(`${key}_`)) ?? null;
+
+    const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map(
+      (name) => ({ name, capabilityKey: capabilityKeyFor(name) }),
+    );
+
+    return {
+      servable,
+      isHostApproved: isDelegatedChatMcpToolAllowed,
+      isCapabilityAvailable: (key) => authorizedKeys.has(key),
+    };
+  } catch {
+    // Unresolvable state means no hint, not a smaller turn.
+    return undefined;
+  }
 }
 
 /**
@@ -1121,6 +1201,13 @@ export async function runAssistantTurn(
         adapter.provider,
         { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
         issueChatMcpActorToken,
+        {
+          catalogState: await resolveChatMcpCatalogState({
+            actorContext,
+            userId,
+            sessionOrgId,
+          }),
+        },
       );
   if (!chatCinatraMcpTool) {
     send("error", {
