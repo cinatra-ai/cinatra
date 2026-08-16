@@ -558,10 +558,16 @@ export async function serverSideExplicitDispatch(input: {
     // sent the reader to another surface would be a pointer standing in for an
     // implementation, which is the very thing this slice exists to remove. So
     // the line states the run's condition and stops.
+    //
+    // EVENT TENSE, deliberately. This text is durable: it is persisted with the
+    // turn and re-read long after the card beside it has settled and the run has
+    // moved on. "The run is paused" would keep asserting a present state that
+    // stopped being true the moment someone decided. "The run paused" records
+    // what happened in that turn, which stays true.
     const heldForRecommendation = status === "pending_input";
     send("text", {
       content: heldForRecommendation
-        ? `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The run is paused for your decision on the recommended skills.`
+        ? `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The run paused for a decision on the recommended skills.`
         : `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The agent is running — I'll keep polling for its progress.`,
     });
 

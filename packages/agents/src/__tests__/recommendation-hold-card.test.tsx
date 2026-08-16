@@ -414,7 +414,7 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     expect(holdStateMock).not.toHaveBeenCalled();
   });
 
-  it("draws IDENTICALLY on every cookie host — the per-surface matrix is gone", async () => {
+  it("draws IDENTICALLY on page_gate_region and chat_thread — the per-surface matrix is gone", async () => {
     // The removed rule said "a widget visitor never shapes a run's skills", and
     // it made this kind FALSE on `site_widget` in a presence table. The table is
     // gone: what a host draws is no longer a property of which host it is. The

@@ -48,6 +48,7 @@ import {
   recommendationHoldThreadId,
   releaseRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
+  RECOMMENDATION_SKIP_NOT_RECORDED,
 } from "./recommendation-hold";
 import { triggerAgentRun } from "./run-actions";
 import { confirmRunSkillSelectionAction } from "./server-actions";
@@ -312,14 +313,32 @@ export async function skipRunRecommendationAction(input: {
   // matching the existing trigger semantics.
   if (run.runBy && run.runBy !== userId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
-  // Persist durable skip evidence: mark every recommended candidate `user_skipped`.
-  // Best-effort — a telemetry write must never block the dispatch.
+  // DURABLE SKIP EVIDENCE, AND IT IS NOT BEST-EFFORT.
+  //
+  // This evidence IS the card's settled state: `getRunRecommendationHoldStateAction`
+  // reads it back to answer `skipped`, and with no evidence it answers `none` and
+  // the card disappears from the conversation instead of settling. So a failed
+  // write may NOT fall through to the release: releasing a run while losing the
+  // record of the decision is precisely the outcome that made Skip vanish.
+  //
+  // The evidence covers EVERY candidate the row offered, not only the
+  // scorer-recommended ones. The hold fires whenever there is any candidate at
+  // all, so a row can be — and in practice often is — made entirely of FORCED
+  // candidates; writing evidence only for recommended ones left those skips
+  // unrecorded. A forced candidate is written with a NULL rank, which is what
+  // keeps "offered but not recommended" distinguishable from "recommended at
+  // rank n" in the same table.
+  //
+  // (The cleaner home for this is a single run-level skip record rather than one
+  // row per candidate — the zero-candidate case below is the seam that shows
+  // why. That needs a schema change, so this carries it on the sanctioned
+  // fallback: the existing rejection table, with a nullable rank.)
   try {
     const template = await readAgentTemplateById(run.templateId).catch(() => null);
     const packageName = template?.packageName;
     if (packageName) {
-      // The skip evidence must name the SAME candidates the row offered
-      // (cinatra#2148 finding 1) — resolve through the shared run-actor seam.
+      // The evidence must name the SAME candidates the row offered (cinatra#2148
+      // finding 1) — resolved through the shared run-actor seam.
       const assignedSkillIds = await resolveRecommendationCandidateSkillIds({
         run,
         packageName,
@@ -335,27 +354,31 @@ export async function skipRunRecommendationAction(input: {
         intent: { promptText: intentPromptText },
         restrictToSkillIds: assignedSkillIds,
       });
-      const rejectedRows = recommendations
-        .filter((r) => r.recommended)
-        .map((r) => ({
-          skillId: r.skillId,
-          skillRevisionId: r.skillRevisionId,
-          recommendationSource: SKIP_RECOMMENDATION_SOURCE,
-          recommendedRank: r.rank,
-        }));
-      writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
+      const rejectedRows = recommendations.map((r) => ({
+        skillId: r.skillId,
+        skillRevisionId: r.skillRevisionId,
+        recommendationSource: SKIP_RECOMMENDATION_SOURCE,
+        // NULL for a forced candidate: it was offered, never ranked.
+        recommendedRank: r.recommended ? r.rank : null,
+      }));
+      // Zero candidates is not a failed write — it is a row with nothing on it
+      // to skip. The release proceeds, exactly as before: refusing there would
+      // leave a person holding a card they cannot dismiss.
+      if (rejectedRows.length > 0) {
+        writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
+      }
     }
   } catch (err) {
-    // The run id is a request-controlled value; keep it OUT of the console
-    // format-string position (pass it as a discrete argument) so a `%`-bearing
-    // id can never be interpreted as a util.format specifier (CodeQL
-    // js/tainted-format-string).
-    console.warn(
+    // A FAILED WRITE, on the other hand, is fatal to the decision. The run id is
+    // request-controlled, so it is passed as a discrete argument and never
+    // interpolated into the format string (CodeQL js/tainted-format-string).
+    console.error(
       "[skipRunRecommendationAction] skip-evidence write failed for run",
       input.runId,
-      "— continuing:",
+      "— refusing to release:",
       err instanceof Error ? err.message : String(err),
     );
+    return { ok: false, error: RECOMMENDATION_SKIP_NOT_RECORDED };
   }
 
   return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined);

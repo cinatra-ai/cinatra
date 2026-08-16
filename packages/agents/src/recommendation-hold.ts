@@ -114,6 +114,16 @@ export type MaybeHoldResult =
 export const RECOMMENDATION_DECISION_REFUSAL =
   "This run's skill selection cannot be decided from here.";
 
+/**
+ * A SKIP that could not be recorded. The skip evidence is the card's settled
+ * state, so a decision this build cannot persist must not release the run
+ * either — the person would be left with a dispatched run and a card that
+ * silently vanished. Lives here for the same reason the refusal above does: a
+ * `"use server"` module may export async functions only.
+ */
+export const RECOMMENDATION_SKIP_NOT_RECORDED =
+  "This run's skill decision could not be recorded, so the run was left waiting. Try again.";
+
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =
   LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;

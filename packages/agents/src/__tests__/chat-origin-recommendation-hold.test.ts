@@ -107,7 +107,15 @@ const storeMock = vi.hoisted(() => {
     readAgentRunsByTemplateRaw: vi.fn(),
     readAgentRunMessages: vi.fn(),
     appendAgentRunMessage: vi.fn(),
-    transitionRunStatus: vi.fn(async () => undefined),
+    transitionRunStatus: vi.fn(
+      async (
+        _runId: string,
+        _from: string,
+        _to: string,
+        _meta?: unknown,
+        _authority?: unknown,
+      ): Promise<void> => undefined,
+    ),
     RunTransitionError: StubRunTransitionError,
     createAgentVersion: vi.fn(),
     createAgentTemplate: vi.fn(),
@@ -447,6 +455,85 @@ describe("a released hold dispatches through the canonical path, exactly once", 
       (c: unknown[]) => c[1] === "queued" && c[2] === "pending_input",
     );
     expect(reverts).toHaveLength(1);
+  });
+
+  it("FAILS the run when the enqueue fails AND the revert fails", async () => {
+    // The one state nothing recovers on its own is `queued` with no job: no
+    // worker picks it up and no surface offers a way to move it. When the run
+    // cannot be returned to its waiting state, it is landed TERMINAL instead,
+    // so the person sees a failed run carrying the reason rather than a run
+    // that waits forever.
+    enqueueAgentRun.mockRejectedValue(new Error("redis down"));
+    storeMock.transitionRunStatus.mockImplementation(
+      async (_runId: string, from: string, to: string) => {
+        if (from === "queued" && to === "pending_input") throw new Error("revert failed");
+        return undefined;
+      },
+    );
+
+    const result = await dispatch(CHAT_PRE_ROUTER_FRAME);
+
+    const failed = storeMock.transitionRunStatus.mock.calls.filter(
+      (c: unknown[]) => c[1] === "queued" && c[2] === "failed",
+    );
+    expect(failed).toHaveLength(1);
+    // The reason travels with the run rather than only into a log line.
+    expect(JSON.stringify(failed[0]?.[3])).toContain("redis down");
+    // The caller still learns the dispatch failed, and never sees `queued`.
+    expect(result.status).toBeUndefined();
+    expect(result.error).toContain("redis down");
+  });
+
+  it("reports the run STRANDED by name when it can be neither reverted nor failed", async () => {
+    // The last rung. Nothing can land the run honestly, so the error says so
+    // and names the run — rather than reporting only the enqueue failure and
+    // leaving a phantom queued row nobody is looking for.
+    enqueueAgentRun.mockRejectedValue(new Error("redis down"));
+    storeMock.transitionRunStatus.mockImplementation(
+      async (_runId: string, from: string) => {
+        if (from === "queued") throw new Error("writer down");
+        return undefined;
+      },
+    );
+
+    const result = await dispatch(CHAT_PRE_ROUTER_FRAME);
+
+    expect(result.status).toBeUndefined();
+    expect(result.error).toContain("STRANDED");
+    expect(result.error).toContain("queued with no job behind it");
+    const created = storeMock.createAgentRun.mock.calls[0][0] as { id: string };
+    expect(result.error).toContain(created.id);
+  });
+
+  it("refuses to guess when the stale-CAS re-read THROWS", async () => {
+    // Losing the dispatch race is fine; guessing the winner's state is not.
+    // The previous default answered `pending_input`, which reports a run as
+    // parked and decidable when no park is live and no job was made.
+    storeMock.transitionRunStatus.mockRejectedValueOnce(
+      new storeMock.RunTransitionError("stale_from_status"),
+    );
+    storeMock.readAgentRunById.mockRejectedValue(new Error("read down"));
+
+    const result = await dispatch(CHAT_PRE_ROUTER_FRAME);
+
+    expect(enqueueAgentRun).not.toHaveBeenCalled();
+    expect(result.status).toBeUndefined();
+    expect(result.error).toContain("could not be re-read");
+    const created = storeMock.createAgentRun.mock.calls[0][0] as { id: string };
+    expect(result.error).toContain(created.id);
+  });
+
+  it("refuses to guess when the stale-CAS re-read finds NOTHING", async () => {
+    storeMock.transitionRunStatus.mockRejectedValueOnce(
+      new storeMock.RunTransitionError("stale_from_status"),
+    );
+    storeMock.readAgentRunById.mockResolvedValue(null);
+
+    const result = await dispatch(CHAT_PRE_ROUTER_FRAME);
+
+    expect(enqueueAgentRun).not.toHaveBeenCalled();
+    expect(result.status).toBeUndefined();
+    expect(result.error).toContain("no longer reads back");
   });
 });
 

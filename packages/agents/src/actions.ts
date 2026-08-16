@@ -1676,8 +1676,33 @@ export async function createAgentRunForLaunchFrame(input: {
         // A concurrent writer already moved the run off `pending_input`, so it
         // owns the dispatch. Enqueueing here too would be the second enqueue
         // this path promises never to make.
-        const current = await readAgentRunById(run.id).catch(() => null);
-        return { run, status: current?.status ?? "pending_input", held: false };
+        //
+        // What this branch may NOT do is guess. The previous default answered
+        // `pending_input` whenever the re-read failed or found nothing, which
+        // reports a run as parked-and-decidable when nobody knows what it is:
+        // no enqueue was made here, no park is live, and the card has nothing
+        // to settle. The caller would show a waiting run that never moves.
+        //
+        // So the re-read is the only source of the answer, and when it cannot
+        // answer, this call says so. The run is untouched either way — the
+        // other writer owns it — and the outer boundary turns the throw into an
+        // error result naming the run rather than a false state.
+        let current: Awaited<ReturnType<typeof readAgentRunById>> | null = null;
+        try {
+          current = await readAgentRunById(run.id);
+        } catch (rereadErr) {
+          throw new Error(
+            `Run ${run.id} lost the dispatch race and its state could not be re-read: ${
+              rereadErr instanceof Error ? rereadErr.message : String(rereadErr)
+            }`,
+          );
+        }
+        if (!current) {
+          throw new Error(
+            `Run ${run.id} lost the dispatch race and no longer reads back.`,
+          );
+        }
+        return { run, status: current.status, held: false };
       }
       throw transitionErr;
     }
@@ -1689,16 +1714,58 @@ export async function createAgentRunForLaunchFrame(input: {
     // Compensate this function's OWN CAS so a failed enqueue cannot leave the
     // run sitting in `queued` with no job behind it. The headless branch made
     // no transition of its own, so it has nothing to undo.
+    //
+    // A LADDER, not a catch-and-log. `queued` with no job is the one state
+    // nothing recovers on its own: no worker will ever pick it up, and no
+    // surface offers a person a way to move it. Logging the failed revert and
+    // walking away leaves exactly that row behind.
+    //
+    //   1. back to `pending_input` — the run is decidable again and the person
+    //      can retry it from the conversation;
+    //   2. failing that, to `failed` with the reason — a terminal, visible run
+    //      beats a phantom queued one, and the surfaces already render it;
+    //   3. failing that too, the process cannot land the run in any honest
+    //      state, so the error says the run is STRANDED and names it, instead
+    //      of reporting only the enqueue failure that started it.
     if (launchedFromChat) {
-      await transitionRunStatus(run.id, "queued", "pending_input", undefined, authority).catch(
-        (revertErr) => {
-          console.error(
-            "[agent_run] enqueue compensation revert failed for run",
+      let recovered: "pending_input" | "failed" | null = null;
+      try {
+        await transitionRunStatus(run.id, "queued", "pending_input", undefined, authority);
+        recovered = "pending_input";
+      } catch (revertErr) {
+        console.error(
+          "[agent_run] enqueue compensation revert failed for run",
+          run.id,
+          revertErr,
+        );
+        try {
+          await transitionRunStatus(
             run.id,
-            revertErr,
+            "queued",
+            "failed",
+            {
+              error: `Dispatch failed and the run could not be returned to its waiting state: ${
+                enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)
+              }`,
+            },
+            authority,
           );
-        },
-      );
+          recovered = "failed";
+        } catch (failErr) {
+          console.error(
+            "[agent_run] could not land run in any terminal state after a failed enqueue",
+            run.id,
+            failErr,
+          );
+        }
+      }
+      if (recovered === null) {
+        throw new Error(
+          `Run ${run.id} is STRANDED: its dispatch failed, it could not be returned to a waiting state, and it could not be failed. It is queued with no job behind it. Original dispatch error: ${
+            enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)
+          }`,
+        );
+      }
     }
     throw enqueueErr;
   }
