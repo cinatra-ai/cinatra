@@ -57,6 +57,7 @@ import type {
 import {
   classifyRunWaitInterrupt,
   type RunWaitInterruptDescriptor,
+  type RunWaitInterruptKind,
 } from "@cinatra-ai/agents/run-surface-status";
 import {
   RUN_AWAITING_HUMAN_CATEGORY,
@@ -154,6 +155,15 @@ export function buildAutoGateOpenNotificationInput(input: {
  * unmodified `RunHumanWaitReason`, so no consumer's state, filter, or route
  * changes; with no `interrupt` in hand the classifier fails closed to the
  * pre-existing approval copy.
+ *
+ * cinatra#2835 — `waitKind` is the CALLER-SUPPLIED form of that same
+ * classification, for a wait with no interrupt to derive from. The run-start
+ * recommendation HOLD parks an already-`pending_input` run on a card, so
+ * `deriveRunHitlContext` has nothing to answer with and the derivation would
+ * fail closed to the generic continue-copy — while the hold is, by the #2729
+ * ruling, exactly an INPUT wait. An explicit `"input"` therefore selects the
+ * input copy for EITHER reason; anything else leaves the pre-existing
+ * reason+interrupt derivation untouched.
  */
 export function buildRunAwaitingHumanNotificationInput(input: {
   runId: string;
@@ -161,12 +171,14 @@ export function buildRunAwaitingHumanNotificationInput(input: {
   runTitle?: string | null;
   href?: string;
   interrupt?: RunWaitInterruptDescriptor | null;
+  waitKind?: RunWaitInterruptKind;
 }): NotificationInput {
   const name = input.runTitle?.trim();
   const subject = name ? `"${name}"` : "A run";
   const awaitingInput =
-    input.reason === "pending_approval" &&
-    classifyRunWaitInterrupt(input.interrupt) === "input";
+    input.waitKind === "input" ||
+    (input.reason === "pending_approval" &&
+      classifyRunWaitInterrupt(input.interrupt) === "input");
   let title: string;
   let body: string;
   if (awaitingInput) {
@@ -258,7 +270,7 @@ function isRunWaitStatus(status: string | undefined): boolean {
  * pull the notifications service graph onto a cold import graph.
  */
 export const runWaitNotifier: RunWaitNotifier = {
-  async onEnterHumanWait({ runId, reason }) {
+  async onEnterHumanWait({ runId, reason, waitKind }) {
     try {
       await import("@/lib/notifications-host");
       // No actor argument → the store's access-gate block is bypassed (this
@@ -310,8 +322,12 @@ export const runWaitNotifier: RunWaitNotifier = {
       // conversation (a run started outside chat, a turn not yet persisted, a
       // store that cannot answer) keeps the run page, the pre-existing
       // destination.
+      // cinatra#2835 — an explicit `waitKind` from the caller stands in for the
+      // derived classification (a recommendation hold has no interrupt to
+      // derive from), so a held run lands on its conversation exactly as an
+      // unanswered input field does.
       let href = runHref;
-      if (classifyRunWaitInterrupt(interrupt) === "input") {
+      if (waitKind === "input" || classifyRunWaitInterrupt(interrupt) === "input") {
         const { findChatConversationPathForAgentRun } = await import(
           "@/lib/assistant-thread-store"
         );
@@ -328,6 +344,7 @@ export const runWaitNotifier: RunWaitNotifier = {
           runTitle: run.title,
           href,
           interrupt,
+          waitKind,
         }),
       );
     } catch (err) {

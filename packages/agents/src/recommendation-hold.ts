@@ -57,6 +57,10 @@ import {
   readContinuationParksForRun,
   type ParkRow,
 } from "./lifecycle-continuation-park-store";
+import {
+  dispatchRunHumanWaitEntered,
+  dispatchRunHumanWaitLeft,
+} from "./run-wait-notifier";
 import type { AgentRunRecord, AgentTemplateRecord } from "./store";
 
 /** The lifecycle checkpoint the run-start chip-row hold parks on. */
@@ -718,6 +722,28 @@ export async function maybeHoldRunForRecommendation(input: {
     threadId: recommendationHoldThreadId(run),
     holdId: parked.parkId,
   });
+  // cinatra#2835 — the hold is a HUMAN WAIT, so it must also be discoverable off
+  // the surface it happened on: the run waits, not started, until the human
+  // confirms or skips, and before this the bell said nothing at all. Mint the
+  // same durable "needs your input" row the #2729 ruling gives an unanswered
+  // input field — `waitKind: "input"` because a held run carries no HITL
+  // interrupt for the host to classify, and the host deep-links it back to the
+  // conversation the run was started in (the run page when there is none).
+  //
+  // Here and not in the already-parked branch above (which returns early), so a
+  // retried run-start never re-notifies a hold the human is already looking at;
+  // the host's per-run dedupeKey is the second backstop. `reason:
+  // "pending_input"` is the run's ACTUAL status — the hold parks an
+  // already-`pending_input` run rather than moving it — so no consumer's state,
+  // filter, or route sees anything new.
+  //
+  // Awaited but internally swallowed, exactly like the wire announcement above:
+  // the park holds the run; the notification only tells the human about it.
+  await dispatchRunHumanWaitEntered({
+    runId: run.id,
+    reason: "pending_input",
+    waitKind: "input",
+  });
   return { held: true, parkId: parked.parkId, reason: outcome.reason };
 }
 
@@ -760,5 +786,15 @@ export async function releaseRecommendationParkForRun(
   if (!park || park.status !== "parked") return false;
   if (expectedHoldId !== undefined && park.id !== expectedHoldId) return false;
   const { released } = await sweepParks({ releasedParkIds: [park.id] });
+  if (released > 0) {
+    // cinatra#2835 — the wait is over the moment the park is released, so the
+    // notification goes with it. A confirm/skip goes on to dispatch, and that
+    // `pending_input → queued` transition clears the row too; this call is what
+    // covers a release with NO dispatch behind it (the TTL sweeper's fail-closed
+    // release, a decision whose dispatch is refused downstream), where the run
+    // stays `pending_input` and no transition would ever fire. The clear is a
+    // delete-by-key, so both firing is a harmless no-op.
+    await dispatchRunHumanWaitLeft({ runId });
+  }
   return released > 0;
 }

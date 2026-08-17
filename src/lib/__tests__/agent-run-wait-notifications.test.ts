@@ -114,6 +114,34 @@ describe("buildRunAwaitingHumanNotificationInput — pure shape", () => {
     });
   });
 
+  it("an explicit input waitKind selects the input copy for EITHER reason (cinatra#2835)", () => {
+    // The recommendation hold's case: a `pending_input` wait with no interrupt to
+    // classify, which the reason-only derivation would have called a generic
+    // continue-wait.
+    const held = buildRunAwaitingHumanNotificationInput({
+      runId: "R1",
+      reason: "pending_input",
+      runTitle: "Blog draft",
+      waitKind: "input",
+    });
+    expect(held.title).toBe('"Blog draft" needs your input');
+    expect(held.body).toBe("Open the run to fill in the requested fields.");
+    // Same per-run key + payload as any other human wait on this run.
+    expect(held.dedupeKey).toBe(runAwaitingHumanDedupeKey("R1"));
+    expect(held.metadata).toMatchObject({
+      runAwaitingHuman: { runId: "R1", reason: "pending_input" },
+    });
+
+    // An APPROVAL waitKind (or none) leaves the pre-existing derivation alone.
+    const approval = buildRunAwaitingHumanNotificationInput({
+      runId: "R1",
+      reason: "pending_approval",
+      runTitle: "Nightly sync",
+      waitKind: "approval",
+    });
+    expect(approval.title).toBe('"Nightly sync" is awaiting your approval');
+  });
+
   it("varies copy by reason and falls back to a generic subject with no run title", () => {
     const input = buildRunAwaitingHumanNotificationInput({ runId: "R1", reason: "pending_input" });
     expect(input.title).toBe("A run is waiting on you to continue");
@@ -317,6 +345,95 @@ describe("runWaitNotifier.onEnterHumanWait — emit-on-wait", () => {
     const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
     expect(findChatConversationPathForAgentRun).not.toHaveBeenCalled();
     expect(input.href).toBe("/agents/acme/sales/R1");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE RECOMMENDATION HOLD (cinatra#2835)
+  //
+  // A hold parks an already-`pending_input` run on a card, so there is no HITL
+  // interrupt to derive a classification from — `deriveRunHitlContext` is not
+  // even consulted for a `pending_input` reason. The caller therefore states the
+  // classification, and it must buy BOTH halves of the #2729 ruling: the "needs
+  // your input" copy AND the return trip to the conversation.
+  // -------------------------------------------------------------------------
+  it("an explicit input waitKind mints the 'needs your input' copy for a HELD run", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
+
+    await runWaitNotifier.onEnterHumanWait({
+      runId: "R1",
+      reason: "pending_input",
+      waitKind: "input",
+    });
+
+    const input = createNotificationForRecipient.mock.calls[0][1];
+    expect(input.title).toBe('"Blog draft" needs your input');
+    expect(input.body).toBe("Open the run to fill in the requested fields.");
+    // The row is still the SAME family + per-run key as every other human wait,
+    // so a held run and a later gate on it can never double up.
+    expect(input.dedupeKey).toBe(runAwaitingHumanDedupeKey("R1"));
+    // The reason payload is the run's UNMODIFIED status — presentation changed,
+    // state did not.
+    expect(input.metadata).toMatchObject({
+      category: RUN_AWAITING_HUMAN_CATEGORY,
+      runAwaitingHuman: { runId: "R1", reason: "pending_input" },
+    });
+  });
+
+  it("returns a HELD run's notification to the conversation it was started in", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
+    findChatConversationPathForAgentRun.mockReturnValue(
+      "/chat/cinatra-ai/cinatra-assistant/blog-draft",
+    );
+
+    await runWaitNotifier.onEnterHumanWait({
+      runId: "R1",
+      reason: "pending_input",
+      waitKind: "input",
+    });
+
+    expect(findChatConversationPathForAgentRun).toHaveBeenCalledWith("R1");
+    const input = createNotificationForRecipient.mock.calls[0][1];
+    expect(input.href).toBe("/chat/cinatra-ai/cinatra-assistant/blog-draft");
+  });
+
+  it("falls back to the run page for a hold started outside a conversation", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
+    findChatConversationPathForAgentRun.mockReturnValue(null);
+
+    await runWaitNotifier.onEnterHumanWait({
+      runId: "R1",
+      reason: "pending_input",
+      waitKind: "input",
+    });
+
+    const input = createNotificationForRecipient.mock.calls[0][1];
+    expect(input.href).toBe("/agents/acme/sales/R1");
+  });
+
+  it("without a waitKind, a pending_input wait keeps its pre-existing copy and destination", async () => {
+    // The #1058 stop-run-hitl pause — the other flagged `pending_input` wait —
+    // must be untouched by this slice.
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
+    findChatConversationPathForAgentRun.mockReturnValue("/chat/cinatra-ai/cinatra-assistant/t1");
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_input" });
+
+    const input = createNotificationForRecipient.mock.calls[0][1];
+    expect(input.title).toBe('"Blog draft" is waiting on you to continue');
+    expect(findChatConversationPathForAgentRun).not.toHaveBeenCalled();
+    expect(input.href).toBe("/agents/acme/sales/R1");
+  });
+
+  it("a hold on a run with NO initiator notifies nobody (safe no-op)", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: null, title: "Blog draft", status: "pending_input" });
+
+    await runWaitNotifier.onEnterHumanWait({
+      runId: "R1",
+      reason: "pending_input",
+      waitKind: "input",
+    });
+
+    expect(createNotificationForRecipient).not.toHaveBeenCalled();
   });
 
   it("still emits when the conversation lookup throws (best-effort)", async () => {

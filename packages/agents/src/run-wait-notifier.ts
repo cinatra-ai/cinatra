@@ -24,6 +24,9 @@
 // ---------------------------------------------------------------------------
 
 import type { AgentRunStatus } from "./store";
+// TYPE-ONLY (erased at compile), so the true-leaf property in the header holds:
+// this module still pulls NOTHING at runtime from the package graph.
+import type { RunWaitInterruptKind } from "./run-surface-status";
 
 /**
  * Which flavour of human gate a run just entered.
@@ -50,6 +53,22 @@ export interface RunWaitNotifier {
   onEnterHumanWait(input: {
     runId: string;
     reason: RunHumanWaitReason;
+    /**
+     * cinatra#2835 — the wait's INPUT-vs-APPROVAL flavour, when the CALLER
+     * already knows it. The host otherwise re-derives this from the run's live
+     * HITL context (`deriveRunHitlContext` → `classifyRunWaitInterrupt`), which
+     * only ever answers for a `pending_approval` interrupt; a wait that is NOT
+     * an interrupt at all — the run-start recommendation HOLD, which parks an
+     * already-`pending_input` run on a card rather than moving its status — has
+     * no context to derive from and would fail closed to the generic
+     * "waiting on you to continue" copy with a run-page link.
+     *
+     * PRESENTATION + DESTINATION only, exactly like the derived classification
+     * it stands in for: `"input"` selects the "needs your input" copy and the
+     * conversation deep-link (#2729's ruling). Omitted → the pre-existing
+     * derivation, unchanged for every existing caller.
+     */
+    waitKind?: RunWaitInterruptKind;
   }): void | Promise<void>;
   /** A run left a human-wait state — hard-delete the notification (idempotent). */
   onLeaveHumanWait(input: { runId: string }): void | Promise<void>;
@@ -200,6 +219,74 @@ export async function dispatchRunWaitTransition(args: {
   } catch (err) {
     console.warn(
       "[run-wait-notifier] transition side-effect failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * cinatra#2835 — drive the wired notifier for a human wait that is NOT a status
+ * TRANSITION.
+ *
+ * `dispatchRunWaitTransition` above is driven by `transitionRunStatus`, so it can
+ * only fire for a wait a run ENTERS by changing status. The run-start
+ * recommendation HOLD is a human wait that does not: the run is ALREADY
+ * `pending_input` (it was created that way and is simply never dispatched), and
+ * the hold parks it on a continuation park instead of moving the status column —
+ * so there is no transition to ride and the classifier never sees the wait. This
+ * is the seam that path calls directly, with the SAME `onEnterHumanWait`
+ * contract (per-run dedupeKey, so a re-hold of the same run collapses onto one
+ * row) and the SAME best-effort posture: a thrown port is swallowed, because a
+ * notification can never be allowed to fail a hold that is already parked.
+ *
+ * `waitKind` is passed through so the hold is presented as the INPUT wait it is
+ * (the #2729 ruling: "needs your input", linking back to the conversation the run
+ * was started in) — the host cannot derive that here, since a held run carries no
+ * HITL interrupt to classify.
+ */
+export async function dispatchRunHumanWaitEntered(input: {
+  runId: string;
+  reason: RunHumanWaitReason;
+  waitKind?: RunWaitInterruptKind;
+}): Promise<void> {
+  const notifier = notifierHolder().notifier;
+  if (!notifier) return;
+  try {
+    await notifier.onEnterHumanWait(input);
+  } catch (err) {
+    console.warn(
+      "[run-wait-notifier] human-wait enter side-effect failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * cinatra#2835 — the counterpart clear for a non-transition human wait: the wait
+ * ENDED without the run's status necessarily moving.
+ *
+ * A recommendation hold that is CONFIRMED or SKIPPED goes on to dispatch, and
+ * that `pending_input → queued` transition already clears the row through
+ * `dispatchRunWaitTransition`. But a hold can also simply be RELEASED with no
+ * dispatch behind it (the TTL sweeper's fail-closed release; a decision whose
+ * dispatch is refused downstream), and that run stays `pending_input` — no
+ * transition, so nothing would ever clear the row and the bell would keep
+ * pointing at a card the human can no longer act on. Releasing the park is
+ * therefore itself a clear.
+ *
+ * Idempotent by construction (the host's clear is a delete-by-dedupeKey), so
+ * firing here AND on a subsequent dispatch transition is a harmless double-no-op.
+ */
+export async function dispatchRunHumanWaitLeft(input: {
+  runId: string;
+}): Promise<void> {
+  const notifier = notifierHolder().notifier;
+  if (!notifier) return;
+  try {
+    await notifier.onLeaveHumanWait({ runId: input.runId });
+  } catch (err) {
+    console.warn(
+      "[run-wait-notifier] human-wait leave side-effect failed:",
       err instanceof Error ? err.message : err,
     );
   }
