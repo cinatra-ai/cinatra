@@ -6,7 +6,7 @@ before:
   dev server on port 3105:
     [dev:stop] SIGTERM -> 94915 (node /Users/marcushorndt/cinatra-worktrees/s9a-proofs/node_m)
     [dev:stop] SIGTERM -> 94914 (node scripts/dev-server.mjs)
-    [dev:stop] SIGTERM -> 94921 (next-server (v16.2.10))
+    [dev:stop] SIGTERM -> 94921 (next-server (v<redacted: framework version token, removed for the source-leak gate>))
     [dev:stop] port 3105 released. clean stop.
    Container s9aproofcap-postgres-1  Stopping
    Container s9aproofcap-redis-1  Stopping

@@ -10,6 +10,7 @@ import {
   runScriptedStream,
   runScriptedWidgetAssistantTurn,
   scriptedTurnAsksForScheduleProposal,
+  scriptedTurnNamesScheduleTemplate,
   scriptedTurnNamesAgentRun,
   scriptedTurnNamesLifecycleRef,
 } from "../scripted-test-provider";
@@ -395,14 +396,27 @@ describe("a turn that asks to SCHEDULE an agent (epic #2564 §VI)", () => {
     });
   });
 
-  it("dispatches NOTHING it could only guess — a schedule turn naming no template falls through", async () => {
+  it("dispatches NOTHING it could only guess — a schedule turn naming no template calls no tool", async () => {
     const { sink, dispatched } = makeChatSink();
     await runScriptedChatAssistantTurn({
       ...sink,
       instructions: "Schedule something for me later, please.",
     });
+    expect(dispatched).toEqual([]);
+  });
+
+  it("a sentence that asks BOTH still reaches the pull — the pull predicate decides that", async () => {
+    const { sink, dispatched } = makeChatSink();
+    await runScriptedChatAssistantTurn({
+      ...sink,
+      instructions: "Which reviews are waiting before I schedule anything?",
+    });
     expect(dispatched.map((d) => d.name)).toEqual(["artifact_review_gates_list"]);
-    expect(dispatched.some((d) => d.name === "schedule_proposal_render")).toBe(false);
+  });
+
+  it("names the template under its own reader, and reads the same identifier shape", () => {
+    expect(scriptedTurnNamesScheduleTemplate(`Schedule agent ${TEMPLATE} daily`)).toBe(TEMPLATE);
+    expect(scriptedTurnNamesScheduleTemplate("Schedule the blog writer daily")).toBeNull();
   });
 
   it("leaves the lifecycle-pull path untouched — a review question still lists then renders", async () => {

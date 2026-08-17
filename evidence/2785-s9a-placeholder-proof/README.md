@@ -15,57 +15,94 @@ that draws is photographed inside that conversation. That could not be done on
 this branch, and the reason is code, not scheduling.
 
 **The deterministic scripted provider could not name that tool.** Its vocabulary
-was a closed set of five names — `agent_run`, the two content-editor stand-ins,
-`artifact_review_gates_list` and the two `*_render` primitives. `schedule_proposal_render`
-was in none of them, on this branch or on the default branch. So no turn on a
-key-free stack could reach the §VI producer, and the card had no way to appear in
-a conversation at all.
+was a closed set of six names — `agent_run`, the two content-editor stand-ins,
+`artifact_review_gates_list` and the two `*_render` primitives.
+`schedule_proposal_render` was in none of them, on this branch or on the default
+branch. So no turn on a key-free stack could reach the §VI producer, and the card
+had no way to appear in a conversation at all.
 
-This round adds the missing arm, in the **model layer only**:
+This round adds the missing arm. It changes **two files, and one of them is the
+assistant runtime** — said plainly, because "model layer only" would be wrong:
 
 - `packages/llm/src/scripted-test-provider.ts` — a schedule intent, the producer's
-  name, and one branch that dispatches it for the template the turn names. The
-  arm is inside the same production fence as every other arm.
-- `src/lib/assistant-runtime/runtime.ts` — one condition, so a turn the provider
-  claims as a schedule question takes the same short-circuit the lifecycle
-  question already took. The runtime still invents no intent of its own; it asks
-  the provider, exactly as before.
+  name, a reader for the template the turn names, and one branch that dispatches
+  it. The arm is inside the same production fence as every other arm.
+- `src/lib/assistant-runtime/runtime.ts` — one condition on the scripted
+  short-circuit, so a turn the provider claims as a schedule question takes the
+  same path the lifecycle question already took. The runtime still invents no
+  intent of its own; it asks the provider, as before. This is a change to the
+  central assistant runtime, not to a test double.
+
+**The arm synthesizes most of the schedule, and that is a limit on what the
+capture proves.** Only two values come out of the sentence: the template
+identifier and the time of day. The `recurring` kind, the `UTC` timezone, the
+`daily` frequency, the interval and the unused calendar fields are fixed choices
+of this module. A real model would read all of them off the request. So a capture
+driven through this arm proves the PRODUCER and the CARD; it does not prove a
+model's reading of a schedule, and it is not offered as that.
+
+**Behavioural reach, stated rather than left to be discovered.** Any signed-in
+chat turn under the development flag whose text matches the schedule word set now
+takes the scripted short-circuit. A turn that matches but names no template
+dispatches nothing at all and keeps its streamed text — it deliberately does not
+fall through to the gate listing, because answering a scheduling sentence with a
+review backlog would be this seam inventing an intent nobody expressed. A
+sentence that genuinely asks both still reaches the pull, decided by the pull's
+own predicate exactly as before.
 
 **What this does NOT change.** The producer, its authorization, the proposal
 token, the envelope, the sink's recognizer, the card registry, the S1 shell and
-every gate are untouched. The arm grants no authority: the tool it names writes
-nothing. Both gate outputs are byte-for-byte what this branch already recorded —
-`required-gate-run.txt` re-ran identical after the change.
+every gate contract are untouched. The arm grants no authority: the tool it names
+writes nothing. The provider cannot forge a card through the sink shown here —
+the envelope is built inside the tool handler, and the recognizer accepts it only
+from the server label the runtime stamps from a dispatch it actually performed.
+The required gate re-ran after the change and its output is byte-identical to
+`required-gate-run.txt`, the copy recorded before it.
 
 **One sentence in the pull-request body is now narrower than the tree.** That
 body says the product diff against the default branch is empty. It no longer is:
-it is these two model-layer files. The acceptance argument they carry is
+it is these two files. The acceptance argument that body carries is
 unaffected, because the one-card gate reads card owners, mounts and the registry,
 and none of those is touched — but the sentence should be read as "no card
 module is touched", which is what it was always claiming.
 
 If the arm belongs in the slice that draws the schedule card rather than here, it
-moves without costing this proof: the images and the logs stay true of whatever
-branch carries the arm.
+moves without the proof having to be re-argued: the capture programs are
+committed, so the same two cells can be re-shot on whichever branch carries it.
+The images below are evidence of the tree captured here and of nothing else.
 
 ## The runtime and the stack
 
-DEV RUNTIME, named on every cell, which is the standing rule for a
-dispatch-dependent capture: `pnpm dev`, `CINATRA_RUNTIME_MODE=development`,
+DEV RUNTIME, named for every cell in this record and in each capture log's
+first lines, which is the standing rule for a dispatch-dependent capture. The
+screenshots themselves carry no burnt-in runtime label; the label lives here and
+in the logs: `pnpm dev`, `CINATRA_RUNTIME_MODE=development`,
 `NODE_ENV != production`, `CINATRA_TEST_LLM_PROVIDER=scripted`. Neither
 production fence (`assertScriptedProviderNotProduction`, `lifecycleSeedEnvVerdict`
-FENCE 1a) was weakened; this branch does not touch them. **No real provider key
-is present in the capture instance's environment: none was read, used or stored.**
+FENCE 1a) was weakened; this branch does not touch them. **The capture
+instance's `.env.local` holds no provider key**, and none was added to the
+process environment: the scripted branch runs before any adapter resolves, so no
+key is read, used or stored on this path.
 
-`CINATRA_E2E_SETUP_BYPASS=true` was set. It skips the SETUP WIZARD and nothing
-else; it is disclosed here because it is an env switch a reader should see named.
+`CINATRA_E2E_SETUP_BYPASS=true` was set. It is used here to skip the SETUP
+WIZARD. It is not a no-op elsewhere in the codebase — it also makes the dataless
+design-fixture routes reachable under a production build and arms a notifications
+degrade path — and none of those surfaces is touched by either capture.
 
 Throwaway Compose project `s9aproofcap` — own Postgres (55432), own Redis
 (56379), own volumes, own network, own BullMQ queue name
 (`cinatra-s9aproofcap-jobs`), dev server on 3105. Fresh database, provisioned
-with `apply-public-schema.mjs` then `auth:migrate`. The operator's own project was
-never started, stopped, read or written. `teardown-log.txt` counts the stack
-before and after: 2 containers, 2 volumes, 1 network, 1 dev server, all removed.
+with `apply-public-schema.mjs` then `auth:migrate`. The operator's own Compose
+project was never started, stopped or written to. It was READ once, at teardown:
+the last line of `teardown-log.txt` lists Compose projects to show it still
+running and untouched, and that listing is the only contact of any kind.
+
+`teardown-log.txt` counts the stack before and after: 2 containers, 2 volumes,
+1 network, 1 dev server, all removed.
+
+`docker-compose.s9aproofcap.yml` is the throwaway stack's own definition,
+committed so the ports, volumes and network above can be checked rather than
+taken on trust.
 
 ## The cells
 
@@ -75,7 +112,16 @@ before and after: 2 containers, 2 volumes, 1 network, 1 dev server, all removed.
 | `S9a-b__chat_thread__verification-placeholder.png` | **development** | The verification reading asked for by its ref, in a real conversation. The assistant calls `verification_record_render`, and what draws is the same shell: "Verification / Advisory reading." No outcome pill, no revisions, no fields. Thread and composer in frame. |
 | `required-gate-run.txt` | — | The verbatim run of the required gate, exit 1, six findings unfiltered, naming both undrawn kinds. |
 
-`capture-a-log.txt` and `capture-b-log.txt` are the unedited machine output.
+`capture-a-log.txt` and `capture-b-log.txt` are the machine output of the two
+capture programs, which are committed beside them — `capture-a-schedule.mjs` and
+`capture-b-verification.mjs`. Read them: every line in the logs is printed by one
+of those two files, so the assertions can be audited rather than believed, and
+re-run rather than trusted.
+
+**One redaction, marked in place.** `teardown-log.txt` line 9 had the framework
+version token the process table printed. The source-leak gate flags that shape,
+so the token is replaced by a marker naming exactly what was removed and why.
+Nothing else in any log is altered.
 
 ## What is real, and what stands in
 
@@ -86,11 +132,14 @@ them, the proposal token, the review gate, the repair, the verification record,
 the `DATA_PART`, the card registry and the S1 shell. Both messages were typed into
 the real composer of a real thread.
 
-**Stood in for: the model layer, and nothing else.** The scripted provider decides
-which tool the turn calls. It cannot fabricate a card — the envelope is built
-inside the tool handler and the sink accepts it only from the (`cinatra` server
-label, allowlisted tool) tuple the runtime stamps from the dispatch it actually
-performed.
+**Stood in for: the model.** The scripted provider decides which tool the turn
+calls, and for the schedule cell it also composes the schedule arguments, as the
+section above states. It cannot fabricate a card through this path — the envelope
+is built inside the tool handler and the sink accepts it only from the (`cinatra`
+server label, allowlisted tool) tuple the runtime stamps from the dispatch it
+actually performed. The runtime condition that routes these turns is the second
+changed file, so the seam a reader should audit is those two files plus the two
+capture programs, all committed here.
 
 **Two disclosed preconditions**, neither inside the thing under test:
 

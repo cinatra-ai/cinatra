@@ -127,6 +127,20 @@ export function scriptedTurnAsksForScheduleProposal(instructions: string): boole
 export const SCRIPTED_SCHEDULE_PROPOSAL_TOOL = "schedule_proposal_render";
 
 /**
+ * The agent template the person named, or null.
+ *
+ * The SAME identifier shape `scriptedTurnNamesAgentRun` reads, under its own
+ * name because it names a different subject: an agent template, not a run. This
+ * provider holds no store and cannot resolve "the blog writer" to a row, so the
+ * turn names its subject by identifier and the REAL primitive decides whether
+ * that subject exists and whether the asker may reach it. Naming one grants
+ * nothing.
+ */
+export function scriptedTurnNamesScheduleTemplate(instructions: string): string | null {
+  return instructions.match(AGENT_RUN_ID_PATTERN)?.[0] ?? null;
+}
+
+/**
  * The hour and minute the person asked for, defaulting to 09:00.
  *
  * A wall clock, read out of the sentence. Nothing here invents a date: the
@@ -142,17 +156,22 @@ function scriptedScheduleTimeOfDay(instructions: string): { hour: number; minute
  * Emit the §VI producer call: `schedule_proposal_render` for the template the
  * person named, on a daily recurrence at the hour they asked for.
  *
- * THE TEMPLATE IS READ OUT OF THE SENTENCE, never guessed. This provider holds
- * no store and cannot resolve "the blog writer" to a row, so it uses the same
- * stand-in `scriptedTurnNamesAgentRun` already makes for the run card: the turn
- * names its subject by identifier, and the REAL primitive decides whether that
- * subject exists and whether the asker may reach it. Naming one grants nothing.
- * A turn that names none dispatches nothing and the turn carries prose.
+ * THIS ARM SYNTHESIZES THE SCHEDULE SHAPE, and that is worth saying plainly
+ * rather than leaving a reader to infer it. Only two values come out of the
+ * sentence — the template and the time of day. Everything else is a fixed
+ * selection this module chooses: a `recurring` kind, the `UTC` timezone, a
+ * `daily` frequency at interval 1, and the calendar fields the schema requires
+ * but a daily recurrence does not use. A real model would read all of them off
+ * the request; this stand-in does not, so a capture driven through it proves the
+ * PRODUCER and the CARD, never the model's reading of a schedule.
  *
  * DAILY, deliberately. §VI's option rows are a builder's selections, and the
  * simplest selection that exercises the whole producer is a daily recurrence —
  * it needs no future date, so the proposal can never be refused for a runAt in
  * the past.
+ *
+ * A turn that names no template dispatches NOTHING. Guessing one would put a
+ * stranger's identifier into a proposal.
  */
 async function runScriptedScheduleProposal(input: {
   instructions: string;
@@ -160,7 +179,7 @@ async function runScriptedScheduleProposal(input: {
   onToolCall: (call: { id: string; name: string }) => void;
   onToolResult: (result: { id: string; name: string; result: string }) => void;
 }): Promise<boolean> {
-  const templateId = scriptedTurnNamesAgentRun(input.instructions);
+  const templateId = scriptedTurnNamesScheduleTemplate(input.instructions);
   if (!templateId) return false;
   const { hour, minute } = scriptedScheduleTimeOfDay(input.instructions);
   const id = randomUUID();
@@ -363,11 +382,18 @@ async function runScriptedLifecyclePull(input: {
   // A SCHEDULE REQUEST is answered FIRST, and it never lists. §VI's card is a
   // proposal about a template, so there is no backlog to discover and no ref to
   // render — listing here would draw a review gate for a person who asked to
-  // schedule an agent. A schedule turn that names no template falls through to
-  // the pull below rather than dispatching a guess.
+  // schedule an agent.
+  //
+  // A schedule turn that names no template dispatches NOTHING, and it stops
+  // unless the PULL predicate independently claims the same sentence. Falling
+  // through unconditionally would answer "schedule something for me later" with
+  // a review-gate listing — this seam inventing an intent nobody expressed. A
+  // sentence that genuinely asks both still reaches the pull, exactly as before
+  // this arm existed, because the pull's own predicate decides that.
   if (scriptedTurnAsksForScheduleProposal(input.instructions)) {
     const proposed = await runScriptedScheduleProposal(input);
     if (proposed) return true;
+    if (!scriptedTurnAsksForLifecyclePull(input.instructions)) return true;
   }
 
   // A NAMED REF short-circuits the LIST. Listing is the discovery step, and a
