@@ -1412,6 +1412,12 @@ export async function retryExtensionActivationFormAction(input: {
     input.packageName,
   );
   try {
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    // Under the package lock, the same lock every install and lifecycle op
+    // holds: resolving a row and then activating it without it would let a
+    // concurrent install replace or archive that row in between, and this would
+    // activate bytes that are no longer the package.
+    const outcome = await withInstallLock(input.packageName, async () => {
     const { resolveLifecycleTargetRow, lifecycleRowAnchor } = await import(
       "./lifecycle-target-resolver"
     );
@@ -1434,8 +1440,12 @@ export async function retryExtensionActivationFormAction(input: {
         "unrecoverable",
         result.reason ?? "the package did not register",
       );
-      return { ok: false, category: "unrecoverable" };
+      return { ok: false as const, category: "unrecoverable" as const };
     }
+    return undefined;
+    });
+    // A returned value is a FAILURE; success falls through to the redirect.
+    if (outcome) return outcome;
   } catch (err) {
     logMarketplaceFailureForOperator(
       "retry-activation",
@@ -1472,8 +1482,37 @@ export async function rollBackExtensionToBundledFormAction(input: {
     input.packageName,
   );
   try {
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    // Archive and restore run under ONE hold of the package lock, so the pair is
+    // not interleaved by a concurrent install or lifecycle op. The reactivation
+    // seam takes the same lock re-entrantly.
+    const outcome = await withInstallLock(input.packageName, async () => {
     const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
     const row = await resolveLifecycleTargetRow(input.packageName, actor);
+    // REFUSE unless this is genuinely an override with something to fall back
+    // to. Rolling back a row that IS the bundled implementation, or an override
+    // for a package the image does not carry, would archive the only thing
+    // serving and leave nothing behind. The settings surface does not offer the
+    // affordance in those cases; a direct call must be refused all the same.
+    if (row.source?.type !== "verdaccio") {
+      logMarketplaceFailureForOperator(
+        "roll-back-to-bundled",
+        input.packageName,
+        "unrecoverable",
+        "the addressed row is not a marketplace install, so there is nothing to roll back",
+      );
+      return { ok: false as const, category: "unrecoverable" as const };
+    }
+    const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+    if (!STATIC_EXTENSION_MANIFEST[input.packageName]) {
+      logMarketplaceFailureForOperator(
+        "roll-back-to-bundled",
+        input.packageName,
+        "unrecoverable",
+        "this package does not ship in the image, so there is no bundled version to roll back to",
+      );
+      return { ok: false as const, category: "unrecoverable" as const };
+    }
     const { transitionExtensionLifecycle } = await import("./lifecycle-primitive");
     await transitionExtensionLifecycle(row.id, "archive", {
       actor: { source: actor.source ?? "settings", userId: actor.userId },
@@ -1493,8 +1532,12 @@ export async function rollBackExtensionToBundledFormAction(input: {
         "unrecoverable",
         restored.reason,
       );
-      return { ok: false, category: "unrecoverable" };
+      return { ok: false as const, category: "unrecoverable" as const };
     }
+    return undefined;
+    });
+    // A returned value is a FAILURE; success falls through to the redirect.
+    if (outcome) return outcome;
   } catch (err) {
     logMarketplaceFailureForOperator(
       "roll-back-to-bundled",

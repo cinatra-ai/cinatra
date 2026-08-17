@@ -5,7 +5,7 @@ import { classifyExtensionTrust } from "@/lib/extension-trust";
 const PKG = "@cinatra-ai/google-appointment-schedules-connector";
 const REG = "http://127.0.0.1:4880";
 const r = await resolveExtensionDistIntegrity(
-  { packageName: PKG, version: "0.1.1", registryUrl: REG },
+  { packageName: PKG, packageVersion: "0.1.2" },
   { registryUrl: REG, token: null } as never,
 );
 console.log("resolvedVersion:", r.resolvedVersion);
@@ -19,7 +19,7 @@ const trust = classifyExtensionTrust({
   registryUrl: REG,
   integrityVerified: true,
   persistedTrustDecision: true,
-  signatureVerified: verdict === true || (verdict as { verified?: boolean })?.verified === true ? true : undefined,
+  signatureVerified: verdict === true ? true : undefined,
   trustedActivationHosts: ["127.0.0.1:4880"],
   allowMarketplaceBootstrapTrust: false,
 });

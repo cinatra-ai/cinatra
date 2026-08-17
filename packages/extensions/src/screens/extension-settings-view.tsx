@@ -370,7 +370,7 @@ export function ExtensionSettingsView({
                   action={actions.rollBackToBundled}
                   label="Roll back to bundled"
                   pendingLabel="Rolling back…"
-                  failureMessage={`Rolled ${displayName} back, but the bundled version couldn't be started in the running app. It returns after the next restart.`}
+                  failureMessage={`Couldn't roll ${displayName} back to the bundled version. Nothing about the install changed, or the bundled version needs a restart to come back. Check the extension's settings before retrying.`}
                 />
               }
             />

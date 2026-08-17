@@ -64,6 +64,11 @@ vi.mock("../lifecycle-primitive", () => ({
 }));
 
 const reactivateBundled = vi.fn(async () => ({ ok: true }));
+vi.mock("@/lib/generated/extensions.server", () => ({
+  STATIC_EXTENSION_MANIFEST: {
+    "@cinatra-ai/google-appointment-schedules-connector": { packageName: "x" },
+  },
+}));
 vi.mock("@/lib/static-bundle-loader", () => ({
   reactivateBundledFallbackInProcess: (...a: unknown[]) => reactivateBundled(...(a as [])),
 }));
@@ -185,5 +190,27 @@ describe("rollBackExtensionToBundledFormAction", () => {
     const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
     expect(reactivateBundled).not.toHaveBeenCalled();
     expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+  });
+});
+
+describe("rollBackExtensionToBundledFormAction: the guards", () => {
+  it("REFUSES a row that is not a marketplace install: there is nothing to roll back", async () => {
+    resolveTarget.mockResolvedValueOnce({ ...targetRow, source: { type: "bundled" } } as never);
+    const { rollBackExtensionToBundledFormAction } = await import("../actions");
+    const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    // The only thing serving is never archived.
+    expect(transition).not.toHaveBeenCalled();
+    expect(reactivateBundled).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES when the image carries no version to fall back to", async () => {
+    vi.doMock("@/lib/generated/extensions.server", () => ({ STATIC_EXTENSION_MANIFEST: {} }));
+    vi.resetModules();
+    const { rollBackExtensionToBundledFormAction } = await import("../actions");
+    const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    vi.doUnmock("@/lib/generated/extensions.server");
+    vi.resetModules();
   });
 });

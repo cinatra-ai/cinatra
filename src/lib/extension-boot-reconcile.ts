@@ -176,11 +176,16 @@ export async function reconcileStrandedInstall(
       : attempt.reason;
     const failureClass = deps.classifyFailure(reason);
 
-    // The override did not take, so the bundled implementation must be serving
-    // before anything else is decided.
-    const restored = await deps.restoreBundled(packageName);
-
+    // ORDER: the bundled implementation is put back only once the override can
+    // no longer take the package's identity. For a BYTE-class failure that means
+    // after the archive below, never before it: registering the bundled module
+    // underneath a still-live override would leave two registrations racing for
+    // the same global names, which is the defect this whole change exists to
+    // remove. For a CONFIG-class failure the row stays live by design, but it
+    // registered nothing (that is why reconciliation ran), so there is no live
+    // registration to race and the bundle is restored below.
     if (failureClass === "config") {
+      const restored = await deps.restoreBundled(packageName);
       // Mutable host configuration. Leave the install alone: record why, emit
       // the audit event, and let an operator fix the setting and retry.
       await deps.recordActivationFailure({
@@ -207,6 +212,8 @@ export async function reconcileStrandedInstall(
 
     // Byte class: no configuration change will fix these bytes. Archive
     // canonically (restorable, never a delete) and KEEP the store bytes.
+    // The bundle is restored AFTER the archive, so it never registers beneath a
+    // live override.
     try {
       await deps.archiveRow(row.id, `boot reconciliation: ${reason}`);
     } catch (err) {
@@ -225,6 +232,7 @@ export async function reconcileStrandedInstall(
         reason: `${reason}; archiving the row failed: ${detail}`,
       };
     }
+    const restored = await deps.restoreBundled(packageName);
     await deps.recordActivationFailure({
       rowId: row.id,
       packageName,
