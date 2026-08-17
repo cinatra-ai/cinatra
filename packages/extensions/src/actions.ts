@@ -1523,14 +1523,31 @@ export async function rollBackExtensionToBundledFormAction(input: {
     );
     const restored = await reactivateBundledFallbackInProcess(input.packageName);
     if (!restored.ok) {
-      // The override is archived, so it no longer shadows anything, but the
-      // bundled implementation did not come back in this process. Say so rather
-      // than redirect as if it had: it returns on the next restart.
+      // The bundled implementation did not come back. Archiving the override and
+      // stopping here would leave NOTHING serving the package, which is a worse
+      // state than the one the operator asked to leave. So the archive is undone
+      // and the package is returned to exactly where it started; the failure is
+      // then reported instead of a redirect that would imply it worked.
+      let restoredOverride = false;
+      try {
+        await transitionExtensionLifecycle(row.id, "activate", {
+          actor: { source: actor.source ?? "settings", userId: actor.userId },
+          reason: "roll back to bundled failed; the install was put back",
+        });
+        restoredOverride = true;
+      } catch (undoErr) {
+        logMarketplaceFailureForOperator(
+          "roll-back-to-bundled-undo",
+          input.packageName,
+          "unrecoverable",
+          undoErr,
+        );
+      }
       logMarketplaceFailureForOperator(
         "roll-back-to-bundled",
         input.packageName,
         "unrecoverable",
-        restored.reason,
+        `${restored.reason}${restoredOverride ? " (the install was put back)" : " (RECOVERY REQUIRED: the install could not be put back)"}`,
       );
       return { ok: false as const, category: "unrecoverable" as const };
     }

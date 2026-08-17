@@ -210,6 +210,14 @@ export async function reactivateBundledFallbackInProcess(
     }
     // Drop whatever the failed override registered before the bundled module
     // registers, so the two never coexist.
+    //
+    // VERIFIED, not assumed. The teardown hook swallows its own failures by
+    // contract (it is best-effort for the purge path it was written for), so a
+    // try/catch around it proves nothing. The registry is therefore re-read
+    // afterwards: if the package still holds registrations, the teardown did not
+    // take, and activating the bundled module on top would leave two
+    // registrations serving one package. Refusing is the safe answer, because
+    // the boot loader brings the bundled version back cleanly on the next start.
     try {
       const { fireExtensionCapabilityTeardown } = await import("@cinatra-ai/extensions");
       await fireExtensionCapabilityTeardown(packageName);
@@ -223,6 +231,20 @@ export async function reactivateBundledFallbackInProcess(
         record.packageName,
         err instanceof Error ? err.message : String(err),
       );
+    }
+    try {
+      const { hasExtensionUiForPackage } = await import("@/lib/extension-ui-registry");
+      if (hasExtensionUiForPackage(packageName)) {
+        return {
+          ok: false as const,
+          reason:
+            "the previous registrations for this package could not be torn down, so the " +
+            "bundled version was not activated on top of them",
+        };
+      }
+    } catch {
+      /* the registry read is a safety check; its own failure must not block the
+         recovery the operator asked for. */
     }
     const loaderRecord: LoaderRecord = {
       packageName: record.packageName,

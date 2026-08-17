@@ -43,6 +43,12 @@ vi.mock("@cinatra-ai/sdk-extensions", async (orig) => ({
 }));
 
 const teardown = vi.fn(async () => {});
+/** What the UI registry reports AFTER the teardown ran. Production's teardown
+ *  hook swallows failures, so this is the only honest signal. */
+let stillRegistered = false;
+vi.mock("@/lib/extension-ui-registry", () => ({
+  hasExtensionUiForPackage: () => stillRegistered,
+}));
 vi.mock("@cinatra-ai/extensions", () => ({
   fireExtensionCapabilityTeardown: () => teardown(),
   readEffectiveStatusByPackageNames: async () => new Map(),
@@ -57,6 +63,7 @@ vi.mock("@cinatra-ai/agents", () => ({
 }));
 
 beforeEach(() => {
+  stillRegistered = false;
   activation.mockReset();
   teardown.mockClear();
   locked.length = 0;
@@ -142,8 +149,23 @@ describe("reactivateBundledFallbackInProcess", () => {
     });
   });
 
-  it("a teardown that throws does not stop the bundled module coming back", async () => {
-    teardown.mockRejectedValue(new Error("teardown failed"));
+  it("REFUSES to activate on top of registrations the teardown did not clear", async () => {
+    // The teardown hook swallows its own failures by contract, so the seam
+    // cannot learn from a throw. It re-reads the registry instead. Registrations
+    // still present means the teardown did not take, and activating the bundled
+    // module on top would leave TWO registrations serving one package: exactly
+    // the state this whole change exists to prevent. Refusing is safe, because
+    // the boot loader brings the bundled version back cleanly on the next start.
+    stillRegistered = true;
+    activation.mockResolvedValue([{ packageName: SERVER_ENTRY_PKG, status: "registered" }]);
+    const { reactivateBundledFallbackInProcess } = await import("@/lib/static-bundle-loader");
+    const r = await reactivateBundledFallbackInProcess(SERVER_ENTRY_PKG);
+    expect(r).toMatchObject({ ok: false });
+    expect(activation, "nothing is registered on top of a failed teardown").not.toHaveBeenCalled();
+  });
+
+  it("proceeds once the teardown has actually cleared the package", async () => {
+    stillRegistered = false;
     activation.mockResolvedValue([{ packageName: SERVER_ENTRY_PKG, status: "registered" }]);
     const { reactivateBundledFallbackInProcess } = await import("@/lib/static-bundle-loader");
     await expect(reactivateBundledFallbackInProcess(SERVER_ENTRY_PKG)).resolves.toEqual({ ok: true });

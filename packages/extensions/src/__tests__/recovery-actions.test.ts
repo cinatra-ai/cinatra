@@ -193,6 +193,42 @@ describe("rollBackExtensionToBundledFormAction", () => {
   });
 });
 
+describe("rollBackExtensionToBundledFormAction: the rollback is atomic", () => {
+  it("PUTS THE INSTALL BACK when the bundled version cannot be restored", async () => {
+    // Archiving the override and stopping would leave NOTHING serving the
+    // package, which is worse than the state the operator asked to leave. The
+    // archive is undone so the package returns to exactly where it started.
+    reactivateBundled.mockResolvedValue({ ok: false, reason: "module absent" } as never);
+    const { rollBackExtensionToBundledFormAction } = await import("../actions");
+    const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
+    expect(transition).toHaveBeenNthCalledWith(
+      1,
+      "iext_target",
+      "archive",
+      expect.anything(),
+    );
+    expect(transition).toHaveBeenNthCalledWith(
+      2,
+      "iext_target",
+      "activate",
+      expect.objectContaining({ reason: expect.stringContaining("put back") }),
+    );
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+  });
+
+  it("reports RECOVERY REQUIRED when the install cannot be put back either", async () => {
+    reactivateBundled.mockResolvedValue({ ok: false, reason: "module absent" } as never);
+    transition
+      .mockResolvedValueOnce(null as never)
+      .mockRejectedValueOnce(new Error("lifecycle refused"));
+    const { rollBackExtensionToBundledFormAction } = await import("../actions");
+    const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
+    // Still a reported failure, never a redirect implying it worked.
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    expect(redirectMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("rollBackExtensionToBundledFormAction: the guards", () => {
   it("REFUSES a row that is not a marketplace install: there is nothing to roll back", async () => {
     resolveTarget.mockResolvedValueOnce({ ...targetRow, source: { type: "bundled" } } as never);
