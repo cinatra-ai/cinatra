@@ -1386,6 +1386,127 @@ export async function restoreExtensionPackageFormAction(input: {
   redirect("/configuration/extensions");
 }
 
+/**
+ * RETRY ACTIVATION for an install that is live but serving nothing.
+ *
+ * The install path now refuses anything it cannot activate, so this exists for
+ * rows written before it did, and for the case a host-configuration failure
+ * created: a package whose bytes are fine but which the trust classifier would
+ * not admit until an operator configured a signing key or an activation host.
+ * Once they have, the operator needs a way to say "try again" that does not
+ * involve reinstalling or restarting.
+ *
+ * It targets the EFFECTIVE row, the same row every other lifecycle op targets,
+ * and it re-fires the in-process activate hook rather than re-running an
+ * install: the bytes are already materialized and finalized, only the
+ * registration is missing.
+ */
+export async function retryExtensionActivationFormAction(input: {
+  packageName: string;
+}): Promise<MarketplaceInstallActionResult | void> {
+  "use server";
+  const session = await requireAdminSession();
+  const actor = await buildLifecycleActorFromSession(
+    session,
+    "activate",
+    input.packageName,
+  );
+  try {
+    const { resolveLifecycleTargetRow, lifecycleRowAnchor } = await import(
+      "./lifecycle-target-resolver"
+    );
+    // Resolving through the shared target resolver is what applies the standing
+    // check and the supersession rule, so this can never act on a superseded row
+    // or on a row the actor may not write.
+    const row = await resolveLifecycleTargetRow(input.packageName, actor);
+    const { fireExtensionActivate } = await import("./activate-hook");
+    const anchor = lifecycleRowAnchor(row);
+    const result = await fireExtensionActivate(
+      input.packageName,
+      row.organizationId ?? null,
+      row.source && "version" in row.source ? (row.source.version as string) : undefined,
+      anchor.ownerLevel === "workspace" ? { ownerLevel: "workspace" } : undefined,
+    );
+    if (!result.activated) {
+      logMarketplaceFailureForOperator(
+        "retry-activation",
+        input.packageName,
+        "unrecoverable",
+        result.reason ?? "the package did not register",
+      );
+      return { ok: false, category: "unrecoverable" };
+    }
+  } catch (err) {
+    logMarketplaceFailureForOperator(
+      "retry-activation",
+      input.packageName,
+      "unrecoverable",
+      err,
+    );
+    return { ok: false, category: "unrecoverable" };
+  }
+  redirect("/configuration/extensions");
+}
+
+/**
+ * ROLL BACK to the implementation bundled in the image.
+ *
+ * The operator path out of an install that will not serve. It archives the
+ * product-installed row (the restorable primitive, never a delete: the payload
+ * and provenance are real and the operator may want them) and puts the bundled
+ * implementation back in service through the same targeted reactivation seam the
+ * post-commit compensation uses.
+ *
+ * Order matters. The row is archived FIRST so the bundled module never registers
+ * underneath a live override, which would leave two registrations competing for
+ * the same global names.
+ */
+export async function rollBackExtensionToBundledFormAction(input: {
+  packageName: string;
+}): Promise<MarketplaceInstallActionResult | void> {
+  "use server";
+  const session = await requireAdminSession();
+  const actor = await buildLifecycleActorFromSession(
+    session,
+    "archive",
+    input.packageName,
+  );
+  try {
+    const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
+    const row = await resolveLifecycleTargetRow(input.packageName, actor);
+    const { transitionExtensionLifecycle } = await import("./lifecycle-primitive");
+    await transitionExtensionLifecycle(row.id, "archive", {
+      actor: { source: actor.source ?? "settings", userId: actor.userId },
+      reason: "operator rolled the install back to the bundled version",
+    });
+    const { reactivateBundledFallbackInProcess } = await import(
+      "@/lib/static-bundle-loader"
+    );
+    const restored = await reactivateBundledFallbackInProcess(input.packageName);
+    if (!restored.ok) {
+      // The override is archived, so it no longer shadows anything, but the
+      // bundled implementation did not come back in this process. Say so rather
+      // than redirect as if it had: it returns on the next restart.
+      logMarketplaceFailureForOperator(
+        "roll-back-to-bundled",
+        input.packageName,
+        "unrecoverable",
+        restored.reason,
+      );
+      return { ok: false, category: "unrecoverable" };
+    }
+  } catch (err) {
+    logMarketplaceFailureForOperator(
+      "roll-back-to-bundled",
+      input.packageName,
+      "unrecoverable",
+      err,
+    );
+    return { ok: false, category: "unrecoverable" };
+  }
+  redirect("/configuration/extensions");
+}
+
 export async function reinstallLatestFormAction(input: {
   packageName: string;
 }): Promise<void> {

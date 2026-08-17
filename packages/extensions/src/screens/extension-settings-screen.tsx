@@ -44,6 +44,8 @@ import {
   forceDeleteExtensionPackageFormAction,
   promoteExtensionToPublicAction,
   reinstallLatestFormAction,
+  retryExtensionActivationFormAction,
+  rollBackExtensionToBundledFormAction,
   restoreExtensionPackageFormAction,
 } from "../actions";
 // cinatra#2416 — the per-affordance capability comes from the module that
@@ -177,6 +179,32 @@ export async function ExtensionSettingsScreen({
   // NOTE (cinatra#1041): no update action — the §V Maintenance · Update row's
   // live button is a LINK opening the §II detail-modal update flow on the
   // Installed page; the update runs only there (dry-run plan → admin confirm).
+  // cinatra#2762: which recovery affordances this package can offer.
+  //
+  // Retry activation only means something for a PRODUCT install: the copy that
+  // ships in the image has no install row to re-activate. Roll back additionally
+  // needs the image to actually carry a version to fall back to, which is what
+  // the generated static manifest records. Both are derived server-side from
+  // facts, never from a client hint.
+  const effectiveSource = (lifecycleRow ?? canonical)?.source as
+    | { type?: string }
+    | null
+    | undefined;
+  const isProductInstall = effectiveSource?.type === "verdaccio";
+  const bundledFallbackAvailable = await (async () => {
+    if (!isProductInstall) return false;
+    try {
+      const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+      return Boolean(STATIC_EXTENSION_MANIFEST[packageName]);
+    } catch {
+      return false;
+    }
+  })();
+  const recovery = {
+    showRetryActivation: isProductInstall && !lifecycleIsArchived,
+    showRollBackToBundled: isProductInstall && !lifecycleIsArchived && bundledFallbackAvailable,
+  };
+
   async function archiveAction() {
     "use server";
     // cinatra#1061: RETURN (not await-and-drop) so the classified removal
@@ -191,6 +219,16 @@ export async function ExtensionSettingsScreen({
   async function reinstallAction() {
     "use server";
     await reinstallLatestFormAction({ packageName });
+  }
+  // cinatra#2762 recovery pair. Both RETURN on failure (like archive) so the
+  // client renders what actually happened instead of a masked thrown error.
+  async function retryActivationAction() {
+    "use server";
+    return retryExtensionActivationFormAction({ packageName });
+  }
+  async function rollBackToBundledAction() {
+    "use server";
+    return rollBackExtensionToBundledFormAction({ packageName });
   }
   async function publishAction() {
     "use server";
@@ -357,6 +395,7 @@ export async function ExtensionSettingsScreen({
       reinstallDisabled={reinstallDisabled}
       forceDeleteDisabled={forceDeleteDisabled}
       lifecycleCapabilityReasons={capabilityReasons}
+      recovery={recovery}
       archiveDependents={archiveDependents}
       isPublic={isPublic}
       isRegisteredVendor={isRegisteredVendor}
@@ -367,6 +406,8 @@ export async function ExtensionSettingsScreen({
       actions={{
         archive: archiveAction,
         activate: activateAction,
+        retryActivation: retryActivationAction,
+        rollBackToBundled: rollBackToBundledAction,
         reinstall: reinstallAction,
         publish: publishAction,
         forceDelete: forceDeleteAction,

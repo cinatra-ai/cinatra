@@ -247,3 +247,180 @@ export async function reconcileStrandedInstall(
     };
   });
 }
+
+// ---------------------------------------------------------------------------
+// THE REAL BOOT PASS.
+//
+// Everything above is pure and injected so it can be tested exhaustively. This
+// is the production wiring: real canonical store, real in-process activator,
+// real bundled-reactivation seam, real lifecycle primitive, real audit trail.
+// ---------------------------------------------------------------------------
+
+/** What the boot phase reports back, for the log line and for tests. */
+export type BootReconcileSweep = {
+  considered: number;
+  outcomes: BootReconcileOutcome[];
+};
+
+/**
+ * Build the production dependencies.
+ *
+ * `activatedThisBoot` is the set of package names the loaders already brought up
+ * in this process. It is the honest starting point for "is this serving": it is
+ * the loaders' own report, and every candidate is re-checked against it after an
+ * activation attempt rather than trusting the attempt's return value.
+ */
+export async function makeDefaultBootReconcileDeps(
+  activatedThisBoot: Set<string>,
+): Promise<BootReconcileDeps> {
+  const { readInstalledExtensionsByPackageName } = await import(
+    "@cinatra-ai/extensions/canonical-store"
+  );
+  const { transitionExtensionLifecycle } = await import(
+    "@cinatra-ai/extensions/lifecycle-primitive"
+  );
+  const { activateInstalledPackageInProcess } = await import("@/lib/extension-runtime-activate");
+  const { reactivateBundledFallbackInProcess } = await import("@/lib/static-bundle-loader");
+  const { withInstallLock } = await import("@cinatra-ai/agents");
+  const { classifyActivationFailure } = await import("@/lib/extension-activation-failure-class");
+
+  return {
+    readRows: async (packageName) =>
+      (await readInstalledExtensionsByPackageName(packageName)) as unknown as ReconcilableRow[],
+    isServing: (packageName) => activatedThisBoot.has(packageName),
+    activateOverride: async (row) => {
+      try {
+        const results = await activateInstalledPackageInProcess(
+          row.packageName,
+          row.organizationId ?? null,
+        );
+        const ok = results.some(
+          (r) => r.status === "registered" || r.status === "bootstrapped",
+        );
+        if (ok) {
+          activatedThisBoot.add(row.packageName);
+          return { ok: true };
+        }
+        return {
+          ok: false,
+          reason:
+            results.find((r) => r.reason)?.reason ??
+            results[0]?.status ??
+            "the package did not register",
+        };
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    restoreBundled: async (packageName) => {
+      try {
+        return await reactivateBundledFallbackInProcess(packageName);
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    archiveRow: async (rowId, reason) => {
+      await transitionExtensionLifecycle(rowId, "archive", {
+        actor: { source: "boot-reconcile" },
+        reason,
+      });
+    },
+    recordActivationFailure: async ({ rowId, packageName, reason, failureClass }) => {
+      // PERSISTED, not merely logged. The lifecycle audit table is what an
+      // operator reads to learn why an install is sitting inactive, and it is
+      // the same table every other lifecycle decision writes to, so the record
+      // survives the process that made it. The operation is `activate`, which is
+      // the truth: an activation was attempted for this row and did not take;
+      // the reason carries the failure class that decides whether retrying can
+      // help. Best-effort by design, because a boot pass must never fail on its
+      // own audit write.
+      try {
+        const { insertExtensionLifecycleAudit } = await import("@/lib/database");
+        await insertExtensionLifecycleAudit({
+          id: crypto.randomUUID(),
+          actorId: "system:boot-reconcile",
+          actorType: "system",
+          orgId: null,
+          operation: "activate",
+          packageName,
+          packageVersion: null,
+          destroyedRowSnapshot: { resolvedRow: { id: rowId }, failureClass },
+          danglingReferences: null,
+          reason: `boot reconciliation: ${failureClass}-class activation failure: ${reason}`,
+        });
+      } catch (err) {
+        console.warn(
+          "[boot-reconcile] could not record the activation failure for %s: %s",
+          packageName,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    },
+    emitAuditEvent: ({ packageName, rowId, outcome, reason, failureClass }) => {
+      // The structured operational line ops alerting keys on, matching the shape
+      // the install pipeline already emits.
+      console.error(
+        `[operational-event] ${JSON.stringify({
+          event: "extension_boot_reconcile",
+          packageName,
+          rowId,
+          outcome,
+          failureClass,
+          reason,
+        })}`,
+      );
+    },
+    withInstallLock: (packageName, fn) => withInstallLock(packageName, fn),
+    classifyFailure: classifyActivationFailure,
+  };
+}
+
+/**
+ * Reconcile every package that holds a live product install but did NOT come up
+ * in this process.
+ *
+ * Runs after the loaders, so `activatedThisBoot` is complete, and before the
+ * required-activation assertion, so a package this pass recovers is counted as
+ * present rather than reported missing.
+ */
+export async function reconcileStrandedInstallsAtBoot(
+  activatedThisBoot: Set<string>,
+  deps?: BootReconcileDeps,
+): Promise<BootReconcileSweep> {
+  const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
+  const rows = (await listInstalledExtensions({})) as unknown as ReconcilableRow[];
+  // Candidates: a package with a LIVE product-installed row that is not serving.
+  // A bundled-only package is never a candidate (it has no override to recover),
+  // and neither is anything the loaders already brought up.
+  const candidates = [
+    ...new Set(
+      rows
+        .filter(
+          (r) =>
+            (r.status === "active" || r.status === "locked") &&
+            r.isDefault !== false &&
+            r.source?.type === "verdaccio" &&
+            !activatedThisBoot.has(r.packageName),
+        )
+        .map((r) => r.packageName),
+    ),
+  ];
+  if (candidates.length === 0) return { considered: 0, outcomes: [] };
+
+  const wired = deps ?? (await makeDefaultBootReconcileDeps(activatedThisBoot));
+  const outcomes: BootReconcileOutcome[] = [];
+  for (const packageName of candidates) {
+    try {
+      outcomes.push(await reconcileStrandedInstall(packageName, wired));
+    } catch (err) {
+      // A reconciliation that throws must not abort boot, and must not be
+      // silent: the package stays as it was and the operator gets the reason.
+      console.error(
+        "[boot-reconcile] reconciliation threw for %s: %s",
+        packageName,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  return { considered: candidates.length, outcomes };
+}

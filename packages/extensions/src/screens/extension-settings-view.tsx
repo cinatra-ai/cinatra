@@ -20,6 +20,7 @@ import {
 import { KIND_LABEL } from "./installed-rows";
 import type { ExtensionKind } from "../canonical-types";
 import {
+  RecoveryActionForm,
   ArchiveActionForm,
   ConfirmActionButton,
   DisabledActionButton,
@@ -27,6 +28,7 @@ import {
 } from "./extension-settings-actions";
 import type { SettingsUpdateRow } from "./extension-settings-model";
 import type { RemovalActionResult } from "../removal-failure";
+import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
 
 const REGISTRIES_HREF = "/configuration/environment?tab=registries";
 
@@ -40,6 +42,13 @@ export type ExtensionSettingsActions = {
   // success (a returned value always means failure).
   archive: () => void | Promise<RemovalActionResult | void>;
   activate: () => void | Promise<void>;
+  // cinatra#2762 recovery pair. Shown only for a PRODUCT install, because a
+  // package that only ships in the image has nothing to retry and nothing to
+  // roll back to. `retryActivation` re-fires the in-process activate hook after
+  // an operator fixes what refused it; `rollBackToBundled` archives the override
+  // and puts the image's own version back in service.
+  retryActivation: () => void | Promise<MarketplaceInstallActionResult | void>;
+  rollBackToBundled: () => void | Promise<MarketplaceInstallActionResult | void>;
   reinstall: () => void | Promise<void>;
   publish: () => void | Promise<void>;
   forceDelete: (formData: FormData) => void | Promise<void>;
@@ -49,6 +58,8 @@ export type ExtensionSettingsViewProps = {
   kind: ExtensionKind;
   packageName: string;
   displayName: string;
+  /** cinatra#2762: which recovery affordances this package can offer. */
+  recovery?: { showRetryActivation: boolean; showRollBackToBundled: boolean };
   vendor: string | null;
   /**
    * The §V Maintenance · Update row — the §III card update state spelled out
@@ -114,6 +125,7 @@ export function ExtensionSettingsView({
   kind,
   packageName,
   displayName,
+  recovery,
   vendor,
   updateRow,
   archiveDisabled,
@@ -310,7 +322,7 @@ export function ExtensionSettingsView({
           <SettingsRow
             title="Activate"
             description="Reactivate an archived extension. Available once the extension is archived."
-            last
+            last={!recovery?.showRetryActivation && !recovery?.showRollBackToBundled}
             muted={Boolean(activateDisabled)}
             action={
               activateDisabled ? (
@@ -329,6 +341,40 @@ export function ExtensionSettingsView({
               )
             }
           />
+          {/* cinatra#2762: the operator path out of an install that will not
+              serve. Rendered only for a product install (the image's own copy has
+              nothing to retry), and Roll back only when the image actually
+              carries a version to fall back to. */}
+          {recovery?.showRetryActivation ? (
+            <SettingsRow
+              title="Retry activation"
+              description="Try to start this version again in the running app. Use it after fixing what refused it, such as a missing signing key or an untrusted registry."
+              last={!recovery?.showRollBackToBundled}
+              action={
+                <RecoveryActionForm
+                  action={actions.retryActivation}
+                  label="Retry activation"
+                  pendingLabel="Retrying…"
+                  failureMessage={`Couldn't start ${displayName} in the running app. The version bundled with the app is unaffected.`}
+                />
+              }
+            />
+          ) : null}
+          {recovery?.showRollBackToBundled ? (
+            <SettingsRow
+              title="Roll back to bundled"
+              description="Archive this install and go back to the version that ships with the app. The archived install keeps its data and can be restored."
+              last
+              action={
+                <RecoveryActionForm
+                  action={actions.rollBackToBundled}
+                  label="Roll back to bundled"
+                  pendingLabel="Rolling back…"
+                  failureMessage={`Rolled ${displayName} back, but the bundled version couldn't be started in the running app. It returns after the next restart.`}
+                />
+              }
+            />
+          ) : null}
         </section>
 
         {/* Danger zone */}
