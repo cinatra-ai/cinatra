@@ -43,6 +43,7 @@ import {
 } from "./trigger-recurrence";
 import {
   proposalConsumeKey,
+  readTriggerScheduleProposalToken,
   verifyTriggerScheduleProposalToken,
   type ProposalSchedule,
   type TriggerScheduleProposal,
@@ -554,6 +555,13 @@ export type ProposalResolution =
       restrictedReason: string | null;
     }
   | {
+      /** Entitled, unconfirmed, and the window closed. A DRAWN reading. */
+      phase: "expired";
+      proposal: TriggerScheduleProposal;
+      agentName: string;
+      scheduleCopy: string;
+    }
+  | {
       phase: "settled";
       runId: string;
       agentName: string;
@@ -568,25 +576,38 @@ export type ProposalResolution =
  * Resolve what a proposal card may draw RIGHT NOW, against this reader.
  *
  * The order matters and mirrors S1's: decode → bind to the reader → has it been
- * confirmed? → may this reader confirm it? A ref that does not decode, a
- * proposal minted for someone else and a template that has since vanished all
- * answer `absent`, so the card is a probe for nothing.
+ * confirmed? → is the window still open? → may this reader confirm it? A ref
+ * that does not decode, a proposal minted for someone else and a template that
+ * has since vanished all answer `absent`, so the card is a probe for nothing.
  *
  * A SPENT proposal resolves to its run — which is why the settled card can be
  * the trigger's chrome without the transcript carrying a run id: the token the
  * turn already holds addresses the consume row, and the consume row names the
  * run.
+ *
+ * EXPIRY IS READ AFTER THE CONSUME, not before it, and that is the second half
+ * of the same fix. The token's TTL bounds how long a proposal may be CONFIRMED;
+ * it says nothing about how long the card may be READ. Gating the whole resolve
+ * on it (as the verify-only path did) deleted two different cards from the
+ * transcript half an hour on: the expired proposal §VI says must stay visible,
+ * and the SETTLED card — "the trigger's chrome" — for a schedule that was
+ * confirmed and is now happily armed. A confirmed proposal is settled forever;
+ * an unconfirmed one reads as `expired` forever. Neither ever goes blank.
  */
 export async function resolveProposalForReader(
   token: string,
   actor: ConfirmProposalActor,
 ): Promise<ProposalResolution> {
-  const proposal = verifyTriggerScheduleProposalToken({
+  const reading = readTriggerScheduleProposalToken({
     token,
     expectedUserId: actor.userId,
     expectedOrgId: actor.orgId,
   });
-  if (!proposal) return { phase: "absent" };
+  // One `absent` for a forged token, a foreign one and one this reader was
+  // never minted — including when it has ALSO expired. Only a reader the token
+  // names can learn anything about it at all.
+  if (!reading) return { phase: "absent" };
+  const { proposal } = reading;
 
   const template = await readAgentTemplateById(proposal.templateId);
   if (!template) return { phase: "absent" };
@@ -614,6 +635,20 @@ export async function resolveProposalForReader(
     };
   }
 
+  // The window closed with nobody confirming. §VI: not an error state — the
+  // card says so and Adjust re-proposes for free. The runnable gate below is
+  // deliberately NOT run for it: that verdict describes a floor this reading
+  // does not have, and re-resolving it here would spend a provisioning read on
+  // every reload of a card that asks nothing.
+  if (reading.status === "expired") {
+    return {
+      phase: "expired",
+      proposal,
+      agentName,
+      scheduleCopy: describeProposalSchedule(proposal.schedule),
+    };
+  }
+
   const notRunnable = await assertAgentPackageRunnable(
     template.packageName,
     template.packageName ?? template.name,
@@ -628,4 +663,76 @@ export async function resolveProposalForReader(
     // without enumerating anything about the instance.
     restrictedReason: notRunnable ? PROPOSAL_REFUSALS.notRunnable : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// ADJUST FROM AN EXPIRED CARD — re-propose off the card's own ref
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-propose the schedule an expired card is showing: a FRESH token, a fresh
+ * consume identity, nothing mutated.
+ *
+ * It takes the CARD'S OWN REF rather than a template id and a schedule, and
+ * that is the point. The expired token already carries both, server-side, and
+ * it already proves this reader was minted this proposal — so Adjust from the
+ * transcript needs no identifier to travel to the client and back, and cannot
+ * be steered at a template the reader was never proposed. The generic
+ * `adjustScheduleProposal` (which does take the rows, because a reader editing
+ * them is choosing new ones) stays exactly as it is for the drawn form.
+ *
+ * Re-proposing needs NO authority, by §VI's own argument: it writes nothing, so
+ * there is nothing to be authorized for. What the reader ends up holding is a
+ * new question — whether they may answer it is re-resolved at render and again
+ * at Confirm, as it always was.
+ *
+ * A SPENT proposal is refused rather than re-proposed. Its card is settled, not
+ * expired, so nothing draws this — but a re-propose that quietly minted a
+ * second question for an already-armed schedule would be a way to double-book
+ * one by pressing an old button twice.
+ */
+export async function reproposeExpiredScheduleProposal(
+  actor: ConfirmProposalActor,
+  token: string,
+): Promise<
+  { ok: true; token: string; expiresAt: number } | { ok: false; error: string }
+> {
+  const reading = readTriggerScheduleProposalToken({
+    token,
+    expectedUserId: actor.userId,
+    expectedOrgId: actor.orgId,
+  });
+  if (!reading) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+  const { proposal } = reading;
+
+  const consumed = await readProposalConsume(proposalConsumeKey(proposal.nonce));
+  if (consumed) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+
+  // A ONE-SHOT WHOSE MOMENT HAS PASSED cannot be re-proposed as it stands, and
+  // saying so is the honest answer rather than a generic "no". `propose` would
+  // refuse it anyway (its future check is the same one Confirm applies); naming
+  // it here is what turns a dead button into the sentence that tells the reader
+  // what to do — ask for a new time.
+  if (proposal.schedule.kind === "scheduled") {
+    const ms = naiveDatetimeToUtcMs(
+      proposal.schedule.runAt,
+      proposal.schedule.timezone,
+    );
+    if (Number.isNaN(ms) || ms <= Date.now()) {
+      return { ok: false, error: PROPOSAL_REFUSALS.past };
+    }
+  }
+
+  const proposed = await adjustTriggerSchedule({
+    templateId: proposal.templateId,
+    userId: actor.userId,
+    orgId: actor.orgId,
+    schedule: proposal.schedule,
+  });
+  // `propose` answers a bare `{ok:false}` — it is written for a model-facing
+  // caller whose every denial is one sentence. The template may have been
+  // deleted or moved out of reach since; either way the card can no longer be
+  // re-proposed, which is what `invalid` says.
+  if (!proposed.ok) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+  return { ok: true, token: proposed.token, expiresAt: proposed.expiresAt };
 }

@@ -463,25 +463,44 @@ export function mintTriggerScheduleProposalToken(
 }
 
 /**
- * Verify a proposal token and BIND it to the reader confirming it.
+ * What a proposal token READS as, for one reader.
  *
- * Returns the proposal, or `null` on ANY failure — a tampered or foreign token,
- * a wrong key, a forward version, an expired proposal, a stretched lifetime, or
- * a binding that does not match the caller. Fail-closed and NEVER throws: every
- * refusal is one indistinguishable `null`, so a caller cannot use this function
- * to tell "expired" from "not yours" from "never existed".
- *
- * Passing this is NOT authorization. It proves the server minted this proposal
- * for this reader in this org; it says nothing about whether the reader may
- * still dispatch that agent, and nothing about whether the proposal has already
- * been spent. Confirm re-checks both.
+ * `live` is the only reading Confirm may act on. `expired` is a reading the
+ * CARD needs and Confirm does not: an expired proposal is not an error state —
+ * it stays on screen saying so, and Adjust re-proposes it for free — so the
+ * resolver has to be able to tell "yours, and the window closed" from "not
+ * yours", which `verifyTriggerScheduleProposalToken` deliberately cannot.
  */
-export function verifyTriggerScheduleProposalToken(input: {
+export type ProposalTokenReading = {
+  status: "live" | "expired";
+  proposal: TriggerScheduleProposal;
+};
+
+/**
+ * Read a proposal token AGAINST a reader: the authenticated proposal and
+ * whether its window is still open, or `null`.
+ *
+ * ENTITLEMENT IS DECIDED BEFORE EXPIRY, and that order is the whole security
+ * argument. Every structural, cryptographic and BINDING check runs first, so a
+ * token that is tampered, foreign, forged, wrongly-versioned, future-dated or
+ * lifetime-stretched answers one indistinguishable `null` whether or not it has
+ * also expired. Only a token this exact reader was minted — one that decrypted
+ * under our key and names them in this org — can reach the expiry test, so
+ * `expired` is a fact about the reader's OWN proposal and never an oracle about
+ * anyone else's. That is the constraint §VI's expired card is built on: the
+ * refusal for an unauthorized token is unchanged, down to which branch it
+ * takes.
+ *
+ * Passing this is NOT authorization, exactly as verifying is not: it says
+ * nothing about whether the reader may still dispatch that agent, and nothing
+ * about whether the proposal has already been spent.
+ */
+export function readTriggerScheduleProposalToken(input: {
   token: string | null | undefined;
   expectedUserId: string;
   expectedOrgId: string;
   nowSeconds?: number;
-}): TriggerScheduleProposal | null {
+}): ProposalTokenReading | null {
   try {
     const { token, expectedUserId, expectedOrgId } = input;
     if (typeof token !== "string" || token.length === 0) return null;
@@ -523,19 +542,51 @@ export function verifyTriggerScheduleProposalToken(input: {
     // whose lifetime is not exactly the proposal TTL is rejected even under a
     // valid tag. This never rejects a legitimately-minted proposal.
     if (exp - iat !== PROPOSAL_TTL_SECONDS) return null;
-    // Expired AT or after `exp` (RFC 7519: current time MUST be BEFORE exp).
-    if (exp <= now) return null;
 
     // BINDINGS — this proposal must have been minted for exactly this reader,
-    // in this org.
+    // in this org. BEFORE the expiry read, so an expired token belonging to
+    // someone else refuses exactly as an unexpired one does.
     if (userId !== expectedUserId) return null;
     if (orgId !== expectedOrgId) return null;
 
-    return { templateId, userId, orgId, schedule, nonce, expiresAt: exp };
+    // Expired AT or after `exp` (RFC 7519: current time MUST be BEFORE exp).
+    const status = exp <= now ? "expired" : "live";
+    return {
+      status,
+      proposal: { templateId, userId, orgId, schedule, nonce, expiresAt: exp },
+    };
   } catch {
     // Wrong key, tampered bytes, non-JSON plaintext — all "not one of ours".
     return null;
   }
+}
+
+/**
+ * Verify a proposal token and BIND it to the reader confirming it.
+ *
+ * Returns the proposal, or `null` on ANY failure — a tampered or foreign token,
+ * a wrong key, a forward version, an expired proposal, a stretched lifetime, or
+ * a binding that does not match the caller. Fail-closed and NEVER throws: every
+ * refusal is one indistinguishable `null`, so a caller cannot use this function
+ * to tell "expired" from "not yours" from "never existed".
+ *
+ * Still the ONLY reading Confirm and the producer are allowed: collapsing the
+ * expired reading back into `null` here is what keeps the new state a CARD
+ * affordance rather than a second, softer path to arming a schedule.
+ *
+ * Passing this is NOT authorization. It proves the server minted this proposal
+ * for this reader in this org; it says nothing about whether the reader may
+ * still dispatch that agent, and nothing about whether the proposal has already
+ * been spent. Confirm re-checks both.
+ */
+export function verifyTriggerScheduleProposalToken(input: {
+  token: string | null | undefined;
+  expectedUserId: string;
+  expectedOrgId: string;
+  nowSeconds?: number;
+}): TriggerScheduleProposal | null {
+  const reading = readTriggerScheduleProposalToken(input);
+  return reading?.status === "live" ? reading.proposal : null;
 }
 
 /**

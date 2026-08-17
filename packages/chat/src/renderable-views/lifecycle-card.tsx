@@ -36,12 +36,15 @@
 //     owner ruling 2026-08-11 — the per-surface restriction matrix is gone).
 // ---------------------------------------------------------------------------
 
-import { type ReactElement } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 
 import {
   type LifecycleCardState,
   type LifecycleDataPartViewType,
+  type LifecycleResolveEnvelope,
+  type TriggerScheduleProposalExpiredView,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { TriggerScheduleProposalExpired } from "./trigger-schedule-proposal-expired";
 // The host declaration + the authoritative-refetch hook MOVED to
 // `@cinatra-ai/agents/lifecycle-card-runtime` (cinatra#2566, epic #2564 S2) and
 // are re-exported here unchanged. They had to sit at a package the RUN CARD can
@@ -96,6 +99,28 @@ function stateLine(state: LifecycleCardState): string | null {
 }
 
 /**
+ * The EXPIRED proposal's body, if that is what this card resolved to.
+ *
+ * Reads it straight off the resolve ENVELOPE (epic S9, slice S9c). The envelope
+ * was already parsed at the protocol's one seam, against the kind this card
+ * asked for, so there is nothing left for the shell to validate: a body that
+ * did not satisfy this kind's schema never became an envelope at all, and the
+ * card drew nothing. All that is left here is the two questions the shell is
+ * entitled to ask — is this the proposal kind, and is its body the expired
+ * phase. Any other phase (or no body) answers `null` and the shell draws its
+ * ordinary state line, so a reading this build has no design for degrades to
+ * S1's floor rather than to a blank card.
+ */
+function expiredProposalBody(
+  envelope: LifecycleResolveEnvelope,
+): TriggerScheduleProposalExpiredView | null {
+  if (envelope.kind !== "trigger_schedule_proposal") return null;
+  const body = envelope.body;
+  if (body === null || body.phase !== "expired") return null;
+  return body;
+}
+
+/**
  * The registry's component for every lifecycle viewType. Renders nothing until
  * an authorized resolve says otherwise; renders nothing, ever, for `absent`.
  */
@@ -105,24 +130,35 @@ export function LifecycleCard({
   view: { viewType: LifecycleDataPartViewType; schemaVersion: number; ref: string };
 }): ReactElement | null {
   const host = useLifecycleCardHost();
+  // The proposal this card is CURRENTLY showing. It starts as the transcript's
+  // own ref and changes exactly once: when Adjust re-proposes an expired card,
+  // the fresh token becomes the identity the runtime re-resolves under, so the
+  // reader watches the card come back to life in place. It is local by design —
+  // a proposal has no server record until Confirm, so there is nothing to
+  // persist, and a reload honestly returns to the expired reading.
+  const [adjustedRef, setAdjustedRef] = useState<string | null>(null);
+  const activeRef = adjustedRef ?? view.ref;
+  const onReproposed = useCallback((token: string) => setAdjustedRef(token), []);
   // The one surface gate: a subtree that declared no host is not a lifecycle
   // surface, so the card is not part of it. Every DECLARED host draws every
   // kind — the per-surface restriction matrix is gone (owner ruling 2026-08-11).
   const present = host !== null;
-  // The shell draws from the STATE alone — it is the never-blank floor for a
-  // kind whose own renderer is not built yet, and it must not start drawing a
-  // body it has no design for. The envelope's per-kind body is read by the
-  // owner card each kind's own slice lands.
+  // The shell draws from the state for every kind whose own renderer is not
+  // built yet. The ONE exception is the expired proposal, whose reading IS this
+  // change: it is taken from the envelope's per-kind body, already parsed
+  // against this kind's schema at the one seam (S9c), so the shell validates
+  // nothing itself and can never draw a body it has no design for.
   const resolved = useLifecycleCardResolve({
     viewType: view.viewType,
-    ref: view.ref,
+    ref: activeRef,
     enabled: present,
   });
-  const state = resolved?.state ?? null;
 
-  if (!present || state === null) return null;
+  if (!present || resolved === null) return null;
+  const { state } = resolved;
   const line = stateLine(state);
   if (line === null) return null; // `absent` — no card DOM at all (§IV)
+  const expired = expiredProposalBody(resolved);
 
   return (
     <div
@@ -131,7 +167,18 @@ export function LifecycleCard({
       data-lifecycle-card-state={state.state}
     >
       <div className="font-semibold text-foreground">{CARD_TITLES[view.viewType]}</div>
-      <div className="mt-1">{line}</div>
+      {expired === null ? (
+        <div className="mt-1">{line}</div>
+      ) : (
+        // §VI's expired reading REPLACES the shell's "No longer open." line: the
+        // two are the same rung of S1's ladder, and only one of them is true
+        // here. A proposal that timed out was never decided.
+        <TriggerScheduleProposalExpired
+          view={expired}
+          cardRef={activeRef}
+          onReproposed={onReproposed}
+        />
+      )}
     </div>
   );
 }

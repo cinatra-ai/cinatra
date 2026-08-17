@@ -29,6 +29,16 @@ import "server-only";
 // proposal minted for someone else, a template that has since vanished, a store
 // that threw — all answer `absent`, and an `absent` card draws no DOM at all,
 // so the surface cannot be used to probe what exists.
+//
+// AN EXPIRED PROPOSAL IS NOT ONE OF THEM. `absent` is §IV's answer for a reader
+// who may not see the SUBJECT; a reader whose own proposal timed out may see it
+// perfectly well, and §VI says what they see: "an expired proposal is not an
+// error state — the card says so and Adjust re-proposes for free". Collapsing
+// the two made the card, and the question it asked, vanish from the reader's
+// own transcript thirty minutes on. The two are held apart in the ONE place
+// that can tell them apart safely — the token read, which decides entitlement
+// before it reads the clock, so an expired token belonging to somebody else is
+// still indistinguishable from a forged one.
 // ---------------------------------------------------------------------------
 
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -102,6 +112,32 @@ export async function resolveTriggerScheduleProposalCard(params: {
         restrictedReason: resolved.restrictedReason,
       };
       return { state, view };
+    }
+
+    if (resolved.phase === "expired") {
+      // EXPIRED — drawn, not dropped.
+      //
+      // The STATE is `settled`, and it is not a compromise: S1's ladder is the
+      // epic's contract across all four interaction kinds, and `settled` is the
+      // rung that means "no longer open — this reader has nothing to press
+      // here", which is exactly an expired proposal's standing. The review card
+      // draws its own §IV "no longer open" on the same rung with a Refresh out
+      // of it; this card's way out is Adjust. Adding a seventh rung for one
+      // kind's reading would fork the ladder to say something the body already
+      // says precisely — and the body is where §VI's per-kind content belongs.
+      //
+      // What must NOT happen is `absent`, and that is the defect this branch
+      // closes: `absent` draws no DOM at all and is reserved for a reader who
+      // may not see the subject. Answering it for a reader's OWN timed-out
+      // proposal deleted the card, and the question, out of their transcript.
+      const view: TriggerScheduleProposalViewBody = {
+        phase: "expired",
+        version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
+        agentName: resolved.agentName,
+        schedule: resolved.proposal.schedule,
+        scheduleCopy: resolved.scheduleCopy,
+      };
+      return { state: { state: "settled" }, view };
     }
 
     // Settled — §VI: "The settled card is the trigger's chrome." No floor to

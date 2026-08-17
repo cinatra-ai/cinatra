@@ -76,6 +76,13 @@ export default defineConfig({
         root,
         "packages/agents/src/review-gate-card.tsx",
       ),
+      // The proposal card's Adjust action. The expired-reading test vi.mocks
+      // it, but vite import-analysis must resolve the bare specifier before a
+      // factory mock can replace it.
+      "@cinatra-ai/agents/trigger-schedule-proposal-actions": path.join(
+        root,
+        "packages/agents/src/trigger-schedule-proposal-actions.ts",
+      ),
       // cinatra#2683 — the conversation column mounts the REAL message list in
       // a DOM test, so the leaves that list reaches must resolve here as they do
       // in tsconfig.json. Subpath keys, so they stay above the bare entry.

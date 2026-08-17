@@ -213,6 +213,43 @@ export type TriggerScheduleProposalSettledView = z.infer<
 >;
 
 /**
+ * EXPIRED, and never confirmed — the proposal's 30-minute window closed with
+ * nobody pressing anything.
+ *
+ * A DRAWN state, not an absence. §VI is explicit that an expired proposal "is
+ * not an error state — the card says so and Adjust re-proposes for free", and
+ * §IV reserves the undrawn answer for a reader who may not see the subject at
+ * all. Collapsing the two would make every reader whose proposal timed out
+ * indistinguishable from a reader who was never entitled to it — and would
+ * delete the card, and the question it asked, out of the transcript.
+ *
+ * It carries no floor. There is nothing to confirm: the window is closed and
+ * the token is unspendable, which is exactly why the body can hold the schedule
+ * without holding a decision — Adjust re-proposes, it never arms.
+ *
+ * `schedule` is the SELECTIONS the expired proposal named, so Adjust re-opens
+ * the rows the reader last saw rather than an empty form. Nothing here is new
+ * disclosure: it is the same projection of the same token the pending body
+ * already carried to the same reader.
+ */
+export const triggerScheduleProposalExpiredViewSchema = z
+  .object({
+    phase: z.literal("expired"),
+    version: z.literal(TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION),
+    agentName: z.string().min(1).max(200),
+    schedule: proposedScheduleSchema,
+    /** The plain-language line ("Every weekday at 9:00 AM") — what expired,
+     *  in the words the reader was shown, from the same one renderer the
+     *  settled card reads back. */
+    scheduleCopy: z.string().min(1).max(200),
+  })
+  .strict();
+
+export type TriggerScheduleProposalExpiredView = z.infer<
+  typeof triggerScheduleProposalExpiredViewSchema
+>;
+
+/**
  * The one body a proposal card resolves to. `null` is not part of the union:
  * "there is nothing to draw" is expressed by S1's `absent` STATE, and a state
  * that draws nothing carries no body at all.
@@ -220,6 +257,7 @@ export type TriggerScheduleProposalSettledView = z.infer<
 export const triggerScheduleProposalViewBodySchema = z.union([
   triggerScheduleProposalPendingViewSchema,
   triggerScheduleProposalSettledViewSchema,
+  triggerScheduleProposalExpiredViewSchema,
 ]);
 
 export type TriggerScheduleProposalViewBody = z.infer<

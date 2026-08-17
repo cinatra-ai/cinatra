@@ -90,3 +90,36 @@ export async function adjustScheduleProposal(args: {
   if (!proposed.ok) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
   return { ok: true, token: proposed.token, expiresAt: proposed.expiresAt };
 }
+
+/**
+ * Adjust an EXPIRED proposal — re-propose it from the card's own ref.
+ *
+ * The same act as `adjustScheduleProposal` and a separate entry point for one
+ * reason: an expired card in a transcript has no rows on screen to send, only
+ * the ref it was minted with. That ref already carries the template and the
+ * schedule server-side and already proves the reader was minted this proposal,
+ * so nothing about the agent has to travel to the client and back — which is
+ * also why this cannot be steered at a template the caller was never proposed.
+ *
+ * A HUMAN SESSION action like its siblings: the user and org come from the live
+ * cookie session and never from an argument. It arms nothing — re-proposing
+ * writes nothing at all — so the "the AI can present a schedule and can never
+ * arm one" property is untouched.
+ */
+export async function adjustExpiredScheduleProposal(args: {
+  token: string;
+}): Promise<
+  { ok: true; token: string; expiresAt: number } | { ok: false; error: string }
+> {
+  const session = await requireAuthSession().catch(() => null);
+  const userId = session?.user?.id ?? null;
+  const orgId = session?.session?.activeOrganizationId ?? null;
+  if (!userId || !orgId) return { ok: false, error: "unauthorized" };
+  const role =
+    (session?.user as { role?: string | null } | null | undefined)?.role ?? null;
+
+  const { reproposeExpiredScheduleProposal } = await import(
+    "./trigger-schedule-proposal-service"
+  );
+  return reproposeExpiredScheduleProposal({ userId, orgId, role }, args.token);
+}

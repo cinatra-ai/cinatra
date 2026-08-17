@@ -16,6 +16,7 @@ import {
   mintTriggerScheduleProposalToken,
   proposalConsumeKey,
   readProposalSchedule,
+  readTriggerScheduleProposalToken,
   verifyTriggerScheduleProposalToken,
   type ProposalSchedule,
 } from "../trigger-schedule-proposal-token";
@@ -379,6 +380,131 @@ describe("the schedule is one the FORM could have produced", () => {
       selection: { ...WEEKDAYS_9AM.selection, weekdays: [5, 1, 3, 2, 4] },
     });
     expect(scrambled).toEqual(WEEKDAYS_9AM);
+  });
+});
+
+describe("the EXPIRED reading belongs to the token's OWN reader, and to nobody else", () => {
+  const read = (
+    token: string,
+    over: Partial<{
+      expectedUserId: string;
+      expectedOrgId: string;
+      nowSeconds: number;
+    }> = {},
+  ) =>
+    readTriggerScheduleProposalToken({
+      token,
+      expectedUserId: over.expectedUserId ?? USER,
+      expectedOrgId: over.expectedOrgId ?? ORG,
+      ...(over.nowSeconds !== undefined ? { nowSeconds: over.nowSeconds } : {}),
+    });
+
+  const mintAt = (now: number) =>
+    mintTriggerScheduleProposalToken(
+      { templateId: TEMPLATE, userId: USER, orgId: ORG, schedule: WEEKDAYS_9AM },
+      { nowSeconds: now },
+    )!;
+
+  it("reads a proposal inside its window as LIVE, with the proposal intact", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const minted = mintAt(now);
+    const reading = read(minted.token, { nowSeconds: now + 60 });
+    expect(reading?.status).toBe("live");
+    expect(reading?.proposal.templateId).toBe(TEMPLATE);
+    expect(reading?.proposal.schedule).toEqual(WEEKDAYS_9AM);
+  });
+
+  it("reads the reader's OWN timed-out proposal as EXPIRED rather than as nothing", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const minted = mintAt(now);
+    const reading = read(minted.token, { nowSeconds: now + PROPOSAL_TTL_SECONDS });
+    expect(reading?.status).toBe("expired");
+    // The body §VI's expired card draws comes off this reading, so it has to
+    // survive the expiry — the card says WHAT expired, not merely that it did.
+    expect(reading?.proposal.templateId).toBe(TEMPLATE);
+    expect(reading?.proposal.schedule).toEqual(WEEKDAYS_9AM);
+  });
+
+  it("still reads as expired long afterwards — reopening the conversation is not a deadline", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const minted = mintAt(now);
+    const aWeekOn = now + 7 * 24 * 3600;
+    expect(read(minted.token, { nowSeconds: aWeekOn })?.status).toBe("expired");
+  });
+
+  // THE CONSTRAINT. Entitlement is decided before the clock is read, so every
+  // token this reader was not minted refuses identically — expired or not.
+  it("refuses another user's proposal identically whether or not it has expired", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const minted = mintAt(now);
+    const stranger = { expectedUserId: "user_someone_else" };
+    expect(read(minted.token, { ...stranger, nowSeconds: now + 60 })).toBeNull();
+    expect(
+      read(minted.token, { ...stranger, nowSeconds: now + PROPOSAL_TTL_SECONDS }),
+    ).toBeNull();
+  });
+
+  it("refuses another org's proposal identically whether or not it has expired", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const minted = mintAt(now);
+    const elsewhere = { expectedOrgId: "org_someone_else" };
+    expect(read(minted.token, { ...elsewhere, nowSeconds: now + 60 })).toBeNull();
+    expect(
+      read(minted.token, { ...elsewhere, nowSeconds: now + PROPOSAL_TTL_SECONDS }),
+    ).toBeNull();
+  });
+
+  it("gives ONE indistinguishable refusal for every token that is not this reader's", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const minted = mintAt(now);
+    const tampered = `${minted.token.slice(0, -2)}${minted.token.endsWith("aa") ? "bb" : "aa"}`;
+    const refusals = [
+      // forged / not one of ours
+      read("not-a-token", { nowSeconds: now }),
+      read(tampered, { nowSeconds: now }),
+      read("", { nowSeconds: now }),
+      // structurally ours, but not this reader's
+      read(minted.token, { expectedUserId: "user_x", nowSeconds: now }),
+      read(minted.token, { expectedOrgId: "org_x", nowSeconds: now }),
+      // ours, but the minter never emits it: dated into the future
+      read(mintAt(now + 600).token, { nowSeconds: now }),
+      // and all of the above again, well past the expiry
+      read("not-a-token", { nowSeconds: now + PROPOSAL_TTL_SECONDS }),
+      read(tampered, { nowSeconds: now + PROPOSAL_TTL_SECONDS }),
+      read(minted.token, {
+        expectedUserId: "user_x",
+        nowSeconds: now + PROPOSAL_TTL_SECONDS,
+      }),
+    ];
+    // Not "each is falsy" — each is the SAME answer, so no branch of this
+    // function can be used to tell the cases apart.
+    for (const refusal of refusals) expect(refusal).toBeNull();
+    expect(new Set(refusals).size).toBe(1);
+  });
+
+  it("leaves CONFIRM's reading exactly as it was — an expired proposal is still unspendable", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const minted = mintAt(now);
+    // The card may read it; verify — the one Confirm and the producer use —
+    // must not, and must not learn to say why.
+    expect(read(minted.token, { nowSeconds: now + PROPOSAL_TTL_SECONDS })?.status).toBe(
+      "expired",
+    );
+    expect(verify(minted.token, { nowSeconds: now + PROPOSAL_TTL_SECONDS })).toBeNull();
+    expect(verify(minted.token, { nowSeconds: now + 60 })).not.toBeNull();
+  });
+
+  it("never lets a refused token arrive as a drawn expired card", () => {
+    // The structural checks all run BEFORE the clock is read, so a token that
+    // fails any of them answers `null` — never `expired`. A future-dated one is
+    // the case that is constructible without forging plaintext under our key.
+    const now = Math.floor(Date.now() / 1000);
+    const future = mintAt(now + 600);
+    expect(read(future.token, { nowSeconds: now })).toBeNull();
+    // …and it does not become drawable merely by waiting past its expiry.
+    expect(
+      read(future.token, { nowSeconds: now + 600 + PROPOSAL_TTL_SECONDS }),
+    ).not.toBeNull();
   });
 });
 
