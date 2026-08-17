@@ -1,0 +1,21 @@
+{
+  "setupInstallId": "iext_6e3145b0-e28",
+  "settingsInstallId": null,
+  "setupCalls": [
+    {
+      "installId": "iext_6e3145b0-e28",
+      "actionId": "bookingPageGuideReady",
+      "status": 200
+    },
+    {
+      "installId": "iext_6e3145b0-e28",
+      "actionId": "listCalendars",
+      "status": 200
+    },
+    {
+      "installId": "iext_6e3145b0-e28",
+      "actionId": "listAppointmentSchedules",
+      "status": 200
+    }
+  ]
+}

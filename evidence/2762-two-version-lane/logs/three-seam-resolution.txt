@@ -1,0 +1,20 @@
+=== the three resolution seams resolve ONE row ===
+
+The setup surface and the settings surface were read from the RUNNING
+application in a browser; the provider-write seam was resolved by running
+the writer's own selection over the application's own canonical store.
+
+-- setup surface (the install id its UI actions dispatched against) --
+RESOLVED-INSTALL-ID iext_94a7612d-5c9
+-- settings surface (the version it rendered for its resolved row) --
+settings surface renders version: 0.1.2
+
+-- provider-write seam --
+rows for @cinatra-ai/google-appointment-schedules-connector:
+  iext_6e3145b0-e28  version=0.1.0  status=active  isDefault=true  ownerLevel=platform  org=(none)  source=bundled
+  iext_94a7612d-5c9  version=0.1.2  status=active  isDefault=true  ownerLevel=workspace  org=(none)  source=verdaccio
+live rows: 2
+after supersession: 2
+after source precedence: 1
+PROVIDER-WRITE RESOLVED INSTALL ID: iext_94a7612d-5c9
+PROVIDER-WRITE RESOLVED VERSION: 0.1.2

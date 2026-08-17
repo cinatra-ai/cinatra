@@ -1,0 +1,17 @@
+PASS  baseline: setup page responds 200 — status 200
+PASS  baseline: setup renders the connector's schema-config form
+PASS  baseline: setup form is bound to the connector package — data-package=@cinatra-ai/google-appointment-schedules-connector
+PASS  baseline: the dynamic-select empty slot renders
+PASS  baseline: the DECLARED placeholder renders (not the "No options available." fallback) — rendered: "No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
+screenshot: baseline-connector-setup.png
+setup surface dispatched: [{"installId":"iext_6e3145b0-e28","actionId":"bookingPageGuideReady","status":200},{"installId":"iext_6e3145b0-e28","actionId":"listCalendars","status":200},{"installId":"iext_6e3145b0-e28","actionId":"listAppointmentSchedules","status":200}]
+PASS  baseline: the setup surface actually dispatched a UI action — 3 dispatch(es)
+PASS  baseline: no UI action from the setup surface answered 404 — bookingPageGuideReady=200, listCalendars=200, listAppointmentSchedules=200
+PASS  baseline: the setup surface resolved exactly one install row — ids: iext_6e3145b0-e28
+PASS  baseline: the settings page renders for the connector — landed on http://127.0.0.1:3477/configuration/extensions/settings/connector/@cinatra-ai/google-appointment-schedules-connector
+screenshot: baseline-extension-settings.png
+[browser-console-error] Failed to load resource: the server responded with a status of 404 (Not Found)
+PASS  baseline: UI action "listAppointmentSchedules" is not a 404 — status 200 {"result":{"items":[]}}
+RESOLVED-INSTALL-ID iext_6e3145b0-e28
+
+ALL CHECKS PASSED (mode=baseline, label=baseline)

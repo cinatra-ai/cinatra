@@ -877,12 +877,16 @@ export async function runHostExtensionInstallAndActivate(
   // TIER. It matters at exactly one scope: `orgId === null`, where a
   // product-installed WORKSPACE row and a bundled PLATFORM anchor for the same
   // package can coexist (the org-NULL identity index keys on `owner_level`).
-  // `pickSingleActiveRow(rows, null)` sees both and fails closed on the
-  // ambiguity, so a workspace row's install / update / restore would report
-  // "no-active-canonical-row" while a perfectly good row sat there. With the
-  // tier we use S3's narrower workspace-anchor pick, which sees ONLY the
-  // product-installed workspace tier. Every other call is unchanged: no tier, or
-  // any tier other than `workspace`, keeps the exact existing pick.
+  // `pickSingleActiveRow(rows, null)` now applies the shared source-precedence
+  // policy, so that particular pair resolves to the product install rather than
+  // failing closed. The tier is still passed and still preferred: it selects the
+  // workspace row DIRECTLY, by identity, instead of relying on a policy that
+  // reads a source discriminant — so a row whose source is neither bundled nor
+  // marketplace (a legacy or fixture row, which precedence deliberately leaves
+  // alone) is still resolved here. With the tier we use the narrower
+  // workspace-anchor pick, which sees ONLY the product-installed workspace tier.
+  // Every other call is unchanged: no tier, or any tier other than `workspace`,
+  // keeps the exact existing pick.
   const { readInstalledExtensionsByPackageName } = await import(
     "@cinatra-ai/extensions/canonical-store"
   );

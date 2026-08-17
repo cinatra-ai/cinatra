@@ -162,14 +162,29 @@ export function selectActiveDigest(input: {
  *     version row is INVISIBLE to single-row runtime surfaces until the
  *     versioned-activation slice (S4); resolving one here would prematurely
  *     promote it.
+ *
+ * SOURCE PRECEDENCE (the shared policy) runs first, for the same reason it runs
+ * in `pickSingleLiveRowAcrossOrgs`. A package that ships in the image AND holds
+ * a product install has two live default rows in one scope, and this picker is
+ * what the install pipeline's canonical-row deps resolve through — so without
+ * the policy that pair reads as cross-owner ambiguity and the install FAILS
+ * CLOSED at its own provenance write, rolling back the very install that
+ * created the second row. The override wins; the bundled row stays the fallback
+ * underneath it. Rows that are genuinely peers still fail closed.
  */
 export function pickSingleActiveRow<
-  T extends { status: string; organizationId: string | null; isDefault?: boolean },
+  T extends {
+    status: string;
+    organizationId: string | null;
+    isDefault?: boolean;
+    source?: { type?: string } | null;
+  },
 >(rows: readonly T[], orgId: string | null): T | null {
   const matching = rows.filter(
     (r) => (r.status === "active" || r.status === "locked") && (r.organizationId ?? null) === orgId,
   );
-  const defaults = matching.filter((r) => r.isDefault !== false);
+  const ranked = applyInstallRowPrecedence(matching);
+  const defaults = ranked.filter((r) => r.isDefault !== false);
   return defaults.length === 1 ? defaults[0] : null;
 }
 
@@ -245,12 +260,14 @@ export function pickSingleLiveRowAcrossOrgs<
  *
  * It is deliberately NARROWER than `pickSingleActiveRow(rows, null)`, which
  * would also match `owner_level='platform'` bundled/system anchors at the same
- * org-NULL scope — and, where a platform anchor and a workspace row coexist for
- * one package (the DB's org-NULL identity index keys on `owner_level`, so it
- * permits that), would fail closed on the ambiguity instead of resolving the
- * workspace row. Bundled/system rows keep their existing path; this pick sees
- * only the product-installed workspace tier. Same exact-one-default rule as the
- * other picks.
+ * org-NULL scope (the DB's org-NULL identity index keys on `owner_level`, so a
+ * platform anchor and a workspace row may coexist for one package). That pair
+ * no longer fails closed there — the shared source-precedence policy resolves
+ * it to the product install — but this pick reaches the workspace row by
+ * IDENTITY rather than by source discriminant, so it also resolves a row whose
+ * provenance the policy deliberately leaves alone. Bundled/system rows keep
+ * their existing path; this pick sees only the product-installed workspace
+ * tier. Same exact-one-default rule as the other picks.
  */
 export function pickSingleWorkspaceAnchoredActiveRow<
   T extends {

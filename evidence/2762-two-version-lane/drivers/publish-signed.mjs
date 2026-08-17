@@ -11,7 +11,7 @@
 //   node publish-signed.mjs <pkgDir> <version> <registryUrl> <privateKeyB64>
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, mkdtempSync, cpSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, cpSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createPrivateKey, sign as cryptoSign } from "node:crypto";
@@ -28,6 +28,20 @@ const SIGNATURE_SCHEME = "cinatra-extension-signature/v1";
 const buildPayload = (packageName, v, integrity) =>
   `${SIGNATURE_SCHEME}\n${packageName}\n${v}\n${integrity}`;
 
+/** Walk up from `startDir` and return the first `node_modules/<name>` that
+ *  exists, or null. Mirrors Node's own lookup order without going through the
+ *  exports map, which many packages close to `package.json`. */
+function findPackageDir(startDir, name) {
+  let dir = startDir;
+  for (;;) {
+    const candidate = path.join(dir, "node_modules", name);
+    if (existsSync(path.join(candidate, "package.json"))) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 // 1. Stage the package at the NEW version.
 const stage = mkdtempSync(path.join(tmpdir(), "signed-pub-"));
 cpSync(pkgDir, stage, { recursive: true });
@@ -35,7 +49,63 @@ const manifestPath = path.join(stage, "package.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const packageName = manifest.name;
 manifest.version = version;
+
+// 1b. BUNDLE THE RUNTIME DEPENDENCIES.
+//
+// The installer never runs npm/pnpm install — that is a deliberate security
+// rule. A published extension must therefore ship every runtime dependency
+// either inside its tarball or under a signed materialization plan, and the
+// package store refuses the install otherwise
+// (`validateBundledDependencies`, src/lib/extension-package-store.ts).
+//
+// This lane takes the bundled route, which is the simpler of the two and needs
+// no second signature protocol: each declared runtime dependency is copied into
+// the staged `node_modules` and named in `bundleDependencies`, which is the one
+// mechanism that makes `npm pack` carry `node_modules/<dep>` into the tarball.
+// Host-internal SDK packages are NEVER bundled — they are peers, and a second
+// copy would break ABI identity — but those are declared in `peerDependencies`,
+// which this loop does not touch.
+// Start from an EMPTY staged `node_modules`. The working copy's own
+// `node_modules` is a workspace install full of symlinks into the monorepo;
+// copying those into a published tarball would ship links that resolve to
+// nothing on the installing host, and a dereferencing copy over an existing
+// link resolves to the very directory it is copying from. Only the
+// dependencies bundled below belong in the tarball.
+rmSync(path.join(stage, "node_modules"), { recursive: true, force: true });
+
+const runtimeDeps = Object.keys(manifest.dependencies ?? {});
+const bundled = [];
+for (const dep of runtimeDeps) {
+  // Locate the dependency the way Node's resolver walks: up the directory
+  // chain from the package, checking each `node_modules`. This is a directory
+  // lookup on purpose rather than `require.resolve` — many packages do not
+  // expose `package.json` in their `exports`, so resolving a subpath would fail
+  // on packages that are perfectly present on disk. A workspace install hoists
+  // shared dependencies to the repo root, which this walk reaches naturally.
+  const depDir = findPackageDir(path.resolve(pkgDir), dep);
+  if (!depDir) {
+    console.error(`cannot find runtime dependency ${dep} in any node_modules above ${pkgDir}`);
+    process.exit(1);
+  }
+  const dest = path.join(stage, "node_modules", dep);
+  mkdirSync(path.dirname(dest), { recursive: true });
+  cpSync(depDir, dest, { recursive: true, dereference: true });
+  bundled.push(dep);
+}
+if (bundled.length > 0) manifest.bundleDependencies = bundled;
 writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+if (bundled.length > 0) console.error(`bundled runtime dependencies: ${bundled.join(", ")}`);
+
+// 1c. BUILD THE PACKAGE. The in-tree form points its export map at TypeScript
+// source, which the runtime store refuses outright ("the runtime store accepts
+// BUILT artifacts only"). A real publisher ships built ESM, so the lane does
+// too. This rewrites the staged manifest, so it must run BEFORE the manifest is
+// read back into the packument below.
+execFileSync(process.execPath, [
+  path.join(import.meta.dirname, "build-publishable.mjs"),
+  stage,
+], { stdio: "inherit" });
+Object.assign(manifest, JSON.parse(readFileSync(manifestPath, "utf8")));
 
 // 2. Pack it and take the sha512 SRI of the exact bytes.
 execFileSync("npm", ["pack", "--quiet"], { cwd: stage, stdio: "inherit" });

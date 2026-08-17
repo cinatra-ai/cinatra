@@ -11,7 +11,10 @@
 // package.
 import { describe, it, expect } from "vitest";
 import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
-import { pickSingleLiveRowAcrossOrgs } from "@/lib/extension-install-anchor";
+import {
+  pickSingleActiveRow,
+  pickSingleLiveRowAcrossOrgs,
+} from "@/lib/extension-install-anchor";
 import {
   pickActiveInstall,
   type InstallRowForPick,
@@ -250,5 +253,72 @@ describe("pickSingleLiveRowAcrossOrgs applies supersession before precedence", (
     const a = orgRow({ id: "a" });
     const b = orgRow({ id: "b", organizationId: "org-2", ownerId: "org-2" });
     expect(pickSingleLiveRowAcrossOrgs([a, b])).toBeNull();
+  });
+});
+
+// The INSTALL-TIME picker. `pickSingleActiveRow` is what the install pipeline's
+// canonical-row deps resolve through (recordProvenance, persistDependencyEdges,
+// persistAccessDeclaration and the widget-auth key write all share one
+// `resolveTarget` built on it — src/lib/extension-install-canonical-row-deps.ts).
+//
+// It is the same two-live-default-rows shape as every other seam, reached from
+// the other direction: the marketplace install CREATES the second row, so the
+// pair exists while the install that made it is still running. Without the
+// shared policy here the install fails closed at its own provenance write and
+// rolls itself back, which makes the override permanently uninstallable over a
+// bundled package. Measured against the running application before this seam
+// applied the policy: "recordProvenance: expected exactly 1 active
+// installed_extension row … (0 or ambiguous owner scope) — fail closed".
+describe("pickSingleActiveRow applies source precedence", () => {
+  const platformBundled = {
+    id: "bundled",
+    status: "active",
+    organizationId: null,
+    ownerLevel: "platform",
+    ownerId: "__platform__",
+    isDefault: true,
+    source: { type: "bundled", packageName: "@x/y", version: "0.1.0" },
+  };
+  const workspaceInstall = {
+    id: "installed",
+    status: "active",
+    organizationId: null,
+    ownerLevel: "workspace",
+    ownerId: "__platform__",
+    isDefault: true,
+    source: { type: "verdaccio", packageName: "@x/y", version: "0.1.2" },
+  };
+
+  it("resolves the marketplace row over the bundled anchor in one scope", () => {
+    expect(pickSingleActiveRow([platformBundled, workspaceInstall], null)?.id).toBe(
+      "installed",
+    );
+  });
+
+  it("is order independent", () => {
+    expect(pickSingleActiveRow([workspaceInstall, platformBundled], null)?.id).toBe(
+      "installed",
+    );
+  });
+
+  it("still resolves the bundled anchor when no override exists", () => {
+    expect(pickSingleActiveRow([platformBundled], null)?.id).toBe("bundled");
+  });
+
+  it("two competing marketplace installs still fail closed", () => {
+    const other = { ...workspaceInstall, id: "other", ownerLevel: "platform" };
+    expect(pickSingleActiveRow([workspaceInstall, other], null)).toBeNull();
+  });
+
+  it("rows of an unknown provenance keep the previous exactly-one rule", () => {
+    const legacyA = { id: "a", status: "active", organizationId: null, isDefault: true };
+    const legacyB = { id: "b", status: "active", organizationId: null, isDefault: true };
+    expect(pickSingleActiveRow([legacyA], null)?.id).toBe("a");
+    expect(pickSingleActiveRow([legacyA, legacyB], null)).toBeNull();
+  });
+
+  it("an out-of-scope org row is filtered before the policy runs", () => {
+    const otherOrg = { ...workspaceInstall, id: "other-org", organizationId: "org-9" };
+    expect(pickSingleActiveRow([platformBundled, otherOrg], null)?.id).toBe("bundled");
   });
 });

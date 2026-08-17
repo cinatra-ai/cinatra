@@ -1,0 +1,18 @@
+PASS  after-refusal: setup page responds 200 — status 200
+PASS  after-refusal: setup renders the connector's schema-config form
+PASS  after-refusal: setup form is bound to the connector package — data-package=@cinatra-ai/google-appointment-schedules-connector
+PASS  after-refusal: the dynamic-select empty slot renders
+PASS  after-refusal: the DECLARED placeholder renders (not the "No options available." fallback) — rendered: "No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
+screenshot: after-refusal-connector-setup.png
+setup surface dispatched: [{"installId":"iext_6e3145b0-e28","actionId":"bookingPageGuideReady","status":200},{"installId":"iext_6e3145b0-e28","actionId":"listAppointmentSchedules","status":200},{"installId":"iext_6e3145b0-e28","actionId":"listCalendars","status":200}]
+PASS  after-refusal: the setup surface actually dispatched a UI action — 3 dispatch(es)
+PASS  after-refusal: no UI action from the setup surface answered 404 — bookingPageGuideReady=200, listAppointmentSchedules=200, listCalendars=200
+PASS  after-refusal: the setup surface resolved exactly one install row — ids: iext_6e3145b0-e28
+PASS  after-refusal: the settings page renders for the connector — landed on http://127.0.0.1:3477/configuration/extensions/settings/connector/@cinatra-ai/google-appointment-schedules-connector
+screenshot: after-refusal-extension-settings.png
+settings surface renders version: 0.1.0
+PASS  after-refusal: the settings surface resolved the expected version — rendered 0.1.0, expected 0.1.0
+PASS  after-refusal: UI action "listAppointmentSchedules" is not a 404 — status 200 {"result":{"items":[]}}
+RESOLVED-INSTALL-ID iext_6e3145b0-e28
+
+ALL CHECKS PASSED (mode=baseline, label=after-refusal)

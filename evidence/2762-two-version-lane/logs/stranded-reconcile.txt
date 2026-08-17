@@ -1,0 +1,13 @@
+=== boot reconciliation over a PRE-EXISTING stranded install row ===
+
+-- the fixture, written into the database BEFORE this boot --
+             id             |              package_name              | version | status | is_default | owner_level | source_type 
+----------------------------+----------------------------------------+---------+--------+------------+-------------+-------------
+ iext_stranded_fixture_2762 | @cinatra-ai/stranded-fixture-connector | 0.1.0   | active | t          | workspace   | verdaccio
+(1 row)
+
+-- the phase summary the boot emitted --
+[boot] StrandedInstallReconcile: considered 1, acted on 1: stranded-fixture-connector:retryable
+
+-- the structured operational event --
+[operational-event] {"event":"extension_boot_reconcile","packageName":"@cinatra-ai/stranded-fixture-connector","rowId":"iext_stranded_fixture_2762","outcome":"retryable-bundle-unrestored","failureClass":"config","reason":"the package did not register"}
