@@ -322,3 +322,75 @@ describe("pickSingleActiveRow applies source precedence", () => {
     expect(pickSingleActiveRow([platformBundled, otherOrg], null)?.id).toBe("bundled");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The install-time picker must apply SUPERSESSION FIRST, like its siblings.
+//
+// It applied precedence WITHOUT supersession, and its exact-scope filter is what
+// hid the omission: the superseding WORKSPACE row lives at org-NULL and the row
+// it supersedes lives at an organization scope, so the pair is never in one
+// picker call. `runInstallAnchorClaimBackstop`
+// (src/lib/objects/artifact-claim-install-anchor.ts) walks EVERY live org scope
+// and calls this picker once per scope — so it asked for the superseded scope,
+// this picker answered with the superseded row, and the backstop activated a
+// claim against a row the rest of the system had already replaced.
+// ---------------------------------------------------------------------------
+describe("pickSingleActiveRow applies supersession before precedence", () => {
+  const ws = {
+    id: "ws",
+    status: "active",
+    organizationId: null,
+    ownerLevel: "workspace",
+    ownerId: "__platform__",
+    isDefault: true,
+    source: { type: "verdaccio" },
+  };
+  const orgRow = (over: Record<string, unknown> = {}) => ({
+    id: "org",
+    status: "active",
+    organizationId: "org-1",
+    ownerLevel: "organization",
+    ownerId: "org-1",
+    isDefault: true,
+    source: { type: "verdaccio" },
+    ...over,
+  });
+
+  it("a superseded ORG scope resolves NOTHING while the workspace row is live", () => {
+    // The claim backstop's exact call. Before the fix this returned the org row.
+    expect(pickSingleActiveRow([orgRow(), ws], "org-1")).toBeNull();
+  });
+
+  it("holds for a LOCKED org row, the one the install path deliberately skips", () => {
+    expect(pickSingleActiveRow([orgRow({ status: "locked" }), ws], "org-1")).toBeNull();
+  });
+
+  it("the workspace scope itself still resolves the row in force", () => {
+    expect(pickSingleActiveRow([orgRow(), ws], null)?.id).toBe("ws");
+  });
+
+  it("with NO workspace row the org row still resolves, unchanged", () => {
+    expect(pickSingleActiveRow([orgRow()], "org-1")?.id).toBe("org");
+  });
+
+  it("a PLATFORM anchor at org-NULL supersedes nothing — the org row still resolves", () => {
+    // Only a WORKSPACE-anchored row supersedes; a bundled platform anchor sits at
+    // the same org-NULL scope and must not take an organization's install away.
+    const bundledPlatform = {
+      id: "plat",
+      status: "active",
+      organizationId: null,
+      ownerLevel: "platform",
+      ownerId: null,
+      isDefault: true,
+      source: { type: "bundled" },
+    };
+    expect(pickSingleActiveRow([orgRow(), bundledPlatform], "org-1")?.id).toBe("org");
+  });
+
+  it("rows carrying no ownerLevel at all are passed through untouched", () => {
+    // Legacy/fixture rows: no anchor data → no supersession → the pre-S4 outcome.
+    const legacy = { id: "a", status: "active", organizationId: "org-1", isDefault: true };
+    expect(pickSingleActiveRow([legacy], "org-1")?.id).toBe("a");
+  });
+});

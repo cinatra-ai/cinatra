@@ -579,4 +579,46 @@ describe("runInstallAnchorClaimBackstop — boot re-drive of failed activations"
     ]);
     expect(res).toEqual({ converged: 1, failed: 2, skipped: 0 });
   });
+
+  // cinatra#2762: the backstop loops EVERY live org scope, so it is the caller
+  // that puts a superseded organization scope in front of `pickSingleActiveRow`.
+  // The picker applied source precedence but NOT supersession, so it answered
+  // with the superseded row and the backstop activated claims against a row a
+  // live workspace install had already replaced. The picker (the real one — it
+  // is not mocked here) now drops superseded org rows first, so the superseded
+  // scope resolves NOTHING and only the row in force is converged.
+  it("a superseded ORG scope activates NOTHING; only the live workspace row converges", async () => {
+    const dir = writeArtifactPkg("@v/pkg-artifact");
+    vi.mocked(readInstalledExtensionsByPackageName).mockResolvedValueOnce([
+      canonicalRow({
+        id: "row-ws",
+        organizationId: null,
+        ownerLevel: "workspace",
+        ownerId: "__platform__",
+      }),
+      canonicalRow({
+        id: "row-superseded",
+        organizationId: "org-9",
+        ownerLevel: "organization",
+        ownerId: "org-9",
+      }),
+    ] as never);
+    vi.mocked(replayArtifactExtensionReinstall).mockReturnValue({
+      replayedOperationId: null,
+      insertedAssertions: 0,
+      skippedAssertions: 0,
+      activated: [{ claimId: "c1", type: "@v/pkg:thing", claim: "dedicated" }],
+    } as never);
+
+    const res = await runInstallAnchorClaimBackstop([
+      { packageName: "@v/pkg-artifact", storeDir: dir },
+    ]);
+    // Two live scopes are still WALKED — the superseded one resolves no row.
+    expect(res).toEqual({ converged: 1, failed: 0, skipped: 1 });
+    const contexts = vi
+      .mocked(replayArtifactExtensionReinstall)
+      .mock.calls.map(([ctx]) => ctx as { scope: string; installId: string | null });
+    expect(contexts.map((c) => c.scope)).toEqual(["platform"]);
+    expect(contexts.map((c) => c.installId)).toEqual(["row-ws"]);
+  });
 });

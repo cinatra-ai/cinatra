@@ -163,26 +163,56 @@ export function selectActiveDigest(input: {
  *     versioned-activation slice (S4); resolving one here would prematurely
  *     promote it.
  *
- * SOURCE PRECEDENCE (the shared policy) runs first, for the same reason it runs
- * in `pickSingleLiveRowAcrossOrgs`. A package that ships in the image AND holds
- * a product install has two live default rows in one scope, and this picker is
- * what the install pipeline's canonical-row deps resolve through — so without
- * the policy that pair reads as cross-owner ambiguity and the install FAILS
- * CLOSED at its own provenance write, rolling back the very install that
- * created the second row. The override wins; the bundled row stays the fallback
- * underneath it. Rows that are genuinely peers still fail closed.
+ * SUPERSESSION FIRST (cinatra#2698 S4), the same order the sibling seams apply
+ * — `pickSingleLiveRowAcrossOrgs` below, `pickActiveInstall`, the installed-rows
+ * model and the provider-connection writer. A live WORKSPACE install is the one
+ * row in force and supersedes every organization row of the package, so those
+ * rows are dropped BEFORE the scope filter and before precedence. Without it
+ * this picker disagrees with every other seam about which row is the package:
+ * `runInstallAnchorClaimBackstop`
+ * (`src/lib/objects/artifact-claim-install-anchor.ts`) loops EVERY live org
+ * scope and calls this picker once per scope, so a superseded organization row
+ * resolved — and the backstop then activated a claim against a row the rest of
+ * the system had already replaced. Scoping is what makes the omission invisible
+ * here: the superseding workspace row lives at a DIFFERENT `orgId` than the row
+ * it supersedes, so the exact-scope filter alone can never see the pair.
+ *
+ * SOURCE PRECEDENCE (the shared policy) runs over what supersession leaves, for
+ * the same reason it runs in `pickSingleLiveRowAcrossOrgs`. A package that ships
+ * in the image AND holds a product install has two live default rows in one
+ * scope, and this picker is what the install pipeline's canonical-row deps
+ * resolve through — so without the policy that pair reads as cross-owner
+ * ambiguity and the install FAILS CLOSED at its own provenance write, rolling
+ * back the very install that created the second row. The override wins; the
+ * bundled row stays the fallback underneath it. Rows that are genuinely peers
+ * still fail closed.
  */
 export function pickSingleActiveRow<
   T extends {
     status: string;
     organizationId: string | null;
+    ownerLevel?: string;
+    ownerId?: string | null;
     isDefault?: boolean;
     source?: { type?: string } | null;
   },
 >(rows: readonly T[], orgId: string | null): T | null {
-  const matching = rows.filter(
-    (r) => (r.status === "active" || r.status === "locked") && (r.organizationId ?? null) === orgId,
-  );
+  const live = rows.filter((r) => r.status === "active" || r.status === "locked");
+  // Mirrors `effectiveInstallRows` rather than re-deriving it: with a live
+  // workspace row present only the org-NULL rows remain candidates, so asking
+  // this picker for a superseded organization scope now correctly resolves
+  // NOTHING. A row set with no live workspace row is passed through untouched,
+  // so every pre-S4 call is byte-identical.
+  const effective = live.some((r) =>
+    isWorkspaceAnchoredRow({
+      ownerLevel: r.ownerLevel ?? "",
+      ownerId: r.ownerId ?? null,
+      organizationId: r.organizationId ?? null,
+    }),
+  )
+    ? live.filter((r) => (r.organizationId ?? null) === null)
+    : live;
+  const matching = effective.filter((r) => (r.organizationId ?? null) === orgId);
   const ranked = applyInstallRowPrecedence(matching);
   const defaults = ranked.filter((r) => r.isDefault !== false);
   return defaults.length === 1 ? defaults[0] : null;
