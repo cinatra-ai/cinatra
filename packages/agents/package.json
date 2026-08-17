@@ -46,6 +46,8 @@
     "./review-gate-card": "./src/review-gate-card.tsx",
     "./review-decision-bar": "./src/review-decision-bar.tsx",
     "./review-gate-states": "./src/review-gate-states.tsx",
+    "./run-step-rail": "./src/run-step-rail.ts",
+    "./run-step-rail-panel": "./src/run-step-rail-panel.tsx",
     "./lifecycle-verification-store": "./src/lifecycle-verification-store.ts",
     "./lifecycle-verification-read-store": "./src/lifecycle-verification-read-store.ts",
     "./cms-snapshot-readback-store": "./src/cms-snapshot-readback-store.ts",
