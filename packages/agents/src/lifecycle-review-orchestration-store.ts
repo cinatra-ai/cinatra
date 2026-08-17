@@ -995,6 +995,28 @@ async function orchestrateProducedBatch(
     // partition is idempotent — never double-count).
     if (!gateIdempotent) summary.gatesCreated += 1;
 
+    // cinatra#2833 — a fresh PARTITION gate is a review opening exactly like the
+    // single-artifact path's, so it notifies through the SAME seam. Before this,
+    // the batch path emitted the gate and told nobody: a run that produced
+    // several artifacts at once (or produced into an already-open review epoch)
+    // opened its gates silently, and the initiator's only way to find the review
+    // was to already be looking at the run page.
+    //
+    // ONE notification per emitted GATE, not per target: the partition (up to 50
+    // targets — `lifecycle-batch.ts`) is one gate, one review, one decision. Same
+    // idempotency posture as the single path — `!gateIdempotent` only, so a
+    // re-sweep of the same frozen partition re-emits idempotently and never
+    // re-notifies. `runId` is the batch's own producing run (batch grouping is
+    // keyed on it), so unlike the single path there is no synthetic-orphan case
+    // to exclude. Best-effort by construction: `dispatchAutoGateOpen` swallows
+    // every error, so a notification can never fail the sweep — and it is
+    // dispatched BEFORE the park/link/mark phases below for the same reason the
+    // single path dispatches before its link: the gate row is already committed,
+    // so the review the notification points at exists.
+    if (!gateIdempotent) {
+      await dispatchAutoGateOpen({ runId, reviewTaskId });
+    }
+
     const members = partition
       .map((t) => firedByKey.get(targetKeyOf(t)))
       .filter((m): m is FiredCreateGate => m !== undefined);
