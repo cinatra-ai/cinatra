@@ -27,6 +27,21 @@
 //      module threads both of those into the preflight instead of inventing a
 //      third convention.
 //
+// A later review round found both decisions leaking the same way — by treating
+// "stated, but not something this checkout owns" as "not stated at all":
+//
+//   3. A service URL that is NOT an explicit-port loopback URL (a remote
+//      `NANGO_SERVER_URL`/`REDIS_URL`; a loopback URL with no port, which
+//      WHATWG also reports for a stated `:80`) fell through to the fixed global
+//      port. A failed health check on somebody else's service could then start
+//      a LOCAL stack publishing 3003/5435/6379 — precisely the collision (2)
+//      exists to prevent. Such a service is now unclaimed and unhealed.
+//
+//   4. The dotenv reader kept an inline comment in the value, so
+//      `CINATRA_SKIP_DEV_PREFLIGHT=1 # lane isolation` read as an unrecognized
+//      spelling and the flag was silently dropped — defect (1) again, one layer
+//      down.
+//
 // Everything here is PURE (no IO beyond an explicit file read) and
 // dependency-injected, so the decisions are asserted in
 // scripts/__tests__/dev-preflight.test.mjs without Docker on the box.
@@ -46,10 +61,54 @@ const TRUTHY = new Set(["1", "true", "yes", "on"]);
 const FALSY = new Set(["0", "false", "no", "off"]);
 
 /**
+ * Parse the right-hand side of one `KEY=value` dotenv line.
+ *
+ * Inline comments are real dotenv syntax and a lane WILL write one — a worktree
+ * annotates why it opted out (`CINATRA_SKIP_DEV_PREFLIGHT=1 # lane isolation`).
+ * Reading that as the literal value `1 # lane isolation` made
+ * `normalizeSkipFlag` see an unrecognized spelling, report "not stated", and the
+ * preflight run anyway: the ORIGINAL cinatra#2839 defect's exact shape — an
+ * opt-out stated where a lane states things, silently not honored —
+ * reintroduced one layer down, in the reader this module extracted.
+ *
+ * Rules (dotenv convention):
+ *   - A quoted value ends at its closing quote; a `#` INSIDE the quotes is
+ *     literal, and only trailing whitespace or a comment may follow it.
+ *   - An unquoted value is cut at the first `#` that begins the value or is
+ *     preceded by whitespace. Requiring that separator (as python-dotenv does)
+ *     keeps a `#` that is part of the value itself — a dev DB password, a URL
+ *     fragment — from being silently truncated.
+ *   - Whatever survives is trimmed; empty means "unset".
+ *
+ * @param {string} rawValue
+ * @returns {string | undefined}
+ */
+function parseEnvValue(rawValue) {
+  const value = String(rawValue).trim();
+  if (!value) return undefined;
+
+  const quote = value[0];
+  if (quote === '"' || quote === "'") {
+    const close = value.indexOf(quote, 1);
+    const rest = close === -1 ? undefined : value.slice(close + 1).trim();
+    // Only a WELL-FORMED quoted value (closed, followed by nothing but a
+    // comment) is treated as quoted. Anything else falls through to the
+    // unquoted rule, which is what the previous reader did with an unbalanced
+    // quote — no existing `.env.local` changes meaning here.
+    if (rest !== undefined && (rest === "" || rest.startsWith("#"))) {
+      return value.slice(1, close).trim() || undefined;
+    }
+  }
+
+  return value.replace(/(^|\s)#.*$/, "").trim() || undefined;
+}
+
+/**
  * Read one KEY=value out of a dotenv-style file. Mirrors the launcher's original
  * inline reader: `export ` prefix tolerated, surrounding quotes stripped, blank
- * and `#` lines skipped, first match wins. Returns undefined when the file is
- * absent or the key is unset/empty.
+ * and `#` lines skipped, first match wins — plus the inline-comment handling in
+ * `parseEnvValue`. Returns undefined when the file is absent or the key is
+ * unset/empty.
  *
  * @param {string} filePath
  * @param {string} key
@@ -68,14 +127,7 @@ export function readEnvFileValue(filePath, key) {
     if (!line || line.startsWith("#")) continue;
     const m = new RegExp(`^(?:export\\s+)?${key}\\s*=\\s*(.*)$`).exec(line);
     if (!m) continue;
-    let value = m[1].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    return value.trim() || undefined;
+    return parseEnvValue(m[1]);
   }
   return undefined;
 }
@@ -150,10 +202,13 @@ export function resolveComposeProjectName({ processEnv = {}, envFileValues = [] 
  *
  * `envVar` is the compose interpolation variable (docker-compose.yml /
  * docker-compose.dev.yml read it as `${VAR:-default}`), `defaultHostPort` is the
- * historical fixed port that stays in force when nothing overrides it, and
- * `urlVar` is the `.env.local` service URL the app itself connects on — the
- * SAME value the rest of the stack honors, so the published port and the app's
- * client port cannot drift apart.
+ * historical fixed port that stays in force when the lane states NOTHING (the
+ * main checkout), and `urlVar` is the `.env.local` service URL the app itself
+ * connects on — the SAME value the rest of the stack honors, so the published
+ * port and the app's client port cannot drift apart.
+ *
+ * A `urlVar` that is stated but names a service this checkout does not publish
+ * makes the port UNCLAIMED rather than default — see `resolveComposeHostPortPlan`.
  */
 export const PREFLIGHT_HOST_PORTS = [
   { envVar: "CINATRA_NANGO_SERVER_HOST_PORT", defaultHostPort: 3003, urlVar: "NANGO_SERVER_URL" },
@@ -163,6 +218,28 @@ export const PREFLIGHT_HOST_PORTS = [
 ];
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0"]);
+
+/**
+ * Read a port the URL STATES, straight off the raw string.
+ *
+ * `new URL()` cannot answer this: WHATWG normalization drops a port equal to
+ * the scheme's default, so `http://localhost:80` and `http://localhost` both
+ * leave `url.port === ""`. Those are different statements here — the first
+ * claims host port 80, the second claims nothing — so the authority is parsed
+ * from the raw text instead. Userinfo is dropped first (`user:pw@host:80`) and
+ * an IPv6 literal's bracketed colons are excluded, so neither is mistaken for
+ * the port separator.
+ *
+ * @param {string} rawUrl
+ * @returns {number | undefined}
+ */
+function statedPort(rawUrl) {
+  const afterScheme = rawUrl.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "");
+  const authority = afterScheme.split(/[/?#]/, 1)[0];
+  const hostPart = authority.slice(authority.lastIndexOf("@") + 1);
+  const m = /^(?:\[[^\]]*\]|[^:]*):(\d+)$/.exec(hostPart);
+  return m ? Number(m[1]) : undefined;
+}
 
 /**
  * Extract an EXPLICIT host port from a service URL, and only when it points at
@@ -175,37 +252,81 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0"]);
  * read as a request to publish :80, and a remote service
  * (`https://nango.example.com`) is not ours to publish at all.
  *
+ * Returns undefined for BOTH of those, which is the caller's signal that the
+ * service is not this checkout's to publish — see `resolveComposeHostPortPlan`.
+ *
  * @param {string | undefined} urlValue
  * @returns {number | undefined}
  */
 export function explicitLoopbackPort(urlValue) {
   if (!urlValue) return undefined;
+  const raw = String(urlValue).trim();
   let url;
   try {
-    url = new URL(String(urlValue).trim());
+    url = new URL(raw);
   } catch {
     return undefined;
   }
-  let host = url.hostname;
+  // WHATWG returns an IPv6 hostname bracketed (`[::1]`), so unwrap before the
+  // lookup — otherwise the `::1` entry above is unreachable and a legitimate
+  // explicit-port IPv6 loopback lane URL reads as somebody else's service.
+  let host = url.hostname.replace(/^\[(.*)\]$/, "$1");
   if (host === "host.docker.internal") host = "127.0.0.1";
   if (!LOOPBACK_HOSTS.has(host)) return undefined; // external service — not ours
-  if (!url.port) return undefined;
-  const port = Number(url.port);
+  // `url.port` for anything WHATWG did not normalize away, the raw authority for
+  // a stated default port (`:80`, `:443`) that it did.
+  const port = url.port ? Number(url.port) : statedPort(raw);
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined;
 }
 
 /**
- * Build the compose interpolation environment for the preflight's services.
+ * Classify what one service's configured URL says about who owns its host port.
+ *
+ *   - `unconfigured` — nothing stated. The historical fixed default stays in
+ *     force; this is the main checkout's unchanged behavior.
+ *   - `ours` — an explicit-port loopback URL. That port is what this checkout
+ *     publishes, and it is the lane's own claim.
+ *   - `theirs` — anything else the URL can say: a remote host, or a loopback
+ *     host with NO port stated. Either way the service the app talks to is not
+ *     one this checkout publishes, so the preflight must neither claim a host
+ *     port for it nor start a local copy of it.
+ *
+ * @param {string | undefined} urlValue
+ * @returns {{ state: "unconfigured" } | { state: "ours", port: number, url: string } | { state: "theirs", url: string }}
+ */
+export function classifyServiceUrl(urlValue) {
+  const url = String(urlValue ?? "").trim();
+  if (!url) return { state: "unconfigured" };
+  const port = explicitLoopbackPort(url);
+  return port === undefined ? { state: "theirs", url } : { state: "ours", port, url };
+}
+
+/**
+ * Plan the preflight's host-port claims: the compose interpolation environment
+ * plus the services this checkout may NOT publish.
  *
  * Per port, precedence is: an explicit `CINATRA_*_HOST_PORT` (shell, then
  * `.env.local`) > the port stated in the lane's service URL > the historical
- * default. Always returns every key so the spawned compose never inherits a
- * stale value from the ambient environment.
+ * default.
+ *
+ * The third step is only reachable when NOTHING is stated. A URL that IS stated
+ * but is not an explicit-port loopback URL (a remote host; a loopback host with
+ * no port) used to fall through to that same historical default — so a lane
+ * pointing at `https://nango.example.com` or a remote `REDIS_URL` still handed
+ * compose 3003/6379 and, on a failed health check, published exactly the global
+ * ports this module exists to stop colliding on. Such a service is now reported
+ * in `unmanaged` and gets NO key at all: the launcher refuses the local heal
+ * rather than starting someone else's service on this checkout's behalf.
+ *
+ * Every managed key is always emitted, so the spawned compose cannot inherit a
+ * stale value from the ambient environment. An unmanaged key is omitted safely:
+ * the only ambient source is `processEnv`, and an ambient value there is read as
+ * the explicit override above and would have made the service managed.
  *
  * @param {{ processEnv?: Record<string, string | undefined>, envFileLookup?: (key: string) => string | undefined }} input
- * @returns {Record<string, string>}
+ * @returns {{ portEnv: Record<string, string>, unmanaged: Array<{ envVar: string, urlVar: string, url: string }> }}
  */
-export function resolveComposeHostPortEnv({ processEnv = {}, envFileLookup = () => undefined } = {}) {
+export function resolveComposeHostPortPlan({ processEnv = {}, envFileLookup = () => undefined } = {}) {
   const read = (key) => {
     const fromShell = String(processEnv[key] ?? "").trim();
     if (fromShell) return fromShell;
@@ -213,17 +334,35 @@ export function resolveComposeHostPortEnv({ processEnv = {}, envFileLookup = () 
     return fromFile || undefined;
   };
 
-  const out = {};
+  const portEnv = {};
+  const unmanaged = [];
   for (const spec of PREFLIGHT_HOST_PORTS) {
     const explicit = Number(read(spec.envVar));
     if (Number.isInteger(explicit) && explicit > 0 && explicit < 65536) {
-      out[spec.envVar] = String(explicit);
+      portEnv[spec.envVar] = String(explicit); // an operator's direct claim wins
       continue;
     }
-    const fromUrl = spec.urlVar ? explicitLoopbackPort(read(spec.urlVar)) : undefined;
-    out[spec.envVar] = String(fromUrl ?? spec.defaultHostPort);
+    const configured = spec.urlVar
+      ? classifyServiceUrl(read(spec.urlVar))
+      : { state: "unconfigured" };
+    if (configured.state === "theirs") {
+      unmanaged.push({ envVar: spec.envVar, urlVar: spec.urlVar, url: configured.url });
+      continue;
+    }
+    portEnv[spec.envVar] = String(configured.port ?? spec.defaultHostPort);
   }
-  return out;
+  return { portEnv, unmanaged };
+}
+
+/**
+ * Render `unmanaged` entries as `VAR=value` for an operator-facing warning, so
+ * the line names the configured URL that made the preflight stand down.
+ *
+ * @param {Array<{ urlVar: string, url: string }>} unmanaged
+ * @returns {string}
+ */
+export function formatUnmanagedServices(unmanaged = []) {
+  return unmanaged.map(({ urlVar, url }) => `${urlVar}=${url}`).join(", ");
 }
 
 /**

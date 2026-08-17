@@ -33,8 +33,9 @@ import {
   SKIP_PREFLIGHT_ENV_VAR,
   createComposeRunner,
   formatComposeCommand,
+  formatUnmanagedServices,
   readEnvFileValue,
-  resolveComposeHostPortEnv,
+  resolveComposeHostPortPlan,
   resolveComposeProjectName,
   shouldSkipDevPreflight,
 } from "./lib/dev-preflight.mjs";
@@ -101,7 +102,11 @@ const composeProjectName = resolveComposeProjectName({
   processEnv: process.env,
   envFileValues: [lookupEnvFiles(COMPOSE_PROJECT_ENV_VAR)],
 });
-const composeHostPortEnv = resolveComposeHostPortEnv({
+// `portEnv` is what compose interpolates; `unmanaged` names the services whose
+// configured URL says they are NOT this checkout's to publish (remote host, or
+// loopback with no port stated). Those get no host port AND no local start —
+// see runNangoHealthPreflight.
+const composeHostPortPlan = resolveComposeHostPortPlan({
   processEnv: process.env,
   envFileLookup: lookupEnvFiles,
 });
@@ -202,7 +207,7 @@ const runCompose = createComposeRunner({
   spawnFn: spawn,
   skip: skipPreflight,
   projectName: composeProjectName,
-  portEnv: composeHostPortEnv,
+  portEnv: composeHostPortPlan.portEnv,
   cwd: repoRoot,
   baseEnv: process.env,
 });
@@ -251,6 +256,22 @@ async function runNangoHealthPreflight() {
   if (!isLocalNangoUrl(rawUrl)) {
     console.warn(
       `[dev-server] ⚠ Nango connector service at ${resolveNangoBaseUrl(rawUrl)} is not answering /health — connectors will fail until it recovers.`,
+    );
+    return;
+  }
+
+  // Something in this heal's blast radius is configured elsewhere. `isLocalNangoUrl`
+  // is not enough on its own: it accepts a loopback URL with NO port stated
+  // (`http://localhost/nango` = :80), and `up -d nango-server` also starts its
+  // `depends_on` — nango-db and redis — so a lane whose NANGO_DATABASE_URL or
+  // REDIS_URL points somewhere else would still have a local copy of that
+  // service published here. With no port this checkout may claim, the only
+  // correct move is to NOT start the stack: healing it would fall back to the
+  // fixed global ports (3003/5435/6379) this module exists to keep lanes off.
+  if (composeHostPortPlan.unmanaged.length > 0) {
+    const detail = formatUnmanagedServices(composeHostPortPlan.unmanaged);
+    console.warn(
+      `[dev-server] ⚠ Nango connector service is not answering /health, and this checkout will not start one: ${detail} — not an explicit-port loopback URL, so that service is not ours to publish. Start it where it is configured, or point the URL at a 127.0.0.1 port this worktree owns.`,
     );
     return;
   }

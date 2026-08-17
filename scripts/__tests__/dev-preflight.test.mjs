@@ -39,12 +39,14 @@ import {
   COMPOSE_FILES,
   PREFLIGHT_HOST_PORTS,
   buildComposeArgs,
+  classifyServiceUrl,
   createComposeRunner,
   explicitLoopbackPort,
   formatComposeCommand,
+  formatUnmanagedServices,
   normalizeSkipFlag,
   readEnvFileValue,
-  resolveComposeHostPortEnv,
+  resolveComposeHostPortPlan,
   resolveComposeProjectName,
   shouldSkipDevPreflight,
 } from "../lib/dev-preflight.mjs";
@@ -148,6 +150,24 @@ describe("explicitLoopbackPort", () => {
     expect(explicitLoopbackPort("http://127.0.0.1:13003")).toBe(13003);
     expect(explicitLoopbackPort("redis://localhost:16379")).toBe(16379);
     expect(explicitLoopbackPort("postgresql://nango:nango@127.0.0.1:15435/nango")).toBe(15435);
+    expect(explicitLoopbackPort("http://host.docker.internal:13003")).toBe(13003);
+  });
+
+  // WHATWG normalizes away a port equal to the scheme default, so `url.port` is
+  // "" for BOTH `http://localhost:80` and `http://localhost`. They are different
+  // statements here — a stated :80 is a claim on host port 80 — so the port is
+  // read off the raw authority when the parser dropped it.
+  it("counts a stated scheme-default port as explicit", () => {
+    expect(explicitLoopbackPort("http://localhost:80")).toBe(80);
+    expect(explicitLoopbackPort("https://127.0.0.1:443/health")).toBe(443);
+    expect(explicitLoopbackPort("http://localhost:80/nango")).toBe(80);
+  });
+
+  // `new URL()` reports an IPv6 hostname bracketed, so the lookup unwraps it.
+  it("handles a bracketed IPv6 loopback URL", () => {
+    expect(explicitLoopbackPort("http://[::1]:16379")).toBe(16379);
+    expect(explicitLoopbackPort("http://[::1]/nango")).toBeUndefined();
+    expect(explicitLoopbackPort("https://[2001:db8::1]:16379")).toBeUndefined();
   });
 
   // Publishing a container port is a claim on a HOST port: a URL that states no
@@ -155,19 +175,45 @@ describe("explicitLoopbackPort", () => {
   // remote service is not ours to publish at all.
   it("refuses a URL with no explicit port, a remote host, or a non-URL", () => {
     expect(explicitLoopbackPort("http://localhost/nango")).toBeUndefined();
+    expect(explicitLoopbackPort("https://nango.example.com")).toBeUndefined();
     expect(explicitLoopbackPort("https://nango.example.com:443")).toBeUndefined();
     expect(explicitLoopbackPort("not a url")).toBeUndefined();
     expect(explicitLoopbackPort(undefined)).toBeUndefined();
   });
 });
 
-describe("resolveComposeHostPortEnv", () => {
-  it("falls back to the historical global ports when nothing overrides them", () => {
-    expect(resolveComposeHostPortEnv()).toEqual({
-      CINATRA_NANGO_SERVER_HOST_PORT: "3003",
-      CINATRA_NANGO_CONNECT_HOST_PORT: "3009",
-      CINATRA_NANGO_DB_HOST_PORT: "5435",
-      CINATRA_REDIS_HOST_PORT: "6379",
+describe("classifyServiceUrl", () => {
+  it("separates 'nothing stated' from 'stated, but not ours'", () => {
+    expect(classifyServiceUrl(undefined)).toEqual({ state: "unconfigured" });
+    expect(classifyServiceUrl("   ")).toEqual({ state: "unconfigured" });
+    expect(classifyServiceUrl("redis://127.0.0.1:16379")).toEqual({
+      state: "ours",
+      port: 16379,
+      url: "redis://127.0.0.1:16379",
+    });
+    // The distinction the port fallback used to collapse: a REMOTE service and
+    // a loopback URL with no port stated are both "not ours", not "unstated".
+    expect(classifyServiceUrl("https://nango.example.com")).toEqual({
+      state: "theirs",
+      url: "https://nango.example.com",
+    });
+    expect(classifyServiceUrl("http://localhost/nango")).toEqual({
+      state: "theirs",
+      url: "http://localhost/nango",
+    });
+  });
+});
+
+describe("resolveComposeHostPortPlan", () => {
+  it("falls back to the historical global ports when nothing states otherwise", () => {
+    expect(resolveComposeHostPortPlan()).toEqual({
+      portEnv: {
+        CINATRA_NANGO_SERVER_HOST_PORT: "3003",
+        CINATRA_NANGO_CONNECT_HOST_PORT: "3009",
+        CINATRA_NANGO_DB_HOST_PORT: "5435",
+        CINATRA_REDIS_HOST_PORT: "6379",
+      },
+      unmanaged: [],
     });
   });
 
@@ -180,30 +226,101 @@ describe("resolveComposeHostPortEnv", () => {
       REDIS_URL: "redis://127.0.0.1:16379",
       CINATRA_NANGO_CONNECT_HOST_PORT: "13009",
     };
-    expect(
-      resolveComposeHostPortEnv({ envFileLookup: (key) => envFile[key] }),
-    ).toEqual({
-      CINATRA_NANGO_SERVER_HOST_PORT: "13003",
-      CINATRA_NANGO_CONNECT_HOST_PORT: "13009",
-      CINATRA_NANGO_DB_HOST_PORT: "15435",
-      CINATRA_REDIS_HOST_PORT: "16379",
+    expect(resolveComposeHostPortPlan({ envFileLookup: (key) => envFile[key] })).toEqual({
+      portEnv: {
+        CINATRA_NANGO_SERVER_HOST_PORT: "13003",
+        CINATRA_NANGO_CONNECT_HOST_PORT: "13009",
+        CINATRA_NANGO_DB_HOST_PORT: "15435",
+        CINATRA_REDIS_HOST_PORT: "16379",
+      },
+      unmanaged: [],
     });
   });
 
   it("lets an explicit host-port override beat the URL-derived one", () => {
     expect(
-      resolveComposeHostPortEnv({
+      resolveComposeHostPortPlan({
         processEnv: { CINATRA_REDIS_HOST_PORT: "16380" },
         envFileLookup: (key) => (key === "REDIS_URL" ? "redis://127.0.0.1:16379" : undefined),
-      }).CINATRA_REDIS_HOST_PORT,
+      }).portEnv.CINATRA_REDIS_HOST_PORT,
     ).toBe("16380");
   });
 
-  it("always emits every key, so a stale ambient value cannot leak through", () => {
-    const resolved = resolveComposeHostPortEnv({ processEnv: {} });
+  it("emits every MANAGED key, so a stale ambient value cannot leak through", () => {
+    const { portEnv } = resolveComposeHostPortPlan({ processEnv: {} });
     for (const spec of PREFLIGHT_HOST_PORTS) {
-      expect(resolved[spec.envVar]).toBeTypeOf("string");
+      expect(portEnv[spec.envVar]).toBeTypeOf("string");
     }
+  });
+
+  // The convergence-round defect: `String(fromUrl ?? spec.defaultHostPort)` read
+  // "the URL states a port we may not publish" and "the URL states nothing" as
+  // the same thing, so a lane pointing at a REMOTE service still handed compose
+  // the fixed global port — the exact collision this module exists to prevent.
+  it("claims no host port for a service configured on a remote host", () => {
+    const envFile = {
+      NANGO_SERVER_URL: "https://nango.example.com",
+      NANGO_DATABASE_URL: "postgresql://db.example.com:5432/nango",
+      REDIS_URL: "rediss://cache.example.com:6380",
+    };
+    const { portEnv, unmanaged } = resolveComposeHostPortPlan({
+      envFileLookup: (key) => envFile[key],
+    });
+
+    expect(portEnv).toEqual({ CINATRA_NANGO_CONNECT_HOST_PORT: "3009" });
+    expect(unmanaged.map((u) => u.urlVar)).toEqual([
+      "NANGO_SERVER_URL",
+      "NANGO_DATABASE_URL",
+      "REDIS_URL",
+    ]);
+    expect(unmanaged.map((u) => u.url)).toEqual(Object.values(envFile));
+  });
+
+  it("claims no host port for a loopback URL that states no port", () => {
+    const { portEnv, unmanaged } = resolveComposeHostPortPlan({
+      envFileLookup: (key) => (key === "NANGO_SERVER_URL" ? "http://localhost/nango" : undefined),
+    });
+
+    expect(portEnv.CINATRA_NANGO_SERVER_HOST_PORT).toBeUndefined();
+    expect(portEnv.CINATRA_NANGO_DB_HOST_PORT).toBe("5435"); // unstated → unchanged
+    expect(unmanaged).toEqual([
+      {
+        envVar: "CINATRA_NANGO_SERVER_HOST_PORT",
+        urlVar: "NANGO_SERVER_URL",
+        url: "http://localhost/nango",
+      },
+    ]);
+  });
+
+  it("treats a stated :80 as an explicit claim, not as the global default", () => {
+    const { portEnv, unmanaged } = resolveComposeHostPortPlan({
+      envFileLookup: (key) => (key === "NANGO_SERVER_URL" ? "http://localhost:80" : undefined),
+    });
+
+    expect(portEnv.CINATRA_NANGO_SERVER_HOST_PORT).toBe("80");
+    expect(unmanaged).toEqual([]);
+  });
+
+  it("lets an explicit host-port override reclaim an otherwise-unmanaged service", () => {
+    const { portEnv, unmanaged } = resolveComposeHostPortPlan({
+      processEnv: { CINATRA_REDIS_HOST_PORT: "16379" },
+      envFileLookup: (key) => (key === "REDIS_URL" ? "rediss://cache.example.com:6380" : undefined),
+    });
+
+    expect(portEnv.CINATRA_REDIS_HOST_PORT).toBe("16379");
+    expect(unmanaged).toEqual([]);
+  });
+});
+
+describe("formatUnmanagedServices", () => {
+  it("names the configured URL that made the preflight stand down", () => {
+    expect(
+      formatUnmanagedServices([
+        { envVar: "CINATRA_REDIS_HOST_PORT", urlVar: "REDIS_URL", url: "rediss://cache.example.com:6380" },
+        { envVar: "CINATRA_NANGO_SERVER_HOST_PORT", urlVar: "NANGO_SERVER_URL", url: "http://localhost/nango" },
+      ]),
+    ).toBe("REDIS_URL=rediss://cache.example.com:6380, NANGO_SERVER_URL=http://localhost/nango");
+    expect(formatUnmanagedServices()).toBe("");
   });
 });
 
@@ -282,6 +399,55 @@ describe("createComposeRunner", () => {
     expect(calls[0].opts.env.CINATRA_REDIS_HOST_PORT).toBe("16379");
     expect(calls[0].opts.env.PATH).toBe("/usr/bin");
   });
+
+  // Finding 1 asserted where it actually bites: the interpolation environment
+  // compose is SPAWNED with. `${VAR:-3003}` in the compose files means a global
+  // default reaching this env is a real published host port, so the plan must
+  // put no value there for a service configured somewhere else — and, because
+  // the plan and the runner's baseEnv read the SAME process env, omitting the
+  // key cannot let an ambient value take its place either.
+  it("hands compose no global-default port for a service configured elsewhere", () => {
+    const processEnv = { PATH: "/usr/bin" };
+    const envFile = {
+      NANGO_SERVER_URL: "https://nango.example.com", // remote
+      NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango", // ours
+      REDIS_URL: "redis://localhost", // loopback, no port stated
+    };
+    const plan = resolveComposeHostPortPlan({
+      processEnv,
+      envFileLookup: (key) => envFile[key],
+    });
+
+    const calls = [];
+    const runCompose = createComposeRunner({
+      spawnFn: (bin, argv, opts) => {
+        calls.push({ bin, argv, opts });
+        return fakeChild();
+      },
+      skip: false,
+      projectName: "p2839",
+      portEnv: plan.portEnv,
+      cwd: "/repo",
+      baseEnv: processEnv,
+    });
+
+    runCompose(["up", "-d", "nango-server"]);
+
+    const spawnedPorts = Object.fromEntries(
+      Object.entries(calls[0].opts.env).filter(
+        ([k]) => k.startsWith("CINATRA_") && k.endsWith("_HOST_PORT"),
+      ),
+    );
+    expect(spawnedPorts).toEqual({
+      CINATRA_NANGO_DB_HOST_PORT: "15435",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "3009", // no URL to state otherwise
+    });
+    // Neither the remote nor the implicit-port service reaches compose at all.
+    expect(spawnedPorts.CINATRA_NANGO_SERVER_HOST_PORT).toBeUndefined();
+    expect(spawnedPorts.CINATRA_REDIS_HOST_PORT).toBeUndefined();
+    expect(Object.values(spawnedPorts)).not.toContain("3003");
+    expect(Object.values(spawnedPorts)).not.toContain("6379");
+  });
 });
 
 describe("readEnvFileValue", () => {
@@ -297,6 +463,17 @@ describe("readEnvFileValue", () => {
         'export COMPOSE_PROJECT_NAME="p2839"',
         "REDIS_URL='redis://127.0.0.1:16379'",
         "EMPTY=",
+        // Inline comments — dotenv syntax a lane really writes.
+        "BARE_COMMENT=1 # lane isolation",
+        'DQ_COMMENT="1" # lane isolation',
+        "SQ_COMMENT='1' # lane isolation",
+        'HASH_IN_DQ="a # b"',
+        "HASH_IN_SQ='a # b'",
+        "HASH_IN_VALUE=pa#ssword",
+        "URL_WITH_FRAGMENT=http://127.0.0.1:13003/x#frag",
+        "ONLY_COMMENT= # nothing stated",
+        'EXPORTED_COMMENT=export_is_not_here',
+        "export EXPORTED_WITH_COMMENT=p2839 # the lane project",
       ].join("\n"),
     );
   });
@@ -314,6 +491,43 @@ describe("readEnvFileValue", () => {
     expect(readEnvFileValue(file, "NOPE")).toBeUndefined();
     expect(readEnvFileValue(file, "EMPTY")).toBeUndefined();
     expect(readEnvFileValue(path.join(dir, "absent"), "PORT")).toBeUndefined();
+  });
+
+  // Finding 2: `CINATRA_SKIP_DEV_PREFLIGHT=1 # lane isolation` parsed as the
+  // literal "1 # lane isolation", which normalizeSkipFlag reports as "not
+  // stated" — so the flag was silently ignored and the preflight ran. Same
+  // silent-drop shape as the original cinatra#2839 defect.
+  it("strips an inline comment from bare and quoted values", () => {
+    const file = path.join(dir, ".env.local");
+    expect(readEnvFileValue(file, "BARE_COMMENT")).toBe("1");
+    expect(readEnvFileValue(file, "DQ_COMMENT")).toBe("1");
+    expect(readEnvFileValue(file, "SQ_COMMENT")).toBe("1");
+    expect(readEnvFileValue(file, "EXPORTED_WITH_COMMENT")).toBe("p2839");
+    // …and the stripped value is a value the flag reader actually recognizes.
+    expect(normalizeSkipFlag(readEnvFileValue(file, "BARE_COMMENT"))).toBe(true);
+    expect(normalizeSkipFlag(readEnvFileValue(file, "DQ_COMMENT"))).toBe(true);
+    expect(normalizeSkipFlag(readEnvFileValue(file, "SQ_COMMENT"))).toBe(true);
+  });
+
+  it("keeps a # that is inside quotes or part of the value itself", () => {
+    const file = path.join(dir, ".env.local");
+    expect(readEnvFileValue(file, "HASH_IN_DQ")).toBe("a # b");
+    expect(readEnvFileValue(file, "HASH_IN_SQ")).toBe("a # b");
+    // No whitespace before the `#` → not a comment, so a dev password or a URL
+    // fragment is not silently truncated.
+    expect(readEnvFileValue(file, "HASH_IN_VALUE")).toBe("pa#ssword");
+    expect(readEnvFileValue(file, "URL_WITH_FRAGMENT")).toBe("http://127.0.0.1:13003/x#frag");
+  });
+
+  it("leaves comment-free values exactly as written", () => {
+    const file = path.join(dir, ".env.local");
+    expect(readEnvFileValue(file, "PORT")).toBe("13839");
+    expect(readEnvFileValue(file, "REDIS_URL")).toBe("redis://127.0.0.1:16379");
+    expect(readEnvFileValue(file, "EXPORTED_COMMENT")).toBe("export_is_not_here");
+  });
+
+  it("treats a value that is nothing but a comment as unset", () => {
+    expect(readEnvFileValue(path.join(dir, ".env.local"), "ONLY_COMMENT")).toBeUndefined();
   });
 });
 
@@ -424,20 +638,98 @@ describe("dev-server.mjs preflight (end-to-end, fake docker)", () => {
     return { ...result, calls };
   };
 
+  // Every case below also asserts the launcher RAN TO COMPLETION: a zero-docker
+  // result is only evidence of the flag's promise if the launcher actually got
+  // past the preflight and spawned (the stubbed) `next`. A crash in the
+  // preflight would otherwise read as a pass.
+  const expectCleanRun = (result) => {
+    expect(
+      result.status,
+      `launcher exited ${result.status} (signal ${result.signal})\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    ).toBe(0);
+    expect(result.error).toBeUndefined();
+  };
+
   // The issue's headline: the flag's promise is that NOTHING is started.
   it("makes zero docker calls when the flag is set in the shell env", () => {
-    const { calls } = runLauncher("PORT=13839\n", { CINATRA_SKIP_DEV_PREFLIGHT: "1" });
-    expect(calls).toEqual([]);
+    const result = runLauncher("PORT=13839\n", { CINATRA_SKIP_DEV_PREFLIGHT: "1" });
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
   });
 
   // The regression itself: the lane set the flag where lanes keep their config.
   it("makes zero docker calls when the flag is set in the worktree .env.local", () => {
-    const { calls } = runLauncher("PORT=13839\nCINATRA_SKIP_DEV_PREFLIGHT=1\n");
-    expect(calls).toEqual([]);
+    const result = runLauncher("PORT=13839\nCINATRA_SKIP_DEV_PREFLIGHT=1\n");
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
+  });
+
+  // Finding 2, end to end: the lane annotates WHY it opted out. Before the
+  // reader handled inline comments the value read as "1 # lane isolation",
+  // normalizeSkipFlag reported "not stated", and the full preflight ran —
+  // the original defect's shape, reached through a different door.
+  it("makes zero docker calls when the .env.local flag carries an inline comment", () => {
+    const result = runLauncher(
+      ["PORT=13839", "CINATRA_SKIP_DEV_PREFLIGHT=1 # lane isolation: no shared containers", ""].join(
+        "\n",
+      ),
+    );
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
+  });
+
+  it("makes zero docker calls when the quoted .env.local flag carries an inline comment", () => {
+    const result = runLauncher(
+      ["PORT=13839", 'CINATRA_SKIP_DEV_PREFLIGHT="1" # lane isolation', ""].join("\n"),
+    );
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
+  });
+
+  // Finding 1, end to end: a remote Nango is not ours to start. `.invalid` is
+  // reserved as non-resolvable (RFC 2606), so the /health probe fails on DNS
+  // without reaching the network.
+  it("does not heal — or publish — a Nango configured on a remote host", () => {
+    const result = runLauncher("PORT=13839\n", {
+      NANGO_SERVER_URL: "https://nango.example.invalid",
+    });
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
+    expect(result.stderr).toContain("nango.example.invalid");
+  });
+
+  // The subtler half: Nango IS ours, but `up -d nango-server` starts its
+  // depends_on (nango-db, redis) too. With REDIS_URL pointing elsewhere there is
+  // no redis host port this checkout may claim, so healing would publish the
+  // global 6379 — exactly the collision this module exists to prevent. Stand
+  // down instead, naming the URL that decided it.
+  it("does not start the local stack when a depends_on service is configured elsewhere", () => {
+    const result = runLauncher("PORT=13839\n", {
+      REDIS_URL: "rediss://cache.example.com:6380",
+    });
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
+    expect(result.stderr).toContain("REDIS_URL=rediss://cache.example.com:6380");
+  });
+
+  // A loopback URL that states NO port is the same "not ours" case: the scheme
+  // default is not this checkout's to publish, and it must not silently become
+  // the global 5435. Stated on NANGO_DATABASE_URL rather than NANGO_SERVER_URL
+  // so the /health probe still targets the reserved-closed loopback port above
+  // and this test never reaches for :80 on the host running it.
+  it("does not start the local stack for a loopback URL that states no port", () => {
+    const result = runLauncher("PORT=13839\n", {
+      NANGO_DATABASE_URL: "postgresql://localhost/nango",
+    });
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
+    expect(result.stderr).toContain(
+      "NANGO_DATABASE_URL=postgresql://localhost/nango",
+    );
   });
 
   it("without the flag, scopes its compose calls to the worktree project and ports", () => {
-    const { calls } = runLauncher(
+    const result = runLauncher(
       [
         "PORT=13839",
         "COMPOSE_PROJECT_NAME=p2839",
@@ -446,7 +738,9 @@ describe("dev-server.mjs preflight (end-to-end, fake docker)", () => {
         "",
       ].join("\n"),
     );
+    const { calls } = result;
 
+    expectCleanRun(result);
     expect(calls.length).toBeGreaterThan(0);
     const up = calls.find((c) => c.argv.includes("up"));
     expect(up, "the Nango heal should have run").toBeDefined();
