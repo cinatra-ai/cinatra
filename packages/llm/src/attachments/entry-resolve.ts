@@ -106,16 +106,24 @@ export async function resolveStreamMessageAttachments(params: {
       }
     }
   }
+  // APPENDED, not prepended (cinatra#2771 lever 2). The manifest is per-turn
+  // content — it names this turn's refs, their titles and sizes — and it used
+  // to sit at byte 0 of the system string, ahead of the whole stable persona.
+  // A provider caches the longest matching request prefix, so one unreadable
+  // attachment moved the divergence point to the very front and re-billed the
+  // entire prompt. At the tail it costs only its own bytes, and it is also the
+  // most recent thing the model reads, which is the stronger position for a
+  // "do not claim you read this file" note, not the weaker one.
   const system =
     notReadable.length > 0
-      ? `${manifestToModelText({
+      ? `${params.system}\n\n${manifestToModelText({
           attachedButNotReadable: notReadable.map((e) => ({
             ref: e.ref,
             title: e.ref.title,
             size: e.ref.size,
             reason: e.reason,
           })),
-        })}\n\n${params.system}`
+        })}`
       : params.system;
   return { messages: sanitized, system };
 }
@@ -134,7 +142,8 @@ export async function resolveEntryAttachments(params: {
   // (2) Attachments BUT no resolver ports -- Decision A requires the model to
   // be TOLD the file exists and is not readable. Never silently drop the
   // attachment signal. Build a "resolver unavailable for this run" manifest
-  // for every ref and prepend to system; the turn still proceeds.
+  // for every ref and APPEND it to system (cinatra#2771: per-turn content goes
+  // after the stable prefix, never before it); the turn still proceeds.
   if (!params.ports) {
     const manifest = {
       attachedButNotReadable: params.attachments.map((ref) => ({
@@ -145,7 +154,7 @@ export async function resolveEntryAttachments(params: {
       })),
     };
     return {
-      system: `${manifestToModelText(manifest)}\n\n${params.system}`,
+      system: `${params.system}\n\n${manifestToModelText(manifest)}`,
     };
   }
   const { readable, manifest } = await resolveAttachments({
@@ -164,10 +173,11 @@ export async function resolveEntryAttachments(params: {
         }))
       : undefined;
   // Decision A: a non-ingestible attachment is NEVER silently dropped -- its
-  // structured manifest is PREPENDED to the system prompt so the model knows a
-  // file exists and why it cannot read it.
+  // structured manifest is APPENDED to the system prompt so the model knows a
+  // file exists and why it cannot read it. Appended rather than prepended so
+  // the stable, cacheable head of the prompt stays intact (cinatra#2771).
   const system = manifest
-    ? `${manifestToModelText(manifest)}\n\n${params.system}`
+    ? `${params.system}\n\n${manifestToModelText(manifest)}`
     : params.system;
   return { resolvedAttachments, system };
 }

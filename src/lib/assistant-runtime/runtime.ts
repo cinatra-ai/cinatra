@@ -107,6 +107,11 @@ import {
 } from "@/lib/execution/surface-execution-session";
 import { evaluateExecutionProvenance } from "@cinatra-ai/llm/execution-plane";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
+// cinatra#2771 lever 2 — the stable-head-first system-string composer.
+import {
+  composeChatSystemPrompt,
+  type ChatSystemPromptFragments,
+} from "./chat-system-prefix";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 // The scripted widget turn's REAL self-MCP dispatcher (cinatra#2683). Imported
 // unconditionally (a module, not a side effect); CONSTRUCTED only inside the
@@ -1600,6 +1605,27 @@ export async function runAssistantTurn(
     noProgressAbort.abort(noProgressAbortReason);
   };
 
+  // cinatra#2771 lever 2 — the turn's system fragments, named. Collecting them
+  // into one typed record is what lets the composer own the ORDER (stable head
+  // first, volatile tail last) and lets a unit test assert byte-stability on
+  // the exact same structure the turn builds.
+  const chatSystemFragments: ChatSystemPromptFragments = {
+    systemPrompt,
+    // The provider's skill contribution: an availability cue (Anthropic
+    // container listing; empty for OpenAI shell delivery, which must not be
+    // told about a read_skill tool) or, on an inline provider, the expanded
+    // skill bodies.
+    skillSystemContext,
+    instanceContext,
+    extensionConfirmationPolicy,
+    userContext,
+    pendingConfirmationContext,
+    explicitDispatchDirective,
+    // AC#5: the conversation-only degrade notice (empty for tool-capable
+    // providers).
+    conversationOnlyNotice,
+  };
+
   try {
     await stream({
       provider: adapter.provider,
@@ -1608,23 +1634,12 @@ export async function runAssistantTurn(
       // An explicit `model` pref overrides the connection default; absent, the
       // field is omitted so the call is byte-identical to the legacy chat.
       ...(modelPrefs.model ? { model: modelPrefs.model } : {}),
-      system:
-        explicitDispatchDirective +
-        systemPrompt +
-        // The provider's skill contribution: an availability cue (Anthropic
-        // container listing; empty for OpenAI shell delivery, which must not be
-        // told about a read_skill tool) or, on an inline provider, the expanded
-        // skill bodies. Separated explicitly — the fragment carries no leading
-        // blank line of its own, and a trimmed/fallback persona would otherwise
-        // run straight into its first heading.
-        (skillSystemContext ? `\n\n${skillSystemContext}` : "") +
-        userContext +
-        instanceContext +
-        extensionConfirmationPolicy +
-        pendingConfirmationContext +
-        // AC#5: the conversation-only degrade notice (empty for tool-capable
-        // providers, so their system string is byte-identical to before).
-        conversationOnlyNotice,
+      // cinatra#2771 lever 2 — composed STABLE HEAD FIRST. The same eight
+      // fragments as before, re-ordered so every one that can differ between
+      // two turns of a conversation lands after every one that cannot. The
+      // composer is pure, so the byte-stability property is unit-asserted
+      // rather than inferred (see `chat-system-prefix.ts`).
+      system: composeChatSystemPrompt(chatSystemFragments),
       messages: messages.map((m) => ({
         role: m.role,
         content: m.content,

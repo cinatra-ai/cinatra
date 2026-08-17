@@ -72,6 +72,31 @@ const TOKEN_SCOPE = "mcp:connect";
 // long). The actual authz surface is bounded server-side by
 // `delegated-chat-tool-policy.ts`, not by the token TTL.
 const TOKEN_TTL_SECONDS = 30 * 60;
+/**
+ * The MINT CLOCK is quantized (cinatra#2771 lever 2).
+ *
+ * THE PROBLEM. This token is not only an Authorization header — it is a VALUE
+ * INSIDE THE REQUEST PREFIX. The chat turn hands the provider one hosted MCP
+ * reference, that reference carries `headers.Authorization`, and it is the
+ * FIRST entry of the turn's tool array. Providers cache the longest matching
+ * request prefix, so a token whose bytes change re-bills every byte after it —
+ * which, for the first tool, is the whole tool catalog. With a second-resolution
+ * `iat`/`exp` the bytes changed on essentially every turn, so a ~24k-token
+ * prefix was billed cold each time no matter how close together the turns were.
+ *
+ * THE FIX. Floor `iat` to a bucket. Every turn that starts inside one bucket
+ * mints a BYTE-IDENTICAL token, so the prefix is reusable; a turn in the next
+ * bucket mints a new one. The bucket is 5 minutes, matching the provider cache
+ * window this is meant to land inside.
+ *
+ * WHY THIS DOES NOT WIDEN ANYTHING. `exp` is derived from the SAME floored
+ * value, so the token's lifetime is exactly `TOKEN_TTL_SECONDS` as before and
+ * its wall-clock expiry is never LATER than an unquantized mint's would be —
+ * at worst it is one bucket EARLIER. Worst-case remaining validity at mint is
+ * therefore 25 minutes, still an order of magnitude beyond the 120 s turn
+ * ceiling. Nothing about the claims, the signature, or the verifier changes.
+ */
+const TOKEN_ISSUE_BUCKET_SECONDS = 5 * 60;
 const AUTH_BASE_PATH = "/api/auth";
 const MCP_BASE_PATH = "/api/mcp";
 
@@ -112,8 +137,20 @@ function issueIssuer(): string {
   return `${origin}${AUTH_BASE_PATH}`;
 }
 
+/**
+ * The floored mint instant, in whole seconds. Exported so the byte-stability
+ * test can state the bucket boundary it exercises instead of guessing it.
+ */
+export function chatMcpActorTokenIssuedAt(nowMs: number): number {
+  const nowSeconds = Math.floor(nowMs / 1000);
+  return nowSeconds - (nowSeconds % TOKEN_ISSUE_BUCKET_SECONDS);
+}
+
 export function issueChatMcpActorToken(input: ChatMcpActor): string {
-  const now = Math.floor(Date.now() / 1000);
+  // Quantized, not raw: see TOKEN_ISSUE_BUCKET_SECONDS. Two turns inside one
+  // bucket produce the same bytes, so the provider can reuse the prefix that
+  // carries this header.
+  const issuedAt = chatMcpActorTokenIssuedAt(Date.now());
   const header = { alg: "HS256", typ: "JWT" };
   const payload: ChatMcpActorTokenClaims = {
     t: TOKEN_TYPE,
@@ -123,8 +160,8 @@ export function issueChatMcpActorToken(input: ChatMcpActor): string {
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
-    iat: now,
-    exp: now + TOKEN_TTL_SECONDS,
+    iat: issuedAt,
+    exp: issuedAt + TOKEN_TTL_SECONDS,
   };
 
   const signingInput = `${base64urlJson(header)}.${base64urlJson(payload)}`;

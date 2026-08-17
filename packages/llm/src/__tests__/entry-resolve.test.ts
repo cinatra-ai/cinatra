@@ -63,10 +63,10 @@ describe("resolveEntryAttachments", () => {
     });
     expect(out.resolvedAttachments).toBeUndefined();
     expect(out.system).not.toBe(SYS);
-    expect(out.system.startsWith("[ATTACHMENTS")).toBe(true);
+    expect(out.system.includes("[ATTACHMENTS")).toBe(true);
     expect(out.system).toContain("resolver unavailable for this run");
     expect(out.system).toContain("needed.pdf");
-    expect(out.system.endsWith(SYS)).toBe(true);
+    expect(out.system.startsWith(SYS)).toBe(true);
   });
 
   it("ingestible + cache MISS → upload + cachePut → native part, ref stripped", async () => {
@@ -117,7 +117,7 @@ describe("resolveEntryAttachments", () => {
     expect(p.providerUpload).not.toHaveBeenCalled();
   });
 
-  it("non-ingestible → manifest PREPENDED to system, no parts", async () => {
+  it("non-ingestible → manifest APPENDED to system, no parts", async () => {
     const out = await resolveEntryAttachments({
       attachments: [ref("application/zip", { title: "bundle.zip" })],
       ports: ports(),
@@ -127,8 +127,8 @@ describe("resolveEntryAttachments", () => {
     });
     expect(out.resolvedAttachments).toBeUndefined();
     expect(out.system).not.toBe(SYS);
-    expect(out.system.startsWith("[ATTACHMENTS")).toBe(true);
-    expect(out.system.endsWith(SYS)).toBe(true);
+    expect(out.system.includes("[ATTACHMENTS")).toBe(true);
+    expect(out.system.startsWith(SYS)).toBe(true);
     expect(out.system).toContain("NOT readable");
   });
 
@@ -145,7 +145,10 @@ describe("resolveEntryAttachments", () => {
     });
     expect(out.resolvedAttachments).toHaveLength(1);
     expect(out.resolvedAttachments?.[0]?.nativeKind).toBe("openai_input_file");
-    expect(out.system.startsWith("[ATTACHMENTS")).toBe(true);
+    expect(out.system.includes("[ATTACHMENTS")).toBe(true);
+    // cinatra#2771: the manifest is APPENDED, so the stable prompt head stays
+    // at byte 0 and a provider can still reuse it.
+    expect(out.system.startsWith(SYS)).toBe(true);
     expect(out.system).toContain("no.zip");
   });
 });
@@ -213,7 +216,10 @@ describe("resolveStreamMessageAttachments", () => {
       model: "gpt-5.5",
       system: SYS,
     });
-    expect(out.system.startsWith("[ATTACHMENTS")).toBe(true);
+    expect(out.system.includes("[ATTACHMENTS")).toBe(true);
+    // cinatra#2771: the manifest is APPENDED, so the stable prompt head stays
+    // at byte 0 and a provider can still reuse it.
+    expect(out.system.startsWith(SYS)).toBe(true);
     expect(out.system).toContain("doc1.pdf");
     expect(out.system).toContain("doc2.pdf");
     expect(out.system).toContain("resolver unavailable");
