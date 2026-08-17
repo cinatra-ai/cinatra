@@ -4,7 +4,11 @@
 // Real: the application, the chat surface, the composer, the assistant runtime,
 // the self-MCP transport, the `schedule_proposal_render` producer, the proposal
 // token, the DATA_PART, the card registry and the S1 shell.
-// Stood in for: the MODEL LAYER only (the deterministic scripted provider).
+// Stood in for: the model. The deterministic scripted provider chooses which
+// tool this turn calls. Note this runs on a tree whose scripted schedule arm
+// also composes the schedule arguments, and whose assistant runtime carries
+// one condition routing such a turn here — see the evidence README, which
+// states that reach. "Model layer only" would understate it.
 import { chromium } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 

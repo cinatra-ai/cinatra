@@ -112,16 +112,40 @@ taken on trust.
 | `S9a-b__chat_thread__verification-placeholder.png` | **development** | The verification reading asked for by its ref, in a real conversation. The assistant calls `verification_record_render`, and what draws is the same shell: "Verification / Advisory reading." No outcome pill, no revisions, no fields. Thread and composer in frame. |
 | `required-gate-run.txt` | — | The verbatim run of the required gate, exit 1, six findings unfiltered, naming both undrawn kinds. |
 
-`capture-a-log.txt` and `capture-b-log.txt` are the machine output of the two
-capture programs, which are committed beside them — `capture-a-schedule.mjs` and
-`capture-b-verification.mjs`. Read them: every line in the logs is printed by one
-of those two files, so the assertions can be audited rather than believed, and
-re-run rather than trusted.
+`capture-a-log.txt` and `capture-b-log.txt` were printed by the two capture
+programs committed beside them — `capture-a-schedule.mjs` and
+`capture-b-verification.mjs`. Read those two files: every line in the logs is
+printed by one of them, so the assertions can be audited rather than believed,
+and re-run rather than trusted.
 
 **One redaction, marked in place.** `teardown-log.txt` line 9 had the framework
 version token the process table printed. The source-leak gate flags that shape,
 so the token is replaced by a marker naming exactly what was removed and why.
-Nothing else in any log is altered.
+
+## What this record ATTESTS rather than proves
+
+A second read-only adversarial review of this round drew a line worth keeping
+rather than papering over: a committed tree can prove that a program COULD have
+printed a log, and cannot prove that it DID. So the statements below are the
+author's attestation. They are not derivable from the files, and a reader should
+treat them as claims:
+
+- that the two logs are the unmodified output of the two committed programs,
+  changed only by the one marked redaction above and by nothing else;
+- that the operator's own Compose project was contacted exactly once, by the
+  listing at the end of `teardown-log.txt`;
+- that the required gate re-ran byte-identical after the model change. Only one
+  gate output is committed, so a reader cannot diff the two.
+
+What the tree DOES prove is checkable and is the part the claim rests on: the
+programs contain no DOM injection, no stubbed fetch and no hand-written data
+part; their anchor lists match the ratified contracts exactly; and their selector
+rule is the gate's own. The captures can be re-run.
+
+**One commit message is wrong and cannot be rewritten.** The commit that added
+these two cells calls the change "two model-layer files". One of them is the
+assistant runtime, which is not a model-layer file. The message stands as
+written because the branch is never force-pushed; this record is the correction.
 
 ## What is real, and what stands in
 
