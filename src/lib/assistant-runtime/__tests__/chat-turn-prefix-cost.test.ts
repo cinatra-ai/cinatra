@@ -78,6 +78,15 @@ vi.mock("@/lib/artifacts/attachment-resolver-ports", () => ({
 vi.mock("@/lib/agent-run-skills-used", () => ({
   recordTurnSkillDelivery: vi.fn(async () => 0),
 }));
+// A GENUINELY MUTATING volatile source (codex round-1, finding 4). The
+// pending-confirmation section is a one-hour sliding window over live rows, so
+// it really does change between two turns of one conversation. Driving it from
+// a mutable fake is what turns "the composer declares this fragment volatile"
+// into "a volatile fragment actually moved, and the head did not".
+const volatileState = vi.hoisted(() => ({ pending: "" }));
+vi.mock("../pending-confirmation-context", () => ({
+  buildPendingConfirmationContext: vi.fn(async () => volatileState.pending),
+}));
 vi.mock("@cinatra-ai/llm", () => ({
   hasConfiguredLlmRuntime: vi.fn(async () => true),
   checkPublicMcpReachability: vi.fn(async () => ({
@@ -140,6 +149,7 @@ const ALL_ALLOWED = delegatedChatAllowedToolNames();
 function turnArgs(
   send: (event: string, data: unknown) => void,
   contents: string[],
+  sessionOrgId: string | null,
 ) {
   return {
     messages: contents.map((content, i) => ({
@@ -149,17 +159,17 @@ function turnArgs(
     actorContext: { actorType: "user", userId: "u1" } as never,
     userId: "u1",
     platformRole: "member" as const,
-    sessionOrgId: null,
+    sessionOrgId,
     send,
     turnIdentity: { turnId: "turn-2771", runId: "run-2771" },
   };
 }
 
-async function runTurn(contents: string[]) {
+async function runTurn(contents: string[], sessionOrgId: string | null = null) {
   capturedStreamInput = null;
   await runAssistantTurn(
     buildCinatraAssistantRuntimeConfig(),
-    turnArgs(vi.fn(), contents),
+    turnArgs(vi.fn(), contents, sessionOrgId),
   );
   return capturedStreamInput!;
 }
@@ -180,7 +190,16 @@ function cacheablePrefix(input: Record<string, unknown>): string {
 beforeEach(() => {
   capturedStreamInput = null;
   capturedExposures.length = 0;
+  volatileState.pending = "";
 });
+
+/** The longest common prefix of two strings, in bytes. */
+function commonPrefixLength(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[i] === b[i]) i += 1;
+  return i;
+}
 
 // ---------------------------------------------------------------------------
 // LEVER 1 — selective exposure
@@ -287,6 +306,42 @@ describe("lever 2: the cacheable prefix is byte-identical across turns", () => {
     const second = JSON.stringify(
       (await runTurn(["open another dashboard please"])).tools,
     );
+    expect(second).toBe(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LEVER 2, the harder half (codex round-1, finding 4)
+//
+// A composer that declares its own head stable proves little. This drives a
+// source that GENUINELY changes between two turns — the pending-confirmation
+// section — through the real runtime, and asserts where the two system strings
+// actually diverge: at the volatile tail, never inside the head.
+// ---------------------------------------------------------------------------
+describe("lever 2: a changing volatile source moves only the tail", () => {
+  it("the divergence point is at or after the whole stable head", async () => {
+    volatileState.pending = "";
+    const first = (await runTurn(["hi"], "org-2771")).system as string;
+    volatileState.pending =
+      "\n\nRecent destructive-tool confirmation outcomes:\n- [user denied] x on y";
+    const second = (await runTurn(["hi"], "org-2771")).system as string;
+
+    expect(second).not.toBe(first);
+    const shared = commonPrefixLength(first, second);
+    // The head — persona, skills, instance namespace, confirmation policy — is
+    // entirely inside the shared prefix.
+    const headEnd = first.indexOf(CONFIRMATION_POLICY) + CONFIRMATION_POLICY.length;
+    expect(headEnd).toBeGreaterThan(0);
+    expect(shared).toBeGreaterThanOrEqual(headEnd);
+    // And the divergence really is the new section, not something earlier.
+    expect(second.slice(shared)).toContain("user denied");
+  });
+
+  it("the TOOL block is untouched when a volatile system source changes", async () => {
+    volatileState.pending = "";
+    const first = JSON.stringify((await runTurn(["hi"], "org-2771")).tools);
+    volatileState.pending = "\n\nSOMETHING NEW";
+    const second = JSON.stringify((await runTurn(["hi"], "org-2771")).tools);
     expect(second).toBe(first);
   });
 });

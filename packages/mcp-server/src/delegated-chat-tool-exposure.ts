@@ -35,10 +35,32 @@
 // 9. Exposure inside one conversation is therefore monotone: it grows toward
 // the full catalog and never silently drops a tool the model was already using.
 //
-// FULL-CATALOG REACHABILITY, three ways, all proven by test:
+// FAIL OPEN ON EXPOSURE, NEVER ON ADMISSION. A finite keyword vocabulary can
+// never recognise every way a person phrases a request: "find Jane Doe" is a
+// CRM question and "plot revenue by month" is a dashboard question, and neither
+// carries a vocabulary word. Narrowing those turns to the core floor would take
+// away a tool the model genuinely needed, which is a behaviour regression and
+// strictly worse than paying for schemas. So an unrecognised SUBSTANTIVE turn
+// gets the WHOLE catalog — the pre-#2771 behaviour — and only a turn the core
+// floor demonstrably serves is narrowed:
+//
+//   · a topic matched                     → core + those topics
+//   · nothing matched, and the turn is
+//     small talk or a core-vocabulary
+//     question (agents, runs, connectors,
+//     screens, projects, objects)         → core only
+//   · nothing matched, and the turn says
+//     something else                      → the full catalog
+//
+// The cost win therefore comes from the turns we can POSITIVELY identify, not
+// from guessing at the rest. Widening the vocabulary later moves turns out of
+// the third bucket and is a pure improvement; it can never take a tool away.
+//
+// FULL-CATALOG REACHABILITY, four ways, all proven by test:
 //   1. the union of `core` + every topic IS the whole allowlist;
 //   2. any topic keyword anywhere in the conversation selects that topic;
-//   3. `mode: "full"` (operator escape hatch, see `resolveChatToolExposureMode`)
+//   3. an unrecognised substantive turn gets the whole allowlist (above);
+//   4. `mode: "full"` (operator escape hatch, see `resolveChatToolExposureMode`)
 //      emits exactly `delegatedChatAllowedToolNames()`.
 //
 // BOUNDARY WITH THE ADMISSION MECHANISM. This module builds ON TOP of the
@@ -224,12 +246,16 @@ const TOPIC_VOCABULARY: Readonly<
   crm: {
     words: [
       "crm", "contact", "contacts", "account", "accounts", "lead", "leads",
-      "company", "companies", "segment", "audience",
+      "company", "companies", "segment", "audience", "customer", "customers",
+      "prospect", "prospects",
     ],
     phrases: [],
   },
   dashboards: {
-    words: ["dashboard", "dashboards", "chart", "charts", "graph", "cube", "cubes", "kpi", "visualize", "visualise"],
+    words: [
+      "dashboard", "dashboards", "chart", "charts", "graph", "graphs", "plot",
+      "cube", "cubes", "kpi", "kpis", "visualize", "visualise", "trend", "trends",
+    ],
     phrases: [],
   },
   extensions_admin: {
@@ -258,6 +284,35 @@ const TOPIC_VOCABULARY: Readonly<
   },
 };
 
+/**
+ * The vocabulary the CORE FLOOR itself serves. A turn that uses one of these and
+ * matches no topic is narrowed to core, because the tools it plausibly wants are
+ * already there: agent discovery/dispatch/polling, the connector inventory, the
+ * screen lookup, the extension search, projects and the canonical object reads.
+ *
+ * This is the ONLY positive evidence that narrowing is safe. Everything else
+ * falls through to the full catalog.
+ */
+const CORE_VOCABULARY: readonly string[] = [
+  "agent", "agents", "run", "runs", "running", "ran", "dispatch", "dispatched",
+  "connector", "connectors", "connection", "connections", "connected",
+  "screen", "screens", "page", "extension", "extensions", "install", "installed",
+  "project", "projects", "object", "objects", "status", "queue", "queued",
+  "cancel", "stop", "poll", "platform", "cinatra",
+];
+
+/**
+ * Pure small talk: a turn made only of these tokens says nothing about what the
+ * model may need, and the core floor is the right answer for it.
+ */
+const SMALL_TALK: readonly string[] = [
+  "hi", "hey", "hello", "yo", "hallo", "moin", "thanks", "thank", "thx", "ty",
+  "cheers", "ok", "okay", "k", "cool", "nice", "great", "sure", "yes", "no",
+  "yep", "nope", "please", "sorry", "bye", "goodbye", "you", "u", "how", "are",
+  "doing", "good", "morning", "afternoon", "evening", "night", "help", "there",
+  "hi5", "welcome", "and", "the", "a", "an", "is", "it", "im", "i", "m",
+];
+
 /** Phrases that ask, in plain language, for everything. */
 const EXPOSE_ALL_PHRASES: readonly string[] = [
   "all tools",
@@ -279,8 +334,24 @@ export type ChatToolExposureInput = {
   mode?: ChatToolExposureMode;
 };
 
+/**
+ * How the list was arrived at. Reported so an operator reading the turn log can
+ * tell a narrowing from a fail-open, and so the tests can name the three
+ * canonical outcomes instead of inferring them from a length.
+ */
+export type ChatToolExposureReason =
+  /** Topics matched: core + those topics. */
+  | "topic_match"
+  /** No topic, but the turn is small talk or a core-vocabulary question. */
+  | "core_served"
+  /** No topic and nothing recognised: the WHOLE catalog, as before #2771. */
+  | "unrecognized_fail_open"
+  /** The operator escape hatch or an explicit `mode: "full"`. */
+  | "mode_full";
+
 export type ChatToolExposure = {
   mode: ChatToolExposureMode;
+  reason: ChatToolExposureReason;
   /** Selected topics, in `CHAT_TOOL_TOPICS` order. Empty on a core-only turn. */
   topics: readonly ChatToolTopic[];
   /** The exposure list: sorted, de-duplicated, always a subset of the allowlist. */
@@ -342,6 +413,24 @@ export function selectChatToolTopics(
 }
 
 /**
+ * Is this conversation one the CORE FLOOR demonstrably serves?
+ *
+ * True when it is pure small talk, or when it uses at least one core-vocabulary
+ * word (agents, runs, connectors, screens, projects, objects, extensions). Any
+ * other wording is treated as unrecognised, and unrecognised means the full
+ * catalog — see the fail-open note at the top of this file.
+ */
+export function isCoreServedConversation(
+  conversationText: readonly string[],
+): boolean {
+  const tokens = tokenize(conversationText.join("\n"));
+  if (tokens.size === 0) return true;
+  if (CORE_VOCABULARY.some((w) => tokens.has(w))) return true;
+  const smallTalk = new Set(SMALL_TALK);
+  return [...tokens].every((t) => smallTalk.has(t));
+}
+
+/**
  * THE ENTRY POINT. Deterministic and byte-stable: the same input yields the
  * same array, in the same order, every time.
  *
@@ -355,9 +444,25 @@ export function resolveDelegatedChatToolExposure(
   const allowed = delegatedChatAllowedToolNames();
   const mode: ChatToolExposureMode = input.mode ?? "tiered";
   if (mode === "full") {
-    return { mode, topics: [...CHAT_TOOL_TOPICS], toolNames: allowed };
+    return {
+      mode,
+      reason: "mode_full",
+      topics: [...CHAT_TOOL_TOPICS],
+      toolNames: allowed,
+    };
   }
   const topics = selectChatToolTopics(input.conversationText);
+  if (topics.length === 0 && !isCoreServedConversation(input.conversationText)) {
+    // Nothing recognised. Fail OPEN on exposure: the model keeps every tool it
+    // had before #2771, because a missing tool is a behaviour regression and a
+    // paid-for schema is only a cost.
+    return {
+      mode,
+      reason: "unrecognized_fail_open",
+      topics: [...CHAT_TOOL_TOPICS],
+      toolNames: allowed,
+    };
+  }
   const selected = new Set<string>(CORE_TOOLS);
   for (const topic of topics) {
     for (const name of TOPIC_TOOLS[topic]) selected.add(name);
@@ -370,7 +475,12 @@ export function resolveDelegatedChatToolExposure(
   const toolNames = [...selected]
     .filter((name) => isDelegatedChatMcpToolAllowed(name))
     .sort();
-  return { mode, topics, toolNames };
+  return {
+    mode,
+    reason: topics.length > 0 ? "topic_match" : "core_served",
+    topics,
+    toolNames,
+  };
 }
 
 /**

@@ -56,8 +56,10 @@
 // Counting is scoped to the RESERVED self-MCP reference: unrelated external MCP
 // references and legitimate non-catalog function tools are permitted.
 //
-// Prefix stability is a REPORTED diagnostic at the end of this file, not a
-// gated assertion (see its comment).
+//   7. PREFIX STABILITY: the cacheable projection of the outbound request is
+//      byte-identical across two identical turns (cinatra#2771 lever 2). It was
+//      a report until the property actually held; see its comment at the end of
+//      this file for what it does and does not claim.
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
@@ -854,15 +856,21 @@ describe("Gemini — conversation-only, with NO tools block on the wire", () => 
 });
 
 // ---------------------------------------------------------------------------
-// PREFIX STABILITY — a REPORTED diagnostic, NOT a gated assertion.
+// PREFIX STABILITY — now a GATED assertion (cinatra#2771 lever 2).
 //
-// The prompt-cache precondition (#2771 lever 2) is byte-equality of the
-// cacheable PREFIX across two identical-config turns. It is reported, never
-// gated: a log-only comparison must not be dressed up as a passing assertion,
-// and provider-side cache accounting cannot be established against a fake
-// endpoint. The projection is canonical and credential-free — headers'
-// Authorization / authorization_token redacted, conversation input and
-// turn/run ids excluded.
+// It shipped as a report because nothing yet HELD the property: the runtime
+// concatenated turn-varying fragments ahead of the stable prompt, and the
+// delegated MCP bearer inside the first tool changed its bytes every second, so
+// an equality assertion would only have recorded a known failure. #2771 fixes
+// both, so the property is now asserted here — on the REAL connector
+// serialization, through the real provider SDKs, at the `fetch` capture point.
+//
+// WHAT IT STILL DOES NOT CLAIM. Byte-equality of the outbound prefix is the
+// PRECONDITION for provider prompt caching, not proof of it. Provider-side
+// cache accounting (`cached_input_tokens`) cannot be established against a fake
+// endpoint and needs a live measurement with a real key. The projection is
+// canonical and credential-free — headers' Authorization / authorization_token
+// redacted, conversation input and turn/run ids excluded.
 // ---------------------------------------------------------------------------
 
 function redactAuth(value: unknown): unknown {
@@ -891,7 +899,7 @@ function cacheablePrefixProjection(body: Record<string, unknown>): string {
   });
 }
 
-describe("prefix stability (REPORTED diagnostic — not a gate)", () => {
+describe("prefix stability (GATED — cinatra#2771 lever 2)", () => {
   beforeEach(() => {
     state.provider = "openai";
     state.defaultModel = "gpt-5.5";
@@ -901,7 +909,7 @@ describe("prefix stability (REPORTED diagnostic — not a gate)", () => {
     responder = () => openAiSse();
   });
 
-  it("reports byte-equality of the cacheable projection across two identical turns", async () => {
+  it("the cacheable projection is BYTE-IDENTICAL across two identical turns", async () => {
     const send = vi.fn();
     await runAssistantTurn(
       buildCinatraAssistantRuntimeConfig(),
@@ -916,15 +924,17 @@ describe("prefix stability (REPORTED diagnostic — not a gate)", () => {
     );
     const second = cacheablePrefixProjection(captured[0].body);
 
-    // REPORT — deliberately not an equality assertion.
     console.info(
-      `[hosted-mcp wire gate] prefix-stability diagnostic: ` +
+      `[hosted-mcp wire gate] prefix stability: ` +
         `${first === second ? "STABLE" : "UNSTABLE"} ` +
         `(${first.length} vs ${second.length} bytes)`,
     );
-    // The only thing asserted is that the diagnostic actually ran on two real
-    // captured prefixes — never that they matched.
+    // The projection ran on two real captured prefixes...
     expect(first.length).toBeGreaterThan(0);
     expect(second.length).toBeGreaterThan(0);
+    // ...and they match, byte for byte. A failure here names a turn-varying
+    // value that reached the request prefix — the whole catalog after it is
+    // re-billed on every turn until it is removed.
+    expect(second).toBe(first);
   });
 });

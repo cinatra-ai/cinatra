@@ -95,6 +95,15 @@ const TOKEN_TTL_SECONDS = 30 * 60;
  * at worst it is one bucket EARLIER. Worst-case remaining validity at mint is
  * therefore 25 minutes, still an order of magnitude beyond the 120 s turn
  * ceiling. Nothing about the claims, the signature, or the verifier changes.
+ *
+ * WHAT IT DOES NOT DO, STATED PLAINLY. Quantization is not a guarantee, it is a
+ * bound. Two turns 2 s apart that straddle a bucket boundary still get different
+ * bytes, so at most ONE turn per bucket can miss on this account instead of
+ * essentially every turn. Any quantization has that boundary — a longer bucket
+ * moves it, it does not remove it — and removing it entirely would mean taking
+ * the rotating credential out of the cache-sensitive part of the request, which
+ * is a provider-transport question, not a mint-clock one. The honest claim is
+ * therefore: a large reduction in avoidable misses, not "caching is now on".
  */
 const TOKEN_ISSUE_BUCKET_SECONDS = 5 * 60;
 const AUTH_BASE_PATH = "/api/auth";

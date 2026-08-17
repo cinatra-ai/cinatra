@@ -21,6 +21,7 @@ import {
 import {
   CHAT_TOOL_TOPICS,
   delegatedChatToolTierOf,
+  isCoreServedConversation,
   overclaimedDelegatedChatToolNames,
   resolveChatToolExposureMode,
   resolveDelegatedChatToolExposure,
@@ -31,7 +32,7 @@ import {
 const ALL = delegatedChatAllowedToolNames();
 
 /** A question that needs no platform tool at all. */
-const TRIVIAL_TURN = ["hi", "Hello — how can I help?", "thanks!"];
+const TRIVIAL_TURN = ["hi", "hello", "thanks"];
 
 describe("the topic map partitions the chat allowlist", () => {
   it("classifies every allowed tool (no drift)", () => {
@@ -241,5 +242,76 @@ describe("the exposure list is canonical (prefix-cache friendly)", () => {
     // "listen" must not select anything, and "wp" inside "swap" must not
     // select the sites topic.
     expect(selectChatToolTopics(["listen to the swapping crment"])).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FAIL OPEN ON EXPOSURE (codex round-1, finding 1).
+//
+// A finite keyword vocabulary cannot recognise every phrasing. Narrowing an
+// unrecognised turn to the core floor would take a tool away from the model,
+// which is a behaviour regression; paying for schemas is only a cost. So an
+// unrecognised SUBSTANTIVE turn keeps the whole pre-#2771 catalog, and only a
+// turn the core floor demonstrably serves is narrowed.
+// ---------------------------------------------------------------------------
+describe("an unrecognised substantive turn keeps the whole catalog", () => {
+  const unrecognised = [
+    "find Jane Doe",
+    "plot revenue by month",
+    "show me the latest record for that person",
+    "what happened with the Berlin thing yesterday",
+    "summarise the quarterly numbers",
+    "who signed the renewal",
+  ];
+
+  it.each(unrecognised)("%s → the full allowlist, not the core floor", (text) => {
+    const exposure = resolveDelegatedChatToolExposure({ conversationText: [text] });
+    // Either a topic matched (fine — it reaches the tools), or nothing did and
+    // the resolver failed OPEN. What must never happen is a narrow core-only
+    // answer to a request the vocabulary did not understand.
+    if (exposure.reason === "unrecognized_fail_open") {
+      expect([...exposure.toolNames]).toEqual([...ALL]);
+    } else {
+      expect(exposure.reason).toBe("topic_match");
+    }
+    expect(exposure.reason).not.toBe("core_served");
+  });
+
+  it("narrows ONLY on small talk or core-vocabulary questions", () => {
+    for (const text of ["hi", "thanks!", "which connectors are active?", "list my agents", "is the run done?"]) {
+      const exposure = resolveDelegatedChatToolExposure({ conversationText: [text] });
+      expect(exposure.reason).toBe("core_served");
+      expect(exposure.toolNames.length).toBeLessThan(ALL.length);
+    }
+  });
+
+  it("classifies the core-served set directly", () => {
+    expect(isCoreServedConversation([])).toBe(true);
+    expect(isCoreServedConversation(["hey there"])).toBe(true);
+    expect(isCoreServedConversation(["which connectors are connected?"])).toBe(true);
+    expect(isCoreServedConversation(["find Jane Doe"])).toBe(false);
+    expect(isCoreServedConversation(["plot revenue by month"])).toBe(false);
+  });
+
+  it("names its reason on every path", () => {
+    expect(
+      resolveDelegatedChatToolExposure({ conversationText: ["hi"] }).reason,
+    ).toBe("core_served");
+    expect(
+      resolveDelegatedChatToolExposure({ conversationText: ["show the dashboard"] }).reason,
+    ).toBe("topic_match");
+    expect(
+      resolveDelegatedChatToolExposure({ conversationText: ["find Jane Doe"] }).reason,
+    ).toBe("unrecognized_fail_open");
+    expect(
+      resolveDelegatedChatToolExposure({ conversationText: ["hi"], mode: "full" }).reason,
+    ).toBe("mode_full");
+  });
+
+  it("a fail-open turn is still canonical (sorted, subset, byte-stable)", () => {
+    const a = resolveDelegatedChatToolExposure({ conversationText: ["find Jane Doe"] });
+    const b = resolveDelegatedChatToolExposure({ conversationText: ["find Jane Doe"] });
+    expect(a.toolNames.join("\n")).toBe(b.toolNames.join("\n"));
+    expect([...a.toolNames]).toEqual([...new Set(a.toolNames)].sort());
   });
 });
