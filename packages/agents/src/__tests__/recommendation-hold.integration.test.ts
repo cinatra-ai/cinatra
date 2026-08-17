@@ -15,12 +15,14 @@
  *   AC-7 the Skills-tab join labels a ledger skill by its selection source
  *        (confirmed / auto-applied / forced).
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
 import { evaluatePolicy } from "@/lib/lifecycle/lifecycle-policy";
-import { evaluateThenPark } from "@/lib/lifecycle/lifecycle-continuation";
+import { evaluateThenPark, type EvaluateThenParkOutcome } from "@/lib/lifecycle/lifecycle-continuation";
+
+import { setRunWaitNotifier, type RunWaitNotifier } from "../run-wait-notifier";
 
 const TEST_SCHEMA = "cinatra_test_recommendation_hold_2067";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -385,5 +387,128 @@ describe.skipIf(!HAS_DB)("cinatra#2148 — recommendation-hold consistency (real
     const after = await hold.readRecommendationParkForRun(runId);
     expect(after?.status).toBe("policy_unresolved");
     expect(after?.resolvedAt).not.toBeNull();
+  });
+});
+
+/**
+ * cinatra#2835, Codex convergence round 2 finding 1 — the "needs your input" row a
+ * hold mints is cleared by the RELEASE PRIMITIVE, so every release path clears it.
+ *
+ * The clear was originally wired into `releaseRecommendationParkForRun`, after
+ * that helper's own `sweepParks` call. That covered exactly one caller. Every
+ * other way a park leaves `parked` bypassed it — above all `sweepParks`' own TTL
+ * fail-close, whose production driver is the gate-maintenance drain
+ * (`releaseResolvedAutoGateParks`), which sweeps EVERY due park including a held
+ * run's. And because a hold moves no run status, there is no
+ * `dispatchRunWaitTransition` behind it either: nothing else in the system would
+ * ever have cleared that row. The bell would point forever at a card the human can
+ * no longer act on.
+ *
+ * These cases exercise the REAL primitive against the REAL table — no mocked
+ * `sweepParks`, which is precisely what let the gap survive the unit tier.
+ */
+describe.skipIf(!HAS_DB)("cinatra#2835 — every release path clears the hold notification (real primitive)", () => {
+  const left: string[] = [];
+
+  beforeEach(() => {
+    left.length = 0;
+    setRunWaitNotifier({
+      onEnterHumanWait: () => {},
+      onLeaveHumanWait: (input) => {
+        left.push(input.runId);
+      },
+    } satisfies RunWaitNotifier);
+  });
+
+  // Never leak the wired notifier into another test file's module singleton.
+  afterEach(() => setRunWaitNotifier(null));
+
+  /** Backdate a park's TTL so the sweeper's due-pass picks it up. */
+  async function expire(parkId: string) {
+    const c = new Client({ connectionString: DB_URL });
+    await c.connect();
+    await c.query(
+      `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+         SET ttl_expires_at = now() - interval '1 minute' WHERE id = $1`,
+      [parkId],
+    );
+    await c.end();
+  }
+
+  it("TTL FAIL-CLOSE clears the row — the path that had no clear at all", async () => {
+    const runId = `run-2835-ttl-${randomUUID()}`;
+    const parked = await parkRecommendation(runId);
+    expect(parked.parked).toBe(true);
+    if (!parked.parked) return;
+    await expire(parked.parkId);
+
+    // The sweeper's OWN due-park pass: no release ids, no hold helper, no run
+    // status transition anywhere. Nothing but the primitive.
+    const swept = await parkStore.sweepParks();
+    expect(swept.blocked).toBeGreaterThanOrEqual(1);
+    expect((await hold.readRecommendationParkForRun(runId))?.status).toBe("policy_unresolved");
+
+    // The wait is over, so the notification is gone.
+    expect(left).toContain(runId);
+  });
+
+  it("a DIRECT sweepParks release clears — a caller that never touches the hold helper", async () => {
+    const runId = `run-2835-direct-${randomUUID()}`;
+    const parked = await parkRecommendation(runId);
+    expect(parked.parked).toBe(true);
+    if (!parked.parked) return;
+
+    const swept = await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
+    expect(swept.released).toBe(1);
+    expect((await hold.readRecommendationParkForRun(runId))?.status).toBe("released");
+    expect(left).toEqual([runId]);
+  });
+
+  it("the hold helper's release clears too — it INHERITS the primitive, it does not wire its own", async () => {
+    const runId = `run-2835-helper-${randomUUID()}`;
+    await parkRecommendation(runId);
+    expect(await hold.releaseRecommendationParkForRun(runId)).toBe(true);
+    expect(left).toEqual([runId]);
+  });
+
+  it("clears EXACTLY ONCE per hold — a re-sweep that transitions nothing clears nothing", async () => {
+    const runId = `run-2835-once-${randomUUID()}`;
+    const parked = await parkRecommendation(runId);
+    if (!parked.parked) return;
+
+    await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
+    expect(left).toEqual([runId]);
+
+    // The status='parked' CAS matches 0 rows the second time, so the already-
+    // released park is not re-reported and the clear does not re-fire.
+    const again = await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
+    expect(again.released).toBe(0);
+    expect(left).toEqual([runId]);
+  });
+
+  it("a NON-hold park leaving `parked` clears NOTHING — an auto-gate park notifies elsewhere", async () => {
+    // A `review` park is the auto-gate machinery's, and its notification is the
+    // (run, reviewTaskId)-keyed auto-gate row that `dispatchAutoGateResolved`
+    // clears on the gate's own decision. Clearing the human-wait row here would
+    // fire on a park release that is not the gate's resolution, under a key
+    // nothing wrote.
+    const runId = `run-2835-review-park-${randomUUID()}`;
+    const reviewOutcome: EvaluateThenParkOutcome = {
+      kind: "park",
+      checkpoint: "review",
+      protectedEffect: "external_publish",
+      reevaluationIntent: false,
+      reason: "test review park",
+    };
+    const parked = await parkStore.maybeParkCheckpoint(reviewOutcome, {
+      runId,
+      eventId: `evt-review-${randomUUID()}`,
+    });
+    expect(parked.parked).toBe(true);
+    if (!parked.parked) return;
+
+    const swept = await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
+    expect(swept.released).toBe(1);
+    expect(left).toEqual([]);
   });
 });

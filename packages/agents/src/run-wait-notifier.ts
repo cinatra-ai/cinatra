@@ -225,6 +225,33 @@ export async function dispatchRunWaitTransition(args: {
 }
 
 /**
+ * The lifecycle checkpoint a run-start recommendation HOLD parks on — the ONE
+ * non-transition human wait this seam serves.
+ *
+ * Declared HERE, in the leaf, rather than in the hold module, for two reasons:
+ * the seam's own hold-binding guard below must compare against it (and this
+ * module may import nothing at runtime — see the header's TRUE LEAF property),
+ * and the park store's release primitive must recognise the same checkpoint to
+ * clear the row. Both import it from here, so the three sites that must agree on
+ * "which park is a notifying hold" share one literal instead of three copies.
+ * `recommendation-hold.ts` re-exports it as `RECOMMENDATION_CHECKPOINT`.
+ */
+export const RECOMMENDATION_HOLD_CHECKPOINT = "recommendation" as const;
+
+/**
+ * The HOLD a human-wait notification is bound to: the continuation park row that
+ * makes the run actually wait. Structurally a `ParkRow` (the park store's row
+ * type is assignable to this), so the only way to obtain one is to have READ a
+ * park — this seam cannot be driven by a caller that has no hold in hand.
+ */
+export interface RunHoldBinding {
+  id: string;
+  runId: string;
+  checkpoint: string;
+  status: "parked" | "released" | "policy_unresolved";
+}
+
+/**
  * cinatra#2835 — drive the wired notifier for a human wait that is NOT a status
  * TRANSITION.
  *
@@ -243,22 +270,71 @@ export async function dispatchRunWaitTransition(args: {
  * (the #2729 ruling: "needs your input", linking back to the conversation the run
  * was started in) — the host cannot derive that here, since a held run carries no
  * HITL interrupt to classify.
+ *
+ * BOUND TO THE HOLD (Codex convergence round 2, finding 2). Every other notifying
+ * seam in this file is bound to a durable fact the caller cannot invent: a status
+ * TRANSITION for `dispatchRunWaitTransition`, a (run, reviewTaskId) gate for the
+ * auto-gate pair. This one had no such binding — it forwarded a caller-supplied
+ * {runId, reason, waitKind} unconditionally, so ANY code path could mint a "needs
+ * your input" row against ANY `pending_input` run and no hold behind it, leaving a
+ * bell pointing at a card that does not exist and (a hold moving no run status) no
+ * transition to ever clear it. It now REFUSES unless it is handed the live
+ * recommendation park that IS the wait:
+ *
+ *   - no `hold` → not expressible: the argument is required;
+ *   - a hold on another checkpoint (an auto-gate `review` park) → refused; that
+ *     wait notifies through `onAutoGateOpen`, and a second row would double-ring;
+ *   - a hold naming another run → refused (the notification is per-run keyed, so a
+ *     mismatched pair would clear under a key nothing wrote);
+ *   - a hold that is not `parked` → refused: a released / TTL-fail-closed park is
+ *     a wait that is already OVER, and minting for it is exactly the stale row
+ *     this issue exists to prevent.
+ *
+ * The refusal is silent-but-logged rather than a throw, matching the seam's
+ * best-effort posture: a notification must never fail a hold, and refusing to
+ * write a fabricated row is strictly safer than writing one. The park's LIVENESS
+ * is re-read from the database by the caller that owns DB access
+ * (`maybeHoldRunForRecommendation`) — this module is a true leaf and cannot query,
+ * so the structural guard here and the DB read there are two halves of one bind.
  */
 export async function dispatchRunHumanWaitEntered(input: {
   runId: string;
   reason: RunHumanWaitReason;
   waitKind?: RunWaitInterruptKind;
+  /** The LIVE recommendation park that makes this run wait. Required. */
+  hold: RunHoldBinding;
 }): Promise<void> {
+  const refusal = describeHoldRefusal(input.runId, input.hold);
+  if (refusal) {
+    console.warn(`[run-wait-notifier] refusing to notify a human wait with no live hold: ${refusal}`);
+    return;
+  }
   const notifier = notifierHolder().notifier;
   if (!notifier) return;
   try {
-    await notifier.onEnterHumanWait(input);
+    await notifier.onEnterHumanWait({
+      runId: input.runId,
+      reason: input.reason,
+      waitKind: input.waitKind,
+    });
   } catch (err) {
     console.warn(
       "[run-wait-notifier] human-wait enter side-effect failed:",
       err instanceof Error ? err.message : err,
     );
   }
+}
+
+/** Why this (run, hold) pair may NOT mint a human-wait notification, or null when
+ * it may. Pure — the caller supplies the row it read. */
+function describeHoldRefusal(runId: string, hold: RunHoldBinding | undefined | null): string | null {
+  if (!hold) return `run ${runId} was given no hold`;
+  if (hold.checkpoint !== RECOMMENDATION_HOLD_CHECKPOINT) {
+    return `park ${hold.id} is a '${hold.checkpoint}' checkpoint, not a recommendation hold`;
+  }
+  if (hold.runId !== runId) return `park ${hold.id} belongs to run ${hold.runId}, not ${runId}`;
+  if (hold.status !== "parked") return `park ${hold.id} is already ${hold.status} — the wait is over`;
+  return null;
 }
 
 /**
@@ -268,11 +344,15 @@ export async function dispatchRunHumanWaitEntered(input: {
  * A recommendation hold that is CONFIRMED or SKIPPED goes on to dispatch, and
  * that `pending_input → queued` transition already clears the row through
  * `dispatchRunWaitTransition`. But a hold can also simply be RELEASED with no
- * dispatch behind it (the TTL sweeper's fail-closed release; a decision whose
- * dispatch is refused downstream), and that run stays `pending_input` — no
- * transition, so nothing would ever clear the row and the bell would keep
- * pointing at a card the human can no longer act on. Releasing the park is
- * therefore itself a clear.
+ * dispatch behind it (the TTL sweeper's fail-close; a decision whose dispatch is
+ * refused downstream), and that run stays `pending_input` — no transition, so
+ * nothing would ever clear the row and the bell would keep pointing at a card the
+ * human can no longer act on. A park leaving `parked` is therefore itself a clear.
+ *
+ * The ONE caller is `sweepParks` (lifecycle-continuation-park-store), the single
+ * primitive through which a park transitions out of `parked` — so EVERY release
+ * path inherits the clear rather than only the one helper that used to wire it
+ * (Codex convergence round 2, finding 1).
  *
  * Idempotent by construction (the host's clear is a delete-by-dedupeKey), so
  * firing here AND on a subsequent dispatch transition is a harmless double-no-op.

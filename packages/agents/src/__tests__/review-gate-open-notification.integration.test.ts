@@ -40,7 +40,7 @@
  *   CINATRA_TEST_DB_URL=postgres://user:pass@127.0.0.1:5432/db \
  *     pnpm --filter @cinatra-ai/agents test:integration review-gate-open-notification
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
@@ -59,6 +59,31 @@ import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-ac
 import type { ChangesRequestedRequest } from "@/lib/lifecycle/lifecycle-repair";
 
 import { setRunWaitNotifier, type RunWaitNotifier } from "../run-wait-notifier";
+
+/**
+ * A one-shot hook that runs INSIDE the repair finalize transaction, immediately
+ * after the successor gate is emitted and before the finalize CAS — the only
+ * window from which the CAS can be made to miss deterministically (see the
+ * ROLLBACK case below). Unarmed by default: `emitArtifactReviewGate` is otherwise
+ * the real one, for this file and for every store that calls it.
+ */
+const hooks = vi.hoisted(() => ({ afterGateEmit: null as null | (() => Promise<void>) }));
+
+vi.mock("../artifact-review-gate-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../artifact-review-gate-store")>();
+  return {
+    ...actual,
+    emitArtifactReviewGate: async (
+      ...args: Parameters<typeof actual.emitArtifactReviewGate>
+    ): ReturnType<typeof actual.emitArtifactReviewGate> => {
+      const emitted = await actual.emitArtifactReviewGate(...args);
+      const hook = hooks.afterGateEmit;
+      hooks.afterGateEmit = null; // one-shot
+      if (hook) await hook();
+      return emitted;
+    },
+  };
+});
 
 const TEST_SCHEMA = "cinatra_test_gate_notify_2833";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -418,6 +443,98 @@ describe.skipIf(!HAS_DB)("cinatra#2833 — every fresh review-gate opening notif
       },
     });
     expect(opened.length).toBe(before);
+  });
+
+  it("REPAIR PIN — ROLLBACK: a finalize that rolls back AFTER emitting the gate notifies NOBODY", async () => {
+    // The negative half of the case above, and the one that makes "post-commit"
+    // mean anything (Codex convergence round 2, finding 3a). The successor gate is
+    // emitted ENLISTED in the finalize transaction, so a non-finalized outcome
+    // discards it on a sentinel throw. If the dispatch sat inside that
+    // transaction — or simply ran unconditionally after it — a human would be told
+    // to review a gate that does not exist and never did, with nothing to clear
+    // the row because no gate will ever be decided.
+    const ev = await produce("document", { destinationClass: "external_publish" });
+    await orch.sweepReviewOrchestration();
+    const runId = ev.producerRunId!;
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+    const baseGate = await gateStore.readReviewGate(runId, baseTaskId);
+    expect(baseGate).not.toBeNull();
+
+    const req = mkChangesRequested(ev, baseGate!.id);
+    const cr = await repairStore.recordChangesRequested({
+      runId,
+      reviewTaskId: baseTaskId,
+      orgId: ORG,
+      request: req,
+      repairCapable: true,
+      producerRunId: ev.producerRunId,
+      currentBaseRevisionId: ev.representationRevisionId,
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) return;
+
+    // Only the successor pin is under test — the base gate already notified.
+    opened.length = 0;
+
+    // FORCE THE ROLLBACK, deterministically. `submitRepairResponse` reads the
+    // repair BEFORE its transaction and CAS-guards the finalize on the status it
+    // read; the gate emit happens first, inside the transaction. Moving the status
+    // on a SEPARATE connection in exactly that window (no row lock is held on
+    // lifecycle_repair yet, so this cannot deadlock) is the documented
+    // "requested→dispatched transition" race: the CAS matches 0 rows and the
+    // freshly-emitted successor gate is rolled back with it.
+    hooks.afterGateEmit = async () => {
+      await pool(
+        `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET status = 'dispatched' WHERE id = $1`,
+        [cr.repairId],
+      );
+    };
+
+    const rr = await repairStore.submitRepairResponse({
+      repairId: cr.repairId,
+      currentBaseRevisionId: ev.representationRevisionId,
+      reauthorized: true,
+      response: {
+        gateId: req.gateId,
+        baseTarget: req.baseTarget,
+        successorTarget: {
+          artifactId: ev.artifactId,
+          representationRevisionId: `rev-rolledback-${randomUUID()}`,
+        },
+        findingOutcomes: [
+          { findingId: "f1", applied: true },
+          { findingId: "f2", applied: true },
+        ],
+        changeSummary: "this finalize never lands",
+        producerProvenance: { runId: ev.producerRunId, agentId: null },
+      },
+    });
+
+    // The hook fired (it is one-shot and self-clearing) and the finalize did NOT
+    // land: the response is refused as a concurrent finalize.
+    expect(hooks.afterGateEmit).toBeNull();
+    expect(rr.ok).toBe(false);
+    if (rr.ok) return;
+    expect(rr.code).toBe("concurrent-finalize");
+
+    // The rollback really discarded the emitted gate — nothing to notify ABOUT.
+    const successorTaskId = repairSuccessorReviewTaskId(cr.repairId, cr.attempt);
+    expect(await gateStore.readReviewGate(runId, successorTaskId)).toBeNull();
+    const gateRows = await pool(
+      `SELECT id FROM "${q(TEST_SCHEMA)}"."artifact_review_gates" WHERE run_id = $1 AND review_task_id = $2`,
+      [runId, successorTaskId],
+    );
+    expect(gateRows.rows).toHaveLength(0);
+
+    // THE ASSERTION: zero notifications. Not "none for the successor" — zero, for
+    // this run and for any other, across the whole rolled-back call.
+    expect(opened).toEqual([]);
+    // And the repair is left retriable rather than silently half-finalized.
+    const repairRow = await pool(
+      `SELECT status, successor_gate_id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id = $1`,
+      [cr.repairId],
+    );
+    expect(repairRow.rows[0]).toMatchObject({ status: "dispatched", successor_gate_id: null });
   });
 
   it("VERIFY PIN: a failed verification's reopened gate notifies once; the idempotent re-drive does not re-notify", async () => {

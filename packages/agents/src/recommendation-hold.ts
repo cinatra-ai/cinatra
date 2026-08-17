@@ -59,12 +59,14 @@ import {
 } from "./lifecycle-continuation-park-store";
 import {
   dispatchRunHumanWaitEntered,
-  dispatchRunHumanWaitLeft,
+  RECOMMENDATION_HOLD_CHECKPOINT,
 } from "./run-wait-notifier";
 import type { AgentRunRecord, AgentTemplateRecord } from "./store";
 
-/** The lifecycle checkpoint the run-start chip-row hold parks on. */
-export const RECOMMENDATION_CHECKPOINT = "recommendation" as const;
+/** The lifecycle checkpoint the run-start chip-row hold parks on. Defined in the
+ * notifier leaf (see `RECOMMENDATION_HOLD_CHECKPOINT`) so this module, the seam's
+ * hold-binding guard and the park store's release primitive share ONE literal. */
+export const RECOMMENDATION_CHECKPOINT = RECOMMENDATION_HOLD_CHECKPOINT;
 
 /** The event id the recommendation park is keyed on. ONE recommendation park
  * per run (the park is unique on (run_id, event_id, checkpoint)), so a per-run
@@ -739,11 +741,25 @@ export async function maybeHoldRunForRecommendation(input: {
   //
   // Awaited but internally swallowed, exactly like the wire announcement above:
   // the park holds the run; the notification only tells the human about it.
-  await dispatchRunHumanWaitEntered({
-    runId: run.id,
-    reason: "pending_input",
-    waitKind: "input",
-  });
+  //
+  // BOUND TO THE HOLD (Codex convergence round 2, finding 2). The seam refuses to
+  // notify without the live park that IS the wait, and the park it is handed is
+  // RE-READ from the database here rather than reconstructed from `parked.parkId`
+  // — this is the liveness half of the bind (the seam is a true leaf and cannot
+  // query). The re-read is not ceremony: between the insert above and this line a
+  // concurrent sweep can already have TTL-fail-closed or released the park, and
+  // notifying for a park that is no longer `parked` mints exactly the stale row
+  // #2835 exists to prevent. A null / already-terminal / mismatched read means no
+  // notification and a held run that is otherwise unaffected.
+  const liveHold = await readRecommendationParkForRun(run.id);
+  if (liveHold && liveHold.id === parked.parkId) {
+    await dispatchRunHumanWaitEntered({
+      runId: run.id,
+      reason: "pending_input",
+      waitKind: "input",
+      hold: liveHold,
+    });
+  }
   return { held: true, parkId: parked.parkId, reason: outcome.reason };
 }
 
@@ -785,16 +801,12 @@ export async function releaseRecommendationParkForRun(
   const park = await readRecommendationParkForRun(runId);
   if (!park || park.status !== "parked") return false;
   if (expectedHoldId !== undefined && park.id !== expectedHoldId) return false;
+  // cinatra#2835 — the wait is over the moment the park leaves `parked`, so the
+  // "needs your input" notification goes with it. That clear is NOT wired here:
+  // it lives inside `sweepParks` itself, the one primitive a park transitions
+  // through, so the TTL fail-close and every other direct caller of the sweeper
+  // inherit it too (Codex convergence round 2, finding 1 — wiring it here covered
+  // only this helper's own callers and left every other release path stale).
   const { released } = await sweepParks({ releasedParkIds: [park.id] });
-  if (released > 0) {
-    // cinatra#2835 — the wait is over the moment the park is released, so the
-    // notification goes with it. A confirm/skip goes on to dispatch, and that
-    // `pending_input → queued` transition clears the row too; this call is what
-    // covers a release with NO dispatch behind it (the TTL sweeper's fail-closed
-    // release, a decision whose dispatch is refused downstream), where the run
-    // stays `pending_input` and no transition would ever fire. The clear is a
-    // delete-by-key, so both firing is a harmless no-op.
-    await dispatchRunHumanWaitLeft({ runId });
-  }
   return released > 0;
 }

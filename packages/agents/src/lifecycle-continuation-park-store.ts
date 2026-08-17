@@ -14,7 +14,9 @@ import "server-only";
 //   sweepParks — the resume sweeper. Releases parks whose linked decision
 //     RESOLVED (release/skip) and TTL-fail-closes the rest of the DUE parks into a
 //     terminal `policy_unresolved` block on the protected effect (always-resume;
-//     never an indefinite strand). Ops-surfaced.
+//     never an indefinite strand). Ops-surfaced. THE one primitive through which a
+//     park leaves `parked`, so it is also where a recommendation hold's human-wait
+//     notification is cleared (cinatra#2835).
 //   strandPark — the forced-strand GUARD: refuses to tear down a still-parked
 //     (non-terminal) park; only an already-resolved park is strippable.
 //   readPolicyUnresolvedParks — the ops visibility reader for blocked effects.
@@ -25,6 +27,10 @@ import { and, eq, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import { artifactProducedOutbox, lifecycleContinuationPark } from "./schema";
+import {
+  dispatchRunHumanWaitLeft,
+  RECOMMENDATION_HOLD_CHECKPOINT,
+} from "./run-wait-notifier";
 import {
   isStrandable,
   resolvePark,
@@ -177,6 +183,24 @@ export interface SweepParksResult {
  *
  * The `resolvePark` pure transition dictates the terminal status + whether the
  * effect blocks; the store applies it.
+ *
+ * cinatra#2835 — this is ALSO where a run-start recommendation hold's "needs your
+ * input" notification is CLEARED, because this function is the one primitive
+ * through which a park leaves `parked` (`maybeParkCheckpoint` only inserts;
+ * `strandPark` refuses anything non-terminal, so it only ever deletes a row this
+ * sweep already resolved). Wiring the clear into the caller that releases a hold
+ * on a human decision — `releaseRecommendationParkForRun` — covered only that one
+ * path, and left every OTHER release stale: notably this function's own TTL
+ * fail-close, whose production driver is the gate-maintenance drain
+ * (`releaseResolvedAutoGateParks`) and which sweeps EVERY due park including a
+ * held run's. A hold moves no run status, so no transition would ever clear the
+ * row behind it and the bell would point at a card the human can no longer act on,
+ * forever. Wired at the primitive, every caller inherits it (Codex convergence
+ * round 2, finding 1).
+ *
+ * BOTH arms clear: a decision-resolved release and a TTL fail-close alike end the
+ * human's ability to act on the hold. Best-effort and post-commit — the dispatch
+ * swallows every error, so a notification can never fail a sweep.
  */
 export async function sweepParks(input: SweepParksInput = {}): Promise<SweepParksResult> {
   const limit = Math.max(1, Math.min(input.limit ?? 100, 500));
@@ -186,6 +210,10 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
 
   let released = 0;
   let blocked = 0;
+  // The runs whose recommendation HOLD this pass ended (either arm) — collected
+  // from the CAS `returning()`, so a park another sweep transitioned first is not
+  // in it and the clear fires exactly once per hold.
+  const endedHoldRunIds = new Set<string>();
 
   // 1. Decision-resolved releases (bounded by the caller's explicit id list). The
   // pure transition confirms the effect is not blocked for a resolved-skip /
@@ -201,8 +229,13 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
           eq(lifecycleContinuationPark.status, "parked"),
         ),
       )
-      .returning({ id: lifecycleContinuationPark.id });
+      .returning({
+        id: lifecycleContinuationPark.id,
+        runId: lifecycleContinuationPark.runId,
+        checkpoint: lifecycleContinuationPark.checkpoint,
+      });
     released += rows.length; // the ACTUAL number transitioned
+    collectEndedHolds(rows, endedHoldRunIds);
   }
 
   // 2. TTL fail-close of the due parks, BOUNDED to `limit` per pass via a LIMIT
@@ -228,10 +261,37 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
         eq(lifecycleContinuationPark.status, "parked"),
       ),
     )
-    .returning({ id: lifecycleContinuationPark.id });
+    .returning({
+      id: lifecycleContinuationPark.id,
+      runId: lifecycleContinuationPark.runId,
+      checkpoint: lifecycleContinuationPark.checkpoint,
+    });
   blocked += dueRows.length;
+  collectEndedHolds(dueRows, endedHoldRunIds);
+
+  // The wait is over for every hold this pass ended — clear its notification.
+  // AFTER both CAS updates, so a row is only ever cleared for a park that
+  // genuinely transitioned; sequential because the set is bounded by `limit` and
+  // each dispatch is a swallowed best-effort call.
+  for (const runId of endedHoldRunIds) {
+    await dispatchRunHumanWaitLeft({ runId });
+  }
 
   return { released, blocked };
+}
+
+/** The subset of just-transitioned parks that are recommendation HOLDS, by run.
+ * A `review` (auto-gate) park is deliberately excluded: its notification is the
+ * auto-gate row, cleared by `dispatchAutoGateResolved` on the gate's own
+ * decision — clearing it here would be keyed wrong and would fire on a park
+ * release that is not the gate's resolution. */
+function collectEndedHolds(
+  rows: ReadonlyArray<{ runId: string; checkpoint: string }>,
+  into: Set<string>,
+): void {
+  for (const row of rows) {
+    if (row.checkpoint === RECOMMENDATION_HOLD_CHECKPOINT) into.add(row.runId);
+  }
 }
 
 /**

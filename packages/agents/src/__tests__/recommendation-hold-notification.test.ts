@@ -16,10 +16,13 @@
  * `waitKind` classification the host cannot derive for a run that carries no
  * HITL interrupt.
  *
- * This file covers the PACKAGE side: the seam dispatchers, and the hold's own
- * wiring (a NEW hold notifies exactly once; an already-parked re-hold does not
- * re-notify; releasing the park clears). The HOST half — the "needs your input"
- * copy and the conversation deep-link — is pinned in
+ * This file covers the PACKAGE side: the seam dispatchers, their REFUSAL to
+ * notify a wait with no live hold behind it, and the hold's own wiring (a NEW
+ * hold notifies exactly once; an already-parked re-hold does not re-notify; a
+ * release delegates to the sweeper). The CLEAR is deliberately not pinned here —
+ * it lives in the release primitive, which this file mocks; it is pinned against
+ * the real primitive in recommendation-hold.integration.test.ts. The HOST half —
+ * the "needs your input" copy and the conversation deep-link — is pinned in
  * src/lib/__tests__/agent-run-wait-notifications.test.ts.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -59,11 +62,26 @@ import {
   setRunWaitNotifier,
   dispatchRunHumanWaitEntered,
   dispatchRunHumanWaitLeft,
+  type RunHoldBinding,
   type RunWaitNotifier,
 } from "../run-wait-notifier";
 
+/** A LIVE recommendation hold — the binding the enter seam now requires. */
+const hold = (over: Partial<RunHoldBinding> = {}): RunHoldBinding => ({
+  id: "park-1",
+  runId: "run-9",
+  checkpoint: "recommendation",
+  status: "parked",
+  ...over,
+});
+
 const onEnterHumanWait = vi.fn();
 const onLeaveHumanWait = vi.fn();
+
+/** The fake park table behind the mocked store (see beforeEach). */
+type FakePark = { id: string; runId: string; checkpoint: string; status: string };
+const parkRows: FakePark[] = [];
+let parkSeq = 0;
 
 function wireNotifier(over: Partial<RunWaitNotifier> = {}) {
   setRunWaitNotifier({
@@ -117,8 +135,20 @@ beforeEach(() => {
       scoredFeatures: [],
     },
   ]);
-  readContinuationParksForRun.mockResolvedValue([]);
-  maybeParkCheckpoint.mockResolvedValue({ parked: true, parkId: "park-1", reason: "parked" });
+  // A STATEFUL park fake, because the hold now RE-READS the park it just wrote
+  // before notifying (the liveness half of the hold binding — see
+  // `maybeHoldRunForRecommendation`). A flat `mockResolvedValue([])` would model a
+  // store in which the row vanishes the instant it is inserted.
+  parkRows.length = 0;
+  parkSeq = 0;
+  readContinuationParksForRun.mockImplementation(async (runId: string) =>
+    parkRows.filter((p) => p.runId === runId),
+  );
+  maybeParkCheckpoint.mockImplementation(async (_outcome: unknown, input: { runId: string }) => {
+    const id = `park-${++parkSeq}`;
+    parkRows.push({ id, runId: input.runId, checkpoint: "recommendation", status: "parked" });
+    return { parked: true, parkId: id, reason: "parked" };
+  });
   sweepParks.mockResolvedValue({ released: 1 });
 });
 
@@ -133,8 +163,10 @@ describe("cinatra#2835 — the direct human-wait seam", () => {
       runId: "run-9",
       reason: "pending_input",
       waitKind: "input",
+      hold: hold(),
     });
     expect(onEnterHumanWait).toHaveBeenCalledTimes(1);
+    // The hold binding is a GUARD, not payload — the host contract is unchanged.
     expect(onEnterHumanWait).toHaveBeenCalledWith({
       runId: "run-9",
       reason: "pending_input",
@@ -150,7 +182,7 @@ describe("cinatra#2835 — the direct human-wait seam", () => {
   it("both are no-ops when no host wired a notifier", async () => {
     setRunWaitNotifier(null);
     await expect(
-      dispatchRunHumanWaitEntered({ runId: "run-9", reason: "pending_input" }),
+      dispatchRunHumanWaitEntered({ runId: "run-9", reason: "pending_input", hold: hold() }),
     ).resolves.toBeUndefined();
     await expect(dispatchRunHumanWaitLeft({ runId: "run-9" })).resolves.toBeUndefined();
   });
@@ -159,9 +191,85 @@ describe("cinatra#2835 — the direct human-wait seam", () => {
     onEnterHumanWait.mockRejectedValueOnce(new Error("notifications down"));
     onLeaveHumanWait.mockRejectedValueOnce(new Error("notifications down"));
     await expect(
-      dispatchRunHumanWaitEntered({ runId: "run-9", reason: "pending_input", waitKind: "input" }),
+      dispatchRunHumanWaitEntered({
+        runId: "run-9",
+        reason: "pending_input",
+        waitKind: "input",
+        hold: hold(),
+      }),
     ).resolves.toBeUndefined();
     await expect(dispatchRunHumanWaitLeft({ runId: "run-9" })).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Codex convergence round 2, finding 2 — the enter seam is BOUND TO THE HOLD.
+ *
+ * Before this, the seam was exported and forwarded a caller-supplied {runId,
+ * reason, waitKind} unconditionally: it verified no park and bound to no hold
+ * identifier, so any code path could FABRICATE a "needs your input" row against
+ * any `pending_input` run with no hold behind it — and because a hold moves no run
+ * status, nothing would ever clear that row. Every case below is a REFUSAL: the
+ * notifier is not driven at all.
+ */
+describe("cinatra#2835 — the enter seam REFUSES a wait with no live hold", () => {
+  it("refuses a fabricated dispatch with NO hold at all — the case the old seam allowed", async () => {
+    // The `hold` argument is REQUIRED, so this does not even typecheck without
+    // the cast; the cast is the point — it reproduces, at runtime, exactly what
+    // arbitrary caller code used to be able to do. It must write nothing.
+    await dispatchRunHumanWaitEntered({
+      runId: "run-victim",
+      reason: "pending_input",
+      waitKind: "input",
+    } as unknown as Parameters<typeof dispatchRunHumanWaitEntered>[0]);
+    expect(onEnterHumanWait).not.toHaveBeenCalled();
+  });
+
+  it("refuses a hold belonging to ANOTHER run — no minting a row against a run you do not hold", async () => {
+    await dispatchRunHumanWaitEntered({
+      runId: "run-victim",
+      reason: "pending_input",
+      waitKind: "input",
+      hold: hold({ runId: "run-9" }),
+    });
+    expect(onEnterHumanWait).not.toHaveBeenCalled();
+  });
+
+  it("refuses a park that is NOT a recommendation hold — an auto-gate park notifies elsewhere", async () => {
+    // A `review` park's wait notifies through onAutoGateOpen; a second row here
+    // would double-ring the same wait under a key its resolve never clears.
+    await dispatchRunHumanWaitEntered({
+      runId: "run-9",
+      reason: "pending_input",
+      waitKind: "input",
+      hold: hold({ checkpoint: "review" }),
+    });
+    expect(onEnterHumanWait).not.toHaveBeenCalled();
+  });
+
+  it("refuses an ALREADY-TERMINAL park — a wait that is over must never mint a row", async () => {
+    // Both terminal states: the decision-resolved release and the TTL fail-close.
+    // Minting for either is precisely the permanently-stale row this issue exists
+    // to prevent (nothing would clear it — the park cannot transition twice).
+    for (const status of ["released", "policy_unresolved"] as const) {
+      await dispatchRunHumanWaitEntered({
+        runId: "run-9",
+        reason: "pending_input",
+        waitKind: "input",
+        hold: hold({ status }),
+      });
+    }
+    expect(onEnterHumanWait).not.toHaveBeenCalled();
+  });
+
+  it("a refusal is silent, never a throw — a notification can never fail a hold", async () => {
+    await expect(
+      dispatchRunHumanWaitEntered({
+        runId: "run-victim",
+        reason: "pending_input",
+        hold: hold({ status: "released" }),
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -186,9 +294,7 @@ describe("cinatra#2835 — entering a hold notifies the run's initiator", () => 
     // The re-entry guard returns held:true off the existing park without writing
     // a second park row; the notification must follow the same rule (the host's
     // per-run dedupeKey is only the backstop).
-    readContinuationParksForRun.mockResolvedValue([
-      { id: "park-1", checkpoint: "recommendation", status: "parked" },
-    ]);
+    parkRows.push({ id: "park-1", runId: "run-1", checkpoint: "recommendation", status: "parked" });
 
     const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
     expect(out.held).toBe(true);
@@ -219,54 +325,88 @@ describe("cinatra#2835 — entering a hold notifies the run's initiator", () => 
   });
 
   it("a RE-HOLD after a release notifies again — once per hold", async () => {
-    // Hold → release → the park is terminal, so a later run-start holds afresh.
+    // Hold → release → a LATER run holds afresh and rings again. It is a later
+    // run, not the same one re-held: the re-entry guard answers held:false for a
+    // run whose recommendation park is already terminal, so "once per hold" is
+    // only observable across holds that actually happen.
     await maybeHoldRunForRecommendation({ run: run(), template: template() });
     expect(onEnterHumanWait).toHaveBeenCalledTimes(1);
+    expect(await releaseRecommendationParkForRun("run-1")).toBe(true);
 
-    readContinuationParksForRun.mockResolvedValue([
-      { id: "park-1", checkpoint: "recommendation", status: "parked" },
-    ]);
-    await releaseRecommendationParkForRun("run-1");
-
-    readContinuationParksForRun.mockResolvedValue([]);
-    await maybeHoldRunForRecommendation({ run: run(), template: template() });
+    await maybeHoldRunForRecommendation({ run: run({ id: "run-2" }), template: template() });
     expect(onEnterHumanWait).toHaveBeenCalledTimes(2);
+    expect(onEnterHumanWait).toHaveBeenLastCalledWith({
+      runId: "run-2",
+      reason: "pending_input",
+      waitKind: "input",
+    });
+  });
+
+  it("does NOT notify when the park it just wrote is no longer live — the liveness re-read", async () => {
+    // A concurrent sweep (TTL fail-close, a racing decision) can terminate the
+    // park between the insert and the notification. Notifying then would mint the
+    // permanently-stale row this issue exists to prevent: the park cannot
+    // transition twice, so the clear that rides the transition has already gone.
+    maybeParkCheckpoint.mockImplementation(async (_o: unknown, input: { runId: string }) => {
+      parkRows.push({
+        id: "park-1",
+        runId: input.runId,
+        checkpoint: "recommendation",
+        status: "policy_unresolved",
+      });
+      return { parked: true, parkId: "park-1", reason: "parked" };
+    });
+
+    const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
+    expect(out.held).toBe(true); // the park decision is unaffected by the notification
+    expect(onEnterHumanWait).not.toHaveBeenCalled();
   });
 });
 
-describe("cinatra#2835 — leaving a hold clears the notification", () => {
-  it("releasing a LIVE park dispatches the clear", async () => {
-    readContinuationParksForRun.mockResolvedValue([
-      { id: "park-1", checkpoint: "recommendation", status: "parked" },
-    ]);
+/**
+ * Codex convergence round 2, finding 1 — the clear is wired into the RELEASE
+ * PRIMITIVE (`sweepParks`), not into this helper.
+ *
+ * It used to live here, after this helper's own sweep call, which covered only
+ * releases that came through this helper. Every OTHER path that transitions a
+ * park out of `parked` — above all the TTL fail-close, whose production driver is
+ * the gate-maintenance drain and which sweeps every due park including a held
+ * run's — bypassed it, and since a hold moves no run status there was no
+ * transition to clear the row either. So `sweepParks` is mocked out in this file,
+ * the clear is NOT observable here, and what these cases pin is that this helper
+ * reaches the primitive with the right park and only when it should. The clear
+ * itself is pinned against the REAL primitive and a real database in
+ * recommendation-hold.integration.test.ts.
+ */
+describe("cinatra#2835 — leaving a hold goes through the release primitive", () => {
+  it("releasing a LIVE park delegates to the sweeper with that park's id", async () => {
+    parkRows.push({ id: "park-1", runId: "run-1", checkpoint: "recommendation", status: "parked" });
     const released = await releaseRecommendationParkForRun("run-1");
     expect(released).toBe(true);
-    expect(onLeaveHumanWait).toHaveBeenCalledWith({ runId: "run-1" });
-  });
-
-  it("a no-op release (no park / already released / wrong hold) clears NOTHING", async () => {
-    readContinuationParksForRun.mockResolvedValue([]);
-    expect(await releaseRecommendationParkForRun("run-1")).toBe(false);
-
-    readContinuationParksForRun.mockResolvedValue([
-      { id: "park-1", checkpoint: "recommendation", status: "released" },
-    ]);
-    expect(await releaseRecommendationParkForRun("run-1")).toBe(false);
-
-    // Instance-bound: a decision naming ANOTHER hold releases nothing, so it must
-    // not clear the live hold's notification either.
-    readContinuationParksForRun.mockResolvedValue([
-      { id: "park-2", checkpoint: "recommendation", status: "parked" },
-    ]);
-    expect(await releaseRecommendationParkForRun("run-1", "park-1")).toBe(false);
-
+    expect(sweepParks).toHaveBeenCalledWith({ releasedParkIds: ["park-1"] });
+    // Not from here — the primitive owns it (see the block comment above).
     expect(onLeaveHumanWait).not.toHaveBeenCalled();
   });
 
-  it("a sweeper that releases nothing (0 rows) clears nothing", async () => {
-    readContinuationParksForRun.mockResolvedValue([
-      { id: "park-1", checkpoint: "recommendation", status: "parked" },
-    ]);
+  it("a no-op release (no park / already released / wrong hold) never reaches the sweeper", async () => {
+    expect(await releaseRecommendationParkForRun("run-1")).toBe(false);
+
+    parkRows.length = 0;
+    parkRows.push({ id: "park-1", runId: "run-1", checkpoint: "recommendation", status: "released" });
+    expect(await releaseRecommendationParkForRun("run-1")).toBe(false);
+
+    // Instance-bound: a decision naming ANOTHER hold releases nothing, so it must
+    // not sweep — and therefore cannot clear the live hold's notification either.
+    parkRows.length = 0;
+    parkRows.push({ id: "park-2", runId: "run-1", checkpoint: "recommendation", status: "parked" });
+    expect(await releaseRecommendationParkForRun("run-1", "park-1")).toBe(false);
+
+    expect(sweepParks).not.toHaveBeenCalled();
+    expect(onLeaveHumanWait).not.toHaveBeenCalled();
+  });
+
+  it("a sweeper that releases nothing (0 rows) reports no release", async () => {
+    parkRows.push({ id: "park-1", runId: "run-1", checkpoint: "recommendation", status: "parked" });
     sweepParks.mockResolvedValue({ released: 0 });
     expect(await releaseRecommendationParkForRun("run-1")).toBe(false);
     expect(onLeaveHumanWait).not.toHaveBeenCalled();
