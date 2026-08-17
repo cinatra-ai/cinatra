@@ -110,7 +110,8 @@ describe("the bundled + marketplace pair resolves to the install", () => {
     const caps = evaluateLifecycleCapabilities([bundled(), marketplace()], platformAdmin);
     for (const op of ["archive", "activate", "uninstall"] as const) {
       expect(caps[op].allowed, `${op} must be enabled`).toBe(true);
-      expect(caps[op].reasonCode ?? null).toBe(null);
+      expect(caps[op].code).toBe("ok");
+      expect(caps[op].reason).toBeNull();
     }
   });
 
@@ -152,7 +153,14 @@ describe("every other case keeps its old outcome", () => {
   it("a row of some OTHER provenance leaves the pair untouched", () => {
     const rows = [
       bundled(),
-      marketplace({ source: { type: "github", version: "0.1.1" } as InstalledExtension["source"] }),
+      marketplace({
+        source: {
+          type: "github",
+          repo: "acme/thing",
+          ref: "main",
+          resolvedSha: "0".repeat(40),
+        } as InstalledExtension["source"],
+      }),
     ];
     const res = resolveLifecycleScope(rows, platformAdmin);
     expect(res.ok).toBe(false);
@@ -188,7 +196,7 @@ describe("every other case keeps its old outcome", () => {
       userId: "u-member",
       source: "ui",
       orgId: "org-1",
-      orgRole: "org_member",
+      orgRole: "member",
     };
     const caps = evaluateLifecycleCapabilities([bundled(), marketplace()], orgMember);
     expect(caps.archive.allowed).toBe(false);
