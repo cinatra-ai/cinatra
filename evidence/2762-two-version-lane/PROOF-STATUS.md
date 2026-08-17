@@ -30,7 +30,7 @@ started, stopped or written.
 
 **This is a dev-runtime proof, and that is not a shortcut.** The storefront base
 URL is overridable only outside `NODE_ENV=production`
-(`resolveMarketplaceBaseUrl`, `packages/marketplace-mcp-client/src/http-client.ts`),
+(`resolveMarketplaceBaseUrl`, in the marketplace client package's HTTP client),
 so a production runtime always browses the single hardcoded marketplace. Driving
 the real marketplace install path against a lane-private catalog therefore
 *requires* the dev runtime. This is the same reason the repo's own

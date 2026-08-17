@@ -23,7 +23,7 @@
 //   MARKETPLACE_BASE_URL       = http://127.0.0.1:<this port>
 //   CINATRA_AGENT_REGISTRY_URL = http://127.0.0.1:<verdaccio port>
 // (`MARKETPLACE_BASE_URL` is honored only outside NODE_ENV=production — see
-// `resolveMarketplaceBaseUrl` in packages/marketplace-mcp-client/src/http-client.ts.
+// `resolveMarketplaceBaseUrl`, in the marketplace client package's HTTP client.
 // That is why this proof runs on the dev runtime.)
 // -----------------------------------------------------------------------------
 
