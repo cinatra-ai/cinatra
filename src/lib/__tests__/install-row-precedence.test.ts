@@ -12,6 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
 import {
+  pickExactOrgActiveRow,
   pickSingleActiveRow,
   pickSingleLiveRowAcrossOrgs,
 } from "@/lib/extension-install-anchor";
@@ -392,5 +393,17 @@ describe("pickSingleActiveRow applies supersession before precedence", () => {
     // Legacy/fixture rows: no anchor data → no supersession → the pre-S4 outcome.
     const legacy = { id: "a", status: "active", organizationId: "org-1", isDefault: true };
     expect(pickSingleActiveRow([legacy], "org-1")?.id).toBe("a");
+  });
+
+  it("`pickExactOrgActiveRow` still answers THIS ORG'S OWN row, supersession or not", () => {
+    // The install-anchor resolver's `exact-org` arm asks a different question,
+    // and the owner's 2026-08-16 ruling kept that arm unchanged when
+    // `org-then-workspace` was inverted to workspace-first. The two pickers are
+    // one body plus that one rule, so they can only differ where they must.
+    expect(pickExactOrgActiveRow([orgRow(), ws], "org-1")?.id).toBe("org");
+    expect(pickSingleActiveRow([orgRow(), ws], "org-1")).toBeNull();
+    // Identical everywhere supersession does not apply.
+    expect(pickExactOrgActiveRow([orgRow()], "org-1")?.id).toBe("org");
+    expect(pickExactOrgActiveRow([orgRow(), ws], null)?.id).toBe("ws");
   });
 });

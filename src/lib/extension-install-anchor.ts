@@ -212,7 +212,36 @@ export function pickSingleActiveRow<
   )
     ? live.filter((r) => (r.organizationId ?? null) === null)
     : live;
-  const matching = effective.filter((r) => (r.organizationId ?? null) === orgId);
+  return pickExactOrgActiveRow(effective, orgId);
+}
+
+/**
+ * THIS ORGANIZATION'S OWN live row — the pre-supersession pick, kept as its own
+ * named function because one seam asks that question deliberately.
+ *
+ * `makeDefaultInstallAnchorResolver`'s `"exact-org"` arm binds the row the
+ * install actor's org actually holds, and the owner's ruling of 2026-08-16 kept
+ * that arm unchanged when the `org-then-workspace` arm was inverted to
+ * workspace-first: the two arms answer different questions, and the install path
+ * relies on the exact-scope one to bind the row its own pipeline just finalized.
+ * `pickSingleActiveRow` (the EFFECTIVE-row pick, supersession applied) is what
+ * every other caller wants; this is the narrow one, named for its question so
+ * the distinction is legible instead of implicit.
+ *
+ * Everything else — scope equality, source precedence, the exactly-one-default
+ * rule — is identical, because it is the same body.
+ */
+export function pickExactOrgActiveRow<
+  T extends {
+    status: string;
+    organizationId: string | null;
+    isDefault?: boolean;
+    source?: { type?: string } | null;
+  },
+>(rows: readonly T[], orgId: string | null): T | null {
+  const matching = rows.filter(
+    (r) => (r.status === "active" || r.status === "locked") && (r.organizationId ?? null) === orgId,
+  );
   const ranked = applyInstallRowPrecedence(matching);
   const defaults = ranked.filter((r) => r.isDefault !== false);
   return defaults.length === 1 ? defaults[0] : null;
@@ -520,9 +549,14 @@ export async function makeDefaultInstallAnchorResolver(
         // platform-global mode `oid` is the DERIVED org of the single live row, so
         // this still resolves exactly that one row. Under an ENGAGED #2697
         // workspace fallback the pick is narrowed to the workspace anchor.
+        // `pickExactOrgActiveRow`, NOT the effective-row pick: this arm binds
+        // THIS org's own row, and the owner's 2026-08-16 ruling kept it that way
+        // when the `org-then-workspace` arm was inverted to workspace-first. The
+        // supersession that `pickSingleActiveRow` now applies belongs to the
+        // question every OTHER caller asks ("the row in force"), not to this one.
         const active = workspaceFallback
           ? pickSingleWorkspaceAnchoredActiveRow(rows)
-          : pickSingleActiveRow(rows, oid);
+          : pickExactOrgActiveRow(rows, oid);
         return active
           ? {
               id: active.id,
