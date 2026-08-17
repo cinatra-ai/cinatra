@@ -81,7 +81,11 @@ export function resolveExtensionCaptureDirectory(packageName: string, channel: s
     sanitizeSegment(packageName, "extension"),
     sanitizeSegment(channel, "default"),
   );
-  if (directory !== logsRoot && !directory.startsWith(logsRoot + path.sep)) {
+  // A bare `startsWith(root + sep)`, with no disjunct: `sanitizeSegment` never
+  // returns "", so `directory` is always strictly BELOW the root and the
+  // equal-to-root case cannot arise. Keeping the condition single-term also
+  // keeps it legible to the taint checker as the guard it is.
+  if (!directory.startsWith(logsRoot + path.sep)) {
     throw new Error("Refusing to resolve an extension capture directory outside the extension log root.");
   }
   return directory;
@@ -128,7 +132,7 @@ export async function enforceExtensionCaptureRetention(
       // is rotating. Skips rather than throws: rotation is best-effort and MUST
       // NOT surface a failure into the write path that produced the capture.
       const target = path.resolve(base, name);
-      if (target !== base && !target.startsWith(base + path.sep)) return Promise.resolve();
+      if (!target.startsWith(base + path.sep)) return Promise.resolve();
       return unlink(target).catch(() => {});
     }),
   );
