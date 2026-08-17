@@ -34,13 +34,13 @@ import {
   HOST_ANCHOR_REQUIREMENTS,
   KIND_REQUIRED_ACTIONS,
   RECORDER_ID,
-  buildCaptureRecord,
   chatThreadRequirementsFor,
   classifyUrl,
   collectAssertions,
   hostTokenInCell,
   kindTokenInCell,
   observeCapture,
+  stateTokenInCell,
   validateCaptureIndex,
   validateCaptureRecord,
 } from "../lib/chat-hitl-capture-recorder.mjs";
@@ -74,6 +74,7 @@ function chatRecord(over = {}) {
     cell: "S9x-1__chat_thread__recommendation-hold-held",
     declaredHost: "chat_thread",
     kind: "recommendation_hold",
+    state: "pending",
     finalUrl: "http://localhost:3000/chat?thread=t-1",
     build: "development",
     screenshot: PNG,
@@ -372,21 +373,16 @@ describe("the shared recorder", () => {
     expect(assertions[0].expect).toBe("present");
   });
 
-  it("hashes the screenshot from disk, so a record cannot carry a hash it invented", () => {
-    const record = buildCaptureRecord({
-      cell: "S9x-7__chat_thread__held",
-      declaredHost: "chat_thread",
-      kind: "recommendation_hold",
-      finalUrl: "http://localhost:3000/chat",
-      build: "development",
-      screenshot: PNG,
-      assertions: chatRecord().assertions,
-      repoRoot: "/anywhere",
-      readImpl: () => Buffer.from("fixture-bytes"),
-    });
-    expect(record.sha256).toBe(HASH);
-    expect(record.recordedBy).toBe(RECORDER_ID);
-    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+  it("exposes no API that turns supplied assertions into an official record", async () => {
+    // API SURFACE, stated exactly. The builder that stamped this module's
+    // provenance onto assertions handed to it is gone, so no CODE PATH here
+    // manufactures a record from counts it did not take. That is not the same
+    // as provenance: a person editing the JSON can still copy the recorder id
+    // and invent counts, which the module header says out loud and no check in
+    // this repo prevents for any evidence file.
+    const mod = await import("../lib/chat-hitl-capture-recorder.mjs");
+    expect(Object.keys(mod)).not.toContain("buildCaptureRecord");
+    expect(typeof mod.observeCapture).toBe("function");
   });
 });
 
@@ -413,6 +409,13 @@ function fakePage({ url, counts = {}, frame = null, frameUrl = "", frameCounts =
       log.push(`page.count:${selector}`);
       return counts[selector] ?? 0;
     },
+    // Card-scoped reads. The fake keys them by "root>>selector" so a test can
+    // say what lives INSIDE the card and what merely lives on the page.
+    countWithin: async (root, selector) => {
+      log.push(`page.countWithin:${root}>>${selector}`);
+      const scoped = counts[`${root}>>${selector}`];
+      return scoped === undefined ? (counts[selector] ?? 0) : scoped;
+    },
     frame: async (selector) => {
       log.push(`page.frame:${selector}`);
       if (!frame) return null;
@@ -424,6 +427,11 @@ function fakePage({ url, counts = {}, frame = null, frameUrl = "", frameCounts =
         count: async (sel) => {
           log.push(`frame.count:${sel}`);
           return frameCounts[sel] ?? 0;
+        },
+        countWithin: async (root, sel) => {
+          log.push(`frame.countWithin:${root}>>${sel}`);
+          const scoped = frameCounts[`${root}>>${sel}`];
+          return scoped === undefined ? (frameCounts[sel] ?? 0) : scoped;
         },
       };
     },
@@ -442,7 +450,10 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
     const page = fakePage({
       url: "http://localhost:3000/chat?thread=t-9",
       counts: Object.fromEntries(
-        chatThreadRequirementsFor("recommendation_hold").map((r) => [r.selector, 1]),
+        chatThreadRequirementsFor("recommendation_hold").map((r) => [
+          r.within ? `${r.within}>>${r.selector}` : r.selector,
+          1,
+        ]),
       ),
     });
     const record = await observeCapture({
@@ -450,6 +461,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       cell: "S9x-obs__chat_thread__held",
       declaredHost: "chat_thread",
       kind: "recommendation_hold",
+      state: "pending",
       screenshot: PNG,
       build: "development",
       repoRoot: "/anywhere",
@@ -459,9 +471,12 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
     expect(record.finalUrl).toBe("http://localhost:3000/chat?thread=t-9");
     expect(record.sha256).toBe(HASH);
     expect(record.recordedBy).toBe(RECORDER_ID);
-    // Every required anchor was actually looked for.
+    // Every required anchor was actually looked for, card-scoped ones INSIDE
+    // the card root rather than anywhere on the page.
     for (const req of chatThreadRequirementsFor("recommendation_hold")) {
-      expect(page.log).toContain(`page.count:${req.selector}`);
+      expect(page.log).toContain(
+        req.within ? `page.countWithin:${req.within}>>${req.selector}` : `page.count:${req.selector}`,
+      );
     }
     expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
   });
@@ -522,6 +537,7 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
       cell: "S9x-obs__chat_thread__zero",
       declaredHost: "chat_thread",
       kind: "recommendation_hold",
+      state: "pending",
       screenshot: PNG,
       build: "production",
       repoRoot: "/anywhere",
@@ -546,6 +562,133 @@ function manifestClaiming(cell, file = "evidence/2821-fixture/README.md") {
     ],
   };
 }
+
+describe("a SETTLED capture owes the absence of its controls", () => {
+  // C2-shaped: the same chat card after the decision. Requiring the controls
+  // present would make an honest settled screenshot unindexable; requiring
+  // nothing would let a placeholder pass as either state.
+  function settledRecord(over = {}) {
+    return chatRecord({
+      cell: "S9x-8__chat_thread__recommendation-hold-settled",
+      state: "settled",
+      assertions: chatThreadRequirementsFor("recommendation_hold", "settled").map((r) => ({
+        ...r,
+        expect: r.expect ?? "present",
+        count: (r.expect ?? "present") === "present" ? 1 : 0,
+      })),
+      ...over,
+    });
+  }
+
+  it("ACCEPTS a settled record whose controls are gone and whose summary is there", () => {
+    expect(validateCaptureRecord(settledRecord(), { hashOf })).toEqual([]);
+  });
+
+  it("REFUSES a settled record that still shows its decision controls", () => {
+    const assertions = settledRecord().assertions.map((a) =>
+      a.selector === '[data-action="confirm-run-recommendation"]' ? { ...a, count: 1 } : a,
+    );
+    expect(validateCaptureRecord(settledRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+      /recorded as absent but observed 1 times/,
+    );
+  });
+
+  it("REFUSES a settled record with no decided summary", () => {
+    const assertions = settledRecord().assertions.filter(
+      (a) => a.selector !== "[data-run-recommendation-decision]",
+    );
+    expect(validateCaptureRecord(settledRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+      /does not assert it at all/,
+    );
+  });
+
+  it("REFUSES a chat_thread record that declares no state at all", () => {
+    expect(validateCaptureRecord(chatRecord({ state: undefined }), { hashOf }).join("\n")).toMatch(
+      /must declare the `state` it photographed/,
+    );
+  });
+});
+
+describe("the three bypasses an adversarial round found", () => {
+  it("REFUSES a settled marker borrowed from a DIFFERENT card", async () => {
+    // The page has the schedule card's root, a stray chat_thread host on some
+    // wrapper, and an unrelated card's settled marker. Page-wide counting called
+    // that settled; card-scoped counting does not.
+    const kind = "trigger_schedule_proposal";
+    const reqs = chatThreadRequirementsFor(kind, "settled");
+    const counts = { "[data-conversation-list]": 1, [`[data-lifecycle-card="${kind}"]`]: 1 };
+    for (const r of reqs) {
+      if (!r.within) continue;
+      // Present somewhere on the page, absent INSIDE the claimed card.
+      counts[r.selector] = 1;
+      counts[`${r.within}>>${r.selector}`] = 0;
+    }
+    const page = fakePage({ url: "http://localhost:3000/chat", counts });
+    const record = await observeCapture({
+      page,
+      cell: "S9x-borrow__chat_thread__settled",
+      declaredHost: "chat_thread",
+      kind,
+      state: "settled",
+      screenshot: PNG,
+      build: "development",
+      repoRoot: "/anywhere",
+      readImpl: OBSERVER_READ,
+    });
+    // The host declaration and the settled marker were counted zero INSIDE the
+    // card, so the record is refused however the page looked.
+    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+      /data-lifecycle-card-host="chat_thread"/,
+    );
+  });
+
+  it("REFUSES a capture whose screen changed between the counts and the shutter", async () => {
+    // Hydration, a poll, a streamed state change: a record whose numbers
+    // describe one screen while its image shows another is worse than none.
+    const reqs = chatThreadRequirementsFor("recommendation_hold");
+    const counts = Object.fromEntries(
+      reqs.map((r) => [r.within ? `${r.within}>>${r.selector}` : r.selector, 1]),
+    );
+    const page = fakePage({ url: "http://localhost:3000/chat", counts });
+    const realScreenshot = page.screenshot;
+    page.screenshot = async (abs) => {
+      // The decision lands while the shutter is open.
+      for (const key of Object.keys(counts)) {
+        if (key.includes("confirm-run-recommendation")) counts[key] = 0;
+      }
+      return realScreenshot(abs);
+    };
+    await expect(
+      observeCapture({
+        page,
+        cell: "S9x-drift__chat_thread__held",
+        declaredHost: "chat_thread",
+        kind: "recommendation_hold",
+        state: "pending",
+        screenshot: PNG,
+        build: "development",
+        repoRoot: "/anywhere",
+        readImpl: OBSERVER_READ,
+      }),
+    ).rejects.toThrow(/is not stable/);
+  });
+
+  it("REFUSES pending evidence for a cell whose name claims a decided state", () => {
+    expect(stateTokenInCell("C2__review-card__chat_thread__decided")).toBe("settled");
+    expect(stateTokenInCell("C1__review-card__chat_thread__pending")).toBe("pending");
+    const violations = auditManifestIndexBinding({
+      manifest: manifestClaiming("C2__review-card__chat_thread__decided.png"),
+      index: indexOf([
+        chatRecord({
+          cell: "C2__review-card__chat_thread__decided",
+          kind: "artifact_review_gate",
+          state: "pending",
+        }),
+      ]),
+    });
+    expect(violations.join("\n")).toMatch(/cites .* as settled; its record photographs pending/);
+  });
+});
 
 describe("the manifest to capture-index binding", () => {
   it("finds the manifest cells that CLAIM a chat_thread capture", () => {

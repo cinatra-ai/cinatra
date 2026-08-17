@@ -305,10 +305,75 @@ async function mountHeldChat(text?: string) {
 }
 
 /**
- * Mount the REAL card into the REAL triggering container, under the chat_thread
- * host the column declares. This is the shape the production mount must
- * produce: both halves are real, and the wiring between them is what the mount
- * slice adds.
+ * Let the card's own resolve settle.
+ *
+ * `RecommendationHoldCard` reads its authority in an effect on mount, so an
+ * observation taken in the same tick would report "no card" on a tree that does
+ * mount one. Flushing here is what makes the absence measured rather than
+ * assumed.
+ */
+async function settleResolver() {
+  await act(async () => {
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
+/**
+ * The kinds this contract enforces whose card is NOT projected by the rendered
+ * transcript. Read off whatever is on screen at the moment it is called.
+ */
+function observeContainer(root: HTMLElement): string[] {
+  const observed: string[] = [];
+  for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
+    if (row.enforcer !== "held-turn-card-contract") continue;
+    const { projection } = projectionFromProductionTurn(
+      root,
+      { name: "agent_run", result: DURABLE_RESULT },
+      row,
+    );
+    if (!projectsOwnerCard(projection, row)) observed.push(row.kind);
+  }
+  return observed;
+}
+
+/**
+ * THE PRODUCTION OBSERVATION. Mount the real column on a real persisted held
+ * transcript, with the resolver ANSWERING HELD, wait for the card's own resolve
+ * to settle, and report which enforced kinds the view did not project.
+ *
+ * The held answer matters more than it looks. The card self-gates on no live
+ * hold, so an arm that left the resolver at `none` would see an empty container
+ * whether or not the carriage existed, and could never observe the mount
+ * landing. With HELD in place, the only thing between this and a rendered card
+ * is the carriage.
+ */
+/**
+ * IS THE HOLD CARD'S CHAT MOUNT STILL OWED?
+ *
+ * ONE switch for the whole suite, read from the contract rather than repeated.
+ * Striking `recommendation_hold` from `HELD_TURN_MOUNT_OBLIGATIONS` is the
+ * single edit the carriage slice makes, and every assertion below flips with it
+ * — which is what "the mount plus its obligation update is green" has to mean.
+ */
+const HOLD_MOUNT_OWED = HELD_TURN_MOUNT_OBLIGATIONS.includes("recommendation_hold");
+const HOLD_ROOT_OWED = ROOT_DECLARATION_OBLIGATIONS.includes("recommendation_hold");
+
+async function observeProductionCarriage(): Promise<string[]> {
+  holdStateMock.mockImplementation(async () => HELD);
+  const { root } = await mountHeldChat();
+  await settleResolver();
+  return observeContainer(root);
+}
+
+/**
+ * Put the REAL card in the REAL triggering container.
+ *
+ * THIS IS NOT PRODUCTION CARRIAGE and nothing that uses it may claim to be.
+ * The carriage question is answered only by `observeProductionCarriage`, which
+ * renders the view and looks. What this is for is everything the card owes ONCE
+ * it is mounted: that the contract accepts its real markup, that a decision
+ * settles in place, and that the ratchet's red direction really moves.
  */
 function mountRealCardInto(container: HTMLElement) {
   return render(
@@ -371,28 +436,106 @@ describe("the PRODUCTION chat transcript, on a held dispatch turn", () => {
     );
   });
 
-  it("does NOT project the held card yet — the observed obligation set is what is declared", async () => {
-    const observed: string[] = [];
-    for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
-      if (row.enforcer !== "held-turn-card-contract") continue;
-      const { root } = await mountHeldChat();
-      const { projection } = projectionFromProductionTurn(
-        root,
-        { name: "agent_run", result: DURABLE_RESULT },
-        row,
-      );
-      if (!projectsOwnerCard(projection, row)) observed.push(row.kind);
-      cleanup();
-    }
+  it("does NOT project the held card — measured with the resolver ANSWERING HELD", async () => {
+    // THE RATCHET, and the whole point of driving it this way. The card
+    // self-gates: with no live hold it renders nothing, so a production arm
+    // that left the resolver at `none` would observe an empty container
+    // whether the carriage existed or not, and could never see the mount land.
+    // The resolver answers HELD here, so the ONLY thing standing between this
+    // observation and a rendered card is the carriage itself.
+    const observed = await observeProductionCarriage();
     expect(
       observed,
       "the PRODUCTION view's unmounted set drifted from HELD_TURN_MOUNT_OBLIGATIONS — " +
         "strike the row when the mount lands, and never before",
     ).toEqual([...HELD_TURN_MOUNT_OBLIGATIONS]);
   });
+
+  it("asks the authority for the hold state exactly when a card is mounted to ask", async () => {
+    // The second signal, independent of every selector this contract knows. The
+    // card resolves on mount, so the resolver's call count answers "was a card
+    // mounted" on its own. Symmetric on purpose: owed means untouched, and no
+    // longer owed means it MUST have been consulted, so a struck row over a
+    // silent transcript is just as red as an unstruck row over a live one.
+    holdStateMock.mockImplementation(async () => HELD);
+    await mountHeldChat();
+    await settleResolver();
+    if (HOLD_MOUNT_OWED) {
+      expect(
+        holdStateMock,
+        "the production transcript resolved a recommendation hold — the carriage " +
+          "has landed; strike the obligation row",
+      ).not.toHaveBeenCalled();
+    } else {
+      expect(
+        holdStateMock,
+        "the obligation row is struck, so the production transcript must mount the " +
+          "card and resolve its authority — it did not",
+      ).toHaveBeenCalled();
+    }
+  });
+
+  it.runIf(HOLD_MOUNT_OWED)("RATCHET DIRECTION: the observation flips the moment the container holds the card", async () => {
+    // The red half, proven without pretending it is production carriage. The
+    // card is put in the container the production view built, exactly where the
+    // carriage will put it, and the SAME observation function is re-run. If it
+    // did not flip, landing the mount would leave CI green and the ratchet
+    // would be decoration.
+    holdStateMock.mockImplementation(async () => HELD);
+    const { root } = await mountHeldChat();
+    const { triggerContainer } = projectionFromProductionTurn(root, {
+      name: "agent_run",
+      result: DURABLE_RESULT,
+    });
+    expect(observeContainer(root)).toEqual([...HELD_TURN_MOUNT_OBLIGATIONS]);
+
+    mountRealCardInto(triggerContainer);
+    await waitFor(() =>
+      expect(root.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull(),
+    );
+
+    const afterMount = observeContainer(root);
+    expect(afterMount, "the observation did not move when the card appeared").toEqual([]);
+    // …and that new observation no longer matches the declared obligation, which
+    // is what turns CI red until the row is struck.
+    expect(afterMount).not.toEqual([...HELD_TURN_MOUNT_OBLIGATIONS]);
+  });
+
+  it.runIf(HOLD_MOUNT_OWED)("RATCHET DIRECTION: striking the row while nothing mounts is also red", async () => {
+    // The other half of the coupling: an empty declared list against this
+    // observation is a mismatch, so the row cannot be struck ahead of the mount.
+    const observed = await observeProductionCarriage();
+    expect(observed).not.toEqual([]);
+  });
+
+  it.runIf(!HOLD_MOUNT_OWED)("the struck row is backed by a card the PRODUCTION view mounted", async () => {
+    // Once the row is struck this replaces the two above: the view itself must
+    // project the card, in the triggering container, outside the run card's
+    // subtree, with its decision controls. No hand-mounting anywhere near it.
+    holdStateMock.mockImplementation(async () => HELD);
+    const { root } = await mountHeldChat();
+    await waitFor(() =>
+      expect(root.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull(),
+    );
+    const { projection } = projectionFromProductionTurn(root, {
+      name: "agent_run",
+      result: DURABLE_RESULT,
+    });
+    const violations = evaluateHeldTurnProjection(projection, HELD_TURN_ROW, {
+      requireMount: true,
+    });
+    expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
+  });
 });
 
-describe("the REAL card in the REAL triggering container", () => {
+// ---------------------------------------------------------------------------
+// CARD-LEVEL PROOFS. Not carriage claims.
+// ---------------------------------------------------------------------------
+// Everything below puts the real card in the real container by hand, because
+// the carriage does not exist on this tree yet. Each one answers "what does the
+// card owe once it is mounted", never "is it mounted". The carriage question is
+// answered above, by rendering the view and looking.
+describe("the REAL card, once it is in the REAL triggering container", () => {
   it("PASSES the contract — the ruled mount is accepted, not rejected", async () => {
     holdStateMock.mockImplementation(async () => HELD);
     const { root } = await mountHeldChat();
@@ -498,6 +641,9 @@ describe("the REAL card in the REAL triggering container", () => {
 });
 
 describe("the structural invariant — a decision keeps the URL and settles in place", () => {
+  // Card-level, per the note above. When the carriage lands, the same
+  // assertions run against the card the production view mounted, because the
+  // container and the card are both already the real ones.
   it("Confirm settles the same mount point without navigating", async () => {
     holdStateMock.mockImplementation(async () => HELD);
     const { root } = await mountHeldChat();
@@ -597,12 +743,24 @@ describe("the root-declaration obligation, measured on the real card's own root"
         triggerContainer.querySelectorAll(row.ruledRootAnchors[0] ?? "[data-lifecycle-card]"),
       ).some((el) => row.ruledRootAnchors.every((a) => el.matches(a)));
       if (!declared) owed.push(row.kind);
+      void HOLD_ROOT_OWED;
     }
     expect(
       owed,
       "the real card's root declaration drifted from ROOT_DECLARATION_OBLIGATIONS — " +
         "strike the row when the declaration lands, and never before",
     ).toEqual([...ROOT_DECLARATION_OBLIGATIONS]);
+  });
+
+  it.runIf(!HOLD_ROOT_OWED)("the struck root obligation is backed by a real declaration", () => {
+    // Symmetry again: with the row struck, the shipped component must really
+    // emit both attributes on one root, or the strike was premature.
+    const source = readFileSync(
+      join(__dirname, "..", "..", "..", "agents", "src", "run-recommendation-chip-row.tsx"),
+      "utf8",
+    );
+    expect(source).toContain('data-lifecycle-card="recommendation_hold"');
+    expect(source).toContain("data-lifecycle-card-host");
   });
 
   it("REFUSES a declaration split across two elements", async () => {
@@ -614,16 +772,21 @@ describe("the root-declaration obligation, measured on the real card's own root"
       name: "agent_run",
       result: DURABLE_RESULT,
     });
+    // An ISOLATED container: the point is the reader, not whatever the tree
+    // around it happens to render, and on a tree where the card already
+    // declares its root the ambient DOM would answer for the fixture.
+    const isolated = document.createElement("div");
     const a = document.createElement("div");
     a.setAttribute("data-lifecycle-card", "recommendation_hold");
     const b = document.createElement("div");
     b.setAttribute("data-lifecycle-card-host", "chat_thread");
-    triggerContainer.append(a, b);
+    isolated.append(a, b);
+    void triggerContainer;
 
     const row = HELD_TURN_ROW;
-    const declared = Array.from(
-      triggerContainer.querySelectorAll(row.ruledRootAnchors[0]!),
-    ).some((el) => row.ruledRootAnchors.every((sel) => el.matches(sel)));
+    const declared = Array.from(isolated.querySelectorAll(row.ruledRootAnchors[0]!)).some((el) =>
+      row.ruledRootAnchors.every((sel) => el.matches(sel)),
+    );
     expect(declared).toBe(false);
   });
 });
@@ -727,7 +890,11 @@ describe("the production mount points, read from the import graph", () => {
   // is deliberately absent: the review kind's chat mount has LANDED, through the
   // renderable-views registry, and forbidding it would be forbidding the thing
   // this program is trying to achieve.
-  const OWED_OWNER_MODULES = ["run-recommendation-chip-row"];
+  // BOTH SPELLINGS. The card's drawing module is reachable as its own filename
+  // and through the `@cinatra-ai/agents/run-recommendation-card` alias the
+  // carriage slice adds; a list carrying only one of them would miss the import
+  // that lands the mount.
+  const OWED_OWNER_MODULES = ["run-recommendation-chip-row", "run-recommendation-card"];
   const OWED_OWNER_SYMBOLS = ["RecommendationHoldCard", "RunRecommendationChipRow"];
   // The barrels a chat import could reach the card through without ever naming
   // its module. Watched below, which is what closes the re-export route.
@@ -756,11 +923,19 @@ describe("the production mount points, read from the import graph", () => {
         }
       }
     }
-    expect(
-      offenders,
-      "a lifecycle card's drawing module is now imported by chat production code — " +
-        "if that is the chat mount landing, strike the obligation row",
-    ).toEqual([]);
+    if (HOLD_MOUNT_OWED) {
+      expect(
+        offenders,
+        "a lifecycle card's drawing module is now imported by chat production code — " +
+          "if that is the chat mount landing, strike the obligation row",
+      ).toEqual([]);
+    } else {
+      expect(
+        offenders.length,
+        "the obligation row is struck, so chat production code must import the card " +
+          "it now mounts — nothing does",
+      ).toBeGreaterThan(0);
+    }
   });
 
   it("the agents barrels do not re-export an owed card, so the module scan cannot be routed around", () => {
@@ -773,13 +948,14 @@ describe("the production mount points, read from the import graph", () => {
     for (const barrel of AGENTS_BARRELS) {
       const source = readFileSync(join(AGENTS_SRC, barrel), "utf8");
       for (const symbol of OWED_OWNER_SYMBOLS) {
+        if (!HOLD_MOUNT_OWED) continue;
         expect(
           source.includes(symbol),
           `packages/agents/src/${barrel} now re-exports ${symbol} — the owed chat mount may be ` +
             "landing through the barrel; check the obligation row",
         ).toBe(false);
       }
-      expect(source).not.toContain("run-recommendation-chip-row");
+      if (HOLD_MOUNT_OWED) expect(source).not.toContain("run-recommendation-chip-row");
     }
   });
 
@@ -793,7 +969,8 @@ describe("the production mount points, read from the import graph", () => {
         if (source.includes(symbol)) offenders.push(`${file.slice(CHAT_SRC.length + 1)} → ${symbol}`);
       }
     }
-    expect(offenders).toEqual([]);
+    if (HOLD_MOUNT_OWED) expect(offenders).toEqual([]);
+    else expect(offenders.length).toBeGreaterThan(0);
   });
 
   it("the transcript's agent_run branch still names the inline run card", () => {

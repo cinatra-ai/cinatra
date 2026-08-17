@@ -70,6 +70,7 @@ import {
   hashFile,
   hostTokenInCell,
   kindTokenInCell,
+  stateTokenInCell,
   validateCaptureIndex,
 } from "./lib/chat-hitl-capture-recorder.mjs";
 
@@ -270,9 +271,13 @@ export function chatThreadCellClaims(manifest) {
   for (const [i, row] of (manifest.rows ?? []).entries()) {
     for (const proof of proofsOf(row)) {
       if (hostTokenInCell(proof.testName) !== "chat_thread") continue;
+      // Tokens are read off the cell KEY, not the raw proof name: a trailing
+      // `.png` puts a `.` where the token boundary is expected and silently
+      // turns "decided" into no claim at all.
+      const key = cellKey(proof.testName);
       claims.push({
         row: i + 1,
-        cell: cellKey(proof.testName),
+        cell: key,
         file: proof.file,
         // The PROOF TIER (unitProofs / e2eProofs / …), not a lifecycle kind.
         // Named plainly because the earlier spelling read like the latter and
@@ -281,7 +286,10 @@ export function chatThreadCellClaims(manifest) {
         // The lifecycle kind the CELL NAME claims, when it names one. This is
         // what the record must agree with — otherwise a record's self-declared
         // kind would be authoritative over the row that cites it.
-        claimedKind: kindTokenInCell(proof.testName),
+        claimedKind: kindTokenInCell(key),
+        // The state the cell name claims. A `decided` cell answered with pending
+        // evidence would be judged against the easier requirement set.
+        claimedState: stateTokenInCell(key),
       });
     }
   }
@@ -366,14 +374,26 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       );
       continue;
     }
-    for (const req of chatThreadRequirementsFor(record.kind)) {
+    if (claim.claimedState !== null && claim.claimedState !== (record.state ?? "pending")) {
+      violations.push(
+        `manifest row ${claim.row} cites "${claim.cell}" as ${claim.claimedState}; ` +
+          `its record photographs ${record.state ?? "pending"}`,
+      );
+      continue;
+    }
+    for (const req of chatThreadRequirementsFor(record.kind, record.state ?? "pending")) {
+      const wanted = req.expect ?? "present";
       const found = (record.assertions ?? []).find(
         (a) => a?.selector === req.selector && (a?.frame ?? "main") === req.frame,
       );
-      if (!found || (found.expect ?? "present") !== "present" || !(found.count >= 1)) {
+      const ok =
+        found &&
+        (found.expect ?? "present") === wanted &&
+        (wanted === "present" ? found.count >= 1 : found.count === 0);
+      if (!ok) {
         violations.push(
           `manifest row ${claim.row}: the record for "${claim.cell}" does not observe ` +
-            `${req.selector} present in the ${req.frame} frame`,
+            `${req.selector} ${wanted} in the ${req.frame} frame`,
         );
       }
     }

@@ -21,6 +21,11 @@
  * outer `.cw-frame` and then the embed frame's own anchors. A selector found in
  * the wrong frame proves the wrong host.
  *
+ * THERE IS ONE WAY TO MAKE A RECORD, and it is a browser. `observeCapture` is
+ * the only exported record producer; the earlier `buildCaptureRecord`, which
+ * stamped this module's provenance onto assertions handed to it, is gone. A
+ * caller that wants an official record has to drive a page.
+ *
  * IT OBSERVES; IT DOES NOT TAKE DICTATION. `observeCapture` resolves the outer
  * frame itself, counts it, ENTERS it, reads the frame's own URL, and counts the
  * inner anchors there. Nothing about the frames or the counts is accepted from
@@ -156,18 +161,64 @@ export const KIND_REQUIRED_ACTIONS = Object.freeze({
 export const LIFECYCLE_KINDS = Object.freeze(Object.keys(KIND_REQUIRED_ACTIONS));
 
 /**
+ * The states a capture can photograph, and why the distinction is not cosmetic.
+ *
+ * A PENDING card owes its decision controls; a SETTLED one owes their ABSENCE
+ * and its own decided summary. Requiring the controls on every capture would
+ * make an honest settled screenshot unindexable, and requiring nothing would let
+ * a placeholder pass as either. So the required set is state-relative, and a
+ * record has to say which state it photographed.
+ */
+export const CAPTURE_STATES = Object.freeze(["pending", "settled"]);
+
+/** What a kind draws once it is decided. */
+export const KIND_SETTLED_MARKERS = Object.freeze({
+  recommendation_hold: "[data-run-recommendation-decision]",
+  artifact_review_gate: '[data-conformance-id="review-gate-blocked"]',
+  trigger_schedule_proposal: '[data-lifecycle-card-state="settled"]',
+  verification_summary: '[data-lifecycle-card-state="settled"]',
+});
+
+/**
  * The anchors a chat_thread capture of `kind` must record present, IN THE SAME
  * FRAME: the conversation list, the card's own root, the host declaration, and
  * the kind's decision controls. This is the set the manifest binding requires,
  * so a cell that names chat_thread cannot be satisfied by a photograph of a
  * transcript with no card in it.
  */
-export function chatThreadRequirementsFor(kind) {
-  return [
+export function chatThreadRequirementsFor(kind, state = "pending") {
+  // The card's own root. Everything that describes THE CARD is counted inside
+  // it: without that, a host declaration on an unrelated wrapper and a settled
+  // marker borrowed from a different card satisfy the set while the card this
+  // record names never settled at all.
+  const root = `[data-lifecycle-card="${kind}"]`;
+  const base = [
+    // The transcript is a page-level fact, so it stays page-scoped.
     { frame: "main", selector: "[data-conversation-list]" },
-    { frame: "main", selector: `[data-lifecycle-card="${kind}"]` },
-    { frame: "main", selector: '[data-lifecycle-card-host="chat_thread"]' },
-    ...(KIND_REQUIRED_ACTIONS[kind] ?? []).map((selector) => ({ frame: "main", selector })),
+    { frame: "main", selector: root },
+    { frame: "main", within: root, selector: '[data-lifecycle-card-host="chat_thread"]' },
+  ];
+  if (state === "settled") {
+    // The decision is done: its controls must be GONE, and the decided summary
+    // must be there in their place. Both are observations, not inferences.
+    return [
+      ...base,
+      { frame: "main", within: root, selector: KIND_SETTLED_MARKERS[kind], expect: "present" },
+      ...(KIND_REQUIRED_ACTIONS[kind] ?? []).map((selector) => ({
+        frame: "main",
+        within: root,
+        selector,
+        expect: "absent",
+      })),
+    ];
+  }
+  return [
+    ...base,
+    ...(KIND_REQUIRED_ACTIONS[kind] ?? []).map((selector) => ({
+      frame: "main",
+      within: root,
+      selector,
+    })),
   ];
 }
 
@@ -208,48 +259,15 @@ export function collectAssertions(specs, queryCount) {
 }
 
 /**
- * Build one record from ALREADY-OBSERVED assertions. `screenshot` is
- * repo-relative; the hash is computed from the file on disk, so a record can
- * never carry a hash for a file it does not have.
- *
- * Prefer `observeCapture`: this entry point trusts its `assertions`, which is
- * only safe when they came from `collectAssertions` against a live driver.
- */
-export function buildCaptureRecord({
-  cell,
-  declaredHost,
-  kind = undefined,
-  finalUrl,
-  build,
-  screenshot,
-  assertions,
-  frames = undefined,
-  capturedAt = new Date().toISOString(),
-  repoRoot = process.cwd(),
-  readImpl = readFileSync,
-}) {
-  const record = {
-    cell,
-    declaredHost,
-    finalUrl,
-    build,
-    screenshot,
-    sha256: hashFile(join(repoRoot, screenshot), readImpl),
-    capturedAt,
-    assertions,
-    recordedBy: RECORDER_ID,
-  };
-  if (kind) record.kind = kind;
-  if (frames) record.frames = frames;
-  return record;
-}
-
-/**
  * OBSERVE one capture cell and write the record from what was seen.
  *
  * `page` is the CapturePage port:
  *   · `url()`               — the URL the page actually ended on
  *   · `count(selector)`     — how many elements match, in the MAIN frame
+ *   · `countWithin(root, selector)` — how many match INSIDE the first `root`.
+ *                             Card-relative anchors go through this, so a host
+ *                             declaration on an unrelated wrapper cannot stand
+ *                             in for the card's own
  *   · `frame(selector)`     — resolve the frame element `selector` reaches and
  *                             return `{ url(), count(selector) }` for INSIDE it,
  *                             or null when it does not resolve
@@ -267,6 +285,7 @@ export async function observeCapture({
   cell,
   declaredHost,
   kind = undefined,
+  state = "pending",
   screenshot,
   build,
   extraAssertions = [],
@@ -295,26 +314,59 @@ export async function observeCapture({
   // 2. The anchors the host (and kind) require, counted WHERE THEY LIVE.
   const required =
     declaredHost === "chat_thread" && kind
-      ? chatThreadRequirementsFor(kind)
+      ? chatThreadRequirementsFor(kind, state)
       : [...HOST_ANCHOR_REQUIREMENTS[declaredHost]];
-  const specs = [...required.map((r) => ({ ...r, expect: "present" })), ...extraAssertions];
+  const specs = [
+    ...required.map((r) => ({ ...r, expect: r.expect ?? "present" })),
+    ...extraAssertions,
+  ];
 
-  const assertions = [];
-  for (const spec of specs) {
-    const frameName = spec.frame ?? "main";
-    const reader = frameName === "main" ? page : (frameHandles.get(frameName) ?? null);
-    assertions.push({
-      frame: frameName,
-      selector: spec.selector,
-      expect: spec.expect ?? "present",
-      // An unresolved frame counts ZERO rather than skipping the assertion.
-      count: reader ? await reader.count(spec.selector) : 0,
-    });
-  }
+  const measure = async () => {
+    const out = [];
+    for (const spec of specs) {
+      const frameName = spec.frame ?? "main";
+      const reader = frameName === "main" ? page : (frameHandles.get(frameName) ?? null);
+      const entry = {
+        frame: frameName,
+        selector: spec.selector,
+        expect: spec.expect ?? "present",
+        // An unresolved frame counts ZERO rather than skipping the assertion.
+        count: 0,
+      };
+      if (spec.within) entry.within = spec.within;
+      if (reader) {
+        entry.count = spec.within
+          ? await reader.countWithin(spec.within, spec.selector)
+          : await reader.count(spec.selector);
+      }
+      out.push(entry);
+    }
+    return out;
+  };
+
+  const assertions = await measure();
 
   // 3. The image, written and then hashed from disk.
   const abs = join(repoRoot, screenshot);
   await page.screenshot(abs);
+
+  // 4. MEASURE AGAIN. A page can move between the counts and the shutter —
+  //    hydration, a poll, a streamed state change — and a record whose numbers
+  //    describe one screen while its image shows another is worse than none.
+  //    Anything that shifted fails the capture instead of being written down.
+  const after = await measure();
+  const drifted = assertions
+    .map((a, i) => ({ a, b: after[i] }))
+    .filter(({ a, b }) => !b || a.count !== b.count);
+  if (drifted.length > 0) {
+    throw new Error(
+      `capture "${cell}" is not stable: ` +
+        drifted
+          .map(({ a, b }) => `${a.selector} counted ${a.count} then ${b?.count ?? "n/a"}`)
+          .join("; ") +
+        ". The screen changed between the measurement and the screenshot.",
+    );
+  }
 
   const record = {
     cell,
@@ -328,6 +380,7 @@ export async function observeCapture({
     recordedBy: RECORDER_ID,
   };
   if (kind) record.kind = kind;
+  if (declaredHost === "chat_thread") record.state = state;
   if (Object.keys(frames).length > 0) {
     record.frames = Object.fromEntries(
       Object.entries(frames).map(([name, f]) => [name, { selector: f.selector, url: f.url }]),
@@ -362,6 +415,22 @@ const CELL_KIND_LABELS = Object.freeze({
   "verification-card": "verification_summary",
   "verification-summary": "verification_summary",
 });
+
+/**
+ * The STATE a cell name claims, normalized. `decided` and `settled` are the same
+ * claim written two ways; a name that claims neither returns null.
+ *
+ * The binding uses this so a record cannot answer a cell that says `decided`
+ * with pending evidence, where the decision controls are REQUIRED rather than
+ * required-absent and the bar is therefore lower.
+ */
+export function stateTokenInCell(cell) {
+  if (typeof cell !== "string") return null;
+  const lower = cell.toLowerCase();
+  if (/(^|[-_])(settled|decided|confirmed|skipped)([-_]|$)/.test(lower)) return "settled";
+  if (/(^|[-_])(pending|held|open)([-_]|$)/.test(lower)) return "pending";
+  return null;
+}
 
 export function kindTokenInCell(cell) {
   if (typeof cell !== "string") return null;
@@ -513,6 +582,13 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   // Without it the record proves a transcript was on screen, not that a card
   // was in it, which is the whole distance between a capture and evidence.
   if (host === "chat_thread") {
+    if (!CAPTURE_STATES.includes(record?.state)) {
+      v.push(
+        `${where}: a chat_thread record must declare the \`state\` it photographed ` +
+          `(${CAPTURE_STATES.join("/")}) — a settled card owes the ABSENCE of its controls, ` +
+          `not their presence; it declares "${record?.state}"`,
+      );
+    }
     if (!LIFECYCLE_KINDS.includes(record?.kind)) {
       v.push(
         `${where}: a chat_thread record must declare the lifecycle \`kind\` it photographed ` +
@@ -524,22 +600,43 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   // --- every required host anchor, observed present ---
   const hostRequirements =
     host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.kind)
-      ? chatThreadRequirementsFor(record.kind)
+      ? chatThreadRequirementsFor(record.kind, record.state ?? "pending")
       : HOST_ANCHOR_REQUIREMENTS[host];
   for (const req of hostRequirements) {
     const found = assertions.find(
-      (a) => a?.selector === req.selector && (a?.frame ?? "main") === req.frame,
+      (a) =>
+        a?.selector === req.selector &&
+        (a?.frame ?? "main") === req.frame &&
+        (a?.within ?? null) === (req.within ?? null),
     );
     if (!found) {
       v.push(
-        `${where}: host "${host}" requires the ${req.frame}-frame anchor ${req.selector}, and the ` +
-          "record does not assert it at all",
+        `${where}: host "${host}" requires ${req.selector} in the ${req.frame} frame` +
+          `${req.within ? `, inside ${req.within}` : ""}, and the record does not assert it at all`,
       );
       continue;
     }
-    if ((found.expect ?? "present") !== "present" || !(found.count >= 1)) {
+    // The requirement carries its OWN expectation: a settled capture owes the
+    // ABSENCE of the decision controls, and asserting them present there would
+    // reject the honest screenshot.
+    const wanted = req.expect ?? "present";
+    const got = found.expect ?? "present";
+    if (got !== wanted) {
+      v.push(
+        `${where}: host "${host}" requires ${req.selector} ${wanted.toUpperCase()} in the ` +
+          `${req.frame} frame; the record asserts it ${got}`,
+      );
+      continue;
+    }
+    if (wanted === "present" && !(found.count >= 1)) {
       v.push(
         `${where}: host "${host}" requires ${req.selector} PRESENT in the ${req.frame} frame; ` +
+          `the record observed ${found.count}`,
+      );
+    }
+    if (wanted === "absent" && found.count !== 0) {
+      v.push(
+        `${where}: host "${host}" requires ${req.selector} ABSENT in the ${req.frame} frame; ` +
           `the record observed ${found.count}`,
       );
     }

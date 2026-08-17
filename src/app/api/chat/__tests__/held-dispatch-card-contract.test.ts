@@ -176,10 +176,15 @@ describe("a HELD chat dispatch (pending_input)", () => {
   });
 });
 
-describe("the status is the PRIMITIVE's, copied verbatim", () => {
-  // This is what makes the simulated result above stand for a real one: the
-  // boundary never derives, defaults or rewrites the status, so whatever a real
-  // parked run reports is what reaches the transcript.
+describe("the status is the PRIMITIVE's, with exactly one named default", () => {
+  // This is what makes the simulated result above stand for a real one: a status
+  // the primitive reports reaches the transcript unchanged.
+  //
+  // THE ONE EXCEPTION, pinned rather than glossed: an ABSENT status becomes
+  // `queued` (`explicit-dispatch-server.ts`, `out.status ?? "queued"`). An
+  // earlier draft of this comment claimed the boundary never defaults, which was
+  // simply untrue. It defaults in exactly this case, the case is asserted below,
+  // and `pending_input` is never manufactured by it.
   it.each(["pending_input", "queued", "running", "some_future_status"])(
     "passes %s straight through to the durable payload",
     async (status) => {
@@ -192,6 +197,20 @@ describe("the status is the PRIMITIVE's, copied verbatim", () => {
       expect(JSON.parse(String(toolResult!.data.result))).toEqual({ runId: "run-pt", status });
     },
   );
+
+  it("defaults an ABSENT status to queued, and never to a held one", async () => {
+    mocks.invokePrimitive.mockResolvedValueOnce({ runId: "run-nostatus" });
+    const { send, events } = makeSend();
+
+    await serverSideExplicitDispatch({ packageName: PACKAGE, actor: humanActor(), send });
+
+    const toolResult = events.find((e) => e.event === "tool_result");
+    const payload = JSON.parse(String(toolResult!.data.result)) as { status?: string };
+    expect(payload.status).toBe("queued");
+    // The default can never invent a hold: a card mounted off a manufactured
+    // `pending_input` would be a screen with no run behind it.
+    expect(isHeldDispatch(payload)).toBe(false);
+  });
 
   it("emits the durable payload BEFORE any prose, so a reader never needs the prose", async () => {
     mocks.invokePrimitive.mockResolvedValueOnce({ runId: "run-order", status: "pending_input" });
