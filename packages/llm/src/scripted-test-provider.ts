@@ -91,6 +91,107 @@ export function scriptedTurnAsksForLifecyclePull(instructions: string): boolean 
  */
 const VERIFICATION_INTENT = /\b(verification|verified|verify)\b/i;
 
+/**
+ * The SCHEDULE-PROPOSAL intent (epic #2564 §VI).
+ *
+ * Matched against the USER'S INSTRUCTIONS ONLY, exactly like the two intents
+ * above, and it stands in for the same one decision: which tool this turn
+ * calls. A person who asks for an agent to run later is asking for the §VI
+ * card, and the producer that draws it is `schedule_proposal_render`.
+ *
+ * WHY THIS ARM EXISTS. The lifecycle-pull arm can name only the two `*_render`
+ * primitives, so no turn on a key-free stack could ever reach the schedule
+ * producer, and the §VI card could not be photographed in a conversation at
+ * all. The arm adds no authority: the tool it names WRITES NOTHING (it mints a
+ * signed, expiring proposal token and returns the S1 envelope), and every check
+ * behind it — the caller's principal, the org boundary, the template's reach —
+ * is the shipped one.
+ */
+const SCHEDULE_PROPOSAL_INTENT = /\b(schedule|scheduled|scheduling|recurring|recurrence)\b/i;
+
+/**
+ * Does this turn's instruction ask for a schedule proposal?
+ *
+ * Exported for the same reason `scriptedTurnAsksForLifecyclePull` is: the
+ * intent reading belongs to the model layer, so the host asks the provider
+ * rather than deriving a second answer of its own.
+ */
+export function scriptedTurnAsksForScheduleProposal(instructions: string): boolean {
+  return SCHEDULE_PROPOSAL_INTENT.test(instructions);
+}
+
+/** The producer this provider may drive for §VI. THE NAME IS THE CONTRACT — it
+ *  must equal the registered name (`src/lib/lifecycle/schedule-proposal-mcp.ts`)
+ *  and sit in `LIFECYCLE_PRODUCER_TOOLS.trigger_schedule_proposal`, or the call
+ *  refuses at the transport and no card mints. */
+export const SCRIPTED_SCHEDULE_PROPOSAL_TOOL = "schedule_proposal_render";
+
+/**
+ * The hour and minute the person asked for, defaulting to 09:00.
+ *
+ * A wall clock, read out of the sentence. Nothing here invents a date: the
+ * proposal this arm asks for is a RECURRING one, which carries no date at all.
+ */
+function scriptedScheduleTimeOfDay(instructions: string): { hour: number; minute: number } {
+  const match = instructions.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
+  if (!match) return { hour: 9, minute: 0 };
+  return { hour: Number(match[1]), minute: Number(match[2]) };
+}
+
+/**
+ * Emit the §VI producer call: `schedule_proposal_render` for the template the
+ * person named, on a daily recurrence at the hour they asked for.
+ *
+ * THE TEMPLATE IS READ OUT OF THE SENTENCE, never guessed. This provider holds
+ * no store and cannot resolve "the blog writer" to a row, so it uses the same
+ * stand-in `scriptedTurnNamesAgentRun` already makes for the run card: the turn
+ * names its subject by identifier, and the REAL primitive decides whether that
+ * subject exists and whether the asker may reach it. Naming one grants nothing.
+ * A turn that names none dispatches nothing and the turn carries prose.
+ *
+ * DAILY, deliberately. §VI's option rows are a builder's selections, and the
+ * simplest selection that exercises the whole producer is a daily recurrence —
+ * it needs no future date, so the proposal can never be refused for a runAt in
+ * the past.
+ */
+async function runScriptedScheduleProposal(input: {
+  instructions: string;
+  callSelfMcpTool: ScriptedSelfMcpDispatch;
+  onToolCall: (call: { id: string; name: string }) => void;
+  onToolResult: (result: { id: string; name: string; result: string }) => void;
+}): Promise<boolean> {
+  const templateId = scriptedTurnNamesAgentRun(input.instructions);
+  if (!templateId) return false;
+  const { hour, minute } = scriptedScheduleTimeOfDay(input.instructions);
+  const id = randomUUID();
+  input.onToolCall({ id, name: SCRIPTED_SCHEDULE_PROPOSAL_TOOL });
+  const result = await input.callSelfMcpTool({
+    name: SCRIPTED_SCHEDULE_PROPOSAL_TOOL,
+    args: {
+      templateId,
+      schedule: {
+        kind: "recurring",
+        timezone: "UTC",
+        selection: {
+          frequency: "daily",
+          interval: 1,
+          weekdays: [],
+          dayOfMonth: 1,
+          monthlyMode: "date",
+          nthWeek: 1,
+          monthlyWeekday: 1,
+          quarterAnchor: "start",
+          yearlyMonth: 1,
+          hour,
+          minute,
+        },
+      },
+    },
+  });
+  input.onToolResult({ id, name: SCRIPTED_SCHEDULE_PROPOSAL_TOOL, result });
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // The AGENT-RUN scenario (cinatra#2683, epic #2564 S8f — the undo chip's mount).
 // ---------------------------------------------------------------------------
@@ -259,6 +360,16 @@ async function runScriptedLifecyclePull(input: {
   onToolCall: (call: { id: string; name: string }) => void;
   onToolResult: (result: { id: string; name: string; result: string }) => void;
 }): Promise<boolean> {
+  // A SCHEDULE REQUEST is answered FIRST, and it never lists. §VI's card is a
+  // proposal about a template, so there is no backlog to discover and no ref to
+  // render — listing here would draw a review gate for a person who asked to
+  // schedule an agent. A schedule turn that names no template falls through to
+  // the pull below rather than dispatching a guess.
+  if (scriptedTurnAsksForScheduleProposal(input.instructions)) {
+    const proposed = await runScriptedScheduleProposal(input);
+    if (proposed) return true;
+  }
+
   // A NAMED REF short-circuits the LIST. Listing is the discovery step, and a
   // turn that already names the item has nothing to discover — so this renders
   // exactly what was asked for, once. The primitive still decides whether the

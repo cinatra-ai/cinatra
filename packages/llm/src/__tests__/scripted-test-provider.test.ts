@@ -6,8 +6,10 @@ import {
   assertScriptedProviderNotProduction,
   buildScriptedContentEditorReplyText,
   isScriptedTestProviderEnabled,
+  runScriptedChatAssistantTurn,
   runScriptedStream,
   runScriptedWidgetAssistantTurn,
+  scriptedTurnAsksForScheduleProposal,
   scriptedTurnNamesAgentRun,
   scriptedTurnNamesLifecycleRef,
 } from "../scripted-test-provider";
@@ -326,5 +328,100 @@ describe("buildScriptedContentEditorReplyText (widget-relay stand-in)", () => {
     });
     expect(text).toContain(UAT_SENTINEL);
     expect(text).toContain("Drupal");
+  });
+});
+
+describe("a turn that asks to SCHEDULE an agent (epic #2564 §VI)", () => {
+  const TEMPLATE = "cbf1e985-bb4d-444a-9729-417d38a27474";
+
+  function makeChatSink(): {
+    sink: Omit<Parameters<typeof runScriptedChatAssistantTurn>[0], "instructions">;
+    calls: Array<{ id: string; name: string }>;
+    results: Array<{ id: string; name: string; result: string }>;
+    dispatched: Array<{ name: string; args: Record<string, unknown> }>;
+  } {
+    const calls: Array<{ id: string; name: string }> = [];
+    const results: Array<{ id: string; name: string; result: string }> = [];
+    const dispatched: Array<{ name: string; args: Record<string, unknown> }> = [];
+    return {
+      calls,
+      results,
+      dispatched,
+      sink: {
+        onText: () => {},
+        onToolCall: (call) => calls.push(call),
+        onToolResult: (r) => results.push(r),
+        callSelfMcpTool: async (call) => {
+          dispatched.push(call as { name: string; args: Record<string, unknown> });
+          return JSON.stringify({ ok: true });
+        },
+      },
+    };
+  }
+
+  it("reads the schedule intent, and does not read it into an ordinary question", () => {
+    expect(scriptedTurnAsksForScheduleProposal("Schedule that agent to run daily")).toBe(true);
+    expect(scriptedTurnAsksForScheduleProposal("Set up a recurring run")).toBe(true);
+    expect(scriptedTurnAsksForScheduleProposal("Which reviews are waiting for me?")).toBe(false);
+    expect(scriptedTurnAsksForScheduleProposal("Show me the verification reading")).toBe(false);
+  });
+
+  it("calls schedule_proposal_render ONCE for the named template, and never lists", async () => {
+    const { sink, calls, results, dispatched } = makeChatSink();
+    await runScriptedChatAssistantTurn({
+      ...sink,
+      instructions: `Schedule agent ${TEMPLATE} to run every day at 07:30`,
+    });
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].name).toBe("schedule_proposal_render");
+    expect(dispatched[0].args.templateId).toBe(TEMPLATE);
+    expect(dispatched[0].args.schedule).toMatchObject({
+      kind: "recurring",
+      timezone: "UTC",
+      selection: { frequency: "daily", interval: 1, hour: 7, minute: 30 },
+    });
+    expect(calls.map((c) => c.name)).toEqual(["schedule_proposal_render"]);
+    expect(results[0].id).toBe(calls[0].id);
+  });
+
+  it("defaults the hour to 09:00 when the sentence names no time", async () => {
+    const { sink, dispatched } = makeChatSink();
+    await runScriptedChatAssistantTurn({
+      ...sink,
+      instructions: `Please schedule agent ${TEMPLATE} to run daily`,
+    });
+    expect(dispatched[0].args.schedule).toMatchObject({
+      selection: { hour: 9, minute: 0 },
+    });
+  });
+
+  it("dispatches NOTHING it could only guess — a schedule turn naming no template falls through", async () => {
+    const { sink, dispatched } = makeChatSink();
+    await runScriptedChatAssistantTurn({
+      ...sink,
+      instructions: "Schedule something for me later, please.",
+    });
+    expect(dispatched.map((d) => d.name)).toEqual(["artifact_review_gates_list"]);
+    expect(dispatched.some((d) => d.name === "schedule_proposal_render")).toBe(false);
+  });
+
+  it("leaves the lifecycle-pull path untouched — a review question still lists then renders", async () => {
+    const { sink, dispatched } = makeChatSink();
+    sink.callSelfMcpTool = async (call) => {
+      (dispatched as Array<{ name: string; args: Record<string, unknown> }>).push(
+        call as { name: string; args: Record<string, unknown> },
+      );
+      return call.name === "artifact_review_gates_list"
+        ? JSON.stringify({ refs: ["R".repeat(64)] })
+        : JSON.stringify({ ok: true });
+    };
+    await runScriptedChatAssistantTurn({
+      ...sink,
+      instructions: "Which reviews are waiting for me?",
+    });
+    expect(dispatched.map((d) => d.name)).toEqual([
+      "artifact_review_gates_list",
+      "artifact_review_gate_render",
+    ]);
   });
 });

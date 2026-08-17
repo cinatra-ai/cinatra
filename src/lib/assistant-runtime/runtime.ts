@@ -84,6 +84,7 @@ import {
   runScriptedChatAssistantTurn,
   runScriptedWidgetAssistantTurn,
   scriptedTurnAsksForLifecyclePull,
+  scriptedTurnAsksForScheduleProposal,
 } from "@cinatra-ai/llm/scripted-test-provider";
 // The reserved producer label the sink's recognizer requires. Stamped by THIS
 // module, on THIS module's own record of what it actually dispatched — never by
@@ -613,6 +614,11 @@ export async function runAssistantTurn(
   // provider itself claims (`scriptedTurnAsksForLifecyclePull`), added by
   // cinatra#2683 so the proof can photograph the SAME primitive on `/chat` and in
   // the widget; every other chat turn under the flag is byte-identical to before.
+  // A SECOND question joins it here: the schedule proposal the provider claims
+  // with `scriptedTurnAsksForScheduleProposal`, so the §VI card can be reached
+  // in a conversation at all. Both predicates are the PROVIDER's readings; this
+  // module still invents no intent of its own, and a turn both decline falls
+  // through to the real adapter path untouched.
   //
   // ONE PRODUCTION FENCE, BOTH BRANCHES. `assertScriptedProviderNotProduction`
   // runs before either can be entered: a no-op unless the env flag is set, so
@@ -712,7 +718,8 @@ export async function runAssistantTurn(
     !widgetPrincipal &&
     scriptedProviderEnabled &&
     userId &&
-    scriptedTurnAsksForLifecyclePull(scriptedInstructions)
+    (scriptedTurnAsksForLifecyclePull(scriptedInstructions) ||
+      scriptedTurnAsksForScheduleProposal(scriptedInstructions))
   ) {
     const dispatchedResults = new Set<string>();
     const callSelfMcpTool = createScriptedChatSelfMcpDispatch({
