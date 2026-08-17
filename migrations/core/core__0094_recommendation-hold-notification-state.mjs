@@ -36,6 +36,18 @@
 // MEANING). Postgres 11+ applies a non-volatile DEFAULT as catalog metadata, so
 // the ADD COLUMN does not rewrite the table.
 //
+// MARKED destructive:true BECAUSE THE ARTIFACT IS REQUIRED, NOT BECAUSE DATA IS AT
+// RISK. The schema-migration gate classifies a NOT NULL column added to a deployed
+// table, and an ADD CONSTRAINT CHECK over existing rows, as user-land-affecting —
+// and it is right to: both take an ACCESS EXCLUSIVE lock on
+// lifecycle_continuation_park, and the CHECK validates with a table scan. What it
+// cannot do is FAIL: the only value any pre-existing row can hold is the 'none'
+// default this migration gives it, which the CHECK admits. So the honest cost to an
+// operator is the lock and the scan on one small table, not a data outcome. The
+// column stays NOT NULL rather than taking the gate's nullable carve-out because a
+// null obligation has no meaning here — every park either owes a clear or does not,
+// and the sweeper's drain predicate would have to invent an answer for null.
+//
 // IDEMPOTENT: ADD COLUMN IF NOT EXISTS, an ADD CONSTRAINT wrapped in the
 // duplicate_object guard (ADD CONSTRAINT has no IF NOT EXISTS), and CREATE INDEX
 // IF NOT EXISTS. Statement for statement, in the same order, as the bootstrap
