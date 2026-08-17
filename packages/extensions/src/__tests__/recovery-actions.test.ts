@@ -77,6 +77,13 @@ vi.mock("../canonical-store", () => ({
   readInstalledExtensionsByPackageName: (...a: unknown[]) => readRows(...(a as [])),
 }));
 
+// The ACTIVATION-ONLY seam retry drives (cinatra#2762). The install dispatcher's
+// hook is mocked too, and every retry test asserts it is NEVER reached: retry
+// must not need the registry, and must not re-run an install pipeline.
+const activateRow = vi.fn(async () => ({ activated: true }));
+vi.mock("@/lib/extension-runtime-activate", () => ({
+  activateInstalledRowInProcess: (...a: unknown[]) => activateRow(...(a as [])),
+}));
 const fireActivate = vi.fn(async () => ({ finalized: true, activated: true }));
 vi.mock("../activate-hook", () => ({
   fireExtensionActivate: (...a: unknown[]) => fireActivate(...(a as [])),
@@ -90,9 +97,15 @@ vi.mock("../lifecycle-primitive", () => ({
 }));
 
 const reactivateBundled = vi.fn(async () => ({ ok: true }));
+// Does the IMAGE carry this package? Mutable rather than re-mocked per test: a
+// `vi.doUnmock` here cancels this module's mock for every LATER import too, and
+// the actions then read the real generated manifest.
+let staticManifest: Record<string, unknown> = {
+  "@cinatra-ai/google-appointment-schedules-connector": { packageName: "x" },
+};
 vi.mock("@/lib/generated/extensions.server", () => ({
-  STATIC_EXTENSION_MANIFEST: {
-    "@cinatra-ai/google-appointment-schedules-connector": { packageName: "x" },
+  get STATIC_EXTENSION_MANIFEST() {
+    return staticManifest;
   },
 }));
 vi.mock("@/lib/static-bundle-loader", () => ({
@@ -103,10 +116,13 @@ beforeEach(() => {
   redirectMock.mockClear();
   readRows.mockClear();
   storeRows = [bundledAnchorRow, installRow];
+  staticManifest = { [PKG]: { packageName: "x" } };
   fireActivate.mockClear();
+  activateRow.mockClear();
   transition.mockClear();
   reactivateBundled.mockClear();
   fireActivate.mockResolvedValue({ finalized: true, activated: true } as never);
+  activateRow.mockResolvedValue({ activated: true } as never);
   reactivateBundled.mockResolvedValue({ ok: true } as never);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -133,12 +149,22 @@ describe("retryExtensionActivationFormAction", () => {
     expect(out.redirected, "a recovered install returns the operator to the list").toBe(true);
   });
 
-  it("targets the INSTALL, not the bundled anchor: the row's own org, version and anchor tier", async () => {
+  it("is ACTIVATION-ONLY: it never touches the install dispatcher or the registry", async () => {
+    // cinatra#2762 round-2 item 3. Retry used to call `fireExtensionActivate` →
+    // `installExtensionFromRegistry`, so it NEEDED the marketplace host —
+    // unreachable for exactly the operator most in need of a retry — and re-ran a
+    // whole install pipeline to fix a missing registration.
     const { retryExtensionActivationFormAction } = await import("../actions");
     await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
-    // org-NULL + the workspace tier + the INSTALL's version (0.1.1, not the
-    // bundled anchor's 0.1.0) — read off the resolved row, never off the actor.
-    expect(fireActivate).toHaveBeenCalledWith(PKG, null, "0.1.1", { ownerLevel: "workspace" });
+    expect(fireActivate).not.toHaveBeenCalled();
+    expect(activateRow).toHaveBeenCalledTimes(1);
+  });
+
+  it("is ROW-BOUND: it activates the resolved row's own org, not the actor's", async () => {
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    // The install is org-NULL; the ACTOR's active org is "org-1". The row wins.
+    expect(activateRow).toHaveBeenCalledWith({ packageName: PKG, orgId: null });
   });
 
   it("does NOT reinstall: the bytes are already finalized, only the registration is missing", async () => {
@@ -149,7 +175,7 @@ describe("retryExtensionActivationFormAction", () => {
 
   it("an ORG-anchored install resolves at the actor's own scope, unchanged", async () => {
     // No workspace row: the actor's own org scope answers, and the row's own org
-    // is what travels to the hook.
+    // is what travels to the activator.
     storeRows = [
       canonicalRow({
         id: "iext_org",
@@ -160,15 +186,58 @@ describe("retryExtensionActivationFormAction", () => {
     ];
     const { retryExtensionActivationFormAction } = await import("../actions");
     await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
-    expect(fireActivate).toHaveBeenCalledWith(PKG, "org-1", "0.1.1", undefined);
+    expect(activateRow).toHaveBeenCalledWith({ packageName: PKG, orgId: "org-1" });
   });
 
   it("an activation that does not take RETURNS a failure and never redirects", async () => {
-    fireActivate.mockResolvedValue({ finalized: true, activated: false, reason: "signature required" } as never);
+    activateRow.mockResolvedValue({ activated: false, reason: "signature required" } as never);
     const { retryExtensionActivationFormAction } = await import("../actions");
     const out = await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
     expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
     expect(redirectMock).not.toHaveBeenCalled();
+  });
+
+  it("RESTORES THE BUNDLE when the activation fails — a failed retry leaves something serving", async () => {
+    // The activation path fires an idempotent capability teardown before it
+    // registers, so a retry that then fails can leave NOTHING serving the
+    // package: the #2762 state itself, recreated by the recovery action.
+    activateRow.mockResolvedValue({ activated: false, reason: "register-threw" } as never);
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    const out = await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    expect(reactivateBundled).toHaveBeenCalledWith(PKG);
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    // The row is NOT archived: retry is not a rollback, and the operator may
+    // still fix what refused it.
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("does NOT restore anything on SUCCESS — the install itself is serving", async () => {
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    expect(reactivateBundled).not.toHaveBeenCalled();
+  });
+
+  it("says so when the restore ALSO fails, instead of reporting a bare activation failure", async () => {
+    activateRow.mockResolvedValue({ activated: false, reason: "register-threw" } as never);
+    reactivateBundled.mockResolvedValue({ ok: false, reason: "module absent" } as never);
+    const errors: unknown[] = [];
+    vi.mocked(console.error).mockImplementation((...a: unknown[]) => void errors.push(a.join(" ")));
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    const out = await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    expect(errors.join(" ")).toContain("RECOVERY REQUIRED");
+  });
+
+  it("a package the image does not carry is reported as unserved, not silently 'restored'", async () => {
+    activateRow.mockResolvedValue({ activated: false, reason: "register-threw" } as never);
+    staticManifest = {};
+    const errors: unknown[] = [];
+    vi.mocked(console.error).mockImplementation((...a: unknown[]) => void errors.push(a.join(" ")));
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    const out = await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    expect(reactivateBundled).not.toHaveBeenCalled();
+    expect(errors.join(" ")).toContain("does not ship in the image");
   });
 
   it("a REAL resolver refusal is reported, not thrown at the client", async () => {
@@ -312,12 +381,10 @@ describe("rollBackExtensionToBundledFormAction: the guards", () => {
   });
 
   it("REFUSES when the image carries no version to fall back to", async () => {
-    vi.doMock("@/lib/generated/extensions.server", () => ({ STATIC_EXTENSION_MANIFEST: {} }));
-    vi.resetModules();
+    staticManifest = {};
     const { rollBackExtensionToBundledFormAction } = await import("../actions");
     const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
     expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
-    vi.doUnmock("@/lib/generated/extensions.server");
-    vi.resetModules();
+    expect(transition).not.toHaveBeenCalled();
   });
 });

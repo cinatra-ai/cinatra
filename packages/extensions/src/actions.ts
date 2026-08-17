@@ -1387,6 +1387,34 @@ export async function restoreExtensionPackageFormAction(input: {
 }
 
 /**
+ * Put the image-bundled implementation back in service after an activation
+ * attempt failed, and say what happened (cinatra#2762).
+ *
+ * Returns a SUFFIX for the operator-facing failure reason — never throws, and
+ * never turns a failed activation into a reported success. A package the image
+ * does not carry has nothing to restore, which is itself worth saying: it is the
+ * case where a failed retry really does leave the package unserved, and the
+ * operator needs to know that rather than infer it.
+ */
+async function restoreBundledAfterFailedActivation(packageName: string): Promise<string> {
+  try {
+    const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+    if (!STATIC_EXTENSION_MANIFEST[packageName]) {
+      return " (this package does not ship in the image, so nothing could be put back in service)";
+    }
+    const { reactivateBundledFallbackInProcess } = await import("@/lib/static-bundle-loader");
+    const restored = await reactivateBundledFallbackInProcess(packageName);
+    return restored.ok
+      ? " (the version bundled in the image was put back in service)"
+      : ` (RECOVERY REQUIRED: the bundled version could not be put back: ${restored.reason})`;
+  } catch (err) {
+    return ` (RECOVERY REQUIRED: restoring the bundled version threw: ${
+      err instanceof Error ? err.message : String(err)
+    })`;
+  }
+}
+
+/**
  * RETRY ACTIVATION for an install that is live but serving nothing.
  *
  * The install path now refuses anything it cannot activate, so this exists for
@@ -1396,10 +1424,29 @@ export async function restoreExtensionPackageFormAction(input: {
  * Once they have, the operator needs a way to say "try again" that does not
  * involve reinstalling or restarting.
  *
- * It targets the EFFECTIVE row, the same row every other lifecycle op targets,
- * and it re-fires the in-process activate hook rather than re-running an
- * install: the bytes are already materialized and finalized, only the
- * registration is missing.
+ * It targets the EFFECTIVE row, the same row every other lifecycle op targets.
+ *
+ * ROW-BOUND AND ACTIVATION-ONLY (cinatra#2762). It used to fire the install
+ * dispatcher's activate hook (`fireExtensionActivate` →
+ * `extension-activate-hook-wiring` → `installExtensionFromRegistry`), so "retry
+ * activation" was really "reinstall":
+ *   - it NEEDED THE REGISTRY, and the operator most in need of a retry is
+ *     exactly the one whose marketplace host will not resolve;
+ *   - it RE-RESOLVED the row from the package name, so it could act on a
+ *     different row than the one just addressed and standing-checked;
+ *   - and its unconditional capability teardown could leave NOTHING serving when
+ *     the activation then failed, with no bundled restore — recreating the very
+ *     state #2762 is about.
+ * It now drives `activateInstalledRowInProcess` — the shared loader, bound to
+ * the resolved row's own org, no registry, no install pipeline. The bytes are
+ * already materialized and finalized; only the registration is missing.
+ *
+ * AND IT RESTORES THE BUNDLE WHEN IT FAILS. The loader path tears capabilities
+ * down before it activates (a re-activate must replace, not stack), so a failed
+ * retry is exactly the moment the package can end up with nothing serving. The
+ * image's own version goes back in service through the same targeted seam the
+ * rollback and the boot reconciliation use, and the operator is told which of
+ * the two things happened.
  */
 export async function retryExtensionActivationFormAction(input: {
   packageName: string;
@@ -1418,27 +1465,29 @@ export async function retryExtensionActivationFormAction(input: {
     // concurrent install replace or archive that row in between, and this would
     // activate bytes that are no longer the package.
     const outcome = await withInstallLock(input.packageName, async () => {
-    const { resolveLifecycleTargetRow, lifecycleRowAnchor } = await import(
-      "./lifecycle-target-resolver"
-    );
+    const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
     // Resolving through the shared target resolver is what applies the standing
     // check and the supersession rule, so this can never act on a superseded row
     // or on a row the actor may not write.
     const row = await resolveLifecycleTargetRow(input.packageName, actor);
-    const { fireExtensionActivate } = await import("./activate-hook");
-    const anchor = lifecycleRowAnchor(row);
-    const result = await fireExtensionActivate(
-      input.packageName,
-      row.organizationId ?? null,
-      row.source && "version" in row.source ? (row.source.version as string) : undefined,
-      anchor.ownerLevel === "workspace" ? { ownerLevel: "workspace" } : undefined,
-    );
+    const { activateInstalledRowInProcess } = await import("@/lib/extension-runtime-activate");
+    // The ROW's org, never the actor's — the row the resolver addressed is the
+    // row that is retried.
+    const result = await activateInstalledRowInProcess({
+      packageName: input.packageName,
+      orgId: row.organizationId ?? null,
+    });
     if (!result.activated) {
+      // The activation attempt already fired the capability teardown, so the
+      // package may now be serving NOTHING. Put the image's version back before
+      // reporting, exactly as the rollback and the boot reconciliation do — a
+      // failed retry must never be worse than not retrying.
+      const restored = await restoreBundledAfterFailedActivation(input.packageName);
       logMarketplaceFailureForOperator(
         "retry-activation",
         input.packageName,
         "unrecoverable",
-        result.reason ?? "the package did not register",
+        `${result.reason ?? "the package did not register"}${restored}`,
       );
       return { ok: false as const, category: "unrecoverable" as const };
     }

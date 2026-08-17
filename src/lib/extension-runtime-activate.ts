@@ -48,6 +48,7 @@ import {
 } from "@cinatra-ai/sdk-extensions";
 import type { ExtensionActivateResult } from "@cinatra-ai/extensions";
 import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
+import { METADATA_ONLY_STORE_KINDS } from "@/lib/extension-package-store-core";
 import { isContainedRealpath } from "@/lib/fs-safety";
 
 /**
@@ -606,6 +607,49 @@ export function summarizeActivation(results: ActivationResult[], packageName: st
   };
 }
 
+/**
+ * ACTIVATION-ONLY re-activation of a row that is ALREADY installed — the
+ * operator's "Retry activation" (cinatra#2762 item 2).
+ *
+ * WHY IT IS NOT `runHostExtensionInstallAndActivate`. That function is the
+ * dispatcher's INSTALL hook: it re-resolves a canonical row from the package
+ * name, then drives `installExtensionFromRegistry` — the full real-integrity
+ * pipeline. Retry used it, which made "retry activation" mean three things it
+ * must not mean:
+ *   - it NEEDED THE REGISTRY. An operator whose marketplace host is unreachable
+ *     could not retry an install whose bytes were already materialized and whose
+ *     journal was already finalized — the exact situation retry exists for;
+ *   - it re-resolved the row instead of using the one the lifecycle resolver had
+ *     just addressed, so retry could act on a different row than the operator
+ *     saw and than the standing check had passed;
+ *   - it re-ran a pipeline whose steps are only meaningful for an install.
+ *
+ * This is the seam boot reconciliation already uses to recover the same class of
+ * row: the shared loader, anchor-narrowed, scoped to one package. The bytes are
+ * already there; only the registration is missing.
+ *
+ * IT IS NOT SAFE ON ITS OWN, and does not pretend to be. The loader path fires
+ * an idempotent capability teardown before it activates (a re-activate must
+ * replace, not stack), so a retry whose activation then fails can leave NOTHING
+ * serving the package — which is the #2762 state itself. The caller MUST restore
+ * the bundled implementation on `activated:false`; `retryExtensionActivationFormAction`
+ * does, and is pinned on it.
+ *
+ * Never throws — a refusal is a verdict, not an exception.
+ */
+export async function activateInstalledRowInProcess(input: {
+  packageName: string;
+  /** The RESOLVED row's org, never the actor's. */
+  orgId: string | null;
+}): Promise<HotUpdateActivateResult> {
+  try {
+    const results = await activateInstalledPackageInProcess(input.packageName, input.orgId);
+    return summarizeActivation(results, input.packageName);
+  } catch (err) {
+    return { activated: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Tear down the PARTIAL new registration after a failed new activation: fire the
  *  in-memory capability teardown for the package + destroy the new module if it
  *  loaded (so a half-registered new digest releases what it acquired). */
@@ -853,10 +897,15 @@ async function cleanupEmptyQuarantineRoots(entries: QuarantineEntry[]): Promise<
 }
 
 // cinatra#793: the kinds whose store payload is METADATA-ONLY (no hot-loadable
-// `register(ctx)` server module). Their pipeline runs with inert in-process
-// activation deps (see the override below); the dispatcher gates them on
-// `finalized` only and the NATIVE handler projects their run surface.
-const METADATA_ONLY_STORE_KINDS = new Set(["agent", "skill", "artifact"]);
+// `register(ctx)` server module) are `METADATA_ONLY_STORE_KINDS`, imported at
+// the top of this file. Their pipeline runs with inert in-process activation
+// deps (see the override below); the dispatcher gates them on `finalized` only
+// and the NATIVE handler projects their run surface.
+//
+// The SET itself lives with the store kinds it partitions
+// (`extension-package-store-core`) because boot reconciliation must read the
+// SAME one: it decides whether a package that did not activate in-process is
+// stranded, and for these kinds not activating is the healthy outcome.
 
 /**
  * The host activate-hook body. Records real provenance + activates a

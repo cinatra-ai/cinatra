@@ -1600,10 +1600,19 @@ class ExtensionRegistryImpl {
     // The anchor TIER handed to the host activate hook. Forwarded ONLY where it
     // can change WHICH row the host resolves — the org-NULL WORKSPACE anchor,
     // the one scope where two rows (a product-installed workspace row and a
-    // bundled platform anchor) share an `organization_id` and `pickSingleActiveRow`
-    // would fail closed on the ambiguity. Every other install — org-anchored, or
-    // the platform tier itself — keeps the pre-#2698 call exactly as it was, so
-    // "byte-identical to today" holds down to the hook invocation.
+    // bundled platform anchor) share an `organization_id`.
+    //
+    // `pickSingleActiveRow` no longer fails closed on THAT pair: it applies the
+    // shared source precedence, so the product install outranks the bundled
+    // fallback (cinatra#2762). The tier is still forwarded, and still preferred,
+    // because it selects the workspace row DIRECTLY by identity rather than via a
+    // policy that reads a source discriminant — so a row whose provenance is
+    // neither bundled nor marketplace (a legacy or fixture row, which precedence
+    // deliberately leaves alone) still resolves here.
+    //
+    // Every other install — org-anchored, or the platform tier itself — keeps the
+    // pre-#2698 call exactly as it was, so "byte-identical to today" holds down
+    // to the hook invocation.
     const activateAnchor =
       rowOrgId === null && rowAnchor.ownerLevel === "workspace"
         ? { ownerLevel: rowAnchor.ownerLevel }

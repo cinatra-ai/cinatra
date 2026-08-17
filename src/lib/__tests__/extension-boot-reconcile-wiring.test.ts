@@ -234,3 +234,178 @@ describe("reconcileStrandedInstallsAtBoot: the five outcome classes", () => {
     expect(sweep.outcomes[0]).toEqual({ kind: "activated", packageName: PKG });
   });
 });
+
+// ---------------------------------------------------------------------------
+// METADATA-ONLY KINDS ARE NOT STRANDED (cinatra#2762 round-2 item 1).
+//
+// `activatedThisBoot` is built from the loaders' ActivationResults. A skill,
+// agent or artifact NEVER enters it: it ships no server module, so
+// `sdk-extensions/activate.ts` returns `skipped/no-server-entry` on a perfectly
+// HEALTHY install, and the artifact bridge rescan that does project artifacts
+// runs in a LATER boot phase than this one. Absence from the set therefore says
+// nothing about these kinds — and reading it as evidence reconciled every
+// healthy metadata-only install on EVERY boot: an activation attempt, an audit
+// INSERT and an `[operational-event]` error per package per restart.
+// ---------------------------------------------------------------------------
+describe("reconcileStrandedInstallsAtBoot: metadata-only kinds are excluded BY KIND", () => {
+  for (const kind of ["skill", "agent", "artifact"] as const) {
+    it(`a healthy ${kind} install is never a candidate`, async () => {
+      storeRows = [row({ id: "org", kind })];
+      const { reconcileStrandedInstallsAtBoot } = await import("@/lib/extension-boot-reconcile");
+      const { deps, calls } = makeDeps();
+      const sweep = await reconcileStrandedInstallsAtBoot(new Set(), deps);
+      expect(sweep).toEqual({ considered: 0, outcomes: [] });
+      // No attempt, no archive, no audit row, no operational-event error.
+      expect(calls.activated).toEqual([]);
+      expect(calls.archived).toEqual([]);
+      expect(calls.recorded).toEqual([]);
+      expect(calls.audit).toEqual([]);
+    });
+  }
+
+  it("a connector IS still a candidate — the exclusion is by kind, not a blanket mute", async () => {
+    storeRows = [row({ id: "org", kind: "connector" })];
+    const { reconcileStrandedInstallsAtBoot } = await import("@/lib/extension-boot-reconcile");
+    const { deps, calls } = makeDeps();
+    const sweep = await reconcileStrandedInstallsAtBoot(new Set(), deps);
+    expect(sweep.considered).toBe(1);
+    expect(calls.activated).toEqual(["org"]);
+  });
+
+  it("a row with NO kind recorded keeps the previous behaviour", async () => {
+    storeRows = [row({ id: "org" })];
+    const { reconcileStrandedInstallsAtBoot } = await import("@/lib/extension-boot-reconcile");
+    const { deps, calls } = makeDeps();
+    const sweep = await reconcileStrandedInstallsAtBoot(new Set(), deps);
+    expect(sweep.considered).toBe(1);
+    expect(calls.activated).toEqual(["org"]);
+  });
+
+  it("the reconciler ITSELF also refuses a metadata-only row it is handed directly", async () => {
+    // Defense in depth: the sweep filters the rows `listInstalledExtensions`
+    // returned; this is the row a fresh read under the lock produced.
+    storeRows = [row({ id: "org", kind: "skill" })];
+    const { reconcileStrandedInstall } = await import("@/lib/extension-boot-reconcile");
+    const { deps, calls } = makeDeps();
+    const out = await reconcileStrandedInstall(PKG, deps);
+    expect(out).toMatchObject({ kind: "skipped" });
+    expect(calls.activated).toEqual([]);
+  });
+
+  it("the failure-class regex is NOT the fix: 'no server entry' still classifies as byte", async () => {
+    // Widening `/no server entry/i` to match the loader's `no-server-entry` skip
+    // would have silenced the same log line by declaring healthy installs
+    // BYTE-class — which archives them. The regex must stay exactly as it was.
+    expect(classifyActivationFailure("registered:no server entry")).toBe("byte");
+    expect(classifyActivationFailure("skipped:no-server-entry")).not.toBe("byte");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SWEEP'S RESULTS REACH THE REQUIRED-ACTIVATION ASSERT (round-2 item 2).
+//
+// The phase runs this pass before `assertRequiredExtensionActivations` precisely
+// so a package it recovers "counts as present" — but it pushed NOTHING into the
+// array that assert reads, so a REQUIRED package reconciliation had just
+// activated was still reported `missing` and a production boot aborted on its
+// own successful recovery.
+// ---------------------------------------------------------------------------
+describe("activationResultsFromReconcileSweep", () => {
+  const sweepOf = (...outcomes: unknown[]) =>
+    ({ considered: outcomes.length, outcomes } as never);
+
+  it("an ACTIVATED package becomes a registered result", async () => {
+    const { activationResultsFromReconcileSweep } = await import(
+      "@/lib/extension-boot-reconcile"
+    );
+    expect(
+      activationResultsFromReconcileSweep(sweepOf({ kind: "activated", packageName: PKG })),
+    ).toEqual([{ packageName: PKG, status: "registered" }]);
+  });
+
+  it("a recovered REQUIRED package no longer fails the real assert", async () => {
+    // The end-to-end point of the fix, through the real cross-check.
+    const { activationResultsFromReconcileSweep } = await import(
+      "@/lib/extension-boot-reconcile"
+    );
+    const { findRequiredActivationFailures } = await import(
+      "@/lib/required-extension-activation"
+    );
+    const results = activationResultsFromReconcileSweep(
+      sweepOf({ kind: "activated", packageName: PKG }),
+    );
+    expect(findRequiredActivationFailures(results, [PKG], new Set([PKG]))).toEqual([]);
+    // Without the results the SAME required package is reported missing.
+    expect(findRequiredActivationFailures([], [PKG], new Set([PKG]))).toEqual([
+      { packageName: PKG, status: "missing" },
+    ]);
+  });
+
+  it("a failed override whose BUNDLE was restored counts as present: it IS serving", async () => {
+    const { activationResultsFromReconcileSweep } = await import(
+      "@/lib/extension-boot-reconcile"
+    );
+    const { findRequiredActivationFailures } = await import(
+      "@/lib/required-extension-activation"
+    );
+    for (const kind of ["retryable", "archived"] as const) {
+      const results = activationResultsFromReconcileSweep(
+        sweepOf({
+          kind,
+          packageName: PKG,
+          rowId: "org",
+          reason: "signature required",
+          failureClass: kind === "retryable" ? "config" : "byte",
+          bundledRestored: true,
+        }),
+      );
+      expect(results[0].status).toBe("registered");
+      // The reason is still carried, so nobody reads this as a clean activation.
+      expect(String(results[0].error)).toContain("bundled in the image is serving");
+      expect(findRequiredActivationFailures(results, [PKG], new Set([PKG]))).toEqual([]);
+    }
+  });
+
+  it("NOTHING serving still FAILS the assert — now with this pass's diagnosis", async () => {
+    const { activationResultsFromReconcileSweep } = await import(
+      "@/lib/extension-boot-reconcile"
+    );
+    const { findRequiredActivationFailures } = await import(
+      "@/lib/required-extension-activation"
+    );
+    const results = activationResultsFromReconcileSweep(
+      sweepOf({
+        kind: "archived",
+        packageName: PKG,
+        rowId: "org",
+        reason: "integrity mismatch",
+        failureClass: "byte",
+        bundledRestored: false,
+      }),
+      );
+    expect(results[0].status).toBe("failed");
+    expect(String(results[0].error)).toContain("integrity mismatch");
+    expect(findRequiredActivationFailures(results, [PKG], new Set([PKG]))).toHaveLength(1);
+  });
+
+  it("recovery-required fails the assert too", async () => {
+    const { activationResultsFromReconcileSweep } = await import(
+      "@/lib/extension-boot-reconcile"
+    );
+    const results = activationResultsFromReconcileSweep(
+      sweepOf({ kind: "recovery-required", packageName: PKG, rowId: "org", reason: "archive failed" }),
+    );
+    expect(results[0].status).toBe("failed");
+  });
+
+  it("a SKIPPED package contributes nothing: this pass did not act", async () => {
+    const { activationResultsFromReconcileSweep } = await import(
+      "@/lib/extension-boot-reconcile"
+    );
+    expect(
+      activationResultsFromReconcileSweep(
+        sweepOf({ kind: "skipped", packageName: PKG, reason: "already serving" }),
+      ),
+    ).toEqual([]);
+  });
+});

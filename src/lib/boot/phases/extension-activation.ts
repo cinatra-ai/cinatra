@@ -171,11 +171,19 @@ export function extensionActivationPhases(
             .filter((r) => r.status === "registered" || r.status === "bootstrapped")
             .map((r) => r.packageName),
         );
-        const { reconcileStrandedInstallsAtBoot } = await import(
-          "@/lib/extension-boot-reconcile"
-        );
+        const { reconcileStrandedInstallsAtBoot, activationResultsFromReconcileSweep } =
+          await import("@/lib/extension-boot-reconcile");
         const sweep = await reconcileStrandedInstallsAtBoot(activatedThisBoot);
         if (sweep.considered === 0) return;
+        // WHAT THIS PASS CHANGED, as ActivationResults (cinatra#2762). The phase
+        // runs before `assertRequiredExtensionActivations` precisely so a package
+        // recovered here counts as present — but it pushed nothing into the array
+        // that assert reads, so a REQUIRED package this pass had just activated
+        // was still reported `missing` and a production boot aborted on its own
+        // successful recovery. The results go in before the assert can read them;
+        // a package left with nothing serving still contributes a `failed` result
+        // and still fails it.
+        bootActivationResults.push(...activationResultsFromReconcileSweep(sweep));
         const acted = sweep.outcomes.filter((o) => o.kind !== "skipped");
         console.info(
           `[boot] StrandedInstallReconcile: considered ${sweep.considered}, acted on ${acted.length}` +

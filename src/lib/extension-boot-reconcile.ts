@@ -33,7 +33,9 @@ import "server-only";
 //
 // Nothing here deletes a row by hand, and nothing here relaxes a gate.
 
+import type { ActivationResult } from "@cinatra-ai/sdk-extensions";
 import type { ActivationFailureClass } from "@/lib/extension-activation-failure-class";
+import { isMetadataOnlyStoreKind } from "@/lib/extension-package-store-core";
 
 export type { ActivationFailureClass };
 
@@ -47,6 +49,8 @@ export type BootReconcileOutcome =
       rowId: string;
       reason: string;
       failureClass: "config";
+      /** Did the implementation bundled in the image come back into service? */
+      bundledRestored: boolean;
     }
   | {
       kind: "archived";
@@ -54,6 +58,8 @@ export type BootReconcileOutcome =
       rowId: string;
       reason: string;
       failureClass: "byte";
+      /** Did the implementation bundled in the image come back into service? */
+      bundledRestored: boolean;
     }
   | {
       kind: "recovery-required";
@@ -69,6 +75,9 @@ export type ReconcilableRow = {
   organizationId: string | null;
   /** Present so supersession can tell a workspace anchor from an org row. */
   ownerLevel?: string;
+  /** The store kind. AUTHORITATIVE for "can this package activate in-process at
+   *  all" — a metadata-only kind never can, and never should be reconciled. */
+  kind?: string;
   status: string;
   isDefault?: boolean;
   source?: { type?: string } | null;
@@ -164,6 +173,19 @@ export async function reconcileStrandedInstall(
     }
 
     const row = overrides[0]!;
+    // The same kind exclusion the sweep applies, restated over the row this pass
+    // actually resolved (cinatra#2762). The sweep filters on the rows
+    // `listInstalledExtensions` returned; this is the row a fresh read under the
+    // lock produced. A metadata-only package has no server module to activate, so
+    // "did not activate in-process" is its healthy state and there is nothing
+    // here to recover.
+    if (isMetadataOnlyStoreKind(row.kind)) {
+      return {
+        kind: "skipped" as const,
+        packageName,
+        reason: "metadata-only kind: no server module to activate in-process",
+      };
+    }
     const attempt = await deps.activateOverride(row);
     // SUCCESS IS REGISTRATION, not trust. Re-read the serving registry rather
     // than believing the attempt's own report, so "effective" means the same
@@ -207,6 +229,7 @@ export async function reconcileStrandedInstall(
         rowId: row.id,
         reason,
         failureClass: "config",
+        bundledRestored: restored.ok,
       };
     }
 
@@ -252,6 +275,7 @@ export async function reconcileStrandedInstall(
       rowId: row.id,
       reason,
       failureClass: "byte",
+      bundledRestored: restored.ok,
     };
   });
 }
@@ -400,6 +424,22 @@ export async function reconcileStrandedInstallsAtBoot(
   // Candidates: a package with a LIVE product-installed row that is not serving.
   // A bundled-only package is never a candidate (it has no override to recover),
   // and neither is anything the loaders already brought up.
+  //
+  // METADATA-ONLY KINDS ARE EXCLUDED BY ROW KIND (cinatra#2762). `activatedThisBoot`
+  // is built from the loaders' ActivationResults, and a skill, agent or artifact
+  // NEVER enters it: it ships no server module, so `activate.ts` returns
+  // `skipped/no-server-entry` for it — on a perfectly healthy install — and the
+  // artifact bridge rescan that does project artifacts runs in a LATER phase than
+  // this one. So absence from that set says nothing about a metadata-only
+  // package's health, and treating it as evidence made this pass reconcile every
+  // healthy metadata-only install on EVERY boot: a pointless activation attempt,
+  // an audit INSERT, and an `[operational-event]` error per package per restart.
+  //
+  // The exclusion is BY KIND and nothing else. Widening the `/no server entry/i`
+  // failure-class regex to match `no-server-entry` would have suppressed the same
+  // log line by classifying these healthy installs as BYTE-class failures — which
+  // archives them (`extension-activation-failure-class.ts:213-255`). The row kind
+  // is the fact; the reason string is a symptom.
   const candidates = [
     ...new Set(
       rows
@@ -408,6 +448,7 @@ export async function reconcileStrandedInstallsAtBoot(
             (r.status === "active" || r.status === "locked") &&
             r.isDefault !== false &&
             r.source?.type === "verdaccio" &&
+            !isMetadataOnlyStoreKind(r.kind) &&
             !activatedThisBoot.has(r.packageName),
         )
         .map((r) => r.packageName),
@@ -431,4 +472,80 @@ export async function reconcileStrandedInstallsAtBoot(
     }
   }
   return { considered: candidates.length, outcomes };
+}
+
+/**
+ * The sweep's outcomes as `ActivationResult`s, for `bootActivationResults`
+ * (cinatra#2762).
+ *
+ * WHY THIS EXISTS. The boot phase runs this pass before
+ * `assertRequiredExtensionActivations` precisely so a package it recovers
+ * "counts as present" — but it pushed NOTHING into the results array the assert
+ * reads. So a required package that reconciliation successfully activated was
+ * still reported `missing`, and a PRODUCTION boot aborted on the very recovery
+ * that had just fixed it. The phase's claim is now backed by a result.
+ *
+ * The mapping is exactly what is true in-process, never more:
+ *   - `activated` → REGISTERED. The override registered, verified by re-reading
+ *     the serving registry rather than by trusting the attempt's own report.
+ *   - `retryable` / `archived` WITH the bundle restored → REGISTERED. This is the
+ *     documented failure-class policy working: the override did not take and the
+ *     implementation bundled in the image is serving in this process. The
+ *     package is present — by the bundled version, which is the outcome #2762
+ *     asks for — so a boot must not abort on it. The reason says which version
+ *     is actually serving, so no operator reads this as a clean activation.
+ *   - `retryable` / `archived` WITHOUT the bundle restored, and
+ *     `recovery-required` → FAILED. Nothing is serving the package; the assert
+ *     must still fail it, now carrying this pass's own diagnosis instead of a
+ *     bare `missing`.
+ *   - `skipped` → NO result. This pass did not act, so it has nothing to add:
+ *     "already serving" is the loaders' result to report, and it already is.
+ *
+ * `reason` stays the loader's CLOSED machine-readable union — this pass has no
+ * member that honestly describes a config-class refusal, and inventing one (or
+ * borrowing `register-threw`) would put a false cause in front of an operator.
+ * The human diagnosis travels in `error`, which is exactly the field for it, and
+ * the audit row + the phase log line carry it too.
+ */
+export function activationResultsFromReconcileSweep(
+  sweep: BootReconcileSweep,
+): ActivationResult[] {
+  const results: ActivationResult[] = [];
+  for (const outcome of sweep.outcomes) {
+    switch (outcome.kind) {
+      case "activated":
+        results.push({ packageName: outcome.packageName, status: "registered" });
+        break;
+      case "retryable":
+      case "archived":
+        results.push(
+          outcome.bundledRestored
+            ? {
+                packageName: outcome.packageName,
+                status: "registered",
+                error:
+                  `boot-reconcile: the install did not activate (${outcome.reason}); ` +
+                  "the version bundled in the image is serving",
+              }
+            : {
+                packageName: outcome.packageName,
+                status: "failed",
+                error:
+                  `boot-reconcile: the install did not activate (${outcome.reason}) ` +
+                  "and the bundled version could not be restored",
+              },
+        );
+        break;
+      case "recovery-required":
+        results.push({
+          packageName: outcome.packageName,
+          status: "failed",
+          error: `boot-reconcile: ${outcome.reason}`,
+        });
+        break;
+      case "skipped":
+        break;
+    }
+  }
+  return results;
 }
