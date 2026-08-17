@@ -13,11 +13,17 @@
 // jsdom — the assertions live in tests/e2e/design/run-step-rail-geometry.spec.ts
 // and read real bounding boxes off this route.
 //
-// Two rails, side by side:
+// Three rails, side by side:
 //   • run-step-rail-wrapped — the reported scenario: TWO CONSECUTIVE skipped
 //     lifecycle rows whose reasons wrap to several lines inside the narrow
 //     rail, sandwiched between ordinary single-line step rows so the push-down
 //     is measurable.
+//   • run-step-rail-single-line — a skipped lifecycle row whose reason is SHORT
+//     enough NOT to wrap. The fix applies `items-start` to EVERY lifecycle
+//     trigger, so this is the case where that alignment could go wrong without
+//     any wrapping to make it obvious: the indicator must still sit on the
+//     row's FIRST line. Kept as its own rail rather than added to the wrapped
+//     one so the wrapped rail keeps meaning "every reason here wraps".
 //   • run-step-rail-plain — the same rail with NO lifecycle rows: the control
 //     that pins "rows without reasons are unchanged".
 //
@@ -25,8 +31,10 @@
 // baselines there stay untouched; the coverage for this route is assertion-based.
 // ---------------------------------------------------------------------------
 
-import { RunStepRailPanel } from "@cinatra-ai/agents/run-step-rail-panel";
-import type { RunStepRailEntry } from "@cinatra-ai/agents/run-step-rail";
+import {
+  RunStepRailPanel,
+  type RunStepRailEntry,
+} from "@cinatra-ai/agents/run-step-rail-panel";
 
 // The verbatim shape the decision lattice emits when a policy moved after a
 // decision was taken — the string the report was filed against. Long enough to
@@ -37,6 +45,14 @@ const STALE_ORG_REASON =
 
 const SECOND_STALE_ORG_REASON =
   "policy has changed since this decision (now: org policy requires review before any published artifact is replaced)";
+
+// The SHORT counterpart: a real lifecycle reason that fits on ONE line inside
+// the rail's `max-w-36` reason column at every viewport the spec samples
+// (measured: a 16px single line box at 1440px and at 900px). This is the row
+// the wrapped fixtures could not exercise — `items-start` is applied to every
+// lifecycle trigger, and a first-line misalignment on a row with nothing to
+// wrap leaves no overlap behind to notice.
+const SINGLE_LINE_REASON = "no reviewer required";
 
 function step(ordinal: number, label: string, status: RunStepRailEntry["status"]): RunStepRailEntry {
   return {
@@ -79,6 +95,15 @@ const WRAPPED_ENTRIES: RunStepRailEntry[] = [
   step(5, "Publish", "upcoming"),
 ];
 
+// The single-line lifecycle rail: ONE skipped row whose reason does not wrap,
+// with ordinary step rows on both sides so its indicator alignment can be read
+// against a row that has always been a plain single-line row.
+const SINGLE_LINE_ENTRIES: RunStepRailEntry[] = [
+  step(1, "Collect sources", "completed"),
+  skippedLifecycle(2, "Review skipped", SINGLE_LINE_REASON),
+  step(3, "Publish", "upcoming"),
+];
+
 // The control rail: identical step rows, no lifecycle rows at all.
 const PLAIN_ENTRIES: RunStepRailEntry[] = [
   step(1, "Collect sources", "completed"),
@@ -92,6 +117,13 @@ export function RunStepRailGeometryFixtures() {
       <div data-surface-id="run-step-rail-wrapped">
         <RunStepRailPanel
           entries={WRAPPED_ENTRIES}
+          activeOrdinal={null}
+          reviewHrefBase="/design-fixtures/run-step-rail/review"
+        />
+      </div>
+      <div data-surface-id="run-step-rail-single-line">
+        <RunStepRailPanel
+          entries={SINGLE_LINE_ENTRIES}
           activeOrdinal={null}
           reviewHrefBase="/design-fixtures/run-step-rail/review"
         />

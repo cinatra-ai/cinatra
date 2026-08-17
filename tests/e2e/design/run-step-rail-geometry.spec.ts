@@ -18,9 +18,12 @@
  * here, so the spec stays platform-portable (the pixel baselines remain owned
  * by design-fixtures.spec.ts).
  *
- * Four claims, at a desktop AND a narrow viewport. Each was checked against
- * pre-fix markup (the same rail with the row's `h-8` restored) so the suite is
- * known to FAIL without the fix rather than merely passing with it:
+ * Six claims, at a desktop AND a narrow viewport. Every one was checked against
+ * pre-fix markup (the same rail with the row's `h-8 items-center` restored), so
+ * the suite is known to FAIL without the fix rather than merely passing with it.
+ * The ones that pass pre-fix too are the deliberate CONTROLS — "ordinary rows
+ * are unchanged" (4), the ordinary-step-row arm of (5), and the fixture's own
+ * "this reason really is one line" contract in (6):
  *   1. CONTAINMENT — each wrapped reason's box sits INSIDE its own row box.
  *      Pre-fix an 80px and a 96px reason sat in a 32px row, escaping it by
  *      32px and 40px.
@@ -36,18 +39,36 @@
  *      taller than an ordinary single-line row, i.e. the rail GREW rather
  *      than clamping the text away. Pre-fix every row measured 32px.
  *   4. UNCHANGED — ordinary rows with no reason still measure exactly the
- *      2rem row box they always had (the `min-h-8` floor), on both the mixed
- *      rail and the lifecycle-free control rail.
+ *      2rem row box they always had (the `min-h-8` floor), on the mixed rail,
+ *      the single-line lifecycle rail and the lifecycle-free control rail.
+ *   5. FIRST-LINE ALIGNMENT — a lifecycle row's indicator centres on the FIRST
+ *      LINE of its title, for a wrapped reason AND for a SHORT one that does
+ *      not wrap. The fix applies `items-start` to EVERY lifecycle trigger, so
+ *      the non-wrapping row is the case that could regress silently, and it is
+ *      the ONE claim here that catches it: measured on pre-fix markup, a
+ *      single-line lifecycle row still boxes at 32px and leaves its reason
+ *      flush with the row's bottom edge, so containment (1) and intrusion (2)
+ *      both PASS on it — while the indicator's centre lands 1px past the end
+ *      of the first line. Pre-fix the wrapped rows miss by 33px.
+ *   6. ONE EXTRA LINE — a short, non-wrapping reason grows its row by its own
+ *      single line and no more: at least the 2rem floor, strictly shorter than
+ *      a wrapped row. NOTE that a lifecycle row is NOT a 32px row even when the
+ *      reason fits on one line — the reason is a `block` beneath the label, so
+ *      the honest content height is two lines (measured 38px). Pre-fix that row
+ *      reported 32px only because it was pinned there and overflowed.
  */
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
 const FIXTURE_PATH = "/design-fixtures/run-step-rail";
 
 const WRAPPED_RAIL = '[data-surface-id="run-step-rail-wrapped"]';
+const SINGLE_LINE_RAIL = '[data-surface-id="run-step-rail-single-line"]';
 const PLAIN_RAIL = '[data-surface-id="run-step-rail-plain"]';
 
 const ROW = '[data-slot="stepper-item"]';
 const ROW_BOX = '[data-slot="stepper-trigger"]';
+const INDICATOR = '[data-slot="stepper-indicator"]';
+const TITLE = '[data-slot="stepper-title"]';
 const REASON = "[data-rail-lifecycle-reason]";
 const LIFECYCLE_ROW = '[data-rail-kind="lifecycleDecision"]';
 const STEP_ROW = '[data-rail-kind="step"]';
@@ -64,6 +85,34 @@ async function boxOf(locator: Locator): Promise<Box> {
   const box = await locator.boundingBox();
   expect(box, "element must be laid out and visible").not.toBeNull();
   return box!;
+}
+
+/**
+ * The FIRST LINE box of a row's title, and the vertical centre of that row's
+ * indicator — the pair the alignment claim is made of.
+ *
+ * The first line is read as the first client rect of the title's contents
+ * (`Range.getClientRects()` returns one rect per line box), so it is the real
+ * laid-out first line rather than an assumption about line-height. A title with
+ * a wrapped reason produces several rects; a plain step row produces one.
+ */
+async function firstLineAndIndicator(row: Locator) {
+  return row.evaluate(
+    (el, sel) => {
+      const title = el.querySelector(sel.title)!;
+      const indicator = el.querySelector(sel.indicator)!;
+      const range = document.createRange();
+      range.selectNodeContents(title);
+      const firstLine = range.getClientRects()[0];
+      const ind = indicator.getBoundingClientRect();
+      return {
+        firstLineTop: firstLine.top,
+        firstLineBottom: firstLine.bottom,
+        indicatorCentre: ind.top + ind.height / 2,
+      };
+    },
+    { title: TITLE, indicator: INDICATOR }
+  );
 }
 
 /** The viewports the report names: the reported desktop, and a narrow width
@@ -174,8 +223,77 @@ for (const viewport of VIEWPORTS) {
       ).toBeGreaterThan(SINGLE_LINE_ROW_HEIGHT);
     });
 
+    test("a lifecycle indicator centres on the first line, wrapped reason or not", async ({
+      page,
+    }) => {
+      // Both lifecycle cases, plus an ordinary step row as the control that has
+      // always had this alignment.
+      const rowWith = (rail: string, inner: string) =>
+        page
+          .locator(`${rail} ${ROW}`)
+          .filter({ has: page.locator(inner) })
+          .first();
+
+      const cases = [
+        { name: "wrapped lifecycle row", row: rowWith(WRAPPED_RAIL, REASON) },
+        { name: "single-line lifecycle row", row: rowWith(SINGLE_LINE_RAIL, REASON) },
+        { name: "ordinary step row (control)", row: rowWith(SINGLE_LINE_RAIL, STEP_ROW) },
+      ];
+
+      for (const { name, row } of cases) {
+        await expect(row, `${name} must exist`).toHaveCount(1);
+        const { firstLineTop, firstLineBottom, indicatorCentre } =
+          await firstLineAndIndicator(row);
+
+        // The indicator belongs on the FIRST line, not centred against the
+        // whole block. Pre-fix the single-line row misses by 1px and the
+        // wrapped row by 33px.
+        expect(
+          indicatorCentre,
+          `${name}: the indicator must not sit above its title's first line`
+        ).toBeGreaterThanOrEqual(firstLineTop - EPSILON);
+        expect(
+          indicatorCentre,
+          `${name}: the indicator must not sit below its title's first line`
+        ).toBeLessThanOrEqual(firstLineBottom + EPSILON);
+      }
+    });
+
+    test("a short reason grows its row by its own line and no more", async ({ page }) => {
+      const shortReason = page.locator(`${SINGLE_LINE_RAIL} ${REASON}`);
+      await expect(shortReason).toHaveCount(1);
+
+      const reasonBox = await boxOf(shortReason);
+      // The fixture's contract: this reason must NOT wrap, or the row is just
+      // another copy of the wrapped case and proves nothing new.
+      expect(
+        reasonBox.height,
+        "the single-line fixture's reason must occupy exactly one line box"
+      ).toBeLessThanOrEqual(20);
+
+      const shortRowBox = await boxOf(
+        page.locator(`${SINGLE_LINE_RAIL} ${LIFECYCLE_ROW} ${ROW_BOX}`).first()
+      );
+      const wrappedRowBox = await boxOf(
+        page.locator(`${WRAPPED_RAIL} ${LIFECYCLE_ROW} ${ROW_BOX}`).first()
+      );
+
+      // A lifecycle row is NOT a 32px row even unwrapped — the reason is a
+      // block beneath the label — but it must never fall BELOW the floor...
+      expect(
+        shortRowBox.height,
+        "a single-line lifecycle row must keep the 2rem min-h-8 floor"
+      ).toBeGreaterThanOrEqual(SINGLE_LINE_ROW_HEIGHT - EPSILON);
+      // ...and it must stay strictly shorter than a row whose reason wraps,
+      // i.e. the row grew by ITS OWN content and not by a shared constant.
+      expect(
+        shortRowBox.height,
+        "a single-line lifecycle row must be shorter than a wrapped one"
+      ).toBeLessThan(wrappedRowBox.height);
+    });
+
     test("rows without a reason keep the row box they always had", async ({ page }) => {
-      for (const rail of [WRAPPED_RAIL, PLAIN_RAIL]) {
+      for (const rail of [WRAPPED_RAIL, SINGLE_LINE_RAIL, PLAIN_RAIL]) {
         const stepRows = page.locator(`${rail} ${STEP_ROW} ${ROW_BOX}`);
         const count = await stepRows.count();
         expect(count, `${rail} must render its ordinary step rows`).toBeGreaterThan(0);
