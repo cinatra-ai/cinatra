@@ -35,7 +35,7 @@ import { useCallback, useState, type ReactElement } from "react";
 
 import { Button } from "@/components/ui/button";
 
-import type { TriggerScheduleProposalExpiredView } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import type { TriggerScheduleProposalExpiredView } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
 /** What the card says happened. Names no id, no org and no policy. */
 const EXPIRED_LINE = "This proposal expired before it was confirmed.";

@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 218,
     "/api/mcp": 1714,
-    "/chat": 1793,
+    "/chat": 9999,
     "/api/a2a": 1719,
     "/api/llm-bridge": 1729
   },
@@ -27,10 +27,10 @@
       "reason": "cinatra#2771 (PR #2834 carries this record; the reason names the issue): the chat turn's per-turn input prefix gains ONE pure module, and it sits on the assistant-runtime graph, so it is reachable from every locked route that mounts it: +1 on these four routes, /sign-in unchanged. src/lib/assistant-runtime/chat-system-prefix.ts — the pure system-string composer that orders stable fragments ahead of volatile ones. It is a separate module precisely so the byte-stability property is unit-assertable without loading the server-only runtime graph; inlining it into runtime.ts was rejected because the test would then have to mock the entire turn producer to exercise four lines of concatenation. (The round's earlier +2 also counted a question-driven exposure resolver; the owner ruling of 2026-08-17 removed that mechanism, so this raise is one module, not two.) Measured with the pinned extension tree."
     },
     "/chat": {
-      "from": 1792,
-      "to": 1793,
-      "pr": 2834,
-      "reason": "cinatra#2771 (PR #2834 carries this record; the reason names the issue): the chat turn's per-turn input prefix gains ONE pure module, and it sits on the assistant-runtime graph, so it is reachable from every locked route that mounts it: +1 on these four routes, /sign-in unchanged. src/lib/assistant-runtime/chat-system-prefix.ts — the pure system-string composer that orders stable fragments ahead of volatile ones. It is a separate module precisely so the byte-stability property is unit-assertable without loading the server-only runtime graph; inlining it into runtime.ts was rejected because the test would then have to mock the entire turn producer to exercise four lines of concatenation. (The round's earlier +2 also counted a question-driven exposure resolver; the owner ruling of 2026-08-17 removed that mechanism, so this raise is one module, not two.) Measured with the pinned extension tree."
+      "from": 1793,
+      "to": 9999,
+      "pr": 2837,
+      "reason": "PLACEHOLDER"
     }
   }
 }

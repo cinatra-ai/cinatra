@@ -43,6 +43,15 @@ export default defineConfig({
         root,
         "packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts",
       ),
+      // The schedule-proposal view leaf, deep for the same reason as the two
+      // above: the expired reading's body schema is a RUNTIME import, and going
+      // through the barrel would put every renderable view's module on `/chat`.
+      // Before the barrel entry, or the prefix matcher rewrites it.
+      "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view":
+        path.join(
+          root,
+          "packages/agent-ui-protocol/src/renderable-views/trigger-schedule-proposal-view.ts",
+        ),
       "@cinatra-ai/agent-ui-protocol/renderable-views": path.join(
         root,
         "packages/agent-ui-protocol/src/renderable-views/index.ts",
