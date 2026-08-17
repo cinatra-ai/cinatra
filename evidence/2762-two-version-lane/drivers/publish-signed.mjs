@@ -56,7 +56,9 @@ const signature = cryptoSign(null, Buffer.from(buildPayload(packageName, version
 // 4. PUT the packument with the signature in `dist.cinatraSignature`. This is
 //    the shape the registry client reads, so the app under test sees a signed
 //    package through its ordinary resolution path.
-const encodedName = packageName.replace("/", "%2f");
+// Encode EVERY separator, not just the first: a single-occurrence replace
+// would silently mis-address any name with more than one slash.
+const encodedName = packageName.replaceAll("/", "%2f");
 const body = {
   _id: packageName,
   name: packageName,
