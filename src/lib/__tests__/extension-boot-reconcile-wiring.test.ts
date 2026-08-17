@@ -385,7 +385,12 @@ describe("activationResultsFromReconcileSweep", () => {
       );
     expect(results[0].status).toBe("failed");
     expect(String(results[0].error)).toContain("integrity mismatch");
-    expect(findRequiredActivationFailures(results, [PKG], new Set([PKG]))).toHaveLength(1);
+    const failures = findRequiredActivationFailures(results, [PKG], new Set([PKG]));
+    expect(failures).toHaveLength(1);
+    // And the diagnosis REACHES the abort message, rather than a bare "failed":
+    // this pass's cause lives in `error` because the loader's `reason` union has
+    // no member that honestly describes it.
+    expect(failures[0].reason).toContain("integrity mismatch");
   });
 
   it("recovery-required fails the assert too", async () => {
