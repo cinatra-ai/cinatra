@@ -49,11 +49,17 @@ export type ExtensionCaptureEntry = {
 // Mirrors the connectors' own pre-#981 `sanitizeLogLabel` shape so filenames
 // stay familiar. Never returns an empty string.
 function sanitizeSegment(raw: string, fallback: string): string {
-  const cleaned = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
+  // Collapse every run of non-`[a-z0-9]` to a single "-", then trim the edge
+  // dashes with a LINEAR scan rather than a regex. The former `/^-+|-+$/g` trim
+  // was polynomial-time on inputs made of many "-" (js/polynomial-redos, CWE-1333)
+  // and an extension-supplied packageName reaches here from a server action.
+  // The scan produces the byte-identical result for every input.
+  const collapsed = raw.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  let start = 0;
+  let end = collapsed.length;
+  while (start < end && collapsed[start] === "-") start += 1;
+  while (end > start && collapsed[end - 1] === "-") end -= 1;
+  const cleaned = collapsed.slice(start, end).slice(0, 80);
   return cleaned || fallback;
 }
 
@@ -62,12 +68,23 @@ function sanitizeSegment(raw: string, fallback: string): string {
  *  telemetry surface — the extension has no direct filesystem access to this
  *  path; `captureExtensionLogEntry` is the only write path. */
 export function resolveExtensionCaptureDirectory(packageName: string, channel: string): string {
-  return path.join(
-    resolveExtensionDataRoot(),
-    "logs",
+  // `packageName`/`channel` originate in extension-supplied, ultimately
+  // request-borne input, so the sanitized segments are joined and then
+  // CONTAINMENT-CHECKED against the normalized logs root (CWE-22): `path.resolve`
+  // collapses any "." / ".." first, and the prefix test proves the result never
+  // escapes the root. `sanitizeSegment` already makes a separator unrepresentable,
+  // so this is the belt to that sanitizer's braces — it can only fire if a later
+  // change weakens the sanitizer, and it fails closed when it does.
+  const logsRoot = path.resolve(resolveExtensionDataRoot(), "logs");
+  const directory = path.resolve(
+    logsRoot,
     sanitizeSegment(packageName, "extension"),
     sanitizeSegment(channel, "default"),
   );
+  if (directory !== logsRoot && !directory.startsWith(logsRoot + path.sep)) {
+    throw new Error("Refusing to resolve an extension capture directory outside the extension log root.");
+  }
+  return directory;
 }
 
 function buildCaptureTimestamp(): string {
@@ -94,16 +111,27 @@ export async function enforceExtensionCaptureRetention(
   maxFiles: number = DEFAULT_CAPTURE_MAX_FILES,
 ): Promise<void> {
   if (!Number.isFinite(maxFiles) || maxFiles <= 0) return;
+  const base = path.resolve(directory);
   let entries: string[];
   try {
-    entries = await readdir(directory);
+    entries = await readdir(base);
   } catch {
     return; // directory absent/unreadable — nothing to prune.
   }
   const captureFiles = entries.filter((name) => CAPTURE_FILENAME_RE.test(name)).sort();
   if (captureFiles.length <= maxFiles) return;
   const stale = captureFiles.slice(0, captureFiles.length - maxFiles);
-  await Promise.all(stale.map((name) => unlink(path.join(directory, name)).catch(() => {})));
+  await Promise.all(
+    stale.map((name) => {
+      // `readdir` yields bare basenames, so this containment check is defensive
+      // only — but an unlink must never be able to step out of the directory it
+      // is rotating. Skips rather than throws: rotation is best-effort and MUST
+      // NOT surface a failure into the write path that produced the capture.
+      const target = path.resolve(base, name);
+      if (target !== base && !target.startsWith(base + path.sep)) return Promise.resolve();
+      return unlink(target).catch(() => {});
+    }),
+  );
 }
 
 /**

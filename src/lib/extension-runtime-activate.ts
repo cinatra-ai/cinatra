@@ -1253,7 +1253,8 @@ async function teardownSupersededDigests(
     await fireExtensionCapabilityTeardown(packageName);
   } catch (err) {
     console.warn(
-      `[extension-runtime-activate] capability teardown threw for "${packageName}" (non-fatal):`,
+      '[extension-runtime-activate] capability teardown threw for "%s" (non-fatal):',
+      packageName,
       err instanceof Error ? err.message : err,
     );
   }
@@ -1284,14 +1285,16 @@ async function teardownSupersededDigests(
         const res = await destroyExtensionModule(mod, ctx);
         if (res.status === "failed") {
           console.warn(
-            `[extension-runtime-activate] destroy(ctx) threw for old "${packageName}" digest (non-fatal):`,
+            '[extension-runtime-activate] destroy(ctx) threw for old "%s" digest (non-fatal):',
+            packageName,
             res.error instanceof Error ? res.error.message : res.error,
           );
         }
       }
     } catch (err) {
       console.warn(
-        `[extension-runtime-activate] could not destroy old "${packageName}" module (non-fatal):`,
+        '[extension-runtime-activate] could not destroy old "%s" module (non-fatal):',
+        packageName,
         err instanceof Error ? err.message : err,
       );
     }
