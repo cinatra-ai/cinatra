@@ -23,15 +23,21 @@ services:
     ports:
       - "127.0.0.1:5434:5432"
 
+  # redis + nango-db host ports are parameterized (cinatra#2839): the `pnpm dev`
+  # preflight can bring nango-server up, which starts these two via depends_on,
+  # so a per-worktree lane must be able to publish them on its own ports instead
+  # of the global 6379/5435. The defaults below are the historical fixed ports —
+  # unset means unchanged. scripts/lib/dev-preflight.mjs derives the values from
+  # the lane's REDIS_URL / NANGO_DATABASE_URL and threads them through.
   redis:
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${CINATRA_REDIS_HOST_PORT:-6379}:6379"
 
   # nango-db: only the host-side CLI backup/restore tooling (NANGO_DATABASE_URL)
   # reaches it; nango-server itself uses Docker DNS (nango-db:5432) internally.
   nango-db:
     ports:
-      - "127.0.0.1:5435:5432"
+      - "127.0.0.1:${CINATRA_NANGO_DB_HOST_PORT:-5435}:5432"
 
   neo4j:
     ports:

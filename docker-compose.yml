@@ -155,9 +155,17 @@ services:
     # only applies the policy after a 10s successful start, so a true boot-loop
     # still surfaces instead of spinning forever. See cinatra-ai/cinatra#730.
     restart: unless-stopped
+    # Host ports are parameterized so a per-worktree lane can publish this
+    # service on its OWN ports instead of the global 3003/3009 (cinatra#2839:
+    # the `pnpm dev` preflight can bring this service up, and two lanes — or one
+    # lane beside the operator's stack — collided the moment it did). Defaults
+    # preserve the historical fixed ports exactly, so an operator who sets
+    # nothing sees no change. scripts/lib/dev-preflight.mjs derives these from
+    # the lane's NANGO_SERVER_URL (or an explicit override) and passes them to
+    # compose; the CONTAINER-side ports below are untouched.
     ports:
-      - "3003:3003"
-      - "3009:3009"
+      - "${CINATRA_NANGO_SERVER_HOST_PORT:-3003}:3003"
+      - "${CINATRA_NANGO_CONNECT_HOST_PORT:-3009}:3009"
     # NANGO_ENCRYPTION_KEY comes from a NARROW, generated file — NOT inlined as
     # `environment: NANGO_ENCRYPTION_KEY: "${NANGO_ENCRYPTION_KEY}"`. That
     # interpolation reads the *shell* env, so a bare `docker compose up` (no
