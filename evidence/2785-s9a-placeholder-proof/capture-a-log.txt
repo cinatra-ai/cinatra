@@ -1,0 +1,38 @@
+=== PROOF (a) — the §VI schedule-proposal placeholder, in a real conversation ===
+runtime: DEVELOPMENT — pnpm dev, CINATRA_RUNTIME_MODE=development,
+         CINATRA_TEST_LLM_PROVIDER=scripted, NODE_ENV != production.
+         No real provider key is present in .env.local: none was read, used or stored.
+         CINATRA_E2E_SETUP_BYPASS=true is set — it skips the SETUP WIZARD only.
+         throwaway compose project s9aproofcap (pg 55432, redis 56379), dev port 3105
+template under proposal: cbf1e985-bb4d-444a-9729-417d38a27474
+conversation url: http://localhost:3105/chat/cinatra-ai/cinatra-assistant
+driving message: "Schedule agent cbf1e985-bb4d-444a-9729-417d38a27474 to run every day at 07:30"
+mention tokens in the driving message: 0 (must be 0)
+message typed into the REAL composer and sent
+card appeared within the bounded wait: true
+persisted thread id: 51b03cb6-1b2a-40f8-a068-cc35fc885777
+slackMode===false: true (persisted slackMode=false)
+taggedAssistantUserIds: [] (empty — the driving message names nobody)
+parts.length>0: true (parts=2)
+assistant dataParts: [{"ref":"fhARuSE_TQRPZybx___0v_Y7QwzSXTuhLoKe5S2NUVKSun7YLx4M27AKdcm5Qi3dKCkFZ_Z5ufhvEQTpIRY4b7gDyiKrduKETS-N7W1W2ysJwNfOCiRIMjQQL3-S9Rkx08NE4ax2T42CAxWXtarf1sYafCfahOjNY_R8GBwBZ_GXrCNsyJJ9H4ftwSP_5XqHDPxpJAiZEs9L7f_oec_SMkLTF7046_AnShrSBh8Xa2Q2bqRKjrgr6zvQ2NZZG-QbJX6M8G_rQ4tRMM3KFS4F6x-9uXvywtV3fKr3Hw8eo4vDJmJv","viewType":"trigger_schedule_proposal","schemaVersion":1}]
+conversationList present: true
+composer visible (in frame): true
+
+CARD IDENTITY (the two attributes the S1 shell emits):
+  instances of [data-lifecycle-card="trigger_schedule_proposal"]: 1 (must be exactly 1)
+  data-lifecycle-card       = "trigger_schedule_proposal"   PRESENT: true
+  data-lifecycle-card-state = "pending"  PRESENT: true
+  data-lifecycle-card-host  = null   (the S1 shell emits none — an owner must)
+  card is INSIDE the conversation list: true
+  card text: "Schedule proposal\nWaiting for your decision."
+
+RATIFIED §VI ANCHORS — every one must be ABSENT (the absence is the evidence).
+Read verbatim off LIFECYCLE_CARD_CONTRACTS.trigger_schedule_proposal.anchors:
+  ABSENT   schedule-option-rows   selector=[data-conformance-id="schedule-option-rows"]  inCard=0 inDocument=0
+  ABSENT   schedule-proposal-floor   selector=[data-conformance-id="schedule-proposal-floor"]  inCard=0 inDocument=0
+  ABSENT   scheduled-run-chrome   selector=[data-conformance-id="scheduled-run-chrome"]  inCard=0 inDocument=0
+  ABSENT   [data-action="cancel-trigger-schedule"]   selector=[data-action="cancel-trigger-schedule"]  inCard=0 inDocument=0
+  ABSENT   [data-action="release-trigger-now"]   selector=[data-action="release-trigger-now"]  inCard=0 inDocument=0
+ALL FIVE RATIFIED SCHEDULE ANCHORS ABSENT: true
+page errors: 0 []
+captured S9a-a (conversation + composer in frame)

@@ -1,79 +1,179 @@
 # S9a — the two transcript cards are placeholders
 
 This slice's central claim is visual: two of the four lifecycle kinds are not
-drawn. The claim needs three proofs. One is delivered here. Two are not, and
-this file says exactly why and exactly what would deliver them.
+drawn. The claim needs three proofs. All three are here.
 
-## (c) DELIVERED — the required gate names both undrawn kinds
+Captured 2026-08-17 on the DEVELOPMENT RUNTIME, on the real application, against
+this branch. The two chat cells replace the earlier round's "not delivered"
+record.
 
-`required-gate-run.txt` is the verbatim run of the gate with no flags, on this
-branch, whose product tree is byte-identical to the default branch:
+## Read this first — one product change was needed, and it is not evidence
 
-```
-$ node scripts/audit/chat-hitl-one-card-gate.mjs
-[chat-hitl-one-card] 6 violation(s):
-  … [R5] 'trigger_schedule_proposal' has no card of its own …
-  … [R5] 'verification_summary' has no card of its own …
-exit 1
-```
+The ruling for the schedule cell is **real dispatch**: a person types a
+scheduling request, the assistant calls `schedule_proposal_render`, and the card
+that draws is photographed inside that conversation. That could not be done on
+this branch, and the reason is code, not scheduling.
 
-The ordinary run is the done-check, so this is the run anybody makes. Six
-findings, not two: the recommendation card's root obligation and its three
-unmounted hosts are named in the same output rather than filtered out of it.
+**The deterministic scripted provider could not name that tool.** Its vocabulary
+was a closed set of five names — `agent_run`, the two content-editor stand-ins,
+`artifact_review_gates_list` and the two `*_render` primitives. `schedule_proposal_render`
+was in none of them, on this branch or on the default branch. So no turn on a
+key-free stack could reach the §VI producer, and the card had no way to appear in
+a conversation at all.
 
-## (a) and (b) NOT DELIVERED — the schedule shell and the verification shell in a real chat conversation
+This round adds the missing arm, in the **model layer only**:
 
-Both cells need the same thing: a lifecycle `DATA_PART` inside an assistant turn
-of a real conversation, resolved and authorized by the server, drawing the S1
-shell. Neither is delivered. The reasons are code-grounded, not scheduling.
+- `packages/llm/src/scripted-test-provider.ts` — a schedule intent, the producer's
+  name, and one branch that dispatches it for the template the turn names. The
+  arm is inside the same production fence as every other arm.
+- `src/lib/assistant-runtime/runtime.ts` — one condition, so a turn the provider
+  claims as a schedule question takes the same short-circuit the lifecycle
+  question already took. The runtime still invents no intent of its own; it asks
+  the provider, exactly as before.
 
-**No shipped path puts a lifecycle data part into a chat transcript without a
-model dispatch.** The development API surface is two routes — `lifecycle-seed`
-and `logs`. Nothing writes an assistant turn. Reaching a chat-hosted card
-therefore needs an LLM-backed dispatch through the deterministic scripted
-provider, which is the same conclusion the earlier conformance round recorded
-for its own chat cells. That runs on the development runtime only: the
-scripted-provider fence and the lifecycle-seed fence make a production build and
-a model-backed dispatch mutually exclusive by construction, which is why a
-development-runtime capture is the sanctioned form here and why every such image
-must carry its runtime label.
+**What this does NOT change.** The producer, its authorization, the proposal
+token, the envelope, the sink's recognizer, the card registry, the S1 shell and
+every gate are untouched. The arm grants no authority: the tool it names writes
+nothing. Both gate outputs are byte-for-byte what this branch already recorded —
+`required-gate-run.txt` re-ran identical after the change.
 
-**The verification cell (b) has a seed; the schedule cell (a) has none.** The
-development seed drives shipped writers only and exposes exactly two fixtures:
-`repairVerification`, which produces a real review gate, a real repair and a real
-verification record bound to that gate, and `restorableChangeSet`. There is no
-schedule-proposal arm. So (b) needs the seed plus a dispatch that carries its ref
-into a turn; (a) needs a proposal produced first, which today means either a real
-scheduling dispatch or a new fixture arm in that seed. Adding a fixture arm is a
-change to shipped development surface, and it is not this slice's to make
-unasked.
+**One sentence in the pull-request body is now narrower than the tree.** That
+body says the product diff against the default branch is empty. It no longer is:
+it is these two model-layer files. The acceptance argument they carry is
+unaffected, because the one-card gate reads card owners, mounts and the registry,
+and none of those is touched — but the sentence should be read as "no card
+module is touched", which is what it was always claiming.
 
-**Machine discipline.** A sibling lane held the capture stack. The bounded wait
-ran to 34 of its 40 iterations before that project released, and no stack was
-started here, so nothing contended with it and nothing was left running. The
-operator's own stack was never touched.
+If the arm belongs in the slice that draws the schedule card rather than here, it
+moves without costing this proof: the images and the logs stay true of whatever
+branch carries the arm.
 
-## What would deliver (a) and (b)
+## The runtime and the stack
 
-Per cell, on a throwaway project with its own name and ports, on the development
-runtime, with the runtime named on the image:
+DEV RUNTIME, named on every cell, which is the standing rule for a
+dispatch-dependent capture: `pnpm dev`, `CINATRA_RUNTIME_MODE=development`,
+`NODE_ENV != production`, `CINATRA_TEST_LLM_PROVIDER=scripted`. Neither
+production fence (`assertScriptedProviderNotProduction`, `lifecycleSeedEnvVerdict`
+FENCE 1a) was weakened; this branch does not touch them. **No real provider key
+is present in the capture instance's environment: none was read, used or stored.**
 
-1. Seed the subject with the shipped writers. For the verification cell that is
-   the existing fixture. For the schedule cell, a real proposal must exist first.
-2. Dispatch a turn through the deterministic scripted provider so the kind's
-   `DATA_PART` lands in a real conversation, then open that conversation.
-3. Assert on the DOM of the card that draws, not on a screenshot alone:
-   - `[data-lifecycle-card="trigger_schedule_proposal"]` / `[data-lifecycle-card="verification_summary"]` present, exactly one of each;
-   - `data-lifecycle-card-state` equal to the state the server resolved, which
-     is `advisory` for the verification kind;
-   - **zero** occurrences of that kind's ratified anchors — `schedule-option-rows`,
-     `schedule-proposal-floor`, `scheduled-run-chrome`,
-     `[data-action="cancel-trigger-schedule"]`, `[data-action="release-trigger-now"]`
-     for the schedule kind; `verification-in-thread` and all three outcome
-     anchors for the verification kind. The absence is the evidence.
-4. Record the machine assertions beside the pixels. A screenshot is never the
-   only evidence.
+`CINATRA_E2E_SETUP_BYPASS=true` was set. It skips the SETUP WIZARD and nothing
+else; it is disclosed here because it is an env switch a reader should see named.
 
-Under the capture-ownership rule these cells are provisional wherever they are
-produced: the canonical cell names, the capture index and the manifest's
-transition to proven belong to the final conformance slice.
+Throwaway Compose project `s9aproofcap` — own Postgres (55432), own Redis
+(56379), own volumes, own network, own BullMQ queue name
+(`cinatra-s9aproofcap-jobs`), dev server on 3105. Fresh database, provisioned
+with `apply-public-schema.mjs` then `auth:migrate`. The operator's own project was
+never started, stopped, read or written. `teardown-log.txt` counts the stack
+before and after: 2 containers, 2 volumes, 1 network, 1 dev server, all removed.
+
+## The cells
+
+| cell | runtime | what it shows |
+|---|---|---|
+| `S9a-a__chat_thread__schedule-proposal-placeholder.png` | **development** | A scheduling request typed into the real composer. The assistant calls `schedule_proposal_render`, and what draws in the assistant turn is the S1 shell: a bordered strip reading "Schedule proposal / Waiting for your decision." No option rows, no Adjust, no Confirm. The thread and the composer are in frame. |
+| `S9a-b__chat_thread__verification-placeholder.png` | **development** | The verification reading asked for by its ref, in a real conversation. The assistant calls `verification_record_render`, and what draws is the same shell: "Verification / Advisory reading." No outcome pill, no revisions, no fields. Thread and composer in frame. |
+| `required-gate-run.txt` | — | The verbatim run of the required gate, exit 1, six findings unfiltered, naming both undrawn kinds. |
+
+`capture-a-log.txt` and `capture-b-log.txt` are the unedited machine output.
+
+## What is real, and what stands in
+
+**Real** in both cells: the application, the `/chat` surface, the composer, the
+conversation, the assistant runtime, the self-MCP transport carrying the signed-in
+person's own chat credential, the producer tools and every authorization behind
+them, the proposal token, the review gate, the repair, the verification record,
+the `DATA_PART`, the card registry and the S1 shell. Both messages were typed into
+the real composer of a real thread.
+
+**Stood in for: the model layer, and nothing else.** The scripted provider decides
+which tool the turn calls. It cannot fabricate a card — the envelope is built
+inside the tool handler and the sink accepts it only from the (`cinatra` server
+label, allowlisted tool) tuple the runtime stamps from the dispatch it actually
+performed.
+
+**Two disclosed preconditions**, neither inside the thing under test:
+
+- Cell (a) names its template by identifier, because this provider holds no store
+  and cannot resolve "the blog writer" to a row. That is the same stand-in the run
+  card's own arm already makes, for the same reason, and it grants nothing: the
+  real primitive decides whether the template exists and whether the asker may
+  reach it.
+- Cell (b) needs a run to hang its fixture on, and a fresh instance has none. One
+  was created by the shipped run-start route (`/agents/cinatra-ai/planner-agent/new`),
+  navigated to in the browser. Then the **existing** development seed
+  (`POST /api/development/lifecycle-seed`, `fixture: repairVerification`) drove the
+  shipped writers only: a real review gate, a real repair, a real successor gate,
+  and a real verification record bound to it, outcome `drifted`. No seed arm was
+  added and no row was hand-written.
+
+## The layout, asserted before any pixel
+
+Two mentions flip the thread into Slack layout, which suppresses `parts` — and
+`parts` is the only mount point at a tool-call position. Both driving messages
+carry **zero** mention tokens, and both captures assert the layout against the
+app's own persisted thread before a screenshot is taken:
+
+| | cell (a) | cell (b) |
+|---|---|---|
+| mention tokens in the driving message | `0` | `0` |
+| `slackMode === false` | `true` | `true` |
+| `taggedAssistantUserIds` | `[]` | `[]` |
+| `parts.length > 0` | `true` (`parts=2`) | `true` (`parts=2`) |
+| assistant `dataParts` viewTypes | `["trigger_schedule_proposal"]` | `["verification_summary"]` |
+| page errors | `0` | `0` |
+
+## The card identity, read off the live DOM
+
+The S1 shell emits two of the three root attributes. Both are PRESENT on both
+cells; the third is absent, and its absence is part of what makes these
+placeholders rather than cards.
+
+| | cell (a) | cell (b) |
+|---|---|---|
+| instances of the kind selector | `1` | `1` |
+| `data-lifecycle-card` | `"trigger_schedule_proposal"` — PRESENT | `"verification_summary"` — PRESENT |
+| `data-lifecycle-card-state` | `"pending"` — PRESENT | `"advisory"` — PRESENT |
+| `data-lifecycle-card-host` | `null` — the shell emits none; an owner must | `null` — same |
+| inside the conversation list | `true` | `true` |
+| rendered text | `"Schedule proposal / Waiting for your decision."` | `"Verification / Advisory reading."` |
+
+The verification state resolving to `advisory` is the resolver's own answer for
+this kind, which is what the earlier round predicted it would be.
+
+## The ratified anchors, enumerated and absent
+
+The absence IS the evidence, so each anchor is named and counted rather than
+summarized. Every list below is copied verbatim from `LIFECYCLE_CARD_CONTRACTS`
+in `scripts/audit/chat-hitl-one-card-gate.mjs`, which reads them off the ratified
+drawing. A bare conformance id is counted as `[data-conformance-id="…"]`, the
+gate's own rule; an anchor already written as a selector is counted as written.
+Each is counted twice — inside the card and across the whole document — so
+"absent" cannot hide behind a narrow scope.
+
+**Cell (a) — §VI, the schedule proposal. All five ABSENT, `inCard=0 inDocument=0`:**
+
+1. `schedule-option-rows`
+2. `schedule-proposal-floor`
+3. `scheduled-run-chrome`
+4. `[data-action="cancel-trigger-schedule"]`
+5. `[data-action="release-trigger-now"]`
+
+**Cell (b) — §VII, the verification card. All four ABSENT, `inCard=0 inDocument=0`
+— the base anchor plus every member of the ratified one-of outcome group:**
+
+1. `verification-in-thread`
+2. `verification-verified`
+3. `verification-drift`
+4. `verification-findings-not-met`
+
+Cell (b) is worth stating twice: the seeded record's real outcome is `drifted`,
+so a drawn card would have to render the drift outcome. `verification-drift` is
+absent anyway. The reading exists; the card does not.
+
+## Provisional under the capture-ownership rule
+
+These two cells are provisional wherever they are produced. The canonical cell
+names, the capture index and the manifest's move to proven belong to the final
+conformance slice. The names here are chosen to be as close to the eventual ones
+as possible.
