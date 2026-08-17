@@ -48,7 +48,6 @@ import {
 } from "@cinatra-ai/sdk-extensions";
 import type { ExtensionActivateResult } from "@cinatra-ai/extensions";
 import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
-import { METADATA_ONLY_STORE_KINDS } from "@/lib/extension-package-store-core";
 import { isContainedRealpath } from "@/lib/fs-safety";
 
 /**
@@ -897,15 +896,18 @@ async function cleanupEmptyQuarantineRoots(entries: QuarantineEntry[]): Promise<
 }
 
 // cinatra#793: the kinds whose store payload is METADATA-ONLY (no hot-loadable
-// `register(ctx)` server module) are `METADATA_ONLY_STORE_KINDS`, imported at
-// the top of this file. Their pipeline runs with inert in-process activation
-// deps (see the override below); the dispatcher gates them on `finalized` only
-// and the NATIVE handler projects their run surface.
+// `register(ctx)` server module) are `METADATA_ONLY_STORE_KINDS`. Their pipeline
+// runs with inert in-process activation deps (see the override below); the
+// dispatcher gates them on `finalized` only and the NATIVE handler projects
+// their run surface.
 //
-// The SET itself lives with the store kinds it partitions
+// The SET lives with the store kinds it partitions
 // (`extension-package-store-core`) because boot reconciliation must read the
 // SAME one: it decides whether a package that did not activate in-process is
-// stranded, and for these kinds not activating is the healthy outcome.
+// stranded, and for these kinds not activating is the healthy outcome. It is
+// pulled the way this file pulls everything from that module — a LAZY import at
+// the use site, next to `isExtensionStoreKind`'s — so the module graph here is
+// unchanged.
 
 /**
  * The host activate-hook body. Records real provenance + activates a
@@ -993,6 +995,7 @@ export async function runHostExtensionInstallAndActivate(
     //     (cinatra#796 — the anchor-narrowed readers ignore them; the
     //     maintenance reaper enforces `current + 2`). The dispatcher gates
     //     these kinds on `finalized` ONLY.
+    const { METADATA_ONLY_STORE_KINDS } = await import("@/lib/extension-package-store-core");
     if (METADATA_ONLY_STORE_KINDS.has(row.kind)) {
       deps.activateInProcess = async () => ({ activated: false, reason: "metadata-only-kind" });
       deps.activateUpdateWithRollback = async (i) => {
