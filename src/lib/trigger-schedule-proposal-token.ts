@@ -420,10 +420,25 @@ function decodeSchedule(value: unknown): ProposalSchedule | null {
  * the form could not have produced, or a token that would exceed the ref bound.
  * A producer that cannot mint REFUSES; it never emits a proposal the wire would
  * silently mutilate.
+ *
+ * `opts.nonce` INHERITS a consume identity instead of minting a fresh one, and
+ * it exists for exactly one caller: re-proposing an expired card off its own ref
+ * (`reproposeTriggerScheduleInLineage`). The nonce IS the proposal's identity —
+ * `proposalConsumeKey` derives the single-use DB edge from it — so passing the
+ * original's nonce makes the replacement and the proposal it replaces ONE
+ * identity in the consume table's primary key. That is what makes "confirm the
+ * old one AND the new one" unexpressible rather than merely unlikely; see the
+ * lineage note on `reproposeExpiredScheduleProposal`. Everything else about the
+ * replacement is fresh: a fresh IV, a fresh ciphertext, a fresh `iat`/`exp`.
+ *
+ * The nonce is NEVER caller-supplied from the wire. It is read back out of a
+ * token this server minted and authenticated, which is why re-using it cannot
+ * let anyone choose a consume identity: choosing one would require forging the
+ * token that carries it.
  */
 export function mintTriggerScheduleProposalToken(
   input: TriggerScheduleProposalMintInput,
-  opts?: { nowSeconds?: number },
+  opts?: { nowSeconds?: number; nonce?: string },
 ): { token: string; consumeKey: string; expiresAt: number } | null {
   const { templateId, userId, orgId } = input;
   if (!isBoundedId(templateId)) return null;
@@ -431,12 +446,15 @@ export function mintTriggerScheduleProposalToken(
   if (!isBoundedId(orgId)) return null;
   const schedule = readProposalSchedule(input.schedule);
   if (!schedule) return null;
+  // An inherited nonce faces the same bound a decoded one does, so a lineage
+  // can never widen what a proposal may carry.
+  if (opts?.nonce !== undefined && !isBoundedId(opts.nonce)) return null;
 
   const key = proposalKey();
   if (!key) return null;
 
   const now = opts?.nowSeconds ?? Math.floor(Date.now() / 1000);
-  const nonce = randomBytes(NONCE_BYTES).toString("base64url");
+  const nonce = opts?.nonce ?? randomBytes(NONCE_BYTES).toString("base64url");
   const expiresAt = now + PROPOSAL_TTL_SECONDS;
 
   const plaintext = JSON.stringify([

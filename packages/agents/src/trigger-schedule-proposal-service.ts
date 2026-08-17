@@ -18,6 +18,14 @@ import "server-only";
 //              to mutate — which is why Adjust needs no authority at all and can
 //              never half-arm a schedule.
 //
+// ADJUST HAS TWO FORMS, and they differ in exactly one place. Editing the rows
+// on a DRAWN card asks a different question, so it gets a fresh consume identity
+// and the superseded card stays separately answerable. Adjusting an EXPIRED card
+// re-asks the SAME question off the same ref, so its replacement INHERITS the
+// original's consume identity: one lineage, one row in the consume table, one
+// run — whatever order a re-propose and an in-flight Confirm land in. See
+// `reproposeExpiredScheduleProposal`.
+//
 // THE AI CANNOT ARM ANYTHING. The producer is a read-only render primitive; it
 // mints a card. Confirm is a HUMAN SESSION action: it runs under a live cookie
 // session and re-derives the user and org from it, then requires a token minted
@@ -56,6 +64,7 @@ import {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  reproposeTriggerScheduleInLineage,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
 } from "./trigger-schedule-propose";
@@ -64,6 +73,7 @@ export {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  reproposeTriggerScheduleInLineage,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
 };
@@ -686,10 +696,40 @@ export async function resolveProposalForReader(
  * new question — whether they may answer it is re-resolved at render and again
  * at Confirm, as it always was.
  *
+ * ONLY AN EXPIRED READING RE-PROPOSES (codex round-3 finding 1). The earlier
+ * cut read the token's status and never required it, so an authenticated caller
+ * holding a STILL-LIVE ref could ask for a second proposal of the same schedule
+ * and then confirm both. That the UI draws this button only on an expired card
+ * is not a boundary — the ref travels in the transcript and the action takes it
+ * from the wire. The rule is enforced HERE, on the server, and it refuses with
+ * the same `invalid` sentence a forged ref gets: a caller probing with a live
+ * ref learns nothing it did not already know.
+ *
+ * ONE CONSUME IDENTITY PER LINEAGE (codex round-3 finding 2). The spent check
+ * below is honest UX, NOT the safety property — it is a non-transactional read,
+ * and a Confirm that verified while the token was still live can commit at any
+ * moment during or after it. Two independently confirmable identities would
+ * then exist, and both could be spent. So the replacement does not get an
+ * identity of its own: it INHERITS the original's nonce, and therefore its
+ * consume key. The old card and the new one are ONE row in
+ * `trigger_schedule_proposal_consumes`, whose PRIMARY KEY on `consume_key` is
+ * the exact primitive `spendProposalWithinTx` already relies on — the second
+ * spender's INSERT raises a unique violation inside its own run-creation
+ * transaction, unwinds it, and answers with the FIRST run. "Both confirmed" is
+ * not a race the application has to win; it is a state the database cannot
+ * hold. No lock, no claim row, no new table, and it composes with the drawn
+ * form's Adjust, which keeps minting fresh identities because it is asking a
+ * genuinely different question (`adjustTriggerSchedule`).
+ *
+ * The consequence worth naming: once ANY member of the lineage is confirmed,
+ * every card in it resolves `settled` against the same run, so the expired card
+ * still sitting in the transcript stops advertising an Adjust that could not
+ * have produced anything anyway.
+ *
  * A SPENT proposal is refused rather than re-proposed. Its card is settled, not
- * expired, so nothing draws this — but a re-propose that quietly minted a
- * second question for an already-armed schedule would be a way to double-book
- * one by pressing an old button twice.
+ * expired, so nothing draws this — but minting a replacement for it would hand
+ * the reader a card that is dead on arrival, and saying so is more honest than
+ * drawing it.
  */
 export async function reproposeExpiredScheduleProposal(
   actor: ConfirmProposalActor,
@@ -703,6 +743,11 @@ export async function reproposeExpiredScheduleProposal(
     expectedOrgId: actor.orgId,
   });
   if (!reading) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+  // A LIVE proposal is still answerable as it stands; re-proposing it is not an
+  // affordance §VI grants. Indistinguishable from every other refusal here.
+  if (reading.status !== "expired") {
+    return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+  }
   const { proposal } = reading;
 
   const consumed = await readProposalConsume(proposalConsumeKey(proposal.nonce));
@@ -723,11 +768,14 @@ export async function reproposeExpiredScheduleProposal(
     }
   }
 
-  const proposed = await adjustTriggerSchedule({
+  const proposed = await reproposeTriggerScheduleInLineage({
     templateId: proposal.templateId,
     userId: actor.userId,
     orgId: actor.orgId,
     schedule: proposal.schedule,
+    // THE LINEAGE. Read back out of a token this server minted and
+    // authenticated — never off the wire.
+    lineageNonce: proposal.nonce,
   });
   // `propose` answers a bare `{ok:false}` — it is written for a model-facing
   // caller whose every denial is one sentence. The template may have been

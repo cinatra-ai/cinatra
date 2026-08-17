@@ -58,6 +58,19 @@ export type ProposeScheduleResult =
 export async function proposeTriggerSchedule(
   input: ProposeScheduleInput,
 ): Promise<ProposeScheduleResult> {
+  return mintProposal(input);
+}
+
+/**
+ * The shared body of PROPOSE, ADJUST and RE-PROPOSE. `lineageNonce` is the only
+ * thing that differs between them, and it differs in exactly one direction:
+ * supplied, the minted proposal INHERITS an existing consume identity instead of
+ * opening a new one. See `reproposeTriggerScheduleInLineage`.
+ */
+async function mintProposal(
+  input: ProposeScheduleInput,
+  lineageNonce?: string,
+): Promise<ProposeScheduleResult> {
   if (!input.userId || !input.orgId) return { ok: false };
 
   const template = await readAgentTemplateById(input.templateId);
@@ -75,14 +88,36 @@ export async function proposeTriggerSchedule(
     if (Number.isNaN(ms) || ms <= Date.now()) return { ok: false };
   }
 
-  const minted = mintTriggerScheduleProposalToken({
-    templateId: input.templateId,
-    userId: input.userId,
-    orgId: input.orgId,
-    schedule: input.schedule,
-  });
+  const minted = mintTriggerScheduleProposalToken(
+    {
+      templateId: input.templateId,
+      userId: input.userId,
+      orgId: input.orgId,
+      schedule: input.schedule,
+    },
+    lineageNonce === undefined ? undefined : { nonce: lineageNonce },
+  );
   if (!minted) return { ok: false };
   return { ok: true, token: minted.token, expiresAt: minted.expiresAt };
+}
+
+/**
+ * RE-PROPOSE an expired proposal IN ITS OWN LINEAGE — same checks as PROPOSE,
+ * but the replacement inherits `lineageNonce` as its consume identity rather
+ * than opening a second one.
+ *
+ * Distinct from `adjustTriggerSchedule` because the two are answering different
+ * questions. The drawn form's Adjust is a reader CHOOSING NEW ROWS: a genuinely
+ * different schedule, and therefore a different question, which is why it mints
+ * a different identity. Re-proposing an expired card re-asks the SAME question
+ * off the same ref, so it must not become a second answerable copy of it. One
+ * identity per lineage means one run per lineage, whatever the timing.
+ */
+export async function reproposeTriggerScheduleInLineage(
+  input: ProposeScheduleInput & { lineageNonce: string },
+): Promise<ProposeScheduleResult> {
+  if (!input.lineageNonce) return { ok: false };
+  return mintProposal(input, input.lineageNonce);
 }
 
 /**
@@ -97,6 +132,12 @@ export async function proposeTriggerSchedule(
  * revoke, and it does not need one: the two tokens carry DIFFERENT consume
  * identities, so confirming the stale one still creates exactly one run — the
  * one it describes. Revocation would buy nothing and cost a table.
+ *
+ * That reasoning holds because this Adjust is a reader EDITING the rows: the
+ * stale card and the adjusted one describe different schedules, so each getting
+ * its own answer is the honest outcome. It does NOT transfer to re-proposing an
+ * expired card, which re-asks the SAME question and therefore must stay ONE
+ * answerable question — see `reproposeTriggerScheduleInLineage`.
  */
 export async function adjustTriggerSchedule(
   input: ProposeScheduleInput,

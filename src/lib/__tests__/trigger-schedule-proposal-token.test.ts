@@ -508,6 +508,86 @@ describe("the EXPIRED reading belongs to the token's OWN reader, and to nobody e
   });
 });
 
+describe("an INHERITED nonce is one consume identity, not two", () => {
+  // The mechanism the expired card's Adjust is built on: a re-proposal must
+  // never become a second independently spendable copy of the question it
+  // re-asks. `proposalConsumeKey` derives the single-use DB edge from the
+  // NONCE, so inheriting the nonce is what makes the old card and the new one
+  // one row under that table's primary key.
+
+  const read = (token: string) =>
+    readTriggerScheduleProposalToken({
+      token,
+      expectedUserId: USER,
+      expectedOrgId: ORG,
+    });
+
+  it("mints a genuinely fresh TOKEN that addresses the SAME consume key", () => {
+    const original = mint();
+    const inherited = read(original.token);
+    expect(inherited).not.toBeNull();
+
+    const replacement = mintTriggerScheduleProposalToken(
+      { templateId: TEMPLATE, userId: USER, orgId: ORG, schedule: WEEKDAYS_9AM },
+      { nonce: inherited!.proposal.nonce },
+    );
+    expect(replacement).not.toBeNull();
+
+    // A fresh envelope — fresh IV, fresh ciphertext, fresh window…
+    expect(replacement!.token).not.toBe(original.token);
+    // …addressing the identity that is already spoken for.
+    expect(replacement!.consumeKey).toBe(original.consumeKey);
+    expect(proposalConsumeKey(inherited!.proposal.nonce)).toBe(original.consumeKey);
+  });
+
+  it("gives the replacement its OWN window, starting now", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const original = mintTriggerScheduleProposalToken(
+      { templateId: TEMPLATE, userId: USER, orgId: ORG, schedule: WEEKDAYS_9AM },
+      { nowSeconds: now - PROPOSAL_TTL_SECONDS - 60 },
+    );
+    expect(original).not.toBeNull();
+    const expired = read(original!.token);
+    expect(expired?.status).toBe("expired");
+
+    const replacement = mintTriggerScheduleProposalToken(
+      { templateId: TEMPLATE, userId: USER, orgId: ORG, schedule: WEEKDAYS_9AM },
+      { nowSeconds: now, nonce: expired!.proposal.nonce },
+    );
+    // Live again, and still the same identity: the reader gets a new window on
+    // the same question rather than a second question.
+    expect(read(replacement!.token)?.status).toBe("live");
+    expect(replacement!.consumeKey).toBe(original!.consumeKey);
+  });
+
+  it("still binds the replacement to its reader — inheriting an identity widens nothing", () => {
+    const original = mint();
+    const inherited = read(original.token)!.proposal.nonce;
+    const replacement = mintTriggerScheduleProposalToken(
+      { templateId: TEMPLATE, userId: USER, orgId: ORG, schedule: WEEKDAYS_9AM },
+      { nonce: inherited },
+    );
+    expect(
+      verifyTriggerScheduleProposalToken({
+        token: replacement!.token,
+        expectedUserId: "user_someone_else",
+        expectedOrgId: ORG,
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses a nonce outside the id bound rather than minting a mutilated identity", () => {
+    for (const nonce of ["", "   ", "n".repeat(129)]) {
+      expect(
+        mintTriggerScheduleProposalToken(
+          { templateId: TEMPLATE, userId: USER, orgId: ORG, schedule: WEEKDAYS_9AM },
+          { nonce },
+        ),
+      ).toBeNull();
+    }
+  });
+});
+
 describe("no secret, no proposal", () => {
   it("refuses to mint and refuses to verify", () => {
     const original = process.env.BETTER_AUTH_SECRET;
