@@ -314,6 +314,54 @@ export type CreateNotificationOptions = {
    * result. Empty array ⇒ no rows written (same as an empty expansion).
    */
   recipientUserIds?: readonly string[];
+  /**
+   * cinatra#2835 — write the row TRANSACTIONALLY, behind a caller-supplied
+   * precondition.
+   *
+   * Some notifications are only truthful while a row in ANOTHER table says so,
+   * and checking that row before calling here is not enough: whatever the check
+   * observed can change before the insert commits, and for a notification whose
+   * only clearing event may already have passed, that window is the whole defect.
+   * A `fence` closes it by moving the check INTO the write — precondition,
+   * insert and follow-ups run as one transaction on one connection, and the
+   * insert is driven FROM the precondition's rows, so zero rows means zero
+   * writes. A precondition that takes a row lock (`FOR UPDATE`) additionally
+   * serialises this write against whoever else mutates that row.
+   *
+   * The package stays ignorant of what is being fenced: the caller owns the SQL
+   * and the table it names. See `buildHoldNotificationFence` in
+   * `@cinatra-ai/agents/run-wait-notifier` for the run-hold instance.
+   */
+  fence?: NotificationWriteFence;
+};
+
+/** A single statement, in the shape the host query runner takes. */
+export type NotificationWriteStatement = {
+  text: string;
+  values: unknown[];
+};
+
+/** See `CreateNotificationOptions.fence`. */
+export type NotificationWriteFence = {
+  /**
+   * A SELECT that GATES the insert: its rows feed the INSERT's source, so zero
+   * rows write nothing. Placeholders are numbered from `$1` — the row values are
+   * numbered AFTER the precondition's, so the caller never has to know how many
+   * columns the insert carries.
+   *
+   * It is composed as a CTE, so it may carry `FOR UPDATE` / `LIMIT`, and it MUST
+   * be a plain SELECT (a data-modifying precondition is not supported and would
+   * run even when the insert does not).
+   */
+  precondition: NotificationWriteStatement;
+  /**
+   * Statements run in the SAME transaction AFTER the insert — the place to record
+   * that a row now exists. Each numbers its own placeholders from `$1`. They run
+   * unconditionally, so each must carry its own copy of whatever the precondition
+   * asserted; a follow-up that would be wrong when the insert did not happen is
+   * the caller's bug to avoid, not something this seam can detect.
+   */
+  after?: readonly NotificationWriteStatement[];
 };
 
 /**
@@ -396,37 +444,95 @@ function insertNotificationRowForUser(args: {
             WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL
             DO NOTHING`;
 
+  const rowValues = [
+    id,
+    args.userId,
+    recipientKind,
+    recipientId,
+    args.topic,
+    kind,
+    args.input.title,
+    args.input.body ?? "",
+    args.input.href ?? null,
+    args.input.metadata ? JSON.stringify(args.input.metadata) : null,
+    args.input.sourceJobId ?? null,
+    args.input.sourceJobName ?? null,
+    dedupeKey,
+  ];
+  const returning = `id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at`;
+
+  // FENCED (cinatra#2835) vs plain. The two differ only in where the row values
+  // come from: a bare `VALUES` list, or a `SELECT` over the precondition's rows so
+  // an unmet precondition inserts nothing. The precondition's own placeholders
+  // occupy `$1..$n`, so the row values shift behind them — that offset is the only
+  // reason this is not a single template.
+  const fence = args.options.fence;
+  const offset = fence ? fence.precondition.values.length : 0;
+  const rowPlaceholders = rowValues.map((_, i) => `$${offset + i + 1}`).join(", ");
+  const source = fence
+    ? `SELECT ${rowPlaceholders}, now(), ${readAtSql} FROM notification_write_fence`
+    : `VALUES (${rowPlaceholders}, now(), ${readAtSql})`;
+  const insert = {
+    text: `${fence ? `WITH notification_write_fence AS (${fence.precondition.text})\n          ` : ""}INSERT INTO ${schemaQualified("notifications")}
+          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at)
+          ${source}
+          ${conflictSql}
+          RETURNING ${returning}`,
+    values: fence ? [...fence.precondition.values, ...rowValues] : rowValues,
+  };
+
   const host = getNotificationsHostAdapters();
-  const [result] = host.runPostgresQueriesSync({
+  const results = host.runPostgresQueriesSync({
+    connectionString: host.getPostgresConnectionString(),
+    // ONE transaction on ONE connection: the precondition's row lock, the insert
+    // it gates, and the follow-ups that record it either all land or none do.
+    transaction: fence !== undefined,
+    queries: fence
+      ? [insert, ...(fence.after ?? []).map((q) => ({ text: q.text, values: [...q.values] }))]
+      : [insert],
+  });
+  const rows = (results[0]?.rows ?? []) as Array<Record<string, unknown>>;
+  const row = rows[0];
+  return row ? rowToRecord(row) : null;
+}
+
+/**
+ * cinatra#2835 — hard-delete an awaiting-human row that belongs to ONE hold.
+ *
+ * `deleteNotificationsByDedupeKeyForUser` clears whatever currently occupies the
+ * run's per-run key. For a HOLD that is too wide: the hold's clear can arrive long
+ * after the fact (an obligation retried by a later sweep), and by then the key may
+ * legitimately be held by a DIFFERENT wait on the same run — a real approval gate
+ * the run reached afterwards. So this delete additionally requires the row to
+ * carry the park id the hold wrote into its metadata, which no other writer sets.
+ * A hold can only ever delete its own row.
+ *
+ * Returns whether the statement COMMITTED (not whether it matched): the caller
+ * uses that as its ack, and "no row to delete" is a discharged obligation just as
+ * much as "row deleted" is. The `(user_id, dedupe_key)` predicate leads so the
+ * partial unique index does the seeking; the metadata test only narrows.
+ */
+export function deleteHoldNotificationForUser(args: {
+  userId: string;
+  dedupeKey: string;
+  holdParkId: string;
+}): boolean {
+  if (!args.userId || !args.dedupeKey || !args.holdParkId) return false;
+  const host = getNotificationsHostAdapters();
+  host.ensurePostgresSchema();
+  host.runPostgresQueriesSync({
     connectionString: host.getPostgresConnectionString(),
     queries: [
       {
-        text: `INSERT INTO ${schemaQualified("notifications")}
-          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), ${readAtSql})
-          ${conflictSql}
-          RETURNING id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at`,
-        values: [
-          id,
-          args.userId,
-          recipientKind,
-          recipientId,
-          args.topic,
-          kind,
-          args.input.title,
-          args.input.body ?? "",
-          args.input.href ?? null,
-          args.input.metadata ? JSON.stringify(args.input.metadata) : null,
-          args.input.sourceJobId ?? null,
-          args.input.sourceJobName ?? null,
-          dedupeKey,
-        ],
+        text: `DELETE FROM ${schemaQualified("notifications")}
+          WHERE user_id = $1
+            AND dedupe_key = $2
+            AND metadata -> 'runAwaitingHuman' ->> 'holdParkId' = $3`,
+        values: [args.userId, args.dedupeKey, args.holdParkId],
       },
     ],
   });
-  const rows = (result?.rows ?? []) as Array<Record<string, unknown>>;
-  const row = rows[0];
-  return row ? rowToRecord(row) : null;
+  return true;
 }
 
 // ---------------------------------------------------------------------------

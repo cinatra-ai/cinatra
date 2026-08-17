@@ -12,17 +12,24 @@
  * TRANSITION classified as a human wait — and a hold changes no status: the run
  * is ALREADY `pending_input` (created that way) and is simply never dispatched,
  * parked on a continuation park instead. So this slice adds the direct seam
- * (`dispatchRunHumanWaitEntered` / `dispatchRunHumanWaitLeft`) and the
- * `waitKind` classification the host cannot derive for a run that carries no
+ * (`dispatchRecommendationHoldEntered` / `dispatchRecommendationHoldCleared`) and
+ * the `waitKind` classification the host cannot derive for a run that carries no
  * HITL interrupt.
  *
- * This file covers the PACKAGE side: the seam dispatchers, their REFUSAL to
- * notify a wait with no live hold behind it, and the hold's own wiring (a NEW
- * hold notifies exactly once; an already-parked re-hold does not re-notify; a
- * release delegates to the sweeper). The CLEAR is deliberately not pinned here —
- * it lives in the release primitive, which this file mocks; it is pinned against
- * the real primitive in recommendation-hold.integration.test.ts. The HOST half —
- * the "needs your input" copy and the conversation deep-link — is pinned in
+ * This file covers the PACKAGE side: the seam dispatchers, the FENCE SQL they are
+ * written behind, and the hold's own wiring (a NEW hold notifies exactly once with
+ * the park id it just wrote; an already-parked re-hold does not re-notify; a
+ * release delegates to the sweeper).
+ *
+ * What this tier deliberately does NOT prove (Codex convergence round 3): that a
+ * fabricated park id writes nothing, and that an enter racing a sweep cannot leave
+ * a stale row. Both are now enforced by the DATABASE — a `SELECT … FOR UPDATE` of
+ * the park feeding the INSERT inside one transaction — and the previous rounds'
+ * mistake was exactly to assert such properties against mocks that could not fail
+ * them. They are pinned against a real Postgres in
+ * recommendation-hold.integration.test.ts. Here we pin the pure half: that the
+ * fence SQL asks for the right thing. The HOST half — the "needs your input" copy,
+ * the conversation deep-link, and the park-scoped clear — is pinned in
  * src/lib/__tests__/agent-run-wait-notifications.test.ts.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -60,23 +67,16 @@ import {
 } from "../recommendation-hold";
 import {
   setRunWaitNotifier,
-  dispatchRunHumanWaitEntered,
-  dispatchRunHumanWaitLeft,
-  type RunHoldBinding,
+  buildHoldNotificationFence,
+  dispatchRecommendationHoldEntered,
+  dispatchRecommendationHoldCleared,
   type RunWaitNotifier,
 } from "../run-wait-notifier";
 
-/** A LIVE recommendation hold — the binding the enter seam now requires. */
-const hold = (over: Partial<RunHoldBinding> = {}): RunHoldBinding => ({
-  id: "park-1",
-  runId: "run-9",
-  checkpoint: "recommendation",
-  status: "parked",
-  ...over,
-});
-
 const onEnterHumanWait = vi.fn();
 const onLeaveHumanWait = vi.fn();
+const onEnterRecommendationHold = vi.fn();
+const onClearRecommendationHold = vi.fn();
 
 /** The fake park table behind the mocked store (see beforeEach). */
 type FakePark = { id: string; runId: string; checkpoint: string; status: string };
@@ -89,6 +89,10 @@ function wireNotifier(over: Partial<RunWaitNotifier> = {}) {
       onEnterHumanWait(...a),
     onLeaveHumanWait: (...a: Parameters<RunWaitNotifier["onLeaveHumanWait"]>) =>
       onLeaveHumanWait(...a),
+    onEnterRecommendationHold: (input: { runId: string; parkId: string }) =>
+      onEnterRecommendationHold(input),
+    onClearRecommendationHold: (input: { runId: string; parkId: string }) =>
+      onClearRecommendationHold(input),
     ...over,
   } as RunWaitNotifier);
 }
@@ -135,10 +139,9 @@ beforeEach(() => {
       scoredFeatures: [],
     },
   ]);
-  // A STATEFUL park fake, because the hold now RE-READS the park it just wrote
-  // before notifying (the liveness half of the hold binding — see
-  // `maybeHoldRunForRecommendation`). A flat `mockResolvedValue([])` would model a
-  // store in which the row vanishes the instant it is inserted.
+  // A STATEFUL park fake: the hold's re-entry guard reads the run's parks before
+  // deciding whether to create one, so a flat `mockResolvedValue([])` would model
+  // a store in which the row vanishes the instant it is inserted.
   parkRows.length = 0;
   parkSeq = 0;
   readContinuationParksForRun.mockImplementation(async (runId: string) =>
@@ -149,7 +152,8 @@ beforeEach(() => {
     parkRows.push({ id, runId: input.runId, checkpoint: "recommendation", status: "parked" });
     return { parked: true, parkId: id, reason: "parked" };
   });
-  sweepParks.mockResolvedValue({ released: 1 });
+  sweepParks.mockResolvedValue({ released: 1, blocked: 0, holdNotificationsCleared: 0 });
+  onClearRecommendationHold.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -158,118 +162,135 @@ afterEach(() => {
 });
 
 describe("cinatra#2835 — the direct human-wait seam", () => {
-  it("dispatchRunHumanWaitEntered drives onEnterHumanWait with the INPUT classification", async () => {
-    await dispatchRunHumanWaitEntered({
+  it("dispatchRecommendationHoldEntered forwards the run and the park it names", async () => {
+    await dispatchRecommendationHoldEntered({ runId: "run-9", parkId: "park-1" });
+    expect(onEnterRecommendationHold).toHaveBeenCalledTimes(1);
+    // Two opaque ids and no assertions about either: the seam no longer claims a
+    // park is live, it hands over the id whose liveness the WRITE checks.
+    expect(onEnterRecommendationHold).toHaveBeenCalledWith({
       runId: "run-9",
-      reason: "pending_input",
-      waitKind: "input",
-      hold: hold(),
-    });
-    expect(onEnterHumanWait).toHaveBeenCalledTimes(1);
-    // The hold binding is a GUARD, not payload — the host contract is unchanged.
-    expect(onEnterHumanWait).toHaveBeenCalledWith({
-      runId: "run-9",
-      reason: "pending_input",
-      waitKind: "input",
+      parkId: "park-1",
     });
   });
 
-  it("dispatchRunHumanWaitLeft drives the idempotent clear", async () => {
-    await dispatchRunHumanWaitLeft({ runId: "run-9" });
-    expect(onLeaveHumanWait).toHaveBeenCalledWith({ runId: "run-9" });
+  it("dispatchRecommendationHoldCleared drives the park-scoped clear and returns its ack", async () => {
+    onClearRecommendationHold.mockResolvedValueOnce(true);
+    await expect(
+      dispatchRecommendationHoldCleared({ runId: "run-9", parkId: "park-1" }),
+    ).resolves.toBe(true);
+    expect(onClearRecommendationHold).toHaveBeenCalledWith({
+      runId: "run-9",
+      parkId: "park-1",
+    });
   });
 
-  it("both are no-ops when no host wired a notifier", async () => {
+  it("a clear that did NOT commit reports false, so the sweeper keeps the obligation", async () => {
+    onClearRecommendationHold.mockResolvedValueOnce(false);
+    await expect(
+      dispatchRecommendationHoldCleared({ runId: "run-9", parkId: "park-1" }),
+    ).resolves.toBe(false);
+  });
+
+  it("no wired notifier: the enter is a no-op and the clear does NOT claim to have cleared", async () => {
     setRunWaitNotifier(null);
     await expect(
-      dispatchRunHumanWaitEntered({ runId: "run-9", reason: "pending_input", hold: hold() }),
+      dispatchRecommendationHoldEntered({ runId: "run-9", parkId: "park-1" }),
     ).resolves.toBeUndefined();
-    await expect(dispatchRunHumanWaitLeft({ runId: "run-9" })).resolves.toBeUndefined();
+    // `false`, not `true`. Nothing discharged the obligation, and reporting
+    // otherwise would retire a clear that never happened.
+    await expect(
+      dispatchRecommendationHoldCleared({ runId: "run-9", parkId: "park-1" }),
+    ).resolves.toBe(false);
+  });
+
+  it("a host that wires no hold methods is skipped, not crashed", async () => {
+    // The pair is optional for structural back-compat with existing doubles.
+    setRunWaitNotifier({
+      onEnterHumanWait: () => {},
+      onLeaveHumanWait: () => {},
+    } satisfies RunWaitNotifier);
+    await expect(
+      dispatchRecommendationHoldEntered({ runId: "run-9", parkId: "park-1" }),
+    ).resolves.toBeUndefined();
+    await expect(
+      dispatchRecommendationHoldCleared({ runId: "run-9", parkId: "park-1" }),
+    ).resolves.toBe(false);
   });
 
   it("swallows a throwing notifier — a notification can never fail a parked hold", async () => {
-    onEnterHumanWait.mockRejectedValueOnce(new Error("notifications down"));
-    onLeaveHumanWait.mockRejectedValueOnce(new Error("notifications down"));
+    onEnterRecommendationHold.mockRejectedValueOnce(new Error("notifications down"));
+    onClearRecommendationHold.mockRejectedValueOnce(new Error("notifications down"));
     await expect(
-      dispatchRunHumanWaitEntered({
-        runId: "run-9",
-        reason: "pending_input",
-        waitKind: "input",
-        hold: hold(),
-      }),
+      dispatchRecommendationHoldEntered({ runId: "run-9", parkId: "park-1" }),
     ).resolves.toBeUndefined();
-    await expect(dispatchRunHumanWaitLeft({ runId: "run-9" })).resolves.toBeUndefined();
+    // A throw is not an ack: the obligation survives for the next sweep.
+    await expect(
+      dispatchRecommendationHoldCleared({ runId: "run-9", parkId: "park-1" }),
+    ).resolves.toBe(false);
   });
 });
 
 /**
- * Codex convergence round 2, finding 2 — the enter seam is BOUND TO THE HOLD.
+ * Codex convergence round 3, findings 1 + 2 — the FENCE the write happens behind.
  *
- * Before this, the seam was exported and forwarded a caller-supplied {runId,
- * reason, waitKind} unconditionally: it verified no park and bound to no hold
- * identifier, so any code path could FABRICATE a "needs your input" row against
- * any `pending_input` run with no hold behind it — and because a hold moves no run
- * status, nothing would ever clear that row. Every case below is a REFUSAL: the
- * notifier is not driven at all.
+ * Round 2 answered "may this notification be written?" in TypeScript, over fields
+ * the caller supplied. That was wrong twice over: a cast satisfied it (finding 2),
+ * and even an honest caller could only report what was true when it read the park,
+ * not what is true when the row commits (finding 1). Both defects were the same
+ * defect — a check in one place and a write in another.
+ *
+ * The check therefore moved INTO the write, as SQL. These cases pin what that SQL
+ * asks for; that it is actually ENFORCED is a property of Postgres and is proven
+ * against a real one in recommendation-hold.integration.test.ts. This is the
+ * honest division: a mock cannot fail a row lock, so nothing here pretends to
+ * test one.
  */
-describe("cinatra#2835 — the enter seam REFUSES a wait with no live hold", () => {
-  it("refuses a fabricated dispatch with NO hold at all — the case the old seam allowed", async () => {
-    // The `hold` argument is REQUIRED, so this does not even typecheck without
-    // the cast; the cast is the point — it reproduces, at runtime, exactly what
-    // arbitrary caller code used to be able to do. It must write nothing.
-    await dispatchRunHumanWaitEntered({
-      runId: "run-victim",
-      reason: "pending_input",
-      waitKind: "input",
-    } as unknown as Parameters<typeof dispatchRunHumanWaitEntered>[0]);
-    expect(onEnterHumanWait).not.toHaveBeenCalled();
+describe("cinatra#2835 — the hold-notification write fence", () => {
+  const fence = buildHoldNotificationFence({
+    schema: "cinatra_test",
+    parkId: "park-1",
+    runId: "run-9",
   });
 
-  it("refuses a hold belonging to ANOTHER run — no minting a row against a run you do not hold", async () => {
-    await dispatchRunHumanWaitEntered({
-      runId: "run-victim",
-      reason: "pending_input",
-      waitKind: "input",
-      hold: hold({ runId: "run-9" }),
+  it("the guard matches the park on ALL FOUR facts a fabricated binding could lie about", () => {
+    // id (the park exists), run_id (it is THIS run's), checkpoint (it is a hold
+    // and not an auto-gate `review` park), status (the wait is not already over).
+    expect(fence.guard.text).toContain("id = $1");
+    expect(fence.guard.text).toContain("run_id = $2");
+    expect(fence.guard.text).toContain("checkpoint = $3");
+    expect(fence.guard.text).toContain("status = 'parked'");
+    expect(fence.guard.values).toEqual(["park-1", "run-9", "recommendation"]);
+  });
+
+  it("the guard takes the park's ROW LOCK — the whole TOCTOU fix", () => {
+    // Without FOR UPDATE the guard is a snapshot read: a sweep could CAS the park
+    // terminal and clear the notification while this transaction is still open,
+    // and the insert would commit afterwards into a wait that is already over.
+    // With it, the guard and the sweeper's `status = 'parked'` CAS contend for the
+    // same lock and one of them provably goes second.
+    expect(fence.guard.text).toContain("FOR UPDATE");
+  });
+
+  it("it reads the park table, and never the notifications table", () => {
+    expect(fence.guard.text).toContain('"cinatra_test"."lifecycle_continuation_park"');
+    expect(fence.guard.text).not.toContain("notifications");
+  });
+
+  it("the mark records the write under the SAME predicate that admitted it", () => {
+    // A fence that refused the insert must not be able to mark the park `live`,
+    // or the sweeper would chase a clear obligation for a row nobody wrote.
+    expect(fence.mark.text).toContain("hold_notification = 'live'");
+    expect(fence.mark.text).toContain("status = 'parked'");
+    expect(fence.mark.values).toEqual(fence.guard.values);
+  });
+
+  it("the schema name is quoted, not interpolated raw", () => {
+    const hostile = buildHoldNotificationFence({
+      schema: 'we"ird',
+      parkId: "p",
+      runId: "r",
     });
-    expect(onEnterHumanWait).not.toHaveBeenCalled();
-  });
-
-  it("refuses a park that is NOT a recommendation hold — an auto-gate park notifies elsewhere", async () => {
-    // A `review` park's wait notifies through onAutoGateOpen; a second row here
-    // would double-ring the same wait under a key its resolve never clears.
-    await dispatchRunHumanWaitEntered({
-      runId: "run-9",
-      reason: "pending_input",
-      waitKind: "input",
-      hold: hold({ checkpoint: "review" }),
-    });
-    expect(onEnterHumanWait).not.toHaveBeenCalled();
-  });
-
-  it("refuses an ALREADY-TERMINAL park — a wait that is over must never mint a row", async () => {
-    // Both terminal states: the decision-resolved release and the TTL fail-close.
-    // Minting for either is precisely the permanently-stale row this issue exists
-    // to prevent (nothing would clear it — the park cannot transition twice).
-    for (const status of ["released", "policy_unresolved"] as const) {
-      await dispatchRunHumanWaitEntered({
-        runId: "run-9",
-        reason: "pending_input",
-        waitKind: "input",
-        hold: hold({ status }),
-      });
-    }
-    expect(onEnterHumanWait).not.toHaveBeenCalled();
-  });
-
-  it("a refusal is silent, never a throw — a notification can never fail a hold", async () => {
-    await expect(
-      dispatchRunHumanWaitEntered({
-        runId: "run-victim",
-        reason: "pending_input",
-        hold: hold({ status: "released" }),
-      }),
-    ).resolves.toBeUndefined();
+    expect(hostile.guard.text).toContain('"we""ird"."lifecycle_continuation_park"');
   });
 });
 
@@ -278,16 +299,19 @@ describe("cinatra#2835 — entering a hold notifies the run's initiator", () => 
     const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
     expect(out.held).toBe(true);
 
-    expect(onEnterHumanWait).toHaveBeenCalledTimes(1);
-    expect(onEnterHumanWait).toHaveBeenCalledWith({
-      // The run's ACTUAL status — the hold parks an already-`pending_input` run
-      // rather than moving it, so no consumer's state or filter sees anything new.
+    expect(onEnterRecommendationHold).toHaveBeenCalledTimes(1);
+    // The park id it JUST INSERTED — not one re-read afterwards. The re-read used
+    // to be the liveness check; it is gone because it could never have been one
+    // (whatever it observed was already history by the time the row was written).
+    // Liveness is now the fence's job, and the fence needs this exact id.
+    expect(onEnterRecommendationHold).toHaveBeenCalledWith({
       runId: "run-1",
-      reason: "pending_input",
-      // The classification the host cannot derive: a held run carries no HITL
-      // interrupt, and the #2729 ruling makes this an INPUT wait.
-      waitKind: "input",
+      parkId: out.held ? out.parkId : undefined,
     });
+    // The wait's classification and copy are the HOST's to apply now that the
+    // write is fenced — pinned in agent-run-wait-notifications.test.ts. Nothing
+    // rides the transition seam for a hold: it moves no status.
+    expect(onEnterHumanWait).not.toHaveBeenCalled();
   });
 
   it("an ALREADY-PARKED run does NOT re-notify — a retried run-start never re-rings the bell", async () => {
@@ -299,7 +323,7 @@ describe("cinatra#2835 — entering a hold notifies the run's initiator", () => 
     const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
     expect(out.held).toBe(true);
     expect(maybeParkCheckpoint).not.toHaveBeenCalled();
-    expect(onEnterHumanWait).not.toHaveBeenCalled();
+    expect(onEnterRecommendationHold).not.toHaveBeenCalled();
   });
 
   it("a run that does NOT park never notifies (headless, no candidates)", async () => {
@@ -308,17 +332,17 @@ describe("cinatra#2835 — entering a hold notifies the run's initiator", () => 
       template: template(),
     });
     expect(headless.held).toBe(false);
-    expect(onEnterHumanWait).not.toHaveBeenCalled();
+    expect(onEnterRecommendationHold).not.toHaveBeenCalled();
 
     recommendSkillsForAgentTask.mockResolvedValue([]);
     getAssignedSkillIdsForAgent.mockResolvedValue([]);
     const noCandidates = await maybeHoldRunForRecommendation({ run: run(), template: template() });
     expect(noCandidates.held).toBe(false);
-    expect(onEnterHumanWait).not.toHaveBeenCalled();
+    expect(onEnterRecommendationHold).not.toHaveBeenCalled();
   });
 
   it("the park still holds the run when the notification throws (best-effort, never blocking)", async () => {
-    onEnterHumanWait.mockRejectedValueOnce(new Error("notifications down"));
+    onEnterRecommendationHold.mockRejectedValueOnce(new Error("notifications down"));
     const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
     expect(out.held).toBe(true);
     expect(out).toMatchObject({ parkId: "park-1" });
@@ -330,37 +354,19 @@ describe("cinatra#2835 — entering a hold notifies the run's initiator", () => 
     // run whose recommendation park is already terminal, so "once per hold" is
     // only observable across holds that actually happen.
     await maybeHoldRunForRecommendation({ run: run(), template: template() });
-    expect(onEnterHumanWait).toHaveBeenCalledTimes(1);
+    expect(onEnterRecommendationHold).toHaveBeenCalledTimes(1);
     expect(await releaseRecommendationParkForRun("run-1")).toBe(true);
 
     await maybeHoldRunForRecommendation({ run: run({ id: "run-2" }), template: template() });
-    expect(onEnterHumanWait).toHaveBeenCalledTimes(2);
-    expect(onEnterHumanWait).toHaveBeenLastCalledWith({
+    expect(onEnterRecommendationHold).toHaveBeenCalledTimes(2);
+    // A DIFFERENT park id: the second hold is its own row, cleared under its own
+    // key. The two can never collapse onto one another.
+    expect(onEnterRecommendationHold).toHaveBeenLastCalledWith({
       runId: "run-2",
-      reason: "pending_input",
-      waitKind: "input",
+      parkId: "park-2",
     });
   });
 
-  it("does NOT notify when the park it just wrote is no longer live — the liveness re-read", async () => {
-    // A concurrent sweep (TTL fail-close, a racing decision) can terminate the
-    // park between the insert and the notification. Notifying then would mint the
-    // permanently-stale row this issue exists to prevent: the park cannot
-    // transition twice, so the clear that rides the transition has already gone.
-    maybeParkCheckpoint.mockImplementation(async (_o: unknown, input: { runId: string }) => {
-      parkRows.push({
-        id: "park-1",
-        runId: input.runId,
-        checkpoint: "recommendation",
-        status: "policy_unresolved",
-      });
-      return { parked: true, parkId: "park-1", reason: "parked" };
-    });
-
-    const out = await maybeHoldRunForRecommendation({ run: run(), template: template() });
-    expect(out.held).toBe(true); // the park decision is unaffected by the notification
-    expect(onEnterHumanWait).not.toHaveBeenCalled();
-  });
 });
 
 /**
@@ -385,7 +391,7 @@ describe("cinatra#2835 — leaving a hold goes through the release primitive", (
     expect(released).toBe(true);
     expect(sweepParks).toHaveBeenCalledWith({ releasedParkIds: ["park-1"] });
     // Not from here — the primitive owns it (see the block comment above).
-    expect(onLeaveHumanWait).not.toHaveBeenCalled();
+    expect(onClearRecommendationHold).not.toHaveBeenCalled();
   });
 
   it("a no-op release (no park / already released / wrong hold) never reaches the sweeper", async () => {
@@ -402,13 +408,13 @@ describe("cinatra#2835 — leaving a hold goes through the release primitive", (
     expect(await releaseRecommendationParkForRun("run-1", "park-1")).toBe(false);
 
     expect(sweepParks).not.toHaveBeenCalled();
-    expect(onLeaveHumanWait).not.toHaveBeenCalled();
+    expect(onClearRecommendationHold).not.toHaveBeenCalled();
   });
 
   it("a sweeper that releases nothing (0 rows) reports no release", async () => {
     parkRows.push({ id: "park-1", runId: "run-1", checkpoint: "recommendation", status: "parked" });
-    sweepParks.mockResolvedValue({ released: 0 });
+    sweepParks.mockResolvedValue({ released: 0, blocked: 0, holdNotificationsCleared: 0 });
     expect(await releaseRecommendationParkForRun("run-1")).toBe(false);
-    expect(onLeaveHumanWait).not.toHaveBeenCalled();
+    expect(onClearRecommendationHold).not.toHaveBeenCalled();
   });
 });

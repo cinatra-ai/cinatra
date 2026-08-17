@@ -58,14 +58,15 @@ import {
   type ParkRow,
 } from "./lifecycle-continuation-park-store";
 import {
-  dispatchRunHumanWaitEntered,
+  dispatchRecommendationHoldEntered,
   RECOMMENDATION_HOLD_CHECKPOINT,
 } from "./run-wait-notifier";
 import type { AgentRunRecord, AgentTemplateRecord } from "./store";
 
 /** The lifecycle checkpoint the run-start chip-row hold parks on. Defined in the
- * notifier leaf (see `RECOMMENDATION_HOLD_CHECKPOINT`) so this module, the seam's
- * hold-binding guard and the park store's release primitive share ONE literal. */
+ * notifier leaf (see `RECOMMENDATION_HOLD_CHECKPOINT`) so this module, the fence
+ * SQL the host writes behind, and the park store's release primitive share ONE
+ * literal. */
 export const RECOMMENDATION_CHECKPOINT = RECOMMENDATION_HOLD_CHECKPOINT;
 
 /** The event id the recommendation park is keyed on. ONE recommendation park
@@ -742,24 +743,24 @@ export async function maybeHoldRunForRecommendation(input: {
   // Awaited but internally swallowed, exactly like the wire announcement above:
   // the park holds the run; the notification only tells the human about it.
   //
-  // BOUND TO THE HOLD (Codex convergence round 2, finding 2). The seam refuses to
-  // notify without the live park that IS the wait, and the park it is handed is
-  // RE-READ from the database here rather than reconstructed from `parked.parkId`
-  // — this is the liveness half of the bind (the seam is a true leaf and cannot
-  // query). The re-read is not ceremony: between the insert above and this line a
-  // concurrent sweep can already have TTL-fail-closed or released the park, and
-  // notifying for a park that is no longer `parked` mints exactly the stale row
-  // #2835 exists to prevent. A null / already-terminal / mismatched read means no
-  // notification and a held run that is otherwise unaffected.
-  const liveHold = await readRecommendationParkForRun(run.id);
-  if (liveHold && liveHold.id === parked.parkId) {
-    await dispatchRunHumanWaitEntered({
-      runId: run.id,
-      reason: "pending_input",
-      waitKind: "input",
-      hold: liveHold,
-    });
-  }
+  // BOUND TO THE HOLD, IN THE DATABASE (Codex convergence round 3, findings 1+2).
+  // Round 2 bound the seam by RE-READING the park here and handing the row over
+  // for a structural check. That was still two operations: the read established
+  // liveness, the dispatch acted on it, and a concurrent `sweepParks` fitting
+  // between them could transition the park AND clear the notification before this
+  // write landed — recreating the row after its only clearing transition had
+  // already passed, permanently stale. The re-read is gone because it could not
+  // have fixed that; only the write itself can. The host now writes the row behind
+  // `SELECT … FOR UPDATE` of THIS park id in one transaction, so the park's row
+  // lock — the same lock the sweeper's `status = 'parked'` CAS takes — orders the
+  // two: either we commit first and the sweep's clear then finds our row, or the
+  // sweep commits first and our guard matches nothing and writes nothing. Passing
+  // the id we just inserted is now exactly right: it is a claim the database
+  // checks, not one we assert.
+  await dispatchRecommendationHoldEntered({
+    runId: run.id,
+    parkId: parked.parkId,
+  });
   return { held: true, parkId: parked.parkId, reason: outcome.reason };
 }
 

@@ -701,6 +701,11 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
   protectedEffect:    text("protected_effect").notNull(),
   reevaluationIntent: boolean("reevaluation_intent").notNull().default(false),
   status:             text("status").notNull().default("parked"), // parked | released | policy_unresolved
+  // cinatra#2835 — what this park owes the notification feed: none | live | cleared.
+  // Written to `live` in the SAME transaction as the hold notification's INSERT and
+  // retired to `cleared` only after an awaited delete, so "terminal park still live"
+  // is a durable, retryable clear obligation rather than a lost best-effort call.
+  holdNotification:   text("hold_notification").notNull().default("none"),
   ttlExpiresAt:       timestamp("ttl_expires_at", { withTimezone: true }).notNull(),
   createdAt:          timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   resolvedAt:         timestamp("resolved_at", { withTimezone: true }),
@@ -708,6 +713,11 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
   runEventUniq: uniqueIndex("lifecycle_continuation_park_run_event_uniq")
     .on(t.runId, t.eventId, t.checkpoint),
   dueIdx:       index("lifecycle_continuation_park_due_idx").on(t.status, t.ttlExpiresAt),
+  // PARTIAL, so the sweeper's clear-obligation drain scans only the handful of
+  // parks that currently owe one — never the whole (append-only) park table.
+  holdNotifyIdx: index("lifecycle_continuation_park_hold_notify_idx")
+    .on(t.holdNotification, t.status)
+    .where(sql`hold_notification = 'live'`),
 }));
 
 /** The zero-authority advisory seam — gate-bound, provenance-stamped, idempotent,

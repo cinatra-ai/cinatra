@@ -23,13 +23,16 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, lte, ne, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import { artifactProducedOutbox, lifecycleContinuationPark } from "./schema";
 import {
-  dispatchRunHumanWaitLeft,
+  dispatchRecommendationHoldCleared,
+  HOLD_NOTIFICATION_CLEARED,
+  HOLD_NOTIFICATION_LIVE,
   RECOMMENDATION_HOLD_CHECKPOINT,
+  type HoldNotificationState,
 } from "./run-wait-notifier";
 import {
   isStrandable,
@@ -141,6 +144,9 @@ export interface ParkRow {
   protectedEffect: string;
   reevaluationIntent: boolean;
   status: "parked" | "released" | "policy_unresolved";
+  /** cinatra#2835 — what this park owes the notification feed. See
+   * `HoldNotificationState`; only a recommendation hold ever leaves `none`. */
+  holdNotification: HoldNotificationState;
   ttlExpiresAt: Date;
   resolvedAt: Date | null;
 }
@@ -168,6 +174,10 @@ export interface SweepParksInput {
 export interface SweepParksResult {
   released: number;
   blocked: number;
+  /** cinatra#2835 — hold-notification clear obligations RETIRED this pass (a
+   * delete that committed and was acked). Includes obligations left behind by an
+   * earlier pass or another sweeper, not only the parks this pass transitioned. */
+  holdNotificationsCleared: number;
 }
 
 /**
@@ -187,20 +197,37 @@ export interface SweepParksResult {
  * cinatra#2835 — this is ALSO where a run-start recommendation hold's "needs your
  * input" notification is CLEARED, because this function is the one primitive
  * through which a park leaves `parked` (`maybeParkCheckpoint` only inserts;
- * `strandPark` refuses anything non-terminal, so it only ever deletes a row this
- * sweep already resolved). Wiring the clear into the caller that releases a hold
- * on a human decision — `releaseRecommendationParkForRun` — covered only that one
- * path, and left every OTHER release stale: notably this function's own TTL
- * fail-close, whose production driver is the gate-maintenance drain
+ * `strandPark` refuses anything non-terminal and drains the obligation before it
+ * deletes). Wiring the clear into the caller that releases a hold on a human
+ * decision — `releaseRecommendationParkForRun` — covered only that one path, and
+ * left every OTHER release stale: notably this function's own TTL fail-close,
+ * whose production driver is the gate-maintenance drain
  * (`releaseResolvedAutoGateParks`) and which sweeps EVERY due park including a
  * held run's. A hold moves no run status, so no transition would ever clear the
  * row behind it and the bell would point at a card the human can no longer act on,
  * forever. Wired at the primitive, every caller inherits it (Codex convergence
  * round 2, finding 1).
  *
- * BOTH arms clear: a decision-resolved release and a TTL fail-close alike end the
- * human's ability to act on the hold. Best-effort and post-commit — the dispatch
- * swallows every error, so a notification can never fail a sweep.
+ * THE CLEAR IS AN OBLIGATION, NOT A DISPATCH (Codex convergence round 3, finding
+ * 3). It used to be a post-commit, error-swallowing call per park this pass
+ * transitioned — so a notifier throw, or a process that died in the microseconds
+ * after the CAS, stranded the row permanently: the park was already terminal, and
+ * a terminal park can never be re-returned by a later CAS, so nothing would ever
+ * retry. The drain below is driven off `hold_notification = 'live'` instead — a
+ * flag the ENTER wrote in the same transaction as the notification INSERT — and
+ * retires it only on an awaited, successful delete. Two consequences:
+ *
+ *   - the parks this pass just transitioned are picked up immediately (they are
+ *     terminal-and-`live` the instant the CAS commits), so the same-pass clear the
+ *     round-2 fix delivered is unchanged in behaviour; and
+ *   - anything that goes wrong leaves the obligation standing, and EVERY later
+ *     sweep re-drains it. Delete-by-key is idempotent, so over-retrying is free.
+ *
+ * BOTH arms are covered — a decision-resolved release and a TTL fail-close alike
+ * end the human's ability to act — and so is a park some OTHER sweep transitioned,
+ * which the old `returning()`-driven collection could not see. A notification can
+ * still never fail a sweep: every dispatch is internally swallowed and reports
+ * failure by declining to ack.
  */
 export async function sweepParks(input: SweepParksInput = {}): Promise<SweepParksResult> {
   const limit = Math.max(1, Math.min(input.limit ?? 100, 500));
@@ -210,10 +237,6 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
 
   let released = 0;
   let blocked = 0;
-  // The runs whose recommendation HOLD this pass ended (either arm) — collected
-  // from the CAS `returning()`, so a park another sweep transitioned first is not
-  // in it and the clear fires exactly once per hold.
-  const endedHoldRunIds = new Set<string>();
 
   // 1. Decision-resolved releases (bounded by the caller's explicit id list). The
   // pure transition confirms the effect is not blocked for a resolved-skip /
@@ -229,13 +252,8 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
           eq(lifecycleContinuationPark.status, "parked"),
         ),
       )
-      .returning({
-        id: lifecycleContinuationPark.id,
-        runId: lifecycleContinuationPark.runId,
-        checkpoint: lifecycleContinuationPark.checkpoint,
-      });
+      .returning({ id: lifecycleContinuationPark.id });
     released += rows.length; // the ACTUAL number transitioned
-    collectEndedHolds(rows, endedHoldRunIds);
   }
 
   // 2. TTL fail-close of the due parks, BOUNDED to `limit` per pass via a LIMIT
@@ -261,37 +279,71 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
         eq(lifecycleContinuationPark.status, "parked"),
       ),
     )
-    .returning({
-      id: lifecycleContinuationPark.id,
-      runId: lifecycleContinuationPark.runId,
-      checkpoint: lifecycleContinuationPark.checkpoint,
-    });
+    .returning({ id: lifecycleContinuationPark.id });
   blocked += dueRows.length;
-  collectEndedHolds(dueRows, endedHoldRunIds);
 
-  // The wait is over for every hold this pass ended — clear its notification.
-  // AFTER both CAS updates, so a row is only ever cleared for a park that
-  // genuinely transitioned; sequential because the set is bounded by `limit` and
-  // each dispatch is a swallowed best-effort call.
-  for (const runId of endedHoldRunIds) {
-    await dispatchRunHumanWaitLeft({ runId });
-  }
+  // The clear-obligation drain. AFTER both CAS updates, so the parks this pass
+  // ended are already visible to it.
+  const holdNotificationsCleared = await drainHoldNotifications(limit);
 
-  return { released, blocked };
+  return { released, blocked, holdNotificationsCleared };
 }
 
-/** The subset of just-transitioned parks that are recommendation HOLDS, by run.
- * A `review` (auto-gate) park is deliberately excluded: its notification is the
- * auto-gate row, cleared by `dispatchAutoGateResolved` on the gate's own
- * decision — clearing it here would be keyed wrong and would fire on a park
- * release that is not the gate's resolution. */
-function collectEndedHolds(
-  rows: ReadonlyArray<{ runId: string; checkpoint: string }>,
-  into: Set<string>,
-): void {
-  for (const row of rows) {
-    if (row.checkpoint === RECOMMENDATION_HOLD_CHECKPOINT) into.add(row.runId);
+/**
+ * cinatra#2835 — discharge every OUTSTANDING hold-notification clear.
+ *
+ * The predicate IS the invariant: a park that is no longer `parked` must not have
+ * a live "needs your input" row behind it. Every park that violates it — because
+ * this pass just transitioned it, because another sweep did, or because an earlier
+ * pass's delete failed or never ran — is retried here, bounded to `limit` per pass
+ * and index-backed by the partial `…_hold_notify_idx` so the scan sees only parks
+ * that actually owe something.
+ *
+ * DELETE-THEN-ACK, never the reverse. The ack is a CAS off `'live'`, so two sweeps
+ * racing the same park both delete (idempotent) and exactly one acks. Acking first
+ * would be the one ordering that can lose an obligation: a crash between the ack
+ * and the delete would leave a terminal park marked `cleared` with its row still
+ * standing, and nothing would ever look at it again.
+ */
+async function drainHoldNotifications(limit: number): Promise<number> {
+  const owing = await db
+    .select({
+      id: lifecycleContinuationPark.id,
+      runId: lifecycleContinuationPark.runId,
+    })
+    .from(lifecycleContinuationPark)
+    .where(
+      and(
+        eq(lifecycleContinuationPark.holdNotification, HOLD_NOTIFICATION_LIVE),
+        ne(lifecycleContinuationPark.status, "parked"),
+        eq(lifecycleContinuationPark.checkpoint, RECOMMENDATION_HOLD_CHECKPOINT),
+      ),
+    )
+    .limit(limit);
+
+  let cleared = 0;
+  // Sequential: the set is bounded by `limit`, each dispatch is a swallowed
+  // best-effort call, and serialising keeps a slow notifier from fanning out
+  // connections behind a sweep that is itself already on a schedule.
+  for (const park of owing) {
+    const committed = await dispatchRecommendationHoldCleared({
+      runId: park.runId,
+      parkId: park.id,
+    });
+    if (!committed) continue; // obligation stands; the next sweep retries it.
+    const acked = await db
+      .update(lifecycleContinuationPark)
+      .set({ holdNotification: HOLD_NOTIFICATION_CLEARED })
+      .where(
+        and(
+          eq(lifecycleContinuationPark.id, park.id),
+          eq(lifecycleContinuationPark.holdNotification, HOLD_NOTIFICATION_LIVE),
+        ),
+      )
+      .returning({ id: lifecycleContinuationPark.id });
+    cleared += acked.length; // the ACTUAL number retired (a racing sweep wins once)
   }
+  return cleared;
 }
 
 /**
@@ -300,6 +352,13 @@ function collectEndedHolds(
  * can NEVER be stranded: every park must terminate through the sweeper. Throws
  * `forced-strand` on an attempt to strip a live park (the AC's "a forced-strand
  * attempt fails").
+ *
+ * cinatra#2835 — a terminal park may still OWE a hold-notification clear, and the
+ * row is the only place that obligation is recorded. Deleting it would abandon the
+ * notification with nothing left to re-drive it, so the obligation is discharged
+ * FIRST and the teardown proceeds only once it is. A clear that will not commit
+ * (no notifier wired, a throwing port) keeps the park alive for the sweeper to
+ * retry rather than trading a stale bell for a tidy table.
  */
 export async function strandPark(parkId: string): Promise<void> {
   const park = await readPark(parkId);
@@ -309,6 +368,25 @@ export async function strandPark(parkId: string): Promise<void> {
       "forced-strand",
       `park ${parkId} is still ${park.status} — a live park cannot be stranded; it must resolve through the sweeper`,
     );
+  }
+  if (
+    park.holdNotification === HOLD_NOTIFICATION_LIVE &&
+    park.checkpoint === RECOMMENDATION_HOLD_CHECKPOINT
+  ) {
+    const committed = await dispatchRecommendationHoldCleared({
+      runId: park.runId,
+      parkId: park.id,
+    });
+    if (!committed) {
+      throw new ContinuationParkError(
+        "conflict",
+        `park ${parkId} still owes a hold-notification clear that did not commit; the row would be stranded by the teardown — retry once the notifier is reachable`,
+      );
+    }
+    await db
+      .update(lifecycleContinuationPark)
+      .set({ holdNotification: HOLD_NOTIFICATION_CLEARED })
+      .where(eq(lifecycleContinuationPark.id, parkId));
   }
   await db.delete(lifecycleContinuationPark).where(eq(lifecycleContinuationPark.id, parkId));
 }
@@ -399,6 +477,7 @@ function toParkRow(r: typeof lifecycleContinuationPark.$inferSelect): ParkRow {
     protectedEffect: r.protectedEffect,
     reevaluationIntent: r.reevaluationIntent,
     status: r.status as ParkRow["status"],
+    holdNotification: r.holdNotification as HoldNotificationState,
     ttlExpiresAt: r.ttlExpiresAt,
     resolvedAt: r.resolvedAt,
   };

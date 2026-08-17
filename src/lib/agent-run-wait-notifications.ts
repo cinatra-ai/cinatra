@@ -172,6 +172,15 @@ export function buildRunAwaitingHumanNotificationInput(input: {
   href?: string;
   interrupt?: RunWaitInterruptDescriptor | null;
   waitKind?: RunWaitInterruptKind;
+  /**
+   * cinatra#2835 — the continuation park this row belongs to, for a row minted by
+   * a run-start recommendation HOLD. Stamped into the metadata so the hold's clear
+   * can name its OWN row: the dedupeKey is per-RUN, and a clear retried by a later
+   * sweep would otherwise be free to delete whatever wait happens to occupy that
+   * key by then. Absent for every other writer, whose rows the hold clear
+   * therefore cannot touch.
+   */
+  holdParkId?: string;
 }): NotificationInput {
   const name = input.runTitle?.trim();
   const subject = name ? `"${name}"` : "A run";
@@ -199,9 +208,25 @@ export function buildRunAwaitingHumanNotificationInput(input: {
     dedupeKey: runAwaitingHumanDedupeKey(input.runId),
     metadata: {
       category: RUN_AWAITING_HUMAN_CATEGORY,
-      runAwaitingHuman: { runId: input.runId, reason: input.reason },
+      runAwaitingHuman: {
+        runId: input.runId,
+        reason: input.reason,
+        ...(input.holdParkId ? { holdParkId: input.holdParkId } : {}),
+      },
     },
   };
+}
+
+/**
+ * The app schema every table in this database lives in. Resolved at CALL time,
+ * not module load: the real-database suites set `SUPABASE_SCHEMA` to a throwaway
+ * schema before driving these paths, and a module-scope constant would have
+ * captured whatever the env said when some unrelated importer first pulled this
+ * module in. Mirrors `src/lib/postgres-config.ts` / the notifications host
+ * adapter's own resolution.
+ */
+function appSchemaName(): string {
+  return process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
 }
 
 /**
@@ -425,6 +450,140 @@ export const runWaitNotifier: RunWaitNotifier = {
         "[run-awaiting-human] could not clear auto-gate-open notification:",
         err instanceof Error ? err.message : err,
       );
+    }
+  },
+
+  // cinatra#2835 — a run-start recommendation HOLD parked a run.
+  //
+  // THE WRITE IS FENCED. Every other emitter in this module writes on a fact that
+  // already happened and cannot un-happen (a committed status transition, a
+  // created gate). A hold is different: the park it names can go terminal at any
+  // instant, and because a hold moves no run status, the park's own transition is
+  // the ONLY event that ever clears this row. A write that lands after it is stale
+  // forever. Ordering the check before the write does not help — the check is over
+  // the moment it returns.
+  //
+  // So the check IS the write. `buildHoldNotificationFence` supplies a
+  // `SELECT … FOR UPDATE` of the park matched on (id, run, checkpoint,
+  // status='parked'); the insert is driven from its rows inside one transaction on
+  // one connection. That gives two properties at once:
+  //
+  //   FABRICATION (finding 2) — an invented park id, a park belonging to another
+  //     run, an auto-gate `review` park, or an already-terminal park all yield no
+  //     guard row and therefore no notification. Nothing upstream has to be
+  //     trusted, and no cast can help: the park table decides.
+  //   TOCTOU (finding 1) — `FOR UPDATE` takes the park's row lock, which is the
+  //     same lock `sweepParks`' `status = 'parked'` CAS must take. Enter and sweep
+  //     therefore serialise: either we commit first and the sweep's clear finds our
+  //     row, or the sweep commits first and our guard, re-evaluated against the new
+  //     row version, matches nothing. There is no interleaving left in which the
+  //     clear precedes the write it was meant to remove.
+  //
+  // The fence's `mark` records `hold_notification = 'live'` on the same park in the
+  // same transaction, which is what makes the matching clear RETRYABLE (finding 3):
+  // see `onClearRecommendationHold` below.
+  //
+  // `waitKind: "input"` and the conversation deep-link are the #2729 ruling for a
+  // held run (it carries no HITL interrupt to derive a classification from), and
+  // `reason: "pending_input"` is the run's ACTUAL status — presentation and
+  // destination only, no consumer's state, filter or route sees anything new.
+  async onEnterRecommendationHold({ runId, parkId }) {
+    try {
+      await import("@/lib/notifications-host");
+      const { readAgentRunById } = await import("@cinatra-ai/agents");
+      const run = await readAgentRunById(runId);
+      const userId = run?.runBy;
+      // No initiator (system-/trigger-launched run) → no one to notify, and the
+      // park stays `hold_notification = 'none'`: nothing written, nothing owed.
+      if (!userId) return;
+      const { buildHoldNotificationFence } = await import(
+        "@cinatra-ai/agents/run-wait-notifier"
+      );
+      // The park-side SQL comes from the package that OWNS the park table; this
+      // module is only the translator that knows both vocabularies (and is the one
+      // place that can reach both tables on a single connection).
+      const holdFence = buildHoldNotificationFence({
+        schema: appSchemaName(),
+        parkId,
+        runId,
+      });
+      const { resolveAgentRunHref, createNotificationForRecipient } =
+        await import("@cinatra-ai/notifications/server");
+      const runHref = await resolveAgentRunHref({ runId });
+      // A held run belongs to the conversation it was started in — the same
+      // destination an unanswered input field gets. Best-effort: no resolvable
+      // conversation keeps the run page, the pre-existing destination.
+      const { findChatConversationPathForAgentRun } = await import(
+        "@/lib/assistant-thread-store"
+      );
+      const conversationHref = await Promise.resolve()
+        .then(() => findChatConversationPathForAgentRun(runId))
+        .catch(() => null);
+      await createNotificationForRecipient(
+        { kind: "user", userId },
+        buildRunAwaitingHumanNotificationInput({
+          runId,
+          reason: "pending_input",
+          runTitle: run.title,
+          href: conversationHref ?? runHref,
+          waitKind: "input",
+          holdParkId: parkId,
+        }),
+        {
+          // Single, already-resolved recipient: the fence takes ONE park row lock
+          // for ONE insert. (A fenced write with an expanded roster would take the
+          // lock once per recipient, in separate transactions — correct, but not a
+          // shape any caller needs today.)
+          recipientUserIds: [userId],
+          fence: { precondition: holdFence.guard, after: [holdFence.mark] },
+        },
+      );
+    } catch (err) {
+      console.warn(
+        "[run-awaiting-human] could not emit recommendation-hold notification:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  },
+
+  // cinatra#2835 — the hold ended: hard-delete the row its enter wrote.
+  //
+  // Scoped to the park id the row carries, not just the run's per-run key: this
+  // clear can be a RETRY driven by a sweep long after the fact, and by then the key
+  // may legitimately belong to a different, still-live wait on the same run. A hold
+  // only ever deletes its own row.
+  //
+  // The boolean is the sweeper's ACK, and it is only ever `true` for a delete that
+  // actually committed — a throw returns `false` and the park keeps its
+  // `hold_notification = 'live'` obligation for the next sweep. "Matched no row" is
+  // still `true`: the obligation is discharged either way, and the delete is
+  // idempotent by construction.
+  async onClearRecommendationHold({ runId, parkId }) {
+    try {
+      await import("@/lib/notifications-host");
+      const { readAgentRunById } = await import("@cinatra-ai/agents");
+      const run = await readAgentRunById(runId);
+      const userId = run?.runBy;
+      // The row is addressed by (user, key, park). Without the initiator there is
+      // no address — and no row either: the enter writes only for a resolvable
+      // initiator, so a park marked `live` always had one. An unreadable run here
+      // is a purged run, and retrying forever would never find it, so the
+      // obligation is retired rather than left to spin.
+      if (!userId) return true;
+      const { deleteHoldNotificationForUser } = await import(
+        "@cinatra-ai/notifications/server"
+      );
+      return deleteHoldNotificationForUser({
+        userId,
+        dedupeKey: runAwaitingHumanDedupeKey(runId),
+        holdParkId: parkId,
+      });
+    } catch (err) {
+      console.warn(
+        "[run-awaiting-human] could not clear recommendation-hold notification:",
+        err instanceof Error ? err.message : err,
+      );
+      return false;
     }
   },
 

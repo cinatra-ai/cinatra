@@ -416,6 +416,45 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     // COMPILED MANIFEST — agent_templates.lifecycle_config (JSON-as-text).
     // -----------------------------------------------------------------------
     { text: `ALTER TABLE "${q}"."agent_templates" ADD COLUMN IF NOT EXISTS lifecycle_config text` },
+
+    // -----------------------------------------------------------------------
+    // HOLD-NOTIFICATION STATE (cinatra#2835) — additive ALTER on the continuation
+    // park created above. Migration twin: core__0094.
+    //
+    // A run-start recommendation hold mints a durable "needs your input"
+    // notification, and that row must be gone the moment the park stops being
+    // `parked`. The notification lives in `notifications`, written through the
+    // host's own connection, so the delete cannot ride the park's status CAS
+    // transaction. This column carries the OBLIGATION instead: the enter sets it
+    // to 'live' in the same transaction as the INSERT (so it never claims a row
+    // that was not written), the CAS leaves it alone, and the sweeper retires it
+    // to 'cleared' only after an awaited, successful delete. "Park no longer
+    // parked AND hold_notification = 'live'" is therefore a durable, retryable
+    // clear obligation — a process that dies mid-clear leaves work for the next
+    // sweep instead of a permanently stale bell.
+    // -----------------------------------------------------------------------
+    {
+      text: `ALTER TABLE "${q}"."lifecycle_continuation_park"
+  ADD COLUMN IF NOT EXISTS hold_notification text NOT NULL DEFAULT 'none'`,
+    },
+    // The value domain, asserted at the boundary like the table's other unions
+    // (checkpoint / status / protected_effect). Guarded so the bootstrap stays
+    // idempotent — ADD CONSTRAINT has no IF NOT EXISTS.
+    {
+      text: `DO $$ BEGIN
+  ALTER TABLE "${q}"."lifecycle_continuation_park"
+    ADD CONSTRAINT lifecycle_continuation_park_hold_notification_chk
+    CHECK (hold_notification IN ('none','live','cleared'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`,
+    },
+    // PARTIAL: only the parks that currently owe a clear are indexed, so the
+    // sweeper's drain never scans the append-only park table.
+    {
+      text: `CREATE INDEX IF NOT EXISTS lifecycle_continuation_park_hold_notify_idx
+  ON "${q}"."lifecycle_continuation_park" (hold_notification, status)
+  WHERE hold_notification = 'live'`,
+    },
   ];
 }
 

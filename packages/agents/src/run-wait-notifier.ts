@@ -108,6 +108,37 @@ export interface RunWaitNotifier {
     runId: string;
     reviewTaskId: string;
   }): void | Promise<void>;
+  /**
+   * cinatra#2835 — a run-start recommendation HOLD parked a run. Distinct from
+   * `onEnterHumanWait` (which rides a status transition) because a hold moves no
+   * status at all, and distinct in its WRITE CONTRACT: the implementation must
+   * write the row behind `buildHoldNotificationFence`, in ONE transaction with
+   * the park row it names, so the write is impossible for a park that does not
+   * exist, does not belong to this run, or is no longer `parked`.
+   *
+   * OPTIONAL only for structural back-compat with existing notifier doubles; the
+   * production host always wires it. A host that does not is not "best-effort
+   * degraded" — it simply never notifies for holds, which is the safe direction.
+   */
+  onEnterRecommendationHold?(input: {
+    runId: string;
+    parkId: string;
+  }): void | Promise<void>;
+  /**
+   * cinatra#2835 — the hold ended: hard-delete the row `onEnterRecommendationHold`
+   * wrote for THIS park (scoped by the park id the row carries, so a later,
+   * unrelated awaiting-human row for the same run is never collateral).
+   *
+   * Returns whether the delete is COMMITTED. That answer is the sweeper's ack
+   * signal: only a `true` retires the park's `hold_notification = 'live'`
+   * obligation, so a swallowed failure, a dead process, or an unwired notifier all
+   * leave the obligation standing for the next sweep to retry (finding 3). An
+   * implementation must therefore never report `true` optimistically.
+   */
+  onClearRecommendationHold?(input: {
+    runId: string;
+    parkId: string;
+  }): boolean | Promise<boolean>;
 }
 
 // Module singleton behind a global symbol slot (same idiom as
@@ -239,136 +270,195 @@ export async function dispatchRunWaitTransition(args: {
 export const RECOMMENDATION_HOLD_CHECKPOINT = "recommendation" as const;
 
 /**
- * The HOLD a human-wait notification is bound to: the continuation park row that
- * makes the run actually wait. Structurally a `ParkRow` (the park store's row
- * type is assignable to this), so the only way to obtain one is to have READ a
- * park — this seam cannot be driven by a caller that has no hold in hand.
+ * The park table the hold notification is fenced against, and the column that
+ * records whether a row was written for a hold. Declared HERE (a pure string, no
+ * runtime import) so the ONE place that composes the fence SQL — the host writer,
+ * which is the only module that can reach both this table and the notifications
+ * table on one connection — never hand-spells the identifiers.
  */
-export interface RunHoldBinding {
-  id: string;
-  runId: string;
-  checkpoint: string;
-  status: "parked" | "released" | "policy_unresolved";
+export const HOLD_PARK_TABLE = "lifecycle_continuation_park" as const;
+
+/**
+ * `lifecycle_continuation_park.hold_notification` — the DURABLE record of what a
+ * hold owes the notification feed. Three states, and the transitions between them
+ * are what make the clear retryable rather than best-effort:
+ *
+ *   `none`    — nothing was ever written for this park (no initiator to notify, a
+ *               non-recommendation checkpoint, a fence that refused). Nothing owed.
+ *   `live`    — a notification row EXISTS for this hold. Set in the SAME
+ *               transaction as the insert, so it can never claim a row that was
+ *               not written, and never miss one that was.
+ *   `cleared` — the row has been deleted. Set only AFTER an awaited, successful
+ *               delete, so the ack can never run ahead of the effect it acks.
+ *
+ * The invariant the sweeper enforces: a park that is no longer `parked` and is
+ * still `live` OWES a clear, and every subsequent sweep re-attempts it. A process
+ * that dies between the status CAS and the delete therefore leaves a retryable
+ * obligation, not a permanently stale bell (Codex convergence round 3, finding 3).
+ */
+export const HOLD_NOTIFICATION_NONE = "none" as const;
+export const HOLD_NOTIFICATION_LIVE = "live" as const;
+export const HOLD_NOTIFICATION_CLEARED = "cleared" as const;
+export type HoldNotificationState =
+  | typeof HOLD_NOTIFICATION_NONE
+  | typeof HOLD_NOTIFICATION_LIVE
+  | typeof HOLD_NOTIFICATION_CLEARED;
+
+/**
+ * A single SQL statement, in the shape every host query runner in this codebase
+ * takes. Declared locally so this leaf keeps its zero-runtime-imports property.
+ */
+export interface HoldFenceStatement {
+  text: string;
+  values: unknown[];
 }
 
 /**
- * cinatra#2835 — drive the wired notifier for a human wait that is NOT a status
- * TRANSITION.
+ * The TRANSACTIONAL FENCE a hold notification must be written behind
+ * (cinatra#2835, Codex convergence round 3, findings 1 + 2).
+ *
+ * `guard` is a `SELECT … FOR UPDATE` that yields ONE row while — and only while —
+ * the named park exists, belongs to the named run, is a recommendation hold, and
+ * is still `parked`. `mark` records the write on that same row. The host runs
+ * BOTH in ONE transaction on ONE connection, with the notification INSERT
+ * sandwiched between them and fed FROM the guard, so:
+ *
+ *   - the insert is a `SELECT`-driven insert over the guard's rows: an invented
+ *     park id yields zero rows and therefore writes NOTHING. The fabrication
+ *     boundary is the DATABASE, not a structural TypeScript shape a cast can
+ *     satisfy (finding 2). This seam's own arguments are two opaque ids; there is
+ *     no longer any claim that holding a value proves anything.
+ *   - `FOR UPDATE` takes the park's row lock, which is the SAME lock `sweepParks`'
+ *     `status = 'parked'` CAS must take. The two therefore SERIALIZE on the park
+ *     row: either the enter commits first and the sweep's CAS then sees a
+ *     still-`parked` row, transitions it, and goes on to clear what we wrote — or
+ *     the sweep commits first and our guard, re-evaluated against the new row
+ *     version under READ COMMITTED, matches nothing and writes nothing. A clear
+ *     can no longer land BETWEEN a liveness check and the write it was checking
+ *     for, because there is no gap left to land in (finding 1).
+ *
+ * PURE — string building only. Callers pass the resolved schema name; the
+ * placeholders start at `$1` and are independent of the notification insert's own
+ * (each statement runs as its own query inside the shared transaction).
+ */
+export function buildHoldNotificationFence(input: {
+  schema: string;
+  parkId: string;
+  runId: string;
+}): { guard: HoldFenceStatement; mark: HoldFenceStatement } {
+  const table = `"${input.schema.replaceAll('"', '""')}"."${HOLD_PARK_TABLE}"`;
+  const match = `id = $1 AND run_id = $2 AND checkpoint = $3 AND status = 'parked'`;
+  const values = [input.parkId, input.runId, RECOMMENDATION_HOLD_CHECKPOINT];
+  return {
+    // LIMIT 1 is belt-and-braces (`id` is the primary key): it makes "at most one
+    // row feeds the insert" true by construction rather than by key knowledge.
+    guard: { text: `SELECT id FROM ${table} WHERE ${match} LIMIT 1 FOR UPDATE`, values },
+    // Same predicate as the guard, so a fence that refused the insert cannot mark
+    // a park `live` — the two statements agree about what they are looking at.
+    mark: {
+      text: `UPDATE ${table} SET hold_notification = '${HOLD_NOTIFICATION_LIVE}' WHERE ${match}`,
+      values,
+    },
+  };
+}
+
+/**
+ * cinatra#2835 — drive the wired notifier for a run-start recommendation HOLD.
  *
  * `dispatchRunWaitTransition` above is driven by `transitionRunStatus`, so it can
- * only fire for a wait a run ENTERS by changing status. The run-start
- * recommendation HOLD is a human wait that does not: the run is ALREADY
- * `pending_input` (it was created that way and is simply never dispatched), and
- * the hold parks it on a continuation park instead of moving the status column —
- * so there is no transition to ride and the classifier never sees the wait. This
- * is the seam that path calls directly, with the SAME `onEnterHumanWait`
- * contract (per-run dedupeKey, so a re-hold of the same run collapses onto one
- * row) and the SAME best-effort posture: a thrown port is swallowed, because a
- * notification can never be allowed to fail a hold that is already parked.
+ * only fire for a wait a run ENTERS by changing status. The recommendation HOLD is
+ * a human wait that does not: the run is ALREADY `pending_input` (it was created
+ * that way and is simply never dispatched), and the hold parks it on a
+ * continuation park instead of moving the status column — so there is no
+ * transition to ride and the classifier never sees the wait. This is the seam that
+ * path calls directly.
  *
- * `waitKind` is passed through so the hold is presented as the INPUT wait it is
- * (the #2729 ruling: "needs your input", linking back to the conversation the run
- * was started in) — the host cannot derive that here, since a held run carries no
- * HITL interrupt to classify.
+ * TWO OPAQUE IDS, AND THE DATABASE DECIDES (Codex convergence round 3, findings
+ * 1 + 2). This seam used to take a `RunHoldBinding` — a structural park shape —
+ * and validate it here, in TypeScript, against caller-supplied fields. That guard
+ * proved nothing at runtime: a cast satisfied it, and even an HONEST caller could
+ * only assert what was true when it read the park, not what is true when the row
+ * is written. Both defects had the same root cause — the check and the write were
+ * in different places, with a window between them.
  *
- * BOUND TO THE HOLD (Codex convergence round 2, finding 2). Every other notifying
- * seam in this file is bound to a durable fact the caller cannot invent: a status
- * TRANSITION for `dispatchRunWaitTransition`, a (run, reviewTaskId) gate for the
- * auto-gate pair. This one had no such binding — it forwarded a caller-supplied
- * {runId, reason, waitKind} unconditionally, so ANY code path could mint a "needs
- * your input" row against ANY `pending_input` run and no hold behind it, leaving a
- * bell pointing at a card that does not exist and (a hold moving no run status) no
- * transition to ever clear it. It now REFUSES unless it is handed the live
- * recommendation park that IS the wait:
+ * So the check MOVED INTO THE WRITE. This function forwards a run id and a park
+ * id and asserts nothing about either; the host writes the row behind
+ * `buildHoldNotificationFence`, which locks the park and feeds the INSERT from it
+ * inside ONE transaction. A park id that names no row (or the wrong run, or a
+ * checkpoint that is not a hold, or a park that already left `parked`) yields no
+ * guard row and therefore no notification — including for a caller that invented
+ * the id outright. There is nothing left here for a cast to defeat, and nothing
+ * left for a concurrent sweep to slip between.
  *
- *   - no `hold` → not expressible: the argument is required;
- *   - a hold on another checkpoint (an auto-gate `review` park) → refused; that
- *     wait notifies through `onAutoGateOpen`, and a second row would double-ring;
- *   - a hold naming another run → refused (the notification is per-run keyed, so a
- *     mismatched pair would clear under a key nothing wrote);
- *   - a hold that is not `parked` → refused: a released / TTL-fail-closed park is
- *     a wait that is already OVER, and minting for it is exactly the stale row
- *     this issue exists to prevent.
+ * The host also records the write on the park row (`hold_notification = 'live'`,
+ * same transaction), which is what makes the matching clear RETRYABLE — see
+ * `dispatchRecommendationHoldCleared`.
  *
- * The refusal is silent-but-logged rather than a throw, matching the seam's
- * best-effort posture: a notification must never fail a hold, and refusing to
- * write a fabricated row is strictly safer than writing one. The park's LIVENESS
- * is re-read from the database by the caller that owns DB access
- * (`maybeHoldRunForRecommendation`) — this module is a true leaf and cannot query,
- * so the structural guard here and the DB read there are two halves of one bind.
+ * Best-effort in the same sense as every other emitter here: a thrown port is
+ * swallowed, because a notification must never fail a hold that is already parked.
  */
-export async function dispatchRunHumanWaitEntered(input: {
+export async function dispatchRecommendationHoldEntered(input: {
   runId: string;
-  reason: RunHumanWaitReason;
-  waitKind?: RunWaitInterruptKind;
-  /** The LIVE recommendation park that makes this run wait. Required. */
-  hold: RunHoldBinding;
+  parkId: string;
 }): Promise<void> {
-  const refusal = describeHoldRefusal(input.runId, input.hold);
-  if (refusal) {
-    console.warn(`[run-wait-notifier] refusing to notify a human wait with no live hold: ${refusal}`);
-    return;
-  }
   const notifier = notifierHolder().notifier;
-  if (!notifier) return;
+  if (!notifier?.onEnterRecommendationHold) return;
   try {
-    await notifier.onEnterHumanWait({
+    await notifier.onEnterRecommendationHold({
       runId: input.runId,
-      reason: input.reason,
-      waitKind: input.waitKind,
+      parkId: input.parkId,
     });
   } catch (err) {
     console.warn(
-      "[run-wait-notifier] human-wait enter side-effect failed:",
+      "[run-wait-notifier] recommendation-hold enter side-effect failed:",
       err instanceof Error ? err.message : err,
     );
   }
-}
-
-/** Why this (run, hold) pair may NOT mint a human-wait notification, or null when
- * it may. Pure — the caller supplies the row it read. */
-function describeHoldRefusal(runId: string, hold: RunHoldBinding | undefined | null): string | null {
-  if (!hold) return `run ${runId} was given no hold`;
-  if (hold.checkpoint !== RECOMMENDATION_HOLD_CHECKPOINT) {
-    return `park ${hold.id} is a '${hold.checkpoint}' checkpoint, not a recommendation hold`;
-  }
-  if (hold.runId !== runId) return `park ${hold.id} belongs to run ${hold.runId}, not ${runId}`;
-  if (hold.status !== "parked") return `park ${hold.id} is already ${hold.status} — the wait is over`;
-  return null;
 }
 
 /**
- * cinatra#2835 — the counterpart clear for a non-transition human wait: the wait
- * ENDED without the run's status necessarily moving.
+ * cinatra#2835 — the hold ENDED: delete the row its enter wrote.
  *
- * A recommendation hold that is CONFIRMED or SKIPPED goes on to dispatch, and
- * that `pending_input → queued` transition already clears the row through
- * `dispatchRunWaitTransition`. But a hold can also simply be RELEASED with no
- * dispatch behind it (the TTL sweeper's fail-close; a decision whose dispatch is
- * refused downstream), and that run stays `pending_input` — no transition, so
- * nothing would ever clear the row and the bell would keep pointing at a card the
- * human can no longer act on. A park leaving `parked` is therefore itself a clear.
- *
- * The ONE caller is `sweepParks` (lifecycle-continuation-park-store), the single
- * primitive through which a park transitions out of `parked` — so EVERY release
- * path inherits the clear rather than only the one helper that used to wire it
+ * A hold that is CONFIRMED or SKIPPED goes on to dispatch, and that
+ * `pending_input → queued` transition also clears through
+ * `dispatchRunWaitTransition`. But a hold can equally be RELEASED with no dispatch
+ * behind it (the TTL sweeper's fail-close; a decision whose dispatch is refused
+ * downstream), and that run stays `pending_input` — no transition, so nothing else
+ * would ever clear the row. A park leaving `parked` is therefore itself a clear,
+ * and `sweepParks` — the ONE primitive a park transitions through — drives it
  * (Codex convergence round 2, finding 1).
  *
- * Idempotent by construction (the host's clear is a delete-by-dedupeKey), so
- * firing here AND on a subsequent dispatch transition is a harmless double-no-op.
+ * RETURNS THE ACK (Codex convergence round 3, finding 3). The clear cannot ride
+ * the park CAS's own transaction: the notification row is written through the
+ * host's separate connection, so "committed transition ⇒ committed delete" is not
+ * available to us. What IS available is "committed transition ⇒ committed
+ * OBLIGATION": the park carries `hold_notification = 'live'` from the enter, the
+ * CAS leaves it there, and the sweeper retires it only on a `true` from here.
+ * Anything else — a throwing port, a dead process, a host that wired no clear —
+ * leaves the park terminal-and-`live`, which every later sweep re-drains. The
+ * delete is idempotent, so over-retrying costs nothing and under-retrying is the
+ * only failure that matters.
+ *
+ * A missing notifier returns `false` DELIBERATELY: it means we did not clear, and
+ * claiming otherwise would retire an obligation nothing has discharged.
  */
-export async function dispatchRunHumanWaitLeft(input: {
+export async function dispatchRecommendationHoldCleared(input: {
   runId: string;
-}): Promise<void> {
+  parkId: string;
+}): Promise<boolean> {
   const notifier = notifierHolder().notifier;
-  if (!notifier) return;
+  if (!notifier?.onClearRecommendationHold) return false;
   try {
-    await notifier.onLeaveHumanWait({ runId: input.runId });
+    return await notifier.onClearRecommendationHold({
+      runId: input.runId,
+      parkId: input.parkId,
+    });
   } catch (err) {
     console.warn(
-      "[run-wait-notifier] human-wait leave side-effect failed:",
+      "[run-wait-notifier] recommendation-hold clear side-effect failed:",
       err instanceof Error ? err.message : err,
     );
+    return false;
   }
 }
 

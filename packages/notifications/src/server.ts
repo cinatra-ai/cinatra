@@ -36,8 +36,12 @@ export {
   markNotificationUnreadForUser,
   markNotificationsReadByHrefPrefixForUser,
   deleteNotificationsByDedupeKeyForUser,
+  // cinatra#2835 — the hold-scoped clear: same key, but additionally pinned to the
+  // park id the row carries, so a hold can only ever delete its OWN row.
+  deleteHoldNotificationForUser,
 } from "./service";
 export type { CreateNotificationOptions } from "./service";
+export type { NotificationWriteFence, NotificationWriteStatement } from "./service";
 export type { AgentCreationProgressMilestone } from "./service";
 export type { NotificationsKeysetBefore } from "./service";
 

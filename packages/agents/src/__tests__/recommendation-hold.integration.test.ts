@@ -22,7 +22,12 @@ import { Client } from "pg";
 import { evaluatePolicy } from "@/lib/lifecycle/lifecycle-policy";
 import { evaluateThenPark, type EvaluateThenParkOutcome } from "@/lib/lifecycle/lifecycle-continuation";
 
-import { setRunWaitNotifier, type RunWaitNotifier } from "../run-wait-notifier";
+import {
+  buildHoldNotificationFence,
+  dispatchRecommendationHoldEntered,
+  setRunWaitNotifier,
+  type RunWaitNotifier,
+} from "../run-wait-notifier";
 
 const TEST_SCHEMA = "cinatra_test_recommendation_hold_2067";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -391,108 +396,440 @@ describe.skipIf(!HAS_DB)("cinatra#2148 — recommendation-hold consistency (real
 });
 
 /**
- * cinatra#2835, Codex convergence round 2 finding 1 — the "needs your input" row a
- * hold mints is cleared by the RELEASE PRIMITIVE, so every release path clears it.
+ * cinatra#2835 — the hold notification, against the REAL park table, the REAL
+ * notifications table, the REAL sweeper and the REAL host writer.
  *
- * The clear was originally wired into `releaseRecommendationParkForRun`, after
- * that helper's own `sweepParks` call. That covered exactly one caller. Every
- * other way a park leaves `parked` bypassed it — above all `sweepParks`' own TTL
- * fail-close, whose production driver is the gate-maintenance drain
- * (`releaseResolvedAutoGateParks`), which sweeps EVERY due park including a held
- * run's. And because a hold moves no run status, there is no
- * `dispatchRunWaitTransition` behind it either: nothing else in the system would
- * ever have cleared that row. The bell would point forever at a card the human can
- * no longer act on.
+ * Two convergence rounds were lost here to the same mistake, so it is worth
+ * naming: every claim this feature makes is about ORDERING between two writers,
+ * and ordering is exactly what a mocked store cannot have. Round 1 wired the
+ * clear into one helper and asserted it with a mocked `sweepParks`; round 2 moved
+ * the clear to the primitive and asserted the ENTER's safety with a re-read that
+ * a mock could never race. Both passed. Both were wrong.
  *
- * These cases exercise the REAL primitive against the REAL table — no mocked
- * `sweepParks`, which is precisely what let the gap survive the unit tier.
+ * So these cases hold nothing back to a double. The notifier is the production
+ * `runWaitNotifier`, which writes through the real notifications service into the
+ * real `notifications` table; the park transitions run through the real
+ * `sweepParks`; and where a race is the claim, two genuine Postgres sessions
+ * contend for the row and the test asserts what the SECOND one sees.
+ *
+ * Round 3 findings covered here:
+ *   1  TOCTOU — an enter can no longer land after the sweep that would have
+ *      cleared it, in either direction of the race.
+ *   2  FABRICATION — the exported dispatcher, called with any ids a caller likes,
+ *      writes nothing unless the park backs them. The refusal is the database's.
+ *   3  AT-MOST-ONCE CLEAR — a clear that does not commit leaves a retryable
+ *      obligation on the park, and a later sweep discharges it.
  */
-describe.skipIf(!HAS_DB)("cinatra#2835 — every release path clears the hold notification (real primitive)", () => {
-  const left: string[] = [];
+describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real database", () => {
+  const USER = "user-2835";
 
-  beforeEach(() => {
-    left.length = 0;
-    setRunWaitNotifier({
-      onEnterHumanWait: () => {},
-      onLeaveHumanWait: (input) => {
-        left.push(input.runId);
-      },
-    } satisfies RunWaitNotifier);
+  beforeEach(async () => {
+    // The PRODUCTION host writer, not a recording double.
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier(hostNotifier.runWaitNotifier satisfies RunWaitNotifier);
   });
 
   // Never leak the wired notifier into another test file's module singleton.
   afterEach(() => setRunWaitNotifier(null));
 
-  /** Backdate a park's TTL so the sweeper's due-pass picks it up. */
-  async function expire(parkId: string) {
+  async function withClient<T>(fn: (c: Client) => Promise<T>): Promise<T> {
     const c = new Client({ connectionString: DB_URL });
     await c.connect();
-    await c.query(
-      `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
-         SET ttl_expires_at = now() - interval '1 minute' WHERE id = $1`,
-      [parkId],
-    );
-    await c.end();
+    try {
+      return await fn(c);
+    } finally {
+      await c.end().catch(() => {});
+    }
   }
 
-  it("TTL FAIL-CLOSE clears the row — the path that had no clear at all", async () => {
-    const runId = `run-2835-ttl-${randomUUID()}`;
+  /** A run the host writer can address a notification to (it reads `run_by`). */
+  async function seedRun(runId: string) {
+    await withClient((c) =>
+      c.query(
+        `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs"
+           (id, template_id, org_id, status, input_params, human_present, run_by)
+         VALUES ($1, $2, 'org-2835', 'pending_input', '{}', true, $3)
+         ON CONFLICT (id) DO NOTHING`,
+        [runId, `tpl-${randomUUID()}`, USER],
+      ),
+    );
+  }
+
+  /** Every awaiting-human row this run currently owns, park id included. */
+  async function notificationRows(runId: string) {
+    return withClient(async (c) => {
+      const { rows } = await c.query(
+        `SELECT id, user_id, title, href,
+                metadata -> 'runAwaitingHuman' ->> 'holdParkId' AS hold_park_id
+           FROM "${q(TEST_SCHEMA)}"."notifications"
+          WHERE dedupe_key = $1`,
+        [`run-awaiting-human:${runId}`],
+      );
+      return rows as Array<Record<string, string | null>>;
+    });
+  }
+
+  /** The park's status and what it owes the feed, read together. */
+  async function parkState(parkId: string) {
+    return withClient(async (c) => {
+      const { rows } = await c.query(
+        `SELECT status, hold_notification FROM "${q(TEST_SCHEMA)}"."lifecycle_continuation_park" WHERE id = $1`,
+        [parkId],
+      );
+      return rows[0] as { status: string; hold_notification: string } | undefined;
+    });
+  }
+
+  /** Park a fresh run and notify for it exactly as the run-start hold does. */
+  async function heldRun() {
+    const runId = `run-2835-${randomUUID()}`;
+    await seedRun(runId);
     const parked = await parkRecommendation(runId);
     expect(parked.parked).toBe(true);
-    if (!parked.parked) return;
-    await expire(parked.parkId);
+    if (!parked.parked) throw new Error("unreachable: park failed");
+    await dispatchRecommendationHoldEntered({ runId, parkId: parked.parkId });
+    return { runId, parkId: parked.parkId };
+  }
 
-    // The sweeper's OWN due-park pass: no release ids, no hold helper, no run
-    // status transition anywhere. Nothing but the primitive.
-    const swept = await parkStore.sweepParks();
-    expect(swept.blocked).toBeGreaterThanOrEqual(1);
-    expect((await hold.readRecommendationParkForRun(runId))?.status).toBe("policy_unresolved");
+  // -------------------------------------------------------------------------
+  // The enter, fenced.
+  // -------------------------------------------------------------------------
 
-    // The wait is over, so the notification is gone.
-    expect(left).toContain(runId);
+  it("a LIVE hold: the row lands, carries its park id, and the park records the obligation", async () => {
+    const { runId, parkId } = await heldRun();
+
+    const rows = await notificationRows(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].user_id).toBe(USER);
+    // The park id is stamped on the row, which is what lets the clear name its
+    // OWN row rather than whatever currently holds this run's per-run key.
+    expect(rows[0].hold_park_id).toBe(parkId);
+    // Written in the SAME transaction as the insert: the obligation cannot claim
+    // a row that was not written, nor miss one that was.
+    expect(await parkState(parkId)).toMatchObject({
+      status: "parked",
+      hold_notification: "live",
+    });
   });
 
-  it("a DIRECT sweepParks release clears — a caller that never touches the hold helper", async () => {
-    const runId = `run-2835-direct-${randomUUID()}`;
+  // -------------------------------------------------------------------------
+  // Finding 2 — fabrication, refused by the database.
+  // -------------------------------------------------------------------------
+
+  it("FABRICATION: an invented park id writes NOTHING — a cast cannot buy a notification", async () => {
+    const victim = `run-2835-victim-${randomUUID()}`;
+    await seedRun(victim);
+
+    // Exactly what the round-2 seam could be made to accept: the caller asserts a
+    // live hold that does not exist. The cast is the point — it reproduces what
+    // arbitrary caller code can do at runtime once the seam is exported. It is now
+    // powerless, because the assertion is no longer made in TypeScript.
+    await dispatchRecommendationHoldEntered({
+      runId: victim,
+      parkId: `park-invented-${randomUUID()}`,
+    } as Parameters<typeof dispatchRecommendationHoldEntered>[0]);
+
+    expect(await notificationRows(victim)).toHaveLength(0);
+  });
+
+  it("FABRICATION: a REAL park that is not this run's hold writes nothing either", async () => {
+    const victim = `run-2835-victim2-${randomUUID()}`;
+    await seedRun(victim);
+
+    // (a) Someone else's live recommendation hold. The park is real and parked —
+    // only the pairing is a lie, and the guard matches on run_id too.
+    const other = await heldRun();
+    await dispatchRecommendationHoldEntered({
+      runId: victim,
+      parkId: other.parkId,
+    });
+    expect(await notificationRows(victim)).toHaveLength(0);
+
+    // (b) This run's own park, but a `review` (auto-gate) one. That wait notifies
+    // through the auto-gate pair; a second row here would double-ring it under a
+    // key the gate's resolve never clears.
+    const reviewOutcome: EvaluateThenParkOutcome = {
+      kind: "park",
+      checkpoint: "review",
+      protectedEffect: "external_publish",
+      reevaluationIntent: false,
+      reason: "test review park",
+    };
+    const review = await parkStore.maybeParkCheckpoint(reviewOutcome, {
+      runId: victim,
+      eventId: `evt-review-${randomUUID()}`,
+    });
+    expect(review.parked).toBe(true);
+    if (!review.parked) return;
+    await dispatchRecommendationHoldEntered({
+      runId: victim,
+      parkId: review.parkId,
+    });
+    expect(await notificationRows(victim)).toHaveLength(0);
+    // ...and the review park is untouched: nothing marked it as owing a clear.
+    expect(await parkState(review.parkId)).toMatchObject({ hold_notification: "none" });
+  });
+
+  // -------------------------------------------------------------------------
+  // Finding 1 — the TOCTOU, in both directions.
+  // -------------------------------------------------------------------------
+
+  it("TOCTOU (sweep first): a hold whose park ALREADY went terminal mints nothing", async () => {
+    // The exact sequence the finding names: the park transitions, the sweep's
+    // clear runs, and only THEN does the enter reach the write. Under the round-2
+    // shape this recreated the row after its one clearing transition had passed —
+    // permanently stale, because a park cannot transition twice.
+    const runId = `run-2835-late-${randomUUID()}`;
+    await seedRun(runId);
     const parked = await parkRecommendation(runId);
-    expect(parked.parked).toBe(true);
     if (!parked.parked) return;
 
     const swept = await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
     expect(swept.released).toBe(1);
-    expect((await hold.readRecommendationParkForRun(runId))?.status).toBe("released");
-    expect(left).toEqual([runId]);
+
+    await dispatchRecommendationHoldEntered({ runId, parkId: parked.parkId });
+
+    expect(await notificationRows(runId)).toHaveLength(0);
+    expect(await parkState(parked.parkId)).toMatchObject({
+      status: "released",
+      hold_notification: "none",
+    });
   });
 
-  it("the hold helper's release clears too — it INHERITS the primitive, it does not wire its own", async () => {
-    const runId = `run-2835-helper-${randomUUID()}`;
-    await parkRecommendation(runId);
-    expect(await hold.releaseRecommendationParkForRun(runId)).toBe(true);
-    expect(left).toEqual([runId]);
-  });
-
-  it("clears EXACTLY ONCE per hold — a re-sweep that transitions nothing clears nothing", async () => {
-    const runId = `run-2835-once-${randomUUID()}`;
+  it("TOCTOU (enter first): the enter's row LOCK makes the sweeper's CAS wait for it", async () => {
+    // The claim under test is not "the code checks something" — it is that two
+    // Postgres sessions cannot both proceed. So this drives two real sessions and
+    // asserts the second one BLOCKS.
+    const runId = `run-2835-lock-${randomUUID()}`;
+    await seedRun(runId);
     const parked = await parkRecommendation(runId);
     if (!parked.parked) return;
 
-    await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
-    expect(left).toEqual([runId]);
+    const fence = buildHoldNotificationFence({
+      schema: TEST_SCHEMA,
+      parkId: parked.parkId,
+      runId,
+    });
 
-    // The status='parked' CAS matches 0 rows the second time, so the already-
-    // released park is not re-reported and the clear does not re-fire.
-    const again = await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
-    expect(again.released).toBe(0);
-    expect(left).toEqual([runId]);
+    const enter = new Client({ connectionString: DB_URL });
+    const sweeper = new Client({ connectionString: DB_URL });
+    await enter.connect();
+    await sweeper.connect();
+    try {
+      // The enter opens its transaction and takes the park's row lock, exactly as
+      // the fenced INSERT does.
+      await enter.query("BEGIN");
+      const guarded = await enter.query(fence.guard.text, fence.guard.values);
+      expect(guarded.rowCount).toBe(1);
+
+      // The sweeper's own CAS, verbatim. It must not be able to transition the
+      // park while the enter is mid-write.
+      let casSettled = false;
+      const cas = sweeper
+        .query(
+          `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+              SET status = 'released', resolved_at = now()
+            WHERE id = $1 AND status = 'parked'`,
+          [parked.parkId],
+        )
+        .then((r) => {
+          casSettled = true;
+          return r;
+        });
+
+      // Bounded wait: if the lock did NOT hold, the CAS would have completed here.
+      await new Promise((r) => setTimeout(r, 400));
+      expect(casSettled).toBe(false);
+
+      await enter.query("COMMIT");
+      const casResult = await cas;
+      expect(casSettled).toBe(true);
+      // The CAS still finds a `parked` row (the enter changed no status), so the
+      // transition happens AFTER the write — which is the ordering that lets the
+      // clear see the row it must delete.
+      expect(casResult.rowCount).toBe(1);
+    } finally {
+      await enter.query("ROLLBACK").catch(() => {});
+      await enter.end().catch(() => {});
+      await sweeper.end().catch(() => {});
+    }
   });
 
-  it("a NON-hold park leaving `parked` clears NOTHING — an auto-gate park notifies elsewhere", async () => {
-    // A `review` park is the auto-gate machinery's, and its notification is the
-    // (run, reviewTaskId)-keyed auto-gate row that `dispatchAutoGateResolved`
-    // clears on the gate's own decision. Clearing the human-wait row here would
-    // fire on a park release that is not the gate's resolution, under a key
-    // nothing wrote.
-    const runId = `run-2835-review-park-${randomUUID()}`;
+  it("TOCTOU (sweep first, contended): a guard that waits on the CAS then matches NOTHING", async () => {
+    // The other side of the same lock. The enter's guard arrives while a sweep's
+    // CAS is uncommitted, blocks on its lock, and — under READ COMMITTED — is
+    // re-evaluated against the row version the CAS committed. It must find no row,
+    // which is what makes "the wait is already over" impossible to miss.
+    const runId = `run-2835-recheck-${randomUUID()}`;
+    await seedRun(runId);
+    const parked = await parkRecommendation(runId);
+    if (!parked.parked) return;
+
+    const fence = buildHoldNotificationFence({
+      schema: TEST_SCHEMA,
+      parkId: parked.parkId,
+      runId,
+    });
+
+    const sweeper = new Client({ connectionString: DB_URL });
+    const enter = new Client({ connectionString: DB_URL });
+    await sweeper.connect();
+    await enter.connect();
+    try {
+      await sweeper.query("BEGIN");
+      await sweeper.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+            SET status = 'policy_unresolved', resolved_at = now()
+          WHERE id = $1 AND status = 'parked'`,
+        [parked.parkId],
+      );
+
+      let guardSettled = false;
+      const guard = enter.query(fence.guard.text, fence.guard.values).then((r) => {
+        guardSettled = true;
+        return r;
+      });
+      await new Promise((r) => setTimeout(r, 400));
+      expect(guardSettled).toBe(false); // waiting on the sweeper's lock
+
+      await sweeper.query("COMMIT");
+      const guarded = await guard;
+      // ZERO rows: the re-check saw `policy_unresolved`. The insert this guard
+      // feeds therefore inserts nothing, with no code in between to get it wrong.
+      expect(guarded.rowCount).toBe(0);
+    } finally {
+      await sweeper.query("ROLLBACK").catch(() => {});
+      await sweeper.end().catch(() => {});
+      await enter.end().catch(() => {});
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Finding 3 — the clear is an obligation, and obligations survive failure.
+  // -------------------------------------------------------------------------
+
+  it("the transition and the clear are ONE observable state: terminal park ⇒ no row", async () => {
+    const { runId, parkId } = await heldRun();
+    expect(await notificationRows(runId)).toHaveLength(1);
+
+    const swept = await parkStore.sweepParks({ releasedParkIds: [parkId] });
+    expect(swept.released).toBe(1);
+    expect(swept.holdNotificationsCleared).toBe(1);
+
+    // Read the invariant in ONE DB state, not as two separate happenings.
+    const [state, rows] = await Promise.all([parkState(parkId), notificationRows(runId)]);
+    expect(state).toMatchObject({ status: "released", hold_notification: "cleared" });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("TTL FAIL-CLOSE clears too — the arm with no decision and no helper behind it", async () => {
+    const { runId, parkId } = await heldRun();
+    await withClient((c) =>
+      c.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+            SET ttl_expires_at = now() - interval '1 minute' WHERE id = $1`,
+        [parkId],
+      ),
+    );
+
+    const swept = await parkStore.sweepParks();
+    expect(swept.blocked).toBeGreaterThanOrEqual(1);
+    expect(await parkState(parkId)).toMatchObject({
+      status: "policy_unresolved",
+      hold_notification: "cleared",
+    });
+    expect(await notificationRows(runId)).toHaveLength(0);
+  });
+
+  it("the hold helper's release clears too — it INHERITS the primitive", async () => {
+    const { runId, parkId } = await heldRun();
+    expect(await hold.releaseRecommendationParkForRun(runId)).toBe(true);
+    expect(await parkState(parkId)).toMatchObject({ hold_notification: "cleared" });
+    expect(await notificationRows(runId)).toHaveLength(0);
+  });
+
+  it("A CLEAR THAT DOES NOT COMMIT leaves the obligation — and the NEXT sweep discharges it", async () => {
+    // This is the round-3 finding stated as a test: under the old shape the clear
+    // was dispatched after the CAS and its failure was swallowed, so a notifier
+    // outage (or a process that died right here) stranded the row forever — the
+    // park was already terminal, and a terminal park can never be re-returned by a
+    // later CAS. Nothing in the system would have looked at it again.
+    const { runId, parkId } = await heldRun();
+
+    // The notifier is down for this pass. The park still transitions — a
+    // notification must never fail a sweep — but nothing is acked.
+    setRunWaitNotifier({
+      onEnterHumanWait: () => {},
+      onLeaveHumanWait: () => {},
+      onClearRecommendationHold: () => {
+        throw new Error("notifications down");
+      },
+    } satisfies RunWaitNotifier);
+
+    const first = await parkStore.sweepParks({ releasedParkIds: [parkId] });
+    expect(first.released).toBe(1);
+    expect(first.holdNotificationsCleared).toBe(0);
+    // Terminal park, row still standing — and, crucially, the obligation with it.
+    expect(await parkState(parkId)).toMatchObject({
+      status: "released",
+      hold_notification: "live",
+    });
+    expect(await notificationRows(runId)).toHaveLength(1);
+
+    // A later pass. It transitions NOTHING — the park is long terminal — and this
+    // is exactly the case the old shape could not express.
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier(hostNotifier.runWaitNotifier satisfies RunWaitNotifier);
+    const second = await parkStore.sweepParks();
+    expect(second.released).toBe(0);
+    expect(second.holdNotificationsCleared).toBeGreaterThanOrEqual(1);
+
+    expect(await notificationRows(runId)).toHaveLength(0);
+    expect(await parkState(parkId)).toMatchObject({ hold_notification: "cleared" });
+  });
+
+  it("the clear names its OWN row — a later, unrelated wait on the same run survives it", async () => {
+    // The dedupeKey is per-RUN, and a retried clear can arrive arbitrarily late.
+    // By then the key may legitimately belong to a different wait (a real approval
+    // gate the run reached afterwards), which this hold has no business deleting.
+    const { runId, parkId } = await heldRun();
+    await parkStore.sweepParks({ releasedParkIds: [parkId] });
+    expect(await notificationRows(runId)).toHaveLength(0);
+
+    // A DIFFERENT writer takes the same per-run key, carrying no hold park id.
+    await withClient((c) =>
+      c.query(
+        `INSERT INTO "${q(TEST_SCHEMA)}"."notifications"
+           (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, dedupe_key, metadata, created_at)
+         VALUES ($1, $2, 'user', $2, 'user', 'warning', 'A run is awaiting your approval', '', $3,
+                 jsonb_build_object('runAwaitingHuman', jsonb_build_object('runId', $4::text, 'reason', 'pending_approval')), now())`,
+        [randomUUID(), USER, `run-awaiting-human:${runId}`, runId],
+      ),
+    );
+
+    // Force the obligation back on, as a stuck retry would leave it, and sweep.
+    await withClient((c) =>
+      c.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+            SET hold_notification = 'live' WHERE id = $1`,
+        [parkId],
+      ),
+    );
+    await parkStore.sweepParks();
+
+    // The approval row is untouched: it carries no holdParkId, so no hold can
+    // address it.
+    const rows = await notificationRows(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].hold_park_id).toBeNull();
+    expect(rows[0].title).toContain("awaiting your approval");
+  });
+
+  it("a NON-hold park leaving `parked` clears NOTHING", async () => {
+    // A `review` park never enters through this seam, so it never owes a clear and
+    // the drain's checkpoint predicate never picks it up.
+    const runId = `run-2835-review-${randomUUID()}`;
+    await seedRun(runId);
     const reviewOutcome: EvaluateThenParkOutcome = {
       kind: "park",
       checkpoint: "review",
@@ -504,11 +841,34 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — every release path clears the hold no
       runId,
       eventId: `evt-review-${randomUUID()}`,
     });
-    expect(parked.parked).toBe(true);
     if (!parked.parked) return;
 
     const swept = await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
     expect(swept.released).toBe(1);
-    expect(left).toEqual([]);
+    expect(swept.holdNotificationsCleared).toBe(0);
+  });
+
+  it("a forced strand REFUSES to abandon an outstanding obligation", async () => {
+    // The park row is the only place the obligation lives. Deleting it while a
+    // clear is owed would strand the notification with nothing left to re-drive
+    // it — so the teardown discharges the obligation first, or does not happen.
+    const { runId, parkId } = await heldRun();
+    setRunWaitNotifier({
+      onEnterHumanWait: () => {},
+      onLeaveHumanWait: () => {},
+      onClearRecommendationHold: () => false,
+    } satisfies RunWaitNotifier);
+    await parkStore.sweepParks({ releasedParkIds: [parkId] });
+    expect(await parkState(parkId)).toMatchObject({ hold_notification: "live" });
+
+    await expect(parkStore.strandPark(parkId)).rejects.toMatchObject({ code: "conflict" });
+    expect(await parkState(parkId)).toBeDefined(); // still there to be retried
+
+    // With the real writer the obligation discharges and the teardown proceeds.
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier(hostNotifier.runWaitNotifier satisfies RunWaitNotifier);
+    await parkStore.strandPark(parkId);
+    expect(await parkState(parkId)).toBeUndefined();
+    expect(await notificationRows(runId)).toHaveLength(0);
   });
 });
