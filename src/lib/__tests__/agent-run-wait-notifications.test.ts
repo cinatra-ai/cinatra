@@ -698,7 +698,11 @@ describe("runWaitNotifier.onEnterRecommendationHold — the fenced write", () =>
     await runWaitNotifier.onEnterRecommendationHold!({ runId: "R1", parkId: "park-7" });
 
     expect(createNotificationForRecipient).toHaveBeenCalledTimes(1);
-    const [recipient, input, options] = createNotificationForRecipient.mock.calls[0] as [
+    // Through `unknown`: this is the one call site that passes a THIRD argument
+    // (the fence options), and the shared mock above is declared with the two
+    // parameters every other caller uses — so its `mock.calls` tuple is shorter
+    // than what this assertion reads.
+    const [recipient, input, options] = createNotificationForRecipient.mock.calls[0] as unknown as [
       { kind: string; userId: string },
       { title: string; href?: string; metadata?: Record<string, unknown> },
       { recipientUserIds?: string[]; fence?: { precondition: { text: string; values: unknown[] }; after?: Array<{ text: string }> } },
