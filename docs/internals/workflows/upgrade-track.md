@@ -245,7 +245,7 @@ Image / runtime majors offered: postgres 18, redis 8, valkey 8, mariadb 12,
 wordpress 7 (plus 6.9), php 8.5, python 3.14, tailscale 1.98 (held — see §1),
 rabbitmq 4. npm / toolchain majors offered: ESLint 10, Next 16.x (the
 `eslint-config-next` + `next` pair), the React monorepo, `@opentelemetry/*` 2
-(deferred per the overrides note), **`typescript` 7 (the native/Go compiler GA'd
+(applied — see §10), **`typescript` 7 (the native/Go compiler GA'd
 2026-07-09 as `typescript@7`; see §8 — the `@typescript/native-preview` package
 that previewed it stays a dev/nightly channel, excluded from the bar, and is
 obsoleted by adopting the stable GA)**, `cron-parser` 5, `pdfjs-dist` 6,
