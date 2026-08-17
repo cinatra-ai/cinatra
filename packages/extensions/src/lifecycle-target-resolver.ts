@@ -56,6 +56,7 @@ import type {
   InstallRowOwnership,
   InstalledExtension,
 } from "./canonical-types";
+import { applyInstallRowPrecedence } from "./static-bundle-anchor";
 
 
 // ---------------------------------------------------------------------------
@@ -557,13 +558,55 @@ export type LifecycleScopeResolution =
       count: number;
     };
 
+/**
+ * Apply the SHARED source-precedence policy to an already-scoped candidate set
+ * (cinatra#2762): a live marketplace install OVERRIDES the bundled fallback the
+ * image always provides, and the bundled row stays the fallback underneath it.
+ *
+ * WHY IT BELONGS HERE. Supersession ({@link effectiveInstallRows}) drops only
+ * superseded ORGANIZATION rows. The bundled anchor and a marketplace install of
+ * the same package both sit at org-NULL, so both survive it and both reach the
+ * count below — and a successful install therefore made every lifecycle op on
+ * the package report `ambiguous_target`. That was visible in the product:
+ * Archive, Activate and Reinstall rendered DISABLED with "More than one install
+ * matches your scope" right after the install that created the pair, and Retry
+ * activation / Roll back to bundled threw {@link AmbiguousLifecycleTargetError}
+ * from {@link resolveLifecycleTargetRow}. Every row-picking seam already applies
+ * this policy (`pickSingleActiveRow`, `pickSingleLiveRowAcrossOrgs`,
+ * `pickActiveInstall`, the installed-rows model, the provider-connection
+ * writer); the lifecycle resolver was the one that did not, so it disagreed with
+ * all of them about which row is the package.
+ *
+ * DELIBERATELY NARROW — it only ever WIDENS the bundled + single-marketplace
+ * pair, and every other case keeps its old outcome byte-for-byte:
+ *   - the policy is consulted only when EVERY candidate is LIVE. Activate
+ *     addresses an archived row, so a set holding one is left alone rather than
+ *     collapsed onto a live sibling (precedence speaks about live candidates
+ *     only — the seams filter to live before calling it);
+ *   - the narrowing is taken only when it resolves to EXACTLY ONE row. The
+ *     policy's other outcomes — two competing overrides (`[]`) and "leave the
+ *     set alone" (a legacy/unknown provenance, bundled-only) — fall back to the
+ *     original set, so two operator installs still refuse as `ambiguous_target`
+ *     rather than turning into `no_addressable_row`.
+ * It selects a candidate and nothing else: standing is still gated over the
+ * resolved row by the caller, and no trust, integrity or journal gate moves.
+ */
+function narrowByInstallSourcePrecedence(
+  candidates: readonly InstalledExtension[],
+): readonly InstalledExtension[] {
+  if (candidates.length < 2) return candidates;
+  if (!candidates.every(isLiveRow)) return candidates;
+  const ranked = applyInstallRowPrecedence(candidates);
+  return ranked.length === 1 ? ranked : candidates;
+}
+
 export function resolveLifecycleScope(
   rows: readonly InstalledExtension[],
   actor: Actor,
   selector?: LifecycleRowSelector | null,
 ): LifecycleScopeResolution {
   const addressable = addressableLifecycleRows(rows, actor);
-  const candidates = selector
+  const scoped = selector
     ? // NAMED TIER → the whole addressable set, filtered to it. Server-minted
       // only (a reinstall's second leg re-addressing the row its first leg
       // removed; the update path's anchor read).
@@ -575,6 +618,7 @@ export function resolveLifecycleScope(
       addressable.own.length > 0
       ? addressable.own
       : addressable.platformFallback;
+  const candidates = narrowByInstallSourcePrecedence(scoped);
   if (candidates.length === 0) {
     return {
       ok: false,

@@ -34,21 +34,47 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 
 const PKG = "@cinatra-ai/google-appointment-schedules-connector";
-const targetRow = {
-  id: "iext_target",
-  packageName: PKG,
-  organizationId: "org-1",
-  ownerLevel: "organization",
-  status: "active",
-  source: { type: "verdaccio", version: "0.1.1" },
-};
 
-const resolveTarget = vi.fn(async () => targetRow);
-const rowAnchor = vi.fn(() => ({ ownerLevel: "organization", ownerId: "org-1", organizationId: "org-1" }));
-vi.mock("../lifecycle-target-resolver", () => ({
-  resolveLifecycleTargetRow: (...a: unknown[]) => resolveTarget(...(a as [])),
-  lifecycleRowAnchor: (...a: unknown[]) => rowAnchor(...(a as [])),
-  resolveLifecycleScope: () => ({ ok: false }),
+// THE RESOLVER IS NOT MOCKED (cinatra#2762). It used to be, and that is exactly
+// why these tests passed while both actions were unusable in the product: with
+// `resolveLifecycleTargetRow` stubbed, the row set the actions actually face
+// after a successful install — the bundled anchor AND the marketplace install,
+// both at org-NULL — never reached the real addressing rule, which refused it as
+// `ambiguous_target` and threw. The ONLY thing stubbed below the actions now is
+// the canonical-store READ, so every test here drives the real resolver: the
+// real supersession rule, the real precedence policy, the real standing gate.
+const canonicalRow = (over: Record<string, unknown> = {}) => ({
+  id: "iext_installed",
+  packageName: PKG,
+  organizationId: null,
+  ownerLevel: "workspace",
+  ownerId: "__platform__",
+  kind: "connector",
+  status: "active",
+  isDefault: true,
+  source: { type: "verdaccio", version: "0.1.1" },
+  requiredInProd: false,
+  dependencies: [],
+  manifestHash: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  ...over,
+});
+/** The row the image always provides, live alongside the install. */
+const bundledAnchorRow = canonicalRow({
+  id: "iext_bundled",
+  ownerLevel: "platform",
+  ownerId: null,
+  source: { type: "bundled", version: "0.1.0" },
+});
+/** The install that overrides it — the row every recovery op must target. */
+const installRow = canonicalRow();
+
+// THE PRODUCTION SHAPE, and the default for every test: both rows live.
+let storeRows: Record<string, unknown>[] = [bundledAnchorRow, installRow];
+const readRows = vi.fn(async () => storeRows);
+vi.mock("../canonical-store", () => ({
+  readInstalledExtensionsByPackageName: (...a: unknown[]) => readRows(...(a as [])),
 }));
 
 const fireActivate = vi.fn(async () => ({ finalized: true, activated: true }));
@@ -75,7 +101,8 @@ vi.mock("@/lib/static-bundle-loader", () => ({
 
 beforeEach(() => {
   redirectMock.mockClear();
-  resolveTarget.mockClear();
+  readRows.mockClear();
+  storeRows = [bundledAnchorRow, installRow];
   fireActivate.mockClear();
   transition.mockClear();
   reactivateBundled.mockClear();
@@ -95,13 +122,23 @@ async function run(fn: () => Promise<unknown>) {
 }
 
 describe("retryExtensionActivationFormAction", () => {
-  it("re-fires the in-process activate hook against the EFFECTIVE row", async () => {
+  it("RESOLVES through the real resolver with the bundled anchor live beside the install", async () => {
+    // cinatra#2762 item 2, the regression this file previously could not see: a
+    // successful install leaves the image's bundled anchor AND the install both
+    // live at org-NULL, and the resolver used to refuse that pair — so the action
+    // threw AmbiguousLifecycleTargetError instead of retrying anything.
     const { retryExtensionActivationFormAction } = await import("../actions");
     const out = await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
-    expect(resolveTarget).toHaveBeenCalled();
-    // The row's own org and version, never the actor's.
-    expect(fireActivate).toHaveBeenCalledWith(PKG, "org-1", "0.1.1", undefined);
+    expect(readRows).toHaveBeenCalledWith(PKG);
     expect(out.redirected, "a recovered install returns the operator to the list").toBe(true);
+  });
+
+  it("targets the INSTALL, not the bundled anchor: the row's own org, version and anchor tier", async () => {
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    // org-NULL + the workspace tier + the INSTALL's version (0.1.1, not the
+    // bundled anchor's 0.1.0) — read off the resolved row, never off the actor.
+    expect(fireActivate).toHaveBeenCalledWith(PKG, null, "0.1.1", { ownerLevel: "workspace" });
   });
 
   it("does NOT reinstall: the bytes are already finalized, only the registration is missing", async () => {
@@ -110,15 +147,20 @@ describe("retryExtensionActivationFormAction", () => {
     expect(transition).not.toHaveBeenCalled();
   });
 
-  it("forwards the workspace anchor for a workspace-anchored row", async () => {
-    rowAnchor.mockReturnValueOnce({
-      ownerLevel: "workspace",
-      ownerId: "__platform__",
-      organizationId: null,
-    } as never);
+  it("an ORG-anchored install resolves at the actor's own scope, unchanged", async () => {
+    // No workspace row: the actor's own org scope answers, and the row's own org
+    // is what travels to the hook.
+    storeRows = [
+      canonicalRow({
+        id: "iext_org",
+        organizationId: "org-1",
+        ownerLevel: "organization",
+        ownerId: "org-1",
+      }),
+    ];
     const { retryExtensionActivationFormAction } = await import("../actions");
     await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
-    expect(fireActivate).toHaveBeenCalledWith(PKG, "org-1", "0.1.1", { ownerLevel: "workspace" });
+    expect(fireActivate).toHaveBeenCalledWith(PKG, "org-1", "0.1.1", undefined);
   });
 
   it("an activation that does not take RETURNS a failure and never redirects", async () => {
@@ -129,8 +171,21 @@ describe("retryExtensionActivationFormAction", () => {
     expect(redirectMock).not.toHaveBeenCalled();
   });
 
-  it("a resolver refusal (no standing, no addressable row) is reported, not thrown at the client", async () => {
-    resolveTarget.mockRejectedValueOnce(new Error("no addressable row"));
+  it("a REAL resolver refusal is reported, not thrown at the client", async () => {
+    // Two competing marketplace installs: precedence refuses to guess, so the
+    // resolver still raises `ambiguous_target` and the action reports it.
+    storeRows = [
+      installRow,
+      canonicalRow({ id: "iext_other", ownerLevel: "platform", ownerId: null }),
+    ];
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    const out = await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    expect(fireActivate).not.toHaveBeenCalled();
+  });
+
+  it("a canonical-store read failure is reported, never fanned out", async () => {
+    readRows.mockRejectedValueOnce(new Error("canonical store down") as never);
     const { retryExtensionActivationFormAction } = await import("../actions");
     const out = await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
     expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
@@ -161,16 +216,30 @@ describe("rollBackExtensionToBundledFormAction", () => {
     const { rollBackExtensionToBundledFormAction } = await import("../actions");
     await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
     expect(transition).toHaveBeenCalledWith(
-      "iext_target",
+      "iext_installed",
       "archive",
       expect.objectContaining({ reason: expect.stringContaining("bundled") }),
     );
   });
 
   it("acts on the EFFECTIVE row, so a superseded row can never be the target", async () => {
+    // A live ORG row of the same package sits beside the workspace install that
+    // superseded it. The real supersession rule drops it, so the archive lands on
+    // the row in force — never on the one the workspace install replaced.
+    storeRows = [
+      bundledAnchorRow,
+      installRow,
+      canonicalRow({
+        id: "iext_superseded",
+        organizationId: "org-1",
+        ownerLevel: "organization",
+        ownerId: "org-1",
+      }),
+    ];
     const { rollBackExtensionToBundledFormAction } = await import("../actions");
-    await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
-    expect(resolveTarget).toHaveBeenCalled();
+    const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
+    expect(transition).toHaveBeenCalledWith("iext_installed", "archive", expect.anything());
+    expect(out.redirected).toBe(true);
   });
 
   it("reports honestly when the bundled version does not come back in this process", async () => {
@@ -203,13 +272,13 @@ describe("rollBackExtensionToBundledFormAction: the rollback is atomic", () => {
     const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
     expect(transition).toHaveBeenNthCalledWith(
       1,
-      "iext_target",
+      "iext_installed",
       "archive",
       expect.anything(),
     );
     expect(transition).toHaveBeenNthCalledWith(
       2,
-      "iext_target",
+      "iext_installed",
       "activate",
       expect.objectContaining({ reason: expect.stringContaining("put back") }),
     );
@@ -231,7 +300,9 @@ describe("rollBackExtensionToBundledFormAction: the rollback is atomic", () => {
 
 describe("rollBackExtensionToBundledFormAction: the guards", () => {
   it("REFUSES a row that is not a marketplace install: there is nothing to roll back", async () => {
-    resolveTarget.mockResolvedValueOnce({ ...targetRow, source: { type: "bundled" } } as never);
+    // Bundled ONLY: the resolver addresses the anchor itself, and rolling THAT
+    // back would archive the one thing serving the package.
+    storeRows = [bundledAnchorRow];
     const { rollBackExtensionToBundledFormAction } = await import("../actions");
     const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
     expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
