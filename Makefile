@@ -38,9 +38,15 @@ check:
 # The `wayflow` profile brings up the agent runtime with the stack (cinatra#2654):
 # agent runs hit it on :3010 and fail with ECONNREFUSED when it is absent, so it
 # belongs to the default bring-up, not to an undocumented extra command.
+# scripts/dev-compose-env.mjs is the ONE step that resolves this checkout's
+# compose project and host ports (cinatra#2839). It must run here too: this
+# target used to bring the stack up on the compose files' fixed defaults and
+# `pnpm dev` then reconciled the SAME project onto derived ports afterwards, so
+# whichever ran first decided what got published. On the main checkout it
+# resolves to the historical values and nothing changes.
 dev:
 	-npm run --silent gen:graphiti-env
-	docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d
+	eval "$$(node scripts/dev-compose-env.mjs)" && docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d
 	pnpm dev
 
 # Stop infrastructure (keeps data).

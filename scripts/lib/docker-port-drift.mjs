@@ -18,6 +18,7 @@
 // and an impure wrapper (`diagnoseDockerPortDrift`) that shells out to Docker.
 
 import { spawnSync } from "node:child_process";
+import { buildComposeArgs } from "./dev-preflight.mjs";
 import path from "node:path";
 
 // The bundled local DB/cache services whose host ports come from the dev override.
@@ -137,13 +138,18 @@ export function resolveMainRepoRoot(cwd = process.cwd()) {
 // the MAIN compose project. Best-effort — any Docker unavailability / missing
 // container / parse failure returns { available: false } (never throws), so the
 // guard degrades to the generic "service down" message.
-export function diagnoseDockerPortDrift({ service, mainRoot, expectedHostPort }) {
+export function diagnoseDockerPortDrift({ service, mainRoot, expectedHostPort, projectName }) {
+  // Read-only, but it must look at the SAME compose project the writes go to:
+  // an unpinned `ps` inspects the basename-derived project while the preflight's
+  // `up` targets the lane's, so a lane could be told its healthy container had
+  // drifted. Built from dev-preflight's `buildComposeArgs` rather than a second
+  // hand-written argv, so the project pin and the compose-file list cannot fork
+  // between the two call sites (cinatra#2839).
   const compose = (args) =>
-    spawnSync(
-      "docker",
-      ["compose", "-f", "docker-compose.yml", "-f", "docker-compose.dev.yml", ...args],
-      { cwd: mainRoot, encoding: "utf8" },
-    );
+    spawnSync("docker", buildComposeArgs({ projectName, args }), {
+      cwd: mainRoot,
+      encoding: "utf8",
+    });
 
   // `ps -q <service>` (all states) → the container id in THIS project for the
   // service, regardless of which compose files started it (project+service
