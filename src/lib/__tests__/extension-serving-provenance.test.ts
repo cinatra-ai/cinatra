@@ -11,17 +11,17 @@ import { beforeEach, describe, expect, it } from "vitest";
 // would let the settings page report a version that stopped serving.
 
 import {
-  __resetServingRecordsForTests,
+  __resetServingRecords,
   clearServingRecordForPackage,
   readServingRecord,
   recordServingImplementation,
   snapshotServingRecords,
-} from "@/lib/extension-serving-record";
+} from "@/lib/extension-capabilities-registry";
 
 const PKG = "@cinatra-ai/google-appointment-schedules-connector";
 
 beforeEach(() => {
-  __resetServingRecordsForTests();
+  __resetServingRecords();
 });
 
 describe("the serving record", () => {
@@ -91,14 +91,13 @@ describe("the record is cleared in LOCKSTEP with the registrations it describes"
     expect(readServingRecord(PKG)).toBeNull();
   });
 
-  it("the teardown reaches it through the published globalThis surface", () => {
-    // Not a static import: `extension-capability-teardown` is reachable from the
-    // locked dev-perf routes whose static import graph is ratcheted shrink-only
-    // (cinatra#732), so the clear is published on a `Symbol.for` key the way
-    // version-keyed serving publishes its own.
-    const key = Symbol.for("@cinatra-ai/host:extension-serving-record-teardown/v1");
-    const published = (globalThis as unknown as { [k: symbol]: unknown })[key];
-    expect(typeof published).toBe("function");
+  it("the module-wide reset clears it too, so no state bleeds between tests", async () => {
+    const { __resetCapabilityRegistry } = await import(
+      "@/lib/extension-capabilities-registry"
+    );
+    recordServingImplementation({ packageName: PKG, origin: "install", version: "0.1.5" });
+    __resetCapabilityRegistry();
+    expect(readServingRecord(PKG)).toBeNull();
   });
 
   it("tearing down a package with NO record is a safe no-op", async () => {
@@ -126,31 +125,27 @@ describe("the activation seams record what they put in service", () => {
 
   it("the StaticBundleLoader records the IMAGE's version on its boot pass", async () => {
     const src = await read("../static-bundle-loader.ts");
-    expect(src).toContain('await import("@/lib/extension-serving-record")');
-    expect(src).toContain("await recordBundledActivations(records, results)");
+    expect(src).toContain(
+      'import { recordServingImplementation } from "@/lib/extension-capabilities-registry"',
+    );
+    expect(src).toContain("recordBundledActivations(records, results)");
     expect(src).toMatch(/origin:\s*"bundled"/);
   });
 
-  it("both loaders reach the recorder DYNAMICALLY, never as a static edge", async () => {
-    // Both are reachable from the locked dev-perf routes whose static import
-    // graph is ratcheted shrink-only (cinatra#732). A descriptive side-signal
-    // must not spend an edge there — the same reason the version-keyed serving
-    // registry is imported dynamically from the runtime loader.
-    for (const rel of ["../static-bundle-loader.ts", "../runtime-package-loader.ts"]) {
-      const src = await read(rel);
-      expect(src).toContain('await import("@/lib/extension-serving-record")');
-      expect(src).not.toMatch(
-        /^import \{[^}]*\} from "@\/lib\/extension-serving-record";/m,
-      );
-    }
-    // …and so does the settings loader, which reads it at request time.
-    const screen = await read(
-      "../../../packages/extensions/src/screens/extension-settings-screen.tsx",
-    );
-    expect(screen).toContain('await import("@/lib/extension-serving-record")');
-    expect(screen).not.toMatch(
-      /^import \{[^}]*\} from "@\/lib\/extension-serving-record";/m,
-    );
+  it("it COSTS NO NEW MODULE — it is co-located, never a standalone file", async () => {
+    // The route-graph ratchet (cinatra#732) baselines four locked routes and its
+    // ceilings may only ever SHRINK. A standalone `extension-serving-record`
+    // module added exactly +1 reachable module to all four, because the analyzer
+    // follows a literal `import("…")` too — a dynamic import buys nothing here.
+    // It lives with the signed-activated markers instead, whose own comment
+    // records the same reason.
+    const { existsSync } = await import("node:fs");
+    const path = await import("node:path");
+    expect(existsSync(path.resolve(__dirname, "../extension-serving-record.ts"))).toBe(false);
+    const registry = await read("../extension-capabilities-registry.ts");
+    expect(registry).toContain("export function recordServingImplementation");
+    expect(registry).toContain("export function readServingRecord");
+    expect(registry).toContain("export function clearServingRecordForPackage");
   });
 
   it("…and on the TARGETED reactivation seam a rollback uses", async () => {
@@ -165,7 +160,7 @@ describe("the activation seams record what they put in service", () => {
 
   it("the RuntimePackageLoader records the INSTALL's default version", async () => {
     const src = await read("../runtime-package-loader.ts");
-    expect(src).toContain('await import("@/lib/extension-serving-record")');
+    expect(src).toContain("recordServingImplementation,");
     expect(src).toMatch(/origin:\s*"install"/);
     // The DEFAULT version — the one that owns the package's unversioned global
     // names, which is what a request reaches.
@@ -201,7 +196,10 @@ describe("the activation seams record what they put in service", () => {
         if (entry === "node_modules" || entry === "__tests__" || entry === ".next") continue;
         const abs = path.join(dir, entry);
         if (statSync(abs).isDirectory()) walk(abs);
-        else if (/\.tsx?$/.test(abs) && !abs.endsWith("extension-serving-record.ts")) {
+        else if (
+          /\.tsx?$/.test(abs) &&
+          !abs.endsWith("extension-capabilities-registry.ts")
+        ) {
           if (readFileSync(abs, "utf8").includes("readServingRecord")) readers.push(abs);
         }
       }

@@ -51,7 +51,12 @@ import {
   trustedActivationHosts,
   allowMarketplaceBootstrapTrust,
 } from "@/lib/extension-trust-config";
-import { markPackageSignedActivated } from "@/lib/extension-capabilities-registry";
+import {
+  markPackageSignedActivated,
+  // cinatra#2762: which implementation is in service. Descriptive only —
+  // co-located in that registry so it costs no new route-graph module.
+  recordServingImplementation,
+} from "@/lib/extension-capabilities-registry";
 
 /**
  * Resolve the TRUSTED install anchor for a package from a source OUTSIDE the
@@ -657,18 +662,11 @@ export async function loadRuntimePackageExtensions(
   // row is live but the image's copy is what serves". Keyed off the DEFAULT
   // record — the version that owns the package's unversioned global names, which
   // is what a request reaches. Same success rule as the marker below.
-  //
-  // The recorder is reached by DYNAMIC import, exactly like
-  // `beginVersionKeyedRegistration` above and for the same reason: this loader is
-  // reachable from the locked dev-perf routes whose static import graph is
-  // ratcheted shrink-only (cinatra#732), and a descriptive side-signal must not
-  // spend a static edge there.
   const defaultVersionByPackage = new Map<string, string | null>();
   for (const rec of orderedActivatable) {
     if (rec.isDefault === false) continue;
     defaultVersionByPackage.set(rec.packageName, rec.version ?? null);
   }
-  const { recordServingImplementation } = await import("@/lib/extension-serving-record");
   for (const result of activationResults) {
     if (
       (result.status === "registered" || result.status === "bootstrapped") &&

@@ -172,7 +172,9 @@ export async function ExtensionSettingsScreen({
   const servingProvenance = isProductInstall
     ? await (async () => {
         try {
-          const { readServingRecord } = await import("@/lib/extension-serving-record");
+          const { readServingRecord } = await import(
+            "@/lib/extension-capabilities-registry"
+          );
           return readServingRecord(packageName);
         } catch {
           return null;

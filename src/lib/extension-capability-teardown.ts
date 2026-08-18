@@ -27,6 +27,12 @@ import {
   invalidateProvidersForPackage,
   hasCapabilityProvidersForPackage,
   clearPackageSignedActivated,
+  // cinatra#2762 — the serving-provenance record, co-located in that registry for
+  // the same reason the signed-activated marker is: its lifecycle is
+  // lockstep-coupled to the registrations this function removes, and a
+  // standalone module would add a net-new route-reachable first-party module to
+  // the baselined dev-perf route-graph.
+  clearServingRecordForPackage,
 } from "@/lib/extension-capabilities-registry";
 // Version-keyed serving retention for NON-DEFAULT side-by-side versions
 // (cinatra#1392 Gap 1). The SAME four register-channel kinds, retained per
@@ -49,25 +55,6 @@ function clearVersionKeyedServingForPackage(packageName: string): string[] {
     [k: symbol]: ((packageName: string) => string[]) | undefined;
   })[VERSION_KEYED_SERVING_TEARDOWN_KEY];
   return typeof fn === "function" ? fn(packageName) : [];
-}
-// SERVING-PROVENANCE RECORD (cinatra#2762): which implementation — the image's
-// or a marketplace install's — put this package's registrations in place. It
-// DESCRIBES the registrations this function is about to remove, so it must be
-// cleared here or a torn-down package would keep reporting a version that is no
-// longer serving anything. Read off the same kind of `Symbol.for` surface, and
-// for the same reason: `extension-serving-record` is written by the loaders and
-// read by the settings surface, and a static import from this route-reachable
-// chokepoint would add an edge to the shrink-only route-graph ratchet
-// (cinatra#732). A module that never loaded holds no record, so a missing
-// function is a safe no-op.
-const SERVING_RECORD_TEARDOWN_KEY = Symbol.for(
-  "@cinatra-ai/host:extension-serving-record-teardown/v1",
-);
-function clearServingRecordForPackage(packageName: string): boolean {
-  const fn = (globalThis as unknown as {
-    [k: symbol]: ((packageName: string) => boolean) | undefined;
-  })[SERVING_RECORD_TEARDOWN_KEY];
-  return typeof fn === "function" ? fn(packageName) : false;
 }
 import { invalidateExtensionUiForPackage, hasExtensionUiForPackage } from "@/lib/extension-ui-registry";
 import {

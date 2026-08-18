@@ -133,7 +133,7 @@ export function resolveUpdateRow(input: {
 // version no request had reached.
 //
 // The runtime fact comes from the serving-provenance record the activation seams
-// write (`extension-serving-record`): which implementation put the package's
+// write (`extension-capabilities-registry`): which implementation put the package's
 // live registrations in place, and at which version. This function turns that
 // into the state's NAME plus the copy for the two places that were lying.
 //

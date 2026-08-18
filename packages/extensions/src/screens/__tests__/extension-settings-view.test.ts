@@ -255,7 +255,7 @@ describe("§V — the installed-but-not-active state is named", () => {
 
   it("the loader derives it SERVER-SIDE from the activation seams' own record", () => {
     expect(SCREEN).toContain("resolveServingState");
-    expect(SCREEN).toContain('await import("@/lib/extension-serving-record")');
+    expect(SCREEN).toContain('await import(\n            "@/lib/extension-capabilities-registry"');
     expect(SCREEN).toContain("readServingRecord(packageName)");
     // The record read is best-effort — a failure must not blank the page.
     expect(SCREEN).toMatch(/readServingRecord\(packageName\);\s*\}\s*catch\s*\{/);

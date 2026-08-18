@@ -32,6 +32,9 @@ import {
   ExtensionModuleAbsentError,
   isDegradedExtensionLoad,
 } from "@/lib/extension-load-guard";
+// cinatra#2762: what this loader puts in service, recorded where the version is
+// known. Descriptive only — nothing gates on it.
+import { recordServingImplementation } from "@/lib/extension-capabilities-registry";
 
 /**
  * Split-brain guard — the StaticBundleLoader lifecycle gate, now a STRICT
@@ -137,7 +140,7 @@ export async function loadStaticBundleExtensions(): Promise<ActivationResult[]> 
   // them, so the last successful writer per package is the truth — and a package
   // whose install never registers keeps the bundled record, which is exactly the
   // "installed but not in service" state the settings surface must name.
-  await recordBundledActivations(records, results);
+  recordBundledActivations(records, results);
   return results;
 }
 
@@ -145,16 +148,14 @@ export async function loadStaticBundleExtensions(): Promise<ActivationResult[]> 
  * Record the bundled version of every record that actually REGISTERED. Never
  * throws: a descriptive record must not be able to fail a boot pass.
  *
- * The recorder is reached by DYNAMIC import, like the version-keyed serving
- * registry the RuntimePackageLoader retains through: this module is reachable
- * from the locked dev-perf routes whose static import graph is ratcheted
- * shrink-only (cinatra#732), and a descriptive side-signal must not spend a
- * static edge there.
+ * The recorder is co-located in the host capability registry, which is already in
+ * every route graph this loader is in, so recording costs no NEW module in the
+ * baselined dev-perf route-graph (cinatra#732 — those ceilings may only shrink).
  */
-async function recordBundledActivations(
+function recordBundledActivations(
   records: readonly LoaderRecord[],
   results: readonly ActivationResult[],
-): Promise<void> {
+): void {
   try {
     const registered = new Set(
       results
@@ -171,7 +172,6 @@ async function recordBundledActivations(
     const versionByPackage = new Map(
       STATIC_EXTENSION_RECORDS.map((r) => [r.packageName, r.version ?? null]),
     );
-    const { recordServingImplementation } = await import("@/lib/extension-serving-record");
     for (const packageName of registered) {
       if (failed.has(packageName)) continue;
       if (!records.some((r) => r.packageName === packageName)) continue;
@@ -331,19 +331,12 @@ export async function reactivateBundledFallbackInProcess(
     }
     // The image's version is what serves this package now (cinatra#2762). The
     // teardown above already dropped whatever the failed override recorded, so
-    // this replaces rather than races it. Dynamic import for the same reason the
-    // boot pass above uses one; best-effort, because a descriptive record must
-    // never turn a completed recovery into a reported failure.
-    try {
-      const { recordServingImplementation } = await import("@/lib/extension-serving-record");
-      recordServingImplementation({
-        packageName,
-        origin: "bundled",
-        version: record.version ?? null,
-      });
-    } catch {
-      /* the record is descriptive; the bundled module IS serving either way. */
-    }
+    // this replaces rather than races it.
+    recordServingImplementation({
+      packageName,
+      origin: "bundled",
+      version: record.version ?? null,
+    });
     // The registries changed, so the generation-keyed caches must rebuild.
     try {
       const { bumpActivationGeneration } = await import("@/lib/extension-activation-generation");

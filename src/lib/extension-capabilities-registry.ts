@@ -148,13 +148,15 @@ export function snapshotCapabilityProviders(): { capability: string; packageName
 }
 
 /** Test/teardown helper — clears all providers AND the co-located
- * signed-activated markers below, so a "reset this registry module" in a test
- * leaves NO residual state (a stale signed marker outliving a provider reset
- * could otherwise bleed the fail-closed trust signal across tests). Use
- * `__resetSignedTrustedRegistry()` for a targeted signed-only reset. */
+ * signed-activated markers and serving records below, so a "reset this registry
+ * module" in a test leaves NO residual state (a stale signed marker outliving a
+ * provider reset could otherwise bleed the fail-closed trust signal across
+ * tests). Use `__resetSignedTrustedRegistry()` / `__resetServingRecords()` for a
+ * targeted reset. */
 export function __resetCapabilityRegistry(): void {
   registry.clear();
   signedTrustedRegistry.clear();
+  servingRecords.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -249,4 +251,140 @@ export function isPackageSignedActivated(packageName: string): boolean {
 /** Test/teardown helper — clears every signed-activated marker. */
 export function __resetSignedTrustedRegistry(): void {
   signedTrustedRegistry.clear();
+}
+
+// ---------------------------------------------------------------------------
+// SERVING-PROVENANCE RECORD (cinatra#2762)
+// ---------------------------------------------------------------------------
+//
+// WHICH IMPLEMENTATION OF A PACKAGE IS ACTUALLY IN SERVICE, and at which
+// version.
+//
+// THE DEFECT IT EXISTS FOR. A package can hold a live marketplace install row
+// that never registered — the bytes are materialized and the canonical row says
+// `active`, but activation was refused (an untrusted registry, a missing signing
+// key, a module that threw) and the implementation bundled in the image is what
+// serves every request. #2762 is named for that state, and the product could not
+// name it: the settings page read the version off the ROW and reported
+// "Currently on version 0.1.5 — up to date" while 0.1.0 was serving, with
+// Activate greyed "Already active".
+//
+// The row could not answer the question. `installed_extension.status` is the
+// LIFECYCLE fact (has an operator archived it?), not the RUNTIME fact (did it
+// register?), and nothing in the process recorded the difference: the provider
+// Map above — like the MCP-tool, ctx.ui and object-type registries — is keyed by
+// PACKAGE NAME and holds no provenance, so "is something serving this package?"
+// was answerable and "WHAT is serving it?" was not. Boot reconciliation knew,
+// but only within its own boot pass (`activatedThisBoot`), which no request-time
+// surface can read.
+//
+// So each activation seam records what it put in service, right where it already
+// knows the version: the StaticBundleLoader records the image's, the
+// RuntimePackageLoader records the install's. The record is the PROVENANCE of
+// the registrations that are live NOW.
+//
+// CO-LOCATED HERE for exactly the reason the signed-activated markers above are:
+// its lifecycle is lockstep-coupled to those registrations (it is cleared in the
+// SAME `teardownExtensionCapabilities` chokepoint), and a standalone module
+// would add a net-new route-reachable first-party module to the baselined
+// dev-perf route-graph — whose ceilings may only ever shrink. This registry is
+// already in every relevant graph. Its own namespaced `Symbol.for(...)`
+// singleton keeps it independent of the provider Map.
+//
+// IT IS DESCRIPTIVE, NEVER LOAD-BEARING — the one way it differs from the signed
+// marker, which IS a trust boundary. Nothing gates, resolves, activates or
+// refuses on this record; it exists so a surface can TELL AN OPERATOR what is
+// happening. Every consumer must treat an absent record as UNKNOWN and say
+// nothing rather than guess, because absence is a legitimate state: a
+// metadata-only package registers no server module at all, a record written
+// before a restart is gone, and a process that never ran a loader (a unit test,
+// a build-time render) has nothing to report. Reporting "not in service" on
+// absence would put a false alarm on every healthy skill and agent.
+//
+// CROSS-COMPILATION SINGLETON, as with every registry in this file: the loaders
+// write at boot/activation (instrumentation compilation) and the settings
+// surface reads at request time (RSC compilation).
+
+/**
+ * WHERE the implementation now serving a package came from.
+ *
+ * `bundled` — the copy that ships in the image, activated by the
+ * StaticBundleLoader (at boot, or by the targeted reactivation seam a rollback
+ * and the post-failure compensation use).
+ * `install` — a materialized marketplace install, activated by the
+ * RuntimePackageLoader (at boot, or by a targeted in-process activation).
+ */
+export type ServingOrigin = "bundled" | "install";
+
+export type ServingRecord = {
+  origin: ServingOrigin;
+  /** The version that registered, or null when the seam could not name one. */
+  version: string | null;
+};
+
+const SERVING_RECORD_REGISTRY_KEY = Symbol.for(
+  "@cinatra-ai/host:extension-serving-record/v1",
+);
+type ServingRecordHolder = { [SERVING_RECORD_REGISTRY_KEY]?: Map<string, ServingRecord> };
+const _servingHolder = globalThis as unknown as ServingRecordHolder;
+const servingRecords: Map<string, ServingRecord> =
+  _servingHolder[SERVING_RECORD_REGISTRY_KEY] ??
+  (_servingHolder[SERVING_RECORD_REGISTRY_KEY] = new Map<string, ServingRecord>());
+
+/**
+ * Record that `origin`'s `version` of `packageName` is now in service.
+ *
+ * Called ONLY after a registration succeeded — the same bar
+ * {@link markPackageSignedActivated} holds to, and for the same reason: a
+ * package emits ONE result per phase, so a register-passes/bootstrap-throws
+ * activation yields both a success and a failure, and recording on the success
+ * alone would claim a half-activated version is serving.
+ *
+ * Idempotent and LAST-WRITE-WINS, which is the truth: at boot the bundled record
+ * activates first and the install's activation then REPLACES it (the loader
+ * tears the previous registrations down before it registers), so the last
+ * successful writer is whoever owns the package's names right now. A REFUSED
+ * install writes nothing, so the bundled record stands — which is precisely what
+ * makes the #2762 state nameable.
+ *
+ * A blank / absent version is stored as `null` rather than `""`, so a consumer
+ * cannot compare an empty string against a real version and call them different.
+ */
+export function recordServingImplementation(input: {
+  packageName: string;
+  origin: ServingOrigin;
+  version?: string | null;
+}): void {
+  if (!input.packageName) return;
+  const version =
+    typeof input.version === "string" && input.version.length > 0 ? input.version : null;
+  servingRecords.set(input.packageName, { origin: input.origin, version });
+}
+
+/**
+ * What is serving `packageName` in THIS process, or null when nothing recorded
+ * it. Null means UNKNOWN — never "nothing is serving it".
+ */
+export function readServingRecord(packageName: string): ServingRecord | null {
+  return servingRecords.get(packageName) ?? null;
+}
+
+/**
+ * Drop a package's serving record. Wired into the capability-teardown chokepoint
+ * alongside {@link clearPackageSignedActivated}, so the record is cleared in
+ * lockstep with the registrations it DESCRIBES and can never outlive them.
+ * Returns whether a record was actually removed.
+ */
+export function clearServingRecordForPackage(packageName: string): boolean {
+  return servingRecords.delete(packageName);
+}
+
+/** A read-only snapshot — package name → what is serving it. Diagnostic only. */
+export function snapshotServingRecords(): { packageName: string; record: ServingRecord }[] {
+  return [...servingRecords].map(([packageName, record]) => ({ packageName, record }));
+}
+
+/** Test/teardown helper — clears every serving record. */
+export function __resetServingRecords(): void {
+  servingRecords.clear();
 }
