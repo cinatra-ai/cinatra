@@ -158,24 +158,32 @@ describe("hop 4 — CALL-TIME LOOKUP: the self-invoker's retained union plan", (
 });
 
 describe("hop 3 — the REPLAY's freshly constructed registerTool config", () => {
-  // A NARROW SOURCE RATCHET, and labelled as one rather than dressed up as a
-  // behavioural proof. The replay lives inside `registerAllCapabilities`,
-  // which needs the whole connector/module graph and a database to run, so
-  // there is no cheap way to observe it as behaviour from a unit test. What
-  // makes the ratchet worth having anyway: this hop is a config object built
-  // FROM SCRATCH — `{ title, description, inputSchema }` — so the declaration
-  // is dropped by DEFAULT here, silently, and nothing else in this file or the
-  // package tests would notice. The choke-point tests prove what happens once
-  // the declaration arrives; this pins that it is still put on the wire.
+  // WHAT THIS IS NOW. Both halves of this hop — the from-scratch config the
+  // replay puts on the wire, and the recording pass that reads it back — used
+  // to be inline in `registerAllCapabilities` / `buildHostSelfPrimitiveHandlers`,
+  // which need the whole connector/module graph and a database, so they could
+  // only be pinned as SOURCE STRINGS. That proved a line existed and nothing
+  // about what it did.
+  //
+  // They are now pure seams in `@/lib/mcp-declaration-replay`, and their
+  // BEHAVIOUR — register with a declaration, replay, capture, and have the
+  // call-time lookup see the same class — is covered end to end in
+  // `delegated-chat-declaration-replay-roundtrip.test.ts`.
+  //
+  // What is left here is the one thing a behavioural test on the seams cannot
+  // see: that the DB-bound call sites still route through them. A `registerTool`
+  // call that went back to building its own object literal would leave every
+  // seam test green while dropping the declaration in production.
   const source = readFileSync(new URL("../mcp-server.ts", import.meta.url), "utf8");
 
-  it("carries the declaration onto the rebuilt config", () => {
-    expect(source).toContain("delegatedChat: registration.delegatedChat");
+  it("the replay builds its config with the shared seam", () => {
+    expect(source).toContain("buildReplayedExtensionToolConfig(name, registration)");
   });
 
-  it("the self-invoker capture reads the declaration off the SAME config", () => {
+  it("the self-invoker capture runs against the shared recording server", () => {
     // The recording pass and the live pass must not disagree about what a
-    // module declared, so both read it with the policy's own reader.
-    expect(source).toContain("delegatedChat: readDeclaredDelegatedChatClass(config)");
+    // module declared, so both read it with the policy's own reader — which is
+    // what the shared seam guarantees.
+    expect(source).toContain("createSelfPrimitiveRecordingServer(handlers)");
   });
 });

@@ -2,8 +2,23 @@ import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { admitToolInputSchema, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
-import { readDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
-import type { DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
+import {
+  buildReplayedExtensionToolConfig,
+  createSelfPrimitiveRecordingServer,
+  type CapturedHostPrimitive,
+} from "./mcp-declaration-replay";
+// Re-exported so `@/lib/mcp-server` stays the single import surface for the
+// self-primitive map's shape, while the testable seams live in a module that a
+// unit test can import without this file's connector/DB graph.
+export {
+  buildReplayedExtensionToolConfig,
+  createSelfPrimitiveRecordingServer,
+} from "./mcp-declaration-replay";
+export type {
+  CapturedHostPrimitive,
+  CapturedMcpToolHandler,
+  ReplayedExtensionRegistration,
+} from "./mcp-declaration-replay";
 import {
   resolveDurableRunContext,
   recordMcpRunContextServedBy,
@@ -49,7 +64,6 @@ import { auth } from "@/lib/auth";
 import { getAuthSession } from "@/lib/auth-session";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
 import { resolveProviderAdapter } from "@cinatra-ai/llm";
-import { z } from "zod";
 import {
   listExtensionMcpTools,
   markEffectiveExtensionMcpTools,
@@ -328,22 +342,7 @@ export async function registerAllCapabilities(
     try {
       (server.registerTool as (...a: unknown[]) => unknown)(
         name,
-        {
-          title: name,
-          description: registration.description ?? name,
-          // Standard Schema (zod) — the MCP SDK validates against `~standard`.
-          inputSchema: (registration.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
-          // The registration's typed delegated-chat declaration (cinatra#2771).
-          // This config is FRESHLY CONSTRUCTED — only title/description/schema
-          // were rebuilt — so the declaration is dropped here unless it is
-          // carried explicitly. Carrying it is what makes the choke point in
-          // `policedRegisterTool` see the SAME declaration for a
-          // `ctx.mcp.registerTool` extension that it sees for a
-          // manifest-discovered connector that passes it in `config` directly.
-          // Narrow-only: it can only remove this name from a delegated-chat
-          // build, never add it to one.
-          delegatedChat: registration.delegatedChat,
-        },
+        buildReplayedExtensionToolConfig(name, registration),
         async (input: unknown) => {
           const raw = await dispatchPlanned(input);
           return wrapExtensionToolResult(raw);
@@ -377,7 +376,6 @@ export async function registerAllCapabilities(
 }
 
 /** A captured MCP tool handler — the SDK callback `(args, extra) => CallToolResult`. */
-type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
 /**
  * One captured host primitive: its handler PLUS the typed delegated-chat
@@ -392,55 +390,9 @@ type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>
  * `@/lib/extension-self-mcp` apply the SAME narrow-only rule
  * `policedRegisterTool` applies.
  */
-export type CapturedHostPrimitive = {
-  handler: CapturedMcpToolHandler;
-  /** Narrow-only. `undefined` means undeclared, which is neutral. */
-  delegatedChat?: DelegatedChatToolClass;
-};
-
-/**
- * Build the host's UNIVERSAL in-process primitive-handler map
- * so `ctx.mcp.callPrimitive(name, input)` can invoke ANY host primitive by name,
- * the same code path the live MCP transport uses. Captures every registered
- * module's `registerTool(name, config, handler)` plus the replayed extension tools into a
- * `name → handler` map by running the SAME registration pass against a pure
- * RECORDING server (no real transport, no live server mutated). The captured
- * handler is the MCP-SDK callback `(args, extra) => CallToolResult`; the
- * self-invoker (`@/lib/extension-self-mcp`) runs it under the caller's resolved
- * MCP request-context and unwraps the result envelope.
- *
- * The recording server stubs the non-`registerTool` surface
- * (`registerResource`/`registerPrompt`/`registerScreen`) as no-ops — module
- * registrations only call `registerTool`, but the stubs keep an errant call from
- * throwing. The capability modules register idempotently (replace-by-id), so
- * building this map alongside the live registration is side-effect-safe; callers
- * should still MEMOISE it (see `extension-self-mcp`) to build it at most once.
- */
 export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, CapturedHostPrimitive>> {
   const handlers = new Map<string, CapturedHostPrimitive>();
-  const recordingServer = {
-    registerTool: (name: string, config: unknown, handler: CapturedMcpToolHandler) => {
-      // Mirror the live server: the MCP SDK rejects a duplicate tool name, so a
-      // silent overwrite here would let the self-call surface diverge from the
-      // live transport. Fail loudly instead.
-      if (handlers.has(name)) {
-        throw new Error(
-          `[mcp] duplicate tool registration "${name}" during self-primitive capture (the live server would reject it)`,
-        );
-      }
-      // Capture the declaration off the SAME `config` the live server's
-      // `policedRegisterTool` reads, so the recording pass and the live pass
-      // cannot disagree about what a module declared.
-      handlers.set(name, {
-        handler,
-        delegatedChat: readDeclaredDelegatedChatClass(config),
-      });
-      return undefined as never;
-    },
-    registerResource: () => undefined as never,
-    registerPrompt: () => undefined as never,
-    registerScreen: () => undefined,
-  } as unknown as McpRuntimeToolServer;
+  const recordingServer = createSelfPrimitiveRecordingServer(handlers);
 
   // Platform + manifest-discovered connector modules in the SAME order the
   // live server registers them (pre-connector platform block, connector block,
