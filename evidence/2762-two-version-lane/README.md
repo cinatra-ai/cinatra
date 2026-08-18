@@ -95,6 +95,47 @@ rm -f .env.local $D/.lane-run.env
 rm -rf .lane-data
 ```
 
+## Round 5 items 3 and 4: clicking the recovery actions
+
+Item 4 needs no new steps. The stranded mode now takes its lifecycle shot, so
+re-running step 9's driver regenerates both `stranded-settings.png` and
+`stranded-lifecycle-actions.png` from one run.
+
+Item 3 needs the bytes to exist, because "Retry activation" is activation-only
+and never reinstalls. The sequence, against a lane already brought up above:
+
+```bash
+D=evidence/2762-two-version-lane/drivers
+OUT=$PWD/evidence/2762-two-version-lane/screenshots
+APP=http://127.0.0.1:3477
+
+# 1. Install 0.1.5 for real, so the PRODUCT materializes the bytes.
+#    (the storefront must list 0.1.5: LANE_LISTED_VERSION=0.1.5)
+node $D/lane-proof-driver.mjs install $APP <email> <password> /tmp/install-shots real-install
+
+# 2. Roll back, then walk back in. Clicks "Roll back to bundled", revisits the
+#    page, asserts the archived install is still reachable, clicks the way back.
+node $D/lane-proof-driver.mjs rollback-recovery $APP <email> <password> $OUT recovery-rollback
+
+# 3. Stage the state a retry can recover: archive the install, restart so only
+#    the static bundle registers, then put the row back to live WITHOUT
+#    registering it. See the fixture's own header.
+docker exec -i x2774evproof-postgres-1 psql -U cinatra -d cinatra \
+  -c "UPDATE cinatra.installed_extension SET status='archived' \
+      WHERE package_name='@cinatra-ai/google-appointment-schedules-connector' \
+        AND source->>'type'='verdaccio';"
+# restart the app, confirm the boot log carries NO RuntimePackageLoader line,
+# then:
+docker exec -i x2774evproof-postgres-1 psql -U cinatra -d cinatra < $D/stranded-with-bytes-fixture.sql
+
+# 4. Click Retry activation and capture the result.
+node $D/lane-proof-driver.mjs retry-recovery $APP <email> <password> $OUT recovery-retry 0.1.5 0.1.5
+```
+
+The retry run asserts the setup surface renders `[lane registry build 0.1.5]`
+afterwards. That is what makes "the retry put it in service" a visible fact
+rather than a claim.
+
 ## Environment
 
 The lane-specific keys, beyond the ordinary local development set (database,
@@ -143,9 +184,10 @@ correct:
 | `drivers/build-publishable.mjs` | In-tree source → publishable built ESM. |
 | `drivers/lane-storefront.mjs` | The anonymous browse catalog. |
 | `drivers/lane-admin-session.mjs` | An operator with admin standing and an active organization. |
-| `drivers/lane-proof-driver.mjs` | The browser proof: four modes, screenshots, assertions. |
+| `drivers/lane-proof-driver.mjs` | The browser proof: the install/assert modes, the stranded mode, and the two round-5 recovery modes that CLICK. |
 | `drivers/provider-write-resolution.mts` | The provider-write seam's own row selection. |
 | `drivers/stranded-row-fixture.sql` | The pre-existing stranded install row. |
+| `drivers/stranded-with-bytes-fixture.sql` | Puts a real, already-materialized install back to live without registering it: the state a retry can recover. |
 | `drivers/verify-signature-and-trust.mts` | The trust verdict over the published package. |
 | `logs/*.txt` | Captured output. |
 | `screenshots/*.png` | The screens the assertions were read from. |

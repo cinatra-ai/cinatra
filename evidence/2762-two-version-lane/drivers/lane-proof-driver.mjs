@@ -381,8 +381,18 @@ if (mode === "stranded") {
     bodyText.includes("Retry activation") ? "offered" : "absent",
   );
 
-  const lifecycle = await auditLifecycleActions(label, ["Archive", "Reinstall latest"], false);
+  // Round 5 item 4: this call used to pass `takeShot: false`, while the
+  // committed transcript still claimed a `stranded-lifecycle-actions.png`. The
+  // transcript could not have come from this driver, and the file was never
+  // committed. The audit now takes its shot, so the transcript and the files it
+  // names are produced by the same run.
+  //
+  // The settings capture is taken FIRST, before the audit scrolls the
+  // maintenance and danger-zone blocks into view, which is the order `assert`
+  // mode uses. Taken after the scroll the two captures are byte-identical, and
+  // this lane does not commit a duplicate blob when the order alone decides it.
   await shot(page, "settings");
+  const lifecycle = await auditLifecycleActions(label, ["Archive", "Reinstall latest"], true);
   writeFileSync(
     path.join(outDir, `${label}-state.json`),
     JSON.stringify(
@@ -397,6 +407,207 @@ if (mode === "stranded") {
     ),
     "utf8",
   );
+}
+
+// ---------------------------------------------------------------------------
+// ROUND 5 ITEM 3 — the recovery actions CLICKED, not merely rendered.
+//
+// The earlier rounds proved the pair RENDERS. The reviewer asked for the pair
+// to be USED and for the resulting state to be captured. These two modes drive
+// the real buttons on the real settings surface and read what the application
+// does afterwards.
+//
+// Both run against the RECOVERABLE unactivated-newer fixture
+// (`drivers/recovery-unactivated-newer-fixture.sql`): a live default marketplace
+// row at 0.1.5 for the BUNDLED package, with the bundled 0.1.0 serving. That is
+// the shape that produces a serving-provenance record, which is what makes the
+// "Installed but not in service" row render at all. A state where NOTHING serves
+// the package deliberately says nothing here, so it cannot be used for this.
+// ---------------------------------------------------------------------------
+
+/** This app holds a `/api/notifications/stream` SSE connection open, so the
+ *  page NEVER reaches `networkidle`. Waiting on it therefore always costs the
+ *  full timeout. These modes wait a short, bounded moment instead. */
+const settle = async (ms = 2500) => {
+  await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(ms);
+};
+
+/** The two observables the #2762 state is made of, read off the live DOM. */
+async function readServingRow() {
+  const notInService = await page.locator('[data-slot="settings-not-in-service"]').count();
+  const title =
+    notInService > 0
+      ? (await page.locator('[data-slot="settings-not-in-service"]').first().innerText())
+          .trim()
+          .replace(/\s+/g, " ")
+      : null;
+  const bodyText = await page.evaluate(() => document.body.innerText);
+  const updateLine = (/^.*(?:installed but not in service|Currently on version).*$/m.exec(bodyText) ??
+    [])[0];
+  return { named: notInService > 0, title, updateLine: updateLine?.trim() ?? null, bodyText };
+}
+
+/** Click a real button on the settings surface and let the action settle.
+ *  A recovery action REDIRECTS on success and renders `recovery-error` on
+ *  failure, so both outcomes are observable without guessing. */
+async function clickAndSettle(tag, buttonLabel, slot = 'button[data-slot="recovery-action"]') {
+  const btn = page.locator(slot).filter({ hasText: buttonLabel }).first();
+  const present = (await btn.count()) > 0;
+  check(`${tag}: "${buttonLabel}" is present to click`, present);
+  if (!present) return { clicked: false, error: null };
+  const enabled = await btn.isEnabled();
+  check(`${tag}: "${buttonLabel}" is ENABLED before the click`, enabled);
+  say(`CLICK "${buttonLabel}"`);
+  await btn.click();
+  // A recovery action redirects on success, so give the navigation and the
+  // server action a real but BOUNDED moment. See `settle`.
+  await settle(6000);
+  const errNode = page.locator('[data-slot="recovery-error"]');
+  const error = (await errNode.count()) > 0 ? (await errNode.first().innerText()).trim() : null;
+  check(`${tag}: the click did not report a failure`, error === null, error ?? "no error node");
+  return { clicked: true, error };
+}
+
+if (mode === "retry-recovery") {
+  const out = {};
+  await page.goto(SETTINGS_URL, { waitUntil: "domcontentloaded" });
+  await settle();
+
+  const before = await readServingRow();
+  out.before = { named: before.named, title: before.title, updateLine: before.updateLine };
+  say(`BEFORE not-in-service row: ${JSON.stringify(out.before)}`);
+  check(
+    `${label}: the "Installed but not in service" state is named BEFORE the click`,
+    before.named && /Installed but not in service/.test(before.title ?? ""),
+    before.named ? "named" : "not rendered",
+  );
+  await auditLifecycleActions(`${label}-before`, [], false);
+  await shot(page, "before-settings");
+
+  const clicked = await clickAndSettle(label, "Retry activation");
+  out.retryError = clicked.error;
+  // A successful retry redirects, so return to the settings surface before
+  // reading the resulting state. Reading wherever the redirect landed reports
+  // an empty surface and says nothing about the install.
+  await page.goto(SETTINGS_URL, { waitUntil: "domcontentloaded" });
+  await settle();
+  await shot(page, "after-settings");
+
+  const after = await readServingRow();
+  out.after = { named: after.named, title: after.title, updateLine: after.updateLine };
+  say(`AFTER not-in-service row: ${JSON.stringify(out.after)}`);
+  // THE assertion of item 3a: the state the row named is gone.
+  check(
+    `${label}: the "Installed but not in service" row CLEARED after Retry activation`,
+    after.named === false,
+    after.named ? `still rendered: ${after.title}` : "row no longer rendered",
+  );
+  const lifecycleAfter = await auditLifecycleActions(`${label}-after`, [], false);
+  out.lifecycleAfter = lifecycleAfter;
+
+  // The strongest available witness: the SETUP surface renders the manifest of
+  // whatever actually serves. Before the click that was the unstamped bundled
+  // 0.1.0; if the retry truly activated 0.1.5 it now carries that build's stamp.
+  await assertSetupPageRenders(`${label}-after`);
+  const placeholder = await assertDeclaredPlaceholder(`${label}-after`, expectServingVersion || "");
+  out.placeholderAfter = placeholder;
+  await shot(page, "after-connector-setup");
+  check(
+    `${label}: the SETUP surface now renders the retried version's manifest, so the retry actually put it in service`,
+    placeholder?.servedByBundle === false,
+    placeholder?.servedByBundle === false
+      ? "registry manifest is serving"
+      : "the bundle is still serving",
+  );
+
+  writeFileSync(path.join(outDir, `${label}-state.json`), JSON.stringify(out, null, 2), "utf8");
+}
+
+if (mode === "rollback-recovery") {
+  const out = {};
+  await page.goto(SETTINGS_URL, { waitUntil: "domcontentloaded" });
+  await settle();
+
+  const before = await readServingRow();
+  out.before = { named: before.named, title: before.title, updateLine: before.updateLine };
+  // The rollback is REPORTED, not demanded, from a particular starting state.
+  // It is offered on any live product install, and this run reaches it from the
+  // healthy one (0.1.5 installed and serving after a restart), which is the
+  // state an operator actually rolls back FROM. What round 5 asks about is not
+  // where the rollback starts but where it LEAVES you, which is the revisit
+  // below.
+  say(`BEFORE rollback, not-in-service row: ${JSON.stringify(out.before)}`);
+  await shot(page, "before-settings");
+
+  const rolled = await clickAndSettle(label, "Roll back to bundled");
+  out.rollbackError = rolled.error;
+  await shot(page, "after-settings");
+  const afterRoll = await readServingRow();
+  out.afterRollback = { named: afterRoll.named, updateLine: afterRoll.updateLine };
+  say(`AFTER rollback: ${JSON.stringify(out.afterRollback)}`);
+
+  // ---------------------------------------------------------------------
+  // Round 5's NEW behaviour: rollback must not be a one-way door. Visit the
+  // page AGAIN, as an operator would, and read whether the archived install is
+  // still reachable. Round 4 pinned the defect: the live-bundled +
+  // archived-install pair made the next visit `ambiguous_target`, which hid
+  // every way back.
+  // ---------------------------------------------------------------------
+  await page.goto(SETTINGS_URL, { waitUntil: "domcontentloaded" });
+  await settle();
+  const revisit = await auditLifecycleActions(`${label}-revisit`, [], false);
+  out.revisitLifecycle = revisit;
+  const ambiguous = revisit.visibleReasons.some((r) =>
+    /More than one install matches your scope/i.test(r),
+  );
+  check(
+    `${label}: the revisit after rollback is NOT an "ambiguous target" dead end`,
+    !ambiguous,
+    ambiguous ? JSON.stringify(revisit.visibleReasons) : "no ambiguity reason rendered",
+  );
+  const wayBack = revisit.buttons.find(
+    (b) => /^(Activate|Retry activation)/i.test(b.label) && b.disabled === false,
+  );
+  check(
+    `${label}: a way back is OFFERED on the revisit (Activate or Retry activation, enabled)`,
+    wayBack !== undefined,
+    wayBack ? `"${wayBack.label}" enabled` : `none enabled: ${JSON.stringify(revisit.buttons)}`,
+  );
+  out.wayBackOffered = wayBack ?? null;
+  await shot(page, "wayback-offered");
+
+  // ...and it must WORK, not merely render.
+  if (wayBack) {
+    const isRecovery = wayBack.slot === "recovery-action";
+    const clickedBack = await clickAndSettle(
+      `${label}-wayback`,
+      wayBack.label,
+      isRecovery ? 'button[data-slot="recovery-action"]' : "button",
+    );
+    out.wayBackError = clickedBack.error;
+    // Restore redirects to the installed LIST, so come back to the settings
+    // surface before reading it. Auditing wherever the redirect landed reports
+    // an empty button set and says nothing about the install.
+    await page.goto(SETTINGS_URL, { waitUntil: "domcontentloaded" });
+    await settle();
+    await shot(page, "wayback-after");
+    const restored = await auditLifecycleActions(`${label}-restored`, [], false);
+    out.restoredLifecycle = restored;
+    // A live install offers the recovery pair again; an archived one does not
+    // (`extension-settings-screen.tsx`: showRetryActivation needs !isArchived).
+    // Their return is therefore the observable that the install is live again.
+    const recoveryPairBack = restored.buttons.some((b) => /Retry activation/i.test(b.label));
+    check(
+      `${label}: the way-back action WORKED — the install is live again`,
+      recoveryPairBack,
+      recoveryPairBack
+        ? "the recovery pair renders again, which only a live install does"
+        : `buttons: ${JSON.stringify(restored.buttons)}`,
+    );
+  }
+
+  writeFileSync(path.join(outDir, `${label}-state.json`), JSON.stringify(out, null, 2), "utf8");
 }
 
 if (mode === "negative" || mode === "install") {
