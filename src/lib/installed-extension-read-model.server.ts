@@ -32,11 +32,25 @@ import "server-only";
 // path compares against + lazy per-worker re-sync, OR a pub/sub teardown signal).
 // PR-2 delivers the per-process runtime-sourced predicate + this read-model ONLY;
 // it does NOT attempt cross-worker live-uninstall.
+//
+// SUPERSESSION (cinatra#2848). The row this model reports is the package's
+// EFFECTIVE row: a live workspace-anchored install supersedes every organization
+// row of the same package, and a superseded row is not a candidate for anything.
+// The read model applies that rule FIRST, from the same helper the lifecycle
+// target resolver applies (`effectiveInstallRows`), so a row the write-side
+// seams refuse to address can never be the row a read-model-driven surface
+// reports. There is no unfiltered consumer: every caller of
+// `buildInstalledExtensionReadModel` asks "which row is in force for this actor",
+// and the archived/restore surfaces that legitimately need a superseded row read
+// the canonical store directly, not this model.
 
 import {
   readInstalledExtensionsByPackageName,
 } from "@cinatra-ai/extensions/canonical-store";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
+// THE supersession rule, expressed once (cinatra#2698 S4). This module CONSUMES
+// it; it never re-derives it. See `pickAddressableRowForActor` below.
+import { effectiveInstallRows } from "@cinatra-ai/extensions/lifecycle-target-resolver";
 import {
   type PackageStoreFs,
   type PackageStoreRecord,
@@ -168,12 +182,36 @@ function actorScopeForPick(actor: ActorContext): ActorScopeForPick {
  * (active|locked) over an archived one (a live install wins the actor-visible
  * status), and within live prefer `active` over `locked`. Returns null when NO
  * row is addressable for the actor (status `absent`).
+ *
+ * SUPERSESSION FIRST (cinatra#2698 S4 / cinatra#2848) — the same order the
+ * write-side seams apply, and the same order `addressableLifecycleRows` already
+ * applies for lifecycle dispatch. A live WORKSPACE-anchored install is the
+ * package's EFFECTIVE row and supersedes every organization row of that package,
+ * so the superseded rows drop out BEFORE the scope filter and before the status
+ * ranking. Order matters: supersession keys on the workspace row, which sits at
+ * a DIFFERENT scope than the org rows it supersedes, so a scope filter applied
+ * first can never see the pair — the superseded org row would simply be the only
+ * candidate left and would be reported as the package's row.
+ *
+ * Without this the read model reported a row the write side had already refused
+ * to address: a superseded organization row surfaced as the actor's `active`
+ * install (kind, owner scope, teardown state and all), and every read-model-driven
+ * surface — the CG-5 runtime-cube serve gate, `src/lib/dashboards/runtime-cube-serve-host.ts`
+ * — decided from it.
+ *
+ * The rule is CONSUMED, not re-derived: {@link effectiveInstallRows} is the one
+ * place supersession is written down. `rows` is always ONE package's rows here
+ * (`readInstalledExtensionsByPackageName`), which is exactly the per-package row
+ * set that helper is defined over. With no live workspace row it returns `rows`
+ * unchanged, so every pre-S4 pick is byte-identical.
  */
 function pickAddressableRowForActor(
   rows: readonly InstalledExtension[],
   scope: ActorScopeForPick,
 ): InstalledExtension | null {
-  const addressable = rows.filter((r) => isInstallRowAddressableByActor(r, scope));
+  const addressable = effectiveInstallRows(rows).filter((r) =>
+    isInstallRowAddressableByActor(r, scope),
+  );
   if (addressable.length === 0) return null;
   // Cross-org rows (addressable only because a platform_admin sees every org)
   // rank AFTER the actor's own-org / workspace rows, so an admin's read-model
