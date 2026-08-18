@@ -566,8 +566,21 @@ describe("hot-install canary — CUBE/PORTLET (CG-5 serve-gate, BOTH transports)
     const rm = await buildInstalledExtensionReadModel(PKG, actor(orgScope), {
       readRows: async () => cell.rows(),
       discoverRecords: async () => (trusted ? [{ packageName: PKG } as never] : []),
-      resolveTrustAnchor: async () =>
-        trusted ? ({ integrity: "sha512-canary", contentHash: "ch", registryUrl: REGISTRY, trustDecision: true } as never) : null,
+      // cinatra#2848: the read-model's trust verdict must describe the row it
+      // PICKED — an anchor is only honoured when it carries that row's canonical
+      // id. This canary asserts the STATUS-driven serve flip, not row agreement,
+      // so the fixture anchor answers for whatever row the model picked (which
+      // is what a resolution targeted at that row yields in production).
+      resolveTrustAnchor: async (_pkg: string, target: { installId: string | null }) =>
+        trusted
+          ? ({
+              installId: target.installId,
+              integrity: "sha512-canary",
+              contentHash: "ch",
+              registryUrl: REGISTRY,
+              trustDecision: true,
+            } as never)
+          : null,
       verifyIntegrity: async () => true,
       classifyTrust: () => ({ tier: "trusted-host", trusted, reason: "canary" }) as never,
     });

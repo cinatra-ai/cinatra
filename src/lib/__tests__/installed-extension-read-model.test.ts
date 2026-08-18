@@ -3,7 +3,8 @@
 // Exercises the query-time read-model's derived fields: actor visibility, the
 // 3-status + absent mapping (archived≈disabled-recoverable, absent≈uninstalled),
 // the live-wins row pick, teardown state, activation generation, the
-// supersession-first row pick (cinatra#2848), and the best-effort trust verdict.
+// supersession-first row pick + the picked-row-bound trust verdict
+// (cinatra#2848), and the best-effort trust verdict.
 // Runs in the root vitest suite (`src/**/__tests__/**/*.test.ts` is in the root
 // include — the gate of record).
 
@@ -11,7 +12,11 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { buildInstalledExtensionReadModel } from "@/lib/installed-extension-read-model.server";
+import {
+  buildInstalledExtensionReadModel,
+  type ReadModelAnchorTarget,
+} from "@/lib/installed-extension-read-model.server";
+import type { TrustVerdict } from "@/lib/extension-trust";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import { PLATFORM_OWNER_SENTINEL } from "@cinatra-ai/extensions/canonical-types";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
@@ -173,6 +178,9 @@ describe("buildInstalledExtensionReadModel — actor-scoped status derivation", 
           { packageName: "@cinatra-ai/demo-connector", uiSurface: "schema-config", configSchema: null } as never,
         ],
       resolveTrustAnchor: async () => ({
+        // cinatra#2848: the anchor must identify the row the model picked
+        // (`row()`'s default id) or the verdict degrades to null.
+        installId: "iext_x",
         integrity: "sha512-x",
         contentHash: "ch",
         registryUrl: "https://registry.example",
@@ -197,6 +205,9 @@ describe("buildInstalledExtensionReadModel — cinatra#792 anchor-bound record s
   const DIG_A = "a1".padEnd(64, "0");
   const DIG_B = "b2".padEnd(64, "0");
   const anchor = {
+    // cinatra#2848: identifies `row()`'s default id — these cases pin the
+    // RECORD selection, so the identity check must be satisfied, not exercised.
+    installId: "iext_x",
     integrity: "sha512-x",
     contentHash: "ch",
     registryUrl: "https://registry.example",
@@ -264,6 +275,14 @@ describe("buildInstalledExtensionReadModel — cinatra#792 anchor-bound record s
 // The helper is NOT mocked here: these drive the real
 // `@cinatra-ai/extensions/lifecycle-target-resolver` export through the real
 // `buildInstalledExtensionReadModel`; only the canonical-store READ is injected.
+//
+// WHAT THE REVERT SHOWS. Four cases below are BEHAVIOUR CHANGES — they fail on
+// the pre-fix pick: the better-ranked org row, the array-order case, the platform
+// admin's own-org row, and the same-org survivor. The two marked INVARIANT PIN
+// already passed pre-fix (the status ranking / the scope filter decided them on
+// their own); they are kept because they pin the NARROWNESS of the rule, and
+// they are labelled so no claim rests on them. The no-supersession cases at the
+// bottom pin shapes that must not move at all.
 // ---------------------------------------------------------------------------
 
 /** The exact workspace anchor the S2 write path persists: org-NULL, `workspace`,
@@ -312,7 +331,11 @@ describe("buildInstalledExtensionReadModel — supersession-first (cinatra#2848)
     expect(rm.kind).toBe("connector");
   });
 
-  it("a superseded ARCHIVED organization row does not report `archived` / `torn-down`", async () => {
+  // INVARIANT PIN (not a behaviour change): the live workspace row already
+  // out-ranked the archived org row pre-fix via the status ranking, so this
+  // passes with or without supersession. It pins that supersession did not
+  // INVERT it — a superseded archived row must never become the reported row.
+  it("INVARIANT PIN: a superseded ARCHIVED organization row does not report `archived` / `torn-down`", async () => {
     const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
       ...baseDeps,
       readRows: async () => [
@@ -357,7 +380,11 @@ describe("buildInstalledExtensionReadModel — supersession-first (cinatra#2848)
     expect(rm.ownerScope?.ownerLevel).toBe("workspace");
   });
 
-  it("supersession-survivor: an actor whose org holds NO row still reads the workspace row", async () => {
+  // INVARIANT PIN (not a behaviour change): for an actor whose org holds no
+  // row, the org row was never addressable, so the scope filter alone already
+  // left the workspace row pre-fix. It pins that supersession did not take the
+  // survivor away — the model must not go `absent` for these actors.
+  it("INVARIANT PIN: an actor whose org holds NO row still reads the workspace row", async () => {
     const otherOrgActor: ActorContext = { ...actor, organizationId: "org-9" };
     const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", otherOrgActor, {
       ...baseDeps,
@@ -409,5 +436,196 @@ describe("buildInstalledExtensionReadModel — supersession-first (cinatra#2848)
     });
     expect(rm.status).toBe("active");
     expect(rm.ownerScope?.organizationId).toBe("org-1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2848 — ONE ROW, ONE VERDICT: the trust verdict describes the PICKED
+// row or is null.
+//
+// The row pick and the trust anchor are TWO resolutions. Before this change the
+// anchor was resolved at `actor.organizationId` with no supersession awareness,
+// so for a superseded pair (a live org row beside a live workspace row) the
+// record's status/kind/ownerScope came from the WORKSPACE row while its
+// trust/signatureVerified could come from the superseded ORG row. The CG-5
+// runtime-cube serve gate reads `status` and `trust` together as ONE effective
+// install, so that split record could serve an untrusted effective install on a
+// trusted superseded anchor (or deny a trusted one).
+//
+// These drive the real `buildInstalledExtensionReadModel` with DISTINCT anchors
+// per row and OPPOSITE trust outcomes, so a verdict sourced from the wrong row
+// is visible in the assertion rather than hidden behind one synthetic anchor.
+// ---------------------------------------------------------------------------
+
+const TRUSTED_REGISTRY = "https://trusted.example";
+const ROGUE_REGISTRY = "https://rogue.example";
+
+/** An anchor BOUND to a canonical row id, carrying the registry that decides its verdict. */
+function anchorForRow(installId: string | null, registryUrl: string) {
+  return {
+    installId,
+    integrity: "sha512-x",
+    contentHash: "ch",
+    registryUrl,
+    trustDecision: true,
+    version: "1.0.0",
+    // An UNKNOWN signature transport (a ":"-prefixed non-v2 scheme) makes
+    // `resolveSignatureVerdict` a hard `false` rather than `undefined`, so
+    // `signatureVerified` distinguishes "computed from THIS anchor" (false)
+    // from "degraded — no verdict at all" (null).
+    signature: "bogus-scheme:zz",
+  };
+}
+
+/**
+ * Registry-keyed classifier: the reported verdict is traceable to the exact
+ * anchor it was computed from, which is the whole point of these cases.
+ */
+const classifyByRegistry = (input: { registryUrl?: string | null }): TrustVerdict =>
+  input.registryUrl === TRUSTED_REGISTRY
+    ? { tier: "trusted-bootstrap", trusted: true, reason: "test: trusted registry" }
+    : { tier: "untrusted", trusted: false, reason: "test: rogue registry" };
+
+/** One store record for the package, so a digest-unbound anchor selects it unambiguously. */
+const oneRecord = async () =>
+  [{ packageName: "@cinatra-ai/demo-connector", uiSurface: "schema-config", configSchema: null } as never];
+
+/** Deps that compute a real verdict from whatever anchor the resolver returns. */
+const trustDeps = {
+  getActivationGeneration: () => 7,
+  discoverRecords: oneRecord,
+  verifyIntegrity: async () => true,
+  classifyTrust: classifyByRegistry,
+};
+
+/** The superseded pair: a live org-1 row + the live workspace row that supersedes it. */
+const supersededPair = async (): Promise<InstalledExtension[]> => [
+  row({ id: "iext_org", status: "active", organizationId: "org-1" }),
+  workspaceRow({ status: "active" }),
+];
+
+/**
+ * A resolver that answers per ROW IDENTITY — what a resolution targeted at the
+ * picked row yields. Records what it was asked for.
+ */
+function anchorsByRow(
+  byId: Record<string, ReturnType<typeof anchorForRow>>,
+  asked: ReadModelAnchorTarget[],
+) {
+  return async (_packageName: string, target: ReadModelAnchorTarget) => {
+    asked.push(target);
+    return (byId[target.installId ?? ""] ?? null) as never;
+  };
+}
+
+describe("buildInstalledExtensionReadModel — the trust verdict describes the PICKED row (cinatra#2848)", () => {
+  it("trusted superseded ORG anchor + untrusted WORKSPACE anchor → the UNTRUSTED workspace verdict is reported", async () => {
+    const asked: ReadModelAnchorTarget[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: supersededPair,
+      resolveTrustAnchor: anchorsByRow(
+        {
+          iext_org: anchorForRow("iext_org", TRUSTED_REGISTRY),
+          iext_workspace: anchorForRow("iext_workspace", ROGUE_REGISTRY),
+        },
+        asked,
+      ),
+    });
+    // The record describes the workspace row...
+    expect(rm.ownerScope?.ownerLevel).toBe("workspace");
+    expect(rm.status).toBe("active");
+    // ...and so does its trust verdict. The trusted superseded org anchor never
+    // reaches the serve gate: this is the "authorize serving an untrusted
+    // effective install" direction of the split.
+    expect(rm.trust?.trusted).toBe(false);
+    expect(rm.trust?.tier).toBe("untrusted");
+    expect(rm.signatureVerified).toBe(false); // computed from the workspace anchor
+    // The resolution was ASKED for the effective (workspace) identity — the
+    // actor's own org (`org-1`) is never the question.
+    expect(asked).toEqual([{ installId: "iext_workspace", organizationId: null }]);
+  });
+
+  it("untrusted superseded ORG anchor + trusted WORKSPACE anchor → the TRUSTED workspace verdict is reported", async () => {
+    const asked: ReadModelAnchorTarget[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: supersededPair,
+      resolveTrustAnchor: anchorsByRow(
+        {
+          iext_org: anchorForRow("iext_org", ROGUE_REGISTRY),
+          iext_workspace: anchorForRow("iext_workspace", TRUSTED_REGISTRY),
+        },
+        asked,
+      ),
+    });
+    // The inverse direction: the picked row's REAL trust survives — the fix is
+    // not "always deny", and a superseded untrusted anchor cannot deny it.
+    expect(rm.ownerScope?.ownerLevel).toBe("workspace");
+    expect(rm.trust?.trusted).toBe(true);
+    expect(rm.trust?.tier).toBe("trusted-bootstrap");
+    expect(asked[0]).toEqual({ installId: "iext_workspace", organizationId: null });
+  });
+
+  it("BACKSTOP: a resolver that answers for the superseded ORG row degrades trust to null (never reports the wrong row)", async () => {
+    // Exactly what `makeDefaultInstallAnchorResolver(actor.organizationId)` does
+    // on main: a supersession-UNAWARE resolution that lands on the org row while
+    // the model reports the workspace row. The identity check catches it.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: supersededPair,
+      resolveTrustAnchor: async () => anchorForRow("iext_org", TRUSTED_REGISTRY) as never,
+    });
+    expect(rm.ownerScope?.ownerLevel).toBe("workspace");
+    expect(rm.trust).toBeNull();
+    expect(rm.signatureVerified).toBeNull();
+    // The FIELD degrades, never the record: the canonical status fields stay
+    // authoritative and store presence is still reported.
+    expect(rm.actorVisible).toBe(true);
+    expect(rm.status).toBe("active");
+    expect(rm.sourcePackageStoreRecordPresent).toBe(true);
+  });
+
+  it("BACKSTOP: an IDENTITY-LESS anchor cannot prove it describes the picked row → trust null", async () => {
+    // A legacy/identity-less anchor for a picked INSTALL row proves nothing: the
+    // rows this model reads always carry a canonical id, so "no installId" is
+    // treated as disagreement rather than as agreement-by-default.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: supersededPair,
+      resolveTrustAnchor: async () => anchorForRow(null, TRUSTED_REGISTRY) as never,
+    });
+    expect(rm.ownerScope?.ownerLevel).toBe("workspace");
+    expect(rm.trust).toBeNull();
+    expect(rm.signatureVerified).toBeNull();
+  });
+
+  it("no supersession: the resolution is asked for the picked ORG row's own identity and its agreeing verdict IS reported", async () => {
+    // The check is not a blanket null: an anchor that DOES describe the picked
+    // row reports its verdict exactly as before.
+    const asked: ReadModelAnchorTarget[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: async () => [row({ status: "active" })], // id `iext_x`, org-1
+      resolveTrustAnchor: anchorsByRow({ iext_x: anchorForRow("iext_x", TRUSTED_REGISTRY) }, asked),
+    });
+    expect(asked).toEqual([{ installId: "iext_x", organizationId: "org-1" }]);
+    expect(rm.trust?.trusted).toBe(true);
+    expect(rm.signatureVerified).toBe(false);
+  });
+
+  it("the resolution targets the PICKED ROW's scope, not the actor's (platform admin reading another org's row)", async () => {
+    // The admin's own org holds no row; the picked row is org-OTHER's. Resolving
+    // at the ACTOR's org would answer for a scope that has no row at all.
+    const platformAdmin: ActorContext = { ...actor, platformRole: "platform_admin" };
+    const asked: ReadModelAnchorTarget[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", platformAdmin, {
+      ...trustDeps,
+      readRows: async () => [row({ id: "iext_other", status: "active", organizationId: "org-OTHER" })],
+      resolveTrustAnchor: anchorsByRow({ iext_other: anchorForRow("iext_other", TRUSTED_REGISTRY) }, asked),
+    });
+    expect(asked).toEqual([{ installId: "iext_other", organizationId: "org-OTHER" }]);
+    expect(rm.ownerScope?.organizationId).toBe("org-OTHER");
+    expect(rm.trust?.trusted).toBe(true);
   });
 });

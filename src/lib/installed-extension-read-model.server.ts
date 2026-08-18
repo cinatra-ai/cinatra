@@ -43,6 +43,25 @@ import "server-only";
 // `buildInstalledExtensionReadModel` asks "which row is in force for this actor",
 // and the archived/restore surfaces that legitimately need a superseded row read
 // the canonical store directly, not this model.
+//
+// ONE ROW, ONE VERDICT (cinatra#2848). The row pick above and the trust verdict
+// below are TWO resolutions, and a record that mixes them describes no install
+// that exists: the status/kind/ownerScope fields would come from the effective
+// row while `trust`/`signatureVerified` came from another. The CG-5 serve gate
+// consumes `status` and `trust` TOGETHER as one effective install, so a split
+// record can authorize serving on a row the actor does not run. Two mechanisms
+// keep the two resolutions on the SAME row:
+//   1. TARGETED — the default anchor resolution is built for the PICKED ROW's
+//      scope (`row.organizationId`, `org-then-workspace`), not the actor's, so
+//      it lands on the row the read model reports rather than on a superseded
+//      organization row of the same package.
+//   2. PROVEN — the resolved anchor must carry the picked row's canonical id
+//      (`anchor.installId === row.id`). Any disagreement, and any anchor that
+//      cannot prove its identity at all, degrades `trust`/`signatureVerified`
+//      to null. Fail-safe doctrine: a failure degrades the FIELD, never the
+//      record — and `trust: null` is a DENY at the serve gate, never a pass.
+// (1) is the correctness win; (2) is the backstop that holds even if the
+// resolver's selection semantics ever drift from the effective-row rule.
 
 import {
   readInstalledExtensionsByPackageName,
@@ -141,13 +160,35 @@ const realStoreFs: PackageStoreFs = {
   readFile: (p) => readFile(p, "utf8"),
 };
 
+/**
+ * The identity of the row the read model PICKED — the package's effective row
+ * for this actor. Handed to the trust-anchor resolution so the verdict targets
+ * (and is checked against) THAT row rather than the actor's own org scope
+ * (cinatra#2848; see "ONE ROW, ONE VERDICT" in the module header).
+ */
+export type ReadModelAnchorTarget = {
+  /** The picked row's canonical `installed_extension` id. */
+  readonly installId: string | null;
+  /** The picked row's OWN org scope — null for a workspace/platform anchor. */
+  readonly organizationId: string | null;
+};
+
 export type InstalledExtensionReadModelDeps = {
   /** Read all canonical rows for a package (override for tests). */
   readRows?: (packageName: string) => Promise<InstalledExtension[]>;
   /** Discover store records (override for tests); defaults to the real `/data` store. */
   discoverRecords?: (storeRoot: string) => Promise<readonly PackageStoreRecord[]>;
-  /** Resolve the trusted install anchor (override for tests); null when no real-pipeline install. */
-  resolveTrustAnchor?: (packageName: string) => Promise<InstallTrustAnchor | null>;
+  /**
+   * Resolve the trusted install anchor (override for tests); null when no
+   * real-pipeline install. Receives the PICKED ROW's identity so an injected
+   * resolver can answer for the same row the model reports — the default
+   * resolver is built for that row's scope, and the identity is re-checked
+   * against `anchor.installId` either way.
+   */
+  resolveTrustAnchor?: (
+    packageName: string,
+    target: ReadModelAnchorTarget,
+  ) => Promise<InstallTrustAnchor | null>;
   /** Re-verify the materialized package against the anchor (override for tests). */
   verifyIntegrity?: (
     record: PackageStoreRecord,
@@ -242,6 +283,9 @@ function pickAddressableRowForActor(
  * UIs). It is NOT a render/execute authorization — rendering a runtime
  * schema-config surface still passes the live trust gate in
  * `resolveRuntimeConnectorUiRecord`, and action endpoints keep their own gates.
+ * It is, however, read TOGETHER with `status` by the CG-5 serve gate, so it
+ * describes the PICKED row or is null — never another row of the package
+ * (cinatra#2848; see "ONE ROW, ONE VERDICT" in the module header).
  */
 export async function buildInstalledExtensionReadModel(
   packageName: string,
@@ -298,13 +342,44 @@ export async function buildInstalledExtensionReadModel(
     const candidates = records.filter((r) => r.packageName === packageName);
     sourcePackageStoreRecordPresent = candidates.length > 0;
 
+    // cinatra#2848 — resolve the anchor for the PICKED ROW, not for the actor.
+    // The row above is the package's EFFECTIVE row (supersession applied), which
+    // for a superseded pair sits at a DIFFERENT scope than the actor: resolving
+    // at `actor.organizationId` would answer for the superseded organization row
+    // while every other field of this record describes the workspace row.
+    // `org-then-workspace` is the supersession-aligned arm already on main (the
+    // owner ruling of 2026-08-16, the same arm `resolveRuntimeConnectorUiRecord`
+    // uses): with a live workspace row it resolves THAT anchor (reading its
+    // grant/journal at its own org-NULL scope), and with none it resolves the
+    // row's own org exactly as before. Supersession is NOT re-derived here — the
+    // scope is simply pointed at the row the effective-row rule already chose.
+    const anchorTarget: ReadModelAnchorTarget = {
+      installId: row.id ?? null,
+      organizationId: row.organizationId ?? null,
+    };
     const resolveTrustAnchor =
       deps.resolveTrustAnchor ??
       (await (async () => {
         const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
-        return makeDefaultInstallAnchorResolver(actor.organizationId ?? null);
+        return makeDefaultInstallAnchorResolver(anchorTarget.organizationId, "org-then-workspace");
       })());
-    const anchor = await resolveTrustAnchor(packageName);
+    const resolved = await resolveTrustAnchor(packageName, anchorTarget);
+
+    // IDENTITY BACKSTOP. The trust verdict may describe THE PICKED ROW or
+    // nothing — never another row. A resolver's row selection is its own
+    // (and a legacy/injected one need not be supersession-aware at all), so the
+    // agreement is PROVEN here from the anchor's canonical row id rather than
+    // assumed from the scope we asked at.
+    //
+    // An anchor that carries NO `installId` is refused too: an identity-less
+    // anchor cannot prove it describes the picked INSTALL row, and this model's
+    // rows always carry a canonical id, so "unknown identity" is treated as
+    // disagreement (fail-safe). Only legacy row views / pure unit fixtures
+    // produce one — the default resolver always stamps the row's id.
+    const anchor =
+      resolved && anchorTarget.installId !== null && (resolved.installId ?? null) === anchorTarget.installId
+        ? resolved
+        : null;
 
     // cinatra#792: with multi-digest retention (#796) several digests of one
     // package may legitimately be on disk — evaluate the trust verdict against
