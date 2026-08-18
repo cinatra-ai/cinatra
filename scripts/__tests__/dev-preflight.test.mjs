@@ -1563,6 +1563,242 @@ describe("whole-stack entry points — the guard the Makefile and package.json a
 });
 
 // ---------------------------------------------------------------------------
+// 3a-bis. scripts/setup.sh — the FIFTH whole-stack entry point
+// ---------------------------------------------------------------------------
+//
+// `make setup` runs `bash scripts/setup.sh`, which brings the WHOLE stack up
+// (`docker compose … up -d`) exactly like `make dev` and `pnpm services`. It had
+// no guard at all: in a lane whose COMPOSE_PROJECT_NAME and service URLs live in
+// `.env.local`, setup ignored the lane's project (compose fell back to the
+// directory-derived one), published the four historical defaults, and bypassed
+// every refusal this branch added.
+//
+// Its guard cannot be the entry points' one-line `&&` chain. setup.sh runs under
+// `set -e`, and errexit EXEMPTS a command that is part of an `&&` list — so a
+// refusal would skip the `up` and then let the REST of setup run to "Setup
+// complete!". The shape here is therefore: a standalone assignment with an
+// explicit `|| error`, then `eval` on its own line.
+//
+// Same method as the tests above: take the guard out of the REAL file and run
+// it, with a marker standing in for everything setup.sh does afterwards.
+// Reaching the marker means the real script would have reached its `up`.
+
+describe("scripts/setup.sh — the fifth guarded whole-stack entry point", () => {
+  const SHARED_STEP = path.join(REPO_ROOT, "scripts", "dev-compose-env.mjs");
+  const SETUP_SH_PATH = path.join(REPO_ROOT, "scripts", "setup.sh");
+  const SETUP_SH = readFileSync(SETUP_SH_PATH, "utf8");
+  const SETUP_LINES = SETUP_SH.split("\n");
+
+  // Plain throws, not `expect`: a setup.sh that loses its guard must fail a
+  // NAMED test rather than blow up this file's collection.
+
+  /**
+   * setup.sh's own preamble — shebang, `set -euo pipefail`, the colour vars and
+   * the info()/error() helpers, up to and including prompt(). Taken from the
+   * real file so the guard below runs under the REAL shell options and the REAL
+   * `error` (which is what has to exit 1).
+   */
+  const setupPreamble = () => {
+    const end = SETUP_LINES.findIndex((l) => l.startsWith("prompt()"));
+    if (end < 0) throw new Error("scripts/setup.sh lost its info()/error() preamble");
+    const preamble = SETUP_LINES.slice(0, end + 1).join("\n");
+    if (!/^set -[a-z]*e/m.test(preamble)) {
+      throw new Error("scripts/setup.sh no longer sets -e; the guard's abort reasoning changes");
+    }
+    return preamble;
+  };
+
+  /** The assign → `|| error` → eval block, verbatim from scripts/setup.sh. */
+  const setupGuard = () => {
+    const start = SETUP_LINES.findIndex((l) => l.startsWith("CINATRA_COMPOSE_ENV="));
+    if (start < 0) throw new Error("no compose-env guard in scripts/setup.sh");
+    const end = SETUP_LINES.findIndex(
+      (l, i) => i >= start && l.startsWith('eval "$CINATRA_COMPOSE_ENV"'),
+    );
+    if (end < start) throw new Error("scripts/setup.sh never evals the guard's output");
+    return SETUP_LINES.slice(start, end + 1).join("\n");
+  };
+
+  /** The line number of setup.sh's first `docker compose`, 1-based. */
+  const firstComposeLine = () =>
+    SETUP_LINES.findIndex((l) => /^\s*docker compose /.test(l)) + 1;
+  const guardLine = () =>
+    SETUP_LINES.findIndex((l) => l.startsWith("CINATRA_COMPOSE_ENV=")) + 1;
+
+  it("runs the shared step with --require-manageable, like the other whole-stack ups", () => {
+    expect(setupGuard()).toContain("node scripts/dev-compose-env.mjs --require-manageable");
+    expect(setupGuard()).toContain('eval "$CINATRA_COMPOSE_ENV"');
+  });
+
+  // The `&&`-chain shape is CORRECT in the Makefile and package.json (make and
+  // npm check the whole line's status) and WRONG here (errexit exempts it, so
+  // the script would sail on). Assert setup.sh does not use it.
+  it("does not chain the guard with && , which set -e would exempt", () => {
+    expect(setupGuard()).not.toContain("&& eval");
+    expect(setupGuard()).not.toContain("&& docker compose");
+    expect(setupGuard()).toContain("|| error");
+    expect(SETUP_SH).not.toContain('eval "$(node scripts/dev-compose-env.mjs');
+  });
+
+  // Placement is the whole point: a guard AFTER the first compose call has
+  // already let that call run on the wrong project.
+  it("places the guard before the first compose invocation in the file", () => {
+    expect(guardLine()).toBeGreaterThan(0);
+    expect(firstComposeLine()).toBeGreaterThan(0);
+    expect(guardLine()).toBeLessThan(firstComposeLine());
+  });
+
+  // PROPAGATION, asserted structurally: `eval` exports into setup.sh's own
+  // shell, so every later `docker compose` inherits it as a child — but only
+  // because the script never changes directory and never runs compose inside a
+  // subshell or a function body, either of which the exports still reach but
+  // whose cwd would break the relative `-f` paths.
+  it("never cd's, so every later compose invocation shares the guard's cwd", () => {
+    expect(SETUP_LINES.filter((l) => /^\s*(cd|pushd|popd)\s/.test(l))).toEqual([]);
+  });
+
+  const MARKER = "SETUP_WOULD_CONTINUE";
+
+  /**
+   * Run setup.sh's REAL preamble + REAL guard through bash, with a marker
+   * standing in for the `up` and everything setup.sh does after it. The only
+   * edit is the script PATH (these run in a temp lane dir, not the checkout).
+   */
+  const runSetupGuard = ({ envLocal = "", extraEnv = {} } = {}) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "cinatra-2839-setup-"));
+    writeFileSync(path.join(dir, ".env.local"), envLocal);
+    const script = [
+      setupPreamble(),
+      setupGuard().replace(
+        "node scripts/dev-compose-env.mjs",
+        `node ${JSON.stringify(SHARED_STEP)}`,
+      ),
+      `echo ${MARKER}`,
+      "env",
+    ].join("\n");
+
+    const env = { ...process.env };
+    delete env.COMPOSE_PROJECT_NAME;
+    for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
+    for (const key of ["NANGO_SERVER_URL", "NANGO_DATABASE_URL", "REDIS_URL"]) delete env[key];
+    Object.assign(env, extraEnv);
+
+    const result = spawnSync("bash", ["-c", script], { cwd: dir, encoding: "utf8", env });
+    rmSync(dir, { recursive: true, force: true });
+
+    const reached = result.stdout.includes(MARKER);
+    const exported = Object.fromEntries(
+      result.stdout
+        .split("\n")
+        .map((line) => /^(COMPOSE_PROJECT_NAME|CINATRA_[A-Z_]*_HOST_PORT)=(.*)$/.exec(line))
+        .filter(Boolean)
+        .map((m) => [m[1], m[2]]),
+    );
+    return { ...result, reached, exported };
+  };
+
+  const LANE = [
+    "COMPOSE_PROJECT_NAME=p2839",
+    "NANGO_SERVER_URL=http://127.0.0.1:13003",
+    "NANGO_DATABASE_URL=postgresql://nango:nango@127.0.0.1:15435/nango",
+    "REDIS_URL=redis://127.0.0.1:16379",
+    "",
+  ].join("\n");
+
+  // The canonical `make setup` on a fresh clone: no project name, historical
+  // ports, setup proceeds exactly as before this branch.
+  it("sets an unscoped checkout up on the historical ports", () => {
+    const result = runSetupGuard();
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported).toEqual({
+      CINATRA_NANGO_SERVER_HOST_PORT: "3003",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "3009",
+      CINATRA_NANGO_DB_HOST_PORT: "5435",
+      CINATRA_REDIS_HOST_PORT: "6379",
+    });
+    expect(result.exported.COMPOSE_PROJECT_NAME).toBeUndefined();
+  });
+
+  // The blocker itself: a lane's project name and ports now reach every compose
+  // call setup.sh makes, instead of the directory-derived project + defaults.
+  it("exports the lane's project and ports for every later compose invocation", () => {
+    const result = runSetupGuard({ envLocal: LANE });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported).toEqual({
+      COMPOSE_PROJECT_NAME: "p2839",
+      CINATRA_NANGO_SERVER_HOST_PORT: "13003",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "13009",
+      CINATRA_NANGO_DB_HOST_PORT: "15435",
+      CINATRA_REDIS_HOST_PORT: "16379",
+    });
+  });
+
+  // …and the Nango health wait that follows must track the PUBLISHED port, or a
+  // lane on 13003 waits forever on the global 3003 (an unbounded `until` loop).
+  it("waits for Nango on the published port, not a hardcoded 3003", () => {
+    expect(SETUP_SH).toContain("${CINATRA_NANGO_SERVER_HOST_PORT:-3003}/health");
+    expect(SETUP_SH).not.toContain("http://127.0.0.1:3003/health");
+  });
+
+  // The abort that the `&&` shape would have swallowed: a refusal must stop the
+  // SCRIPT, not merely skip the `up`.
+  it("stops the whole script when a named lane states no port for a service", () => {
+    const result = runSetupGuard({
+      envLocal: LANE.replace("REDIS_URL=redis://127.0.0.1:16379\n", ""),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.reached).toBe(false);
+    expect(result.stderr).toContain("REDIS_URL");
+    // Attributable: setup.sh names itself in the abort, not just the step.
+    expect(result.stdout + result.stderr).toContain("scripts/setup.sh");
+    expect(result.exported).toEqual({});
+  });
+
+  it("stops the whole script when a lane stands a service down", () => {
+    const result = runSetupGuard({
+      envLocal: LANE.replace(
+        "REDIS_URL=redis://127.0.0.1:16379",
+        "REDIS_URL=rediss://cache.example.com:6380",
+      ),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.reached).toBe(false);
+    expect(result.stderr).toContain("refusing to start the whole stack");
+  });
+
+  it("corrects an invalid ambient host-port override before the stack starts", () => {
+    const result = runSetupGuard({ extraEnv: { CINATRA_REDIS_HOST_PORT: "not-a-port" } });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");
+    expect(result.stderr).toContain("not-a-port");
+  });
+
+  // A pin of this checkout's own compose default is a no-op, not a lane —
+  // `make setup` must survive it, same as `make dev`.
+  it("warns but still proceeds when the pinned name is this checkout's compose default", () => {
+    const result = runSetupGuard({
+      extraEnv: { COMPOSE_PROJECT_NAME: composeDefaultProjectName(REPO_ROOT) },
+    });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");
+  });
+
+  // Review item 2, at the entry point: a stated name compose would reject stops
+  // setup before anything starts.
+  it("stops the whole script when the stated project name is not canonical", () => {
+    const result = runSetupGuard({ extraEnv: { COMPOSE_PROJECT_NAME: "Cinatra!" } });
+    expect(result.status).not.toBe(0);
+    expect(result.reached).toBe(false);
+    expect(result.stderr).toContain("COMPOSE_PROJECT_NAME=Cinatra!");
+    expect(result.exported).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 3b. The advertised URL follows the PUBLISHED port (review item 2)
 // ---------------------------------------------------------------------------
 //
