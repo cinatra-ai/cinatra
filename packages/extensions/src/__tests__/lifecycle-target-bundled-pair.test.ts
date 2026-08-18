@@ -5,6 +5,8 @@ import {
   evaluateLifecycleCapabilities,
   resolveLifecycleScope,
   pickLifecycleTargetRow,
+  lifecycleRowSelectorFor,
+  validateLifecycleRowSelectorInput,
   AmbiguousLifecycleTargetError,
 } from "../lifecycle-target-resolver";
 
@@ -353,5 +355,78 @@ describe("the archived arm refuses to widen anything else", () => {
     ];
     const res = resolveLifecycleScope(rows, platformAdmin);
     expect(res.ok && res.row.id).toBe("iext_installed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RPC-BOUNDARY VALIDATION of the row selector (cinatra#2762 round-5
+// convergence).
+//
+// Two consumers of `LifecycleRowSelector` are parameters of EXPORTED
+// `"use server"` functions, so the value is deserialized from a payload a
+// direct invocation controls. The annotation declares the shape; this checks
+// it. It is not the security bound — the resolver's actor-recomputed
+// addressable set is (the tests above are what pin THAT) — it is what turns an
+// anonymous `no_addressable_row` into an attributable refusal, and what keeps
+// this module from carrying fields it never agreed to.
+// ---------------------------------------------------------------------------
+describe("validateLifecycleRowSelectorInput", () => {
+  it("accepts absent / null as the legitimate NO-SELECTOR case", () => {
+    for (const absent of [undefined, null]) {
+      const out = validateLifecycleRowSelectorInput(absent);
+      expect(out).toEqual({ ok: true, selector: null });
+    }
+  });
+
+  it("accepts every known owner tier, and returns the NARROWED value", () => {
+    for (const ownerLevel of ["user", "team", "organization", "workspace", "platform"]) {
+      expect(validateLifecycleRowSelectorInput({ ownerLevel })).toEqual({
+        ok: true,
+        selector: { ownerLevel },
+      });
+    }
+  });
+
+  it("REFUSES an ownerLevel outside the enum, and says which field", () => {
+    const out = validateLifecycleRowSelectorInput({ ownerLevel: "root" });
+    expect(out.ok).toBe(false);
+    expect(!out.ok && out.reason).toContain("ownerLevel");
+  });
+
+  it("REFUSES a non-string ownerLevel", () => {
+    for (const bad of [1, true, null, undefined, {}, ["workspace"]]) {
+      expect(validateLifecycleRowSelectorInput({ ownerLevel: bad }).ok).toBe(false);
+    }
+  });
+
+  it("REFUSES extra fields — the shape is EXACTLY the known one", () => {
+    // The point of an exact-shape check at a serialization boundary: a payload
+    // carrying `rowId` alongside a valid tier is a caller reaching for an
+    // addressing model this module deliberately does not have.
+    const out = validateLifecycleRowSelectorInput({
+      ownerLevel: "workspace",
+      rowId: "iext_other",
+    });
+    expect(out.ok).toBe(false);
+    expect(!out.ok && out.reason).toContain("rowId");
+  });
+
+  it("REFUSES a non-object, including the shapes JSON can produce", () => {
+    for (const bad of ["workspace", 7, true, [], [{ ownerLevel: "workspace" }], () => {}]) {
+      expect(validateLifecycleRowSelectorInput(bad).ok).toBe(false);
+    }
+  });
+
+  it("is TOTAL — it returns a verdict rather than throwing, for any input", () => {
+    for (const weird of [Object.create(null), new Date(), Symbol("x"), NaN]) {
+      expect(() => validateLifecycleRowSelectorInput(weird)).not.toThrow();
+    }
+  });
+
+  it("round-trips what the server-side mint produces", () => {
+    // The legitimate producer's output must pass unchanged — a validator that
+    // refused the mint would be a second addressing rule, not a shape check.
+    const minted = lifecycleRowSelectorFor(marketplace());
+    expect(validateLifecycleRowSelectorInput(minted)).toEqual({ ok: true, selector: minted });
   });
 });

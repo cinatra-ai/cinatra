@@ -514,6 +514,23 @@ export async function loadRuntimePackageExtensions(
   // a structural supertype of the store record, hence the `object` key type).
   const pendingSinks = new Map<object, VersionKeyedRegistrationSink>();
 
+  // cinatra#2762 (round-5 convergence): the version of the DEFAULT record whose
+  // register pass ACTUALLY SETTLED SUCCESSFULLY, captured at the settle hook
+  // from that record itself.
+  //
+  // It used to be a side lookup — a name-keyed map built by walking
+  // `orderedActivatable` before the pass, last-write-wins. With more than one
+  // default record for a package (the permitted ownership scopes can produce
+  // that), the version it reported was whichever default came LAST in discovery
+  // order, not the one whose registration succeeded — so the settings surface
+  // could name a version that never registered, which is the exact class of
+  // mis-report #2762 exists to end. Reading it off the settled record keeps the
+  // record IDENTITY: the version reported is the version that registered.
+  //
+  // Still last-write-wins ACROSS successful registrations, which is the truth:
+  // the last one to register owns the package's unversioned global names.
+  const servingVersionByPackage = new Map<string, string | null>();
+
   // PUBLISH the pre-resolved edge maps BEFORE activation (codex S8 round-0
   // #2): a dependent's `register(ctx)` may resolve capabilities during THIS
   // pass and must already see its pins (the post-activation refresh below
@@ -609,6 +626,14 @@ export async function loadRuntimePackageExtensions(
     // non-default register's retention; abort (discard) anything else. A record
     // with no pending sink is a no-op (default versions; versionless records).
     onRegisterSettled: (record, registered) => {
+      // Serving provenance, from THIS record (cinatra#2762). Defaults only: the
+      // default version is what owns the package's unversioned global names, so
+      // it is what a request reaches. The per-package no-failure rule still
+      // gates the actual write below — a register-passes/bootstrap-throws
+      // activation must not claim a half-activated version is serving.
+      if (registered && record.isDefault !== false) {
+        servingVersionByPackage.set(record.packageName, record.version ?? null);
+      }
       const sink = pendingSinks.get(record);
       if (!sink) return;
       pendingSinks.delete(record);
@@ -659,14 +684,11 @@ export async function loadRuntimePackageExtensions(
   );
   // cinatra#2762: the version of each INSTALL that actually registered, so a
   // request-time surface can tell "the installed version is serving" from "the
-  // row is live but the image's copy is what serves". Keyed off the DEFAULT
-  // record — the version that owns the package's unversioned global names, which
-  // is what a request reaches. Same success rule as the marker below.
-  const defaultVersionByPackage = new Map<string, string | null>();
-  for (const rec of orderedActivatable) {
-    if (rec.isDefault === false) continue;
-    defaultVersionByPackage.set(rec.packageName, rec.version ?? null);
-  }
+  // row is live but the image's copy is what serves". The version comes from
+  // `servingVersionByPackage`, captured at the per-record settle hook from the
+  // DEFAULT record whose registration succeeded — never from a name-keyed
+  // pre-pass lookup, which could attribute another default record's version to
+  // this one. Same per-package no-failure rule as the marker below.
   for (const result of activationResults) {
     if (
       (result.status === "registered" || result.status === "bootstrapped") &&
@@ -678,12 +700,12 @@ export async function loadRuntimePackageExtensions(
     if (
       (result.status === "registered" || result.status === "bootstrapped") &&
       !failedNames.has(result.packageName) &&
-      defaultVersionByPackage.has(result.packageName)
+      servingVersionByPackage.has(result.packageName)
     ) {
       recordServingImplementation({
         packageName: result.packageName,
         origin: "install",
-        version: defaultVersionByPackage.get(result.packageName) ?? null,
+        version: servingVersionByPackage.get(result.packageName) ?? null,
       });
     }
   }

@@ -15,7 +15,6 @@ import {
   clearServingRecordForPackage,
   readServingRecord,
   recordServingImplementation,
-  snapshotServingRecords,
 } from "@/lib/extension-capabilities-registry";
 
 const PKG = "@cinatra-ai/google-appointment-schedules-connector";
@@ -59,7 +58,7 @@ describe("the serving record", () => {
 
   it("ignores a nameless package rather than minting an empty key", () => {
     recordServingImplementation({ packageName: "", origin: "bundled", version: "1" });
-    expect(snapshotServingRecords()).toEqual([]);
+    expect(readServingRecord("")).toBeNull();
   });
 
   it("is keyed per package", () => {
@@ -158,14 +157,26 @@ describe("the activation seams record what they put in service", () => {
     expect(seam).toMatch(/origin:\s*"bundled"/);
   });
 
-  it("the RuntimePackageLoader records the INSTALL's default version", async () => {
+  it("the RuntimePackageLoader records the version of the record that REGISTERED", async () => {
+    // Round-5 convergence. This used to be a name-keyed pre-pass lookup over
+    // `orderedActivatable`, last-write-wins — so with more than one DEFAULT
+    // record for a package (the permitted ownership scopes can produce that)
+    // the reported version was whichever default came last in discovery order,
+    // not the one whose registration succeeded. The version is now read off the
+    // settled record at the per-record settle hook, which is the only place
+    // record identity and register outcome are both in hand.
     const src = await read("../runtime-package-loader.ts");
     expect(src).toContain("recordServingImplementation,");
     expect(src).toMatch(/origin:\s*"install"/);
-    // The DEFAULT version — the one that owns the package's unversioned global
+    // Captured AT the settle hook, from that record.
+    expect(src).toMatch(
+      /onRegisterSettled:\s*\(record,\s*registered\)\s*=>\s*\{[\s\S]*?servingVersionByPackage\.set\(\s*record\.packageName,\s*record\.version \?\? null,?\s*\)/,
+    );
+    // DEFAULTS only — the version that owns the package's unversioned global
     // names, which is what a request reaches.
-    expect(src).toContain("defaultVersionByPackage");
-    expect(src).toMatch(/if \(rec\.isDefault === false\) continue;/);
+    expect(src).toMatch(/registered && record\.isDefault !== false/);
+    // …and the pre-pass side lookup is GONE, not merely unused.
+    expect(src).not.toContain("defaultVersionByPackage");
   });
 
   it("both gate on a CLEAN activation, never on a bare 'registered'", async () => {
@@ -180,34 +191,97 @@ describe("the activation seams record what they put in service", () => {
     }
   });
 
-  it("nothing GATES on the record — it is descriptive only", async () => {
-    // A load-bearing read would make a descriptive, best-effort, process-local
-    // signal into a control-flow input, and a missing record (a fresh process, a
-    // metadata-only package) would then change behaviour rather than copy.
+  // -------------------------------------------------------------------------
+  // WHAT THE NEXT TWO TESTS CAN AND CANNOT PROVE (round-5 convergence).
+  //
+  // They are a SOURCE SCAN. A scan proves that no first-party file under the
+  // scanned roots textually names a way to reach the record — which covers a
+  // plain import, a `const { readServingRecord } = await import(...)`, and an
+  // ALIASED import (`readServingRecord as x`), because the alias form still
+  // contains the accessor's own name at the import site.
+  //
+  // It CANNOT prove there is no reflective read: the record lives behind a
+  // `Symbol.for(...)` global, so `globalThis[Symbol.for("…")]` reaches it
+  // without naming any accessor. That is why the SYMBOL STRING is scanned for
+  // too, and why the first test below keeps the export surface to a single
+  // accessor — the fewer named doors there are, the more of the surface the
+  // scan actually covers. Nor can it prove anything about the compiled output,
+  // a dynamic `import(variable)`, or a consumer outside these roots.
+  // -------------------------------------------------------------------------
+
+  /** Every named way to reach the serving record, plus the singleton key
+   *  itself. A new accessor MUST be added here — that is the point. */
+  const SERVING_RECORD_DOORS = [
+    "readServingRecord",
+    "recordServingImplementation",
+    "clearServingRecordForPackage",
+    "@cinatra-ai/host:extension-serving-record",
+  ];
+
+  const walkFirstPartySources = async (
+    visit: (abs: string, src: string) => void,
+  ): Promise<void> => {
     const { readdirSync, readFileSync, statSync } = await import("node:fs");
     const path = await import("node:path");
     const roots = [
       path.resolve(__dirname, "../.."),
       path.resolve(__dirname, "../../../packages/extensions/src"),
     ];
-    const readers: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
         if (entry === "node_modules" || entry === "__tests__" || entry === ".next") continue;
         const abs = path.join(dir, entry);
         if (statSync(abs).isDirectory()) walk(abs);
-        else if (
-          /\.tsx?$/.test(abs) &&
-          !abs.endsWith("extension-capabilities-registry.ts")
-        ) {
-          if (readFileSync(abs, "utf8").includes("readServingRecord")) readers.push(abs);
+        else if (/\.tsx?$/.test(abs) && !abs.endsWith("extension-capabilities-registry.ts")) {
+          visit(abs, readFileSync(abs, "utf8"));
         }
       }
     };
     for (const root of roots) walk(root);
-    // Exactly ONE reader: the settings loader, which turns it into copy.
-    expect(readers.map((f) => path.basename(f)).sort()).toEqual([
-      "extension-settings-screen.tsx",
+  };
+
+  it("the record has exactly ONE read accessor, so the scan below covers the read side", async () => {
+    // The enforcement is a source scan over named accessors, so a SECOND
+    // exported accessor is a second door the scan must know about. There was
+    // one — `snapshotServingRecords`, exported and imported by nothing but its
+    // own test — and it is gone rather than merely added to the scanned set:
+    // an export nobody needs is surface, not diagnostics.
+    const registry = await read("../extension-capabilities-registry.ts");
+    const exportedAccessors = [
+      ...registry.matchAll(/export function (\w+)\(/g),
+    ]
+      .map((m) => m[1])
+      .filter((name) => /Serving/i.test(name));
+    expect(exportedAccessors.sort()).toEqual([
+      "__resetServingRecords",
+      "clearServingRecordForPackage",
+      "readServingRecord",
+      "recordServingImplementation",
     ]);
+  });
+
+  it("nothing GATES on the record — it is descriptive only", async () => {
+    // A load-bearing read would make a descriptive, best-effort, process-local
+    // signal into a control-flow input, and a missing record (a fresh process, a
+    // metadata-only package) would then change behaviour rather than copy.
+    //
+    // Scanned over EVERY door (see the note above), not just `readServingRecord`
+    // — the previous version scanned that one literal, so a second accessor or a
+    // reflective read through the singleton key escaped it entirely.
+    const path = await import("node:path");
+    const touchers = new Map<string, string[]>();
+    await walkFirstPartySources((abs, src) => {
+      const hit = SERVING_RECORD_DOORS.filter((door) => src.includes(door));
+      if (hit.length > 0) touchers.set(path.basename(abs), hit.sort());
+    });
+    // The WRITE side is the two activation seams and the teardown chokepoint;
+    // the READ side is exactly one file: the settings loader, which turns the
+    // record into copy.
+    expect(Object.fromEntries([...touchers].sort())).toEqual({
+      "extension-capability-teardown.ts": ["clearServingRecordForPackage"],
+      "extension-settings-screen.tsx": ["readServingRecord"],
+      "runtime-package-loader.ts": ["recordServingImplementation"],
+      "static-bundle-loader.ts": ["recordServingImplementation"],
+    });
   });
 });

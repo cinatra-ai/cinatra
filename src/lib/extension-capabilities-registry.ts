@@ -379,10 +379,14 @@ export function clearServingRecordForPackage(packageName: string): boolean {
   return servingRecords.delete(packageName);
 }
 
-/** A read-only snapshot — package name → what is serving it. Diagnostic only. */
-export function snapshotServingRecords(): { packageName: string; record: ServingRecord }[] {
-  return [...servingRecords].map(([packageName, record]) => ({ packageName, record }));
-}
+// THERE IS DELIBERATELY NO SECOND ACCESSOR (cinatra#2762 round-5 convergence).
+// A `snapshotServingRecords()` lived here briefly, exported and used by nothing
+// but its own test. It cost more than it was worth: the "nothing GATES on this
+// record" enforcement is a source scan for the accessor names, so every extra
+// exported way to reach the map is another way to read it that the scan has to
+// know about — and an export nobody imports is not diagnostics, it is surface.
+// {@link readServingRecord} is the whole read side. If a real diagnostic need
+// appears, add the accessor AND add its name to that test's scanned set.
 
 /** Test/teardown helper — clears every serving record. */
 export function __resetServingRecords(): void {

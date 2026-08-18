@@ -73,17 +73,29 @@ import { isContainedRealpath } from "@/lib/fs-safety";
  * Returns the loader's `ActivationResult[]` for the package (empty when the
  * anchor refuses it — fail-closed; or a single `skipped`/`failed` result when the
  * new digest fails the pre-verify on an update — old left intact).
+ *
+ * ROW-BOUND MODE (`opts.expectRowId`, cinatra#2762 round-5 convergence): the
+ * resolver this pass uses is WRAPPED so that EVERY anchor it hands out must
+ * prove it binds that row. See {@link bindAnchorResolverToRow} — the binding
+ * lives on the resolution activation actually consumes, so there is no separate
+ * pre-read for the row to change out from under.
  */
 export async function activateInstalledPackageInProcess(
   packageName: string,
   orgId: string | null,
-  opts: { currentStoreDir?: string; storeRoot?: string } = {},
+  opts: { currentStoreDir?: string; storeRoot?: string; expectRowId?: string | null } = {},
 ): Promise<ActivationResult[]> {
   const storeRoot =
     opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
 
   const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
-  const resolveInstallAnchor = await makeDefaultInstallAnchorResolver(orgId);
+  // THE ONE resolver this activation uses — for the pre-verify, for the
+  // destroy-ports read, and for the loader's own trust pass. Under a row
+  // binding it is wrapped, so the identity check rides on each of those
+  // resolutions rather than on a separate guard read beside them.
+  const resolveInstallAnchor = opts.expectRowId
+    ? bindAnchorResolverToRow(await makeDefaultInstallAnchorResolver(orgId), opts.expectRowId)
+    : await makeDefaultInstallAnchorResolver(orgId);
 
   // Detect a hot-UPDATE: any materialized store dir for this package that is NOT
   // the just-installed current digest. (Empty for a clean NEW install / a SAME-
@@ -118,7 +130,13 @@ export async function activateInstalledPackageInProcess(
   try {
     const anchor = await resolveInstallAnchor(packageName);
     destroyPorts = (anchor?.approvedPorts ?? []) as readonly import("@cinatra-ai/sdk-extensions").HostPortName[];
-  } catch {
+  } catch (err) {
+    // BEST-EFFORT ONLY WHEN NOTHING WAS PROMISED. Under a row binding the
+    // caller asked us to prove which row we are activating, so an anchor we
+    // cannot read — or one that refuses the binding — is a FAILURE of that
+    // promise, never a shrug that lets the pass continue unbound
+    // (cinatra#2762 round-5 convergence).
+    if (opts.expectRowId) throw err;
     destroyPorts = [];
   }
 
@@ -651,21 +669,26 @@ export async function activateInstalledRowInProcess(input: {
    * identity away, so a divergence would activate a row other than the one the
    * operator addressed and the standing gate passed.
    *
-   * When supplied, the anchor is resolved FIRST and its `installId` must be this
-   * row; a mismatch REFUSES rather than activating the other row. A legacy
-   * anchor that reports no `installId` cannot contradict anything, so it is
-   * allowed through (identity-less anchors predate the field) — this narrows the
-   * refusal to a genuine, observable disagreement. Absent ⇒ the pre-existing
-   * unchecked behaviour, for callers that never resolved a row.
+   * When supplied, the resolution activation ITSELF uses is bound to this row:
+   * every anchor that pass consumes must report this `installId` or the
+   * activation refuses. See {@link bindAnchorResolverToRow} for the two edge
+   * cases and why each is a refusal. Absent ⇒ the pre-existing unchecked
+   * behaviour, for callers that never resolved a row.
    */
   expectRowId?: string | null;
 }): Promise<HotUpdateActivateResult> {
   try {
-    if (input.expectRowId) {
-      const drift = await findAnchorRowDrift(input.packageName, input.orgId, input.expectRowId);
-      if (drift) return { activated: false, reason: drift };
-    }
-    const results = await activateInstalledPackageInProcess(input.packageName, input.orgId);
+    // ONE resolution, checked where it is consumed — cinatra#2762 round-5
+    // convergence. This used to be a separate best-effort pre-read
+    // (`findAnchorRowDrift`) followed by an INDEPENDENT re-resolution inside
+    // the activation: two reads, so the row could change between them, and the
+    // pre-read returned "no drift" on the two cases it could not decide (an
+    // identity-less anchor, a throwing read) — so a bound retry could reach
+    // activation having proved nothing. The binding now rides on the
+    // activation's own resolver instead.
+    const results = await activateInstalledPackageInProcess(input.packageName, input.orgId, {
+      expectRowId: input.expectRowId ?? null,
+    });
     return summarizeActivation(results, input.packageName);
   } catch (err) {
     return { activated: false, reason: err instanceof Error ? err.message : String(err) };
@@ -673,32 +696,56 @@ export async function activateInstalledRowInProcess(input: {
 }
 
 /**
- * Does the anchor `(packageName, orgId)` resolves bind a row OTHER than
- * `expectRowId`? Returns the refusal reason, or null when there is nothing to
- * refuse (the anchor agrees, refuses on its own, or is identity-less).
+ * Wrap an install-anchor resolver so every anchor it returns must PROVE it binds
+ * `expectRowId` (cinatra#2762 round-5 convergence).
  *
- * Read-only and never throws: an anchor read that fails is NOT a drift verdict —
- * the activation below re-resolves the anchor anyway and reports its own refusal
- * with the better message.
+ * Activation re-derives its trust anchor from `(packageName, orgId)`, and for an
+ * org-NULL row that is platform-global selection
+ * (`pickSingleLiveRowAcrossOrgs`) — a coarser key than the one the lifecycle
+ * resolver used to pick the row and pass the standing gate. Binding the ROW
+ * identity to the resolver is what makes "retry THIS row" mean it: the check
+ * runs on the resolution the pass consumes, so nothing can change in between.
+ *
+ * The two edge cases, decided deliberately:
+ *
+ *   - THE ANCHOR CANNOT PROVE IDENTITY (no `installId`) ⇒ REFUSE. The previous
+ *     guard let this through as "cannot contradict anything". But the caller
+ *     asked for a binding, and an unprovable binding is a refusal, not a pass —
+ *     otherwise `expectRowId` degrades to a hint exactly when it would matter.
+ *     Every anchor the shipped resolver produces carries `installId` (it is set
+ *     from the resolved row's `id`), so this refuses nothing the product
+ *     produces today; it refuses a resolver that stopped reporting identity.
+ *   - THE ANCHOR READ THROWS ⇒ propagate, i.e. the activation FAILS. The
+ *     previous guard swallowed it as "no drift" and activated unbound. A read
+ *     we could not complete is an identity we did not prove.
+ *
+ * A NULL anchor (the resolver's own fail-closed refusal: no live row, ambiguous
+ * multi-org, unfinalized journal) is passed through UNCHANGED — the loader
+ * refuses it on its own and reports the specific reason, which is strictly more
+ * useful than overwriting it with a binding message.
  */
-async function findAnchorRowDrift(
-  packageName: string,
-  orgId: string | null,
+function bindAnchorResolverToRow(
+  resolve: (pkg: string) => Promise<import("@/lib/extension-package-store").InstallTrustAnchor | null>,
   expectRowId: string,
-): Promise<string | null> {
-  try {
-    const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
-    const resolveInstallAnchor = await makeDefaultInstallAnchorResolver(orgId);
-    const anchor = await resolveInstallAnchor(packageName);
-    const boundRowId = anchor?.installId ?? null;
-    if (!boundRowId || boundRowId === expectRowId) return null;
-    return (
-      `row-drift: the addressed install row is no longer the one activation would bind ` +
-      `(the activation anchor resolves a different row)`
-    );
-  } catch {
-    return null;
-  }
+): (pkg: string) => Promise<import("@/lib/extension-package-store").InstallTrustAnchor | null> {
+  return async (packageName: string) => {
+    const anchor = await resolve(packageName);
+    if (!anchor) return null;
+    const boundRowId = anchor.installId ?? null;
+    if (boundRowId === null) {
+      throw new Error(
+        `row-drift: the activation anchor for "${packageName}" reports no install row, so it ` +
+          `cannot prove it binds the addressed row — refusing rather than activating unbound`,
+      );
+    }
+    if (boundRowId !== expectRowId) {
+      throw new Error(
+        `row-drift: the addressed install row is no longer the one activation would bind ` +
+          `(the activation anchor for "${packageName}" resolves a different row)`,
+      );
+    }
+    return anchor;
+  };
 }
 
 /** Tear down the PARTIAL new registration after a failed new activation: fire the

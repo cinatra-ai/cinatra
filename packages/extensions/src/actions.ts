@@ -1455,19 +1455,49 @@ export async function retryExtensionActivationFormAction(input: {
   packageName: string;
   /**
    * The anchor TIER of the row the settings page described (cinatra#2762 round
-   * 5). SERVER-MINTED ONLY: the screen mints it from the row
-   * `describeLifecycleCapabilities` just resolved and bakes it into this
-   * action's closure, so it never crosses the client and nothing on the client
-   * can name a row. It cannot widen reach — the resolver recomputes the
-   * addressable set from the ACTOR server-side and only then filters it by this
-   * tier — and it is what lets the action address the row the operator was
-   * LOOKING AT when a package holds a bundled anchor and an install at the same
-   * org-NULL scope. Absent ⇒ the ordinary unselected addressing, unchanged.
+   * 5). It is what lets the action address the row the operator was LOOKING AT
+   * when a package holds a bundled anchor and an install at the same org-NULL
+   * scope. Absent ⇒ the ordinary unselected addressing, unchanged.
+   *
+   * THE SETTINGS SCREEN IS THE ONLY LEGITIMATE PRODUCER — it mints this from
+   * the row `describeLifecycleCapabilities` just resolved and bakes it into a
+   * server closure. IT IS NOT, HOWEVER, A SECRET (cinatra#2762 round-5
+   * convergence). This function is EXPORTED from a `"use server"` module, so it
+   * is a client-invokable RPC endpoint and this parameter is deserialized from
+   * a payload a direct invocation controls. The type annotation declares the
+   * shape; it does not check it.
+   *
+   * WHAT IS ENFORCED, and it is enough:
+   *   1. {@link requireAdminSession} — the caller holds an admin session;
+   *   2. `validateLifecycleRowSelectorInput` below — the value is exactly
+   *      `{ ownerLevel: <known tier> }` or the action refuses, attributably;
+   *   3. `resolveLifecycleTargetRow` recomputes the addressable set from the
+   *      ACTOR and only THEN filters by the tier, so a forged-but-well-formed
+   *      selector can only NARROW among rows that admin already addresses — it
+   *      can never widen to a row they do not.
    */
   rowSelector?: LifecycleRowSelector | null;
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
+  // RPC-BOUNDARY VALIDATION (cinatra#2762 round-5 convergence). `input` is
+  // deserialized from a client-controlled payload on this exported `"use
+  // server"` function; the annotation above declares the selector's shape and
+  // does not check it. Refuse anything that is not exactly a known tier, BEFORE
+  // it reaches the resolver — an unknown `ownerLevel` would otherwise match
+  // nothing and surface as `no_addressable_row`, which reads as "you may not do
+  // this" rather than "you sent nonsense".
+  const { validateLifecycleRowSelectorInput } = await import("./lifecycle-target-resolver");
+  const selector = validateLifecycleRowSelectorInput(input.rowSelector);
+  if (!selector.ok) {
+    logMarketplaceFailureForOperator(
+      "retry-activation",
+      input.packageName,
+      "unrecoverable",
+      selector.reason,
+    );
+    return { ok: false as const, category: "unrecoverable" as const };
+  }
   const actor = await buildLifecycleActorFromSession(
     session,
     "activate",
@@ -1487,7 +1517,7 @@ export async function retryExtensionActivationFormAction(input: {
     const row = await resolveLifecycleTargetRow(
       input.packageName,
       actor,
-      input.rowSelector ?? null,
+      selector.selector,
     );
     const { activateInstalledRowInProcess } = await import("@/lib/extension-runtime-activate");
     // The ROW's org, never the actor's — the row the resolver addressed is the
@@ -1548,12 +1578,31 @@ export async function retryExtensionActivationFormAction(input: {
 export async function rollBackExtensionToBundledFormAction(input: {
   packageName: string;
   /** The anchor TIER of the row the settings page described — see
-   *  {@link retryExtensionActivationFormAction} for why this is server-minted
-   *  only and cannot widen reach (cinatra#2762 round 5). */
+   *  {@link retryExtensionActivationFormAction} for the RPC-boundary reality
+   *  (admin session + validation + actor-bounded resolution, not secrecy) that
+   *  actually bounds it (cinatra#2762 round 5 + convergence). */
   rowSelector?: LifecycleRowSelector | null;
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
+  // RPC-BOUNDARY VALIDATION (cinatra#2762 round-5 convergence). `input` is
+  // deserialized from a client-controlled payload on this exported `"use
+  // server"` function; the annotation above declares the selector's shape and
+  // does not check it. Refuse anything that is not exactly a known tier, BEFORE
+  // it reaches the resolver — an unknown `ownerLevel` would otherwise match
+  // nothing and surface as `no_addressable_row`, which reads as "you may not do
+  // this" rather than "you sent nonsense".
+  const { validateLifecycleRowSelectorInput } = await import("./lifecycle-target-resolver");
+  const selector = validateLifecycleRowSelectorInput(input.rowSelector);
+  if (!selector.ok) {
+    logMarketplaceFailureForOperator(
+      "roll-back-to-bundled",
+      input.packageName,
+      "unrecoverable",
+      selector.reason,
+    );
+    return { ok: false as const, category: "unrecoverable" as const };
+  }
   const actor = await buildLifecycleActorFromSession(
     session,
     "archive",
@@ -1569,7 +1618,7 @@ export async function rollBackExtensionToBundledFormAction(input: {
     const row = await resolveLifecycleTargetRow(
       input.packageName,
       actor,
-      input.rowSelector ?? null,
+      selector.selector,
     );
     // REFUSE unless this is genuinely an override with something to fall back
     // to. Rolling back a row that IS the bundled implementation, or an override

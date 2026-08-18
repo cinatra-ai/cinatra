@@ -464,6 +464,15 @@ describe("the actions are bound to the row the settings page described", () => {
   // names an anchor TIER: the bundled anchor is `platform`, the install is
   // `workspace`, and both sit at org-NULL — the one same-scope identity
   // ambiguity the store permits.
+  //
+  // THE MINT IS THE ONLY LEGITIMATE PRODUCER, NOT THE ENFORCED BOUNDARY
+  // (round-5 convergence). Both actions are exported from a `"use server"`
+  // module, so `rowSelector` is part of a client-invokable RPC payload and a
+  // direct invocation can supply any value. Every test in this block calls the
+  // EXPORTED action directly — that is the real boundary — with the resolver
+  // UNMOCKED, so what they exercise is the enforcement chain that actually
+  // holds: admin session, then shape validation, then a resolver that
+  // recomputes the addressable set from the ACTOR before filtering by tier.
 
   it("a selector naming the INSTALL tier targets the install", async () => {
     const { retryExtensionActivationFormAction } = await import("../actions");
@@ -501,10 +510,14 @@ describe("the actions are bound to the row the settings page described", () => {
     expect(out.redirected).toBe(true);
   });
 
-  it("a selector can NEVER widen reach — standing is still gated over the row", async () => {
-    // An org-scoped, non-platform-admin actor naming the platform tier resolves
-    // nothing addressable: the selector filters the set the ACTOR can reach, it
-    // does not extend it.
+  it("a FORGED but well-formed selector can NEVER widen reach — the RPC bound", async () => {
+    // THE ACTUAL SECURITY CLAIM, driven at the actual boundary: this is the
+    // exported action invoked directly with a selector no server mint would
+    // ever produce for this actor, resolver unmocked. An org-scoped,
+    // non-platform-admin actor naming the `platform` tier reaches NOTHING — the
+    // selector filters the set the ACTOR already addresses, it does not extend
+    // it, so the worst a forged-but-valid selector can do is narrow among rows
+    // that admin can already reach.
     actorIsPlatformAdmin = false;
     const { retryExtensionActivationFormAction } = await import("../actions");
     const out = await run(() =>
@@ -515,5 +528,119 @@ describe("the actions are bound to the row the settings page described", () => {
     );
     expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
     expect(activateRow).not.toHaveBeenCalled();
+    // Nothing was archived or restored on the way to the refusal either.
+    expect(transition).not.toHaveBeenCalled();
+    expect(reactivateBundled).not.toHaveBeenCalled();
+  });
+
+  it("…and rollback is bounded the same way", async () => {
+    actorIsPlatformAdmin = false;
+    const { rollBackExtensionToBundledFormAction } = await import("../actions");
+    const out = await run(() =>
+      rollBackExtensionToBundledFormAction({
+        packageName: PKG,
+        rowSelector: { ownerLevel: "platform" },
+      }),
+    );
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    expect(transition).not.toHaveBeenCalled();
+    expect(reactivateBundled).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RPC-BOUNDARY VALIDATION of the selector (cinatra#2762 round-5 convergence).
+//
+// `rowSelector` is a parameter of an EXPORTED `"use server"` function, so it is
+// deserialized from a client-controlled payload. The TypeScript annotation
+// declares its shape and does not check it: at runtime a direct invocation can
+// send a string, an array, extra fields, or an `ownerLevel` outside the enum.
+// None of those can widen reach — the test above is what proves that — but an
+// unchecked value produces an ANONYMOUS refusal: an unknown `ownerLevel`
+// matches no row and surfaces as `no_addressable_row`, which reads to an
+// operator as "you may not do this" rather than "you sent nonsense". So the
+// actions validate the shape strictly, before it reaches the resolver.
+// ---------------------------------------------------------------------------
+describe("the selector is validated at the RPC boundary", () => {
+  const MALFORMED: [string, unknown][] = [
+    ["an ownerLevel outside the tier enum", { ownerLevel: "root" }],
+    ["an empty ownerLevel", { ownerLevel: "" }],
+    ["a non-string ownerLevel", { ownerLevel: 1 }],
+    ["a nested object as ownerLevel", { ownerLevel: { toString: "workspace" } }],
+    ["extra fields beside the known one", { ownerLevel: "workspace", rowId: "iext_bundled" }],
+    ["a field the type never had", { id: "iext_bundled" }],
+    ["a bare string", "workspace"],
+    ["an array", [{ ownerLevel: "workspace" }]],
+  ];
+
+  for (const [label, forged] of MALFORMED) {
+    it(`retry REFUSES ${label}, and resolves nothing`, async () => {
+      const { retryExtensionActivationFormAction } = await import("../actions");
+      const out = await run(() =>
+        retryExtensionActivationFormAction({
+          packageName: PKG,
+          rowSelector: forged as never,
+        }),
+      );
+      expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+      // Refused BEFORE the resolver: the canonical rows were never even read,
+      // so no row was addressed and nothing was activated.
+      expect(readRows).not.toHaveBeenCalled();
+      expect(activateRow).not.toHaveBeenCalled();
+    });
+
+    it(`roll back REFUSES ${label}, and writes nothing`, async () => {
+      const { rollBackExtensionToBundledFormAction } = await import("../actions");
+      const out = await run(() =>
+        rollBackExtensionToBundledFormAction({
+          packageName: PKG,
+          rowSelector: forged as never,
+        }),
+      );
+      expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+      expect(readRows).not.toHaveBeenCalled();
+      expect(transition).not.toHaveBeenCalled();
+      expect(reactivateBundled).not.toHaveBeenCalled();
+    });
+  }
+
+  it("the refusal is ATTRIBUTABLE — it names the selector, not a generic denial", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    await run(() =>
+      retryExtensionActivationFormAction({
+        packageName: PKG,
+        rowSelector: { ownerLevel: "root" } as never,
+      }),
+    );
+    const said = logged.mock.calls.flat().map(String).join(" ");
+    expect(said).toContain("ownerLevel");
+  });
+
+  it("a WELL-FORMED selector still passes straight through to the resolver", async () => {
+    // The validator narrows; it must not become a second addressing rule.
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    await run(() =>
+      retryExtensionActivationFormAction({
+        packageName: PKG,
+        rowSelector: { ownerLevel: "workspace" },
+      }),
+    );
+    expect(activateRow).toHaveBeenCalledWith(
+      expect.objectContaining({ expectRowId: "iext_installed" }),
+    );
+  });
+
+  it("an ABSENT selector is the legitimate no-selector case, not a malformed one", async () => {
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    for (const absent of [undefined, null]) {
+      activateRow.mockClear();
+      await run(() =>
+        retryExtensionActivationFormAction({ packageName: PKG, rowSelector: absent }),
+      );
+      expect(activateRow).toHaveBeenCalledWith(
+        expect.objectContaining({ expectRowId: "iext_installed" }),
+      );
+    }
   });
 });
