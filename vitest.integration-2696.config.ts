@@ -39,12 +39,14 @@ export default defineConfig({
     testTimeout: 120_000,
     hookTimeout: 180_000,
     // The INSTALL-SEMANTICS tier — extended per slice, never forked: S2's write
-    // path and S3's connector substrate share the same isolation reasoning, the
-    // same real-Postgres requirement, and the same `pnpm test:install-semantics`
-    // entry point.
+    // path, S3's connector substrate, S4's row-identity lifecycle and S5's §V
+    // re-anchor share the same isolation reasoning, the same real-Postgres
+    // requirement, and the same `pnpm test:install-semantics` entry point.
     include: [
       "src/lib/__tests__/install-semantics-write-path.integration.test.ts",
       "src/lib/__tests__/install-semantics-connector-substrate.integration.test.ts",
+      "src/lib/__tests__/install-semantics-lifecycle-row-identity.integration.test.ts",
+      "src/lib/__tests__/install-semantics-reanchor.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
   },

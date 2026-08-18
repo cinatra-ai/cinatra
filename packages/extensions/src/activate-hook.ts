@@ -76,7 +76,25 @@ export type ExtensionActivateHook = (
   packageName: string,
   orgId?: string | null,
   version?: string,
+  anchor?: ExtensionActivateAnchor,
 ) => ExtensionActivateResult | Promise<ExtensionActivateResult>;
+
+/**
+ * The target row's ANCHOR TIER (cinatra#2694 / S4 #2698).
+ *
+ * `orgId` alone stopped being a row identity once a product-installed WORKSPACE
+ * row (`owner_level='workspace'`, `organization_id NULL`) could coexist with a
+ * bundled PLATFORM anchor for the same package — the DB's org-NULL identity
+ * index keys on `owner_level`, so both live at `orgId === null`. A host hook
+ * given only the org would then see TWO rows there and fail closed (or, if it
+ * picked one, pick a stranger's). Passing the tier resolves it.
+ *
+ * OPTIONAL and ADDITIVE: omitted (every pre-#2698 caller, and every org-anchored
+ * install, where the org IS the identity) the host keeps its exact existing pick.
+ */
+export type ExtensionActivateAnchor = {
+  ownerLevel?: string;
+};
 
 const ACTIVATE_HOOK_SLOT = Symbol.for("cinatra.extensions.activateHook.v1");
 type HookHolder = { hook: ExtensionActivateHook | null };
@@ -99,15 +117,19 @@ export async function fireExtensionActivate(
   packageName: string,
   orgId?: string | null,
   version?: string,
+  anchor?: ExtensionActivateAnchor,
 ): Promise<ExtensionActivateResult> {
   const { hook } = hookHolder();
   if (!hook) return { activated: false, reason: "no-host-hook" };
   try {
-    // Forward `version` ONLY when defined so the 2-arg hook invocation
-    // (and its tests asserting `toHaveBeenCalledWith(pkg, orgId)`) is unchanged.
-    return version === undefined
-      ? await hook(packageName, orgId ?? null)
-      : await hook(packageName, orgId ?? null, version);
+    // Forward each trailing argument ONLY when defined, so the 2-arg and 3-arg
+    // hook invocations (and their tests asserting `toHaveBeenCalledWith(pkg,
+    // orgId)` / `(pkg, orgId, version)`) stay byte-identical — cinatra#2698's
+    // `anchor` appears in the call ONLY where the caller supplies it.
+    if (version === undefined) return await hook(packageName, orgId ?? null);
+    return anchor === undefined
+      ? await hook(packageName, orgId ?? null, version)
+      : await hook(packageName, orgId ?? null, version, anchor);
   } catch (err) {
     console.warn(
       '[cinatra:extensions] activate hook threw for "%s" ' +

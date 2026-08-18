@@ -1,0 +1,301 @@
+[
+  {
+    "surface": "roles",
+    "asserts": "the two sessions, as the database records them",
+    "rows": [
+      {
+        "id": "37be6937-2b74-42e7-a789-884b8f1372d3",
+        "email": "gate-admin@local.test",
+        "role": "admin"
+      },
+      {
+        "id": "cb770fba-93d9-4fee-bb21-e727378c7758",
+        "email": "gate-member@local.test",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "surface": "seed",
+    "asserts": "a pre-existing author notification row EXISTS in the database, href and all, for both viewers",
+    "rows": [
+      {
+        "id": "s2-uat-notif-admin",
+        "href": "/configuration/agents/approvals/s2-uat-approval-row"
+      },
+      {
+        "id": "s2-uat-notif-member",
+        "href": "/configuration/agents/approvals/s2-uat-approval-row"
+      }
+    ]
+  },
+  {
+    "surface": "sign-in",
+    "role": "member",
+    "httpStatus": 200
+  },
+  {
+    "surface": "sign-in",
+    "role": "admin",
+    "httpStatus": 200
+  },
+  {
+    "surface": "a-command-menu",
+    "role": "member",
+    "file": "/tmp/proof-2701/member-a-command-menu.png",
+    "asserts": "the palette lists NO Configuration group and no /configuration destination",
+    "groupsRendered": [
+      "Navigate",
+      "Theme"
+    ],
+    "configurationGroupPresent": false,
+    "itemCount": 10,
+    "itemsMentioningConfiguration": []
+  },
+  {
+    "surface": "b-development-toolbar",
+    "role": "member",
+    "file": "/tmp/proof-2701/member-b-development-toolbar.png",
+    "asserts": "the toolbar still renders for a member, WITHOUT the 'All development administration' link",
+    "toolbarRenders": true,
+    "configurationDevelopmentLinks": 0
+  },
+  {
+    "surface": "c-notifications-feed",
+    "role": "member",
+    "file": "/tmp/proof-2701/member-c-notifications-feed.png",
+    "asserts": "the pre-existing 'Agent proposal approved' row renders with NO link into /configuration",
+    "approvalNotificationRowFound": true,
+    "configurationLinksInThatRow": 0,
+    "configurationLinksAnywhereOnPage": 0
+  },
+  {
+    "surface": "a-command-menu",
+    "role": "admin",
+    "file": "/tmp/proof-2701/admin-a-command-menu.png",
+    "asserts": "the palette lists the Configuration group and every /configuration destination, unchanged",
+    "groupsRendered": [
+      "Navigate",
+      "Configuration",
+      "Theme"
+    ],
+    "configurationGroupPresent": true,
+    "itemCount": 17,
+    "itemsMentioningConfiguration": [
+      "Artifacts — Restore objects",
+      "AI Providers (LLM / API keys)",
+      "MCP Server",
+      "Permissions",
+      "Skills administration",
+      "Environment",
+      "Development"
+    ]
+  },
+  {
+    "surface": "b-development-toolbar",
+    "role": "admin",
+    "file": "/tmp/proof-2701/admin-b-development-toolbar.png",
+    "asserts": "the toolbar renders for an admin WITH the link, unchanged",
+    "toolbarRenders": true,
+    "configurationDevelopmentLinks": 1
+  },
+  {
+    "surface": "c-notifications-feed",
+    "role": "admin",
+    "file": "/tmp/proof-2701/admin-c-notifications-feed.png",
+    "asserts": "the same pre-existing row renders WITH its link, unchanged",
+    "approvalNotificationRowFound": true,
+    "configurationLinksInThatRow": 1,
+    "configurationLinksAnywhereOnPage": 2
+  },
+  {
+    "surface": "d-restore-affordance-mount",
+    "asserts": "WHERE the restore affordance actually renders in the shipped app. The per-object ObjectHistoryPanel (and the RestoreVersionButton inside it) has NO mount site: it is defined, imported only by itself, and pinned by fixture in src/components/data-safety/__tests__/restore-affordance-admin-only.test.ts. The LIVE restore surface a person reaches is the Artifacts console's Restore objects tab and the targeted-restore route below, so those are what is photographed.",
+    "grep": "ObjectHistoryPanel occurs only in src/components/data-safety/object-history-panel.tsx (its own definition); RestoreVersionButton only there and in its own module + the fixture test"
+  },
+  {
+    "surface": "d-seed-preconditions",
+    "asserts": "FULL DISCLOSURE of what was written by hand and what was not. The CHANGE SETS were NOT written by hand — they come from the shipped writers through the repo own seed route (next row). The seed driver refuses to create the agent run its subject names, so exactly two rows were inserted into cinatra.agent_runs to satisfy that precondition, with the table NOT NULL contract and nothing else; they carry no history and appear on no surface under proof.",
+    "insertedRows": [
+      {
+        "table": "cinatra.agent_runs",
+        "id": "s2-uat-run-admin",
+        "run_by": "37be6937-2b74-42e7-a789-884b8f1372d3",
+        "status": "succeeded",
+        "source_type": "agent_builder"
+      },
+      {
+        "table": "cinatra.agent_runs",
+        "id": "s2-uat-run-member",
+        "run_by": "cb770fba-93d9-4fee-bb21-e727378c7758",
+        "status": "succeeded",
+        "source_type": "agent_builder"
+      }
+    ],
+    "notInserted": "change_set, object_change_event and objects rows — every one of those was written by openChangeSet / historyAwareUpsert / closeChangeSet inside the app process"
+  },
+  {
+    "surface": "d-seed-change-sets",
+    "asserts": "the two change sets under proof, as the repo's own in-process seed path returned them: POST /api/development/lifecycle-seed fixture 'restorableChangeSet' (src/lib/test-support/lifecycle-seed-drivers.ts) drives openChangeSet -> historyAwareUpsert -> closeChangeSet, the shipped writers. The driver holds no SQL and the object type + payload are pinned inside it.",
+    "admin": {
+      "fixture": "restorableChangeSet",
+      "changeSetId": "cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+      "objectId": "8df345f6-0aa8-43a4-856e-8c59e424f7e9",
+      "objectType": "@cinatra-ai/text-artifact:artifact",
+      "eventId": "0b41daf2-d42e-4221-a4ba-1645e51b3295",
+      "effectRollup": "reversible-internal",
+      "restorable": true,
+      "memberEventCount": 1,
+      "closedAt": "2026-08-16T06:44:14.114Z"
+    },
+    "member": {
+      "fixture": "restorableChangeSet",
+      "changeSetId": "cs_43ad79a2-74df-40bb-a0ae-0107c770c95f",
+      "objectId": "7166f1ca-10e7-4623-8c75-826fdbb9a9ba",
+      "objectType": "@cinatra-ai/text-artifact:artifact",
+      "eventId": "7f27f21c-e8c8-4e01-ab76-570fb214a819",
+      "effectRollup": "reversible-internal",
+      "restorable": true,
+      "memberEventCount": 1,
+      "closedAt": "2026-08-16T06:44:14.682Z"
+    }
+  },
+  {
+    "surface": "change-sets",
+    "asserts": "two REAL closed restorable change sets exist, each with a real member event — written by the shipped writers (openChangeSet -> historyAwareUpsert -> closeChangeSet) through the repo's own POST /api/development/lifecycle-seed fixture 'restorableChangeSet'; no SQL was written by hand",
+    "adminChangeSetId": "cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+    "memberChangeSetId": "cs_43ad79a2-74df-40bb-a0ae-0107c770c95f",
+    "rows": [
+      {
+        "id": "cs_43ad79a2-74df-40bb-a0ae-0107c770c95f",
+        "actor_id": "cb770fba-93d9-4fee-bb21-e727378c7758",
+        "actor_kind": "user",
+        "run_id": "s2-uat-run-member",
+        "restorable": true,
+        "effect_rollup": "reversible-internal",
+        "closed_at": "2026-08-16T06:44:14.682Z",
+        "event_count": "1",
+        "events": "create @cinatra-ai/text-artifact:artifact"
+      },
+      {
+        "id": "cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+        "actor_id": "37be6937-2b74-42e7-a789-884b8f1372d3",
+        "actor_kind": "user",
+        "run_id": "s2-uat-run-admin",
+        "restorable": true,
+        "effect_rollup": "reversible-internal",
+        "closed_at": "2026-08-16T06:44:14.114Z",
+        "event_count": "1",
+        "events": "create @cinatra-ai/text-artifact:artifact"
+      }
+    ]
+  },
+  {
+    "surface": "d-undo-chip-gate",
+    "asserts": "with a REAL restorable change set behind each run, the admin's read returns the change-set id (the chip renders) and the member's returns null (the chip is withheld) — the admin-only branch is now measured, not fixtured",
+    "member": "{\"changeSetId\":null}",
+    "admin": "{\"changeSetId\":\"cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f\"}",
+    "file": "/tmp/proof-2701/undo-candidate-gate.txt"
+  },
+  {
+    "surface": "d1-restore-console",
+    "role": "member",
+    "file": "member-d-restore-console.png",
+    "url": "/configuration/artifacts?tab=restore",
+    "asserts": "the member never reaches the console at all — the whole /configuration segment is admin-only (S1, #2700), which is why S2 withholds every member-facing affordance that used to point here",
+    "status": 200,
+    "finalPath": "/not-authorized",
+    "h1": "Not authorized",
+    "restoreRowsRendered": 0,
+    "restoreAffordancesRendered": 0
+  },
+  {
+    "surface": "d1-restore-console",
+    "role": "admin",
+    "file": "admin-d-restore-console.png",
+    "url": "/configuration/artifacts?tab=restore",
+    "asserts": "the admin reaches the change-set history console and every real change set carries its Restore affordance",
+    "status": 200,
+    "finalPath": "/configuration/artifacts",
+    "h1": "Artifacts",
+    "restoreRowsRendered": 5,
+    "restoreAffordancesRendered": 5
+  },
+  {
+    "surface": "d2-restore-confirmation",
+    "role": "member",
+    "file": "member-d-restore-confirmation.png",
+    "url": "/configuration/artifacts/restore/cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+    "changeSetId": "cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+    "asserts": "the member is stopped by the S1 route gate before the page renders at all: /not-authorized",
+    "status": 200,
+    "finalPath": "/not-authorized",
+    "h1": "Not authorized",
+    "authorizedPanelRendered": false,
+    "deniedPanelRendered": false,
+    "restoreActionRendered": 0,
+    "leadCopy": null
+  },
+  {
+    "surface": "d2-restore-confirmation",
+    "role": "admin",
+    "file": "admin-d-restore-confirmation.png",
+    "url": "/configuration/artifacts/restore/cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+    "changeSetId": "cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+    "asserts": "the admin gets the REAL 'Restore this change?' confirmation for a change set that exists, with the restore action available — not the not-authorized panel",
+    "status": 200,
+    "finalPath": "/configuration/artifacts/restore/cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+    "h1": "Restore this change?",
+    "authorizedPanelRendered": true,
+    "deniedPanelRendered": false,
+    "restoreActionRendered": 1,
+    "leadCopy": "You are authorized to restore every affected object."
+  },
+  {
+    "surface": "e-restore-applied",
+    "role": "admin",
+    "file": "admin-d-restore-applied.png",
+    "asserts": "the admin confirms the restore and the platform appends the compensating change set — the object reverts",
+    "changeSetId": "cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+    "objectId": "8df345f6-0aa8-43a4-856e-8c59e424f7e9",
+    "dialogText": "Restore change-set This will append a new change-set that brings the affected 1 object back to their pre-change state. The original change-set is preserved unchanged. Diff preview @cinatra-ai/text-artifact:artifact created 8df345f6… Restored 1 event. New change-set:cs_a3e0b28f-34b1… Cancel Confirm restore Close"
+  },
+  {
+    "surface": "e-restore-applied-db",
+    "asserts": "the restored object's row, and the newest change sets, as the database records them after the restore",
+    "object": [
+      {
+        "id": "8df345f6-0aa8-43a4-856e-8c59e424f7e9",
+        "version": 2,
+        "tombstoned": true
+      }
+    ],
+    "newestChangeSets": [
+      {
+        "id": "cs_a3e0b28f-34b1-4d34-b968-a59b1fd9bc66",
+        "actor_kind": "user",
+        "restorable": true
+      },
+      {
+        "id": "cs_43ad79a2-74df-40bb-a0ae-0107c770c95f",
+        "actor_kind": "user",
+        "restorable": true
+      },
+      {
+        "id": "cs_ce6115e7-3c14-4b19-8b8a-81baeb2b751f",
+        "actor_kind": "user",
+        "restorable": true
+      }
+    ]
+  },
+  {
+    "surface": "d-panel-copy-defect",
+    "asserts": "FOLLOW-UP, not part of the S2 claim: a NONEXISTENT change set makes the ADMIN's page render the authorization-shaped denial instead of a 'no such change set' state. Copy measured live.",
+    "url": "/configuration/artifacts/restore/s2-uat-no-such-change-set",
+    "role": "admin",
+    "status": 200,
+    "copyRendered": "You're not authorized to restore this change",
+    "supportingCopy": "Restoring a change set requires authorization for every object it touched. This change set may also no longer be restorable.",
+    "codeLocation": "src/app/configuration/artifacts/restore/[changeSetId]/page.tsx — the local RestoreNotAuthorized() component (data-testid artifacts-restore-route-denied), reached whenever loadAuthorizedTargetedRestore() (src/lib/object-history/restore-eligibility.ts) returns null, which it also does for a change set that does not exist"
+  }
+]

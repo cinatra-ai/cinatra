@@ -402,15 +402,23 @@ export async function makeDefaultInstallAnchorResolver(
       if (!live) return null;
       derivedOrgId = live.organizationId ?? null;
     } else if (scope === "org-then-workspace") {
-      // ORG-ROW-FIRST: only when the actor's org holds no live row for this
-      // package does the workspace-anchored row serve. The org arm is evaluated
-      // with the SAME pick the exact-org scope uses, so an org that has its own
-      // row is byte-identically unchanged by this mode.
+      // WORKSPACE-FIRST (cinatra#2698 change 1 — the effective row). S3 read the
+      // organization row first and fell back to the workspace row; the owner
+      // ruling of 2026-08-16 inverts that precedence, because a live workspace
+      // row SUPERSEDES every organization row of the package and is the one
+      // install in force. Under the shipped write path an organization row is
+      // archived the moment a workspace install finalizes, so the two orders
+      // agree on every row set the system now produces — this arm decides the
+      // legacy/racing shape (a live organization row still standing beside a
+      // live workspace row), and it must decide it the same way the lifecycle
+      // resolver and the screens do, or runtime resolution would bind a row no
+      // screen shows and no lifecycle op can reach.
+      //
+      // An organization whose package has NO live workspace row is byte-identically
+      // unchanged: the workspace pick returns null and the org arm runs exactly
+      // as before.
       const rows = await readInstalledExtensionsByPackageName(packageName);
-      if (
-        pickSingleActiveRow(rows, orgId) === null &&
-        pickSingleWorkspaceAnchoredActiveRow(rows) !== null
-      ) {
+      if (pickSingleWorkspaceAnchoredActiveRow(rows) !== null) {
         workspaceFallback = true;
         // The grant + install-op bind the WORKSPACE row's own scope (org NULL),
         // never the actor's org: the row was installed platform-wide, so its

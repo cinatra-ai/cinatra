@@ -41,7 +41,7 @@
  * to fetch impls that ignore abort signals (custom mocks, polyfills).
  */
 
-import { resolveWayflowUrl } from "./wayflow-url";
+import { resolveWayflowUrl, wayflowComposeCommand } from "./wayflow-url";
 import { triggerWayflowReload, type ReloadResult } from "./wayflow-reload-client";
 
 export const WAYFLOW_PREFLIGHT_TIMEOUT_MS = 2000;
@@ -175,13 +175,23 @@ export async function preflightWayflowAgent(
       // the operator knows whether to rebuild the container, check env vars,
       // or accept that the agent's tarball is missing cinatra/oas.json.
       const reloadDiagnostic = _formatReloadDiagnostic(reloadAttempt);
+      // The runtime IS up (it answered with a 404, not a connection
+      // failure) — the agent just isn't mounted on it. So the rebuild
+      // fallback rebuilds and force-recreates the wayflow container rather
+      // than starting a stopped one, and it goes through the same
+      // project-pinned `wayflowComposeCommand` builder the down-recovery
+      // fallback in `wayflow-url.ts` uses, so the two surfaces can't drift
+      // apart on the project flag / profile again.
+      const rebuildFallback =
+        `\`${wayflowComposeCommand("build wayflow")} && ` +
+        `${wayflowComposeCommand("up -d --force-recreate wayflow")}\``;
       return {
         code: "WAYFLOW_AGENT_NOT_REGISTERED",
         error:
           `Agent '${packageName}' is published but not registered with the WayFlow runtime at ${expectedUrl}. ` +
           `auto-recovery attempted a reload via /.internal/reload-agents — ${reloadDiagnostic}. ` +
           `Likely causes: (a) the wayflow container does not expose /.internal/reload-agents — rebuild and restart: ` +
-          `\`docker compose --profile wayflow build wayflow && docker compose --profile wayflow up -d --force-recreate wayflow\`; ` +
+          `${rebuildFallback}; ` +
           `(b) the agent's package tarball does not include cinatra/oas.json (use publishAgentPackageFromGitDir, not publishAgentPackage); ` +
           `(c) the agent's oas.json failed to parse on the runtime — check \`docker logs cinatra-wayflow-1\` for the parse error.`,
         packageName,

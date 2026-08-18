@@ -6,6 +6,7 @@ import {
   resolveCardDisplayName,
   normalizeCardDescription,
   resolveMarketplaceCardCta,
+  workspaceReachLabel,
   resolveCardPriceLabel,
   resolveCardIconChain,
   safeManifestLogoSrc,
@@ -772,5 +773,81 @@ describe("resolveCardIconChain — the explicit fallback order (cinatra#1325)", 
     );
     expect(chain.imageSrcs).toEqual(["https://a.example/same.png"]);
     expect(chain.emblem).toBe("kind-emblem");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2698 (S4, change 3) — REVERSE INSTALLS ARE REFUSED, so the card never
+// offers one. Where the package's EFFECTIVE row is a live workspace row the
+// existing disabled "Installed" pill states the reach, and every install /
+// update / restore action is withheld from anyone who cannot act on that row.
+// No new control and no new CTA state: the drawing (§IV) is untouched.
+// ---------------------------------------------------------------------------
+describe("cinatra#2698 — the workspace-reach CTA", () => {
+  const listing = { packageVersion: "2.0.0" } as const;
+
+  it("labels the reach the install was made at", () => {
+    expect(workspaceReachLabel("workspace")).toBe("Installed (Workspace: All)");
+    expect(workspaceReachLabel("admin")).toBe("Installed (Workspace: Admins only)");
+  });
+
+  it("an organization admin sees Installed with the reach — no install action", () => {
+    const cta = resolveMarketplaceCardCta(
+      listing,
+      { version: "1.0.0", isArchived: false, workspaceReach: "workspace" },
+      true,
+      "compatible",
+      false,
+    );
+    // A NEWER catalog version is on offer, and it is still NOT an Update: this
+    // administrator cannot act on the app-wide row at all.
+    expect(cta).toEqual({ state: "installed", workspaceReach: "workspace" });
+  });
+
+  it("an organization admin whose OWN row was superseded is not offered Restore", () => {
+    // The superseded row is archived, so the template-derived map would have
+    // said "restore" — which is exactly the reverse install the server refuses.
+    const cta = resolveMarketplaceCardCta(
+      listing,
+      { version: "1.0.0", isArchived: true, workspaceReach: "admin" },
+      true,
+      "compatible",
+      false,
+    );
+    expect(cta).toEqual({ state: "installed", workspaceReach: "admin" });
+  });
+
+  it("a PLATFORM ADMIN keeps the ordinary states — they can act on the row", () => {
+    const cta = resolveMarketplaceCardCta(
+      listing,
+      { version: "1.0.0", isArchived: false, workspaceReach: "workspace" },
+      true,
+      "compatible",
+      true,
+    );
+    expect(cta).toEqual({ state: "update", disabled: false });
+  });
+
+  it("a platform admin on the current version sees the reach on the Installed pill", () => {
+    const cta = resolveMarketplaceCardCta(
+      { packageVersion: "1.0.0" },
+      { version: "1.0.0", isArchived: false, workspaceReach: "admin" },
+      true,
+      "compatible",
+      true,
+    );
+    expect(cta).toEqual({ state: "installed", workspaceReach: "admin" });
+  });
+
+  it("an ORGANIZATION-anchored install is completely unchanged", () => {
+    expect(
+      resolveMarketplaceCardCta(listing, { version: "1.0.0", isArchived: false }, true, "compatible"),
+    ).toEqual({ state: "update", disabled: false });
+    expect(
+      resolveMarketplaceCardCta(listing, { version: "1.0.0", isArchived: true }, true, "compatible"),
+    ).toEqual({ state: "restore" });
+    expect(
+      resolveMarketplaceCardCta(listing, undefined, true, "compatible"),
+    ).toEqual({ state: "install", disabled: false });
   });
 });

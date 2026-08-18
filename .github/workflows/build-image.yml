@@ -2976,11 +2976,13 @@ jobs:
     # Bound the worst-case slow-runner hang. Typical wall-clock is ~10-11 min
     # for the image build (next build is the dominant pole) plus ~3-5 min for
     # the prod-boot e2e (image load + fresh-DB setup + boot + probes); we've
-    # seen occasional 25-30 min hangs on contended runners. 30 min is generous
-    # over normal and surfaces a real stall as a job failure (artifacts/logs
-    # preserved) instead of letting it eat the workflow budget invisibly. Same
-    # defensive class as the RBAC globalTimeout.
-    timeout-minutes: 30
+    # seen occasional 25-30 min hangs on contended runners, and by 2026-08 a
+    # fully green pass crosses the old 30-min line (the prod-boot suite grew;
+    # a passing run was cancelled at 30:00 with the suite green at 29:59+).
+    # 45 min is generous over normal and still surfaces a real stall as a job
+    # failure (artifacts/logs preserved) instead of letting it eat the
+    # workflow budget invisibly. Same defensive class as the RBAC globalTimeout.
+    timeout-minutes: 45
     steps:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the

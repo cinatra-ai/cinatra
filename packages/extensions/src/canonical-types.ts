@@ -678,3 +678,197 @@ export function workspaceAnchorIdentity(packageName: string): {
     packageName,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The §V RE-ANCHOR rules (cinatra#2694 / S5 #2802) — the PURE half.
+//
+// Owner ruling 2026-08-16 (entry 350): the settings page's access picker is the
+// widening/narrowing surface and must move the row ANCHOR, not just the audience
+// label. The decision itself is arithmetic on the canonical row identity, so it
+// lives HERE — beside the anchor tuples and the sentinel it normalizes to, and
+// beside the identity/default index shapes it mirrors — rather than in a new
+// module on an already-locked route graph.
+//
+// PURE (no IO, no server-only): the store re-runs these predicates INSIDE its
+// transaction (after the row locks) and the server action runs them before it,
+// so a refusal is decided by exactly one rule in both places.
+// ---------------------------------------------------------------------------
+
+/**
+ * Does this audience selection ask for the app-wide WORKSPACE anchor?
+ *
+ * The two workspace audiences are the widening ones: `workspace` reaches every
+ * member of the deployment and `admin` reaches the owner-aware admin tier across
+ * it. Either token means the row must sit at the org-NULL workspace anchor,
+ * because an organization-anchored row is fenced to its organization by the
+ * cross-org guard no matter what its policy says — the exact defect S5 closes.
+ */
+export function policyWidensToWorkspaceAnchor(tokens: readonly string[]): boolean {
+  return tokens.some((t) => t === "workspace" || t === "admin");
+}
+
+/** The ORGANIZATION anchor tuple for `orgId` — the narrowing destination. */
+export function organizationRowAnchor(orgId: string): InstallRowOwnership {
+  return { ownerLevel: "organization", ownerId: orgId, organizationId: orgId };
+}
+
+/**
+ * Normalized owner id for anchor comparison: at the org-NULL tiers the canonical
+ * store platformizes a null owner to the sentinel, so `null` and `__platform__`
+ * denote the SAME persisted row and must compare equal.
+ */
+function normalizedAnchorOwnerId(
+  ownerLevel: string,
+  ownerId: string | null,
+  organizationId: string | null,
+): string | null {
+  if ((organizationId ?? null) !== null) return ownerId;
+  if (ownerLevel === "user" || ownerLevel === "team") return ownerId;
+  return ownerId ?? PLATFORM_OWNER_SENTINEL;
+}
+
+/** Do these two anchors denote the same canonical row identity tuple? */
+export function sameRowAnchor(
+  a: { ownerLevel: string; ownerId: string | null; organizationId: string | null },
+  b: { ownerLevel: string; ownerId: string | null; organizationId: string | null },
+): boolean {
+  return (
+    a.ownerLevel === b.ownerLevel &&
+    (a.organizationId ?? null) === (b.organizationId ?? null) &&
+    normalizedAnchorOwnerId(a.ownerLevel, a.ownerId, a.organizationId ?? null) ===
+      normalizedAnchorOwnerId(b.ownerLevel, b.ownerId, b.organizationId ?? null)
+  );
+}
+
+/** The row fields the conflict rule reads (DI-friendly; kind-agnostic). */
+export type ReanchorRowView = {
+  id: string;
+  packageName: string;
+  ownerLevel: string;
+  ownerId: string | null;
+  organizationId: string | null;
+  version?: string;
+  isDefault?: boolean;
+};
+
+/**
+ * A destination slot that is already occupied.
+ *
+ *  - `identity` — the destination IDENTITY tuple `(organization_id, owner_level,
+ *    owner_id, package_name, version)` is taken
+ *    (`installed_extension_identity_org_v_idx` /
+ *    `installed_extension_identity_platform_v_idx`).
+ *  - `default` — the moved row is the DEFAULT version and the destination's
+ *    one-default slot `(organization_id, owner_level, owner_id, package_name)`
+ *    is taken (`installed_extension_one_default_org_idx` /
+ *    `installed_extension_one_default_platform_idx`).
+ */
+export type ReanchorConflict = {
+  rowId: string;
+  reason: "identity" | "default";
+};
+
+/**
+ * Is the destination identity/default slot FREE for this row?
+ *
+ * Mirrors the four partial unique indexes EXACTLY, including the fact that NONE
+ * of them filters on lifecycle status: an ARCHIVED row occupies its identity and
+ * (when it is the default) its default slot just as a live one does. Per the
+ * owner ruling the answer to an occupied slot is a refusal — never a
+ * restore-instead, a relocation or a delete.
+ *
+ * The org-NULL indexes key on `owner_level`, which is why a bundled `platform`
+ * row and a product-installed `workspace` row of the same package coexist: a
+ * re-anchor to the workspace tier does NOT collide with the bundled platform
+ * anchor beside it.
+ *
+ * `rows` is every canonical row of the package (the caller reads them under the
+ * row locks); the moved row itself is skipped by id.
+ */
+export function findReanchorConflict(
+  rows: readonly ReanchorRowView[],
+  moved: ReanchorRowView,
+  destination: { ownerLevel: string; ownerId: string | null; organizationId: string | null },
+): ReanchorConflict | null {
+  const destOrg = destination.organizationId ?? null;
+  const destOwnerId = normalizedAnchorOwnerId(
+    destination.ownerLevel,
+    destination.ownerId,
+    destOrg,
+  );
+  const movedVersion = moved.version ?? null;
+  const movedIsDefault = moved.isDefault !== false;
+
+  const sitsAtDestination = (row: ReanchorRowView): boolean =>
+    (row.organizationId ?? null) === destOrg &&
+    row.ownerLevel === destination.ownerLevel &&
+    normalizedAnchorOwnerId(row.ownerLevel, row.ownerId, row.organizationId ?? null) ===
+      destOwnerId;
+
+  for (const row of rows) {
+    if (row.id === moved.id) continue;
+    if (row.packageName !== moved.packageName) continue;
+    if (!sitsAtDestination(row)) continue;
+    // IDENTITY slot — same version at the destination tuple.
+    if ((row.version ?? null) === movedVersion) {
+      return { rowId: row.id, reason: "identity" };
+    }
+    // ONE-DEFAULT slot — a different version, but both are the default.
+    if (movedIsDefault && row.isDefault !== false) {
+      return { rowId: row.id, reason: "default" };
+    }
+  }
+  return null;
+}
+
+/**
+ * Is a proposed audience token within an INSTALLED CONNECTOR's declared
+ * `access.scope.only` ceiling?
+ *
+ * The installed-row twin of the per-connection ceiling check. It is written
+ * separately ON PURPOSE (owner direction, S5 change 5): the connection
+ * validator reasons about a connection identity — its owner user, its org
+ * anchor, its person-grants — none of which applies to an install row, whose
+ * anchor is exactly what this operation MOVES. The organization the tokens are
+ * measured against is therefore the DESTINATION organization of the re-anchor,
+ * not the row's current one.
+ *
+ * `admin` is WITHIN the `workspace` ceiling: "Workspace: Admins only" is a
+ * strictly narrower audience than "Workspace: All", so a connector that caps
+ * itself at workspace reach must still admit the admin-only selection.
+ */
+export function installedAudienceWithinDeclaredCeiling(
+  token: string,
+  scope: ConnectorAccessDeclarationScope,
+  destinationOrganizationId: string | null,
+): boolean {
+  if (token === "owner") return true; // owner is within every ceiling
+  switch (scope) {
+    case "user":
+      return false;
+    case "project":
+      return token.startsWith("project:");
+    case "team":
+      return token.startsWith("team:");
+    case "organization":
+      if (token === "org") return true;
+      return (
+        token.startsWith("org:") &&
+        destinationOrganizationId != null &&
+        token.slice("org:".length) === destinationOrganizationId
+      );
+    case "workspace":
+      return (
+        token === "workspace" ||
+        token === "admin" ||
+        token === "org" ||
+        token.startsWith("org:") ||
+        token.startsWith("team:") ||
+        token.startsWith("project:")
+      );
+    case "admin":
+      return token === "admin";
+    default:
+      return false; // unknown scope vocabulary — fail closed
+  }
+}

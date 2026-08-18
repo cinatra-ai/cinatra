@@ -70,8 +70,13 @@ vi.mock("../canonical-store", () => ({
   listInstalledExtensions: (...a: unknown[]) => listInstalledExtensions(...(a as [])),
   readEffectiveStatusByPackageNames: vi.fn(async () => new Map()),
 }));
+const supersedeOrganizationRowsForWorkspaceInstall = vi.fn(async (..._args: unknown[]) => [] as string[]);
 vi.mock("../lifecycle-primitive", () => ({
   installExtensionManifest: (...a: unknown[]) => installExtensionManifest(...(a as [Row])),
+  // cinatra#2698 (S4, change 2): the dispatcher runs the supersession inside the
+  // install lock, after the whole install sequence succeeded.
+  supersedeOrganizationRowsForWorkspaceInstall: (...a: unknown[]) =>
+    supersedeOrganizationRowsForWorkspaceInstall(...a),
   transitionExtensionLifecycle: (...a: unknown[]) => transitionExtensionLifecycle(...(a as [])),
   deleteNonFinalizedCanonicalRow: async (id: string) => {
     const row = rows.find((r) => r.id === id);
@@ -140,8 +145,13 @@ describe("cinatra#2696 — the dispatcher writes the row at the THREADED anchor"
       ownerId: PLATFORM_OWNER_SENTINEL,
       organizationId: null,
     });
-    // The pipeline resolves the SAME (package, org) row — org-NULL, not org-1.
-    expect(fireExtensionActivate).toHaveBeenCalledWith("@v/ws-artifact", null, "1.0.0");
+    // The pipeline resolves the SAME row — org-NULL, not org-1 — and since
+    // cinatra#2698 it is handed the anchor TIER as well: at the org-NULL scope
+    // a product-installed workspace row and a bundled platform anchor share an
+    // `organization_id`, so the org alone no longer identifies the row.
+    expect(fireExtensionActivate).toHaveBeenCalledWith("@v/ws-artifact", null, "1.0.0", {
+      ownerLevel: "workspace",
+    });
   });
 
   it("the workspace row is resolved from ANOTHER organization's actor — one row, app-wide", async () => {
@@ -215,7 +225,7 @@ describe("cinatra#2696 — the dispatcher writes the row at the THREADED anchor"
     expect(_internalDeleteInstalledExtension).toHaveBeenCalledTimes(1);
   });
 
-  it("an EXISTING org-anchored row for the same package is NOT touched by a workspace-anchored install", async () => {
+  it("an EXISTING org-anchored row is SUPERSEDED by a workspace-anchored install", async () => {
     rows = [
       {
         id: "iext_org_pre",
@@ -234,7 +244,9 @@ describe("cinatra#2696 — the dispatcher writes the row at the THREADED anchor"
       rowOwnership: WORKSPACE_ANCHOR_ROW_OWNERSHIP,
     });
 
-    // A NEW row at the workspace anchor; the pre-existing org row is untouched.
+    // A NEW row at the workspace anchor — the install itself never rewrites the
+    // organization row (the anchor is the row identity, so the two writes stay
+    // separate).
     expect(rows).toHaveLength(2);
     expect(rows.find((r) => r.id === "iext_org_pre")).toEqual({
       id: "iext_org_pre",
@@ -245,6 +257,39 @@ describe("cinatra#2696 — the dispatcher writes the row at the THREADED anchor"
       organizationId: "org-1",
       source: { type: "verdaccio", integrity: "sha512-real" },
     });
-    expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    // cinatra#2698 (S4, change 2): the SUPERSESSION then archives it in place —
+    // fired ONCE, for THIS package, after the install finalized. The primitive's
+    // own tests own what it does to the row; what is pinned here is that the
+    // dispatcher fires it, and fires it only on the workspace path.
+    expect(supersedeOrganizationRowsForWorkspaceInstall).toHaveBeenCalledTimes(1);
+    expect(supersedeOrganizationRowsForWorkspaceInstall.mock.calls[0]![0]).toBe(
+      "@v/both-artifact",
+    );
+  });
+
+  it("an ORG-anchored install never supersedes anything", async () => {
+    extensionRegistry.register(makeHandler("artifact"));
+    fireExtensionActivate.mockResolvedValue({ finalized: true, activated: false });
+
+    await extensionRegistry.install("artifact", makeRef("@v/org-only"), orgActor("org-1"));
+
+    expect(supersedeOrganizationRowsForWorkspaceInstall).not.toHaveBeenCalled();
+  });
+
+  it("a FAILED workspace install supersedes nothing", async () => {
+    extensionRegistry.register(makeHandler("artifact"));
+    fireExtensionActivate.mockResolvedValue({
+      finalized: false,
+      activated: false,
+      reason: "anchor-refused",
+    });
+
+    await expect(
+      extensionRegistry.install("artifact", makeRef("@v/ws-failed"), orgActor("org-1"), {
+        rowOwnership: WORKSPACE_ANCHOR_ROW_OWNERSHIP,
+      }),
+    ).rejects.toThrow(/did not finalize/);
+
+    expect(supersedeOrganizationRowsForWorkspaceInstall).not.toHaveBeenCalled();
   });
 });

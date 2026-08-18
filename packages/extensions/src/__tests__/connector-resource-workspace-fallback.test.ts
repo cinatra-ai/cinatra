@@ -1,9 +1,14 @@
-// cinatra#2694 / S3 #2697 — the ASYNC canonical connector-access resolver's
-// org-row-first / workspace-fallback rule (`resolveConnectorResource`).
+// cinatra#2694 / S3 #2697, re-grounded by S4 #2698 — the ASYNC canonical
+// connector-access resolver's EFFECTIVE-ROW rule (`resolveConnectorResource`).
 //
 // Before S3 this resolver read ONE identity — the actor org's own row — so a
 // connector installed at "Workspace: All" was invisible to every organization.
-// These pin the two-arm resolution over the canonical store's identity read.
+// S3 added the workspace arm as a FALLBACK behind the org row; the owner ruling
+// of 2026-08-16 inverts that precedence, because a LIVE workspace row supersedes
+// every organization row. The inversion is load-bearing: identity reads return
+// ARCHIVED rows too, and a workspace install now archives the organization row
+// in place, so an org-first order would govern the connector by the superseded
+// row. These pin the resolution over the canonical store's identity read.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { InstalledExtension } from "../canonical-types";
@@ -73,25 +78,23 @@ beforeEach(() => {
   identityReads.length = 0;
 });
 
-describe("resolveConnectorResource — org row first", () => {
-  it("resolves the org's OWN row and never reads the workspace identity", async () => {
+describe("resolveConnectorResource — the organization's own row", () => {
+  it("resolves the org's OWN row when no workspace row exists", async () => {
     const r = seed(orgRow());
     const resolved = await resolveConnectorResource(ORG_A, PKG);
     expect(resolved?.resourceId).toBe(r.id);
     expect(resolved?.owner.organizationId).toBe(ORG_A);
-    // The fallback arm is not even consulted when the org has its own row.
-    expect(identityReads).toHaveLength(1);
-    expect(identityReads[0]!.ownerLevel).toBe("organization");
+    // Two identity reads: the workspace arm is consulted first and misses.
+    expect(identityReads.map((i) => i.ownerLevel)).toEqual(["workspace", "organization"]);
   });
 
   it("a non-connector row at the org identity fails closed — it does NOT fall through", async () => {
     seed(row({ kind: "artifact" }));
     expect(await resolveConnectorResource(ORG_A, PKG)).toBeNull();
-    expect(identityReads).toHaveLength(1);
   });
 });
 
-describe("resolveConnectorResource — workspace fallback", () => {
+describe("resolveConnectorResource — the live workspace row is the effective row", () => {
   it("serves the workspace row to an org that has no row of its own", async () => {
     const ws = seed(workspaceRow());
     const resolved = await resolveConnectorResource(ORG_A, PKG);
@@ -109,10 +112,27 @@ describe("resolveConnectorResource — workspace fallback", () => {
     expect((await resolveConnectorResource(ORG_B, PKG))?.resourceId).toBe(ws.id);
   });
 
-  it("with BOTH rows present, org A gets its own row and org B gets the workspace row", async () => {
-    const own = seed(orgRow());
+  it("a LIVE workspace row supersedes the organization's own row for EVERY org", async () => {
+    // cinatra#2698: the organization's row is superseded, so it is not the row
+    // whose permissions and owner context govern the connector — not even for
+    // the organization that installed it.
+    seed(orgRow());
     const ws = seed(workspaceRow());
+    expect((await resolveConnectorResource(ORG_A, PKG))?.resourceId).toBe(ws.id);
+    expect((await resolveConnectorResource(ORG_B, PKG))?.resourceId).toBe(ws.id);
+  });
+
+  it("an ARCHIVED workspace row supersedes nothing — the organization row governs", async () => {
+    const own = seed(orgRow());
+    seed(row({ ownerLevel: "workspace", ownerId: "__platform__", organizationId: null, status: "archived" }));
     expect((await resolveConnectorResource(ORG_A, PKG))?.resourceId).toBe(own.id);
+  });
+
+  it("an archived workspace row still serves an org with NO row of its own", async () => {
+    // Status was never a FILTER here and still is not — only a preference.
+    const ws = seed(
+      row({ ownerLevel: "workspace", ownerId: "__platform__", organizationId: null, status: "archived" }),
+    );
     expect((await resolveConnectorResource(ORG_B, PKG))?.resourceId).toBe(ws.id);
   });
 

@@ -867,16 +867,39 @@ export async function runHostExtensionInstallAndActivate(
   packageName: string,
   orgId: string | null,
   passedVersion?: string,
+  anchor?: { ownerLevel?: string },
 ): Promise<ExtensionActivateResult> {
   // Resolve the canonical row to learn the source + version. The dispatcher
   // created it platform-scoped (organization_id IS NULL); the caller passes the
   // matching `orgId` (null for the dispatch path).
+  //
+  // cinatra#2694 / S4 (#2698): the caller may also pass the target row's ANCHOR
+  // TIER. It matters at exactly one scope: `orgId === null`, where a
+  // product-installed WORKSPACE row and a bundled PLATFORM anchor for the same
+  // package can coexist (the org-NULL identity index keys on `owner_level`).
+  // `pickSingleActiveRow(rows, null)` sees both and fails closed on the
+  // ambiguity, so a workspace row's install / update / restore would report
+  // "no-active-canonical-row" while a perfectly good row sat there. With the
+  // tier we use S3's narrower workspace-anchor pick, which sees ONLY the
+  // product-installed workspace tier. Every other call is unchanged: no tier, or
+  // any tier other than `workspace`, keeps the exact existing pick.
   const { readInstalledExtensionsByPackageName } = await import(
     "@cinatra-ai/extensions/canonical-store"
   );
-  const { pickSingleActiveRow } = await import("@/lib/extension-install-anchor");
   const rows = await readInstalledExtensionsByPackageName(packageName);
-  const row = pickSingleActiveRow(rows, orgId);
+  // The workspace pick is imported ONLY on the branch that needs it, so every
+  // existing caller (and every existing test double of this module) sees the
+  // exact import shape it saw before #2698.
+  let row: (typeof rows)[number] | null;
+  if (orgId === null && anchor?.ownerLevel === "workspace") {
+    const { pickSingleWorkspaceAnchoredActiveRow } = await import(
+      "@/lib/extension-install-anchor"
+    );
+    row = pickSingleWorkspaceAnchoredActiveRow(rows);
+  } else {
+    const { pickSingleActiveRow } = await import("@/lib/extension-install-anchor");
+    row = pickSingleActiveRow(rows, orgId);
+  }
   if (!row) return { finalized: false, activated: false, reason: "no-active-canonical-row" };
   if (!row.source || row.source.type !== "verdaccio") {
     // github / local / add-from-chat are not real-integrity-pipeline sources.

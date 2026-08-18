@@ -513,8 +513,32 @@ export async function loadInstalledCardRows(
   // ORs across the visible identities.
   const STATUS_RANK: Record<string, number> = { locked: 0, active: 1, archived: 2 };
   const canonicalByKey = new Map<string, { row: InstalledExtension; requiredInProd: boolean }>();
+  // cinatra#2698 (S4, change 5): the card is annotated from the package's
+  // EFFECTIVE row. A live workspace install supersedes every organization row of
+  // the same package, so a superseded row must not contribute its version,
+  // status or required-in-prod flag to the ONE card the list draws — without
+  // this filter a card could show the archived organization row's version beside
+  // the workspace row's live status. The superseded row is still reachable in
+  // its own right: it keeps its identity, so the ARCHIVED list surfaces it for
+  // an authorized admin to restore once the workspace install is gone (change 4).
+  const packagesWithLiveWorkspaceRow = new Set(
+    canonicalRows
+      .filter(
+        (r) =>
+          (r.status === "active" || r.status === "locked") &&
+          r.ownerLevel === "workspace" &&
+          (r.organizationId ?? null) === null,
+      )
+      .map((r) => r.packageName),
+  );
   for (const row of canonicalRows) {
     if (!manifestVisibleToScope(row, scope)) continue;
+    if (
+      (row.organizationId ?? null) !== null &&
+      packagesWithLiveWorkspaceRow.has(row.packageName)
+    ) {
+      continue;
+    }
     const key = rowKey(row.kind, row.packageName);
     const existing = canonicalByKey.get(key);
     if (!existing) {
