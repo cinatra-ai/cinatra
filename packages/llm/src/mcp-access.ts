@@ -198,9 +198,9 @@ export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
 export type { DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
 
 /**
- * The chat-eligible classes. A declaration outside this set narrows to nothing,
- * which covers BOTH an explicit `"none"` and any value that is not a valid
- * class at all — the same fail-closed-toward-narrowing reading the host's
+ * The chat-eligible classes. A class outside this set narrows to nothing, which
+ * covers an explicit `"none"`, any value that is not a valid class at all, and
+ * — since the owner's ruling — the ABSENCE of a class — the same fail-closed-toward-narrowing reading the host's
  * `normalizeDelegatedChatToolClass` applies, since an unreadable declaration
  * must never be re-read as the NEUTRAL "undeclared".
  *
@@ -219,8 +219,15 @@ const CHAT_ELIGIBLE_CLASSES: ReadonlySet<string> = new Set(["read", "discovery",
 export type ServableChatPrimitive = {
   name: string;
   /**
-   * The class the registration declared, when it declared one. Absent means
-   * undeclared, which is neutral: host admission alone decides.
+   * The class in force for this primitive — what its registration declared, or
+   * the interim class the legacy allowlist implies for it.
+   *
+   * ABSENT MEANS UNEXPOSED, not neutral (owner ruling, cinatra#2771): a
+   * primitive with no class in force is dropped from the catalog. The host
+   * resolves this with the policy's `resolveDelegatedChatClass` before seeding,
+   * so an undeclared-but-legacy-admitted name arrives here already carrying its
+   * interim class. A caller that seeds nothing here gets an EMPTY catalog, by
+   * design.
    */
   declaredClass?: string | null;
   /**
@@ -264,8 +271,12 @@ export function resolveChatMcpAllowedTools(state: ChatMcpCatalogState): string[]
     // 2. A declaration may narrow, never widen. Note this runs strictly AFTER
     //    host admission above, which is what makes it structurally impossible
     //    for a declaration to widen: an unadmitted name never reaches here.
+    //    MISSING NARROWS TOO: no class in force means unexposed, so `null` /
+    //    `undefined` is dropped exactly like `"none"` or an unreadable value.
+    //    The host is responsible for seeding the class in force (its own
+    //    declaration, else the interim legacy one) — see `declaredClass`.
     const declared = primitive.declaredClass;
-    if (declared != null && !CHAT_ELIGIBLE_CLASSES.has(declared)) continue;
+    if (declared == null || !CHAT_ELIGIBLE_CLASSES.has(declared)) continue;
     // 3. A connection-gated primitive needs an authorized connection.
     const capability = primitive.capabilityKey;
     if (capability != null && capability !== "" && !state.isCapabilityAvailable(capability)) {

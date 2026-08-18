@@ -29,6 +29,13 @@ const UNLISTED = "acme_widget_catalog_list";
  * report whether the choke point admitted it.
  */
 async function registers(name: string, config: Record<string, unknown>): Promise<boolean> {
+  // Descriptors, not a spread: a spread READS every own property, which would
+  // invoke a throwing accessor here in the harness instead of at the choke
+  // point — the exact thing the hostile-accessor case below needs to observe.
+  const merged = Object.defineProperties(
+    { title: name, description: name, inputSchema: z.object({}) } as Record<string, unknown>,
+    Object.getOwnPropertyDescriptors(config),
+  );
   let outcome = false;
   await createMcpRuntimeServer({
     name: "test",
@@ -41,7 +48,7 @@ async function registers(name: string, config: Record<string, unknown>): Promise
           c: unknown,
           h: (...a: unknown[]) => unknown,
         ) => unknown
-      )(name, { title: name, description: name, inputSchema: z.object({}), ...config }, () => ({
+      )(name, merged, () => ({
         content: [{ type: "text", text: "ok" }],
       }));
       outcome = handle != null;
@@ -52,8 +59,12 @@ async function registers(name: string, config: Record<string, unknown>): Promise
 
 describe("the declaration choke point: absent declarations change nothing", () => {
   it("registers an admitted primitive that declares nothing", async () => {
-    // Every registration in the tree today. This is the behavior-identity
-    // proof: adding the field moved nothing until something declares.
+    // Every registration in the tree today. Still the behavior-identity proof,
+    // but it now proves a different mechanism: since the owner's ruling a
+    // MISSING declaration means `none`, so this only stays green because the
+    // choke point resolves the class through the interim shim first. If it read
+    // the config raw, every primitive on the chat surface would be refused
+    // here.
     await expect(registers(ADMITTED, {})).resolves.toBe(true);
   });
 
@@ -81,6 +92,24 @@ describe("the declaration choke point: a declaration NARROWS", () => {
     for (const cls of ["read", "discovery", "dispatch"]) {
       await expect(registers(ADMITTED, { delegatedChat: cls })).resolves.toBe(true);
     }
+  });
+
+  it("withdraws an admitted primitive whose declaration THROWS on read", async () => {
+    // `config` is connector-supplied, so reading `config.delegatedChat` can
+    // execute connector code. Two things are asserted at once here, through the
+    // real server: the throw does not escape the registration pass (this test
+    // would reject rather than resolve), and the name is REFUSED — an
+    // unreadable declaration is the malformed case, so it must not fall through
+    // to the interim shim and be handed a chat-eligible class for being
+    // hostile.
+    const config: Record<string, unknown> = {};
+    Object.defineProperty(config, "delegatedChat", {
+      enumerable: true,
+      get() {
+        throw new Error("hostile accessor");
+      },
+    });
+    await expect(registers(ADMITTED, config)).resolves.toBe(false);
   });
 });
 

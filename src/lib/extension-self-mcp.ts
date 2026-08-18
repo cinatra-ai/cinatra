@@ -116,7 +116,7 @@ export async function callHostPrimitive(
   const handler = captured.handler;
 
   const { mcpRequestContextStorage, isDelegatedChatMcpToolAllowed } = await import("@cinatra-ai/mcp-server");
-  const { declarationPermitsDelegatedChat } = await import(
+  const { declarationPermitsDelegatedChat, resolveDelegatedChatClass } = await import(
     "@cinatra-ai/mcp-server/delegated-chat-tool-policy"
   );
 
@@ -131,20 +131,23 @@ export async function callHostPrimitive(
       );
     }
     // (a2) The registration's typed delegated-chat declaration (cinatra#2771),
-    // applied on exactly the terms `policedRegisterTool` applies it: AFTER
-    // admission and NARROW-ONLY. A declaration can only withdraw a primitive
-    // its own registration declined (`none`, or a value that normalized to it);
-    // it can never make an unadmitted name self-invocable, because (a) above
-    // has already refused those. Undeclared — every registration today — is
-    // neutral, so this changes nothing until something declares.
+    // applied on exactly the terms `policedRegisterTool` applies it — SAME
+    // composition, SAME order: AFTER admission and NARROW-ONLY. A declaration
+    // can only withdraw a primitive its own registration declined (`none`, or a
+    // value that normalized to it); it can never make an unadmitted name
+    // self-invocable, because (a) above has already refused those.
     //
-    // Carrying it here is what closes the last lossy hop the #2771 review
-    // named: without it the in-process self-invoker and the live transport
-    // could disagree about the SAME registration.
-    if (ctx?.delegatedRestricted && !declarationPermitsDelegatedChat(captured.delegatedChat)) {
+    // An absent declaration means NONE (owner ruling), so this reads through
+    // the SAME `resolveDelegatedChatClass` the choke point uses — the interim
+    // class the legacy allowlist implies stands in until something declares.
+    // Using one resolver on both sides is what keeps the in-process
+    // self-invoker and the live transport from disagreeing about the SAME
+    // registration, which is the lossy hop the #2771 review named.
+    const effectiveClass = resolveDelegatedChatClass(primitiveName, captured.delegatedChat);
+    if (ctx?.delegatedRestricted && !declarationPermitsDelegatedChat(effectiveClass)) {
       throw new Error(
         `[extension-self-mcp] "${primitiveName}" declines the delegated chat surface ` +
-          `(delegatedChat: "${captured.delegatedChat}").`,
+          `(delegatedChat: "${effectiveClass ?? "undeclared"}").`,
       );
     }
     // (b) Deny-by-default MCP boundary — identical gate to the live transport.

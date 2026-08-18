@@ -52,6 +52,7 @@ import {
 import {
   delegatedChatAllowedToolNames,
   isDelegatedChatMcpToolAllowed,
+  resolveDelegatedChatClass,
 } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 
 const ACTOR = {
@@ -61,9 +62,28 @@ const ACTOR = {
   platformRole: "member" as const,
 };
 
+/**
+ * One primitive AS THE HOST SEEDS IT (`resolveChatMcpCatalogState` in
+ * src/lib/assistant-runtime/runtime.ts): the class in force is resolved through
+ * the policy, which today yields the interim class the legacy allowlist implies
+ * because nothing in the tree declares yet.
+ *
+ * Seeding is not optional decoration. Since the owner's ruling (cinatra#2771) a
+ * primitive with NO class in force is unexposed, so a state built without it
+ * resolves to the empty catalog and every assertion below would pass or fail
+ * for the wrong reason. `seededWithNoClass` is the deliberate opposite, used by
+ * the one test that asserts that rule.
+ */
+function seeded(
+  name: string,
+  extra: Partial<ServableChatPrimitive> = {},
+): ServableChatPrimitive {
+  return { name, declaredClass: resolveDelegatedChatClass(name, undefined), ...extra };
+}
+
 /** Everything the policy admits today, as if all of it were registered. */
 function servableFromPolicy(): ServableChatPrimitive[] {
-  return delegatedChatAllowedToolNames().map((name) => ({ name }));
+  return delegatedChatAllowedToolNames().map((name) => seeded(name));
 }
 
 function stateOf(
@@ -88,11 +108,11 @@ describe("chat MCP catalog: forward direction", () => {
   it("drops a servable primitive the policy refuses, however it was registered", () => {
     const resolved = resolveChatMcpAllowedTools(
       stateOf([
-        { name: "agent_list" },
+        seeded("agent_list"),
         // Carries a denied verb token.
-        { name: "objects_delete" },
+        seeded("objects_delete"),
         // Denied family prefix.
-        { name: "permissions_grant_list" },
+        seeded("permissions_grant_list"),
       ]),
     );
     expect(resolved).toEqual(["agent_list"]);
@@ -103,6 +123,25 @@ describe("chat MCP catalog: forward direction", () => {
       stateOf([{ name: "objects_delete", declaredClass: "read" }]),
     );
     expect(resolved).toEqual([]);
+  });
+
+  it("a MISSING class narrows too: a host-approved name with no class stays out", () => {
+    // The owner's ruling (cinatra#2771), at the resolver. Absence used to be
+    // neutral — host admission alone decided — which meant an undeclared
+    // primitive was exposed by default. It is now read exactly like `"none"`.
+    //
+    // The host is what closes the resulting gap: it seeds the class in force
+    // (the registration's own, else the interim legacy one) before this
+    // resolver ever runs, which is why `seeded()` above exists and why the
+    // catalog is unchanged in practice.
+    expect(
+      resolveChatMcpAllowedTools(stateOf([{ name: "agent_list" }])),
+    ).toEqual([]);
+    expect(
+      resolveChatMcpAllowedTools(stateOf([{ name: "agent_list", declaredClass: null }])),
+    ).toEqual([]);
+    // Same name, seeded the way the host seeds it — exposed.
+    expect(resolveChatMcpAllowedTools(stateOf([seeded("agent_list")]))).toEqual(["agent_list"]);
   });
 
   it("a declared class can narrow: an unrecognized class removes an admitted name", () => {
@@ -132,7 +171,7 @@ describe("chat MCP catalog: backward direction", () => {
     const NOVEL = "acme_widget_catalog_list";
     expect(delegatedChatAllowedToolNames()).not.toContain(NOVEL);
     const resolved = resolveChatMcpAllowedTools(
-      stateOf([{ name: "agent_list" }, { name: NOVEL, declaredClass: "read" }], {
+      stateOf([seeded("agent_list"), { name: NOVEL, declaredClass: "read" }], {
         isHostApproved: (name) => name === NOVEL || isDelegatedChatMcpToolAllowed(name),
       }),
     );
@@ -141,9 +180,9 @@ describe("chat MCP catalog: backward direction", () => {
 
   it("grows and shrinks with what the instance can serve", () => {
     const two = resolveChatMcpAllowedTools(
-      stateOf([{ name: "agent_list" }, { name: "objects_list" }]),
+      stateOf([seeded("agent_list"), seeded("objects_list")]),
     );
-    const one = resolveChatMcpAllowedTools(stateOf([{ name: "agent_list" }]));
+    const one = resolveChatMcpAllowedTools(stateOf([seeded("agent_list")]));
     expect(two).toEqual(["agent_list", "objects_list"]);
     expect(one).toEqual(["agent_list"]);
   });
@@ -152,8 +191,8 @@ describe("chat MCP catalog: backward direction", () => {
 describe("chat MCP catalog: capability availability", () => {
   it("withholds a connection-gated primitive with no authorized connection", () => {
     const servable: ServableChatPrimitive[] = [
-      { name: "agent_list" },
-      { name: "crm_account_get", capabilityKey: "crm" },
+      seeded("agent_list"),
+      seeded("crm_account_get", { capabilityKey: "crm" }),
     ];
     const withCrm = resolveChatMcpAllowedTools(stateOf(servable));
     const withoutCrm = resolveChatMcpAllowedTools(
@@ -168,7 +207,7 @@ describe("chat MCP catalog: capability availability", () => {
   it("does not consult availability for an ungated primitive", () => {
     const isCapabilityAvailable = vi.fn(() => true);
     resolveChatMcpAllowedTools(
-      stateOf([{ name: "agent_list" }], { isCapabilityAvailable }),
+      stateOf([seeded("agent_list")], { isCapabilityAvailable }),
     );
     expect(isCapabilityAvailable).not.toHaveBeenCalled();
   });
@@ -177,10 +216,10 @@ describe("chat MCP catalog: capability availability", () => {
 describe("chat MCP catalog: determinism", () => {
   it("is registry-order independent and sorted", () => {
     const a = resolveChatMcpAllowedTools(
-      stateOf([{ name: "objects_list" }, { name: "agent_list" }]),
+      stateOf([seeded("objects_list"), seeded("agent_list")]),
     );
     const b = resolveChatMcpAllowedTools(
-      stateOf([{ name: "agent_list" }, { name: "objects_list" }]),
+      stateOf([seeded("agent_list"), seeded("objects_list")]),
     );
     expect(a).toEqual(b);
     expect(a).toEqual([...a].sort());
@@ -188,7 +227,7 @@ describe("chat MCP catalog: determinism", () => {
 
   it("deduplicates a primitive registered twice", () => {
     const resolved = resolveChatMcpAllowedTools(
-      stateOf([{ name: "agent_list" }, { name: "agent_list" }]),
+      stateOf([seeded("agent_list"), seeded("agent_list")]),
     );
     expect(resolved).toEqual(["agent_list"]);
   });
@@ -205,7 +244,7 @@ describe("chat MCP catalog: determinism", () => {
       stateOf([
         { name: "" },
         { name: undefined as unknown as string },
-        { name: "agent_list" },
+        seeded("agent_list"),
       ]),
     );
     expect(resolved).toEqual(["agent_list"]);
@@ -224,7 +263,7 @@ describe("buildLlmMcpServerToolForChat: carries the derived catalog", () => {
 
   it("carries the derived allowlist on the same hosted reference", async () => {
     const tool = await buildLlmMcpServerToolForChat("openai", ACTOR, issueToken, {
-      catalogState: stateOf([{ name: "agent_list" }, { name: "objects_list" }]),
+      catalogState: stateOf([seeded("agent_list"), seeded("objects_list")]),
     });
     expect(tool?.allowedTools).toEqual(["agent_list", "objects_list"]);
     // Narrowing never becomes inlining, and never changes transport.

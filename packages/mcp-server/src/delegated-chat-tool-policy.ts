@@ -516,28 +516,284 @@ export function normalizeDelegatedChatToolClass(
 
 /**
  * Read a declaration off the manifest-discovered registration path's `config`
- * (the `(name, config, handler)` shape). Total: a non-object config, a missing
- * field, or a hostile getter-free scalar all read as UNDECLARED rather than
- * throwing inside a registration pass.
+ * (the `(name, config, handler)` shape).
+ *
+ * TOTAL, for real: a non-object config, a missing field, or a scalar all read
+ * as UNDECLARED, and the property READ ITSELF is guarded. `config` is an
+ * arbitrary object supplied by a connector, so `config.delegatedChat` can be an
+ * accessor that throws (or a Proxy whose `get` trap does). An escaping throw
+ * here would propagate out of a registration pass — on the live transport that
+ * is `policedRegisterTool` deciding admission, so the throw would take down the
+ * whole per-request capability build rather than refuse one name.
+ *
+ * A read that throws lands on `"none"`, NOT on `undefined`: the field is
+ * PRESENT and unreadable, which is exactly the malformed case, and the same
+ * fail-closed-toward-narrowing rule applies — an unreadable declaration must
+ * never be re-read as the NEUTRAL "undeclared". Note this also means a throwing
+ * getter is not rescued by the interim shim below, which only fills in for a
+ * genuinely ABSENT declaration.
  */
 export function readDeclaredDelegatedChatClass(
   config: unknown,
 ): DelegatedChatToolClass | undefined {
   if (typeof config !== "object" || config === null) return undefined;
-  return normalizeDelegatedChatToolClass((config as { delegatedChat?: unknown }).delegatedChat);
+  let raw: unknown;
+  try {
+    raw = (config as { delegatedChat?: unknown }).delegatedChat;
+  } catch {
+    return "none";
+  }
+  return normalizeDelegatedChatToolClass(raw);
 }
 
 /**
  * Whether a declaration leaves a name on the chat surface.
  *
- * TRUE for undeclared (neutral) and for the three chat-eligible classes; FALSE
- * for `"none"` and for anything that normalized to it. This NEVER admits on its
- * own — every caller applies it as an AND on top of
+ * TRUE for exactly the three chat-eligible classes. FALSE for `"none"`, for
+ * anything that normalized to it, and — since the owner's ruling — for a
+ * MISSING declaration. Absent no longer means neutral: an undeclared primitive
+ * is unexposed.
+ *
+ * This NEVER admits on its own — every caller applies it as an AND on top of
  * `isDelegatedChatMcpToolAllowed`.
+ *
+ * Callers that decide about a name admitted by the LEGACY allowlist must pass
+ * this the output of `resolveDelegatedChatClass`, not a raw read: nothing in
+ * the tree declares yet, so a raw read would empty the entire interim catalog.
+ * See the interim shim below.
  */
 export function declarationPermitsDelegatedChat(
   declared: DelegatedChatToolClass | undefined,
 ): boolean {
-  if (declared === undefined) return true;
+  if (declared === undefined) return false;
   return CHAT_ELIGIBLE_DECLARED_CLASSES.has(declared);
+}
+
+// ---------------------------------------------------------------------------
+// INTERIM DECLARATIONS FOR THE LEGACY ALLOWLIST (cinatra#2771 → deleted by
+// cinatra#2817).
+//
+// WHY THIS EXISTS. `declarationPermitsDelegatedChat` above now reads a MISSING
+// declaration as "unexposed", per the owner's ruling. Nothing in the tree
+// declares yet, and production admission still seeds from
+// `delegatedChatAllowedToolNames()` (the interim source of truth, per the
+// owner's correction in issue comment 5307314368). Taken together those two
+// facts would empty the ENTIRE delegated-chat catalog the moment the ruling's
+// semantics were applied literally — every admitted name is undeclared, so
+// every admitted name would be withdrawn.
+//
+// So the ruling is applied where it belongs (the predicate) and the gap is
+// closed where the gap actually is (the interim seeding). This table SYNTHESIZES
+// the declaration each legacy-allowlisted primitive would carry if its
+// registration declared one. The result: `missing = none` holds for real at the
+// predicate, and today's catalog is unchanged BYTE FOR BYTE (asserted in
+// `__tests__/delegated-chat-declaration.test.ts`).
+//
+// SCOPE, AND WHY THIS CANNOT WIDEN. Every consultation is downstream of
+// `isDelegatedChatMcpToolAllowed` — the shim is only ever reached for a name
+// the legacy allowlist ALREADY admits, so it cannot make a denied family, a
+// destructive-verb name, or an unlisted connector primitive reachable. The
+// exhaustiveness test requires the table's keys to be exactly
+// `delegatedChatAllowedToolNames()`, in both directions, so it can neither
+// grow past the allowlist nor silently miss a member of it.
+//
+// #2817's OBLIGATION. When persisted, version-bound admission replaces
+// `ALLOWED_EXACT`, this whole section is DELETED, not migrated — and the
+// classes below must be RE-DERIVED from what registrations actually declare,
+// never inherited from here. The class values are documentation today (all
+// three chat-eligible classes behave identically at the predicate); they must
+// not become authorization by inheritance from a table this PR wrote.
+//
+// THE CLASSIFICATION RULE used below:
+//   discovery  enumerates the CATALOG of things chat can then act on — screens,
+//              extensions, agents, connected accounts/instances, cube schemas.
+//              Answers "what exists / what can I use?".
+//   read       returns DATA about specific entities — rows, content, versions,
+//              metrics, history, and the read-only lifecycle renders.
+//   dispatch   hands work to an executor that runs under its own actor — agent
+//              runs and run control, artifact emission, proposals into a review
+//              workflow, per-site tool forwarding.
+// ---------------------------------------------------------------------------
+
+/**
+ * Interim classes for `ALLOWED_EXACT`. Kept in the same order as that set so
+ * the two read side by side under review.
+ */
+const INTERIM_CLASSES_EXACT: Readonly<Record<string, DelegatedChatToolClass>> = {
+  system_screen_lookup: "discovery",
+  extensions_search: "discovery",
+
+  artifact_extension_search: "discovery",
+  artifact_extension_get: "discovery",
+  artifact_authoring_emit: "dispatch",
+  artifact_authoring_chain_get: "read",
+  artifacts_get: "read",
+  artifacts_list: "read",
+  artifact_assertion_list: "read",
+  artifact_assertion_get: "read",
+  artifact_representation_list: "read",
+  artifact_representation_get: "read",
+  artifact_representation_latest: "read",
+
+  // The lifecycle PULL surfaces. Read-only by construction — each returns an
+  // opaque ref or one rendered card, never a decision.
+  artifact_review_gates_list: "read",
+  artifact_review_gate_render: "read",
+  verification_record_render: "read",
+  // Mints an opaque, expiring proposal token and returns a card envelope. It
+  // creates no run, writes no trigger row and arms no schedule, so it is `read`
+  // on the same terms as the three renders above — NOT `dispatch`, which would
+  // overstate what it does.
+  schedule_proposal_render: "read",
+
+  metric_cost_summary: "read",
+  metric_cost_by_provider: "read",
+  metric_cost_by_agent: "read",
+  metric_cost_recent_events: "read",
+  metric_cost_budget_get: "read",
+  metric_cost_timeseries: "read",
+  metric_usage_events: "read",
+  metric_usage_summary: "read",
+
+  // Dry-run only (no mutation, no audit row) — see ADMIN_REQUIRED_TOOLS in
+  // packages/extensions/src/mcp/registry.ts.
+  extensions_purge: "read",
+  // THE ONE UNCOMFORTABLE ENTRY, recorded rather than smoothed over. This
+  // primitive EXECUTES the destructive purge saga; it is in that package's
+  // MUTATING_TOOLS and admin-gated there. None of the three chat-eligible
+  // classes describes it honestly — the policy header above says chat must not
+  // reach raw mutations at all, and this name only survives the destructive-verb
+  // backstop because neither "purge" nor "execute" is a denied token. Classified
+  // `dispatch` as the least-wrong fit (it hands a saga to an executor).
+  //
+  // Whether it belongs on the chat allowlist AT ALL is a live question about
+  // `ALLOWED_EXACT`, not about the declaration channel, so it is deliberately
+  // NOT decided here: removing it would change the production catalog, which
+  // this PR's byte-for-byte invariant exists to prevent. Flagged for #2817 /
+  // the owner as an admission question.
+  extensions_purge_execute: "dispatch",
+
+  agent_list: "discovery",
+  agent_get: "read",
+  agent_run: "dispatch",
+  agent_run_get: "read",
+  agent_run_list: "read",
+  agent_run_messages_list: "read",
+  agent_registry_list: "discovery",
+  agent_version_list: "read",
+  agent_version_get: "read",
+  agent_version_diff: "read",
+
+  skills_catalog_list: "discovery",
+  skills_library_list: "discovery",
+  skills_installed_get: "read",
+  skills_installed_list: "read",
+  skills_installed_resolve_for_agent: "read",
+  skills_personal_list: "read",
+  skills_personal_list_for_agent: "read",
+  skills_personal_get: "read",
+
+  objects_list: "read",
+  objects_get: "read",
+
+  crm_list_search: "read",
+  crm_list_get: "read",
+  crm_list_members_get: "read",
+  crm_account_search: "read",
+  crm_account_get: "read",
+  crm_contact_search: "read",
+  crm_contact_get: "read",
+  crm_contact_find_by_email: "read",
+
+  projects_list: "read",
+  projects_get: "read",
+  blog_project_list: "read",
+  blog_project_get: "read",
+  campaigns_list: "read",
+  campaigns_get: "read",
+  email_outreach_campaign_list: "read",
+  email_outreach_campaign_get: "read",
+
+  // "What connections / instances does this actor have?" — the catalog chat
+  // consults before it can act through one.
+  media_feeds_list: "discovery",
+  connector_inventory_list: "discovery",
+  gmail_aliases_list: "discovery",
+  linkedin_accounts_list: "discovery",
+  drupal_instances_list: "discovery",
+
+  // The governed-invoker pair (#2022 S7 PR-δ): one enumerates a site's
+  // forwardable tools, the other forwards one call to the site.
+  wordpress_site_tools_list: "discovery",
+  wordpress_site_tool_call: "dispatch",
+
+  dashboards_list: "read",
+  dashboards_get: "read",
+  dashboards_cube_discover: "discovery",
+  dashboards_cube_validate: "read",
+  dashboards_cube_load: "read",
+  dashboards_cube_chart: "read",
+};
+
+/**
+ * Interim classes for `ALLOWED_PROPOSAL_OVERRIDE`.
+ *
+ * DELIBERATELY A SEPARATE LITERAL, not folded into the table above. The
+ * override is a separately-audited exception admitted ABOVE the destructive-verb
+ * backstop, and collapsing its members into the same object would erase the one
+ * structural signal that says so — a reviewer diffing `ALLOWED_EXACT` against
+ * its class table would silently pick up seven names that are not in it. The
+ * two are merged only at lookup, below.
+ *
+ * A class here still grants nothing: these names are admitted by the override,
+ * never by their declaration.
+ */
+const INTERIM_CLASSES_PROPOSAL_OVERRIDE: Readonly<Record<string, DelegatedChatToolClass>> = {
+  dashboards_create: "dispatch",
+  dashboards_update: "dispatch",
+  agent_run_stop: "dispatch",
+  agent_creation_request_propose: "dispatch",
+  agent_creation_request_edit: "dispatch",
+  agent_creation_request_list: "read",
+  agent_creation_request_get: "read",
+};
+
+const INTERIM_DECLARATIONS: ReadonlyMap<string, DelegatedChatToolClass> = new Map([
+  ...Object.entries(INTERIM_CLASSES_EXACT),
+  ...Object.entries(INTERIM_CLASSES_PROPOSAL_OVERRIDE),
+] as ReadonlyArray<[string, DelegatedChatToolClass]>);
+
+/**
+ * The class the LEGACY allowlist implies for a name it admits, or `undefined`
+ * for any other name.
+ *
+ * INTERIM (cinatra#2817 deletes this). Never an admission decision: a caller
+ * must have run `isDelegatedChatMcpToolAllowed` first, exactly as it must
+ * before consulting a real declaration.
+ */
+export function interimDelegatedChatClassFor(
+  name: string,
+): DelegatedChatToolClass | undefined {
+  return INTERIM_DECLARATIONS.get(name.toLowerCase());
+}
+
+/**
+ * The declaration in force for one host-admitted name: what the registration
+ * declared, else the interim class the legacy allowlist implies.
+ *
+ * This is the ONE place the interim fallback is applied, so all three
+ * declaration consumers — the registration choke point, the call-time
+ * self-invoker lookup, and the chat catalog resolver's seeding — agree about
+ * what a name means, and #2817 has a single call site to delete.
+ *
+ * A REAL declaration always wins, in BOTH directions: a registration that
+ * declares `none` (or ships something malformed, which normalized to `none`) is
+ * withdrawn even though the shim would have supplied a class for it.
+ */
+export function resolveDelegatedChatClass(
+  name: string,
+  declared: DelegatedChatToolClass | undefined,
+): DelegatedChatToolClass | undefined {
+  if (declared !== undefined) return declared;
+  return interimDelegatedChatClassFor(name);
 }

@@ -120,7 +120,13 @@ describe("delegated-chat class: the resolver's local mirror vs the host rule", (
     }
     expect(RESOLVER_RULE("none")).toBe(false);
     expect(HOST_RULE("none")).toBe(false);
-    expect(RESOLVER_RULE(undefined)).toBe(true);
-    expect(HOST_RULE(undefined)).toBe(true);
+    // INVERTED by the owner's ruling: a MISSING class is unexposed, not
+    // neutral. Both sides must move together — a mirror that still read
+    // absence as neutral would expose every undeclared primitive the host
+    // seeded without a class, which is the fail-open the ruling closes.
+    expect(RESOLVER_RULE(undefined)).toBe(false);
+    expect(HOST_RULE(undefined)).toBe(false);
+    expect(RESOLVER_RULE(null)).toBe(false);
+    expect(HOST_RULE(null)).toBe(false);
   });
 });

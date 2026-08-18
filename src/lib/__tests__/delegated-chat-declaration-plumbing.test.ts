@@ -66,10 +66,14 @@ describe("hop 1a — the DEFAULT extension MCP registry", () => {
     });
   });
 
-  it("leaves an UNDECLARED registration undeclared — neutral, not `none`", () => {
-    // Every registration in the tree today takes this path. If it landed on
-    // `none` instead, adding the field would have silently withdrawn every
-    // extension primitive from chat.
+  it("leaves an UNDECLARED registration undeclared — absent, not `none`", () => {
+    // Every registration in the tree today takes this path. ABSENCE must stay
+    // a distinct third state here even though the decision layer now reads it
+    // as `none` (owner ruling, cinatra#2771): the policy's
+    // `resolveDelegatedChatClass` fills in an interim class for an absent
+    // declaration and must NOT for an explicit `none`, so a registry that
+    // collapsed the two would make a connector's deliberate opt-out
+    // indistinguishable from never having said anything.
     registerExtensionMcpTool(PKG, { name: "acme_thing_list", handler });
     expect(listExtensionMcpTools()[0].delegatedChat).toBeUndefined();
   });

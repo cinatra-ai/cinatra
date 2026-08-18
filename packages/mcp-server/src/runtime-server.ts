@@ -11,6 +11,7 @@ import {
   declarationPermitsDelegatedChat,
   isDelegatedChatMcpToolAllowed,
   readDeclaredDelegatedChatClass,
+  resolveDelegatedChatClass,
 } from "./delegated-chat-tool-policy";
 import {
   isDelegatedWidgetMcpToolAllowed,
@@ -169,13 +170,21 @@ export async function createMcpRuntimeServer(input: {
   // it already admitted. No declaration value can reach `true` on a name
   // `isDelegatedChatMcpToolAllowed` refused, so a connector cannot
   // self-classify its way past a denied family, the destructive-verb backstop,
-  // or the exact-name admission. An ABSENT declaration — every registration in
-  // the tree today — is neutral, so this is behavior-identical until something
-  // actually declares.
+  // or the exact-name admission.
+  //
+  // An ABSENT declaration now means NONE (owner ruling) — so the read is routed
+  // through `resolveDelegatedChatClass`, which supplies the interim class the
+  // legacy allowlist implies for the names it admits. Nothing in the tree
+  // declares yet; without that fallback the ruling would withdraw every
+  // primitive on the chat surface rather than the undeclared ones. The fallback
+  // is reached only AFTER admission above, so it cannot widen either, and
+  // #2817 deletes it with the allowlist.
   const isRegistrableUnderPolicy = (name: string, config: unknown): boolean => {
     if (policyMode === "delegated-chat") {
       if (!isDelegatedChatMcpToolAllowed(name)) return false;
-      return declarationPermitsDelegatedChat(readDeclaredDelegatedChatClass(config));
+      return declarationPermitsDelegatedChat(
+        resolveDelegatedChatClass(name, readDeclaredDelegatedChatClass(config)),
+      );
     }
     if (policyMode === "delegated-widget") {
       // The widget perimeter is its own CLOSED, kind-keyed allowlist and is

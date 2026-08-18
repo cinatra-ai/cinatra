@@ -34,6 +34,7 @@ import {
 import { connectionSubjectUserId } from "@/lib/connection-use-gate";
 import {
   delegatedChatAllowedToolNames,
+  resolveDelegatedChatClass,
   isDelegatedChatMcpToolAllowed,
 } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
@@ -615,9 +616,17 @@ async function resolveChatMcpCatalogState(input: {
     const capabilityKeyFor = (name: string): string | null =>
       orderedKeys.find((key) => name.startsWith(`${key}_`)) ?? null;
 
-    const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map(
-      (name) => ({ name, capabilityKey: capabilityKeyFor(name) }),
-    );
+    // The INTERIM seeding site (cinatra#2817 replaces it wholesale). Admission
+    // still comes from the legacy allowlist, and since the owner's ruling a
+    // primitive with no class in force is unexposed, each seeded name carries
+    // the class `resolveDelegatedChatClass` puts in force for it — the interim
+    // one here, because nothing in the tree declares yet. Seeding no class
+    // would empty the catalog, which is exactly the failure the shim prevents.
+    const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map((name) => ({
+      name,
+      declaredClass: resolveDelegatedChatClass(name, undefined),
+      capabilityKey: capabilityKeyFor(name),
+    }));
 
     return {
       servable,
