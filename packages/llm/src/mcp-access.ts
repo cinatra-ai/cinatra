@@ -10,6 +10,10 @@ import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmMcpServerTool, LlmTool } from "./types";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
+  declarationPermitsDelegatedChat,
+  normalizeDelegatedChatToolClass,
+} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import {
   loadExternalMcpToolboxBySlug,
   sanitizeExternalMcpToolboxTools,
 } from "@/lib/external-mcp-toolbox-loader.server";
@@ -187,15 +191,15 @@ export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
 /**
  * How a registration means its primitive to be used on the delegated chat
  * surface. Structural only. Never sufficient authorization on its own.
+ *
+ * RE-EXPORTED, not redeclared: this is the SDK's author-facing enum, the same
+ * one both registration paths carry (`HostMcpToolRegistration.delegatedChat`
+ * and the manifest-discovered config's `delegatedChat`). A second copy here
+ * could drift from the enum the host actually validates, and a resolver that
+ * disagreed with the registration boundary about what "dispatch" means would
+ * be a security bug, not a typo.
  */
-export type DelegatedChatToolClass = "read" | "discovery" | "dispatch";
-
-/** The chat-eligible classes. A declaration outside this set narrows to nothing. */
-const CHAT_ELIGIBLE_CLASSES: ReadonlySet<string> = new Set<DelegatedChatToolClass>([
-  "read",
-  "discovery",
-  "dispatch",
-]);
+export type { DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
 
 /** One primitive this instance can currently serve. */
 export type ServableChatPrimitive = {
@@ -243,9 +247,19 @@ export function resolveChatMcpAllowedTools(state: ChatMcpCatalogState): string[]
     if (typeof name !== "string" || name.length === 0) continue;
     // 1. Host admission is the only thing that admits.
     if (!state.isHostApproved(name)) continue;
-    // 2. A declaration may narrow, never widen.
-    const declared = primitive.declaredClass;
-    if (declared != null && !CHAT_ELIGIBLE_CLASSES.has(declared)) continue;
+    // 2. A declaration may narrow, never widen. The narrowing RULE is the
+    //    policy module's, not a second copy: `normalize` maps an unreadable
+    //    value to `"none"` (fail-closed toward narrowing, never back to the
+    //    neutral "undeclared") and `declarationPermits` decides. Note this runs
+    //    strictly AFTER host admission above, which is what makes it
+    //    structurally impossible for a declaration to widen.
+    if (
+      !declarationPermitsDelegatedChat(
+        normalizeDelegatedChatToolClass(primitive.declaredClass),
+      )
+    ) {
+      continue;
+    }
     // 3. A connection-gated primitive needs an authorized connection.
     const capability = primitive.capabilityKey;
     if (capability != null && capability !== "" && !state.isCapabilityAvailable(capability)) {

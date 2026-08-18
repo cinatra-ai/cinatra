@@ -2,6 +2,8 @@ import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { admitToolInputSchema, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
+import { readDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import type { DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
 import {
   resolveDurableRunContext,
   recordMcpRunContextServedBy,
@@ -331,6 +333,16 @@ export async function registerAllCapabilities(
           description: registration.description ?? name,
           // Standard Schema (zod) — the MCP SDK validates against `~standard`.
           inputSchema: (registration.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
+          // The registration's typed delegated-chat declaration (cinatra#2771).
+          // This config is FRESHLY CONSTRUCTED — only title/description/schema
+          // were rebuilt — so the declaration is dropped here unless it is
+          // carried explicitly. Carrying it is what makes the choke point in
+          // `policedRegisterTool` see the SAME declaration for a
+          // `ctx.mcp.registerTool` extension that it sees for a
+          // manifest-discovered connector that passes it in `config` directly.
+          // Narrow-only: it can only remove this name from a delegated-chat
+          // build, never add it to one.
+          delegatedChat: registration.delegatedChat,
         },
         async (input: unknown) => {
           const raw = await dispatchPlanned(input);
@@ -368,6 +380,25 @@ export async function registerAllCapabilities(
 type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
 /**
+ * One captured host primitive: its handler PLUS the typed delegated-chat
+ * declaration its registration carried (cinatra#2771).
+ *
+ * The map used to be a bare `name → handler`, which is precisely the lossy hop
+ * the #2771 review named: a declaration that survived the registry, versioned
+ * discovery and the replay was still dropped before the in-process
+ * self-invoker could see it, so a delegated-restricted self-invocation and the
+ * live transport would have disagreed about the same registration. Carrying
+ * the declaration alongside the handler is what lets
+ * `@/lib/extension-self-mcp` apply the SAME narrow-only rule
+ * `policedRegisterTool` applies.
+ */
+export type CapturedHostPrimitive = {
+  handler: CapturedMcpToolHandler;
+  /** Narrow-only. `undefined` means undeclared, which is neutral. */
+  delegatedChat?: DelegatedChatToolClass;
+};
+
+/**
  * Build the host's UNIVERSAL in-process primitive-handler map
  * so `ctx.mcp.callPrimitive(name, input)` can invoke ANY host primitive by name,
  * the same code path the live MCP transport uses. Captures every registered
@@ -385,10 +416,10 @@ type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>
  * building this map alongside the live registration is side-effect-safe; callers
  * should still MEMOISE it (see `extension-self-mcp`) to build it at most once.
  */
-export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, CapturedMcpToolHandler>> {
-  const handlers = new Map<string, CapturedMcpToolHandler>();
+export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, CapturedHostPrimitive>> {
+  const handlers = new Map<string, CapturedHostPrimitive>();
   const recordingServer = {
-    registerTool: (name: string, _config: unknown, handler: CapturedMcpToolHandler) => {
+    registerTool: (name: string, config: unknown, handler: CapturedMcpToolHandler) => {
       // Mirror the live server: the MCP SDK rejects a duplicate tool name, so a
       // silent overwrite here would let the self-call surface diverge from the
       // live transport. Fail loudly instead.
@@ -397,7 +428,13 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
           `[mcp] duplicate tool registration "${name}" during self-primitive capture (the live server would reject it)`,
         );
       }
-      handlers.set(name, handler);
+      // Capture the declaration off the SAME `config` the live server's
+      // `policedRegisterTool` reads, so the recording pass and the live pass
+      // cannot disagree about what a module declared.
+      handlers.set(name, {
+        handler,
+        delegatedChat: readDeclaredDelegatedChatClass(config),
+      });
       return undefined as never;
     },
     registerResource: () => undefined as never,
@@ -441,14 +478,19 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
       unionSkipped.push({ name: tool.name, packageName: tool.packageName });
       continue;
     }
-    handlers.set(tool.name, async (input: unknown) => {
-      // Edge-bound serve (cinatra#1392 Gap 1) — same chokepoint as the live
-      // transport replay, so the in-process self-invoker serves identically.
-      // (No plan-pinning here: this map applies no schema validation, so the
-      // dispatch-time decision is authoritative — see
-      // dispatchPlannedExtensionMcpTool's doc.)
-      const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
-      return wrapExtensionToolResult(raw);
+    handlers.set(tool.name, {
+      // The registry already normalized the declaration structurally, so this
+      // is either a valid class or `undefined` (undeclared / neutral).
+      delegatedChat: tool.delegatedChat,
+      handler: async (input: unknown) => {
+        // Edge-bound serve (cinatra#1392 Gap 1) — same chokepoint as the live
+        // transport replay, so the in-process self-invoker serves identically.
+        // (No plan-pinning here: this map applies no schema validation, so the
+        // dispatch-time decision is authoritative — see
+        // dispatchPlannedExtensionMcpTool's doc.)
+        const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
+        return wrapExtensionToolResult(raw);
+      },
     });
     unionEffective.push({ name: tool.name, packageName: tool.packageName });
   }
@@ -473,9 +515,12 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   });
   for (const entry of retainedUnion.register) {
     const target = { packageName: entry.packageName, name: entry.name };
-    handlers.set(entry.name, async (input: unknown) => {
-      const raw = await dispatchVersionedOnlyExtensionMcpTool(target, input);
-      return wrapExtensionToolResult(raw);
+    handlers.set(entry.name, {
+      delegatedChat: entry.delegatedChat,
+      handler: async (input: unknown) => {
+        const raw = await dispatchVersionedOnlyExtensionMcpTool(target, input);
+        return wrapExtensionToolResult(raw);
+      },
     });
   }
   for (const deduped of retainedUnion.dedupedExtensionNames) {

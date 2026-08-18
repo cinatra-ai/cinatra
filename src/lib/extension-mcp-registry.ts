@@ -16,6 +16,7 @@ import "server-only";
 // (same pattern as the email/social connector registries).
 
 import type { HostMcpToolRegistration } from "@cinatra-ai/sdk-extensions";
+import { normalizeDelegatedChatToolClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 
 export type RegisteredExtensionMcpTool = HostMcpToolRegistration & { packageName: string };
 
@@ -36,7 +37,22 @@ class ExtensionMcpRegistryImpl {
         `[extensionMcpRegistry] tool "${name}" re-registered by ${packageName} (was ${existing.packageName})`,
       );
     }
-    this.entries.set(name, { ...tool, packageName });
+    // STRUCTURAL VALIDATION of the delegated-chat declaration (cinatra#2771)
+    // at the registry boundary, so a malformed value can never propagate into
+    // versioned discovery, the replay, or a call-time lookup. Normalizing here
+    // rather than at each reader means every consumer sees either a valid
+    // class or `undefined` (undeclared). A present-but-unreadable value
+    // normalizes to `"none"` — fail-closed in the NARROWING direction; it is
+    // never re-read as "undeclared", which is neutral and would widen.
+    //
+    // Note this is validation ONLY. The declaration is not authorization: what
+    // an extension declares here still cannot admit a name the delegated-chat
+    // policy refuses.
+    this.entries.set(name, {
+      ...tool,
+      packageName,
+      delegatedChat: normalizeDelegatedChatToolClass(tool.delegatedChat),
+    });
   }
 
   listAll(): readonly RegisteredExtensionMcpTool[] {

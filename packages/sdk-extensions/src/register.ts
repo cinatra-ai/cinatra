@@ -29,8 +29,15 @@ import type { ExtensionHostContext } from "./host-context";
  * 2.3.0: added optional `logger.capture`/`logger.captureDirectory` — host-owned
  *   request/response log capture (cinatra#981).
  * 2.4.0: added optional `objects.resolveType` — the edge-bound CONSUME side of
- *   `objects.registerType` (cinatra#1392 object-type serve). */
-export const SDK_EXTENSIONS_ABI_VERSION = "2.4.0" as const;
+ *   `objects.registerType` (cinatra#1392 object-type serve).
+ * 2.5.0: added optional `delegatedChat` on BOTH MCP registration shapes —
+ *   `HostMcpToolRegistration` (`mcp.registerTool`) and the
+ *   manifest-discovered `ExtensionMcpToolConfig`. A registration may declare
+ *   how it means to be used on the delegated chat surface
+ *   (`read`/`discovery`/`dispatch`/`none`). NARROW-ONLY: it is never
+ *   authorization, and the host's deny rules stay authoritative
+ *   (cinatra#2771). */
+export const SDK_EXTENSIONS_ABI_VERSION = "2.5.0" as const;
 
 /**
  * The package `exports` subpaths every extension package must expose.

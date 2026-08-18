@@ -7,7 +7,11 @@ import {
   type ToolCallback,
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
+import {
+  declarationPermitsDelegatedChat,
+  isDelegatedChatMcpToolAllowed,
+  readDeclaredDelegatedChatClass,
+} from "./delegated-chat-tool-policy";
 import {
   isDelegatedWidgetMcpToolAllowed,
   type WidgetDelegationKind,
@@ -152,9 +156,31 @@ export async function createMcpRuntimeServer(input: {
   // G12) selected by `widgetKind`. An absent/unknown widgetKind on a
   // delegated-widget request denies everything (fail-closed) — no widget
   // delegation may register a tool without a resolved kind.
-  const isRegistrableUnderPolicy = (name: string): boolean => {
-    if (policyMode === "delegated-chat") return isDelegatedChatMcpToolAllowed(name);
+  //
+  // The `config` argument is read for ONE thing only: the registration's typed
+  // delegated-chat declaration (cinatra#2771). This is the single choke point
+  // BOTH registration paths pass through — the manifest-discovered `(name,
+  // config, handler)` connectors call directly, and `ctx.mcp.registerTool`
+  // extensions via the replay in `@/lib/mcp-server` — so reading it here is
+  // what makes the declaration binding on both without a second walk.
+  //
+  // NARROW-ONLY, and the AND ordering below is the proof: host admission is
+  // evaluated FIRST and a declaration is only ever consulted to REMOVE a name
+  // it already admitted. No declaration value can reach `true` on a name
+  // `isDelegatedChatMcpToolAllowed` refused, so a connector cannot
+  // self-classify its way past a denied family, the destructive-verb backstop,
+  // or the exact-name admission. An ABSENT declaration — every registration in
+  // the tree today — is neutral, so this is behavior-identical until something
+  // actually declares.
+  const isRegistrableUnderPolicy = (name: string, config: unknown): boolean => {
+    if (policyMode === "delegated-chat") {
+      if (!isDelegatedChatMcpToolAllowed(name)) return false;
+      return declarationPermitsDelegatedChat(readDeclaredDelegatedChatClass(config));
+    }
     if (policyMode === "delegated-widget") {
+      // The widget perimeter is its own CLOSED, kind-keyed allowlist and is
+      // deliberately NOT declaration-aware: a connector must not be able to
+      // influence it in either direction (#2817 keeps it untouched too).
       return widgetKind ? isDelegatedWidgetMcpToolAllowed(widgetKind, name) : false;
     }
     return true;
@@ -184,7 +210,7 @@ export async function createMcpRuntimeServer(input: {
     config: unknown,
     cb: (...cbArgs: unknown[]) => unknown,
   ) => {
-    if (!isRegistrableUnderPolicy(name)) {
+    if (!isRegistrableUnderPolicy(name, config)) {
       // Not registered: invisible to tools/list, unresolvable by tools/call.
       return undefined as never;
     }

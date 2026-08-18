@@ -427,3 +427,117 @@ export function delegatedChatAllowedToolNames(): readonly string[] {
   const union = new Set<string>([...ALLOWED_EXACT, ...ALLOWED_PROPOSAL_OVERRIDE]);
   return [...union].filter((name) => isDelegatedChatMcpToolAllowed(name)).sort();
 }
+
+// ---------------------------------------------------------------------------
+// TYPED DELEGATED-CHAT DECLARATION (cinatra#2771, owner ruling 2026-08-15).
+//
+// A registration may DECLARE how it means its primitive to be used on the chat
+// surface. Both registration paths carry it — `HostMcpToolRegistration`
+// (`ctx.mcp.registerTool`) and the manifest-discovered `(name, config,
+// handler)` shape, whose `config` already carried `annotations` / `_meta`.
+//
+// THE DECLARATION IS NOT AUTHORIZATION, and this module is deliberately the
+// place the runtime reader lives so that fact is unmissable: everything above
+// in this file — the hard family denies, the destructive-verb token backstop,
+// the separately-audited `ALLOWED_PROPOSAL_OVERRIDE`, and the exact-name
+// admission — stays authoritative and UNCHANGED. A declaration is applied
+// strictly ON TOP, and only in the narrowing direction:
+//
+//   chat-eligible class  a name the host already admits stays admitted; a name
+//                        the host does NOT admit is still refused. Declaring
+//                        `read` can never make a denied family reachable.
+//   `none`               the registration DECLINES chat; the name is dropped
+//                        even though the host would have admitted it.
+//   malformed            normalizes to `none`. A value we cannot read must
+//                        never be re-read as "undeclared", because undeclared
+//                        is NEUTRAL and that would be a widening
+//                        reinterpretation of a broken input.
+//   absent               neutral. Nothing changes. This is what every
+//                        registration in the tree does today, which is why
+//                        adding the field changes no current behavior.
+//
+// WHY THE RUNTIME READER IS HERE AND THE TYPE IS IN THE SDK. The author-facing
+// TYPE belongs to `@cinatra-ai/sdk-extensions` (a connector must be able to
+// declare without importing host internals), but this package cannot depend on
+// the SDK and the SDK's connector contract is deliberately TYPE-ONLY — adding
+// a runtime module there would put a new module on every route graph that
+// mounts the MCP registry. This module is already on all of them and already
+// dependency-free, so the reader is free. The two definitions are pinned
+// together by an explicit drift test in `@cinatra-ai/llm` (the one package
+// that depends on both).
+//
+// NOTE ON SCOPE (cinatra#2817). This is the DECLARATION channel only. The
+// admission SOURCE is untouched: `isDelegatedChatMcpToolAllowed` above still
+// ends at `ALLOWED_EXACT`. Replacing that with version- and declaration-bound
+// admission is #2817's, sequenced deliberately because an incorrect swap
+// widens what is CALLABLE, not merely what is advertised.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a registration declares its primitive is meant to be used on the
+ * delegated chat surface. Structural mirror of the SDK's author-facing
+ * `DelegatedChatToolClass` (drift-tested).
+ */
+export type DelegatedChatToolClass = "read" | "discovery" | "dispatch" | "none";
+
+/** Every structurally valid declaration value, in declaration order. */
+export const DELEGATED_CHAT_TOOL_CLASSES = [
+  "read",
+  "discovery",
+  "dispatch",
+  "none",
+] as const satisfies readonly DelegatedChatToolClass[];
+
+const VALID_DECLARED_CLASSES: ReadonlySet<string> = new Set(DELEGATED_CHAT_TOOL_CLASSES);
+
+/** The classes that do not, by themselves, remove a name from the chat surface. */
+const CHAT_ELIGIBLE_DECLARED_CLASSES: ReadonlySet<string> = new Set([
+  "read",
+  "discovery",
+  "dispatch",
+]);
+
+/**
+ * Structurally validate one declaration value.
+ *
+ * `undefined` means UNDECLARED (neutral). Anything present but unreadable
+ * normalizes to `"none"` — fail-closed in the narrowing direction, never back
+ * to neutral.
+ */
+export function normalizeDelegatedChatToolClass(
+  value: unknown,
+): DelegatedChatToolClass | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string" && VALID_DECLARED_CLASSES.has(value)) {
+    return value as DelegatedChatToolClass;
+  }
+  return "none";
+}
+
+/**
+ * Read a declaration off the manifest-discovered registration path's `config`
+ * (the `(name, config, handler)` shape). Total: a non-object config, a missing
+ * field, or a hostile getter-free scalar all read as UNDECLARED rather than
+ * throwing inside a registration pass.
+ */
+export function readDeclaredDelegatedChatClass(
+  config: unknown,
+): DelegatedChatToolClass | undefined {
+  if (typeof config !== "object" || config === null) return undefined;
+  return normalizeDelegatedChatToolClass((config as { delegatedChat?: unknown }).delegatedChat);
+}
+
+/**
+ * Whether a declaration leaves a name on the chat surface.
+ *
+ * TRUE for undeclared (neutral) and for the three chat-eligible classes; FALSE
+ * for `"none"` and for anything that normalized to it. This NEVER admits on its
+ * own — every caller applies it as an AND on top of
+ * `isDelegatedChatMcpToolAllowed`.
+ */
+export function declarationPermitsDelegatedChat(
+  declared: DelegatedChatToolClass | undefined,
+): boolean {
+  if (declared === undefined) return true;
+  return CHAT_ELIGIBLE_DECLARED_CLASSES.has(declared);
+}

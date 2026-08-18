@@ -1,0 +1,144 @@
+import { describe, it, expect } from "vitest";
+import { z } from "zod";
+import { createMcpRuntimeServer } from "../runtime-server";
+import { delegatedChatAllowedToolNames } from "../delegated-chat-tool-policy";
+
+// The registration CHOKE POINT, exercised through the real runtime server
+// (cinatra#2771).
+//
+// `policedRegisterTool` is the one place BOTH registration paths converge: a
+// manifest-discovered connector calls `server.registerTool(name, config,
+// handler)` directly, and a `ctx.mcp.registerTool` extension arrives via the
+// replay in `@/lib/mcp-server`, which rebuilds a config and now carries the
+// declaration on it. Reading the declaration here is what makes it binding on
+// both without a second registration walk (the walk itself is #2817's).
+//
+// The observable used below is the choke point's own return value: a REFUSED
+// registration returns `undefined` and never reaches the SDK server, so the
+// tool is invisible to `tools/list` and unresolvable by `tools/call`. An
+// ACCEPTED one returns the SDK's registered-tool handle. That is a direct read
+// of the decision, not a proxy for it.
+
+const ADMITTED = delegatedChatAllowedToolNames()[0]!;
+const DENIED_FAMILY = "permissions_grant_list";
+const DENIED_VERB = "objects_delete";
+const UNLISTED = "acme_widget_catalog_list";
+
+/**
+ * Register `(name, config)` through a real delegated-chat runtime server and
+ * report whether the choke point admitted it.
+ */
+async function registers(name: string, config: Record<string, unknown>): Promise<boolean> {
+  let outcome = false;
+  await createMcpRuntimeServer({
+    name: "test",
+    version: "0.0.0",
+    toolPolicyMode: "delegated-chat",
+    registerCapabilities: (server) => {
+      const handle = (
+        server.registerTool as unknown as (
+          n: string,
+          c: unknown,
+          h: (...a: unknown[]) => unknown,
+        ) => unknown
+      )(name, { title: name, description: name, inputSchema: z.object({}), ...config }, () => ({
+        content: [{ type: "text", text: "ok" }],
+      }));
+      outcome = handle != null;
+    },
+  });
+  return outcome;
+}
+
+describe("the declaration choke point: absent declarations change nothing", () => {
+  it("registers an admitted primitive that declares nothing", async () => {
+    // Every registration in the tree today. This is the behavior-identity
+    // proof: adding the field moved nothing until something declares.
+    await expect(registers(ADMITTED, {})).resolves.toBe(true);
+  });
+
+  it("still refuses the names the policy always refused, undeclared", async () => {
+    await expect(registers(DENIED_FAMILY, {})).resolves.toBe(false);
+    await expect(registers(DENIED_VERB, {})).resolves.toBe(false);
+    await expect(registers(UNLISTED, {})).resolves.toBe(false);
+  });
+});
+
+describe("the declaration choke point: a declaration NARROWS", () => {
+  it("withdraws an admitted primitive that declares `none`", async () => {
+    await expect(registers(ADMITTED, { delegatedChat: "none" })).resolves.toBe(false);
+  });
+
+  it("withdraws an admitted primitive whose declaration is MALFORMED", async () => {
+    // Fail-closed toward narrowing: a value the host cannot read must not be
+    // re-read as "undeclared", which is neutral and would leave it exposed.
+    await expect(registers(ADMITTED, { delegatedChat: "superuser" })).resolves.toBe(false);
+    await expect(registers(ADMITTED, { delegatedChat: 42 })).resolves.toBe(false);
+    await expect(registers(ADMITTED, { delegatedChat: {} })).resolves.toBe(false);
+  });
+
+  it("keeps an admitted primitive that declares a chat-eligible class", async () => {
+    for (const cls of ["read", "discovery", "dispatch"]) {
+      await expect(registers(ADMITTED, { delegatedChat: cls })).resolves.toBe(true);
+    }
+  });
+});
+
+describe("the declaration choke point: a declaration NEVER widens", () => {
+  it("cannot admit a denied family, a denied verb, or an unlisted name", async () => {
+    // The ordering inside the choke point is the guarantee: host admission is
+    // evaluated first and a declaration is only consulted to REMOVE. If this
+    // ever goes green-to-red it means a connector's self-classification became
+    // sufficient authorization, which is the exact failure the ruling forbids.
+    for (const cls of ["read", "discovery", "dispatch", "none"]) {
+      await expect(registers(DENIED_FAMILY, { delegatedChat: cls })).resolves.toBe(false);
+      await expect(registers(DENIED_VERB, { delegatedChat: cls })).resolves.toBe(false);
+      await expect(registers(UNLISTED, { delegatedChat: cls })).resolves.toBe(false);
+    }
+  });
+});
+
+describe("the declaration choke point: other policy modes are untouched", () => {
+  it("an unrestricted server ignores the declaration entirely", async () => {
+    // The declaration is a DELEGATED-CHAT channel. An unrestricted build (the
+    // operator's own MCP client, agent runs) registers everything as before —
+    // a connector must not be able to hide a primitive from the full surface
+    // by declaring `none` for chat.
+    let registered = false;
+    await createMcpRuntimeServer({
+      name: "test",
+      version: "0.0.0",
+      registerCapabilities: (server) => {
+        const handle = (
+          server.registerTool as unknown as (n: string, c: unknown, h: () => unknown) => unknown
+        )(DENIED_VERB, { title: "t", inputSchema: z.object({}), delegatedChat: "none" }, () => ({
+          content: [{ type: "text", text: "ok" }],
+        }));
+        registered = handle != null;
+      },
+    });
+    expect(registered).toBe(true);
+  });
+
+  it("the delegated-widget perimeter stays closed and declaration-blind", async () => {
+    // The widget policy is its own kind-keyed allowlist. A connector must not
+    // be able to influence it in EITHER direction — declaring `read` must not
+    // open it, which is what this asserts.
+    let registered = false;
+    await createMcpRuntimeServer({
+      name: "test",
+      version: "0.0.0",
+      toolPolicyMode: "delegated-widget",
+      widgetDelegationKind: "wordpress",
+      registerCapabilities: (server) => {
+        const handle = (
+          server.registerTool as unknown as (n: string, c: unknown, h: () => unknown) => unknown
+        )(ADMITTED, { title: "t", inputSchema: z.object({}), delegatedChat: "read" }, () => ({
+          content: [{ type: "text", text: "ok" }],
+        }));
+        registered = handle != null;
+      },
+    });
+    expect(registered).toBe(false);
+  });
+});
