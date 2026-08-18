@@ -19,8 +19,14 @@
 //
 //   --json   emit the resolved plan as JSON instead (used by the tests)
 //
-// Emits NOTHING when the checkout states no COMPOSE_PROJECT_NAME and no
-// explicit override: that is the main checkout, and its behavior is unchanged.
+// On a checkout that states no COMPOSE_PROJECT_NAME the exported ports are the
+// HISTORICAL DEFAULTS (3003/3009/5435/6379) and no COMPOSE_PROJECT_NAME line is
+// emitted at all: that is the main checkout, and compose renders exactly what it
+// rendered before — verified by rendering `docker compose config` with and
+// without this step on an unconfigured checkout and diffing. Derivation from a
+// service URL happens only for a named project (see resolveComposeHostPortPlan),
+// so a main checkout whose REDIS_URL names some other loopback port still
+// publishes 6379.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
