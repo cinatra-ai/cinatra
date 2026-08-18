@@ -507,18 +507,54 @@ describe("resolveComposeHostPortPlan — a named lane is never given a shared de
     expect(result.refusals.length).toBe(3);
   });
 
-  // Compose's own normalization, so an operator pinning `Cinatra_Cinatra` (or
-  // the directory `cinatra.cinatra`) is compared the way compose compares it.
-  it("compares project names the way compose normalizes them", () => {
+  // Compose's normalization applies to the name it DERIVES from a directory
+  // basename — that is the only side of the `checkout` comparison it is valid
+  // on, and `composeDefaultProjectName` is where it belongs.
+  it("normalizes the directory-derived side the way compose does", () => {
     expect(normalizeComposeProjectName("Cinatra_Cinatra")).toBe("cinatra_cinatra");
     expect(normalizeComposeProjectName(" -p2839! ")).toBe("p2839");
     expect(composeDefaultProjectName("/Users/dev/src/Cinatra_Cinatra")).toBe("cinatra_cinatra");
-    expect(
-      resolveComposeHostPortPlan({
-        projectName: "Cinatra_Cinatra",
-        defaultProjectName: "/Users/dev/src/cinatra_cinatra",
-      }).laneScope,
-    ).toBe("checkout");
+  });
+
+  // …but an EXPLICIT COMPOSE_PROJECT_NAME is only VALIDATED by compose, never
+  // normalized: `Cinatra_Cinatra` is rejected with "invalid project name", not
+  // folded into `cinatra_cinatra`. Normalizing it before the comparison (the
+  // pre-fix shape) classified a name that could never boot as this checkout's
+  // own no-op pin, and let the run continue to compose's own late error.
+  it("refuses a stated project name compose would reject, rather than pinning it", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "Cinatra_Cinatra",
+      defaultProjectName: "/Users/dev/src/cinatra_cinatra",
+    });
+    expect(result.laneScope).not.toBe("checkout");
+    const refusal = result.refusals.find((r) => r.reason === "project-name-not-canonical");
+    expect(refusal).toBeDefined();
+    expect(refusal.envVar).toBe("COMPOSE_PROJECT_NAME");
+    // Names the variable, compose's rule, and both ways out.
+    expect(refusal.message).toContain("COMPOSE_PROJECT_NAME=Cinatra_Cinatra");
+    expect(refusal.message).toContain("lowercase alphanumeric characters, hyphens and underscores");
+    expect(refusal.message).toContain("COMPOSE_PROJECT_NAME=cinatra_cinatra");
+  });
+
+  // The same rule for a name that is not merely mis-cased but unusable outright.
+  it("refuses a stated project name with characters compose forbids", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "Cinatra!",
+      defaultProjectName: "/Users/dev/src/cinatra",
+    });
+    expect(result.laneScope).not.toBe("checkout");
+    expect(result.refusals.some((r) => r.reason === "project-name-not-canonical")).toBe(true);
+  });
+
+  // The pin that IS a no-op: already canonical, and exactly the name compose
+  // derives from this directory. Still `checkout`, still lenient.
+  it("treats an already-canonical pin of the derived name as this checkout", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "cinatra_cinatra",
+      defaultProjectName: "/Users/dev/src/cinatra_cinatra",
+    });
+    expect(result.laneScope).toBe("checkout");
+    expect(result.refusals).toEqual([]);
   });
 
   // An explicit port for every scoped service is a complete lane: no refusal,

@@ -429,14 +429,19 @@ export function classifyServiceUrl(urlValue) {
  *     `scripts/setup.sh`, `make dev` and `pnpm services` pass no `-p` and set no
  *     project name anywhere in this repo, so the operator's stack lands here and
  *     NOTHING below can refuse it. Historical defaults, silently, as before.
- *   - `"checkout"` — a name is stated, but it is the one compose would have
- *     derived from this directory anyway (`composeDefaultProjectName`). A no-op
- *     pin is not a second lane, so a missing URL is a loud WARNING here, not a
- *     refusal: an operator who merely pinned their own project name must not
- *     have `make dev` taken away from them.
- *   - `"lane"` — a name that names a DIFFERENT project than this directory's.
- *     That is a second stack on one host, which is precisely the situation where
- *     a shared default is a collision. Refusals apply.
+ *   - `"checkout"` — a name is stated, it is ALREADY CANONICAL, and it is the one
+ *     compose would have derived from this directory anyway
+ *     (`composeDefaultProjectName`). A no-op pin is not a second lane, so a
+ *     missing URL is a loud WARNING here, not a refusal: an operator who merely
+ *     pinned their own project name must not have `make dev` taken away from
+ *     them. Canonicality is required because the comparison's two sides are not
+ *     symmetric — compose normalizes a DERIVED name but only validates an
+ *     EXPLICIT one — so a stated `Cinatra!` is refused by compose, never folded
+ *     into `cinatra`. Such a name is refused here instead (see below), earlier
+ *     and naming the rule.
+ *   - `"lane"` — a canonical name that names a DIFFERENT project than this
+ *     directory's. That is a second stack on one host, which is precisely the
+ *     situation where a shared default is a collision. Refusals apply.
  *
  * An INVALID explicit `CINATRA_*_HOST_PORT` is refused on any scoped checkout
  * and replaced by the historical default (with a warning) on an unscoped one.
@@ -471,11 +476,21 @@ export function resolveComposeHostPortPlan({
     const fromFile = String(envFileLookup(key) ?? "").trim();
     return fromFile || undefined;
   };
-  const scoped = Boolean(String(projectName ?? "").trim());
-  const named = normalizeComposeProjectName(projectName);
+  const stated = String(projectName ?? "").trim();
+  const scoped = Boolean(stated);
+  const named = normalizeComposeProjectName(stated);
+  // Compose NORMALIZES the name it derives from a directory basename, but only
+  // VALIDATES one stated explicitly: `COMPOSE_PROJECT_NAME=Cinatra!` (or plain
+  // `Cinatra`) is rejected outright with "invalid project name … must consist
+  // only of lowercase alphanumeric characters, hyphens, and underscores as well
+  // as start with a letter or number" — it is never cleaned up into `cinatra`.
+  // So the two sides of the `checkout` comparison are NOT symmetric, and
+  // normalizing the stated name before comparing it (the pre-fix shape) let a
+  // name compose would refuse be classified as this checkout's own no-op pin.
+  const canonical = scoped && stated === named;
   const laneScope = !scoped
     ? "unscoped"
-    : named && named === composeDefaultProjectName(defaultProjectName)
+    : canonical && named === composeDefaultProjectName(defaultProjectName)
       ? "checkout"
       : "lane";
   // Only a distinct lane is refused; see the `laneScope` note above.
@@ -484,6 +499,27 @@ export function resolveComposeHostPortPlan({
   const portEnv = {};
   const unmanaged = [];
   const refusals = [];
+  // A stated name compose will not accept can never boot this stack at all, so
+  // refuse HERE — at the step that names the variable and the rule — instead of
+  // letting the operator meet compose's own error after the entry point has
+  // already run part of the way. Applies to every scoped checkout: the name is
+  // unusable whether it was meant as a lane or as a pin.
+  if (scoped && !canonical) {
+    refusals.push({
+      service: "compose",
+      envVar: COMPOSE_PROJECT_ENV_VAR,
+      reason: "project-name-not-canonical",
+      message:
+        `${COMPOSE_PROJECT_ENV_VAR}=${stated} is not a name Docker Compose accepts. Compose normalizes only the ` +
+        `project name it DERIVES from the directory basename; an explicit one must ALREADY consist only of ` +
+        `lowercase alphanumeric characters, hyphens and underscores, and start with a letter or number — ` +
+        `compose rejects anything else outright rather than cleaning it up. ` +
+        (named
+          ? `Set ${COMPOSE_PROJECT_ENV_VAR}=${named} instead`
+          : `Choose a name matching that rule`) +
+        `, or unset ${COMPOSE_PROJECT_ENV_VAR} to run as the unscoped checkout on the historical defaults.`,
+    });
+  }
   const warnings = [];
   const note = (list, spec, reason, message) =>
     list.push({ service: spec.service, envVar: spec.envVar, reason, message });
