@@ -68,6 +68,7 @@
 // scripts/__tests__/dev-preflight.test.mjs without Docker on the box.
 
 import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 
 /** The documented dev-preflight bypass switch. */
 export const SKIP_PREFLIGHT_ENV_VAR = "CINATRA_SKIP_DEV_PREFLIGHT";
@@ -218,6 +219,46 @@ export function resolveComposeProjectName({ processEnv = {}, envFileValues = [] 
 }
 
 /**
+ * Compose's own project-name normalization, applied to a candidate name.
+ *
+ * Docker Compose lowercases a project name and drops every character outside
+ * `[a-z0-9_-]`, then strips leading separators. Reproduced here for ONE
+ * comparison: "is the name this checkout states the same project compose would
+ * have derived on its own?" — see `composeDefaultProjectName`.
+ *
+ * @param {unknown} raw
+ * @returns {string}
+ */
+export function normalizeComposeProjectName(raw) {
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .replace(/^[^a-z0-9]+/, "");
+}
+
+/**
+ * The project name compose derives for a checkout ALL BY ITSELF: the normalized
+ * basename of the directory it composes from.
+ *
+ * This is the operator's own stack. `docker compose` in this repo is always
+ * invoked from the checkout root with relative `-f` paths (scripts/setup.sh, the
+ * `Makefile`, package.json), none of which pass `-p`, so the operator's live
+ * project IS this name — `cinatra_cinatra` on the canonical checkout, which is
+ * why packages/agents/src/wayflow-url.ts can hardcode `-p cinatra_cinatra`.
+ *
+ * It matters because a checkout that STATES the very name compose already
+ * derives has not made itself a second lane: the pin is a no-op, and the
+ * scoping rules below must not treat it as one. See `laneScope`.
+ *
+ * @param {string} projectDir  The directory compose composes from (the repo root).
+ * @returns {string}
+ */
+export function composeDefaultProjectName(projectDir) {
+  return normalizeComposeProjectName(path.basename(String(projectDir ?? "")));
+}
+
+/**
  * The host ports the preflight can cause to be published, and where a lane
  * already states each one.
  *
@@ -350,8 +391,8 @@ export function classifyServiceUrl(urlValue) {
 }
 
 /**
- * Plan the host-port claims: the compose interpolation environment, plus the
- * services this checkout may NOT publish.
+ * Plan the host-port claims: the compose interpolation environment, the services
+ * this checkout may NOT publish, and the claims it REFUSES to guess at.
  *
  * Per port, precedence is: an explicit `CINATRA_*_HOST_PORT` (shell, then
  * `.env.local`) > a port derived from the lane's own configuration > the
@@ -372,21 +413,57 @@ export function classifyServiceUrl(urlValue) {
  * A URL that IS stated but is not an explicit-port loopback URL (a remote host;
  * a loopback host with no port) is reported in `unmanaged` and gets NO key at
  * all — the caller stands that SERVICE down rather than starting someone else's
- * service on this checkout's behalf. Omitting the key is safe rather than a
- * second leak: the only ambient source is `processEnv`, and a value there would
- * already have been read as the explicit override above.
+ * service on this checkout's behalf.
+ *
+ * A NAMED LANE IS NEVER GIVEN A SCOPED SERVICE'S GLOBAL DEFAULT SILENTLY. That
+ * was the hole this rule closes: with a project name configured and (say) no
+ * REDIS_URL, the plan used to hand back the shared 6379 without a word, so two
+ * named lanes that each omitted one URL collided on that service with each other
+ * AND with the operator's stack — the exact quiet failure the port scoping
+ * exists to kill. Such a claim is now a REFUSAL that names the missing variable
+ * and both fixes (state the port, or stop naming the project).
+ *
+ * `laneScope` bounds who that refusal can reach, and it is deliberately narrow:
+ *
+ *   - `"unscoped"` — no COMPOSE_PROJECT_NAME. The canonical single-stack flow:
+ *     `scripts/setup.sh`, `make dev` and `pnpm services` pass no `-p` and set no
+ *     project name anywhere in this repo, so the operator's stack lands here and
+ *     NOTHING below can refuse it. Historical defaults, silently, as before.
+ *   - `"checkout"` — a name is stated, but it is the one compose would have
+ *     derived from this directory anyway (`composeDefaultProjectName`). A no-op
+ *     pin is not a second lane, so a missing URL is a loud WARNING here, not a
+ *     refusal: an operator who merely pinned their own project name must not
+ *     have `make dev` taken away from them.
+ *   - `"lane"` — a name that names a DIFFERENT project than this directory's.
+ *     That is a second stack on one host, which is precisely the situation where
+ *     a shared default is a collision. Refusals apply.
+ *
+ * An INVALID explicit `CINATRA_*_HOST_PORT` is refused on any scoped checkout
+ * and replaced by the historical default (with a warning) on an unscoped one.
+ * It must never simply be dropped: the plan's keys are spread OVER the ambient
+ * environment (`createComposeRunner`) and an omitted key cannot unset a shell
+ * variable an `eval` already inherited, so a rejected value that produces no
+ * replacement reaches compose anyway.
  *
  * @param {{
  *   processEnv?: Record<string, string | undefined>,
  *   envFileLookup?: (key: string) => string | undefined,
  *   projectName?: string,
+ *   defaultProjectName?: string,
  * }} input
- * @returns {{ portEnv: Record<string, string>, unmanaged: Array<{ service: string, envVar: string, urlVar: string, url: string }> }}
+ * @returns {{
+ *   portEnv: Record<string, string>,
+ *   unmanaged: Array<{ service: string, envVar: string, urlVar: string, url: string }>,
+ *   refusals: Array<{ service: string, envVar: string, reason: string, message: string }>,
+ *   warnings: Array<{ service: string, envVar: string, reason: string, message: string }>,
+ *   laneScope: "unscoped" | "checkout" | "lane",
+ * }}
  */
 export function resolveComposeHostPortPlan({
   processEnv = {},
   envFileLookup = () => undefined,
   projectName,
+  defaultProjectName,
 } = {}) {
   const read = (key) => {
     const fromShell = String(processEnv[key] ?? "").trim();
@@ -395,9 +472,22 @@ export function resolveComposeHostPortPlan({
     return fromFile || undefined;
   };
   const scoped = Boolean(String(projectName ?? "").trim());
+  const named = normalizeComposeProjectName(projectName);
+  const laneScope = !scoped
+    ? "unscoped"
+    : named && named === composeDefaultProjectName(defaultProjectName)
+      ? "checkout"
+      : "lane";
+  // Only a distinct lane is refused; see the `laneScope` note above.
+  const strict = laneScope === "lane";
 
   const portEnv = {};
   const unmanaged = [];
+  const refusals = [];
+  const warnings = [];
+  const note = (list, spec, reason, message) =>
+    list.push({ service: spec.service, envVar: spec.envVar, reason, message });
+
   const byVar = new Map(PREFLIGHT_HOST_PORTS.map((spec) => [spec.envVar, spec]));
   // Two passes: a `derivedFrom` port can only be resolved once the entry it
   // follows has been.
@@ -408,14 +498,40 @@ export function resolveComposeHostPortPlan({
 
   for (const pass of passes) {
     for (const spec of pass) {
-      const explicit = Number(read(spec.envVar));
-      if (isUsablePort(explicit)) {
-        portEnv[spec.envVar] = String(explicit); // an operator's direct claim wins
+      const stated = read(spec.envVar);
+      if (stated !== undefined) {
+        const explicit = Number(stated);
+        if (isUsablePort(explicit)) {
+          portEnv[spec.envVar] = String(explicit); // an operator's direct claim wins
+          continue;
+        }
+        // Stated, but not a port. Emitting NOTHING here is the leak: the value
+        // is already in the ambient environment compose inherits.
+        const what = `${spec.envVar}=${stated} is not a usable host port (1-65535)`;
+        if (scoped) {
+          note(
+            refusals,
+            spec,
+            "invalid-host-port-override",
+            `${what}. Refusing: this checkout names a compose project, so publishing ${spec.service} on the shared default ` +
+              `${spec.defaultHostPort} behind an override that says otherwise would be a silent collision. ` +
+              `Set ${spec.envVar} to a valid port, or unset it.`,
+          );
+          continue;
+        }
+        note(
+          warnings,
+          spec,
+          "invalid-host-port-override",
+          `${what} — ignoring it and publishing the historical default ${spec.defaultHostPort} for ${spec.service}.`,
+        );
+        portEnv[spec.envVar] = String(spec.defaultHostPort);
         continue;
       }
 
       if (spec.derivedFrom) {
         const source = byVar.get(spec.derivedFrom);
+        const offset = spec.defaultHostPort - source.defaultHostPort;
         const sourceUnmanaged = unmanaged.find((u) => u.envVar === spec.derivedFrom);
         if (sourceUnmanaged) {
           // Same container as its source: if that is not ours to publish,
@@ -423,9 +539,28 @@ export function resolveComposeHostPortPlan({
           unmanaged.push({ ...sourceUnmanaged, envVar: spec.envVar });
           continue;
         }
+        // Source already refused → one message for the pair, not two.
+        if (refusals.some((r) => r.envVar === spec.derivedFrom)) continue;
         const sourcePort = Number(portEnv[spec.derivedFrom]);
-        const derived = sourcePort + (spec.defaultHostPort - source.defaultHostPort);
-        portEnv[spec.envVar] = String(isUsablePort(derived) ? derived : spec.defaultHostPort);
+        const derived = sourcePort + offset;
+        if (!isUsablePort(derived)) {
+          // The overflow band (a source port above 65535 - offset). Falling back
+          // to the global ${spec.defaultHostPort} here broke BOTH properties at
+          // once: the companion no longer follows its container's port, and two
+          // lanes in this band both land on the shared default.
+          note(
+            refusals,
+            spec,
+            "companion-port-overflow",
+            `${spec.envVar}: the companion port published by the ${spec.service} container follows ` +
+              `${spec.derivedFrom}=${sourcePort} by +${offset}, but ${sourcePort} + ${offset} = ${derived} ` +
+              `is not a usable host port. There is no safe fallback — the shared default ${spec.defaultHostPort} would ` +
+              `collide with every other stack. Pick a ${spec.derivedFrom} of at most ${65535 - offset}, or set ` +
+              `${spec.envVar} explicitly.`,
+          );
+          continue;
+        }
+        portEnv[spec.envVar] = String(derived);
         continue;
       }
 
@@ -441,10 +576,82 @@ export function resolveComposeHostPortPlan({
         });
         continue;
       }
-      portEnv[spec.envVar] = String(configured.port ?? spec.defaultHostPort);
+      if (configured.state === "ours") {
+        portEnv[spec.envVar] = String(configured.port);
+        continue;
+      }
+
+      // Nothing stated for this service.
+      if (strict) {
+        note(
+          refusals,
+          spec,
+          "missing-service-url",
+          `${spec.urlVar} is not stated, so this lane has no host port for ${spec.service}. ` +
+            `${COMPOSE_PROJECT_ENV_VAR}=${projectName} names a compose project of its own, and a named lane is never handed ` +
+            `the shared default ${spec.defaultHostPort} silently: two lanes that each omit ${spec.urlVar} would collide there, ` +
+            `with each other and with the operator's stack. Fix it either way — state the port ` +
+            `(${spec.urlVar}=<loopback URL with an explicit port>, or ${spec.envVar}=<port>), or unset ` +
+            `${COMPOSE_PROJECT_ENV_VAR} to run as the unscoped checkout on the historical defaults.`,
+        );
+        continue;
+      }
+      if (scoped && spec.urlVar) {
+        note(
+          warnings,
+          spec,
+          "shared-default-on-named-checkout",
+          `${spec.urlVar} is not stated, so ${spec.service} falls back to the shared default ${spec.defaultHostPort}. ` +
+            `${COMPOSE_PROJECT_ENV_VAR}=${projectName} is the project compose derives from this directory anyway, so this is ` +
+            `read as the checkout's own stack rather than a second lane. If it IS a second lane, state ${spec.urlVar} ` +
+            `(or ${spec.envVar}) — otherwise it will collide on ${spec.defaultHostPort}.`,
+        );
+      }
+      portEnv[spec.envVar] = String(spec.defaultHostPort);
     }
   }
-  return { portEnv, unmanaged };
+  return { portEnv, unmanaged, refusals, warnings, laneScope };
+}
+
+/**
+ * The distinct messages of a plan's `refusals` / `warnings`, in order.
+ *
+ * A refusal on a derived port repeats its source's, so entries are
+ * de-duplicated exactly as `formatUnmanagedServices` de-duplicates a stand-down.
+ *
+ * @param {Array<{ message: string }>} entries
+ * @returns {string[]}
+ */
+export function planMessages(entries = []) {
+  return [...new Set(entries.map((entry) => String(entry.message)))];
+}
+
+/**
+ * The error a WHOLE-STACK entry point (`make dev`, `pnpm services`) must fail
+ * with when this checkout's plan stands a service down.
+ *
+ * Those entry points run `docker compose up -d` over the whole file, so a
+ * service the plan claims no port for still starts there — on the compose
+ * default — which is the stand-down being violated at the exact moment it
+ * matters. The launcher can honor a stand-down per service (`--no-deps`); a
+ * whole-stack up structurally cannot, so the honest enforcement is to not run
+ * it. The derivation step exits non-zero with this text and the `&&` chain in
+ * the Makefile / package.json recipe never reaches `docker compose up`.
+ *
+ * @param {{ unmanaged?: Array<{ service: string, urlVar: string, url: string }> }} input
+ * @returns {string}
+ */
+export function formatStandDownRefusal({ unmanaged = [] } = {}) {
+  const services = unmanagedComposeServices(unmanaged);
+  return (
+    `refusing to start the whole stack: ${formatUnmanagedServices(unmanaged)} — not an explicit-port loopback URL, so ` +
+    `${services.join(", ")} ${services.length === 1 ? "is" : "are"} not this lane's to publish. A whole-stack ` +
+    `\`docker compose up\` has no way to honor that: it would start ${services.length === 1 ? "it" : "them"} anyway, on the ` +
+    `compose default, colliding with whoever really owns ${services.length === 1 ? "that service" : "those services"}. ` +
+    `Either point the URL at a 127.0.0.1 port this lane owns (or set the matching CINATRA_*_HOST_PORT), or bring the stack ` +
+    `up without ${services.length === 1 ? "that service" : "those services"} — \`pnpm dev\` heals nango-server alone ` +
+    `(\`--no-deps\`) and honors the stand-down.`
+  );
 }
 
 /**

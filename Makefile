@@ -44,9 +44,28 @@ check:
 # `pnpm dev` then reconciled the SAME project onto derived ports afterwards, so
 # whichever ran first decided what got published. On the main checkout it
 # resolves to the historical values and nothing changes.
+#
+# ASSIGN, then eval — never `eval "$$(...)"` directly. The step exits non-zero on
+# a plan it will not guess at (a named lane with no host port for a scoped
+# service, an unusable override, a companion port that overflows), but the exit
+# status of a command substitution inside `eval` is thrown away, so the `up`
+# would run anyway. A bare assignment carries it, and the `&&` chain stops.
+#
+# --require-manageable is what makes the stand-down real HERE. This is a
+# WHOLE-STACK `up`: it has no way to leave out a service whose URL says it is
+# configured elsewhere, so for a named lane the step refuses rather than letting
+# compose publish that service on the shared default. `pnpm dev` (the launcher)
+# heals nango-server alone with `--no-deps` and honors the stand-down per
+# service; a whole-stack up structurally cannot.
+#
+# SCOPE LIMIT, stated plainly (cinatra#2845/#2849): only nango-server,
+# nango-connect, nango-db and redis are parameterized. A second lane running THIS
+# target still collides on the stack's other fixed host ports — wayflow 3010,
+# verdaccio 4873, postgres 5434, neo4j, graphiti. Two-lane whole-stack bring-up
+# is not supported yet; `pnpm dev` per lane is.
 dev:
 	-npm run --silent gen:graphiti-env
-	eval "$$(node scripts/dev-compose-env.mjs)" && docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d
+	CINATRA_COMPOSE_ENV="$$(node scripts/dev-compose-env.mjs --require-manageable)" && eval "$$CINATRA_COMPOSE_ENV" && docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d
 	pnpm dev
 
 # Stop infrastructure (keeps data).

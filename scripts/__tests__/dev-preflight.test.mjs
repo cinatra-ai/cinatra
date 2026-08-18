@@ -40,11 +40,14 @@ import {
   PREFLIGHT_HOST_PORTS,
   buildComposeArgs,
   classifyServiceUrl,
+  composeDefaultProjectName,
   createComposeRunner,
   explicitLoopbackPort,
   formatComposeCommand,
   formatUnmanagedServices,
+  normalizeComposeProjectName,
   normalizeSkipFlag,
+  planMessages,
   readEnvFileValue,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
@@ -221,10 +224,16 @@ describe("resolveComposeHostPortPlan — derivation is gated on a named project"
 
   it("derives from the same URLs once the checkout names its project", () => {
     const plan = resolveComposeHostPortPlan({
-      processEnv: REVIEWERS_CASE,
+      processEnv: {
+        ...REVIEWERS_CASE,
+        // Stated so the lane's plan is complete; the subject is REDIS_URL.
+        NANGO_SERVER_URL: "http://127.0.0.1:13003",
+        NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+      },
       projectName: "p2839",
     });
     expect(plan.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6579");
+    expect(plan.refusals).toEqual([]);
   });
 
   // A remote service on an UNNAMED project must not be reported unmanaged
@@ -248,15 +257,23 @@ describe("resolveComposeHostPortPlan — derivation is gated on a named project"
 });
 
 describe("resolveComposeHostPortPlan", () => {
+  // Every case in here states the OTHER services' URLs, because a named lane
+  // that omits one is a refusal now (see the describe below) — the point of
+  // each test is the one service it varies.
+  const LANE_URLS = {
+    NANGO_SERVER_URL: "http://127.0.0.1:13003",
+    NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+    REDIS_URL: "redis://127.0.0.1:16379",
+  };
   const lane = (envFile, processEnv = {}) =>
     resolveComposeHostPortPlan({
       processEnv,
-      envFileLookup: (key) => envFile[key],
+      envFileLookup: (key) => ({ ...LANE_URLS, ...envFile })[key],
       projectName: "p2839",
     });
 
-  it("falls back to the historical global ports when nothing states otherwise", () => {
-    expect(resolveComposeHostPortPlan({ projectName: "p2839" })).toEqual({
+  it("falls back to the historical global ports on the UNSCOPED checkout", () => {
+    expect(resolveComposeHostPortPlan({})).toMatchObject({
       portEnv: {
         CINATRA_NANGO_SERVER_HOST_PORT: "3003",
         CINATRA_NANGO_CONNECT_HOST_PORT: "3009",
@@ -264,15 +281,14 @@ describe("resolveComposeHostPortPlan", () => {
         CINATRA_REDIS_HOST_PORT: "6379",
       },
       unmanaged: [],
+      refusals: [],
+      warnings: [],
+      laneScope: "unscoped",
     });
   });
 
   it("derives lane ports from the same .env.local service URLs the app uses", () => {
-    const plan = lane({
-      NANGO_SERVER_URL: "http://127.0.0.1:13003",
-      NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
-      REDIS_URL: "redis://127.0.0.1:16379",
-    });
+    const plan = lane(LANE_URLS);
     expect(plan.portEnv).toEqual({
       CINATRA_NANGO_SERVER_HOST_PORT: "13003",
       CINATRA_NANGO_CONNECT_HOST_PORT: "13009",
@@ -337,10 +353,16 @@ describe("resolveComposeHostPortPlan", () => {
 // the SAME container as nango-server, so it follows nango-server's resolved port
 // by the offset the compose files state between them.
 describe("resolveComposeHostPortPlan — nango-connect (3009) derivation", () => {
+  // The other two services are stated in every case: a named lane that omits
+  // one is refused now, and the subject here is the connect port alone.
+  const OTHER_LANE_URLS = {
+    NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+    REDIS_URL: "redis://127.0.0.1:16379",
+  };
   const lane = (envFile, processEnv = {}) =>
     resolveComposeHostPortPlan({
       processEnv,
-      envFileLookup: (key) => envFile[key],
+      envFileLookup: (key) => ({ ...OTHER_LANE_URLS, ...envFile })[key],
       projectName: "p2839",
     });
 
@@ -379,6 +401,284 @@ describe("resolveComposeHostPortPlan — nango-connect (3009) derivation", () =>
     expect(formatUnmanagedServices(plan.unmanaged)).toBe(
       "NANGO_SERVER_URL=https://nango.example.com",
     );
+  });
+});
+
+// Review round 2, item 1. The hole the previous shape left: with a project name
+// configured and a service URL simply ABSENT, the plan handed back that
+// service's shared default without a word — and a test blessed it. Two named
+// lanes each omitting one URL collide on that service with each other AND with
+// the operator's stack, which is the exact quiet failure this work exists to
+// kill. A named lane is now refused, attributably.
+describe("resolveComposeHostPortPlan — a named lane is never given a shared default silently", () => {
+  const LANE_URLS = {
+    NANGO_SERVER_URL: "http://127.0.0.1:13003",
+    NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+    REDIS_URL: "redis://127.0.0.1:16379",
+  };
+  const plan = (input) => resolveComposeHostPortPlan({ projectName: "p2839", ...input });
+
+  it("refuses the service whose URL is missing, and names it and both fixes", () => {
+    const statedButRedis = { ...LANE_URLS };
+    delete statedButRedis.REDIS_URL;
+    const result = plan({ processEnv: statedButRedis });
+
+    expect(result.laneScope).toBe("lane");
+    expect(result.refusals.map((r) => r.envVar)).toEqual(["CINATRA_REDIS_HOST_PORT"]);
+    expect(result.refusals[0].reason).toBe("missing-service-url");
+    // No key at all: NOT the shared 6379 under another name.
+    expect(result.portEnv.CINATRA_REDIS_HOST_PORT).toBeUndefined();
+    expect(Object.values(result.portEnv)).not.toContain("6379");
+    // The services this lane DID state are unaffected — the refusal is
+    // per-service, not a whole-plan collapse.
+    expect(result.portEnv.CINATRA_NANGO_SERVER_HOST_PORT).toBe("13003");
+
+    const [message] = planMessages(result.refusals);
+    expect(message).toContain("REDIS_URL"); // the missing variable
+    expect(message).toContain("CINATRA_REDIS_HOST_PORT"); // fix 1: state the port
+    expect(message).toContain("unset COMPOSE_PROJECT_NAME"); // fix 2: stop being a lane
+    expect(message).toContain("6379"); // the default it refuses to hand out
+  });
+
+  // The collision the refusal prevents, spelled out: before this, BOTH lanes
+  // got 6379 back and neither was told.
+  it("refuses both of two lanes that each omit a different URL", () => {
+    const a = plan({
+      processEnv: { NANGO_SERVER_URL: "http://127.0.0.1:13003", REDIS_URL: LANE_URLS.REDIS_URL },
+    });
+    const b = plan({
+      processEnv: {
+        NANGO_SERVER_URL: "http://127.0.0.1:14003",
+        NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:25435/nango",
+      },
+    });
+    expect(a.refusals.map((r) => r.envVar)).toEqual(["CINATRA_NANGO_DB_HOST_PORT"]);
+    expect(b.refusals.map((r) => r.envVar)).toEqual(["CINATRA_REDIS_HOST_PORT"]);
+    expect(a.portEnv.CINATRA_NANGO_DB_HOST_PORT).toBeUndefined();
+    expect(b.portEnv.CINATRA_REDIS_HOST_PORT).toBeUndefined();
+  });
+
+  // HARD CAUTION, and the reason `laneScope` exists. The canonical single-stack
+  // flow sets no project name at all (scripts/setup.sh, the Makefile and
+  // package.json pass no `-p` and export none), so it can never be refused —
+  // and a checkout that merely PINS the name compose already derives from its
+  // own directory has not become a second lane either.
+  it("never refuses the unscoped checkout", () => {
+    const result = resolveComposeHostPortPlan({ processEnv: {} });
+    expect(result.laneScope).toBe("unscoped");
+    expect(result.refusals).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    expect(result.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6379");
+  });
+
+  it("warns instead of refusing when the name IS this checkout's compose default", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "cinatra_cinatra",
+      defaultProjectName: "/Users/dev/src/cinatra_cinatra",
+      processEnv: {},
+    });
+    expect(result.laneScope).toBe("checkout");
+    expect(result.refusals).toEqual([]);
+    // Loud, and it says what will happen and what to do if it is wrong.
+    expect(result.warnings.map((w) => w.envVar)).toEqual([
+      "CINATRA_NANGO_SERVER_HOST_PORT",
+      "CINATRA_NANGO_DB_HOST_PORT",
+      "CINATRA_REDIS_HOST_PORT",
+    ]);
+    expect(planMessages(result.warnings)[0]).toContain("collide on 3003");
+    // …and `make dev` still gets the historical values it always had.
+    expect(result.portEnv).toEqual({
+      CINATRA_NANGO_SERVER_HOST_PORT: "3003",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "3009",
+      CINATRA_NANGO_DB_HOST_PORT: "5435",
+      CINATRA_REDIS_HOST_PORT: "6379",
+    });
+  });
+
+  // A DIFFERENT name in the same checkout is a second project on one host —
+  // the situation a shared default actually breaks.
+  it("treats a name that differs from the compose default as a lane", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "p2839",
+      defaultProjectName: "/Users/dev/src/cinatra_cinatra",
+      processEnv: {},
+    });
+    expect(result.laneScope).toBe("lane");
+    expect(result.refusals.length).toBe(3);
+  });
+
+  // Compose's own normalization, so an operator pinning `Cinatra_Cinatra` (or
+  // the directory `cinatra.cinatra`) is compared the way compose compares it.
+  it("compares project names the way compose normalizes them", () => {
+    expect(normalizeComposeProjectName("Cinatra_Cinatra")).toBe("cinatra_cinatra");
+    expect(normalizeComposeProjectName(" -p2839! ")).toBe("p2839");
+    expect(composeDefaultProjectName("/Users/dev/src/Cinatra_Cinatra")).toBe("cinatra_cinatra");
+    expect(
+      resolveComposeHostPortPlan({
+        projectName: "Cinatra_Cinatra",
+        defaultProjectName: "/Users/dev/src/cinatra_cinatra",
+      }).laneScope,
+    ).toBe("checkout");
+  });
+
+  // An explicit port for every scoped service is a complete lane: no refusal,
+  // no URL required.
+  it("is satisfied by explicit CINATRA_*_HOST_PORT claims alone", () => {
+    const result = plan({
+      processEnv: {
+        CINATRA_NANGO_SERVER_HOST_PORT: "13003",
+        CINATRA_NANGO_DB_HOST_PORT: "15435",
+        CINATRA_REDIS_HOST_PORT: "16379",
+      },
+    });
+    expect(result.refusals).toEqual([]);
+    expect(result.portEnv.CINATRA_NANGO_CONNECT_HOST_PORT).toBe("13009");
+  });
+});
+
+// Review round 2, item 2. The companion port is nangoServerPort + 6, so a server
+// port in 65530-65535 derives something that is not a port at all. Falling back
+// to the global 3009 there broke BOTH of the properties the offset exists for:
+// the companion stopped following its own container, and every lane in that band
+// landed on the one shared default.
+describe("resolveComposeHostPortPlan — companion-port overflow is refused, not defaulted", () => {
+  const lane = (serverPort) =>
+    resolveComposeHostPortPlan({
+      projectName: "p2839",
+      processEnv: {
+        NANGO_SERVER_URL: `http://127.0.0.1:${serverPort}`,
+        NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+        REDIS_URL: "redis://127.0.0.1:16379",
+      },
+    });
+
+  // 65529 is the last server port whose companion still fits (65529 + 6 =
+  // 65535); 65530 is the first that does not.
+  it("derives right up to the boundary", () => {
+    expect(lane(65529).portEnv).toMatchObject({
+      CINATRA_NANGO_SERVER_HOST_PORT: "65529",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "65535",
+    });
+    expect(lane(65529).refusals).toEqual([]);
+  });
+
+  it("refuses every server port whose companion overflows", () => {
+    for (const serverPort of [65530, 65531, 65532, 65533, 65534, 65535]) {
+      const result = lane(serverPort);
+      expect(result.refusals.map((r) => r.reason)).toEqual(["companion-port-overflow"]);
+      // Never the shared default, which is what made this a collision bug and
+      // not merely a wrong number.
+      expect(result.portEnv.CINATRA_NANGO_CONNECT_HOST_PORT).toBeUndefined();
+      expect(Object.values(result.portEnv)).not.toContain("3009");
+      // The server port it derives FROM is still resolved, so the message can
+      // name the real culprit.
+      expect(result.portEnv.CINATRA_NANGO_SERVER_HOST_PORT).toBe(String(serverPort));
+    }
+  });
+
+  it("tells the operator which port to lower, and to what", () => {
+    const [message] = planMessages(lane(65533).refusals);
+    expect(message).toContain("CINATRA_NANGO_SERVER_HOST_PORT=65533");
+    expect(message).toContain("65539"); // the value that is not a port
+    expect(message).toContain("at most 65529"); // the actionable ceiling
+  });
+
+  // Same band reached through the explicit override rather than the URL.
+  it("refuses an overflowing companion behind an explicit server-port override", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "p2839",
+      processEnv: {
+        CINATRA_NANGO_SERVER_HOST_PORT: "65534",
+        CINATRA_NANGO_DB_HOST_PORT: "15435",
+        CINATRA_REDIS_HOST_PORT: "16379",
+      },
+    });
+    expect(result.refusals.map((r) => r.reason)).toEqual(["companion-port-overflow"]);
+  });
+
+  // An operator who states the connect port outright is not guessing, so there
+  // is nothing to refuse.
+  it("accepts an overflowing server port when the companion is stated outright", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "p2839",
+      processEnv: {
+        CINATRA_NANGO_SERVER_HOST_PORT: "65534",
+        CINATRA_NANGO_CONNECT_HOST_PORT: "13009",
+        CINATRA_NANGO_DB_HOST_PORT: "15435",
+        CINATRA_REDIS_HOST_PORT: "16379",
+      },
+    });
+    expect(result.refusals).toEqual([]);
+    expect(result.portEnv.CINATRA_NANGO_CONNECT_HOST_PORT).toBe("13009");
+  });
+});
+
+// Review round 2, item 4. An INVALID ambient CINATRA_*_HOST_PORT was rejected
+// and then nothing was emitted in its place — but omitting a key cannot unset a
+// variable: `createComposeRunner` spreads the plan OVER the ambient environment,
+// and an `eval` that prints no line for a key leaves the shell's own value
+// standing. The rejected value reached compose either way.
+describe("resolveComposeHostPortPlan — a rejected ambient override is replaced, not dropped", () => {
+  const INVALID = ["abc", "0", "-1", "65536", "13003:13003", "13 003"];
+
+  it("publishes the historical default in its place on the unscoped checkout", () => {
+    for (const bad of INVALID) {
+      const result = resolveComposeHostPortPlan({
+        processEnv: { CINATRA_REDIS_HOST_PORT: bad },
+      });
+      // The KEY IS PRESENT — that is the fix. An omitted key leaves `bad` in
+      // place in the environment compose interpolates from.
+      expect(result.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6379");
+      expect(result.warnings.map((w) => w.reason)).toEqual(["invalid-host-port-override"]);
+      expect(planMessages(result.warnings)[0]).toContain(bad);
+    }
+  });
+
+  it("refuses it on a named lane rather than guessing a port", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "p2839",
+      processEnv: {
+        CINATRA_REDIS_HOST_PORT: "not-a-port",
+        NANGO_SERVER_URL: "http://127.0.0.1:13003",
+        NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+        REDIS_URL: "redis://127.0.0.1:16379", // stated, and still not guessed at
+      },
+    });
+    expect(result.refusals.map((r) => r.reason)).toEqual(["invalid-host-port-override"]);
+    expect(planMessages(result.refusals)[0]).toContain("CINATRA_REDIS_HOST_PORT=not-a-port");
+  });
+
+  // Where it actually bit: the unmanaged branch. The service is configured
+  // elsewhere, so the plan emitted no key — and the invalid ambient value sailed
+  // through to compose as the published host port.
+  it("does not let an invalid ambient value survive a stand-down", () => {
+    const processEnv = {
+      PATH: "/usr/bin",
+      CINATRA_REDIS_HOST_PORT: "nope",
+      REDIS_URL: "rediss://cache.example.com:6380", // not ours to publish
+    };
+    const scoped = resolveComposeHostPortPlan({
+      projectName: "p2839",
+      defaultProjectName: "/src/cinatra",
+      processEnv,
+    });
+    // A lane refuses outright, so nothing is spawned at all (asserted below).
+    expect(scoped.refusals.map((r) => r.envVar)).toContain("CINATRA_REDIS_HOST_PORT");
+
+    // Unscoped, the same ambient value is REPLACED by the historical default
+    // rather than left standing.
+    const unscoped = resolveComposeHostPortPlan({ processEnv });
+    expect(unscoped.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6379");
+  });
+
+  // An empty or whitespace-only value is "not stated", not "stated wrongly" —
+  // an exported-but-empty shell variable must not become a refusal.
+  it("treats an empty ambient value as unset", () => {
+    const result = resolveComposeHostPortPlan({
+      processEnv: { CINATRA_REDIS_HOST_PORT: "   " },
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6379");
   });
 });
 
@@ -684,6 +984,10 @@ describe("dev-server.mjs preflight (end-to-end, fake docker)", () => {
       // the Nango heal is the only docker interaction in play.
       SUPABASE_DB_URL: "postgresql://postgres:postgres@127.0.0.1:15434/postgres",
       REDIS_URL: "redis://127.0.0.1:16379",
+      // Stated for the same reason a real lane must state it: a named lane with
+      // no host port for a scoped service is refused, not defaulted (item 1).
+      // Cases that name a project and want a heal must be complete lanes.
+      NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
     };
     // Whatever the ambient shell carries, each case states its own inputs.
     delete env.CINATRA_SKIP_DEV_PREFLIGHT;
@@ -819,6 +1123,31 @@ describe("dev-server.mjs preflight (end-to-end, fake docker)", () => {
     expect(result.stderr).toContain("NANGO_DATABASE_URL=postgresql://localhost/nango");
   });
 
+  // Review round 2, item 1, at the launcher. A named lane with no host port for
+  // a scoped service has no safe thing to publish, so the heal does not run at
+  // all — the refusal is enforced at the same chokepoint the skip flag is, not
+  // printed and then ignored.
+  it("makes zero docker calls when a named lane's plan cannot be resolved", () => {
+    const result = runLauncher("PORT=13839\nCOMPOSE_PROJECT_NAME=p2839\n", {
+      NANGO_DATABASE_URL: "", // the lane states no port for nango-db
+    });
+    expectCleanRun(result); // the app still boots; only Docker stands down
+    expect(result.calls).toEqual([]);
+    expect(result.stderr).toContain("NANGO_DATABASE_URL");
+    expect(result.stderr).toContain("not touching Docker");
+  });
+
+  // Review round 2, item 2, at the launcher: the overflow band never reaches
+  // compose carrying the shared 3009.
+  it("makes zero docker calls when the companion port overflows", () => {
+    const result = runLauncher("PORT=13839\nCOMPOSE_PROJECT_NAME=p2839\n", {
+      CINATRA_NANGO_SERVER_HOST_PORT: "65533",
+    });
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
+    expect(result.stderr).toContain("65539");
+  });
+
   it("without the flag, scopes its compose calls to the worktree project and ports", () => {
     const result = runLauncher(
       [
@@ -905,7 +1234,14 @@ describe("scripts/dev-compose-env.mjs — the shared derivation step", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "cinatra-2839-step-"));
     writeFileSync(
       path.join(dir, ".env.local"),
-      "COMPOSE_PROJECT_NAME=p2839 # lane\nREDIS_URL=redis://127.0.0.1:16379\n",
+      [
+        "COMPOSE_PROJECT_NAME=p2839 # lane",
+        "REDIS_URL=redis://127.0.0.1:16379",
+        // A named lane states every scoped service or it is refused (item 1).
+        "NANGO_SERVER_URL=http://127.0.0.1:13003",
+        "NANGO_DATABASE_URL=postgresql://nango:nango@127.0.0.1:15435/nango",
+        "",
+      ].join("\n"),
     );
     const env = { ...process.env };
     delete env.COMPOSE_PROJECT_NAME;
@@ -932,6 +1268,7 @@ describe("scripts/dev-compose-env.mjs — the shared derivation step", () => {
     const inputs = {
       COMPOSE_PROJECT_NAME: "p2839",
       NANGO_SERVER_URL: "http://127.0.0.1:13003",
+      NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
       REDIS_URL: "rediss://cache.example.com:6380",
     };
     const result = runStep(inputs, ["--json"]);
@@ -940,9 +1277,14 @@ describe("scripts/dev-compose-env.mjs — the shared derivation step", () => {
     const fromLauncher = resolveComposeHostPortPlan({
       processEnv: inputs,
       projectName: "p2839",
+      defaultProjectName: REPO_ROOT,
     });
     expect(fromStep.portEnv).toEqual(fromLauncher.portEnv);
     expect(fromStep.unmanaged).toEqual(fromLauncher.unmanaged);
+    // Same for the two channels that decide whether anything runs at all.
+    expect(fromStep.refusals).toEqual(fromLauncher.refusals);
+    expect(fromStep.warnings).toEqual(fromLauncher.warnings);
+    expect(fromStep.laneScope).toBe(fromLauncher.laneScope);
 
     // In the mode the entry points actually `eval`, a service configured
     // elsewhere contributes NO export and is reported on stderr instead, so it
@@ -951,6 +1293,236 @@ describe("scripts/dev-compose-env.mjs — the shared derivation step", () => {
     expect(shell.stdout).not.toContain("CINATRA_REDIS_HOST_PORT");
     expect(shell.stdout).not.toContain("6379");
     expect(shell.stderr).toContain("REDIS_URL=rediss://cache.example.com:6380");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3a. The whole-stack entry points, driven as the shell actually runs them
+// ---------------------------------------------------------------------------
+//
+// The equivalence tests above compare the step's PLAN with the launcher's. They
+// never ran the `Makefile` / package.json line, so two things they could not see
+// went wrong:
+//
+//   - `eval "$(node scripts/dev-compose-env.mjs)"` throws the step's exit status
+//     away (eval of an empty string succeeds), so a refusal printed on stderr
+//     was followed by `docker compose up` anyway.
+//   - a whole-stack `up -d` cannot honor a per-service stand-down at all, so a
+//     remote/portless service still started on its compose default there. The
+//     step warned into a void.
+//
+// So these tests take the guard PREFIX out of the real Makefile recipe and the
+// real npm script, assert the entry points agree on it, and run it through `sh`
+// with a marker standing in for `docker compose up`. Reaching the marker means
+// the real recipe would have reached the `up`.
+
+describe("whole-stack entry points — the guard the Makefile and package.json actually run", () => {
+  const SHARED_STEP = path.join(REPO_ROOT, "scripts", "dev-compose-env.mjs");
+  const MAKEFILE = readFileSync(path.join(REPO_ROOT, "Makefile"), "utf8");
+  const PKG = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+
+  // Plain throws, not `expect`, and called from inside the tests: an entry point
+  // that loses the guard must fail a NAMED test, not the file's collection.
+  /** The `assign → eval` prefix of one recipe, up to (not including) the `up`. */
+  const guardOf = (commandLine) => {
+    const start = commandLine.indexOf("CINATRA_COMPOSE_ENV=");
+    const end = commandLine.indexOf(" && docker compose", start);
+    if (start < 0) throw new Error(`no compose-env guard in: ${commandLine}`);
+    if (end <= start) throw new Error(`no docker compose up after the guard in: ${commandLine}`);
+    return commandLine.slice(start, end);
+  };
+
+  // The recipe line of one target, as the SHELL sees it: make doubles every `$`
+  // in a recipe, so `$$(…)` on disk is `$(…)` at run time.
+  const makefileRecipe = (target) => {
+    const lines = MAKEFILE.split("\n");
+    const start = lines.findIndex((l) => l.startsWith(`${target}:`));
+    if (start < 0) throw new Error(`no ${target}: target in the Makefile`);
+    const body = lines.slice(start + 1);
+    const end = body.findIndex((l) => !l.startsWith("\t"));
+    const line = (end === -1 ? body : body.slice(0, end)).find((l) =>
+      l.includes("dev-compose-env.mjs"),
+    );
+    if (!line) throw new Error(`no ${target} recipe line running the shared step`);
+    return line.trim().replace(/\$\$/g, "$");
+  };
+
+  const MAKE_DEV_GUARD = () => guardOf(makefileRecipe("dev"));
+  const SERVICES_GUARD = () => guardOf(PKG.scripts.services);
+  const KG_REFRESH_GUARD = () => guardOf(PKG.scripts["kg:refresh"]);
+
+  it("uses one identical guard for both whole-stack bring-ups", () => {
+    expect(SERVICES_GUARD()).toBe(MAKE_DEV_GUARD());
+    expect(MAKE_DEV_GUARD()).toContain("--require-manageable");
+  });
+
+  // `kg:refresh` brings up graphiti (+ neo4j) only — neither is a scoped
+  // service, so there is no stand-down for it to violate and it does not pass
+  // --require-manageable. It still assigns-then-evals, so a plan the step
+  // refuses outright stops it.
+  it("uses the same assign-then-eval shape for the graphiti-only bring-up", () => {
+    expect(KG_REFRESH_GUARD()).toContain('CINATRA_COMPOSE_ENV="$(node scripts/dev-compose-env.mjs)"');
+    expect(KG_REFRESH_GUARD()).toContain('eval "$CINATRA_COMPOSE_ENV"');
+    expect(KG_REFRESH_GUARD()).not.toContain("--require-manageable");
+  });
+
+  // The shape that swallowed the exit status must not come back anywhere.
+  it("nowhere evals the step's output directly", () => {
+    expect(MAKEFILE).not.toContain('eval "$$(node scripts/dev-compose-env.mjs');
+    expect(JSON.stringify(PKG.scripts)).not.toContain("eval \\\"$(node scripts/dev-compose-env.mjs");
+  });
+
+  const MARKER = "COMPOSE_UP_WOULD_RUN";
+
+  /**
+   * Run one entry point's guard through `sh`, exactly as make / npm run it,
+   * with a marker where `docker compose up` would be. The only edit is the
+   * script PATH (these run in a temp lane dir, not the checkout root).
+   */
+  const runGuard = (guard, { envLocal = "", extraEnv = {} } = {}) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "cinatra-2839-entry-"));
+    writeFileSync(path.join(dir, ".env.local"), envLocal);
+    const script = `${guard.replace(
+      "node scripts/dev-compose-env.mjs",
+      `node ${JSON.stringify(SHARED_STEP)}`,
+    )} && echo ${MARKER} && env`;
+
+    const env = { ...process.env };
+    delete env.COMPOSE_PROJECT_NAME;
+    for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
+    for (const key of ["NANGO_SERVER_URL", "NANGO_DATABASE_URL", "REDIS_URL"]) delete env[key];
+    Object.assign(env, extraEnv);
+
+    const result = spawnSync("sh", ["-c", script], { cwd: dir, encoding: "utf8", env });
+    rmSync(dir, { recursive: true, force: true });
+
+    const reached = result.stdout.includes(MARKER);
+    const exported = Object.fromEntries(
+      result.stdout
+        .split("\n")
+        .map((line) => /^(COMPOSE_PROJECT_NAME|CINATRA_[A-Z_]*_HOST_PORT)=(.*)$/.exec(line))
+        .filter(Boolean)
+        .map((m) => [m[1], m[2]]),
+    );
+    return { ...result, reached, exported };
+  };
+
+  const LANE = [
+    "COMPOSE_PROJECT_NAME=p2839",
+    "NANGO_SERVER_URL=http://127.0.0.1:13003",
+    "NANGO_DATABASE_URL=postgresql://nango:nango@127.0.0.1:15435/nango",
+    "REDIS_URL=redis://127.0.0.1:16379",
+    "",
+  ].join("\n");
+
+  // The canonical single-stack flow, unchanged: no project name anywhere, the
+  // historical ports, and the `up` runs.
+  it("brings the unscoped checkout up on the historical ports", () => {
+    const result = runGuard(MAKE_DEV_GUARD());
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported).toEqual({
+      CINATRA_NANGO_SERVER_HOST_PORT: "3003",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "3009",
+      CINATRA_NANGO_DB_HOST_PORT: "5435",
+      CINATRA_REDIS_HOST_PORT: "6379",
+    });
+    expect(result.exported.COMPOSE_PROJECT_NAME).toBeUndefined();
+  });
+
+  // …and the exported values are what compose interpolates, from the lane's own
+  // `.env.local` — which Docker does not read for COMPOSE_PROJECT_NAME.
+  it("brings a complete lane up on the lane's ports", () => {
+    const result = runGuard(MAKE_DEV_GUARD(), { envLocal: LANE });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported).toEqual({
+      COMPOSE_PROJECT_NAME: "p2839",
+      CINATRA_NANGO_SERVER_HOST_PORT: "13003",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "13009",
+      CINATRA_NANGO_DB_HOST_PORT: "15435",
+      CINATRA_REDIS_HOST_PORT: "16379",
+    });
+  });
+
+  // Item 1 at the entry point: the `up` must not run at all.
+  it("stops before the up when a named lane states no port for a service", () => {
+    const result = runGuard(MAKE_DEV_GUARD(), {
+      envLocal: LANE.replace("REDIS_URL=redis://127.0.0.1:16379\n", ""),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.reached).toBe(false);
+    expect(result.stderr).toContain("REDIS_URL");
+    // Nothing was exported either — an empty stdout is the whole point.
+    expect(result.exported).toEqual({});
+  });
+
+  // Item 3, the one this section exists for: a whole-stack `up` cannot leave a
+  // service out, so a lane that stands one down does not get to run it.
+  it("stops before the up when a lane stands a service down", () => {
+    const result = runGuard(MAKE_DEV_GUARD(), {
+      envLocal: LANE.replace(
+        "REDIS_URL=redis://127.0.0.1:16379",
+        "REDIS_URL=rediss://cache.example.com:6380",
+      ),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.reached).toBe(false);
+    expect(result.stderr).toContain("refusing to start the whole stack");
+    expect(result.stderr).toContain("REDIS_URL=rediss://cache.example.com:6380");
+    // The alternative that DOES honor a stand-down is named in the message.
+    expect(result.stderr).toContain("pnpm dev");
+  });
+
+  it("stops the same way from the pnpm services guard", () => {
+    const result = runGuard(SERVICES_GUARD(), {
+      envLocal: LANE.replace(
+        "REDIS_URL=redis://127.0.0.1:16379",
+        "REDIS_URL=rediss://cache.example.com:6380",
+      ),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.reached).toBe(false);
+  });
+
+  // kg:refresh starts graphiti alone, so a redis stand-down is not its problem:
+  // it proceeds, and simply claims no redis port.
+  it("lets the graphiti-only bring-up proceed through a stand-down", () => {
+    const result = runGuard(KG_REFRESH_GUARD(), {
+      envLocal: LANE.replace(
+        "REDIS_URL=redis://127.0.0.1:16379",
+        "REDIS_URL=rediss://cache.example.com:6380",
+      ),
+    });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported.CINATRA_REDIS_HOST_PORT).toBeUndefined();
+    expect(result.stderr).toContain("not claiming a host port for");
+  });
+
+  // HARD CAUTION at the entry point: pinning the very name compose derives from
+  // this checkout is a no-op, not a second lane, and `make dev` must survive it.
+  it("warns but still runs when the pinned name is this checkout's compose default", () => {
+    const result = runGuard(MAKE_DEV_GUARD(), {
+      extraEnv: { COMPOSE_PROJECT_NAME: composeDefaultProjectName(REPO_ROOT) },
+    });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");
+    expect(result.stderr).toContain("collide on 6379");
+  });
+
+  // Item 4 where the omission actually leaked: an invalid ambient value is
+  // already IN the shell, so a plan that emits no line for that key leaves it
+  // standing and compose publishes it. The replacement line is what corrects it.
+  it("overwrites an invalid ambient host-port value in the evaluated shell", () => {
+    const result = runGuard(MAKE_DEV_GUARD(), {
+      extraEnv: { CINATRA_REDIS_HOST_PORT: "not-a-port" },
+    });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");
+    expect(result.stderr).toContain("not-a-port");
   });
 });
 

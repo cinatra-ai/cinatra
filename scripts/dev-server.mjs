@@ -34,6 +34,7 @@ import {
   createComposeRunner,
   formatComposeCommand,
   formatUnmanagedServices,
+  planMessages,
   readEnvFileValue,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
@@ -115,7 +116,31 @@ const composeHostPortPlan = resolveComposeHostPortPlan({
   processEnv: process.env,
   envFileLookup: lookupEnvFiles,
   projectName: composeProjectName,
+  // The project compose derives for this checkout all by itself. A checkout
+  // that merely PINS that same name has not made itself a second lane, so the
+  // refusals below cannot reach it — see `laneScope` in dev-preflight.mjs.
+  defaultProjectName: repoRoot,
 });
+
+// A plan with a hole in it — a named lane with no host port for a scoped
+// service, an unusable CINATRA_*_HOST_PORT, a companion port that overflows —
+// is never papered over with the shared default. There is nothing safe to
+// publish, so this preflight touches Docker not at all: the refusal is enforced
+// at the same chokepoint the skip flag is (`createComposeRunner`), not left as a
+// warning the launcher then ignores.
+const planRefused = composeHostPortPlan.refusals.length > 0;
+if (planRefused) {
+  console.error(
+    `\n[dev-server] ✖ Compose host-port scoping is unresolved — not touching Docker for this run.\n`,
+  );
+  for (const message of planMessages(composeHostPortPlan.refusals)) {
+    console.error(`  • ${message}`);
+  }
+  console.error("");
+}
+for (const message of planMessages(composeHostPortPlan.warnings)) {
+  console.warn(`[dev-server] ⚠ ${message}`);
+}
 
 // Narrow Docker DB-port preflight (CINATRA_SKIP_DEV_PREFLIGHT=1 to skip, from
 // the shell env or `.env.local`). Read-only: it inspects containers, never
@@ -163,6 +188,7 @@ function probeTcp(host, port, timeoutMs = 1500) {
 
 async function runDbPortPreflight() {
   if (skipPreflight) return;
+  if (planRefused) return; // the ports it would diagnose against are the unresolved ones
   // Only the two REQUIRED services gate boot; neo4j (recommended) is skipped to
   // keep healthy boots fast.
   const targets = BUNDLED_DB_SERVICES.filter((s) =>
@@ -223,7 +249,7 @@ await runDbPortPreflight();
 // see scripts/lib/dev-preflight.mjs for all three decisions and their tests.
 const runCompose = createComposeRunner({
   spawnFn: spawn,
-  skip: skipPreflight,
+  skip: skipPreflight || planRefused,
   projectName: composeProjectName,
   portEnv: composeHostPortPlan.portEnv,
   cwd: repoRoot,
@@ -263,6 +289,7 @@ async function waitForNangoHealth(healthUrl, { tries, intervalMs }) {
 // returns, so this only warns — it must not block dev on the connector backend.
 async function runNangoHealthPreflight() {
   if (skipPreflight) return;
+  if (planRefused) return; // reported above; nothing here is safe to publish
   const rawUrl =
     process.env.NANGO_SERVER_URL || readEnvFileValue(repoEnvPath, "NANGO_SERVER_URL");
   const healthUrl = nangoHealthUrl(rawUrl);
