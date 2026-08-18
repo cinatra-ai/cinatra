@@ -33,9 +33,7 @@ import {
   SKIP_PREFLIGHT_ENV_VAR,
   createComposeRunner,
   formatComposeCommand,
-  formatUnmanagedServices,
   readEnvFileValue,
-  resolveComposeHostPortPlan,
   resolveComposeProjectName,
   shouldSkipDevPreflight,
 } from "./lib/dev-preflight.mjs";
@@ -94,21 +92,14 @@ const skipPreflight = shouldSkipDevPreflight({
   envFileValues: ENV_FILES.map((file) => readEnvFileValue(file, SKIP_PREFLIGHT_ENV_VAR)),
 });
 
-// The compose project + published host ports this preflight is allowed to act
-// on, resolved from the SAME per-worktree overrides the rest of the stack uses
-// (COMPOSE_PROJECT_NAME; the service URLs in `.env.local`). Unset everywhere =
-// the historical main-checkout behavior: basename-derived project, fixed ports.
+// The compose project this preflight is allowed to act on, resolved from the
+// SAME per-worktree switch the rest of the stack uses (COMPOSE_PROJECT_NAME),
+// read from the shell env AND `.env.local` because Docker itself only reads the
+// former. Unset = the historical main-checkout behavior: compose derives the
+// project from the directory basename.
 const composeProjectName = resolveComposeProjectName({
   processEnv: process.env,
   envFileValues: [lookupEnvFiles(COMPOSE_PROJECT_ENV_VAR)],
-});
-// `portEnv` is what compose interpolates; `unmanaged` names the services whose
-// configured URL says they are NOT this checkout's to publish (remote host, or
-// loopback with no port stated). Those get no host port AND no local start —
-// see runNangoHealthPreflight.
-const composeHostPortPlan = resolveComposeHostPortPlan({
-  processEnv: process.env,
-  envFileLookup: lookupEnvFiles,
 });
 
 // Narrow Docker DB-port preflight (CINATRA_SKIP_DEV_PREFLIGHT=1 to skip, from
@@ -201,15 +192,13 @@ await runDbPortPreflight();
 
 // Run a docker compose subcommand against the bundled dev stack (base +
 // loopback-publish override, exactly as `make dev` does), pinned to THIS
-// worktree's compose project and host ports, and hard-gated on the skip flag —
-// see scripts/lib/dev-preflight.mjs for all three decisions and their tests.
+// worktree's compose project and hard-gated on the skip flag — see
+// scripts/lib/dev-preflight.mjs for both decisions and their tests.
 const runCompose = createComposeRunner({
   spawnFn: spawn,
   skip: skipPreflight,
   projectName: composeProjectName,
-  portEnv: composeHostPortPlan.portEnv,
   cwd: repoRoot,
-  baseEnv: process.env,
 });
 
 // Poll the /health URL up to `tries` times (spaced `intervalMs` apart). Returns
@@ -230,8 +219,7 @@ async function waitForNangoHealth(healthUrl, { tries, intervalMs }) {
 // flag exists for. Its `up -d nango-server` also starts nango-server's
 // `depends_on` (nango-db, redis) — three containers, their volumes and the
 // project network — which is why it is pinned to this worktree's compose
-// project and host ports rather than the compose files' fixed globals
-// (cinatra#2839).
+// project rather than a basename-derived one (cinatra#2839).
 //
 // The connector OAuth gateway (`cinatra-nango-server-1`) runs the upstream
 // amd64-only image under qemu on arm64 dev hosts and can segfault. The compose
@@ -256,22 +244,6 @@ async function runNangoHealthPreflight() {
   if (!isLocalNangoUrl(rawUrl)) {
     console.warn(
       `[dev-server] ⚠ Nango connector service at ${resolveNangoBaseUrl(rawUrl)} is not answering /health — connectors will fail until it recovers.`,
-    );
-    return;
-  }
-
-  // Something in this heal's blast radius is configured elsewhere. `isLocalNangoUrl`
-  // is not enough on its own: it accepts a loopback URL with NO port stated
-  // (`http://localhost/nango` = :80), and `up -d nango-server` also starts its
-  // `depends_on` — nango-db and redis — so a lane whose NANGO_DATABASE_URL or
-  // REDIS_URL points somewhere else would still have a local copy of that
-  // service published here. With no port this checkout may claim, the only
-  // correct move is to NOT start the stack: healing it would fall back to the
-  // fixed global ports (3003/5435/6379) this module exists to keep lanes off.
-  if (composeHostPortPlan.unmanaged.length > 0) {
-    const detail = formatUnmanagedServices(composeHostPortPlan.unmanaged);
-    console.warn(
-      `[dev-server] ⚠ Nango connector service is not answering /health, and this checkout will not start one: ${detail} — not an explicit-port loopback URL, so that service is not ours to publish. Start it where it is configured, or point the URL at a 127.0.0.1 port this worktree owns.`,
     );
     return;
   }

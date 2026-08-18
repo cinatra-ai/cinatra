@@ -18,29 +18,27 @@
 //      promise is that nothing starts.
 //
 //   2. The compose invocation was unscoped: no `-p`, so the project name fell
-//      out of the checkout directory's basename, and the compose files publish
-//      FIXED host ports (3003/3009/5435/6379). Two lanes — or one lane beside
-//      the operator's stack — therefore collide on those ports even though each
-//      lane already runs its own compose project. The rest of the stack scopes
-//      itself with COMPOSE_PROJECT_NAME (see evidence/2747-e2e: `p2747-*`
-//      containers) and states its service ports as URLs in `.env.local`; this
-//      module threads both of those into the preflight instead of inventing a
-//      third convention.
+//      out of the checkout directory's basename. A lane that already runs its
+//      own compose project (see evidence/2747-e2e: `p2747-*` containers) got a
+//      SECOND, basename-derived project rather than the one it owns, so the
+//      "heal" started a duplicate stack the lane could not see. The rest of the
+//      stack already scopes itself with COMPOSE_PROJECT_NAME, so this module
+//      threads that same switch into the preflight instead of inventing a third
+//      convention.
 //
-// A later review round found both decisions leaking the same way — by treating
-// "stated, but not something this checkout owns" as "not stated at all":
+// A later review round found the reader leaking the same way the flag did — by
+// reading something a lane HAD stated as "not stated at all":
 //
-//   3. A service URL that is NOT an explicit-port loopback URL (a remote
-//      `NANGO_SERVER_URL`/`REDIS_URL`; a loopback URL with no port, which
-//      WHATWG also reports for a stated `:80`) fell through to the fixed global
-//      port. A failed health check on somebody else's service could then start
-//      a LOCAL stack publishing 3003/5435/6379 — precisely the collision (2)
-//      exists to prevent. Such a service is now unclaimed and unhealed.
-//
-//   4. The dotenv reader kept an inline comment in the value, so
+//   3. The dotenv reader kept an inline comment in the value, so
 //      `CINATRA_SKIP_DEV_PREFLIGHT=1 # lane isolation` read as an unrecognized
 //      spelling and the flag was silently dropped — defect (1) again, one layer
 //      down.
+//
+// Host-PORT scoping is deliberately NOT here. Parameterizing the compose files'
+// fixed 3003/3009/5435/6379 and deriving each lane's port is the other half of
+// cinatra#2839 (acceptance item 2); it needs a real boot on a Docker host before
+// it is worth trusting, so it lands on its own branch. This module changes WHICH
+// PROJECT the preflight acts on and nothing about which host ports it publishes.
 //
 // Everything here is PURE (no IO beyond an explicit file read) and
 // dependency-injected, so the decisions are asserted in
@@ -197,175 +195,6 @@ export function resolveComposeProjectName({ processEnv = {}, envFileValues = [] 
 }
 
 /**
- * The host ports the preflight can cause to be published, and where a lane
- * already states each one.
- *
- * `envVar` is the compose interpolation variable (docker-compose.yml /
- * docker-compose.dev.yml read it as `${VAR:-default}`), `defaultHostPort` is the
- * historical fixed port that stays in force when the lane states NOTHING (the
- * main checkout), and `urlVar` is the `.env.local` service URL the app itself
- * connects on — the SAME value the rest of the stack honors, so the published
- * port and the app's client port cannot drift apart.
- *
- * A `urlVar` that is stated but names a service this checkout does not publish
- * makes the port UNCLAIMED rather than default — see `resolveComposeHostPortPlan`.
- */
-export const PREFLIGHT_HOST_PORTS = [
-  { envVar: "CINATRA_NANGO_SERVER_HOST_PORT", defaultHostPort: 3003, urlVar: "NANGO_SERVER_URL" },
-  { envVar: "CINATRA_NANGO_CONNECT_HOST_PORT", defaultHostPort: 3009, urlVar: undefined },
-  { envVar: "CINATRA_NANGO_DB_HOST_PORT", defaultHostPort: 5435, urlVar: "NANGO_DATABASE_URL" },
-  { envVar: "CINATRA_REDIS_HOST_PORT", defaultHostPort: 6379, urlVar: "REDIS_URL" },
-];
-
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0"]);
-
-/**
- * Read a port the URL STATES, straight off the raw string.
- *
- * `new URL()` cannot answer this: WHATWG normalization drops a port equal to
- * the scheme's default, so `http://localhost:80` and `http://localhost` both
- * leave `url.port === ""`. Those are different statements here — the first
- * claims host port 80, the second claims nothing — so the authority is parsed
- * from the raw text instead. Userinfo is dropped first (`user:pw@host:80`) and
- * an IPv6 literal's bracketed colons are excluded, so neither is mistaken for
- * the port separator.
- *
- * @param {string} rawUrl
- * @returns {number | undefined}
- */
-function statedPort(rawUrl) {
-  const afterScheme = rawUrl.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "");
-  const authority = afterScheme.split(/[/?#]/, 1)[0];
-  const hostPart = authority.slice(authority.lastIndexOf("@") + 1);
-  const m = /^(?:\[[^\]]*\]|[^:]*):(\d+)$/.exec(hostPart);
-  return m ? Number(m[1]) : undefined;
-}
-
-/**
- * Extract an EXPLICIT host port from a service URL, and only when it points at
- * this host.
- *
- * Deliberately narrower than docker-port-drift's `parseHostPort`: that helper
- * falls back to the URL scheme's default port, which is right for "where do I
- * connect?" but wrong here. Publishing a container port is a claim on a HOST
- * port, so a URL with no port stated (`http://localhost/…` = :80) must not be
- * read as a request to publish :80, and a remote service
- * (`https://nango.example.com`) is not ours to publish at all.
- *
- * Returns undefined for BOTH of those, which is the caller's signal that the
- * service is not this checkout's to publish — see `resolveComposeHostPortPlan`.
- *
- * @param {string | undefined} urlValue
- * @returns {number | undefined}
- */
-export function explicitLoopbackPort(urlValue) {
-  if (!urlValue) return undefined;
-  const raw = String(urlValue).trim();
-  let url;
-  try {
-    url = new URL(raw);
-  } catch {
-    return undefined;
-  }
-  // WHATWG returns an IPv6 hostname bracketed (`[::1]`), so unwrap before the
-  // lookup — otherwise the `::1` entry above is unreachable and a legitimate
-  // explicit-port IPv6 loopback lane URL reads as somebody else's service.
-  let host = url.hostname.replace(/^\[(.*)\]$/, "$1");
-  if (host === "host.docker.internal") host = "127.0.0.1";
-  if (!LOOPBACK_HOSTS.has(host)) return undefined; // external service — not ours
-  // `url.port` for anything WHATWG did not normalize away, the raw authority for
-  // a stated default port (`:80`, `:443`) that it did.
-  const port = url.port ? Number(url.port) : statedPort(raw);
-  return Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined;
-}
-
-/**
- * Classify what one service's configured URL says about who owns its host port.
- *
- *   - `unconfigured` — nothing stated. The historical fixed default stays in
- *     force; this is the main checkout's unchanged behavior.
- *   - `ours` — an explicit-port loopback URL. That port is what this checkout
- *     publishes, and it is the lane's own claim.
- *   - `theirs` — anything else the URL can say: a remote host, or a loopback
- *     host with NO port stated. Either way the service the app talks to is not
- *     one this checkout publishes, so the preflight must neither claim a host
- *     port for it nor start a local copy of it.
- *
- * @param {string | undefined} urlValue
- * @returns {{ state: "unconfigured" } | { state: "ours", port: number, url: string } | { state: "theirs", url: string }}
- */
-export function classifyServiceUrl(urlValue) {
-  const url = String(urlValue ?? "").trim();
-  if (!url) return { state: "unconfigured" };
-  const port = explicitLoopbackPort(url);
-  return port === undefined ? { state: "theirs", url } : { state: "ours", port, url };
-}
-
-/**
- * Plan the preflight's host-port claims: the compose interpolation environment
- * plus the services this checkout may NOT publish.
- *
- * Per port, precedence is: an explicit `CINATRA_*_HOST_PORT` (shell, then
- * `.env.local`) > the port stated in the lane's service URL > the historical
- * default.
- *
- * The third step is only reachable when NOTHING is stated. A URL that IS stated
- * but is not an explicit-port loopback URL (a remote host; a loopback host with
- * no port) used to fall through to that same historical default — so a lane
- * pointing at `https://nango.example.com` or a remote `REDIS_URL` still handed
- * compose 3003/6379 and, on a failed health check, published exactly the global
- * ports this module exists to stop colliding on. Such a service is now reported
- * in `unmanaged` and gets NO key at all: the launcher refuses the local heal
- * rather than starting someone else's service on this checkout's behalf.
- *
- * Every managed key is always emitted, so the spawned compose cannot inherit a
- * stale value from the ambient environment. An unmanaged key is omitted safely:
- * the only ambient source is `processEnv`, and an ambient value there is read as
- * the explicit override above and would have made the service managed.
- *
- * @param {{ processEnv?: Record<string, string | undefined>, envFileLookup?: (key: string) => string | undefined }} input
- * @returns {{ portEnv: Record<string, string>, unmanaged: Array<{ envVar: string, urlVar: string, url: string }> }}
- */
-export function resolveComposeHostPortPlan({ processEnv = {}, envFileLookup = () => undefined } = {}) {
-  const read = (key) => {
-    const fromShell = String(processEnv[key] ?? "").trim();
-    if (fromShell) return fromShell;
-    const fromFile = String(envFileLookup(key) ?? "").trim();
-    return fromFile || undefined;
-  };
-
-  const portEnv = {};
-  const unmanaged = [];
-  for (const spec of PREFLIGHT_HOST_PORTS) {
-    const explicit = Number(read(spec.envVar));
-    if (Number.isInteger(explicit) && explicit > 0 && explicit < 65536) {
-      portEnv[spec.envVar] = String(explicit); // an operator's direct claim wins
-      continue;
-    }
-    const configured = spec.urlVar
-      ? classifyServiceUrl(read(spec.urlVar))
-      : { state: "unconfigured" };
-    if (configured.state === "theirs") {
-      unmanaged.push({ envVar: spec.envVar, urlVar: spec.urlVar, url: configured.url });
-      continue;
-    }
-    portEnv[spec.envVar] = String(configured.port ?? spec.defaultHostPort);
-  }
-  return { portEnv, unmanaged };
-}
-
-/**
- * Render `unmanaged` entries as `VAR=value` for an operator-facing warning, so
- * the line names the configured URL that made the preflight stand down.
- *
- * @param {Array<{ urlVar: string, url: string }>} unmanaged
- * @returns {string}
- */
-export function formatUnmanagedServices(unmanaged = []) {
-  return unmanaged.map(({ urlVar, url }) => `${urlVar}=${url}`).join(", ");
-}
-
-/**
  * Build the argv for a `docker compose` subcommand, pinned to the resolved
  * project and the dev stack's two compose files.
  *
@@ -419,20 +248,11 @@ export function formatComposeCommand({ projectName, args = [] } = {}) {
  *   spawnFn: Function,          // node:child_process spawn (injected for tests)
  *   skip: boolean,
  *   projectName?: string,
- *   portEnv?: Record<string, string>,
  *   cwd: string,
- *   baseEnv?: Record<string, string | undefined>,
  * }} deps
  * @returns {(args: string[], opts?: { timeoutMs?: number }) => Promise<{ available: boolean, ok?: boolean, skipped?: boolean }>}
  */
-export function createComposeRunner({
-  spawnFn,
-  skip,
-  projectName,
-  portEnv = {},
-  cwd,
-  baseEnv = {},
-}) {
+export function createComposeRunner({ spawnFn, skip, projectName, cwd }) {
   return function runCompose(args, { timeoutMs = 120_000 } = {}) {
     if (skip) return Promise.resolve({ available: false, skipped: true });
     return new Promise((resolve) => {
@@ -441,9 +261,6 @@ export function createComposeRunner({
         child = spawnFn("docker", buildComposeArgs({ projectName, args }), {
           cwd,
           stdio: "ignore",
-          // The host-port overrides are passed as compose interpolation
-          // variables; the compose files read them as `${VAR:-default}`.
-          env: { ...baseEnv, ...portEnv },
         });
       } catch {
         resolve({ available: false });
