@@ -186,7 +186,7 @@ This run stopped at the machine's memory guard before three deliverables were
 captured. They are **not** claimed anywhere above.
 
 **The guard.** The lane checks
-`/Users/marcushorndt/cinatra-loop/loop-monitor/mem-halt.flag` before booting the
+a machine-local memory-guard flag file (path redacted) before booting the
 application. After the hot-install captures the flag was set, and it did not
 clear across a bounded wait of 20 checks at 30-second intervals:
 
