@@ -4,10 +4,15 @@ This records the state of the real-application proof honestly. Every file named
 below was produced by driving the running application in this single run. What
 was NOT produced says so, and says why, in "What is still missing".
 
-**One run, one environment.** Everything in `screenshots/` and `logs/` comes
-from the same lane stack. The previous round's captures were deleted rather than
-mixed in: two runs in one directory is how the last round shipped a capture that
-did not show what its caption claimed.
+**Two lane instances, and which is which is stated on every file.** Instance A
+carries the install sequence (baseline → refusal → hot install → restart).
+Instance B carries the two states that require rows seeded BEFORE a boot (the
+stranded row, and the unactivated newer row); it performs no install at all, so
+its install ids differ. They are separate because the states are mutually
+exclusive in one linear run, not to blur them: no claim below combines the two,
+and the section for each names its instance. The previous round's captures were
+deleted rather than mixed in — an unlabelled mixture is how the last round
+shipped a capture that did not show what its caption claimed.
 
 ## How this run was driven
 
@@ -161,8 +166,11 @@ means. `after-restart-driver.txt` is the separate invocation that produced them.
 0.1.2: `SIGNATURE VERDICT: true`, `TRUST VERDICT: trusted-signed`.
 
 `logs/seam-resolution-with-unactivated-newer-row.txt` — the provider-write
-seam's own selection, run over the application's own canonical store with the
-application's own policy function, at the fixture state described below.
+seam's own selection over the application's own canonical store, using the
+application's own policy function, taken on instance B at the fixture state
+described below. It resolves `iext_unactivated_newer_2762` (version 0.1.5) out
+of the bundled-plus-newer pair, which is the seam-level form of the same
+acceptance-1 statement the screenshots make.
 
 ### The duplicate hashes in this directory, named
 
@@ -176,64 +184,94 @@ change:
   marketplace card does not render the version, so listing 0.1.1 and listing
   0.1.2 produce the same card. Which version was listed is in the storefront
   process and in each run's `*-driver.txt`, not on the card.
+- `unactivated-newer-connector-setup.png` = `baseline-connector-setup.png` =
+  `after-refusal-connector-setup.png` — and here the identity **is the
+  assertion**. The baseline is the bundled version serving alone; the
+  acceptance-1 state renders identically **because the bundled version is still
+  what serves**, with the newer 0.1.5 row live beside it. A different render
+  there would mean the newer row had taken over.
 
 `post-install-connector-setup.png` and `after-restart-connector-setup.png` are
 NOT identical. No other two files in this directory share a hash.
 
-## What is still missing, and why
+## The fixture-seeded boot: the stranded row and acceptance item 1
 
-This run stopped at the machine's memory guard before two deliverables were
-captured. They are **not** claimed anywhere above.
+These two states need rows that exist **before** a boot, so they were captured on
+a second lane instance: a fresh database, both fixtures seeded, then one boot.
+That instance deliberately performs **no install** — the point is a
+pre-existing row, not a new one — so its install ids differ from the run above
+(`iext_9a7fc562-049` is its bundled anchor). Nothing from the two instances is
+combined into a single claim; each file below names which state it shows.
 
-**The guard.** The lane checks a machine-local memory-guard flag file (path
-redacted) before every application boot. Both fixtures below were seeded, and
-the guard then re-armed and did not clear across a bounded wait of 20 checks at
-30-second intervals:
+### The boot itself
+
+`logs/boot-C-stranded-reconcile.txt`, in full:
 
 ```
-2026-08-18T02:49:23Z pressure=2 swap_free=616MB
+[operational-event] {"event":"extension_boot_reconcile","packageName":"@cinatra-ai/stranded-fixture-connector","rowId":"iext_stranded_fixture_2762","outcome":"retryable-bundle-unrestored","failureClass":"config","reason":"the package did not register"}
+[boot] StrandedInstallReconcile: considered 1, acted on 1: stranded-fixture-connector:retryable
 ```
 
-Booting a third Next dev server there risks an OOM on the operator's machine,
-which is what the guard exists to prevent, so the lane stopped instead.
+Two things are load-bearing there. The reconciliation **acted on** the stranded
+row, classified it `config` and left it retryable rather than durably archiving
+it. And it **considered exactly 1** row, not 2: the unactivated 0.1.5 row for the
+*bundled* package was never a candidate, because the static bundle had already
+registered that package this boot. That skip is the documented "the bundled
+implementation is already serving" branch, and the same log shows
+`google-appointment-schedules-connector:registered` from the static bundle with
+**no** `RuntimePackageLoader` line — so 0.1.5 never activated.
 
-Missing as a result:
+### The stranded row is visible and named (#2762 acceptance items 1 and 2)
 
-1. **The pre-existing stranded row.** `drivers/stranded-row-fixture.sql` **was
-   seeded** (`logs/rows-with-fixtures-seeded.txt` shows
-   `iext_stranded_fixture_2762` live), but the boot that would read
-   `StrandedInstallReconcile` out of the log never ran. No boot log in this
-   directory shows that line, and none is claimed to.
-2. **#2762 acceptance item 1 end to end** — an unactivated **newer** row present
-   while the **bundle still serves**. `drivers/unactivated-newer-row-fixture.sql`
-   **was seeded**: a live, default, workspace-anchored `verdaccio` row at
-   **0.1.5** for the **bundled** package, pointing at a version published and
-   materialized nowhere, so nothing but the bundled 0.1.0 can serve it.
+| File | What it shows |
+|---|---|
+| `stranded-settings.png` | The settings surface for `@cinatra-ai/stranded-fixture-connector`, naming the package, its kind (Connector) and version 0.1.0, with **Retry activation** offered: *"Try to start this version again in the running app. Use it after fixing what refused it, such as a missing signing key or an untrusted registry."* |
+| `stranded-state.json`, `stranded-driver.txt` | The assertions and the full lifecycle-button audit for that row. |
 
-   What this run **does** establish for item 1, without the boot:
-   `logs/seam-resolution-with-unactivated-newer-row.txt` runs the seam over that
-   exact row set and shows the newer row being **named**, not shadowed:
+A row the reconciliation left retryable is therefore not a shadow: the operator
+can see it and is offered the recovery action for it.
 
-   ```
-   iext_4b38afe2-5fa            version=0.1.0  source=bundled
-   iext_unactivated_newer_2762  version=0.1.5  source=verdaccio
-   live rows: 2 → after supersession: 2 → after source precedence: 1
-   PROVIDER-WRITE RESOLVED INSTALL ID: iext_unactivated_newer_2762  (version 0.1.5)
-   ```
+**One correction, recorded rather than quietly fixed.** The first version of this
+capture targeted `/configuration/extensions` and reported the row as absent. That
+route lists neither this fixture nor the bundled appointment connector, so it was
+the wrong surface and the finding was the driver's fault, not the product's. The
+`stranded` mode now targets the per-extension settings screen, which is the
+surface that carries a connector row's state.
 
-   What is **missing** is the browser capture of that state: the setup surface
-   rendering the **unstamped** bundled placeholder (the bundle serving) while the
-   settings surface names 0.1.5 (the newer row visible). The driver is ready for
-   it — `lane-proof-driver.mjs` takes `expectServingVersion` separately from
-   `expectVersion` for exactly this — and the invocation is one boot away:
+### An unactivated NEWER row while the BUNDLE serves (#2762 acceptance item 1)
 
-   ```
-   node drivers/lane-proof-driver.mjs assert <origin> <email> <pw> $OUT unactivated-newer 0.1.5 0.1.0
-   ```
+`drivers/unactivated-newer-row-fixture.sql` seeds a live, default,
+workspace-anchored `verdaccio` row at **0.1.5** for the **bundled** package,
+pointing at a version published and materialized nowhere, so nothing but the
+bundled 0.1.0 can serve it.
 
-The reconcile behavior itself is presently proven by the repo's own tests
-(`src/lib/__tests__/extension-boot-reconcile.test.ts`), not by a driver run in
-this directory.
+| File | What it shows |
+|---|---|
+| `unactivated-newer-connector-setup.png` | The setup surface rendering the **unstamped** declared placeholder — the **bundled 0.1.0 manifest** produced this render. **The bundle is serving.** |
+| `unactivated-newer-extension-settings.png` | The settings surface naming version **0.1.5**. **The newer row is visible, not shadowed.** |
+| `unactivated-newer-lifecycle-actions.png` | Archive and Reinstall latest enabled; **Retry activation** and **Roll back to bundled** both enabled; zero capability-denial text. |
+| `unactivated-newer-resolution.json`, `-driver.txt` | Every assertion, the resolved install id and the rendered placeholder. |
+
+Those two captures together are the acceptance-1 statement: **the setup surface
+says 0.1.0's manifest served, and the settings surface says 0.1.5 is the row.**
+
+`unactivated-newer-connector-setup.png` is byte-identical to
+`baseline-connector-setup.png`. **That identity is the proof, not a duplicate**:
+the baseline is the bundled version serving alone, and this state renders exactly
+the same because the bundled version is still what serves.
+
+The third fact is on the wire. Every UI action the surface fired dispatched
+against the **newer row's** id and answered **200**:
+
+```
+{"installId":"iext_unactivated_newer_2762","actionId":"bookingPageGuideReady","status":200}
+{"installId":"iext_unactivated_newer_2762","actionId":"listCalendars","status":200}
+{"installId":"iext_unactivated_newer_2762","actionId":"listAppointmentSchedules","status":200}
+```
+
+The row the operator sees and the implementation that answers are reconciled: the
+visible newer row is served by the bundled implementation instead of 404-ing.
+That is the "no shadow visible state" this change is named for.
 
 ## What is NOT claimed
 

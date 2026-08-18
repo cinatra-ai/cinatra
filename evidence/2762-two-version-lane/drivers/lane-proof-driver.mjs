@@ -188,7 +188,7 @@ async function assertDeclaredPlaceholder(tag, expectServingVersion = "") {
  *  that came from the SERVER capability is also printed visibly in
  *  `p[data-slot="lifecycle-capability-reason"]` — which is what puts
  *  "More than one install matches your scope" on the screen. */
-async function auditLifecycleActions(tag, expectEnabled = []) {
+async function auditLifecycleActions(tag, expectEnabled = [], takeShot = true) {
   const root = page.locator('main[data-surface-id="extension-settings"]');
   check(`${tag}: the extension settings surface mounted`, (await root.count()) > 0);
 
@@ -236,7 +236,7 @@ async function auditLifecycleActions(tag, expectEnabled = []) {
       hit === undefined ? "not rendered at all" : `disabled=${hit.disabled} reason=${hit.reason ?? "none"}`,
     );
   }
-  await shot(page, "lifecycle-actions");
+  if (takeShot) await shot(page, "lifecycle-actions");
   return { buttons, visibleReasons };
 }
 
@@ -341,6 +341,62 @@ if (mode === "baseline" || mode === "assert") {
     "utf8",
   );
   say(`RESOLVED-INSTALL-ID ${setupInstallId}`);
+}
+
+if (mode === "stranded") {
+  // ---------------------------------------------------------------------
+  // #2762 acceptance item 1, the STRANDED half: a row the boot
+  // reconciliation acted on must be VISIBLE and NAMED on the installed
+  // list, not silently absent. The package here is one the image does not
+  // bundle, so it has no fallback and nothing serves it — the state the
+  // reconciliation exists to surface rather than hide.
+  // ---------------------------------------------------------------------
+  // The per-extension settings screen is the surface that carries a connector
+  // row's state. `/configuration/extensions` is NOT that surface — it lists
+  // neither this fixture nor the bundled appointment connector, so a capture of
+  // it would prove nothing about either.
+  const STRANDED_PKG = "@cinatra-ai/stranded-fixture-connector";
+  await page.goto(`${origin}/configuration/extensions/settings/connector/${STRANDED_PKG}`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForLoadState("networkidle").catch(() => {});
+
+  const bodyText = await page.evaluate(() => document.body.innerText);
+  check(
+    `${label}: the settings surface NAMES the stranded package`,
+    bodyText.includes("stranded-fixture-connector"),
+    bodyText.includes("stranded-fixture-connector") ? "named on the surface" : "not named",
+  );
+  check(
+    `${label}: the surface names the stranded row's version`,
+    /0\.1\.0/.test(bodyText),
+    "version 0.1.0 rendered",
+  );
+  // The recovery affordance #2762 acceptance item 2 requires for exactly this
+  // row: the reconciliation left it retryable, and the operator is offered the
+  // retry rather than a dead end.
+  check(
+    `${label}: "Retry activation" is offered on the stranded row`,
+    bodyText.includes("Retry activation"),
+    bodyText.includes("Retry activation") ? "offered" : "absent",
+  );
+
+  const lifecycle = await auditLifecycleActions(label, ["Archive", "Reinstall latest"], false);
+  await shot(page, "settings");
+  writeFileSync(
+    path.join(outDir, `${label}-state.json`),
+    JSON.stringify(
+      {
+        package: STRANDED_PKG,
+        namedOnSurface: bodyText.includes("stranded-fixture-connector"),
+        retryOffered: bodyText.includes("Retry activation"),
+        lifecycle,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
 }
 
 if (mode === "negative" || mode === "install") {
