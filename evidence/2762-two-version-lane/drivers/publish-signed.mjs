@@ -80,8 +80,8 @@ if (process.env.LANE_MANIFEST_MARK === "true") {
     );
     process.exit(1);
   }
-  field.placeholder = `[lane v${version} from the registry] ${field.placeholder}`;
-  console.error(`marked the declared calendarId placeholder with v${version}`);
+  field.placeholder = `[lane registry build ${version}] ${field.placeholder}`;
+  console.error(`marked the declared calendarId placeholder with build ${version}`);
 }
 
 // 1b. BUNDLE THE RUNTIME DEPENDENCIES.

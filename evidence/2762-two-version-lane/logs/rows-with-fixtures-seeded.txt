@@ -1,0 +1,7 @@
+             id              |                    package_name                    | owner_level | status | version | is_default |    src    
+-----------------------------+----------------------------------------------------+-------------+--------+---------+------------+-----------
+ iext_4b38afe2-5fa           | @cinatra-ai/google-appointment-schedules-connector | platform    | active | 0.1.0   | t          | bundled
+ iext_unactivated_newer_2762 | @cinatra-ai/google-appointment-schedules-connector | workspace   | active | 0.1.5   | t          | verdaccio
+ iext_stranded_fixture_2762  | @cinatra-ai/stranded-fixture-connector             | workspace   | active | 0.1.0   | t          | verdaccio
+(3 rows)
+

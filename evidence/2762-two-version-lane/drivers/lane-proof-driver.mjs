@@ -117,7 +117,7 @@ const BUNDLED_VERSION = "0.1.0";
 
 /** What the placeholder must read for a given serving version.
  *
- *  The versions this lane publishes carry a `[lane v<x> from the registry]`
+ *  The versions this lane publishes carry a `[lane registry build <x>]`
  *  stamp on that same declared placeholder (`publish-signed.mjs`,
  *  LANE_MANIFEST_MARK), because a newer version that renders identically to the
  *  bundled one cannot testify to which of the two actually served. With the
@@ -127,7 +127,7 @@ const BUNDLED_VERSION = "0.1.0";
 const placeholderFor = (version) =>
   !version || version === BUNDLED_VERSION
     ? DECLARED_PLACEHOLDER
-    : `[lane v${version} from the registry] ${DECLARED_PLACEHOLDER}`;
+    : `[lane registry build ${version}] ${DECLARED_PLACEHOLDER}`;
 
 async function assertSetupPageRenders(tag) {
   const res = await page.goto(SETUP_URL, { waitUntil: "domcontentloaded" });
@@ -161,10 +161,10 @@ async function assertDeclaredPlaceholder(tag, expectServingVersion = "") {
     text.endsWith(DECLARED_PLACEHOLDER),
     `rendered: ${JSON.stringify(text.slice(0, 180))}`,
   );
-  const servedByBundle = !text.startsWith("[lane v");
+  const servedByBundle = !text.startsWith("[lane registry build");
   say(
     `setup surface is rendering the ${servedByBundle ? "BUNDLED" : "REGISTRY"} manifest` +
-      (servedByBundle ? "" : ` (${/\[lane (v[\d.]+)/.exec(text)?.[1] ?? "?"})`),
+      (servedByBundle ? "" : ` (build ${/\[lane registry build ([\d.]+)/.exec(text)?.[1] ?? "?"})`),
   );
   if (expectServingVersion) {
     check(

@@ -1,5 +1,5 @@
 {
-  "setupInstallId": "iext_e9846c87-1df",
+  "setupInstallId": "iext_4b38afe2-5fa",
   "settingsVersion": "0.1.0",
   "expectVersion": "0.1.0",
   "expectServingVersion": "0.1.0",
@@ -9,18 +9,18 @@
   },
   "setupCalls": [
     {
-      "installId": "iext_e9846c87-1df",
+      "installId": "iext_4b38afe2-5fa",
       "actionId": "bookingPageGuideReady",
       "status": 200
     },
     {
-      "installId": "iext_e9846c87-1df",
-      "actionId": "listAppointmentSchedules",
+      "installId": "iext_4b38afe2-5fa",
+      "actionId": "listCalendars",
       "status": 200
     },
     {
-      "installId": "iext_e9846c87-1df",
-      "actionId": "listCalendars",
+      "installId": "iext_4b38afe2-5fa",
+      "actionId": "listAppointmentSchedules",
       "status": 200
     }
   ],

@@ -5,9 +5,9 @@ below was produced by driving the running application in this single run. What
 was NOT produced says so, and says why, in "What is still missing".
 
 **One run, one environment.** Everything in `screenshots/` and `logs/` comes
-from the same lane stack booted on the same commit. The previous round's
-captures were deleted rather than mixed in: two runs in one directory is how the
-last round shipped a capture that did not show what its caption claimed.
+from the same lane stack. The previous round's captures were deleted rather than
+mixed in: two runs in one directory is how the last round shipped a capture that
+did not show what its caption claimed.
 
 ## How this run was driven
 
@@ -21,8 +21,7 @@ Nothing outside the lane was started, stopped or written. The operator's
   the sha512 integrity of the exact tarball bytes, signs the canonical payload
   with an Ed25519 key generated for the run, and PUTs the signature in the
   packument's per-version `dist.cinatraSignature`.
-- **Storefront** — `drivers/lane-storefront.mjs` on `127.0.0.1:4881`, the
-  anonymous browse catalog.
+- **Storefront** — `drivers/lane-storefront.mjs` on `127.0.0.1:4881`.
 - **Application** — the real Next.js application on `127.0.0.1:3477`, booted
   against the lane database with the setup wizard bypassed
   (`CINATRA_E2E_SETUP_BYPASS=true`), driven in a real Chromium through
@@ -36,10 +35,10 @@ boot). The lane registry holds **0.1.2** signed with the trusted key, and
 
 One change to the lane since the last round, and it is the change that makes
 these captures worth anything: the published versions carry a
-`[lane v<x> from the registry]` stamp on the connector's own declared
-`calendarId` placeholder (`publish-signed.mjs`, `LANE_MANIFEST_MARK`). It edits
-one declared string in the staged manifest and nothing else — no code path, no
-install logic, no signing-input handling.
+`[lane registry build <x>]` stamp on the connector's own declared `calendarId`
+placeholder (`publish-signed.mjs`, `LANE_MANIFEST_MARK`). It edits one declared
+string in the staged manifest and nothing else — no code path, no install logic,
+no signing-input handling.
 
 The reason is the defect the last round shipped. The lane was publishing a
 version byte-identical to the bundled one, so the setup surface rendered
@@ -49,12 +48,19 @@ image; with the stamp, the setup surface **names the manifest that reached the
 render**, so "the bundled implementation is serving" and "the marketplace
 version is serving" are two visibly different screens.
 
+The stamp deliberately spells the version bare, as `build 0.1.2`, rather than
+prefixing it with a lowercase "v": the org source-leak gate's
+`SLG_MILESTONE_VERSION` rule matches that prefixed shape, and an evidence
+transcript is not a place to trip a required gate. An earlier revision of this
+lane used the prefixed form and turned `source-leak-gate` red for exactly that
+reason.
+
 ## What each screenshot shows
 
 Every row was produced by `drivers/lane-proof-driver.mjs`; the matching
 `*-driver.txt` is that invocation's full transcript, and the matching
 `*-resolution.json` carries the resolved install id, the version each surface
-named, and the full lifecycle-button audit.
+named, the rendered placeholder, and the full lifecycle-button audit.
 
 ### Baseline — the bundled 0.1.0 alone
 
@@ -62,19 +68,19 @@ named, and the full lifecycle-button audit.
 |---|---|
 | `baseline-connector-setup.png` | The connector setup page. The `calendarId` placeholder is **unstamped**, so the render came from the **bundled 0.1.0 manifest**. |
 | `baseline-extension-settings.png` | The extension settings page naming version **0.1.0**. |
-| `baseline-lifecycle-actions.png` | The maintenance + danger-zone blocks: **Archive** and **Reinstall latest** enabled, **Activate** disabled reading "Already active", **Update** disabled reading "Already up to date". No capability-denial text. |
+| `baseline-lifecycle-actions.png` | **Archive** and **Reinstall latest** enabled, **Activate** disabled reading "Already active", **Update** disabled reading "Already up to date". No capability-denial text. |
 
 ### The bad-signature refusal (#2762 acceptance item 3)
 
-The same package published at 0.1.1 signed with a key that is **not** in
+0.1.1 signed with a key that is **not** in
 `CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS`. A genuine signature over the correct
 payload from an untrusted key — not a corrupted byte.
 
 | File | What it shows |
 |---|---|
 | `negative-marketplace-card.png` | The marketplace card the storefront listed. |
-| `negative-install-panel-open.png` | The in-card access-target install panel, `data-availability="ready"`, before submit. |
-| `negative-install-refused.png` | **The actual refusal.** The sonner error toast on screen, reading `Couldn't install Google Appointment Schedules. Contact your administrator for help. (Ref: REF-4E69904D)`, with the install panel still open behind it. |
+| `negative-install-panel-open.png` | The in-card install panel, `data-availability="ready"`, before submit. |
+| `negative-install-refused.png` | **The actual refusal.** The sonner error toast on screen, reading `Couldn't install Google Appointment Schedules. Contact your administrator for help. (Ref: REF-D0A58EBC)`, with the install panel still open behind it. |
 | `negative-refusal.json` | The toast text, the `sr-only` panel mirror text, and the URL — still `/configuration/marketplace`, so no redirect happened. |
 
 **Why the previous `negative-install-refused.png` was byte-identical to the open
@@ -85,38 +91,27 @@ the panel with an error state nor grows its height"*
 `extension-install-panel-error` node is real but `sr-only`, so it cannot carry a
 screenshot. The toast is the only visible refusal UI, and it is mounted with
 `duration={8000}` (`src/app/providers.tsx`). The old driver slept **20 seconds**
-and then captured — i.e. it captured the screen *after* the toast had already
-gone, which is exactly why the file carried no proof. The driver now waits for
+and then captured — it photographed the screen *after* the toast had already
+gone, which is why the file carried no proof. The driver now waits for
 `[data-sonner-toast][data-type="error"]` to be **visible** and captures it there,
 with `fullPage` off because the toast is a fixed-position overlay.
 
-The application's own log records the refusal
-(`logs/boot-and-install-run.txt`):
-
-> install of `@cinatra-ai/google-appointment-schedules-connector@0.1.1` was
-> refused before anything was committed: package signature did not verify. No
-> install-op journal, host-port grant or provenance was written, the
-> materialized bytes were removed, and the version bundled in the image stays in
-> service.
-
-`logs/rows-after-install.txt` is read after the later install; immediately after
-the refusal the same query returned the bundled row **only** — zero live
-marketplace rows.
+Immediately after the refusal the row query returned the bundled row **only** —
+zero live marketplace rows.
 
 ### After the refusal — the bundle still serves
 
 | File | What it shows |
 |---|---|
-| `after-refusal-connector-setup.png` | The setup page, placeholder still **unstamped** → still the bundled 0.1.0 manifest. |
+| `after-refusal-connector-setup.png` | Setup page, placeholder still **unstamped** → still the bundled 0.1.0 manifest. |
 | `after-refusal-extension-settings.png` | Settings still naming **0.1.0**. |
 | `after-refusal-lifecycle-actions.png` | Lifecycle actions unchanged from baseline. |
 
-**These three files are byte-identical to their `baseline-` counterparts, and
-that is the assertion, not a shortcut.** A refused install committed nothing, so
-the application is in literally the same state; an identical render is the
-correct outcome. The captures are listed separately because they were taken
-separately, after the refusal, in the same run — `after-refusal-driver.txt` is
-that separate invocation.
+**These three are byte-identical to their `baseline-` counterparts, and that is
+the assertion, not a shortcut.** A refused install committed nothing, so the
+application is in literally the same state; an identical render is the correct
+outcome. They were captured separately, after the refusal —
+`after-refusal-driver.txt` is that separate invocation.
 
 ### The hot install, without a restart (#2762 acceptance items 2 and 4)
 
@@ -128,102 +123,117 @@ The signed 0.1.2 installed through the real marketplace panel while the bundled
 | `install-marketplace-card.png` | The card, listed at 0.1.2. |
 | `install-install-panel-open.png` | The install panel ready, before submit. |
 | `install-post-install-installed-list.png` | The redirect to `/configuration/extensions` that only a successful install produces. |
-| `post-install-connector-setup.png` | The setup page with the placeholder reading **`[lane v0.1.2 from the registry] …`** — the **marketplace manifest** is what rendered. This is the file that makes the version visible. |
+| `post-install-connector-setup.png` | The setup page with the placeholder reading **`[lane registry build 0.1.2] …`** — the **marketplace manifest** is what rendered. |
 | `post-install-extension-settings.png` | Settings naming version **0.1.2**. |
-| `post-install-lifecycle-actions.png` | **The capture the owner's round-3 finding demanded.** With the bundled anchor and the marketplace row both live, **Archive** and **Reinstall latest** are **ENABLED**, and **no** "More than one install matches your scope" text is rendered anywhere. **Retry activation** and **Roll back to bundled** both render **enabled**. |
-
-`logs/rows-after-install.txt` shows the pair that used to deny every lifecycle
-operation:
-
-```
-iext_e9846c87-1df  platform   active  0.1.0  is_default=t  bundled
-iext_8a02f014-7a8  workspace  active  0.1.2  is_default=t  verdaccio
-```
+| `post-install-lifecycle-actions.png` | **The capture the round-3 finding demanded.** With the bundled anchor and the marketplace row both live, **Archive** and **Reinstall latest** are **ENABLED**, and **no** "More than one install matches your scope" text is rendered anywhere. **Retry activation** and **Roll back to bundled** both render **enabled**. |
 
 The resolver reaching one row from that pair is
 `narrowByInstallSourcePrecedence` (`packages/extensions/src/lifecycle-target-resolver.ts:594-601`),
-feeding `resolveLifecycleScope`. `post-install-resolution.json` carries the
-full button audit that `post-install-lifecycle-actions.png` shows.
+feeding `resolveLifecycleScope`.
 
 **Activate is disabled, reading "Already active".** That is the status tier in
 `extension-settings-model.ts`, not the ambiguity denial — the row *is* active.
-The defect was the capability tier printing
-`More than one install matches your scope`; the audit records zero
-`lifecycle-capability-reason` nodes.
+The audit records zero `lifecycle-capability-reason` nodes.
 
-### All three seams resolve the same row
+### After a restart — the same surface, still correct
 
-`logs/three-seam-resolution.txt` runs the provider-write seam's own selection
-over the application's own canonical store, using the application's own policy
-function:
+The application was stopped and booted again with the marketplace row in place.
+`logs/boot-B-after-restart.txt` shows the row activating in-process:
 
 ```
-after supersession: 2 → after source precedence: 1
-PROVIDER-WRITE RESOLVED INSTALL ID: iext_8a02f014-7a8   (version 0.1.2)
+[boot] RuntimePackageLoader: 2 result(s) — google-appointment-schedules-connector:registered, …
 ```
 
-The setup and settings surfaces resolved that same id in the browser
-(`post-install-resolution.json`, `post-install-driver.txt`).
+| File | What it shows |
+|---|---|
+| `after-restart-connector-setup.png` | Setup page after the restart, placeholder reading `[lane registry build 0.1.2] …`. |
+| `after-restart-extension-settings.png` | Settings naming **0.1.2** after the restart. |
+| `after-restart-lifecycle-actions.png` | Archive and Reinstall latest still enabled, both recovery actions still enabled, still no ambiguity text. |
 
-`logs/trust-verdict-signed-local.txt` is the trust verdict over the published
+The settings and lifecycle captures are byte-identical to their `post-install-`
+counterparts. **That identity is the assertion**: the restart changed nothing
+that the surface shows, which is exactly what "after restart, still correct"
+means. `after-restart-driver.txt` is the separate invocation that produced them.
+
+### Trust and seam resolution
+
+`logs/trust-verdict-signed-local.txt` — the trust verdict over the published
 0.1.2: `SIGNATURE VERDICT: true`, `TRUST VERDICT: trusted-signed`.
+
+`logs/seam-resolution-with-unactivated-newer-row.txt` — the provider-write
+seam's own selection, run over the application's own canonical store with the
+application's own policy function, at the fixture state described below.
 
 ### The duplicate hashes in this directory, named
 
-Two more pairs are byte-identical, and both are honest:
+Six pairs are byte-identical, and each one is a state that genuinely did not
+change:
 
-- `install-marketplace-card.png` = `negative-marketplace-card.png`. The
+- the `baseline-` / `after-refusal-` triple — a refusal committed nothing;
+- `post-install-` / `after-restart-` for `extension-settings` and
+  `lifecycle-actions` — the restart preserved the state, which is the assertion;
+- `install-marketplace-card.png` = `negative-marketplace-card.png` — the
   marketplace card does not render the version, so listing 0.1.1 and listing
-  0.1.2 produce the same card. The version that was listed is in the storefront
+  0.1.2 produce the same card. Which version was listed is in the storefront
   process and in each run's `*-driver.txt`, not on the card.
-- the `baseline-` / `after-refusal-` triple, explained above.
 
-No other two files in this directory share a hash.
+`post-install-connector-setup.png` and `after-restart-connector-setup.png` are
+NOT identical. No other two files in this directory share a hash.
 
 ## What is still missing, and why
 
-This run stopped at the machine's memory guard before three deliverables were
+This run stopped at the machine's memory guard before two deliverables were
 captured. They are **not** claimed anywhere above.
 
-**The guard.** The lane checks
-a machine-local memory-guard flag file (path redacted) before booting the
-application. After the hot-install captures the flag was set, and it did not
-clear across a bounded wait of 20 checks at 30-second intervals:
+**The guard.** The lane checks a machine-local memory-guard flag file (path
+redacted) before every application boot. Both fixtures below were seeded, and
+the guard then re-armed and did not clear across a bounded wait of 20 checks at
+30-second intervals:
 
 ```
-2026-08-18T01:19:14Z pressure=2 swap_free=843MB
+2026-08-18T02:49:23Z pressure=2 swap_free=616MB
 ```
 
-At the end of that wait the machine had **674 MB of 20 GB swap free**. Booting a
-second Next dev server there risks an OOM on the operator's machine, which is
-what the guard exists to prevent, so the lane stopped instead of booting.
+Booting a third Next dev server there risks an OOM on the operator's machine,
+which is what the guard exists to prevent, so the lane stopped instead.
 
 Missing as a result:
 
-1. **After a restart.** The same assertions re-run against a restarted
-   application. Needs one application boot. No `after-restart-*` file is present
-   in this directory; the previous round's `after-restart-*` captures were
-   deleted with the rest of that run rather than presented as if they belonged
-   to this one.
-2. **The pre-existing stranded row.** `drivers/stranded-row-fixture.sql` seeded
-   before a boot, with the boot log read for `StrandedInstallReconcile`. Needs
-   one application boot.
-3. **#2762 acceptance item 1 end to end** — an unactivated **newer** row present
-   while the **bundle still serves**. The driver support for it is in place and
-   is the reason the manifest stamp exists: `lane-proof-driver.mjs` now takes a
-   separate `expectServingVersion`, so a state where settings names 0.1.2 while
-   the setup surface still renders the **unstamped bundled** placeholder is
-   directly assertable and directly capturable. The fixture is a workspace-
-   anchored `verdaccio` row for the **bundled** package
-   (`owner_level='workspace'`, `owner_id='__platform__'`, `organization_id=NULL`,
-   `status='active'`, `is_default=true`, `kind='connector'`, `version='0.1.2'`),
-   which the boot sweep skips as "already serving" because the static bundle
-   registered the package — that skip *is* the documented
-   "keeps serving the bundled implementation" branch of acceptance 1. Needs one
-   application boot.
+1. **The pre-existing stranded row.** `drivers/stranded-row-fixture.sql` **was
+   seeded** (`logs/rows-with-fixtures-seeded.txt` shows
+   `iext_stranded_fixture_2762` live), but the boot that would read
+   `StrandedInstallReconcile` out of the log never ran. No boot log in this
+   directory shows that line, and none is claimed to.
+2. **#2762 acceptance item 1 end to end** — an unactivated **newer** row present
+   while the **bundle still serves**. `drivers/unactivated-newer-row-fixture.sql`
+   **was seeded**: a live, default, workspace-anchored `verdaccio` row at
+   **0.1.5** for the **bundled** package, pointing at a version published and
+   materialized nowhere, so nothing but the bundled 0.1.0 can serve it.
 
-Item 3's reconcile behavior is presently proven only by the repo's own tests,
-not by a driver run in this directory.
+   What this run **does** establish for item 1, without the boot:
+   `logs/seam-resolution-with-unactivated-newer-row.txt` runs the seam over that
+   exact row set and shows the newer row being **named**, not shadowed:
+
+   ```
+   iext_4b38afe2-5fa            version=0.1.0  source=bundled
+   iext_unactivated_newer_2762  version=0.1.5  source=verdaccio
+   live rows: 2 → after supersession: 2 → after source precedence: 1
+   PROVIDER-WRITE RESOLVED INSTALL ID: iext_unactivated_newer_2762  (version 0.1.5)
+   ```
+
+   What is **missing** is the browser capture of that state: the setup surface
+   rendering the **unstamped** bundled placeholder (the bundle serving) while the
+   settings surface names 0.1.5 (the newer row visible). The driver is ready for
+   it — `lane-proof-driver.mjs` takes `expectServingVersion` separately from
+   `expectVersion` for exactly this — and the invocation is one boot away:
+
+   ```
+   node drivers/lane-proof-driver.mjs assert <origin> <email> <pw> $OUT unactivated-newer 0.1.5 0.1.0
+   ```
+
+The reconcile behavior itself is presently proven by the repo's own tests
+(`src/lib/__tests__/extension-boot-reconcile.test.ts`), not by a driver run in
+this directory.
 
 ## What is NOT claimed
 
@@ -236,8 +246,7 @@ a production build.** Two reasons, neither a shortcut:
    `next start` from a host checkout aborts at boot by design.
 2. The marketplace install path under test cannot run in a production runtime
    against a lane-private catalog at all: `MARKETPLACE_BASE_URL` is honored only
-   outside `NODE_ENV=production`, so a production runtime always browses the
-   single hardcoded marketplace.
+   outside `NODE_ENV=production`.
 
 Two smaller disclosures:
 

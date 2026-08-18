@@ -2,14 +2,14 @@ PASS  post-install: setup page responds 200 — status 200
 PASS  post-install: setup renders the connector's schema-config form
 PASS  post-install: setup form is bound to the connector package — data-package=@cinatra-ai/google-appointment-schedules-connector
 PASS  post-install: the dynamic-select empty slot renders
-PASS  post-install: the DECLARED placeholder renders (not the "No options available." fallback) — rendered: "[lane v0.1.2 from the registry] No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
-setup surface is rendering the REGISTRY manifest (v0.1.2)
-PASS  post-install: the setup surface renders the manifest of the SERVING version 0.1.2 — rendered "[lane v0.1.2 from the registry] No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
+PASS  post-install: the DECLARED placeholder renders (not the "No options available." fallback) — rendered: "[lane registry build 0.1.2] No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
+setup surface is rendering the REGISTRY manifest (build 0.1.2)
+PASS  post-install: the setup surface renders the manifest of the SERVING version 0.1.2 — rendered "[lane registry build 0.1.2] No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
 screenshot: post-install-connector-setup.png
-setup surface dispatched: [{"installId":"iext_8a02f014-7a8","actionId":"bookingPageGuideReady","status":200},{"installId":"iext_8a02f014-7a8","actionId":"listAppointmentSchedules","status":200},{"installId":"iext_8a02f014-7a8","actionId":"listCalendars","status":200}]
+setup surface dispatched: [{"installId":"iext_7031fdcd-e86","actionId":"bookingPageGuideReady","status":200},{"installId":"iext_7031fdcd-e86","actionId":"listAppointmentSchedules","status":200},{"installId":"iext_7031fdcd-e86","actionId":"listCalendars","status":200}]
 PASS  post-install: the setup surface actually dispatched a UI action — 3 dispatch(es)
 PASS  post-install: no UI action from the setup surface answered 404 — bookingPageGuideReady=200, listAppointmentSchedules=200, listCalendars=200
-PASS  post-install: the setup surface resolved exactly one install row — ids: iext_8a02f014-7a8
+PASS  post-install: the setup surface resolved exactly one install row — ids: iext_7031fdcd-e86
 PASS  post-install: the settings page renders for the connector — landed on http://127.0.0.1:3477/configuration/extensions/settings/connector/@cinatra-ai/google-appointment-schedules-connector
 screenshot: post-install-extension-settings.png
 settings surface renders version: 0.1.2
@@ -22,6 +22,6 @@ PASS  post-install: "Archive" is rendered and ENABLED — disabled=false reason=
 PASS  post-install: "Reinstall latest" is rendered and ENABLED — disabled=false reason=none
 screenshot: post-install-lifecycle-actions.png
 PASS  post-install: UI action "listAppointmentSchedules" is not a 404 — status 200 {"result":{"items":[]}}
-RESOLVED-INSTALL-ID iext_8a02f014-7a8
+RESOLVED-INSTALL-ID iext_7031fdcd-e86
 
 ALL CHECKS PASSED (mode=assert, label=post-install)

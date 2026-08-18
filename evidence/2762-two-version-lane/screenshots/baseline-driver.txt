@@ -6,10 +6,10 @@ PASS  baseline: the DECLARED placeholder renders (not the "No options available.
 setup surface is rendering the BUNDLED manifest
 PASS  baseline: the setup surface renders the manifest of the SERVING version 0.1.0 — rendered "No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
 screenshot: baseline-connector-setup.png
-setup surface dispatched: [{"installId":"iext_e9846c87-1df","actionId":"bookingPageGuideReady","status":200},{"installId":"iext_e9846c87-1df","actionId":"listAppointmentSchedules","status":200},{"installId":"iext_e9846c87-1df","actionId":"listCalendars","status":200}]
+setup surface dispatched: [{"installId":"iext_4b38afe2-5fa","actionId":"bookingPageGuideReady","status":200},{"installId":"iext_4b38afe2-5fa","actionId":"listCalendars","status":200},{"installId":"iext_4b38afe2-5fa","actionId":"listAppointmentSchedules","status":200}]
 PASS  baseline: the setup surface actually dispatched a UI action — 3 dispatch(es)
-PASS  baseline: no UI action from the setup surface answered 404 — bookingPageGuideReady=200, listAppointmentSchedules=200, listCalendars=200
-PASS  baseline: the setup surface resolved exactly one install row — ids: iext_e9846c87-1df
+PASS  baseline: no UI action from the setup surface answered 404 — bookingPageGuideReady=200, listCalendars=200, listAppointmentSchedules=200
+PASS  baseline: the setup surface resolved exactly one install row — ids: iext_4b38afe2-5fa
 PASS  baseline: the settings page renders for the connector — landed on http://127.0.0.1:3477/configuration/extensions/settings/connector/@cinatra-ai/google-appointment-schedules-connector
 screenshot: baseline-extension-settings.png
 settings surface renders version: 0.1.0
@@ -22,6 +22,6 @@ PASS  baseline: "Archive" is rendered and ENABLED — disabled=false reason=none
 PASS  baseline: "Reinstall latest" is rendered and ENABLED — disabled=false reason=none
 screenshot: baseline-lifecycle-actions.png
 PASS  baseline: UI action "listAppointmentSchedules" is not a 404 — status 200 {"result":{"items":[]}}
-RESOLVED-INSTALL-ID iext_e9846c87-1df
+RESOLVED-INSTALL-ID iext_4b38afe2-5fa
 
 ALL CHECKS PASSED (mode=baseline, label=baseline)
