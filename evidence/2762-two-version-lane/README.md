@@ -25,7 +25,7 @@ cd <worktree>
 D=evidence/2762-two-version-lane/drivers
 
 # 1. The stack. Its own project name, so nothing else is touched.
-docker compose -p x2774r5proof -f $D/lane-stack.compose.yml up -d
+docker compose -p x2774evproof -f $D/lane-stack.compose.yml up -d
 
 # 2. A signing key for this run. The PUBLIC half goes in the app env below;
 #    the private half never leaves the run.
@@ -45,10 +45,16 @@ pnpm auth:migrate
 # 5. Publish. The dependency first (the install threads the declared closure),
 #    then the version signed with an UNTRUSTED key for the negative run, then
 #    the version signed with the TRUSTED key.
+#
+#    LANE_MANIFEST_MARK=true stamps the connector's own declared `calendarId`
+#    placeholder with the version being published, so the setup surface NAMES
+#    the manifest that reached the render. Without it a published version that
+#    is byte-identical to the bundled one renders identical pixels, and no
+#    screenshot of that surface can say which version served. See PROOF-STATUS.
 GOOD=$(node -e 'console.log(require("/tmp/lane-key.json").priv)')
 node $D/publish-signed.mjs extensions/cinatra-ai/google-calendar-connector 0.1.3 http://127.0.0.1:4880 "$GOOD"
-node $D/publish-signed.mjs extensions/cinatra-ai/google-appointment-schedules-connector 0.1.1 http://127.0.0.1:4880 "<an untrusted key>"
-node $D/publish-signed.mjs extensions/cinatra-ai/google-appointment-schedules-connector 0.1.2 http://127.0.0.1:4880 "$GOOD"
+LANE_MANIFEST_MARK=true node $D/publish-signed.mjs extensions/cinatra-ai/google-appointment-schedules-connector 0.1.1 http://127.0.0.1:4880 "<an untrusted key>"
+LANE_MANIFEST_MARK=true node $D/publish-signed.mjs extensions/cinatra-ai/google-appointment-schedules-connector 0.1.2 http://127.0.0.1:4880 "$GOOD"
 
 # 6. The storefront, listing whichever version the next step should install.
 LANE_LISTED_VERSION=0.1.1 node $D/lane-storefront.mjs &   # the negative run
@@ -60,20 +66,31 @@ node $D/lane-admin-session.mjs http://127.0.0.1:3477 \
   postgresql://cinatra:cinatra@127.0.0.1:55440/cinatra <email> <password>
 
 # 8. The proof itself. Modes: baseline | negative | install | assert.
+#
+#    The two trailing arguments are separate on purpose:
+#      <expectVersion>        the version the SETTINGS surface must name
+#      <expectServingVersion> the version whose MANIFEST must have produced the
+#                             setup render
+#    They differ exactly when a newer row is present but has not activated —
+#    settings names the newer row while the bundled manifest still serves. That
+#    is #2762 acceptance item 1, and keeping the two apart is what lets one run
+#    assert it.
 OUT=$PWD/evidence/2762-two-version-lane/screenshots
-node $D/lane-proof-driver.mjs baseline http://127.0.0.1:3477 <email> <password> $OUT baseline 0.1.0
+node $D/lane-proof-driver.mjs baseline http://127.0.0.1:3477 <email> <password> $OUT baseline 0.1.0 0.1.0
 node $D/lane-proof-driver.mjs negative http://127.0.0.1:3477 <email> <password> $OUT negative
+node $D/lane-proof-driver.mjs assert   http://127.0.0.1:3477 <email> <password> $OUT after-refusal 0.1.0 0.1.0
+# switch the storefront to LANE_LISTED_VERSION=0.1.2, then:
 node $D/lane-proof-driver.mjs install  http://127.0.0.1:3477 <email> <password> $OUT install
-node $D/lane-proof-driver.mjs assert   http://127.0.0.1:3477 <email> <password> $OUT post-install 0.1.2
+node $D/lane-proof-driver.mjs assert   http://127.0.0.1:3477 <email> <password> $OUT post-install 0.1.2 0.1.2
 # restart the app, then:
-node $D/lane-proof-driver.mjs assert   http://127.0.0.1:3477 <email> <password> $OUT after-restart 0.1.2
+node $D/lane-proof-driver.mjs assert   http://127.0.0.1:3477 <email> <password> $OUT after-restart 0.1.2 0.1.2
 
 # 9. The stranded-row fixture, written BEFORE a boot.
-docker exec -i x2774r5proof-postgres-1 psql -U cinatra -d cinatra < $D/stranded-row-fixture.sql
+docker exec -i x2774evproof-postgres-1 psql -U cinatra -d cinatra < $D/stranded-row-fixture.sql
 # restart the app and read the boot log for StrandedInstallReconcile.
 
 # 10. Teardown.
-docker compose -p x2774r5proof -f $D/lane-stack.compose.yml down -v
+docker compose -p x2774evproof -f $D/lane-stack.compose.yml down -v
 rm -f .env.local $D/.lane-run.env
 rm -rf .lane-data
 ```

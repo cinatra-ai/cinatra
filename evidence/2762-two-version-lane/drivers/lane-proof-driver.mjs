@@ -18,8 +18,22 @@ import { chromium } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const [mode, origin, email, password, outDir, label = mode, expectVersion = ""] =
-  process.argv.slice(2);
+// `expectVersion`        — the version the SETTINGS surface must name (the row
+//                          the lifecycle/settings seam resolves).
+// `expectServingVersion` — the version whose MANIFEST must have produced the
+//                          setup render. Defaults to `expectVersion`; they
+//                          differ exactly when a newer row is present but has
+//                          not activated, which is #2762 acceptance item 1.
+const [
+  mode,
+  origin,
+  email,
+  password,
+  outDir,
+  label = mode,
+  expectVersion = "",
+  expectServingVersion = expectVersion,
+] = process.argv.slice(2);
 if (!mode || !origin || !email || !password || !outDir) {
   console.error(
     "usage: lane-proof-driver.mjs <mode> <appOrigin> <email> <password> <outDir> [label]",
@@ -97,6 +111,24 @@ page.on("response", (res) => {
 const DECLARED_PLACEHOLDER =
   "No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here.";
 
+/** The version the image bundles. Anything else in play came from the lane
+ *  registry. */
+const BUNDLED_VERSION = "0.1.0";
+
+/** What the placeholder must read for a given serving version.
+ *
+ *  The versions this lane publishes carry a `[lane v<x> from the registry]`
+ *  stamp on that same declared placeholder (`publish-signed.mjs`,
+ *  LANE_MANIFEST_MARK), because a newer version that renders identically to the
+ *  bundled one cannot testify to which of the two actually served. With the
+ *  stamp the setup surface NAMES the manifest that reached the render, so
+ *  "the bundled implementation is still serving" is a visible fact rather than
+ *  an inference. */
+const placeholderFor = (version) =>
+  !version || version === BUNDLED_VERSION
+    ? DECLARED_PLACEHOLDER
+    : `[lane v${version} from the registry] ${DECLARED_PLACEHOLDER}`;
+
 async function assertSetupPageRenders(tag) {
   const res = await page.goto(SETUP_URL, { waitUntil: "domcontentloaded" });
   check(`${tag}: setup page responds 200`, res?.status() === 200, `status ${res?.status()}`);
@@ -108,7 +140,12 @@ async function assertSetupPageRenders(tag) {
   return form;
 }
 
-async function assertDeclaredPlaceholder(tag) {
+/** `expectServingVersion` is the version whose MANIFEST must have produced this
+ *  render. It is not always the version the settings surface names: when a
+ *  newer row is present but unactivated, settings names the newer row while the
+ *  bundled manifest is what actually serves, and telling those two apart is the
+ *  whole point of #2762 acceptance item 1. */
+async function assertDeclaredPlaceholder(tag, expectServingVersion = "") {
   // The dynamic-select for `calendarId`. With no Google Calendar connection in
   // this lane the options action returns nothing, which is exactly the state
   // that renders the declared placeholder.
@@ -118,11 +155,89 @@ async function assertDeclaredPlaceholder(tag) {
   check(`${tag}: the dynamic-select empty slot renders`, count > 0);
   if (count === 0) return;
   const text = (await empty.first().innerText()).trim();
+  const want = placeholderFor(expectServingVersion);
   check(
     `${tag}: the DECLARED placeholder renders (not the "No options available." fallback)`,
-    text === DECLARED_PLACEHOLDER,
-    `rendered: ${JSON.stringify(text.slice(0, 140))}`,
+    text.endsWith(DECLARED_PLACEHOLDER),
+    `rendered: ${JSON.stringify(text.slice(0, 180))}`,
   );
+  const servedByBundle = !text.startsWith("[lane v");
+  say(
+    `setup surface is rendering the ${servedByBundle ? "BUNDLED" : "REGISTRY"} manifest` +
+      (servedByBundle ? "" : ` (${/\[lane (v[\d.]+)/.exec(text)?.[1] ?? "?"})`),
+  );
+  if (expectServingVersion) {
+    check(
+      `${tag}: the setup surface renders the manifest of the SERVING version ${expectServingVersion}`,
+      text === want,
+      `rendered ${JSON.stringify(text.slice(0, 180))}`,
+    );
+  }
+  return { renderedPlaceholder: text, servedByBundle };
+}
+
+/** Read every lifecycle affordance the settings surface renders, and say for
+ *  each one whether the application enabled it and, when it did not, the reason
+ *  the application itself printed.
+ *
+ *  This surface carries no `data-testid`. It is addressed the way it is built:
+ *  `data-slot` for the containers and the disabled variant, accessible button
+ *  text for the actions (`extension-settings-view.tsx`,
+ *  `extension-settings-actions.tsx`). A disabled action renders
+ *  `button[data-slot="disabled-action"][data-disabled-reason]`, and a reason
+ *  that came from the SERVER capability is also printed visibly in
+ *  `p[data-slot="lifecycle-capability-reason"]` — which is what puts
+ *  "More than one install matches your scope" on the screen. */
+async function auditLifecycleActions(tag, expectEnabled = []) {
+  const root = page.locator('main[data-surface-id="extension-settings"]');
+  check(`${tag}: the extension settings surface mounted`, (await root.count()) > 0);
+
+  // Bring the maintenance + danger-zone blocks into view so the capture SHOWS
+  // the buttons the assertion talks about, rather than proving them off-screen.
+  for (const slot of ["settings-maintenance", "settings-danger-zone"]) {
+    const el = page.locator(`[data-slot="${slot}"]`).first();
+    if ((await el.count()) > 0) await el.scrollIntoViewIfNeeded().catch(() => {});
+  }
+  await page.waitForTimeout(400);
+
+  const buttons = await page.evaluate(() => {
+    const scope = document.querySelector('main[data-surface-id="extension-settings"]');
+    if (!scope) return [];
+    return [...scope.querySelectorAll("button")].map((b) => ({
+      label: (b.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 60),
+      disabled: b.disabled === true || b.getAttribute("aria-disabled") === "true",
+      slot: b.getAttribute("data-slot"),
+      reason: b.getAttribute("data-disabled-reason"),
+    }));
+  });
+  const visibleReasons = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-slot="lifecycle-capability-reason"]')].map((p) =>
+      (p.textContent ?? "").trim(),
+    ),
+  );
+
+  say(`lifecycle buttons: ${JSON.stringify(buttons)}`);
+  say(`visible capability reasons: ${JSON.stringify(visibleReasons)}`);
+
+  // The regression the owner's own capture recorded: a successful install left
+  // every lifecycle action denied as ambiguous. It must not come back.
+  const ambiguous = visibleReasons.some((r) => /More than one install matches your scope/i.test(r));
+  check(
+    `${tag}: no lifecycle action is denied as "More than one install matches your scope"`,
+    !ambiguous,
+    ambiguous ? `reasons: ${JSON.stringify(visibleReasons)}` : "no ambiguity reason rendered",
+  );
+
+  for (const want of expectEnabled) {
+    const hit = buttons.find((b) => b.label.toLowerCase().startsWith(want.toLowerCase()));
+    check(
+      `${tag}: "${want}" is rendered and ENABLED`,
+      hit !== undefined && hit.disabled === false,
+      hit === undefined ? "not rendered at all" : `disabled=${hit.disabled} reason=${hit.reason ?? "none"}`,
+    );
+  }
+  await shot(page, "lifecycle-actions");
+  return { buttons, visibleReasons };
 }
 
 /** Drive a real UI action through the application's dispatch endpoint, from the
@@ -149,7 +264,7 @@ async function assertUiActionNot404(tag, installId, actionId) {
 if (mode === "baseline" || mode === "assert") {
   // --- the SETUP surface ---
   await assertSetupPageRenders(label);
-  await assertDeclaredPlaceholder(label);
+  const placeholder = await assertDeclaredPlaceholder(label, expectServingVersion);
   await shot(page, "connector-setup");
 
   const setupCalls = actionCalls.splice(0);
@@ -195,6 +310,14 @@ if (mode === "baseline" || mode === "assert") {
     );
   }
 
+  // --- the LIFECYCLE affordances on that same settings surface ---
+  // `Archive` and `Reinstall latest` must be live: they are the two the owner's
+  // own capture showed denied as ambiguous after a successful install. The
+  // `Activate` row is READ rather than demanded — on a row that is already
+  // active the honest render is a status-tier "Already active", which is a
+  // correct denial and not the ambiguity defect.
+  const lifecycle = await auditLifecycleActions(label, ["Archive", "Reinstall latest"]);
+
   // --- a UI action driven explicitly against the row the setup surface chose ---
   if (setupInstallId) {
     await assertUiActionNot404(label, setupInstallId, "listAppointmentSchedules");
@@ -202,7 +325,19 @@ if (mode === "baseline" || mode === "assert") {
 
   writeFileSync(
     path.join(outDir, `${label}-resolution.json`),
-    JSON.stringify({ setupInstallId, settingsVersion, expectVersion, setupCalls }, null, 2),
+    JSON.stringify(
+      {
+        setupInstallId,
+        settingsVersion,
+        expectVersion,
+        expectServingVersion,
+        placeholder,
+        setupCalls,
+        lifecycle,
+      },
+      null,
+      2,
+    ),
     "utf8",
   );
   say(`RESOLVED-INSTALL-ID ${setupInstallId}`);
@@ -244,17 +379,67 @@ if (mode === "negative" || mode === "install") {
     await page.waitForLoadState("networkidle").catch(() => {});
     await shot(page, "post-install-installed-list");
   } else {
-    // The refusal path: the panel stays open and the failure is announced.
-    await page.waitForTimeout(20_000);
+    // ---------------------------------------------------------------------
+    // The refusal path.
+    //
+    // This surface announces a failed install as a TOAST and keeps the panel
+    // open, unredrawn, by design: "a failed install neither redraws the panel
+    // with an error state nor grows its height"
+    // (`extension-install-scope-panel.tsx`, the file's own header). The
+    // in-panel `extension-install-panel-error` node is `sr-only` — real, but
+    // invisible, so it cannot carry a screenshot.
+    //
+    // The toast is therefore the ONLY visible refusal UI, and it is mounted
+    // with `duration={8000}` (`src/app/providers.tsx`). An earlier revision of
+    // this driver slept 20s and then captured, i.e. it captured the screen
+    // AFTER the toast had already gone — which is why that capture was
+    // byte-identical to the open panel and carried no proof at all. The
+    // capture below waits for the toast to be VISIBLE and shoots it there.
+    // ---------------------------------------------------------------------
+    const toast = page.locator('[data-sonner-toast][data-type="error"]').first();
+    let toastText = "";
+    let toastSeen = false;
+    try {
+      await toast.waitFor({ state: "visible", timeout: 180_000 });
+      toastSeen = true;
+      toastText = (await toast.innerText()).trim();
+    } catch {
+      toastSeen = false;
+    }
+    check(
+      `${label}: the refusal is announced in a visible error toast`,
+      toastSeen,
+      toastSeen ? JSON.stringify(toastText.slice(0, 200)) : "no error toast became visible",
+    );
+    // Capture WHILE the toast is on screen. `fullPage` is deliberately off
+    // here: the toast is a fixed-position overlay, and a full-page capture of
+    // a scrolling document does not reliably contain it.
+    const refusedFile = path.join(outDir, `${label}-install-refused.png`);
+    await page.screenshot({ path: refusedFile });
+    say(`screenshot: ${path.basename(refusedFile)}`);
+
     check(
       `${label}: a refused install does NOT redirect to the installed list`,
       !page.url().includes("/configuration/extensions"),
       `still on ${page.url()}`,
     );
+    const panelStillOpen = await page
+      .locator('[data-testid="extension-install-panel-body"]')
+      .count();
+    check(
+      `${label}: the install panel stays open after the refusal`,
+      panelStillOpen > 0,
+      `panel bodies: ${panelStillOpen}`,
+    );
     const alert = page.locator('[data-testid="extension-install-panel-error"]');
     const alertText = (await alert.count()) > 0 ? (await alert.first().innerText()).trim() : "";
     say(`refusal announced to assistive tech: ${JSON.stringify(alertText.slice(0, 200))}`);
-    await shot(page, "install-refused");
+    say(`refusal toast text: ${JSON.stringify(toastText.slice(0, 300))}`);
+    writeFileSync(
+      path.join(outDir, `${label}-refusal.json`),
+      JSON.stringify({ toastSeen, toastText, srOnlyAlertText: alertText, url: page.url() }, null, 2),
+      "utf8",
+    );
   }
 }
 

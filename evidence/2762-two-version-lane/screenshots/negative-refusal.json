@@ -1,0 +1,6 @@
+{
+  "toastSeen": true,
+  "toastText": "Couldn't install Google Appointment Schedules. Contact your administrator for help. (Ref: REF-4E69904D)\nCopy",
+  "srOnlyAlertText": "Couldn't install Google Appointment Schedules. Contact your administrator for help. (Ref: REF-4E69904D)",
+  "url": "http://127.0.0.1:3477/configuration/marketplace"
+}

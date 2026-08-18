@@ -2,8 +2,11 @@ PASS  negative: the marketplace lists the connector card
 screenshot: negative-marketplace-card.png
 PASS  negative: the install panel is ready — data-availability=ready
 screenshot: negative-install-panel-open.png
-PASS  negative: a refused install does NOT redirect to the installed list — still on http://127.0.0.1:3477/configuration/marketplace
-refusal announced to assistive tech: "Couldn't install Google Appointment Schedules. Contact your administrator for help. (Ref: REF-86EF745D)"
+PASS  negative: the refusal is announced in a visible error toast — "Couldn't install Google Appointment Schedules. Contact your administrator for help. (Ref: REF-4E69904D)\nCopy"
 screenshot: negative-install-refused.png
+PASS  negative: a refused install does NOT redirect to the installed list — still on http://127.0.0.1:3477/configuration/marketplace
+PASS  negative: the install panel stays open after the refusal — panel bodies: 1
+refusal announced to assistive tech: "Couldn't install Google Appointment Schedules. Contact your administrator for help. (Ref: REF-4E69904D)"
+refusal toast text: "Couldn't install Google Appointment Schedules. Contact your administrator for help. (Ref: REF-4E69904D)\nCopy"
 
 ALL CHECKS PASSED (mode=negative, label=negative)

@@ -50,6 +50,40 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const packageName = manifest.name;
 manifest.version = version;
 
+// 1a. MAKE THE PUBLISHED VERSION VISIBLY ITSELF.
+//
+// A real newer version of a connector differs from the one baked into the
+// image; that is the whole reason anyone installs it. The version this lane
+// publishes is otherwise byte-identical to the bundled one, and an identical
+// manifest renders an identical setup surface — so a screenshot of that surface
+// could not say WHICH version produced it. That is precisely the weakness that
+// made four "different" setup captures come out byte-identical.
+//
+// Setting LANE_MANIFEST_MARK stamps the connector's own declared
+// `calendarId` placeholder with the version being published. It changes one
+// declared string in the manifest and nothing else: no code path, no signing
+// input handling, no install logic. The signature is taken over the tarball
+// that results, exactly as before. The point is that the setup surface then
+// NAMES the version whose manifest reached the render, so "the bundled version
+// is still serving" and "the marketplace version is serving" become two
+// visibly different screens instead of one blob.
+if (process.env.LANE_MANIFEST_MARK === "true") {
+  const fields = manifest?.cinatra?.configSchema?.fields;
+  const field = Array.isArray(fields)
+    ? fields.find((f) => f && f.key === "calendarId")
+    : undefined;
+  if (!field || typeof field.placeholder !== "string") {
+    console.error(
+      "LANE_MANIFEST_MARK set, but the cinatra.configSchema field with key " +
+        "'calendarId' carries no string placeholder — refusing to publish an " +
+        "unmarked package silently",
+    );
+    process.exit(1);
+  }
+  field.placeholder = `[lane v${version} from the registry] ${field.placeholder}`;
+  console.error(`marked the declared calendarId placeholder with v${version}`);
+}
+
 // 1b. BUNDLE THE RUNTIME DEPENDENCIES.
 //
 // The installer never runs npm/pnpm install — that is a deliberate security

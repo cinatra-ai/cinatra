@@ -1,0 +1,6 @@
+        id         |                    package_name                    | owner_level | status | version | is_default |    src    
+-------------------+----------------------------------------------------+-------------+--------+---------+------------+-----------
+ iext_e9846c87-1df | @cinatra-ai/google-appointment-schedules-connector | platform    | active | 0.1.0   | t          | bundled
+ iext_8a02f014-7a8 | @cinatra-ai/google-appointment-schedules-connector | workspace   | active | 0.1.2   | t          | verdaccio
+(2 rows)
+
