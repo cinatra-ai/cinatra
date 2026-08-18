@@ -165,7 +165,9 @@ describe("hop 3 — the REPLAY's freshly constructed registerTool config", () =>
   // only be pinned as SOURCE STRINGS. That proved a line existed and nothing
   // about what it did.
   //
-  // They are now pure seams in `@/lib/mcp-declaration-replay`, and their
+  // They are now pure seams in `@/lib/extension-mcp-registry` — the registry
+  // the replay replays, and a module already on every route `mcp-server.ts` is
+  // on, so reaching them costs no locked route a module. Their
   // BEHAVIOUR — register with a declaration, replay, capture, and have the
   // call-time lookup see the same class — is covered end to end in
   // `delegated-chat-declaration-replay-roundtrip.test.ts`.

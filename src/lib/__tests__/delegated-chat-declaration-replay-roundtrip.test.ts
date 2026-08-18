@@ -26,9 +26,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const capturedHandlers = new Map<string, unknown>();
 
 // Only the DB-bound module walk is replaced: `buildHostSelfPrimitiveHandlers`
-// returns the map THIS FILE built through the real seams, which are imported
-// from `@/lib/mcp-declaration-replay` — a module with no connector/DB graph —
-// so every hop under test is real code.
+// returns the map THIS FILE built through the real seams, which live alongside
+// the extension registry — a module with no connector/DB graph — so every hop
+// under test is real code.
 vi.mock("@/lib/mcp-server", () => ({
   buildHostSelfPrimitiveHandlers: async () => capturedHandlers,
 }));
@@ -58,12 +58,10 @@ vi.mock("@/lib/authz/mcp-boundary", () => ({
 import {
   buildReplayedExtensionToolConfig,
   createSelfPrimitiveRecordingServer,
-  type CapturedHostPrimitive,
-} from "@/lib/mcp-declaration-replay";
-import {
   registerExtensionMcpTool,
   listExtensionMcpTools,
   _resetExtensionMcpForTests,
+  type CapturedHostPrimitive,
 } from "@/lib/extension-mcp-registry";
 import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
 import {

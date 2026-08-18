@@ -2,23 +2,19 @@ import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { admitToolInputSchema, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
-import {
-  buildReplayedExtensionToolConfig,
-  createSelfPrimitiveRecordingServer,
-  type CapturedHostPrimitive,
-} from "./mcp-declaration-replay";
 // Re-exported so `@/lib/mcp-server` stays the single import surface for the
-// self-primitive map's shape, while the testable seams live in a module that a
-// unit test can import without this file's connector/DB graph.
+// self-primitive map's shape, while the testable seams live alongside the
+// registry they replay — a module a unit test can import without this file's
+// connector/DB graph, and one already on every route this file is on.
 export {
   buildReplayedExtensionToolConfig,
   createSelfPrimitiveRecordingServer,
-} from "./mcp-declaration-replay";
+} from "./extension-mcp-registry";
 export type {
   CapturedHostPrimitive,
   CapturedMcpToolHandler,
   ReplayedExtensionRegistration,
-} from "./mcp-declaration-replay";
+} from "./extension-mcp-registry";
 import {
   resolveDurableRunContext,
   recordMcpRunContextServedBy,
@@ -68,6 +64,9 @@ import {
   listExtensionMcpTools,
   markEffectiveExtensionMcpTools,
   unmarkEffectiveExtensionMcpToolCollisions,
+  buildReplayedExtensionToolConfig,
+  createSelfPrimitiveRecordingServer,
+  type CapturedHostPrimitive,
 } from "@/lib/extension-mcp-registry";
 // Edge-bound serving chokepoint (cinatra#1392 Gap 1 wiring): an extension tool
 // dispatch consults the TRUSTED dependent identity and — when its resolved edge
