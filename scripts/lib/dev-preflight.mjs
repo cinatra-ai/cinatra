@@ -206,14 +206,42 @@ export function shouldSkipDevPreflight({ processEnv = {}, envFileValues = [] } =
  * nothing is configured, which preserves the historical behavior for the main
  * checkout: compose derives the project from the directory basename.
  *
+ * THE STATED VALUE IS RETURNED RAW — surrounding whitespace and all. This
+ * function decides only WHETHER a name was stated; whether the stated name is
+ * one compose accepts is `resolveComposeHostPortPlan`'s call, and it can only
+ * make it on the value the operator actually stated. Trimming here (the pre-fix
+ * shape) rewrote that value before anyone judged it, and reopened the hole the
+ * canonicality check exists to close, twice over:
+ *
+ *   - `COMPOSE_PROJECT_NAME=" cinatra"` trimmed to a canonical `cinatra` and was
+ *     classified as this checkout's own no-op pin. Compose itself rejects the
+ *     raw value outright — it validates an EXPLICIT name, it never cleans one up
+ *     — so the operator's stated value was silently rewritten into a name they
+ *     had not asked for, and the run continued.
+ *   - `COMPOSE_PROJECT_NAME="   "` trimmed to empty and read as "nothing stated
+ *     at all": the UNSCOPED checkout, which by design nothing below can refuse.
+ *     No project-name line was emitted, so the invalid ambient value — already
+ *     in the shell the entry point `eval`s into — survived into every later
+ *     compose invocation and failed there, late, with compose's own error. That
+ *     is the exact late failure this guard exists to prevent, and it is the same
+ *     shape as the rejected-override leak `resolveComposeHostPortPlan` documents:
+ *     an omitted key cannot unset a variable the shell already holds.
+ *
+ * "Stated" is therefore the EMPTY-STRING test, not the trimmed one. An empty
+ * value is genuinely unset — that is how the shell spells "no value" (`VAR=`)
+ * and how compose itself reads it — and falls through to the next source. A
+ * whitespace-only value is a stated value that happens to be unusable, and is
+ * refused as such.
+ *
  * @param {{ processEnv?: Record<string, string | undefined>, envFileValues?: Array<string | undefined> }} input
  * @returns {string | undefined}
  */
 export function resolveComposeProjectName({ processEnv = {}, envFileValues = [] } = {}) {
   const candidates = [processEnv[COMPOSE_PROJECT_ENV_VAR], ...envFileValues];
   for (const candidate of candidates) {
-    const value = String(candidate ?? "").trim();
-    if (value) return value;
+    if (candidate === undefined || candidate === null) continue;
+    const value = String(candidate);
+    if (value !== "") return value;
   }
   return undefined;
 }
@@ -425,10 +453,15 @@ export function classifyServiceUrl(urlValue) {
  *
  * `laneScope` bounds who that refusal can reach, and it is deliberately narrow:
  *
- *   - `"unscoped"` — no COMPOSE_PROJECT_NAME. The canonical single-stack flow:
+ *   - `"unscoped"` — no COMPOSE_PROJECT_NAME AT ALL (unset, or the empty string
+ *     a shell writes as `VAR=`). The canonical single-stack flow:
  *     `scripts/setup.sh`, `make dev` and `pnpm services` pass no `-p` and set no
  *     project name anywhere in this repo, so the operator's stack lands here and
  *     NOTHING below can refuse it. Historical defaults, silently, as before.
+ *     That immunity is why the test is "was a name stated?" and not "is there a
+ *     name left after trimming": a whitespace-only `COMPOSE_PROJECT_NAME` WAS
+ *     stated, and letting it trim its way into this scope handed the operator's
+ *     leniency to a value compose will reject — see below.
  *   - `"checkout"` — a name is stated, it is ALREADY CANONICAL, and it is the one
  *     compose would have derived from this directory anyway
  *     (`composeDefaultProjectName`). A no-op pin is not a second lane, so a
@@ -438,7 +471,9 @@ export function classifyServiceUrl(urlValue) {
  *     symmetric — compose normalizes a DERIVED name but only validates an
  *     EXPLICIT one — so a stated `Cinatra!` is refused by compose, never folded
  *     into `cinatra`. Such a name is refused here instead (see below), earlier
- *     and naming the rule.
+ *     and naming the rule. It is judged on the RAW stated value for the same
+ *     reason: ` cinatra` is a name compose rejects, and trimming it into a
+ *     canonical `cinatra` would approve a value the operator never stated.
  *   - `"lane"` — a canonical name that names a DIFFERENT project than this
  *     directory's. That is a second stack on one host, which is precisely the
  *     situation where a shared default is a collision. Refusals apply.
@@ -476,18 +511,32 @@ export function resolveComposeHostPortPlan({
     const fromFile = String(envFileLookup(key) ?? "").trim();
     return fromFile || undefined;
   };
-  const stated = String(projectName ?? "").trim();
-  const scoped = Boolean(stated);
-  const named = normalizeComposeProjectName(stated);
+  // THE STATED NAME IS JUDGED RAW. Every decision below — stated at all?
+  // canonical? — is made on exactly the bytes the operator set, because
+  // whitespace is as much a character compose forbids as `!` is, and a check
+  // that trims first has already rewritten the value it is about to approve.
+  // `resolveComposeProjectName` hands it over untouched for this reason.
+  const rawName = String(projectName ?? "");
+  // Empty is genuinely unset (`VAR=` is how a shell spells "no value", and how
+  // compose reads it). Whitespace-only is STATED — and unusable, so it lands in
+  // the refusal below rather than being mistaken for the unscoped checkout, the
+  // one scope nothing here is allowed to refuse.
+  const scoped = rawName !== "";
+  const named = normalizeComposeProjectName(rawName);
   // Compose NORMALIZES the name it derives from a directory basename, but only
   // VALIDATES one stated explicitly: `COMPOSE_PROJECT_NAME=Cinatra!` (or plain
-  // `Cinatra`) is rejected outright with "invalid project name … must consist
-  // only of lowercase alphanumeric characters, hyphens, and underscores as well
-  // as start with a letter or number" — it is never cleaned up into `cinatra`.
-  // So the two sides of the `checkout` comparison are NOT symmetric, and
-  // normalizing the stated name before comparing it (the pre-fix shape) let a
-  // name compose would refuse be classified as this checkout's own no-op pin.
-  const canonical = scoped && stated === named;
+  // `Cinatra`, or ` cinatra` with a leading space) is rejected outright with
+  // "invalid project name … must consist only of lowercase alphanumeric
+  // characters, hyphens, and underscores as well as start with a letter or
+  // number" — it is never cleaned up into `cinatra`. So the two sides of the
+  // `checkout` comparison are NOT symmetric, and normalizing (or trimming) the
+  // stated name before comparing it let a name compose would refuse be
+  // classified as this checkout's own no-op pin.
+  const canonical = scoped && rawName === named;
+  // What the operator typed, made visible: a name whose whitespace is the whole
+  // defect renders as an invisible one in an unquoted message. Quoted only when
+  // it differs from its trim, so every name that was already legible stays so.
+  const shownName = rawName === rawName.trim() ? rawName : JSON.stringify(rawName);
   const laneScope = !scoped
     ? "unscoped"
     : canonical && named === composeDefaultProjectName(defaultProjectName)
@@ -510,7 +559,7 @@ export function resolveComposeHostPortPlan({
       envVar: COMPOSE_PROJECT_ENV_VAR,
       reason: "project-name-not-canonical",
       message:
-        `${COMPOSE_PROJECT_ENV_VAR}=${stated} is not a name Docker Compose accepts. Compose normalizes only the ` +
+        `${COMPOSE_PROJECT_ENV_VAR}=${shownName} is not a name Docker Compose accepts. Compose normalizes only the ` +
         `project name it DERIVES from the directory basename; an explicit one must ALREADY consist only of ` +
         `lowercase alphanumeric characters, hyphens and underscores, and start with a letter or number — ` +
         `compose rejects anything else outright rather than cleaning it up. ` +
@@ -624,7 +673,7 @@ export function resolveComposeHostPortPlan({
           spec,
           "missing-service-url",
           `${spec.urlVar} is not stated, so this lane has no host port for ${spec.service}. ` +
-            `${COMPOSE_PROJECT_ENV_VAR}=${projectName} names a compose project of its own, and a named lane is never handed ` +
+            `${COMPOSE_PROJECT_ENV_VAR}=${shownName} names a compose project of its own, and a named lane is never handed ` +
             `the shared default ${spec.defaultHostPort} silently: two lanes that each omit ${spec.urlVar} would collide there, ` +
             `with each other and with the operator's stack. Fix it either way — state the port ` +
             `(${spec.urlVar}=<loopback URL with an explicit port>, or ${spec.envVar}=<port>), or unset ` +
@@ -638,7 +687,7 @@ export function resolveComposeHostPortPlan({
           spec,
           "shared-default-on-named-checkout",
           `${spec.urlVar} is not stated, so ${spec.service} falls back to the shared default ${spec.defaultHostPort}. ` +
-            `${COMPOSE_PROJECT_ENV_VAR}=${projectName} is the project compose derives from this directory anyway, so this is ` +
+            `${COMPOSE_PROJECT_ENV_VAR}=${shownName} is the project compose derives from this directory anyway, so this is ` +
             `read as the checkout's own stack rather than a second lane. If it IS a second lane, state ${spec.urlVar} ` +
             `(or ${spec.envVar}) — otherwise it will collide on ${spec.defaultHostPort}.`,
         );

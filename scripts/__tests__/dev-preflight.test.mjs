@@ -144,9 +144,44 @@ describe("resolveComposeProjectName", () => {
 
   it("returns undefined when unset, preserving compose's basename derivation", () => {
     expect(resolveComposeProjectName()).toBeUndefined();
+    // Empty IS unset — `VAR=` is how a shell spells "no value", and how compose
+    // reads it — so it falls through to the next source rather than counting as
+    // a statement.
+    expect(
+      resolveComposeProjectName({ processEnv: { COMPOSE_PROJECT_NAME: "" } }),
+    ).toBeUndefined();
+    expect(
+      resolveComposeProjectName({ processEnv: { COMPOSE_PROJECT_NAME: "" }, envFileValues: ["p2839"] }),
+    ).toBe("p2839");
+  });
+
+  // The RAW value, whitespace and all. Trimming here decided the canonicality
+  // question before `resolveComposeHostPortPlan` could ask it, on a value the
+  // operator never stated — see the two cases in the `laneScope` block below.
+  it("returns the stated value raw, without trimming it into a different name", () => {
+    expect(
+      resolveComposeProjectName({ processEnv: { COMPOSE_PROJECT_NAME: " cinatra" } }),
+    ).toBe(" cinatra");
+    expect(
+      resolveComposeProjectName({ processEnv: { COMPOSE_PROJECT_NAME: "cinatra " } }),
+    ).toBe("cinatra ");
+  });
+
+  // …and a whitespace-only value is a STATED value, not an absent one. Reading
+  // it as "nothing stated" put it in the one scope nothing can refuse, so no
+  // project-name line was emitted and the invalid ambient value survived into
+  // compose.
+  it("treats a whitespace-only value as stated, not as an unscoped checkout", () => {
     expect(
       resolveComposeProjectName({ processEnv: { COMPOSE_PROJECT_NAME: "  " } }),
-    ).toBeUndefined();
+    ).toBe("  ");
+    // It does not fall through to `.env.local` either: the shell stated it.
+    expect(
+      resolveComposeProjectName({
+        processEnv: { COMPOSE_PROJECT_NAME: "  " },
+        envFileValues: ["p2839"],
+      }),
+    ).toBe("  ");
   });
 });
 
@@ -544,6 +579,71 @@ describe("resolveComposeHostPortPlan — a named lane is never given a shared de
     });
     expect(result.laneScope).not.toBe("checkout");
     expect(result.refusals.some((r) => r.reason === "project-name-not-canonical")).toBe(true);
+  });
+
+  // Whitespace is a character compose forbids too, and it is the one that
+  // survives a trim. ` cinatra` trimmed to a canonical `cinatra` and was
+  // classified as this checkout's own no-op pin — the operator's stated value
+  // silently rewritten into a name they never asked for, on a run that then
+  // continued. Compose rejects the raw value outright.
+  it("refuses a stated name whose only defect is leading whitespace", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: " cinatra",
+      defaultProjectName: "/Users/dev/src/cinatra",
+    });
+    expect(result.laneScope).not.toBe("checkout");
+    const refusal = result.refusals.find((r) => r.reason === "project-name-not-canonical");
+    expect(refusal).toBeDefined();
+    // Quoted, or the whole defect is invisible in the message that reports it.
+    expect(refusal.message).toContain(`COMPOSE_PROJECT_NAME=" cinatra"`);
+    expect(refusal.message).toContain("lowercase alphanumeric characters, hyphens and underscores");
+    // Both ways out, one of which is the name they probably meant.
+    expect(refusal.message).toContain("COMPOSE_PROJECT_NAME=cinatra instead");
+    expect(refusal.message).toContain(`unset COMPOSE_PROJECT_NAME`);
+  });
+
+  it("refuses a trailing-whitespace name the same way", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "p2839 ",
+      defaultProjectName: "/Users/dev/src/cinatra",
+    });
+    expect(result.refusals.some((r) => r.reason === "project-name-not-canonical")).toBe(true);
+  });
+
+  // A stated-but-empty name is a CONFIG ERROR, not an unscoped checkout. Trimmed
+  // to empty it read as "nothing stated at all" and landed in `unscoped` — the
+  // one scope nothing here may refuse — so the step emitted no project-name line
+  // and the invalid ambient value survived into every later compose invocation,
+  // failing late with compose's own error. That is the exact late failure this
+  // guard exists to prevent; see the evaluated-shell test in section 3a.
+  it("refuses a whitespace-only name instead of reading it as unscoped", () => {
+    const result = resolveComposeHostPortPlan({
+      projectName: "   ",
+      defaultProjectName: "/Users/dev/src/cinatra",
+    });
+    expect(result.laneScope).not.toBe("unscoped");
+    const refusal = result.refusals.find((r) => r.reason === "project-name-not-canonical");
+    expect(refusal).toBeDefined();
+    expect(refusal.envVar).toBe("COMPOSE_PROJECT_NAME");
+    expect(refusal.message).toContain(`COMPOSE_PROJECT_NAME="   "`);
+    // Nothing to suggest instead — it normalizes to nothing at all.
+    expect(refusal.message).toContain("Choose a name matching that rule");
+    expect(refusal.message).toContain("unset COMPOSE_PROJECT_NAME");
+  });
+
+  // The unscoped checkout is still reached the only two ways a shell can say
+  // "no value": the variable absent, or set to the empty string.
+  it("still reads an absent or empty project name as the unscoped checkout", () => {
+    for (const projectName of [undefined, ""]) {
+      const result = resolveComposeHostPortPlan({
+        projectName,
+        defaultProjectName: "/Users/dev/src/cinatra",
+        processEnv: {},
+      });
+      expect(result.laneScope).toBe("unscoped");
+      expect(result.refusals).toEqual([]);
+      expect(result.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6379");
+    }
   });
 
   // The pin that IS a no-op: already canonical, and exactly the name compose
@@ -1559,6 +1659,56 @@ describe("whole-stack entry points — the guard the Makefile and package.json a
     expect(result.reached).toBe(true);
     expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");
     expect(result.stderr).toContain("not-a-port");
+  });
+
+  // THE SAME LEAK, on the project name itself — the last hole in the
+  // canonicality check. A whitespace-only COMPOSE_PROJECT_NAME used to trim to
+  // empty, read as the unscoped checkout, and emit no project-name line; the
+  // ambient `"   "` was already in the shell being `eval`ed into, so it stood,
+  // reached `docker compose`, and failed THERE with compose's own "invalid
+  // project name" — after the recipe had run part of the way. Refusing it stops
+  // the chain before the up, which is the only outcome that cannot leak: there
+  // is no later process to leak into.
+  it("stops before the up on a whitespace-only ambient project name", () => {
+    const result = runGuard(MAKE_DEV_GUARD(), {
+      extraEnv: { COMPOSE_PROJECT_NAME: "   " },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.reached).toBe(false);
+    // The ambient value never reaches a compose invocation: the marker (and the
+    // `env` that would show it) is never reached at all.
+    expect(result.exported).toEqual({});
+    expect(result.stdout).toBe("");
+    // …and the refusal is attributable, quoting the value so it is visible.
+    expect(result.stderr).toContain(`COMPOSE_PROJECT_NAME="   "`);
+    expect(result.stderr).toContain("not a name Docker Compose accepts");
+  });
+
+  // The other half of the hole, at the entry point: a name that trims to the
+  // checkout's own default is NOT the checkout's own pin.
+  it("stops before the up on a leading-space ambient project name", () => {
+    const result = runGuard(MAKE_DEV_GUARD(), {
+      extraEnv: { COMPOSE_PROJECT_NAME: ` ${composeDefaultProjectName(REPO_ROOT)}` },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.reached).toBe(false);
+    expect(result.exported).toEqual({});
+    expect(result.stderr).toContain(
+      `COMPOSE_PROJECT_NAME=" ${composeDefaultProjectName(REPO_ROOT)}"`,
+    );
+    // The name they meant is named for them, rather than assumed for them.
+    expect(result.stderr).toContain(
+      `COMPOSE_PROJECT_NAME=${composeDefaultProjectName(REPO_ROOT)} instead`,
+    );
+  });
+
+  // …and an EMPTY ambient value is still no statement at all: the canonical
+  // single-stack flow survives `COMPOSE_PROJECT_NAME=` in the environment.
+  it("still brings the checkout up on an empty ambient project name", () => {
+    const result = runGuard(MAKE_DEV_GUARD(), { extraEnv: { COMPOSE_PROJECT_NAME: "" } });
+    expect(result.status).toBe(0);
+    expect(result.reached).toBe(true);
+    expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");
   });
 });
 
