@@ -107,6 +107,16 @@ export default defineConfig({
       // path). Reached transitively via the aliased
       // `@/lib/authz/enforce-resource-access` the objects handlers import.
       "@cinatra-ai/mcp-server/obo-ceiling": path.join(root, "packages/mcp-server/src/obo-ceiling.ts"),
+      // cinatra#2771: the host's extension MCP registry + version-keyed
+      // retention normalize the typed delegated-chat declaration through this
+      // subpath, and both are reachable from `@/lib` chains these tests pull
+      // in. It is a PURE module (dependency-free on purpose — the same species
+      // as instance-tool-policy / known-destructive-floor above), so alias to
+      // REAL source, BEFORE the barrel stub, or the stub swallows it.
+      "@cinatra-ai/mcp-server/delegated-chat-tool-policy": path.join(
+        root,
+        "packages/mcp-server/src/delegated-chat-tool-policy.ts",
+      ),
       // Alias @cinatra-ai/mcp-server to a tiny stub so registry-orgid.test.ts
       // can import `mcpRequestContextStorage` without pulling in the real
       // next/navigation + better-auth entry point.

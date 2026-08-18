@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import type { DelegatedChatToolClass as SdkDelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
 import {
   DELEGATED_CHAT_TOOL_CLASSES,
+  declarationPermitsDelegatedChat,
   normalizeDelegatedChatToolClass,
   type DelegatedChatToolClass as PolicyDelegatedChatToolClass,
 } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { resolveChatMcpAllowedTools } from "../mcp-access";
 
 // ---------------------------------------------------------------------------
 // DRIFT CHECK: the author-facing declaration enum vs the enum the host
@@ -68,5 +70,57 @@ describe("delegated-chat class: SDK type vs host runtime", () => {
       expect(normalizeDelegatedChatToolClass(asSdk)).toBe(cls);
     }
     expect(DELEGATED_CHAT_TOOL_CLASSES).toHaveLength(4);
+  });
+});
+
+describe("delegated-chat class: the resolver's local mirror vs the host rule", () => {
+  // `mcp-access.ts` keeps a four-string local mirror of the chat-eligible set
+  // rather than importing the policy's runtime helper: it sits on a hot import
+  // path (`@cinatra-ai/llm/registry` reaches it) and three workspace packages
+  // stub the `@cinatra-ai/mcp-server` barrel in their test resolution, so a
+  // runtime edge there is a resolution liability. The mirror is only defensible
+  // if it cannot drift — which is what this asserts, by running BOTH rules over
+  // every value that matters and requiring the same verdict.
+  const HOST_RULE = (declared: unknown): boolean =>
+    declarationPermitsDelegatedChat(normalizeDelegatedChatToolClass(declared));
+
+  const RESOLVER_RULE = (declared: unknown): boolean =>
+    resolveChatMcpAllowedTools({
+      servable: [{ name: "probe_tool", declaredClass: declared as string | null | undefined }],
+      isHostApproved: () => true,
+      isCapabilityAvailable: () => true,
+    }).includes("probe_tool");
+
+  it("agrees on every declared class, on undeclared, and on malformed values", () => {
+    const cases: unknown[] = [
+      ...DELEGATED_CHAT_TOOL_CLASSES,
+      undefined,
+      null,
+      "READ",
+      "Read",
+      "dispatch ",
+      "",
+      "admin",
+      "superuser",
+    ];
+    for (const declared of cases) {
+      expect({ declared, exposed: RESOLVER_RULE(declared) }).toEqual({
+        declared,
+        exposed: HOST_RULE(declared),
+      });
+    }
+  });
+
+  it("both rules expose the three chat-eligible classes and withhold `none`", () => {
+    // Pinned explicitly so a mirror that agreed with a BROKEN host rule (both
+    // returning false for everything) would still fail here.
+    for (const cls of ["read", "discovery", "dispatch"]) {
+      expect(RESOLVER_RULE(cls)).toBe(true);
+      expect(HOST_RULE(cls)).toBe(true);
+    }
+    expect(RESOLVER_RULE("none")).toBe(false);
+    expect(HOST_RULE("none")).toBe(false);
+    expect(RESOLVER_RULE(undefined)).toBe(true);
+    expect(HOST_RULE(undefined)).toBe(true);
   });
 });

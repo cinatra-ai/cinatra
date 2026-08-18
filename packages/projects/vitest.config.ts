@@ -49,6 +49,16 @@ export default defineConfig({
       // obo-ceiling` path. Reached transitively via the aliased
       // `@/lib/authz/enforce-resource-access` and directly by handlers.ts.
       "@cinatra-ai/mcp-server/obo-ceiling": path.join(root, "packages/mcp-server/src/obo-ceiling.ts"),
+      // cinatra#2771: the host's extension MCP registry + version-keyed
+      // retention normalize the typed delegated-chat declaration through this
+      // subpath, and both are reachable from `@/lib` chains these tests pull
+      // in. It is a PURE module (dependency-free on purpose — the same species
+      // as instance-tool-policy / known-destructive-floor above), so alias to
+      // REAL source, BEFORE the barrel stub, or the stub swallows it.
+      "@cinatra-ai/mcp-server/delegated-chat-tool-policy": path.join(
+        root,
+        "packages/mcp-server/src/delegated-chat-tool-policy.ts",
+      ),
       // mcp-server stub — only need `mcpRequestContextStorage`, mirror
       // objects/__stubs__/mcp-server.ts.
       "@cinatra-ai/mcp-server": path.join(__dirname, "src/__tests__/__stubs__/mcp-server.ts"),

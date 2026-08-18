@@ -10,10 +10,6 @@ import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmMcpServerTool, LlmTool } from "./types";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
-  declarationPermitsDelegatedChat,
-  normalizeDelegatedChatToolClass,
-} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
-import {
   loadExternalMcpToolboxBySlug,
   sanitizeExternalMcpToolboxTools,
 } from "@/lib/external-mcp-toolbox-loader.server";
@@ -201,6 +197,24 @@ export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
  */
 export type { DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
 
+/**
+ * The chat-eligible classes. A declaration outside this set narrows to nothing,
+ * which covers BOTH an explicit `"none"` and any value that is not a valid
+ * class at all — the same fail-closed-toward-narrowing reading the host's
+ * `normalizeDelegatedChatToolClass` applies, since an unreadable declaration
+ * must never be re-read as the NEUTRAL "undeclared".
+ *
+ * DELIBERATELY A LOCAL MIRROR, not an import of the policy's runtime helper.
+ * This module sits on a hot import path (`@cinatra-ai/llm/registry` reaches it,
+ * and three workspace packages stub the `@cinatra-ai/mcp-server` barrel in
+ * their test resolution), so a new runtime cross-package edge here is a
+ * resolution liability for a rule that is four strings long. The authority
+ * remains `delegated-chat-tool-policy.ts`; `__tests__/delegated-chat-class-drift.test.ts`
+ * pins this set against it at both type and value level, so the mirror cannot
+ * drift silently.
+ */
+const CHAT_ELIGIBLE_CLASSES: ReadonlySet<string> = new Set(["read", "discovery", "dispatch"]);
+
 /** One primitive this instance can currently serve. */
 export type ServableChatPrimitive = {
   name: string;
@@ -247,19 +261,11 @@ export function resolveChatMcpAllowedTools(state: ChatMcpCatalogState): string[]
     if (typeof name !== "string" || name.length === 0) continue;
     // 1. Host admission is the only thing that admits.
     if (!state.isHostApproved(name)) continue;
-    // 2. A declaration may narrow, never widen. The narrowing RULE is the
-    //    policy module's, not a second copy: `normalize` maps an unreadable
-    //    value to `"none"` (fail-closed toward narrowing, never back to the
-    //    neutral "undeclared") and `declarationPermits` decides. Note this runs
-    //    strictly AFTER host admission above, which is what makes it
-    //    structurally impossible for a declaration to widen.
-    if (
-      !declarationPermitsDelegatedChat(
-        normalizeDelegatedChatToolClass(primitive.declaredClass),
-      )
-    ) {
-      continue;
-    }
+    // 2. A declaration may narrow, never widen. Note this runs strictly AFTER
+    //    host admission above, which is what makes it structurally impossible
+    //    for a declaration to widen: an unadmitted name never reaches here.
+    const declared = primitive.declaredClass;
+    if (declared != null && !CHAT_ELIGIBLE_CLASSES.has(declared)) continue;
     // 3. A connection-gated primitive needs an authorized connection.
     const capability = primitive.capabilityKey;
     if (capability != null && capability !== "" && !state.isCapabilityAvailable(capability)) {

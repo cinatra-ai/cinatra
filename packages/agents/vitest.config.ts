@@ -201,6 +201,16 @@ export default defineConfig({
         root,
         "packages/mcp-server/src/known-destructive-floor.ts",
       ),
+      // cinatra#2771: the host's extension MCP registry + version-keyed
+      // retention normalize the typed delegated-chat declaration through this
+      // subpath, and both are reachable from `@/lib` chains these tests pull
+      // in. It is a PURE module (dependency-free on purpose — the same species
+      // as instance-tool-policy / known-destructive-floor above), so alias to
+      // REAL source, BEFORE the barrel stub, or the stub swallows it.
+      "@cinatra-ai/mcp-server/delegated-chat-tool-policy": path.join(
+        root,
+        "packages/mcp-server/src/delegated-chat-tool-policy.ts",
+      ),
       // Stub the mcp-server barrel itself. The real index.tsx imports React UI components from the host app
       // (`@/components/ui/*`), which are out of reach for this package's
       // vitest config. Our stub exports the runtime values used by
