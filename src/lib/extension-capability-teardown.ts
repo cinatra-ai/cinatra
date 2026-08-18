@@ -15,6 +15,8 @@ import "server-only";
 // SAME four register-channel kinds retained per (packageName, version) for
 // non-default side-by-side serving — in lockstep, so a torn-down package stops
 // serving both its global (default) names AND its edge-bound non-default versions.
+// And it clears the SERVING-PROVENANCE record (cinatra#2762), which describes
+// which implementation put those registrations in place.
 // If a new in-memory register-channel kind is ever added, THIS closure must grow.
 // The per-kind-teardown invariant test asserts this exact function's current
 // contract — it catches a DROPPED kind; a newly-added un-wired register-channel
@@ -47,6 +49,25 @@ function clearVersionKeyedServingForPackage(packageName: string): string[] {
     [k: symbol]: ((packageName: string) => string[]) | undefined;
   })[VERSION_KEYED_SERVING_TEARDOWN_KEY];
   return typeof fn === "function" ? fn(packageName) : [];
+}
+// SERVING-PROVENANCE RECORD (cinatra#2762): which implementation — the image's
+// or a marketplace install's — put this package's registrations in place. It
+// DESCRIBES the registrations this function is about to remove, so it must be
+// cleared here or a torn-down package would keep reporting a version that is no
+// longer serving anything. Read off the same kind of `Symbol.for` surface, and
+// for the same reason: `extension-serving-record` is written by the loaders and
+// read by the settings surface, and a static import from this route-reachable
+// chokepoint would add an edge to the shrink-only route-graph ratchet
+// (cinatra#732). A module that never loaded holds no record, so a missing
+// function is a safe no-op.
+const SERVING_RECORD_TEARDOWN_KEY = Symbol.for(
+  "@cinatra-ai/host:extension-serving-record-teardown/v1",
+);
+function clearServingRecordForPackage(packageName: string): boolean {
+  const fn = (globalThis as unknown as {
+    [k: symbol]: ((packageName: string) => boolean) | undefined;
+  })[SERVING_RECORD_TEARDOWN_KEY];
+  return typeof fn === "function" ? fn(packageName) : false;
 }
 import { invalidateExtensionUiForPackage, hasExtensionUiForPackage } from "@/lib/extension-ui-registry";
 import {
@@ -107,6 +128,12 @@ export function teardownExtensionCapabilities(packageName: string): {
   // marker is a trust-tracking side-signal, not one of the four operator
   // control-plane register-channel kinds.
   clearPackageSignedActivated(packageName);
+  // cinatra#2762 — the serving-provenance record describes exactly the
+  // registrations being removed here, so it goes with them. Not counted toward
+  // the guarded generation bump below: it is a descriptive side-signal, not one
+  // of the operator control-plane register-channel kinds (same rationale as the
+  // signed-activated marker above).
+  clearServingRecordForPackage(packageName);
   invalidateExtensionUiForPackage(packageName);
   // Deregister the package's object types so an archived/uninstalled extension's
   // types stop resolving/listing in the running process without a restart.

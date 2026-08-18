@@ -30,6 +30,7 @@ import {
   VALID_SETTINGS_KINDS,
   canPublishToMarketplace,
   isRegisteredMarketplaceVendor,
+  resolveServingState,
   resolveSettingsAffordances,
   resolveUpdateRow,
 } from "./extension-settings-model";
@@ -99,7 +100,7 @@ export async function ExtensionSettingsScreen({
       })
     ).find((r) => r.packageName === packageName) ?? null;
   const latestVersion = updateReadout?.entry?.latestVersion ?? null;
-  const updateRow = resolveUpdateRow({
+  const updateRowInput = {
     state: deriveInstalledUpdateChipState({
       installedVersion: rawVersion,
       latestVersion,
@@ -108,7 +109,7 @@ export async function ExtensionSettingsScreen({
     }),
     installedVersion: rawVersion,
     latestVersion,
-  });
+  };
 
   const isArchived = row.status === "archived";
   const isPublic = row.visibility === "public";
@@ -150,6 +151,41 @@ export async function ExtensionSettingsScreen({
     ? resolution.row.status === "archived"
     : isArchived;
 
+  // cinatra#2762: which implementation this package is ACTUALLY serving from,
+  // and at which version. `installed_extension.status` is the LIFECYCLE fact —
+  // it says an operator has not archived the row, never that the row's code
+  // registered — so a live install that activation refused reads "active" here
+  // while the image's copy serves every request. The activation seams record the
+  // runtime fact; this reads it.
+  //
+  // Whether the addressed row is a PRODUCT INSTALL at all is the first gate: a
+  // bundled anchor IS the image's copy and can never disagree with it. Both
+  // facts are derived server-side, never from a client hint.
+  const effectiveSource = (lifecycleRow ?? canonical)?.source as
+    | { type?: string }
+    | null
+    | undefined;
+  const isProductInstall = effectiveSource?.type === "verdaccio";
+  // Best-effort by design: a read failure or a process that never ran a loader
+  // leaves this null, and `resolveServingState` then names nothing rather than
+  // accusing a healthy install. Never blanks the page.
+  const servingProvenance = isProductInstall
+    ? await (async () => {
+        try {
+          const { readServingRecord } = await import("@/lib/extension-serving-record");
+          return readServingRecord(packageName);
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const servingState = resolveServingState({
+    installedVersion: lifecycleRow?.version ?? rawVersion,
+    serving: servingProvenance,
+    isProductInstall,
+    isArchived: lifecycleIsArchived,
+  });
+
   // The PACKAGE-WIDE locked/system invariant, which is a different row from the
   // target: `assertNoLockedCanonicalRow` refuses when ANY canonical row for the
   // package is locked, in any scope. `lockedRow` is that row (scope-blind, from
@@ -158,6 +194,13 @@ export async function ExtensionSettingsScreen({
   // locked-first among the identities visible to this session.
   const lifecycleLockedRow =
     lockedRow ?? (canonical?.status === "locked" ? canonical : null);
+
+  // cinatra#2762: the Update row stops calling the installed version "current"
+  // when it is not the version in service, and says both instead.
+  const updateRow = resolveUpdateRow({
+    ...updateRowInput,
+    servingVersion: servingState.named ? servingState.servingVersion : null,
+  });
 
   // Locked / system disabled-action reasons (#1036 mechanism) → the capability
   // verdict → status/version fallbacks (complementary Archive/Activate;
@@ -174,6 +217,9 @@ export async function ExtensionSettingsScreen({
     isArchived: lifecycleIsArchived,
     versionKnown,
     capabilities,
+    // cinatra#2762: "Already active" is a statement about the lifecycle row. When
+    // that row is live but is NOT what is serving, it is the wrong statement.
+    activateNotInServiceReason: servingState.named ? servingState.activateReason : null,
   });
 
   // Server actions — identity baked into the closure, each returning void so
@@ -189,11 +235,6 @@ export async function ExtensionSettingsScreen({
   // needs the image to actually carry a version to fall back to, which is what
   // the generated static manifest records. Both are derived server-side from
   // facts, never from a client hint.
-  const effectiveSource = (lifecycleRow ?? canonical)?.source as
-    | { type?: string }
-    | null
-    | undefined;
-  const isProductInstall = effectiveSource?.type === "verdaccio";
   const bundledFallbackAvailable = await (async () => {
     if (!isProductInstall) return false;
     try {
@@ -418,6 +459,7 @@ export async function ExtensionSettingsScreen({
       displayName={row.displayName}
       vendor={row.vendor}
       updateRow={updateRow}
+      servingState={servingState}
       archiveDisabled={archiveDisabled}
       activateDisabled={activateDisabled}
       reinstallDisabled={reinstallDisabled}

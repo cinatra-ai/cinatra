@@ -652,6 +652,23 @@ export async function loadRuntimePackageExtensions(
   const failedNames = new Set(
     activationResults.filter((r) => r.status === "failed").map((r) => r.packageName),
   );
+  // cinatra#2762: the version of each INSTALL that actually registered, so a
+  // request-time surface can tell "the installed version is serving" from "the
+  // row is live but the image's copy is what serves". Keyed off the DEFAULT
+  // record — the version that owns the package's unversioned global names, which
+  // is what a request reaches. Same success rule as the marker below.
+  //
+  // The recorder is reached by DYNAMIC import, exactly like
+  // `beginVersionKeyedRegistration` above and for the same reason: this loader is
+  // reachable from the locked dev-perf routes whose static import graph is
+  // ratcheted shrink-only (cinatra#732), and a descriptive side-signal must not
+  // spend a static edge there.
+  const defaultVersionByPackage = new Map<string, string | null>();
+  for (const rec of orderedActivatable) {
+    if (rec.isDefault === false) continue;
+    defaultVersionByPackage.set(rec.packageName, rec.version ?? null);
+  }
+  const { recordServingImplementation } = await import("@/lib/extension-serving-record");
   for (const result of activationResults) {
     if (
       (result.status === "registered" || result.status === "bootstrapped") &&
@@ -659,6 +676,17 @@ export async function loadRuntimePackageExtensions(
       signedDefaultNames.has(result.packageName)
     ) {
       markPackageSignedActivated(result.packageName);
+    }
+    if (
+      (result.status === "registered" || result.status === "bootstrapped") &&
+      !failedNames.has(result.packageName) &&
+      defaultVersionByPackage.has(result.packageName)
+    ) {
+      recordServingImplementation({
+        packageName: result.packageName,
+        origin: "install",
+        version: defaultVersionByPackage.get(result.packageName) ?? null,
+      });
     }
   }
 

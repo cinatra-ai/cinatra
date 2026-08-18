@@ -26,7 +26,10 @@ import {
   DisabledActionButton,
   ForceDeleteDialog,
 } from "./extension-settings-actions";
-import type { SettingsUpdateRow } from "./extension-settings-model";
+import type {
+  ExtensionServingState,
+  SettingsUpdateRow,
+} from "./extension-settings-model";
 import type { RemovalActionResult } from "../removal-failure";
 import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
 
@@ -68,6 +71,21 @@ export type ExtensionSettingsViewProps = {
    * card carries at most the Update-available chip.
    */
   updateRow: SettingsUpdateRow;
+  /**
+   * cinatra#2762 — the INSTALLED-BUT-NOT-ACTIVE state, named.
+   *
+   * A live install can be serving nothing: its bytes are in place and its row
+   * says `active`, but activation was refused and the version bundled with the
+   * app is what answers every request. The page used to render that as
+   * "Currently on version X — up to date" with Activate greyed "Already active",
+   * so the one state the whole issue is about was the one state the surface
+   * could not express.
+   *
+   * `{ named: false }` (the overwhelmingly common case, and the default for an
+   * unseeded fixture) renders NOTHING — this row appears only when the loader
+   * has a positive, server-derived reason to say it.
+   */
+  servingState?: ExtensionServingState;
   /** Disabled-action reasons (null ⇒ enabled) — the #1036 lifecycle-ui mechanism
    *  and, since cinatra#2416, the server-derived lifecycle capability. */
   archiveDisabled: string | null;
@@ -128,6 +146,7 @@ export function ExtensionSettingsView({
   recovery,
   vendor,
   updateRow,
+  servingState,
   archiveDisabled,
   activateDisabled,
   reinstallDisabled,
@@ -264,6 +283,28 @@ export function ExtensionSettingsView({
         {/* Maintenance */}
         <section data-slot="settings-maintenance" className="py-5.5">
           <h2 className="mb-3.5 text-lg font-bold text-foreground">Maintenance</h2>
+
+          {/* cinatra#2762 — the installed-but-not-active state, NAMED, and first
+              in Maintenance because every other row on this page describes the
+              install on the assumption that it is the thing running. It carries
+              no action of its own: Retry activation and Roll back to bundled are
+              the affordances, and they render below with their own copy. */}
+          {servingState?.named ? (
+            <SettingsRow
+              dataSlot="settings-not-in-service"
+              title={servingState.title}
+              description={servingState.description}
+              action={
+                <span
+                  data-slot="settings-not-in-service-badge"
+                  className="flex flex-none items-center gap-1.5 rounded-control border border-line bg-surface px-2.5 py-1.5 text-sm font-medium text-muted-foreground"
+                >
+                  <TriangleAlert data-icon="inline-start" aria-hidden="true" />
+                  Not in service
+                </span>
+              }
+            />
+          ) : null}
 
           {/* §V Maintenance · Update — the update status as the row's
               description (the §III card states spelled out in words); the
@@ -481,22 +522,27 @@ function DisabledLifecycleAction({
   );
 }
 
-/** A Maintenance row: title + description on the left, an action on the right. */
+/** A Maintenance row: title + description on the left, an action on the right.
+ *  `dataSlot` marks a row that a driver / conformance capture needs to address
+ *  by name rather than by its copy (cinatra#2762). */
 function SettingsRow({
   title,
   description,
   action,
   last = false,
   muted = false,
+  dataSlot,
 }: {
   title: string;
   description: string;
   action: ReactNode;
   last?: boolean;
   muted?: boolean;
+  dataSlot?: string;
 }) {
   return (
     <div
+      data-slot={dataSlot}
       className={[
         "flex items-center justify-between gap-4 py-3.5",
         last ? "" : "border-b border-line",
