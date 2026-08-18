@@ -27,8 +27,10 @@ const ACTOR = read("../../lifecycle-actor.ts");
 
 describe("AC1 — the enabled state comes from the ENFORCING module", () => {
   it("the loader asks the resolver (not a local copy) for the capability", () => {
-    expect(SCREEN).toContain(
-      'import { describeLifecycleCapabilities } from "../lifecycle-target-resolver"',
+    // The import is a named-list form (it grew a second name in cinatra#2762
+    // round 5), so pin the SPECIFIER and the name, not the exact statement text.
+    expect(SCREEN).toMatch(
+      /import \{[^}]*\bdescribeLifecycleCapabilities\b[^}]*\} from "\.\.\/lifecycle-target-resolver"/,
     );
     expect(SCREEN).toContain("await describeLifecycleCapabilities(");
   });
@@ -189,5 +191,60 @@ describe("AC3 — the enforcement is untouched and its refusals carry stable cod
     expect(ACTIONS).toContain("function stableErrorCode(");
     expect(ACTIONS).toContain("errorCode: stableErrorCode(err),");
     expect(ACTIONS).toContain("result.errorCode,");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2762 round 5 — the recovery actions are BOUND to the row this page
+// described, and the selector that binds them is minted SERVER-SIDE.
+//
+// Structural, because the defect is "the action re-resolves from the package
+// name" — an omission no unit test of the action can see, since the action is
+// correct for every row set where the two resolutions happen to agree.
+// ---------------------------------------------------------------------------
+describe("AC5 — the recovery pair acts on the row the page resolved", () => {
+  it("the loader mints the selector from the RESOLVED row, not from a client hint", () => {
+    expect(SCREEN).toMatch(
+      /import \{[^}]*\blifecycleRowSelectorFor\b[^}]*\} from "\.\.\/lifecycle-target-resolver"/,
+    );
+    // From `resolution.row` — the row `describeLifecycleCapabilities` returned.
+    expect(SCREEN).toMatch(
+      /const lifecycleRowSelector\s*=\s*resolution\.ok\s*\?\s*lifecycleRowSelectorFor\(resolution\.row\)/,
+    );
+  });
+
+  it("both recovery actions carry it", () => {
+    expect(SCREEN).toMatch(
+      /retryExtensionActivationFormAction\(\{[^}]*rowSelector:\s*lifecycleRowSelector/,
+    );
+    expect(SCREEN).toMatch(
+      /rollBackExtensionToBundledFormAction\(\{[^}]*rowSelector:\s*lifecycleRowSelector/,
+    );
+  });
+
+  it("both actions feed it to the ENFORCING resolver", () => {
+    // Not a local re-implementation: the selector is handed to
+    // `resolveLifecycleTargetRow`, which recomputes the addressable set from the
+    // ACTOR and only then filters it by the named tier.
+    const calls = [
+      ...ACTIONS.matchAll(
+        /resolveLifecycleTargetRow\(\s*input\.packageName,\s*actor,\s*input\.rowSelector \?\? null,\s*\)/g,
+      ),
+    ];
+    expect(calls.length).toBe(2);
+  });
+
+  it("no selector is ever read off client-submitted form data", () => {
+    // The selector reaches the actions only as a server-closure argument. A
+    // `formData.get("rowSelector")` — or any selector minted from a client value
+    // — would make "pick a row" a user-facing, forgeable model.
+    expect(ACTIONS).not.toMatch(/formData\.get\(\s*["'][^"']*[Ss]elector/);
+    expect(SCREEN).not.toMatch(/formData\.get\(\s*["'][^"']*[Ss]elector/);
+    expect(SCREEN).not.toMatch(/ownerLevel:\s*(?!\w)/);
+  });
+
+  it("the view never sees the selector — it is not presentational data", () => {
+    expect(VIEW).not.toContain("rowSelector");
+    expect(VIEW).not.toContain("ownerLevel");
   });
 });

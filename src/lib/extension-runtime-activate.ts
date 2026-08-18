@@ -640,12 +640,64 @@ export async function activateInstalledRowInProcess(input: {
   packageName: string;
   /** The RESOLVED row's org, never the actor's. */
   orgId: string | null;
+  /**
+   * The RESOLVED row's id (cinatra#2762 round 5 hardening).
+   *
+   * Activation binds its trust anchor from `(packageName, orgId)`, and for an
+   * org-NULL row that means platform-global selection
+   * (`pickSingleLiveRowAcrossOrgs`) — a SECOND resolution, from a coarser key
+   * than the one the lifecycle resolver used. The two agree on every row set
+   * seen so far, but "retry activation" carrying only the org threw the row
+   * identity away, so a divergence would activate a row other than the one the
+   * operator addressed and the standing gate passed.
+   *
+   * When supplied, the anchor is resolved FIRST and its `installId` must be this
+   * row; a mismatch REFUSES rather than activating the other row. A legacy
+   * anchor that reports no `installId` cannot contradict anything, so it is
+   * allowed through (identity-less anchors predate the field) — this narrows the
+   * refusal to a genuine, observable disagreement. Absent ⇒ the pre-existing
+   * unchecked behaviour, for callers that never resolved a row.
+   */
+  expectRowId?: string | null;
 }): Promise<HotUpdateActivateResult> {
   try {
+    if (input.expectRowId) {
+      const drift = await findAnchorRowDrift(input.packageName, input.orgId, input.expectRowId);
+      if (drift) return { activated: false, reason: drift };
+    }
     const results = await activateInstalledPackageInProcess(input.packageName, input.orgId);
     return summarizeActivation(results, input.packageName);
   } catch (err) {
     return { activated: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Does the anchor `(packageName, orgId)` resolves bind a row OTHER than
+ * `expectRowId`? Returns the refusal reason, or null when there is nothing to
+ * refuse (the anchor agrees, refuses on its own, or is identity-less).
+ *
+ * Read-only and never throws: an anchor read that fails is NOT a drift verdict —
+ * the activation below re-resolves the anchor anyway and reports its own refusal
+ * with the better message.
+ */
+async function findAnchorRowDrift(
+  packageName: string,
+  orgId: string | null,
+  expectRowId: string,
+): Promise<string | null> {
+  try {
+    const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
+    const resolveInstallAnchor = await makeDefaultInstallAnchorResolver(orgId);
+    const anchor = await resolveInstallAnchor(packageName);
+    const boundRowId = anchor?.installId ?? null;
+    if (!boundRowId || boundRowId === expectRowId) return null;
+    return (
+      `row-drift: the addressed install row is no longer the one activation would bind ` +
+      `(the activation anchor resolves a different row)`
+    );
+  } catch {
+    return null;
   }
 }
 

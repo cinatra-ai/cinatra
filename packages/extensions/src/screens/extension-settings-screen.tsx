@@ -53,7 +53,10 @@ import {
 // actions use. Nothing about the addressing rule is re-derived here or shipped
 // to the client.
 import { buildLifecycleActorFromSession } from "../lifecycle-actor";
-import { describeLifecycleCapabilities } from "../lifecycle-target-resolver";
+import {
+  describeLifecycleCapabilities,
+  lifecycleRowSelectorFor,
+} from "../lifecycle-target-resolver";
 import { ExtensionAccessControl } from "./extension-access-control";
 import { ExtensionSettingsView } from "./extension-settings-view";
 
@@ -222,13 +225,38 @@ export async function ExtensionSettingsScreen({
   }
   // cinatra#2762 recovery pair. Both RETURN on failure (like archive) so the
   // client renders what actually happened instead of a masked thrown error.
+  //
+  // ROW-BOUND (round 5). Both carry the anchor TIER of the row this page just
+  // described, so the action addresses the row the operator was LOOKING AT.
+  // Without it the actions re-resolved from the package name alone, and a
+  // package holding a bundled anchor beside an install — which is every package
+  // that ships in the image and was then installed from the marketplace, and is
+  // exactly what a completed rollback leaves behind — could resolve differently
+  // than the page did.
+  //
+  // The selector is MINTED HERE, server-side, from `resolution.row` and closed
+  // over: it never crosses to the client, and no client can name a row. It names
+  // a TIER, not an id, and it cannot widen reach — the resolver recomputes the
+  // addressable set from the actor and only then filters by the tier. When the
+  // page could not resolve a row at all (`resolution.ok === false`) there is no
+  // row to name, so the actions fall back to the unselected addressing and
+  // report the resolver's own refusal, exactly as before.
+  const lifecycleRowSelector = resolution.ok
+    ? lifecycleRowSelectorFor(resolution.row)
+    : null;
   async function retryActivationAction() {
     "use server";
-    return retryExtensionActivationFormAction({ packageName });
+    return retryExtensionActivationFormAction({
+      packageName,
+      rowSelector: lifecycleRowSelector,
+    });
   }
   async function rollBackToBundledAction() {
     "use server";
-    return rollBackExtensionToBundledFormAction({ packageName });
+    return rollBackExtensionToBundledFormAction({
+      packageName,
+      rowSelector: lifecycleRowSelector,
+    });
   }
   async function publishAction() {
     "use server";

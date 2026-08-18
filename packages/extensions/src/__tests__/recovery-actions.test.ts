@@ -27,10 +27,14 @@ vi.mock("@cinatra-ai/agents", () => ({
   withInstallLock: vi.fn(async (_n: string, fn: () => Promise<unknown>) => fn()),
 }));
 const SESSION = { user: { id: "admin-1", role: "admin" }, session: { activeOrganizationId: "org-1" } };
+// Mutable rather than re-mocked per test, for the same reason `staticManifest`
+// below is: a `vi.doUnmock` here would cancel this module's mock for every LATER
+// import too.
+let actorIsPlatformAdmin = true;
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: vi.fn(async () => SESSION),
   buildCanDoOptsFromSession: vi.fn(async () => ({ orgRole: "org_owner" })),
-  isPlatformAdmin: () => true,
+  isPlatformAdmin: () => actorIsPlatformAdmin,
 }));
 
 const PKG = "@cinatra-ai/google-appointment-schedules-connector";
@@ -117,6 +121,7 @@ beforeEach(() => {
   readRows.mockClear();
   storeRows = [bundledAnchorRow, installRow];
   staticManifest = { [PKG]: { packageName: "x" } };
+  actorIsPlatformAdmin = true;
   fireActivate.mockClear();
   activateRow.mockClear();
   transition.mockClear();
@@ -164,7 +169,24 @@ describe("retryExtensionActivationFormAction", () => {
     const { retryExtensionActivationFormAction } = await import("../actions");
     await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
     // The install is org-NULL; the ACTOR's active org is "org-1". The row wins.
-    expect(activateRow).toHaveBeenCalledWith({ packageName: PKG, orgId: null });
+    expect(activateRow).toHaveBeenCalledWith({
+      packageName: PKG,
+      orgId: null,
+      expectRowId: "iext_installed",
+    });
+  });
+
+  it("CARRIES THE ROW ID, so activation cannot bind a different row", async () => {
+    // cinatra#2762 round 5 (non-blocking hardening). Retry used to hand the
+    // activator only `(packageName, orgId)`, and for an org-NULL row that
+    // re-enters PLATFORM-GLOBAL selection — a second resolution from a coarser
+    // key than the resolver used. The resolved row's identity now travels with
+    // it and the activator refuses a row that is not this one.
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    expect(activateRow).toHaveBeenCalledWith(
+      expect.objectContaining({ expectRowId: "iext_installed" }),
+    );
   });
 
   it("does NOT reinstall: the bytes are already finalized, only the registration is missing", async () => {
@@ -186,7 +208,11 @@ describe("retryExtensionActivationFormAction", () => {
     ];
     const { retryExtensionActivationFormAction } = await import("../actions");
     await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
-    expect(activateRow).toHaveBeenCalledWith({ packageName: PKG, orgId: "org-1" });
+    expect(activateRow).toHaveBeenCalledWith({
+      packageName: PKG,
+      orgId: "org-1",
+      expectRowId: "iext_org",
+    });
   });
 
   it("an activation that does not take RETURNS a failure and never redirects", async () => {
@@ -386,5 +412,108 @@ describe("rollBackExtensionToBundledFormAction: the guards", () => {
     const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
     expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
     expect(transition).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2762 round 5 — ROLLBACK IS NOT A ONE-WAY DOOR.
+//
+// A completed rollback leaves {bundled row LIVE, install row ARCHIVED}. Both
+// recovery actions resolve through `resolveLifecycleTargetRow`, which used to
+// throw AmbiguousLifecycleTargetError on exactly that set — so the recovery the
+// operator had just used made every subsequent lifecycle op on the package
+// unusable. THE RESOLVER IS NOT MOCKED here, so these drive the real rule.
+// ---------------------------------------------------------------------------
+const rolledBackRows = () => [
+  bundledAnchorRow,
+  canonicalRow({ status: "archived" }),
+];
+
+describe("the state a completed rollback leaves behind is still addressable", () => {
+  it("retry RESOLVES the archived install instead of refusing the pair", async () => {
+    storeRows = rolledBackRows();
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    const out = await run(() => retryExtensionActivationFormAction({ packageName: PKG }));
+    // It reached the activator at all — before this round it returned
+    // `unrecoverable` without ever getting past the resolver.
+    expect(activateRow).toHaveBeenCalledWith(
+      expect.objectContaining({ expectRowId: "iext_installed" }),
+    );
+    expect(out.redirected).toBe(true);
+  });
+
+  it("roll back RESOLVES the archived install too (and its own guards still speak)", async () => {
+    storeRows = rolledBackRows();
+    const { rollBackExtensionToBundledFormAction } = await import("../actions");
+    await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
+    // The archived INSTALL is what it addressed — not the live bundled anchor,
+    // which its own "not a marketplace install" guard would have refused before
+    // touching anything.
+    expect(transition).toHaveBeenCalledWith(
+      "iext_installed",
+      "archive",
+      expect.anything(),
+    );
+  });
+});
+
+describe("the actions are bound to the row the settings page described", () => {
+  // The settings loader mints a `rowSelector` from the row it resolved and
+  // closes it over both actions, so the action acts on the row the operator was
+  // LOOKING AT rather than re-resolving from the package name. The selector
+  // names an anchor TIER: the bundled anchor is `platform`, the install is
+  // `workspace`, and both sit at org-NULL — the one same-scope identity
+  // ambiguity the store permits.
+
+  it("a selector naming the INSTALL tier targets the install", async () => {
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    await run(() =>
+      retryExtensionActivationFormAction({
+        packageName: PKG,
+        rowSelector: { ownerLevel: "workspace" },
+      }),
+    );
+    expect(activateRow).toHaveBeenCalledWith(
+      expect.objectContaining({ expectRowId: "iext_installed" }),
+    );
+  });
+
+  it("a selector naming the BUNDLED tier reaches the bundled anchor", async () => {
+    // Proof the selector genuinely reaches the resolver: rolling back the
+    // BUNDLED row is refused by the action's own guard ("not a marketplace
+    // install"), which is only reachable when the resolver returned that row.
+    const { rollBackExtensionToBundledFormAction } = await import("../actions");
+    const out = await run(() =>
+      rollBackExtensionToBundledFormAction({
+        packageName: PKG,
+        rowSelector: { ownerLevel: "platform" },
+      }),
+    );
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    expect(transition).not.toHaveBeenCalled();
+    expect(reactivateBundled).not.toHaveBeenCalled();
+  });
+
+  it("NO selector keeps the ordinary addressing, byte for byte", async () => {
+    const { rollBackExtensionToBundledFormAction } = await import("../actions");
+    const out = await run(() => rollBackExtensionToBundledFormAction({ packageName: PKG }));
+    expect(transition).toHaveBeenCalledWith("iext_installed", "archive", expect.anything());
+    expect(out.redirected).toBe(true);
+  });
+
+  it("a selector can NEVER widen reach — standing is still gated over the row", async () => {
+    // An org-scoped, non-platform-admin actor naming the platform tier resolves
+    // nothing addressable: the selector filters the set the ACTOR can reach, it
+    // does not extend it.
+    actorIsPlatformAdmin = false;
+    const { retryExtensionActivationFormAction } = await import("../actions");
+    const out = await run(() =>
+      retryExtensionActivationFormAction({
+        packageName: PKG,
+        rowSelector: { ownerLevel: "platform" },
+      }),
+    );
+    expect(out.returned).toEqual({ ok: false, category: "unrecoverable" });
+    expect(activateRow).not.toHaveBeenCalled();
   });
 });

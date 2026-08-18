@@ -140,11 +140,22 @@ describe("every other case keeps its old outcome", () => {
     );
   });
 
-  it("an ARCHIVED row in the set is left alone — precedence speaks about LIVE rows", () => {
-    // `activate` addresses an archived row. Collapsing the set onto a live
-    // sibling here would silently retarget the op, so the whole set is left as it
-    // was and the pre-existing refusal stands.
-    const rows = [bundled(), marketplace({ status: "archived" })];
+  it("an archived row of an UNKNOWN provenance is left alone", () => {
+    // The archived arm below speaks only about a MARKETPLACE install beside
+    // bundled fallbacks. Any other provenance means the ranking is unknown, so
+    // the set is left exactly as it was and the pre-existing refusal stands.
+    const rows = [
+      bundled(),
+      marketplace({
+        status: "archived",
+        source: {
+          type: "github",
+          repo: "acme/thing",
+          ref: "main",
+          resolvedSha: "0".repeat(40),
+        } as InstalledExtension["source"],
+      }),
+    ];
     const res = resolveLifecycleScope(rows, platformAdmin);
     expect(res.ok).toBe(false);
     expect(!res.ok && res.code).toBe("ambiguous_target");
@@ -200,5 +211,147 @@ describe("every other case keeps its old outcome", () => {
     };
     const caps = evaluateLifecycleCapabilities([bundled(), marketplace()], orgMember);
     expect(caps.archive.allowed).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2762 round 5 — THE POST-ROLLBACK PAIR: rollback must not be a one-way
+// door.
+//
+// `rollBackExtensionToBundledFormAction` archives the install and reactivates
+// the bundled row, so it leaves {bundled LIVE, install ARCHIVED} BY
+// CONSTRUCTION. Precedence used to bail on any non-live candidate, so that pair
+// counted as two and the next visit to the settings page answered
+// `ambiguous_target` for every op: Activate greyed as "More than one install
+// matches your scope", Retry and Roll back hidden. The recovery #2762 item 2
+// asks for could be taken once and never undone.
+//
+// The pair now resolves to the ARCHIVED INSTALL, because that is the row every
+// op on it means — above all `activate`, which addresses an archived row by
+// definition and is the way back through the door.
+// ---------------------------------------------------------------------------
+describe("the post-rollback pair (live bundled + archived install)", () => {
+  const rolledBack = () => [bundled(), marketplace({ status: "archived" })];
+
+  it("resolves to the ARCHIVED INSTALL — not ambiguous, and not the live bundle", () => {
+    const res = resolveLifecycleScope(rolledBack(), platformAdmin);
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.row.id).toBe("iext_installed");
+    expect(res.ok && res.row.status).toBe("archived");
+  });
+
+  it("is order independent", () => {
+    const res = resolveLifecycleScope(
+      [marketplace({ status: "archived" }), bundled()],
+      platformAdmin,
+    );
+    expect(res.ok && res.row.id).toBe("iext_installed");
+  });
+
+  it("ACTIVATE is enabled — this is the way back through the door", () => {
+    // The exact affordance #2762 item 2 requires: after a rollback the operator
+    // can put the install back. It was `ambiguous_target` (greyed, "More than
+    // one install matches your scope") before this arm existed.
+    const caps = evaluateLifecycleCapabilities(rolledBack(), platformAdmin);
+    expect(caps.activate.allowed).toBe(true);
+    expect(caps.activate.code).toBe("ok");
+  });
+
+  it("the recovery actions can RESOLVE the pair instead of throwing", () => {
+    // Both recovery actions call `resolveLifecycleTargetRow`, whose throwing
+    // core is this. It raised AmbiguousLifecycleTargetError on this exact set.
+    expect(() => pickLifecycleTargetRow(rolledBack(), platformAdmin)).not.toThrow();
+    expect(pickLifecycleTargetRow(rolledBack(), platformAdmin).id).toBe("iext_installed");
+  });
+
+  it("the capability verdict and the enforcement agree on the SAME row", () => {
+    const rows = rolledBack();
+    expect(evaluateLifecycleCapabilities(rows, platformAdmin).activate.allowed).toBe(true);
+    expect(pickLifecycleTargetRow(rows, platformAdmin).id).toBe("iext_installed");
+  });
+
+  it("a NAMED TIER still reaches the live bundled row, so the bundle is addressable", () => {
+    // The selector the settings loader mints is what re-addresses the OTHER
+    // tier at the same org-NULL scope; the narrowing runs after that filter, on
+    // a one-row set, and leaves it alone.
+    const res = resolveLifecycleScope(rolledBack(), platformAdmin, {
+      ownerLevel: "platform",
+    });
+    expect(res.ok && res.row.id).toBe("iext_bundled");
+  });
+
+  it("standing is still gated over the resolved row", () => {
+    const orgMember: Actor = {
+      actorType: "human",
+      userId: "u-member",
+      source: "ui",
+      orgId: "org-1",
+      orgRole: "member",
+    };
+    expect(
+      evaluateLifecycleCapabilities(rolledBack(), orgMember).activate.allowed,
+    ).toBe(false);
+  });
+});
+
+describe("the archived arm refuses to widen anything else", () => {
+  it("TWO archived installs beside the bundle stay ambiguous", () => {
+    // No single answer to "which one did the operator mean" — the guess this
+    // resolver exists not to make.
+    const rows = [
+      bundled(),
+      marketplace({ status: "archived" }),
+      marketplace({ id: "iext_other", status: "archived" }),
+    ];
+    const res = resolveLifecycleScope(rows, platformAdmin);
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+  });
+
+  it("a LIVE install beside an archived one stays ambiguous", () => {
+    // Both are real targets: the live one is serving, the archived one is
+    // restorable. This is not the post-rollback shape.
+    const rows = [
+      marketplace({ id: "iext_live" }),
+      marketplace({ status: "archived" }),
+    ];
+    const res = resolveLifecycleScope(rows, platformAdmin);
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+  });
+
+  it("an archived install beside an ARCHIVED bundle stays ambiguous", () => {
+    // The arm keys on a LIVE bundled fallback — the state a rollback actually
+    // leaves. Two archived rows are not that state.
+    const rows = [
+      bundled({ status: "archived" }),
+      marketplace({ status: "archived" }),
+    ];
+    const res = resolveLifecycleScope(rows, platformAdmin);
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+  });
+
+  it("a NON-DEFAULT archived install is not the target", () => {
+    const rows = [bundled(), marketplace({ status: "archived", isDefault: false })];
+    const res = resolveLifecycleScope(rows, platformAdmin);
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+  });
+
+  it("an archived install ALONE still resolves to itself, unchanged", () => {
+    const res = resolveLifecycleScope([marketplace({ status: "archived" })], platformAdmin);
+    expect(res.ok && res.row.id).toBe("iext_installed");
+  });
+
+  it("supersession still runs FIRST", () => {
+    // A live workspace install supersedes the org rows before any of this runs.
+    const rows = [
+      marketplace(),
+      row("iext_org", {
+        ownerLevel: "organization",
+        ownerId: "org-1",
+        organizationId: "org-1",
+        status: "archived",
+      }),
+    ];
+    const res = resolveLifecycleScope(rows, platformAdmin);
+    expect(res.ok && res.row.id).toBe("iext_installed");
   });
 });

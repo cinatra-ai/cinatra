@@ -9,6 +9,9 @@ import { getAgentPackage as _getAgentPackage } from "@cinatra-ai/registries";
 void _getAgentPackage;
 import { extensionRegistry } from "./index";
 import type { Actor } from "@cinatra-ai/extension-types";
+// TYPE-only: `lifecycle-target-resolver` is `server-only` and is already reached
+// through the dynamic imports below — this adds no static edge.
+import type { LifecycleRowSelector } from "./lifecycle-target-resolver";
 import type { DanglingReferences } from "./audit-log";
 import { requireAdminSession } from "@/lib/auth-session";
 // cinatra#2416: THE shared session-derived actor builders. The settings page
@@ -1450,6 +1453,18 @@ async function restoreBundledAfterFailedActivation(packageName: string): Promise
  */
 export async function retryExtensionActivationFormAction(input: {
   packageName: string;
+  /**
+   * The anchor TIER of the row the settings page described (cinatra#2762 round
+   * 5). SERVER-MINTED ONLY: the screen mints it from the row
+   * `describeLifecycleCapabilities` just resolved and bakes it into this
+   * action's closure, so it never crosses the client and nothing on the client
+   * can name a row. It cannot widen reach — the resolver recomputes the
+   * addressable set from the ACTOR server-side and only then filters it by this
+   * tier — and it is what lets the action address the row the operator was
+   * LOOKING AT when a package holds a bundled anchor and an install at the same
+   * org-NULL scope. Absent ⇒ the ordinary unselected addressing, unchanged.
+   */
+  rowSelector?: LifecycleRowSelector | null;
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
@@ -1469,13 +1484,23 @@ export async function retryExtensionActivationFormAction(input: {
     // Resolving through the shared target resolver is what applies the standing
     // check and the supersession rule, so this can never act on a superseded row
     // or on a row the actor may not write.
-    const row = await resolveLifecycleTargetRow(input.packageName, actor);
+    const row = await resolveLifecycleTargetRow(
+      input.packageName,
+      actor,
+      input.rowSelector ?? null,
+    );
     const { activateInstalledRowInProcess } = await import("@/lib/extension-runtime-activate");
     // The ROW's org, never the actor's — the row the resolver addressed is the
-    // row that is retried.
+    // row that is retried. `expectRowId` carries the resolved row's IDENTITY
+    // with it (cinatra#2762 round 5, non-blocking): the activator re-derives its
+    // trust anchor from (packageName, orgId), and for an org-NULL row that
+    // re-enters platform-global selection, so without the id a retry could
+    // activate a row other than the one just resolved and standing-checked. The
+    // activator now refuses that drift instead of proceeding.
     const result = await activateInstalledRowInProcess({
       packageName: input.packageName,
       orgId: row.organizationId ?? null,
+      expectRowId: row.id,
     });
     if (!result.activated) {
       // The activation attempt already fired the capability teardown, so the
@@ -1522,6 +1547,10 @@ export async function retryExtensionActivationFormAction(input: {
  */
 export async function rollBackExtensionToBundledFormAction(input: {
   packageName: string;
+  /** The anchor TIER of the row the settings page described — see
+   *  {@link retryExtensionActivationFormAction} for why this is server-minted
+   *  only and cannot widen reach (cinatra#2762 round 5). */
+  rowSelector?: LifecycleRowSelector | null;
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
@@ -1537,7 +1566,11 @@ export async function rollBackExtensionToBundledFormAction(input: {
     // seam takes the same lock re-entrantly.
     const outcome = await withInstallLock(input.packageName, async () => {
     const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
-    const row = await resolveLifecycleTargetRow(input.packageName, actor);
+    const row = await resolveLifecycleTargetRow(
+      input.packageName,
+      actor,
+      input.rowSelector ?? null,
+    );
     // REFUSE unless this is genuinely an override with something to fall back
     // to. Rolling back a row that IS the bundled implementation, or an override
     // for a package the image does not carry, would archive the only thing

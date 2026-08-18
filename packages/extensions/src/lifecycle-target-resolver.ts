@@ -37,11 +37,19 @@ import "server-only";
 // MACHINERY ONLY, for the one genuine same-scope identity ambiguity the store
 // still permits — a product-installed WORKSPACE row and a bundled PLATFORM
 // anchor both sitting at the org-NULL scope. It is not a user-facing model and
-// no screen offers it: no lifecycle server action takes one, and nothing on any
-// client can name a row. Where the effective rule still leaves two candidates
-// and no selector is supplied, the resolver REFUSES `ambiguous_target` rather
-// than guessing by package name. The standing check is a defense-in-depth safety
-// net UNDER the resolver — the resolver is the primary bound.
+// no screen offers it: nothing on any client can name a row, and no selector
+// ever arrives as action INPUT from a browser. Since cinatra#2762 round 5 two
+// server actions do TAKE one — the recovery pair (`retryExtensionActivation`,
+// `rollBackExtensionToBundled`) — but it is minted SERVER-SIDE by the settings
+// loader from the row it just resolved and closed over in the action, so it
+// binds the action to the row the page described rather than letting it
+// re-resolve from a package name. That is the opposite of a user-facing picker,
+// and it can never widen reach: the resolver recomputes the addressable set from
+// the ACTOR and only then filters it by the named tier. Where the effective rule
+// still leaves two candidates and no selector is supplied, the resolver REFUSES
+// `ambiguous_target` rather than guessing by package name. The standing check is
+// a defense-in-depth safety net UNDER the resolver — the resolver is the primary
+// bound.
 // ---------------------------------------------------------------------------
 
 import type { Actor } from "@cinatra-ai/extension-types";
@@ -56,7 +64,10 @@ import type {
   InstallRowOwnership,
   InstalledExtension,
 } from "./canonical-types";
-import { applyInstallRowPrecedence } from "./static-bundle-anchor";
+import {
+  applyInstallRowPrecedence,
+  isStaticBundleAnchorSource,
+} from "./static-bundle-anchor";
 
 
 // ---------------------------------------------------------------------------
@@ -430,14 +441,15 @@ export function assertNoWorkspaceSupersession(
  * model.
  *
  * The effective-row rule above answers "which row?" for every ordinary case, so
- * nothing asks an operator to pick one: no lifecycle server action takes a
- * selector, no screen renders a row picker, and no client can name a row. What
- * survives is the internal ability to re-address a row by its anchor TIER, for
- * the one genuine identity ambiguity the store still permits at a single scope —
- * a product-installed WORKSPACE row and a bundled PLATFORM anchor, both
- * org-NULL, for one package. Its two internal users are the reinstall's second
- * leg (which must land on the SAME row its first leg removed) and the update
- * path's anchor read.
+ * nothing asks an operator to pick one: no screen renders a row picker and no
+ * client can name a row. What survives is the internal ability to re-address a
+ * row by its anchor TIER, for the one genuine identity ambiguity the store still
+ * permits at a single scope — a product-installed WORKSPACE row and a bundled
+ * PLATFORM anchor, both org-NULL, for one package. Its internal users are the
+ * reinstall's second leg (which must land on the SAME row its first leg
+ * removed), the update path's anchor read, and — since cinatra#2762 round 5 —
+ * the settings loader, which mints one from the row it resolved and closes it
+ * over the recovery actions so they act on THAT row.
  *
  * It names a TIER, never an id, and it can never widen reach: the resolver
  * recomputes the addressable set from the actor server-side and only then
@@ -577,17 +589,38 @@ export type LifecycleScopeResolution =
  * writer); the lifecycle resolver was the one that did not, so it disagreed with
  * all of them about which row is the package.
  *
- * DELIBERATELY NARROW — it only ever WIDENS the bundled + single-marketplace
- * pair, and every other case keeps its old outcome byte-for-byte:
- *   - the policy is consulted only when EVERY candidate is LIVE. Activate
- *     addresses an archived row, so a set holding one is left alone rather than
- *     collapsed onto a live sibling (precedence speaks about live candidates
- *     only — the seams filter to live before calling it);
- *   - the narrowing is taken only when it resolves to EXACTLY ONE row. The
- *     policy's other outcomes — two competing overrides (`[]`) and "leave the
- *     set alone" (a legacy/unknown provenance, bundled-only) — fall back to the
- *     original set, so two operator installs still refuse as `ambiguous_target`
- *     rather than turning into `no_addressable_row`.
+ * DELIBERATELY NARROW — it only ever WIDENS two exact shapes, and every other
+ * case keeps its old outcome byte-for-byte:
+ *
+ *   a. ALL-LIVE (the post-install pair). The shared policy is consulted only
+ *      when every candidate is LIVE, because that is the set the policy speaks
+ *      about — every other seam filters to live before calling it. The
+ *      narrowing is taken only when it resolves to EXACTLY ONE row: the
+ *      policy's other outcomes — two competing overrides (`[]`) and "leave the
+ *      set alone" (a legacy/unknown provenance, bundled-only) — fall back to
+ *      the original set, so two operator installs still refuse as
+ *      `ambiguous_target` rather than turning into `no_addressable_row`.
+ *
+ *   b. THE POST-ROLLBACK PAIR (cinatra#2762 round 5). "Roll back to bundled"
+ *      leaves {bundled row LIVE, install row ARCHIVED} — by construction, since
+ *      the rollback archives the override and reactivates the bundle. Arm (a)
+ *      bails on that set (it is not all-live), so the pair counted as two and
+ *      the NEXT visit to the settings page answered `ambiguous_target` for every
+ *      op: Activate greyed as "More than one install matches your scope",
+ *      Retry / Roll back hidden. Rollback was a ONE-WAY DOOR — the recovery
+ *      #2762 item 2 asks for could be taken once and never undone.
+ *      {@link narrowByArchivedInstallPrecedence} resolves it to the ARCHIVED
+ *      INSTALL, which is the row every op on that pair means:
+ *        - `activate` (the settings Activate button / the marketplace Restore)
+ *          addresses an ARCHIVED row by definition — this is the way back
+ *          through the door, and it is the ONLY op that can reopen it;
+ *        - `archive` then reads "Already archived" and Retry / Roll back hide
+ *          on `lifecycleIsArchived`, which is the truth about that row;
+ *        - `reinstall` targets the install, as it did before the rollback.
+ *      Resolving to the LIVE BUNDLED row instead would say "Already active" and
+ *      leave the archived install permanently unreachable — the one-way door
+ *      with better copy.
+ *
  * It selects a candidate and nothing else: standing is still gated over the
  * resolved row by the caller, and no trust, integrity or journal gate moves.
  */
@@ -595,9 +628,48 @@ function narrowByInstallSourcePrecedence(
   candidates: readonly InstalledExtension[],
 ): readonly InstalledExtension[] {
   if (candidates.length < 2) return candidates;
-  if (!candidates.every(isLiveRow)) return candidates;
+  if (!candidates.every(isLiveRow)) return narrowByArchivedInstallPrecedence(candidates);
   const ranked = applyInstallRowPrecedence(candidates);
   return ranked.length === 1 ? ranked : candidates;
+}
+
+/** A DEFAULT marketplace install row — the override half of the shared source
+ *  policy, restated here because {@link applyInstallRowPrecedence} takes LIVE
+ *  rows by contract and this arm is about a row that is deliberately not. */
+function isMarketplaceDefaultRow(row: InstalledExtension): boolean {
+  return row.isDefault !== false && row.source?.type === "verdaccio";
+}
+
+/**
+ * Arm (b) of {@link narrowByInstallSourcePrecedence}: the {live bundled,
+ * archived install} pair a completed rollback leaves behind.
+ *
+ * Every clause is a REFUSAL to widen anything else:
+ *   - EXACTLY ONE archived default marketplace install. Two archived installs
+ *     have no single answer to "which one did the operator mean", and that is
+ *     precisely the guess this resolver exists not to make;
+ *   - every OTHER candidate is a LIVE BUNDLED fallback row. A second live
+ *     marketplace install beside an archived one is a genuine ambiguity (the
+ *     live one is serving and the archived one is restorable — both are real
+ *     targets); a row of any other provenance means the ranking is unknown;
+ *   - at least one such live bundled row must be present, so this can never
+ *     turn a single-archived-row set into anything but itself.
+ * Anything else returns the input unchanged and keeps its pre-existing verdict.
+ */
+function narrowByArchivedInstallPrecedence(
+  candidates: readonly InstalledExtension[],
+): readonly InstalledExtension[] {
+  const archivedInstalls = candidates.filter(
+    (r) => !isLiveRow(r) && isMarketplaceDefaultRow(r),
+  );
+  if (archivedInstalls.length !== 1) return candidates;
+  const target = archivedInstalls[0];
+  const rest = candidates.filter((r) => r !== target);
+  if (rest.length === 0) return candidates;
+  const everyOtherIsLiveBundled = rest.every(
+    (r) => isLiveRow(r) && isStaticBundleAnchorSource(r.source),
+  );
+  return everyOtherIsLiveBundled ? archivedInstalls : candidates;
 }
 
 export function resolveLifecycleScope(
@@ -744,10 +816,12 @@ export function lifecycleRowAnchor(row: InstalledExtension): {
 
 // cinatra#2698 (rework): `normalizeLifecycleRowSelector` is GONE. It existed to
 // shape-check a selector arriving from the CLIENT through a "use server" export
-// — i.e. it was the seam that made "pick a row" a user-facing model. Under the
-// effective-row rule no lifecycle action takes a selector at all, so there is no
-// untrusted selector to normalize; the only selectors in the system are minted
-// server-side from a row that was just resolved ({@link lifecycleRowSelectorFor}).
+// — i.e. it was the seam that made "pick a row" a user-facing model. There is
+// still no untrusted selector to normalize: every selector in the system is
+// minted server-side from a row that was just resolved
+// ({@link lifecycleRowSelectorFor}) and closed over, never accepted from a
+// browser-submitted form. (cinatra#2762 round 5 gave the recovery actions a
+// `rowSelector` parameter, and it is fed only from that mint.)
 
 /** The row's own {@link LifecycleRowSelector} — so a multi-step operation
  *  (reinstall = uninstall THEN install) re-addresses the SAME row on its second
