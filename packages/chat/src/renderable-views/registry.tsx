@@ -31,6 +31,7 @@ import { CitationGroupCard } from "./citation-group-card";
 import { ChangeHistoryCard } from "./change-history-card";
 import { LifecycleCard } from "./lifecycle-card";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
+import { ScheduleProposalCard } from "@cinatra-ai/agents/schedule-proposal-card";
 
 type ComponentFor<K extends KnownRenderableViewType> = (props: {
   view: Extract<ParsedRenderableView, { viewType: K }>;
@@ -59,11 +60,18 @@ const RENDERABLE_VIEW_COMPONENTS: {
   // (#2566) took the seam S1 named and swapped THIS line — the review gate now
   // dispatches to the drawn `ReviewGateCard`, the same component the run card
   // and the review page's gate region mount. No second dispatch path was added.
-  // The other two kinds keep the S1 shell until their own slices draw them
-  // (S5 for the schedule proposal, the verification card with §VII).
+  // S9d (#2788) swapped the schedule line the same way: `trigger_schedule_proposal`
+  // now dispatches to the DRAWN `ScheduleProposalCard` — §VI's option rows, its
+  // Adjust/Confirm floor and the settled trigger chrome — and the S1 shell is
+  // RETIRED for this kind. This registry row is the transcript dispatch and
+  // covers `chat_thread` and `site_widget` ONLY: the run page and the review
+  // page mount the same component themselves, under their own host declaration,
+  // because a registry row is not a mount on a surface that has no transcript.
+  //
+  // The verification card keeps the shell until §VII's own slice (S9e) draws it.
   artifact_review_gate: ReviewGateCard,
   verification_summary: LifecycleCard,
-  trigger_schedule_proposal: LifecycleCard,
+  trigger_schedule_proposal: ScheduleProposalCard,
 };
 
 /**
