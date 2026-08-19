@@ -58,19 +58,27 @@ export type SubmitReviewDecisionAction = (input: {
 export function ReviewDecisionBar({
   permissions,
   submitAction,
-  suggestionDecisions = null,
+  suggestionDecisionsFor,
 }: {
   permissions: ReviewDecisionPermissions;
   submitAction: SubmitReviewDecisionAction;
   /**
-   * The reviewer's current per-item marks (cinatra#2572), owned by the CARD that
-   * draws the chips above this bar. The bar does not know what a suggestion is;
-   * it carries the partition into the one submit it already owns, which is
-   * precisely §VIII's rule that the chips have no submit of their own. Absent on
-   * every surface that shows no chips, and the decision is then byte-identical
-   * to what it was before this parameter existed.
+   * The partition THIS decision would carry, asked PER DISPOSITION (cinatra#2572;
+   * reworked by cinatra#2852). Owned by the CARD that draws the suggestions above
+   * this bar — the bar does not know what a suggestion is; it carries what the
+   * card answers into the one submit it already owns, which is precisely §VIII's
+   * rule that the suggestions have no submit of their own.
+   *
+   * IT IS A QUESTION, NOT A VALUE, because an approve and a reject do not carry
+   * the same thing: with §VIII's accepted-by-default row, an approve carries what
+   * is on screen and a reject records every surfaced suggestion as NOT TAKEN. A
+   * bar handed one fixed partition would have to either refuse the reject or send
+   * accepts into a decision that tombstones the revisions they would apply to.
+   *
+   * Absent on every surface that shows no suggestions, and the decision is then
+   * byte-identical to what it was before this parameter existed.
    */
-  suggestionDecisions?: SuggestionDecisionPartition | null;
+  suggestionDecisionsFor?: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -101,10 +109,14 @@ export function ReviewDecisionBar({
         // decision when the reviewer takes one.
         //
         // The omission also keeps the pre-#2571 shape exactly: a surface with no
-        // chips hands its action the byte-identical input it handed it before
-        // this slice — the review page's server-action payload included — so its
-        // decision fingerprint stays identity version 1.
-        ...(suggestionDecisions && disposition !== "comment" ? { suggestionDecisions } : {}),
+        // suggestions hands its action the byte-identical input it handed it
+        // before this slice — the review page's server-action payload included —
+        // so its decision fingerprint stays identity version 1.
+        ...(() => {
+          if (disposition === "comment") return {};
+          const suggestionDecisions = suggestionDecisionsFor?.(disposition) ?? null;
+          return suggestionDecisions ? { suggestionDecisions } : {};
+        })(),
       });
       setOutcome(result);
       // A landed terminal decision — or a changes-requested that resolved the gate

@@ -18,6 +18,15 @@
 // Regenerating the fixture is therefore NOT a normal maintenance step: a diff
 // here means the review card's rendering moved, which this slice promised it
 // would not.
+//
+// FOUR ENTRIES WERE REGENERATED ON PURPOSE (cinatra#2852). The §VIII redraw
+// replaces the suggestion row — per-suggestion before/after, a two-state toggle
+// accepted by default, no strike-through — so the four
+// `*/pending-with-suggestions` captures were re-taken against the redrawn
+// component and nothing else was touched. Every other entry is still the
+// pre-envelope capture, byte for byte, which is what keeps this guard honest:
+// the redraw had to move exactly the states that carry suggestions and no
+// others, and that is what the regeneration diff showed.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
