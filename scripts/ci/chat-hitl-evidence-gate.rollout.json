@@ -1,0 +1,36 @@
+{
+  "$comment": [
+    "WARN-FIRST ROLLOUT POLICY for the chat-HITL evidence gates (cinatra#2821).",
+    "The owner's rollout note (2026-08-19) rules that the new gates must not red the epic's",
+    "in-flight branches mid-review: they enforce only for branches created after the gate lands,",
+    "and the branches that were open at that moment are grandfathered by name.",
+    "",
+    "gateLandedAt IS A CUT, NOT A GUESS. It is set to the day this branch was authored. If the",
+    "PR lands later, the merge lane MUST bump it to the merge date -- otherwise a branch created",
+    "in between is enforced against a gate that was not on main when its author cut it.",
+    "",
+    "knownFindings grandfathers pre-existing debt ON MAIN by identity, so a branch created after",
+    "the cut is not failed for findings it did not create. Each entry names the slice that clears",
+    "it. Clearing an entry is a deliberate edit to this file, in the slice that fixes the finding."
+  ],
+  "enforcement": "warn-first",
+  "trunkBranch": "main",
+  "gateLandedAt": "2026-08-19T00:00:00Z",
+  "grandfatheredBranches": [
+    "feat/2785-s9a-truthful-contracts",
+    "feat/2786-s9b-chat-origin-holds",
+    "feat/2787-s9c-resolve-envelope",
+    "feat/2821-s9h-antipattern-gates",
+    "feat/2833-2835-review-and-hold-notifications",
+    "fix/2828-skill-text-pending-input",
+    "fix/2836-expired-proposal-stays-visible"
+  ],
+  "knownFindings": [
+    "evidence/unbound-cell:C1__review-card__chat_thread__pending",
+    "evidence/unbound-cell:C2__review-card__chat_thread__decided"
+  ],
+  "knownFindingNotes": {
+    "evidence/unbound-cell:C1__review-card__chat_thread__pending": "The S7 visuals run photographed this cell but never looked for [data-conversation-list], so no honest record can be written from what it observed. Cleared by the canonical re-capture slice (#2791, S9g), which runs the recorder against a live app.",
+    "evidence/unbound-cell:C2__review-card__chat_thread__decided": "Same run, same gap; the decided cell additionally owes the ABSENCE of its decision controls. Cleared by #2791 (S9g)."
+  }
+}
