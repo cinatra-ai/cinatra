@@ -218,8 +218,10 @@ const ALLOWED_EXACT = new Set<string>([
   // perimeter for three reasons:
   //
   //   1. FIELD ALLOWLIST. The result is a fixed, snapshot-tested projection —
-  //      connector key, display name, authorized-connection presence, and the
-  //      POST-AUTHORIZATION connection ids. Never a credential, token, secret
+  //      connector key, display name, authorized-connection presence, the
+  //      POST-AUTHORIZATION connection ids, and the catalog's MCP
+  //      primitive-name prefixes (build-time catalog data, no actor state,
+  //      no grant). Never a credential, token, secret
   //      ref, owner identity, organization id, or the raw Nango connection
   //      identifier (the token-vault address). The projector is the only
   //      constructor of a result row and a field-allowlist test fails on any

@@ -28,7 +28,13 @@ import "server-only";
 // tool answers a smaller question with a stable contract:
 //
 //     connector key + display name + authorized-connection presence
-//     (+ the authorized connection ids behind that presence)
+//     (+ the authorized connection ids behind that presence, + the catalog's
+//     MCP primitive-name prefixes for the connector)
+//
+// The prefixes are BUILD-TIME CATALOG DATA, not actor state (cinatra#2771):
+// they are what lets a caller map an underscore-named primitive
+// (`gmail_aliases_list`) onto the slug-named connector (`gmail-connector`)
+// that gates it. They describe the catalog, never who may use it.
 //
 // EXPLICIT EXCLUSIONS of the narrow shape, so a reader never mistakes it for
 // the page:
@@ -79,6 +85,24 @@ export type ConnectorInventoryRow = {
    * they are not credentials: every downstream use re-authorizes live.
    */
   authorizedConnectionIds: string[];
+  /**
+   * The catalog's MCP primitive-name prefixes for this connector (e.g.
+   * `["gmail_"]`), verbatim from the descriptor's `mcpPrimitivePrefixes`.
+   *
+   * WHY IT IS ON THE ROW (cinatra#2771). The row is the ONE carrier from the
+   * build-time catalog to a caller that must decide which primitives this
+   * connector gates. Primitives are underscore-named (`gmail_aliases_list`)
+   * while `connectorKey` is a SLUG (`gmail-connector`), so a caller holding
+   * only the key cannot derive that mapping and silently gates nothing.
+   *
+   * MODEL-FACING, AND DELIBERATELY SO. This is public build-time catalog data
+   * — the same strings the CLI-importable descriptor file ships — carrying no
+   * actor, tenant, connection or credential material, and it grants nothing:
+   * the transport re-authorizes every call. It widens the projection by one
+   * field, which is why it is added to the allowlist below and to the
+   * snapshot test in the same change, so a reviewer sees it.
+   */
+  mcpPrimitivePrefixes: string[];
 };
 
 export type ConnectorInventoryResult = {
@@ -95,6 +119,7 @@ export const CONNECTOR_INVENTORY_ROW_FIELDS = [
   "displayName",
   "hasAuthorizedConnection",
   "authorizedConnectionIds",
+  "mcpPrimitivePrefixes",
 ] as const;
 
 /** The allowlisted TOP-LEVEL result keys (same rule as the row fields). */
@@ -109,12 +134,16 @@ export function projectConnectorInventoryRow(input: {
   connectorKey: string;
   displayName: string;
   authorizedConnectionIds: string[];
+  mcpPrimitivePrefixes?: readonly string[];
 }): ConnectorInventoryRow {
   return {
     connectorKey: input.connectorKey,
     displayName: input.displayName,
     hasAuthorizedConnection: input.authorizedConnectionIds.length > 0,
     authorizedConnectionIds: [...input.authorizedConnectionIds],
+    // Copied, never aliased: the catalog's array must not be mutable through
+    // a serialized row (`listConnectorDescriptors` defends the same way).
+    mcpPrimitivePrefixes: [...(input.mcpPrimitivePrefixes ?? [])],
   };
 }
 
@@ -123,6 +152,8 @@ export type ConnectorInventoryCatalogEntry = {
   packageId: string;
   connectorKey: string;
   displayName: string;
+  /** The descriptor's `mcpPrimitivePrefixes`. Absent reads as "gates nothing". */
+  mcpPrimitivePrefixes?: readonly string[];
 };
 
 /**
@@ -195,6 +226,7 @@ export async function buildConnectorInventory(
       displayName: entry.displayName,
       // Sorted so the same workspace state serializes identically turn to turn.
       authorizedConnectionIds: [...(authorizedByPackageId.get(entry.packageId) ?? [])].sort(),
+      mcpPrimitivePrefixes: entry.mcpPrimitivePrefixes,
     }),
   );
 
@@ -237,6 +269,7 @@ export const DEFAULT_CONNECTOR_INVENTORY_DEPS: ConnectorInventoryDeps = {
       packageId: entry.packageId,
       connectorKey: entry.slug,
       displayName: entry.displayName,
+      mcpPrimitivePrefixes: entry.mcpPrimitivePrefixes,
     }));
   },
   listConnectionRows: async (organizationId, subjectUserId) => {
