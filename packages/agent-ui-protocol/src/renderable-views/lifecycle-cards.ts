@@ -185,10 +185,27 @@ export type LifecycleCardStateName = (typeof LIFECYCLE_CARD_STATES)[number];
 // exactly as they see no card at all.
 //
 // WHAT AN ITEM MAY SAY. Only what the reviewer is already reading: the pointer
-// into the reviewed document, the transform class, and the producer's own
-// one-line reason. No patch VALUE ever rides this — a chip names WHERE and WHAT
-// KIND, never the replacement text, so a chip can be drawn beside a target the
-// reader may see without becoming a second, unauthorized projection of it.
+// into the reviewed document, the transform class, the producer's own one-line
+// reason, and — since cinatra#2852 — the BEFORE/AFTER pair the suggestion would
+// change (design §VIII, redrawn: "each one shows what it would change — the
+// current content beside the suggested content — because a label alone cannot
+// tell a reader what accepting it does").
+//
+// WHY CARRYING THE VALUES IS NOT A SECOND PROJECTION. The earlier reading of
+// this rule kept the patch value off the chip in case the row disclosed more
+// than the target beside it. It cannot: `before` is a slice of the SAME
+// disclosed projection the gate's target island already renders to this reader,
+// `after` is what the producer derived from that same slice, and both are read
+// out on exactly the authorization that discloses the target itself (the state
+// is the authorization — `lifecycle-suggestion-chips`). The pair adds no field
+// the reader could not already read; it only puts the two next to each other,
+// which is the whole point of the redraw.
+//
+// BOTH ARE OPTIONAL, AND ABSENCE IS NOT A SIGNAL. A snapshot taken before this
+// slice carries no values, a `remove` has no value to show, and an `add`
+// proposes the empty string — all three surface as a chip with a label and a
+// class and NO panel, which is exactly what the card drew before the pair
+// existed.
 
 /** Ceiling on the chips one card may draw. Mirrors the producer's
  * `MAX_GATE_SUGGESTIONS`; a snapshot cannot hold more than a card can draw. */
@@ -199,11 +216,25 @@ export const LIFECYCLE_SUGGESTION_ID_MAX_LENGTH = 128;
 export const LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH = 160;
 /** The chip's one-line reason (its title / accessible description). */
 export const LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH = 300;
+/**
+ * §VIII's before/after panel is a READING, not the document: it shows a reader
+ * what the suggestion would change, at a length a card can draw without turning
+ * the chip row into a second target panel. The producer's own ceiling on a
+ * value is `MAX_SUGGESTION_VALUE_CHARS` (2 000) — this is deliberately smaller,
+ * and the projection CLAMPS to it with an ellipsis rather than dropping the
+ * panel, because "this is the start of what changes" reads truthfully while
+ * silence does not.
+ */
+export const LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH = 600;
 
 /**
  * A RECORDED per-item outcome. Present only on a gate that has already been
  * decided — a pending gate's marks are local to the reader's screen and have no
  * server-side existence until the one terminal decision carries them (S6b).
+ *
+ * The set is also the whole LIVE marking vocabulary since cinatra#2852: §VIII's
+ * marking is a two-state toggle that starts ACCEPTED, so a surfaced suggestion
+ * is always exactly one of these two and there is no unmarked state to name.
  */
 export const LIFECYCLE_SUGGESTION_MARKS = ["accepted", "dismissed"] as const;
 export type LifecycleSuggestionMark = (typeof LIFECYCLE_SUGGESTION_MARKS)[number];
@@ -240,6 +271,19 @@ export type LifecycleSuggestion = {
   op: LifecycleSuggestionOp;
   /** The producer's one-line reason. */
   message: string;
+  /**
+   * §VIII's before/after pair — the CURRENT content of the pointed-at field,
+   * captured from the same disclosed projection the suggestion was derived
+   * from. Absent when the producer had nothing to show (a `remove`, a field
+   * that did not exist yet) and on every snapshot written before cinatra#2852.
+   */
+  before?: string;
+  /**
+   * §VIII's before/after pair — the content the suggestion PROPOSES. Absent
+   * under the same three conditions as `before`, and absent (never blank) when
+   * the proposal is the empty string, so the card never draws an empty panel.
+   */
+  after?: string;
   /** The RECORDED outcome; absent on a pending gate (marks are local there). */
   mark?: LifecycleSuggestionMark;
 };
@@ -250,6 +294,11 @@ export const lifecycleSuggestionSchema: z.ZodType<LifecycleSuggestion> = z
     label: z.string().min(1).max(LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH),
     op: z.enum(LIFECYCLE_SUGGESTION_OPS),
     message: z.string().min(1).max(LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH),
+    // Bounded and NON-EMPTY: absence is the only representation of "nothing to
+    // show", so a card can decide whether to draw the panel from presence alone
+    // and never has to distinguish an empty string from a missing field.
+    before: z.string().min(1).max(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH).optional(),
+    after: z.string().min(1).max(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH).optional(),
     mark: z.enum(LIFECYCLE_SUGGESTION_MARKS).optional(),
   })
   .strict();
@@ -289,7 +338,9 @@ export function lifecycleSuggestionLabel(fieldPath: string): string {
  * Structurally typed on the producer's row rather than importing it: this
  * package is tier-neutral and must not reach into a server lane. The fields
  * named here are the producer's public shape (`ProducedSuggestion`), pinned by a
- * drift test on the server side.
+ * drift test on the server side — including its `before` (the disclosed value)
+ * and its `value` (the proposed one), which this projection carries onto the
+ * chip as §VIII's `before`/`after` pair instead of dropping them.
  *
  * `marks` is the RECORDED partition, read from the decision ledger; it is empty
  * for a pending gate. An id with no mark simply has none — a reviewer who
@@ -307,6 +358,10 @@ export function projectLifecycleSuggestions(
     fieldPath: string;
     op: string;
     message: string;
+    /** The disclosed value the suggestion would change (cinatra#2852). */
+    before?: string;
+    /** The value the suggestion proposes — the producer's own field name. */
+    value?: string;
   }>,
   marks?: ReadonlyMap<string, LifecycleSuggestionMark>,
 ): LifecycleSuggestion[] {
@@ -318,11 +373,18 @@ export function projectLifecycleSuggestions(
       s.message.length > LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH
         ? `${s.message.slice(0, LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH - 1)}…`
         : s.message;
+    const before = panelValue(s.before);
+    const after = panelValue(s.value);
     out.push({
       id: s.id,
       label: lifecycleSuggestionLabel(s.fieldPath),
       op: s.op as LifecycleSuggestionOp,
       message,
+      // CARRIED THROUGH, not discarded (cinatra#2852). Each side stands on its
+      // own: a suggestion that adds a field has an `after` and no `before`, and
+      // a snapshot written before the pair existed has neither.
+      ...(before ? { before } : {}),
+      ...(after ? { after } : {}),
       ...(mark ? { mark } : {}),
     });
   }
@@ -373,6 +435,23 @@ export type LifecycleSettledOutcome = (typeof LIFECYCLE_SETTLED_OUTCOMES)[number
 
 /** Ceiling on the decider's display name. Bounded like every other wire field. */
 export const LIFECYCLE_DECIDER_NAME_MAX_LENGTH = 80;
+
+/**
+ * One side of §VIII's panel, as a card may draw it.
+ *
+ * A value that is missing, empty, or nothing but whitespace becomes ABSENCE:
+ * there is no reading to show, and a blank panel would claim there is. A value
+ * longer than the panel's ceiling is CLAMPED with an ellipsis — the same
+ * treatment the message gets, for the same reason (a truncated reading is
+ * honest about being a reading; a dropped one is silent about a change).
+ */
+function panelValue(raw: string | undefined): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  if (raw.trim() === "") return undefined;
+  return raw.length > LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH
+    ? `${raw.slice(0, LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH - 1)}…`
+    : raw;
+}
 
 /**
  * The resolved card state as the refetch contract returns it. Discriminated so
