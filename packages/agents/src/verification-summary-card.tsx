@@ -90,18 +90,32 @@ export type VerificationSummaryCardView = {
 };
 
 /**
- * The per-host FRAME — spacing only (§IX: "presence is not layout").
+ * The per-host FRAME (§IX: "presence is not layout").
  *
  * A total map over `LifecycleCardHost`, exactly like the review card's, so a
- * new host cannot be added to the epic without deciding its frame here. The
- * transcript hosts give the card the vertical rhythm of a turn's content slot;
- * the run card and the page region are already inside their own spacing.
+ * new host cannot be added to the epic without deciding its frame here.
+ *
+ * THE BORDERED PANEL IS PART OF THE FRAME, AND THAT IS §VII'S OWN RULING rather
+ * than a liberty taken here. The spec's callout is explicit: "the bordered panel
+ * is the card treatment for a CONVERSATION, where the reading has to separate
+ * itself from the turns around it; on the run's own review page the same regions
+ * sit UNFRAMED in the page column, and that surface is unchanged." So the two
+ * conversation hosts get the plate and the vertical rhythm of a turn's content
+ * slot; the two column hosts get neither — they are already inside their own
+ * spacing and their own surface, and a border there would box a region the page
+ * draws flat.
+ *
+ * This is exactly the seam §IX reserves for a host: the FRAME changes, the
+ * DRAWING does not. Everything inside this element is byte-identical on all four
+ * hosts, and a test pins that.
  */
 const HOST_FRAME: Record<LifecycleCardHost, string> = {
-  chat_thread: "my-3 flex w-full min-w-0 flex-col gap-3",
+  chat_thread:
+    "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
+  site_widget:
+    "my-3 flex w-full min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5",
   run_card: "flex w-full min-w-0 flex-col gap-3",
   page_gate_region: "flex w-full min-w-0 flex-col gap-3",
-  site_widget: "my-3 flex w-full min-w-0 flex-col gap-3",
 };
 
 /**
@@ -203,42 +217,40 @@ export function VerificationSummaryCard({
       data-lifecycle-card-host={host}
       data-conformance-id="verification-card"
     >
-      <div className="flex min-w-0 flex-col gap-3 rounded-card border border-line bg-surface-strong p-3.5">
-        {/* §VII — the Core-analysis chrome and its outcome pill. */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          <span className="grid size-[26px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
-            <ScanSearch aria-hidden="true" className="size-3.5" />
-          </span>
-          <span
-            className="font-sans text-sm font-bold text-foreground"
-            data-verification-chrome="Core analysis"
-          >
-            Core analysis
-          </span>
-          <StatusPill status={copy.pill} data-verification-outcome={body.outcome}>
-            {copy.label}
-          </StatusPill>
-        </div>
-
-        {/* The scope sentence — what was verified, against what authorized it. */}
-        <p className="max-w-[66ch] text-xs leading-relaxed text-muted-foreground">
-          {copy.scope}
-        </p>
-
-        {/* §VII — the two revision pins, in mono. */}
-        <div
-          className="flex flex-wrap items-center gap-1.5 font-mono text-badge-2xs text-muted-foreground"
-          data-verification-revisions=""
+      {/* §VII — the Core-analysis chrome and its outcome pill. */}
+      <div className="flex flex-wrap items-center gap-2.5">
+        <span className="grid size-[26px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
+          <ScanSearch aria-hidden="true" className="size-3.5" />
+        </span>
+        <span
+          className="font-sans text-sm font-bold text-foreground"
+          data-verification-chrome="Core analysis"
         >
-          <span title="reviewed revision">{body.reviewedRevisionId}</span>
-          <ArrowRight aria-hidden="true" className="size-3" />
-          <span title="repaired revision">{body.repairedRevisionId}</span>
-        </div>
-
-        <AuthorizedScope paths={body.scopePaths} />
-        <FieldDiffTable rows={body.fieldDiff} scope={scope} />
-        <AdvisoryComments comments={body.advisoryComments} />
+          Core analysis
+        </span>
+        <StatusPill status={copy.pill} data-verification-outcome={body.outcome}>
+          {copy.label}
+        </StatusPill>
       </div>
+
+      {/* The scope sentence — what was verified, against what authorized it. */}
+      <p className="max-w-[66ch] text-xs leading-relaxed text-muted-foreground">
+        {copy.scope}
+      </p>
+
+      {/* §VII — the two revision pins, in mono. */}
+      <div
+        className="flex flex-wrap items-center gap-1.5 font-mono text-badge-2xs text-muted-foreground"
+        data-verification-revisions=""
+      >
+        <span title="reviewed revision">{body.reviewedRevisionId}</span>
+        <ArrowRight aria-hidden="true" className="size-3" />
+        <span title="repaired revision">{body.repairedRevisionId}</span>
+      </div>
+
+      <AuthorizedScope paths={body.scopePaths} />
+      <FieldDiffTable rows={body.fieldDiff} scope={scope} />
+      <AdvisoryComments comments={body.advisoryComments} />
     </div>
   );
 }

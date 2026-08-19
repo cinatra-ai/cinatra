@@ -182,12 +182,21 @@ describe("one renderer, every host (§IX)", () => {
       drawings.set(host, root.innerHTML);
       cleanup();
     }
-    // "Presence is not layout" (§IX): the two transcript hosts carry the turn's
-    // vertical rhythm; the two that sit inside their own spacing do not.
-    expect(frames.get("chat_thread")).toContain("my-3");
-    expect(frames.get("site_widget")).toContain("my-3");
-    expect(frames.get("run_card")).not.toContain("my-3");
-    expect(frames.get("page_gate_region")).not.toContain("my-3");
+    // §VII's callout, as a checked property: "the bordered panel is the card
+    // treatment for a CONVERSATION … on the run's own review page the same
+    // regions sit UNFRAMED in the page column". So the two conversation hosts
+    // carry the plate and the turn's vertical rhythm, and the two column hosts
+    // carry neither.
+    for (const host of ["chat_thread", "site_widget"] as LifecycleCardHost[]) {
+      expect(frames.get(host), host).toContain("my-3");
+      expect(frames.get(host), host).toContain("border-line");
+      expect(frames.get(host), host).toContain("bg-surface-strong");
+    }
+    for (const host of ["run_card", "page_gate_region"] as LifecycleCardHost[]) {
+      expect(frames.get(host), host).not.toContain("my-3");
+      expect(frames.get(host), host).not.toContain("border-line");
+      expect(frames.get(host), host).not.toContain("bg-surface-strong");
+    }
     // …and the DRAWING is byte-identical on all four, which is what makes "one
     // renderer, host-specific frame" a checked property rather than a claim.
     const reference = drawings.get("chat_thread")!;
