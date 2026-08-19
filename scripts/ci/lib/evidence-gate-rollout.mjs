@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // ---------------------------------------------------------------------------
 // WARN-FIRST ROLLOUT — how the chat-HITL evidence gates start enforcing
-// (cinatra#2821 rollout note, 2026-08-19).
+// (cinatra#2821).
 //
-// THE RULE THE OWNER SET. A new gate must not turn an in-flight branch red in
+// THE ROLLOUT RULE. A new gate must not turn an in-flight branch red in
 // the middle of its review. So the gate enforces only for branches CREATED
 // AFTER it lands; every branch that existed before is warned, not failed, and
 // the epic's open branches are additionally listed by name so the decision is

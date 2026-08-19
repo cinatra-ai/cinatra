@@ -7,7 +7,7 @@
 #
 #   node scripts/ci/chat-hitl-evidence-gate.mjs
 #
-# WARN-FIRST (owner rollout note, 2026-08-19). The gate enforces only on
+# WARN-FIRST rollout. The gate enforces only on
 # branches created after it landed; branches that were in flight are
 # grandfathered by name in `scripts/ci/chat-hitl-evidence-gate.rollout.json`, and
 # the findings already on main stay warnings until the slice that owns them

@@ -19,7 +19,7 @@
 //       that host's anchors, on that host's URL class, with a hash matching the
 //       image on disk. `lib/capture-record-contract.mjs` owns those rules.
 //
-// ROLLOUT. The gate is WARN-FIRST (owner note, 2026-08-19): it enforces only on
+// ROLLOUT. The gate is WARN-FIRST: it enforces only on
 // branches created after it landed, and the branches that were in flight are
 // grandfathered by name. `lib/evidence-gate-rollout.mjs` owns that decision and
 // `chat-hitl-evidence-gate.rollout.json` is its committed policy.

@@ -1,12 +1,12 @@
 // Fixture tests for the CHAT-HITL EVIDENCE GATE CLI and its WARN-FIRST rollout
-// (cinatra#2821, epic #2784 S9h; owner rollout note 2026-08-19).
+// (cinatra#2821, epic #2784 S9h).
 //
 // Two things are held here that the contract suites cannot hold on their own:
 //
 //   1. THE GATE FINDS ITS INPUTS. Planted in a fixture tree, the pointer
 //      sentence is found in a file the gate DISCOVERED (not one it was handed),
 //      and a manifest cell with no record is reported as unbound.
-//   2. THE ROLLOUT PROTECTS WHAT THE OWNER SAID IT PROTECTS. A branch that was
+//   2. THE ROLLOUT PROTECTS WHAT THE POLICY DECLARES. A branch that was
 //      in flight when the gate landed warns; a branch cut after it fails; and
 //      pre-existing findings on main stay warnings even on an enforcing branch,
 //      so a new branch is never red for debt it did not create.
@@ -48,7 +48,7 @@ const GRANDFATHERED = POLICY.grandfatheredBranches[0];
 // The rollout
 // ---------------------------------------------------------------------------
 
-describe("resolveEnforcement — the owner's warn-first rule", () => {
+describe("resolveEnforcement — the warn-first rollout rule", () => {
   it("does not enforce on a branch that was in flight when the gate landed", () => {
     const r = resolveEnforcement({
       branch: GRANDFATHERED,

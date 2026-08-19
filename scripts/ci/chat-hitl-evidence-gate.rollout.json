@@ -1,7 +1,7 @@
 {
   "$comment": [
     "WARN-FIRST ROLLOUT POLICY for the chat-HITL evidence gates (cinatra#2821).",
-    "The owner's rollout note (2026-08-19) rules that the new gates must not red the epic's",
+    "The new gates must not red the epic's",
     "in-flight branches mid-review: they enforce only for branches created after the gate lands,",
     "and the branches that were open at that moment are grandfathered by name.",
     "",
