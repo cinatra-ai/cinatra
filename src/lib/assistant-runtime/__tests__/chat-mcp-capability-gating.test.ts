@@ -25,8 +25,8 @@ import {
   type ServableChatPrimitive,
 } from "@cinatra-ai/llm/mcp-access";
 
-import { buildCapabilityKeyResolver } from "@/lib/assistant-runtime/chat-mcp-capability-key";
 import {
+  buildCapabilityKeyResolver,
   buildConnectorInventory,
   type ConnectorInventoryDeps,
 } from "@/lib/connector-inventory.server";

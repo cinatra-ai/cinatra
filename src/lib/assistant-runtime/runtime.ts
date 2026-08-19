@@ -28,6 +28,7 @@ import "@/lib/register-host-connector-services";
 import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
+  buildCapabilityKeyResolver,
   buildConnectorInventory,
   DEFAULT_CONNECTOR_INVENTORY_DEPS,
 } from "@/lib/connector-inventory.server";
@@ -38,7 +39,6 @@ import {
   isDelegatedChatMcpToolAllowed,
 } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
-import { buildCapabilityKeyResolver } from "@/lib/assistant-runtime/chat-mcp-capability-key";
 import {
   detectExplicitDispatchDirective,
   detectExplicitDispatchPackage,
@@ -580,7 +580,7 @@ function warnOnUnclassifiedVehicles(
 // connector's declared `mcpPrimitivePrefixes` is gated on that connector,
 // longest prefix winning. A connector installed tomorrow gates its own
 // primitives with no code change here, and a primitive whose name matches no
-// catalog prefix is never gated. See `chat-mcp-capability-key.ts`.
+// catalog prefix is never gated. See `connector-inventory.server.ts`.
 //
 // Failure posture is fail-OPEN to the authoritative gate, never fail-closed
 // onto the user. If state cannot be resolved the turn runs unrestricted and
