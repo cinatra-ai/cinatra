@@ -1,0 +1,70 @@
+{
+  "before": {
+    "named": true,
+    "title": "Installed but not in service Version 0.1.5 is installed and its files are in place, but it did not start in the running app, so nothing it provides is being used. Version 0.1.0, the version bundled with the app, is serving it instead. Retry activation to try starting it again, or roll back to the bundled version to archive this install. Not in service",
+    "updateLine": "Version 0.1.5 is installed but not in service (version 0.1.0 is serving) — no newer version to install."
+  },
+  "retryError": null,
+  "after": {
+    "named": false,
+    "title": null,
+    "updateLine": "Currently on version 0.1.5 — up to date."
+  },
+  "lifecycleAfter": {
+    "buttons": [
+      {
+        "label": "Workspace: All",
+        "disabled": false,
+        "slot": "popover-trigger",
+        "reason": null
+      },
+      {
+        "label": "Update",
+        "disabled": true,
+        "slot": "disabled-action",
+        "reason": "Already up to date"
+      },
+      {
+        "label": "Archive",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      },
+      {
+        "label": "Activate",
+        "disabled": true,
+        "slot": "disabled-action",
+        "reason": "Already active"
+      },
+      {
+        "label": "Retry activation",
+        "disabled": false,
+        "slot": "recovery-action",
+        "reason": null
+      },
+      {
+        "label": "Roll back to bundled",
+        "disabled": false,
+        "slot": "recovery-action",
+        "reason": null
+      },
+      {
+        "label": "Reinstall latest",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      },
+      {
+        "label": "Force-delete…",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      }
+    ],
+    "visibleReasons": []
+  },
+  "placeholderAfter": {
+    "renderedPlaceholder": "[lane registry build 0.1.5] No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here.",
+    "servedByBundle": false
+  }
+}

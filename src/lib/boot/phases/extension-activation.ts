@@ -142,6 +142,68 @@ export function extensionActivationPhases(
       },
     },
     {
+      // STRANDED-INSTALL RECONCILIATION.
+      //
+      // Runs AFTER both loaders, so the set of packages that actually came up in
+      // this process is complete, and BEFORE the required-activation assertion,
+      // so a package this pass recovers counts as present rather than being
+      // reported missing.
+      //
+      // It exists for rows written before the install path learned to refuse an
+      // install it cannot activate: a live product install for a package that is
+      // serving nothing. For each one it either activates the row, or leaves the
+      // implementation bundled in the image in service and records why, under
+      // the documented failure-class policy (a mutable host-configuration
+      // failure stays retryable and is never durably archived; a byte-level
+      // failure is archived canonically and its bytes are kept).
+      //
+      // Retryable, like every loader phase: a reconciliation problem must never
+      // abort boot. Kill-switchable for the same reason the loaders are.
+      name: "stranded-install-reconcile",
+      policy: "retryable",
+      run: async () => {
+        if (process.env.CINATRA_DISABLE_STRANDED_INSTALL_RECONCILE === "true") {
+          return SKIPPED_BY_KILL_SWITCH("CINATRA_DISABLE_STRANDED_INSTALL_RECONCILE");
+        }
+        // What the loaders actually brought up, from their own results.
+        const activatedThisBoot = new Set(
+          bootActivationResults
+            .filter((r) => r.status === "registered" || r.status === "bootstrapped")
+            .map((r) => r.packageName),
+        );
+        const { reconcileStrandedInstallsAtBoot, activationResultsFromReconcileSweep } =
+          await import("@/lib/extension-boot-reconcile");
+        const sweep = await reconcileStrandedInstallsAtBoot(activatedThisBoot);
+        if (sweep.considered === 0) return;
+        // WHAT THIS PASS CHANGED, as ActivationResults (cinatra#2762). The phase
+        // runs before `assertRequiredExtensionActivations` precisely so a package
+        // recovered here counts as present — but it pushed nothing into the array
+        // that assert reads, so a REQUIRED package this pass had just activated
+        // was still reported `missing` and a production boot aborted on its own
+        // successful recovery. The results go in before the assert can read them;
+        // a package left with nothing serving still contributes a `failed` result
+        // and still fails it.
+        bootActivationResults.push(...activationResultsFromReconcileSweep(sweep));
+        const acted = sweep.outcomes.filter((o) => o.kind !== "skipped");
+        console.info(
+          `[boot] StrandedInstallReconcile: considered ${sweep.considered}, acted on ${acted.length}` +
+            (acted.length
+              ? `: ${acted
+                  .map((o) => `${o.packageName.replace("@cinatra-ai/", "")}:${o.kind}`)
+                  .join(", ")}`
+              : ""),
+        );
+        // A recovered package registered in-process, so the generation-keyed
+        // caches must rebuild before the first request reads them.
+        if (sweep.outcomes.some((o) => o.kind === "activated")) {
+          const { bumpActivationGeneration } = await import(
+            "@/lib/extension-activation-generation"
+          );
+          bumpActivationGeneration("activate");
+        }
+      },
+    },
+    {
       name: "artifact-bridge-store-rescan",
       policy: "retryable",
       run: async () => {
