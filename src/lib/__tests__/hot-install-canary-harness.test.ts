@@ -80,6 +80,12 @@ import { buildInstalledExtensionReadModel } from "@/lib/installed-extension-read
 import type { InstalledExtension, ExtensionKind } from "@cinatra-ai/extensions/canonical-types";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 
+// cinatra#2850: the read model gates the PICKED row on its access policy before
+// reporting it. These canaries pin the STATUS / trust-driven surface flips, so
+// the audience admits throughout — the gate itself has its own suite in
+// `installed-extension-read-model.test.ts`.
+const admitAudience = async () => ({ allowed: true }) as const;
+
 // ===========================================================================
 // PR-11a — the no-rebuild CROSS-KIND CANARY HARNESS (cinatra#348, Phase F).
 //
@@ -416,6 +422,7 @@ describe("hot-install canary — CONNECTOR (card index + render anchor), no rebu
         readRows: async () => cell.rows(),
         discoverRecords: async () => [],
         resolveTrustAnchor: async () => null,
+        canAccessInstallRow: admitAudience,
       });
       return rm.status === "active" || rm.status === "locked";
     };
@@ -583,6 +590,7 @@ describe("hot-install canary — CUBE/PORTLET (CG-5 serve-gate, BOTH transports)
           : null,
       verifyIntegrity: async () => true,
       classifyTrust: () => ({ tier: "trusted-host", trusted, reason: "canary" }) as never,
+      canAccessInstallRow: admitAudience,
     });
     return { actorVisible: rm.actorVisible, status: rm.status, trust: rm.trust ? { trusted: rm.trust.trusted } : null };
   }
@@ -735,6 +743,7 @@ describe("hot-install canary — UNINSTALL teardown revokes (runtime delete vs b
       readRows: async () => [],            // row deleted
       discoverRecords: async () => [],     // bytes removed from /data
       resolveTrustAnchor: async () => null,
+      canAccessInstallRow: admitAudience,
     });
     expect(rm.status).toBe("absent");
     expect(rm.sourcePackageStoreRecordPresent).toBe(false); // no module to import -> nothing resurrects

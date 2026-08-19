@@ -20,6 +20,14 @@ import type { TrustVerdict } from "@/lib/extension-trust";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import { PLATFORM_OWNER_SENTINEL } from "@cinatra-ai/extensions/canonical-types";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
+import {
+  evaluateExtensionAccess,
+  type ExtensionAccessDecision,
+  type ExtensionAccessResource,
+} from "@cinatra-ai/extensions/enforce-extension-access";
+import { accessTargetToInstallPolicy } from "@cinatra-ai/extensions/install-access-target";
+import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
+import { decideRuntimeCubeServe } from "@cinatra-ai/dashboards/runtime-cube-serve-gate";
 
 const actor: ActorContext = {
   principalType: "HumanUser",
@@ -49,12 +57,22 @@ function row(partial: Partial<InstalledExtension>): InstalledExtension {
   } as InstalledExtension;
 }
 
+/**
+ * Audience: ADMIT. The read model gates the picked row on its access policy
+ * (cinatra#2850), and the platform's default for a row with no stored policy is
+ * workspace-visible — i.e. admit. Injected here so the row-derivation cases stay
+ * isolated from the permissions store; the GATE itself is driven against the
+ * REAL evaluator in its own describe block below.
+ */
+const admitAll = async (): Promise<ExtensionAccessDecision> => ({ allowed: true });
+
 // Default deps: no store record, no anchor, fixed generation — isolate the
 // canonical-row derivation from the heavy trust IO.
 const baseDeps = {
   discoverRecords: async () => [],
   resolveTrustAnchor: async () => null,
   getActivationGeneration: () => 7,
+  canAccessInstallRow: admitAll,
 };
 
 describe("buildInstalledExtensionReadModel — actor-scoped status derivation", () => {
@@ -496,6 +514,7 @@ const trustDeps = {
   discoverRecords: oneRecord,
   verifyIntegrity: async () => true,
   classifyTrust: classifyByRegistry,
+  canAccessInstallRow: admitAll,
 };
 
 /** The superseded pair: a live org-1 row + the live workspace row that supersedes it. */
@@ -627,5 +646,366 @@ describe("buildInstalledExtensionReadModel — the trust verdict describes the P
     expect(asked).toEqual([{ installId: "iext_other", organizationId: "org-OTHER" }]);
     expect(rm.ownerScope?.organizationId).toBe("org-OTHER");
     expect(rm.trust?.trusted).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2850 (blocker 1) — the SINGLE-DEFAULT rule precedes the status ranking.
+//
+// Exactly one row per (org, owner, package) is the DEFAULT that owns the
+// package's unversioned global name (cinatra#1040 S1, DB-enforced). A
+// side-by-side version install (`extension-side-by-side-install.ts`) creates an
+// explicitly NON-default row that stands LIVE beside it, so one scope can hold
+// two `active` rows. The canonical read has no ORDER BY
+// (`readInstalledExtensionsByPackageName`), so the status ranking alone was a
+// TIE and ARRAY ORDER picked the row.
+//
+// Every case below puts the SIBLING FIRST — the order that reproduced the bug.
+// The consequence is not cosmetic: the default install anchor resolver selects
+// the exactly-one-default row, so picking the sibling made the identity backstop
+// disagree, null `trust`, and the CG-5 serve gate DENY a cube it had served.
+// ---------------------------------------------------------------------------
+
+describe("buildInstalledExtensionReadModel — single-default before the status ranking (cinatra#2850)", () => {
+  /**
+   * Live default + live side-by-side sibling, SIBLING FIRST in the array.
+   * The record carries no row id, so the two rows are given DISTINCT `kind`s:
+   * `kind` is what makes the pick observable in the assertion (the same device
+   * the supersession array-order case above uses).
+   */
+  const siblingFirst = async (): Promise<InstalledExtension[]> => [
+    row({ id: "iext_sbs", status: "active", isDefault: false, version: "2.0.0", kind: "agent" }),
+    row({ id: "iext_default", status: "active", isDefault: true, version: "1.0.0", kind: "connector" }),
+  ];
+
+  it("the sibling is FIRST in the row array and the DEFAULT row is still the one reported", async () => {
+    // Pre-fix this returned `iext_sbs`: both rows are addressable, neither is
+    // cross-org, and both are `active` — the ranking was a tie and array order won.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: siblingFirst,
+    });
+    expect(rm.kind).toBe("connector"); // the DEFAULT row's kind, not the sibling's
+    expect(rm.status).toBe("active");
+    expect(rm.actorVisible).toBe(true);
+    expect(rm.ownerScope).toEqual({
+      ownerLevel: "organization",
+      ownerId: null,
+      organizationId: "org-1",
+    });
+  });
+
+  it("the serve gate keeps SERVING: the anchor's exactly-one-default row IS the picked row, so trust survives", async () => {
+    // THE REGRESSION THIS BLOCKS. The default anchor resolver answers for the
+    // DEFAULT row; picking the sibling made `anchor.installId !== row.id`, the
+    // identity backstop nulled `trust`, and `decideRuntimeCubeServe` returned
+    // `cube_untrusted` for an install that had been serving.
+    const asked: ReadModelAnchorTarget[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: siblingFirst,
+      // The resolver's exactly-one-default selection: it answers for the DEFAULT
+      // row whatever the read model picked. An anchor keyed to `iext_sbs` is
+      // deliberately absent, so a sibling pick degrades to `trust: null`.
+      resolveTrustAnchor: anchorsByRow(
+        { iext_default: anchorForRow("iext_default", TRUSTED_REGISTRY) },
+        asked,
+      ),
+    });
+    expect(asked).toEqual([{ installId: "iext_default", organizationId: "org-1" }]);
+    expect(rm.trust?.trusted).toBe(true);
+    expect(
+      decideRuntimeCubeServe({
+        cubeId: "runtime.demo",
+        isRuntimeCube: () => true,
+        facts: { actorVisible: rm.actorVisible, status: rm.status, trust: rm.trust },
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  // INVARIANT PIN (not a behaviour change): with one row the ranking never runs.
+  // Kept because it pins that the rule DEMOTES rather than FILTERS — a side-by-side
+  // row whose default has been removed must not blank the model.
+  it("INVARIANT PIN: a non-default row is only DEMOTED, never dropped — alone in scope it is still reported", async () => {
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [row({ id: "iext_sbs", status: "active", isDefault: false })],
+    });
+    expect(rm.status).toBe("active");
+    expect(rm.actorVisible).toBe(true);
+  });
+
+  // INVARIANT PIN (not a behaviour change): pins the NARROWNESS of the rule —
+  // legacy / pre-#1040 rows carry no flag and must keep their pre-fix pick.
+  it("INVARIANT PIN: only an EXPLICIT `isDefault === false` is demoted — an unset flag still counts as the default", async () => {
+    // Legacy / pre-#1040 rows and fixtures carry no flag. Ranking those below a
+    // flagged sibling would move every such pick; the rule must not reach them.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [
+        row({ id: "iext_flagged", status: "active", isDefault: true }),
+        row({ id: "iext_unflagged", status: "archived" }), // no isDefault at all
+      ],
+    });
+    // The unflagged row is NOT demoted for lacking the flag — the status ranking
+    // (the next key) decides between the two, exactly as before.
+    expect(rm.status).toBe("active");
+  });
+
+  it("the default outranks a better-STATUS sibling: an active sibling does not beat the default", async () => {
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [
+        row({ id: "iext_sbs", status: "active", isDefault: false }),
+        row({ id: "iext_default", status: "locked", isDefault: true }),
+      ],
+    });
+    // single-default is ranked BEFORE the status ranking, so `locked` (the
+    // default) is reported over `active` (the sibling).
+    expect(rm.status).toBe("locked");
+  });
+
+  // INVARIANT PIN (not a behaviour change): the same-org preference already
+  // decided this pre-fix. It is kept because the new key is inserted directly
+  // BELOW it, and ranking single-default higher would silently invert it.
+  it("INVARIANT PIN / KEY ORDER: single-default ranks BELOW the same-org preference (the invariant is per-scope)", async () => {
+    // Exactly-one-default holds per (org, owner, package), so "the default row"
+    // is only meaningful WITHIN a scope. An admin must still read their OWN org's
+    // row rather than another org's merely because that one carries the flag.
+    const platformAdmin: ActorContext = { ...actor, platformRole: "platform_admin" };
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", platformAdmin, {
+      ...baseDeps,
+      readRows: async () => [
+        row({ id: "iext_other_default", status: "active", organizationId: "org-OTHER", isDefault: true }),
+        row({ id: "iext_mine_sbs", status: "active", organizationId: "org-1", isDefault: false }),
+      ],
+    });
+    expect(rm.ownerScope?.organizationId).toBe("org-1");
+  });
+
+  // INVARIANT PIN (not a behaviour change): supersession already dropped the org
+  // row pre-fix. Kept as the ORDER pin — the new key sits below supersession, and
+  // ranking it above would resurrect a superseded row.
+  it("INVARIANT PIN / ORDER: supersession still runs FIRST — a superseded org DEFAULT loses to the live workspace row", async () => {
+    // Order pin — supersession -> [precedence, reserved for #2774] -> single-default.
+    // Ranking single-default above supersession would resurrect the org row.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [
+        row({ id: "iext_org", status: "active", organizationId: "org-1", isDefault: true }),
+        workspaceRow({ status: "active", isDefault: false }),
+      ],
+    });
+    expect(rm.ownerScope?.ownerLevel).toBe("workspace");
+    expect(rm.ownerScope?.organizationId).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2850 (blocker 2) — the AUDIENCE gate.
+//
+// "Workspace: All" and "Workspace: Admins only" persist the SAME canonical row
+// (the workspace anchor — `accessTargetToRowOwnership`); the audience that tells
+// them apart lives ONLY in the access policy (`accessTargetToInstallPolicy`).
+// Neither `isInstallRowAddressableByActor` (an org-NULL row is addressable by
+// every authenticated actor, by design) nor `decideRuntimeCubeServe` reads that
+// policy — so without the gate an ordinary member of any organization reads an
+// ADMINS-ONLY workspace install as their live, trusted install and serves its
+// runtime cubes.
+//
+// The policies here are built by the REAL `accessTargetToInstallPolicy` and the
+// decision is the REAL `evaluateExtensionAccess` — which is exactly what
+// `canExtensionAccess` runs after its policy / co-owner / installer reads. So
+// these pin the platform's own audience semantics, not a mock's opinion.
+// ---------------------------------------------------------------------------
+
+/** The audience decision `canExtensionAccess` would return for `policy`, computed by the real evaluator. */
+function audienceFrom(policy: AgentAuthPolicy) {
+  return async (
+    resource: ExtensionAccessResource,
+    a: ActorContext,
+    op: "use",
+  ): Promise<ExtensionAccessDecision> =>
+    evaluateExtensionAccess({
+      kind: resource.kind,
+      policy,
+      coOwnerUserIds: [],
+      installedByUserId: null,
+      owner: resource.owner,
+      actor: a,
+      op,
+    });
+}
+
+const ADMINS_ONLY = accessTargetToInstallPolicy({ level: "admin", id: "org-1" })!;
+const WORKSPACE_ALL = accessTargetToInstallPolicy({ level: "workspace", id: "org-1" })!;
+
+describe("buildInstalledExtensionReadModel — the picked row's AUDIENCE gates the record (cinatra#2850)", () => {
+  /** The single workspace-anchored row a "Workspace: …" install persists. */
+  const workspaceInstall = async (): Promise<InstalledExtension[]> => [
+    workspaceRow({ status: "active" }),
+  ];
+
+  /** The install facts `runtime-cube-serve-host` derives from the record. */
+  const serve = (rm: Awaited<ReturnType<typeof buildInstalledExtensionReadModel>>) =>
+    decideRuntimeCubeServe({
+      cubeId: "runtime.demo",
+      isRuntimeCube: () => true,
+      facts: { actorVisible: rm.actorVisible, status: rm.status, trust: rm.trust },
+    });
+
+  it("an ordinary member reading an ADMINS-ONLY workspace install → absent, and the serve gate DENIES", async () => {
+    // `actor` is a plain member of org-1: no platformRole, no orgRole. The row is
+    // org-NULL, so `hasAdminStandingOverExtension` admits platform admins only —
+    // the member is not in the audience.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: workspaceInstall,
+      canAccessInstallRow: audienceFrom(ADMINS_ONLY),
+      resolveTrustAnchor: anchorsByRow(
+        { iext_workspace: anchorForRow("iext_workspace", TRUSTED_REGISTRY) },
+        [],
+      ),
+    });
+    expect(rm.actorVisible).toBe(false);
+    expect(rm.status).toBe("absent");
+    expect(rm.ownerScope).toBeNull();
+    expect(rm.trust).toBeNull();
+    expect(serve(rm)).toEqual({
+      ok: false,
+      code: "cube_not_active",
+      reason: 'runtime cube "runtime.demo" is not install-active for the actor (status: absent)',
+    });
+  });
+
+  it("an ORG_ADMIN is still not admitted to an admins-only WORKSPACE row (admin standing over an org-NULL row is platform-admin-only)", async () => {
+    const orgAdmin: ActorContext = { ...actor, orgRole: "org_admin" };
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", orgAdmin, {
+      ...trustDeps,
+      readRows: workspaceInstall,
+      canAccessInstallRow: audienceFrom(ADMINS_ONLY),
+    });
+    expect(rm.status).toBe("absent");
+    expect(serve(rm).ok).toBe(false);
+  });
+
+  it("an ADMITTED actor (platform_admin) reads the same admins-only row live and trusted → the serve gate ALLOWS", async () => {
+    const platformAdmin: ActorContext = { ...actor, platformRole: "platform_admin" };
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", platformAdmin, {
+      ...trustDeps,
+      readRows: workspaceInstall,
+      canAccessInstallRow: audienceFrom(ADMINS_ONLY),
+      resolveTrustAnchor: anchorsByRow(
+        { iext_workspace: anchorForRow("iext_workspace", TRUSTED_REGISTRY) },
+        [],
+      ),
+    });
+    expect(rm.actorVisible).toBe(true);
+    expect(rm.status).toBe("active");
+    expect(rm.ownerScope?.ownerLevel).toBe("workspace");
+    expect(rm.trust?.trusted).toBe(true);
+    expect(serve(rm)).toEqual({ ok: true });
+  });
+
+  it('a "Workspace: All" install still reaches an ordinary member — the gate narrows nothing it should not', async () => {
+    // The DISCLOSED deny->allow direction of this PR: an org-scoped actor now
+    // resolves the workspace row's own anchor (`org-then-workspace`) and reads it
+    // trusted. That is correct for the `workspace` audience and must not regress.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: workspaceInstall,
+      canAccessInstallRow: audienceFrom(WORKSPACE_ALL),
+      resolveTrustAnchor: anchorsByRow(
+        { iext_workspace: anchorForRow("iext_workspace", TRUSTED_REGISTRY) },
+        [],
+      ),
+    });
+    expect(rm.actorVisible).toBe(true);
+    expect(rm.status).toBe("active");
+    expect(rm.trust?.trusted).toBe(true);
+    expect(serve(rm)).toEqual({ ok: true });
+  });
+
+  it("the org-then-workspace anchor arm is never even ASKED for an actor the audience refuses", async () => {
+    // The gate runs BEFORE the anchor resolution, so the arm that flips this
+    // record from no-trust to trusted for an org-scoped actor is reached only by
+    // an admitted one. No second audience check exists downstream to rely on.
+    const asked: ReadModelAnchorTarget[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: workspaceInstall,
+      canAccessInstallRow: audienceFrom(ADMINS_ONLY),
+      resolveTrustAnchor: anchorsByRow(
+        { iext_workspace: anchorForRow("iext_workspace", TRUSTED_REGISTRY) },
+        asked,
+      ),
+    });
+    expect(asked).toEqual([]);
+    expect(rm.status).toBe("absent");
+  });
+
+  it("the gate is asked about the PICKED row — the workspace row, not the superseded org row", async () => {
+    const seen: ExtensionAccessResource[] = [];
+    await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: supersededPair,
+      canAccessInstallRow: async (resource) => {
+        seen.push(resource);
+        return { allowed: true };
+      },
+    });
+    expect(seen).toEqual([
+      {
+        kind: "connector",
+        resourceId: "iext_workspace",
+        owner: { ownerLevel: "workspace", ownerId: PLATFORM_OWNER_SENTINEL, organizationId: null },
+      },
+    ]);
+  });
+
+  it("FAIL-SAFE: a policy read that throws is not an admission → absent", async () => {
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: workspaceInstall,
+      canAccessInstallRow: async () => {
+        throw new Error("permissions store unreachable");
+      },
+    });
+    expect(rm.actorVisible).toBe(false);
+    expect(rm.status).toBe("absent");
+    expect(serve(rm).ok).toBe(false);
+  });
+
+  it("SCOPE: a kind whose install row is NOT the access resource is not gated at all", async () => {
+    // The polymorphic access resource IS the `installed_extension.id` for
+    // connector / artifact / workflow and only those (INSTALL_ACCESS_TARGET_KINDS
+    // — the same kinds whose install persists an audience). A canonical `agent`
+    // row's id belongs to a different identity space, so there is no install-row
+    // audience to consult and the gate must not invent one by reading a policy
+    // under the wrong resource.
+    const asked: ExtensionAccessResource[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [row({ status: "active", kind: "agent" })],
+      canAccessInstallRow: async (resource) => {
+        asked.push(resource);
+        return { allowed: false, reason: "not_visible" };
+      },
+    });
+    expect(asked).toEqual([]); // never consulted
+    expect(rm.status).toBe("active"); // and the record is unchanged
+    expect(rm.actorVisible).toBe(true);
+  });
+
+  it("an ORG-anchored row keeps the pre-gate reach for a same-org member (no-regression)", async () => {
+    // The default policy for a row with no stored audience is workspace-visible;
+    // the gate must not narrow the ordinary org install at all.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [row({ status: "active" })],
+      canAccessInstallRow: audienceFrom(WORKSPACE_ALL),
+    });
+    expect(rm.actorVisible).toBe(true);
+    expect(rm.status).toBe("active");
   });
 });

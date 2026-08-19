@@ -62,6 +62,50 @@ import "server-only";
 //      record — and `trust: null` is a DENY at the serve gate, never a pass.
 // (1) is the correctness win; (2) is the backstop that holds even if the
 // resolver's selection semantics ever drift from the effective-row rule.
+//
+// AUDIENCE (cinatra#2850). Addressability is not admission. The picked row is
+// the package's effective row for the actor's SCOPE, but the row's own access
+// policy — the audience the install was made FOR — decides whether this actor
+// is part of it. The two workspace targets prove the gap: "Workspace: All" and
+// "Workspace: Admins only" persist the SAME canonical row (the workspace
+// anchor — `accessTargetToRowOwnership`, `install-access-target.ts`), and the
+// audience that tells them apart lives ONLY in the access policy
+// (`runListVisibility: ["workspace"] | ["admin"]`, `accessTargetToInstallPolicy`).
+// Neither the addressability predicate (`isInstallRowAddressableByActor` — an
+// org-NULL row is addressable by every authenticated actor, by design) nor the
+// CG-5 serve gate (`decideRuntimeCubeServe`, which reads only `actorVisible` /
+// `status` / `trust`) reads that policy. Without a gate HERE an ordinary member
+// of any organization reads an ADMINS-ONLY workspace install as their own live,
+// trusted install — and serves its runtime cubes.
+//
+// The gate CONSUMES the platform's own evaluator — `canExtensionAccess`
+// (`enforce-extension-access.ts`), the same entry the install / render /
+// dispatch / MCP-use paths call — with `op:"use"` (the data tier the serve gate
+// authorizes; the dashboards catalog reader `installed-catalog-read.ts` admits
+// on the same op for the same reason). The audience check is NOT restated here:
+// co-owners, the installer pointer, the owner-aware `admin` tier and the
+// no-policy-row default all come from that ONE evaluator, so this model can be
+// neither more nor less permissive than the platform's own access decision.
+//
+// A row whose audience does not admit the actor is reported as `absent` — the
+// established meaning of "no row is in force for this actor", the same answer
+// another organization's row already gives. Fail-safe: a policy read that
+// THROWS is not an admission; it degrades to `absent`, the same direction the
+// canonical-store outage already takes. The gate runs BEFORE the anchor
+// resolution above, so the `org-then-workspace` arm is reached only by an actor
+// the row's audience admits.
+//
+// SCOPED TO THE KINDS THAT HAVE ONE. The polymorphic access resource IS the
+// `installed_extension.id` for connector / artifact / workflow and only those —
+// `INSTALL_ACCESS_TARGET_KINDS` / `resolveInstalledExtensionResource`. They are
+// exactly the kinds whose install PERSISTS an audience
+// (`accessTargetToInstallPolicy`), so they are exactly the kinds that have one
+// to consult; the canonical row's `kind` vocabulary is otherwise NOT the
+// permissions resource-kind vocabulary, and keying a policy read on a row id
+// from a different identity space would authorize against the wrong resource.
+// A row of any other kind therefore carries no install-row audience and is
+// reported exactly as before. The CG-5 serve gate's source packages are
+// connector rows, so the blocker's surface is fully covered.
 
 import {
   readInstalledExtensionsByPackageName,
@@ -85,6 +129,13 @@ import {
   verifyMaterializedPackageIntegrity,
   type InstallTrustAnchor,
 } from "@/lib/extension-package-store";
+import type {
+  ExtensionAccessDecision,
+  ExtensionAccessResource,
+} from "@cinatra-ai/extensions/enforce-extension-access";
+// The kinds whose install row IS the polymorphic access resource — the one
+// vocabulary that decides whether an install-row audience exists to consult.
+import { isInstallAccessTargetKind } from "@cinatra-ai/extensions/install-access-target";
 import { classifyExtensionTrust, type TrustVerdict } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
@@ -98,7 +149,10 @@ import { getActivationGeneration } from "@/lib/extension-activation-generation";
  * 3-status canonical model + "no row" (see the module docstring).
  *   - `active` | `locked` : a live, addressable row (running).
  *   - `archived`          : an addressable row, archived (hidden-but-recoverable).
- *   - `absent`            : no addressable row for this actor (uninstalled).
+ *   - `absent`            : no row is IN FORCE for this actor — never installed,
+ *                           hard-uninstalled, out of the actor's scope, or (since
+ *                           cinatra#2850) a row whose AUDIENCE does not admit
+ *                           them (an admins-only install read by a member).
  */
 export type ReadModelStatus = "active" | "locked" | "archived" | "absent";
 
@@ -115,7 +169,11 @@ export type ReadModelTeardownState = "live" | "torn-down";
 /** The query-time per-record read-model the issue enumerates (cinatra#657). */
 export type InstalledExtensionReadModel = {
   packageName: string;
-  /** Whether the actor can see/address ANY row for this package (live or archived). */
+  /**
+   * Whether a row for this package is in force for the actor (live or archived):
+   * addressable in their scope AND admitted by that row's access policy
+   * (cinatra#2850). False is reported as `status: "absent"`.
+   */
   actorVisible: boolean;
   /** Actor-scoped lifecycle status (3-status model + absent). */
   status: ReadModelStatus;
@@ -200,6 +258,19 @@ export type InstalledExtensionReadModelDeps = {
   storeRoot?: string;
   /** Read this process's control-plane generation (override for tests). */
   getActivationGeneration?: () => number;
+  /**
+   * Decide whether the actor is admitted by the PICKED row's ACCESS POLICY
+   * (override for tests); defaults to the platform's own `canExtensionAccess`.
+   * Injected rather than imported at module scope for the same reason the store
+   * / anchor deps are: the extensions access modules reach the permissions store
+   * and its Postgres connection, and nothing pays for that until a row actually
+   * needs authorizing (cinatra#2850).
+   */
+  canAccessInstallRow?: (
+    resource: ExtensionAccessResource,
+    actor: ActorContext,
+    op: "use",
+  ) => Promise<ExtensionAccessDecision>;
 };
 
 const defaultVerifyIntegrity = (
@@ -245,6 +316,14 @@ function actorScopeForPick(actor: ActorContext): ActorScopeForPick {
  * (`readInstalledExtensionsByPackageName`), which is exactly the per-package row
  * set that helper is defined over. With no live workspace row it returns `rows`
  * unchanged, so every pre-S4 pick is byte-identical.
+ *
+ * THEN THE SINGLE-DEFAULT RULE, then the status ranking (cinatra#2850). The
+ * full order is: supersession -> [precedence] -> single-default -> status.
+ * The `[precedence]` slot is RESERVED, not implemented here: version-precedence
+ * lands with cinatra#2774, and this pick is to be rebase-aligned to
+ * supersession -> precedence -> single-default once that PR is in. Nothing in
+ * this function anticipates it — the slot is named so the alignment is a single
+ * insertion rather than a re-derivation.
  */
 function pickAddressableRowForActor(
   rows: readonly InstalledExtension[],
@@ -264,11 +343,40 @@ function pickAddressableRowForActor(
     r.organizationId !== null &&
     scope.organizationId !== null &&
     r.organizationId !== scope.organizationId;
+  // SINGLE-DEFAULT RULE (cinatra#1040 S1), ranked BEFORE the status ranking.
+  // Exactly one row per (org, owner, package) owns the package's unversioned
+  // global name — `isDefault`, DB-enforced by a partial-unique index. A
+  // side-by-side version install (`extension-side-by-side-install.ts`) creates
+  // an explicitly NON-default row that stands LIVE beside that default, so a
+  // package can legitimately present two `active` rows in ONE scope.
+  //
+  // The canonical read has no ORDER BY (`readInstalledExtensionsByPackageName`,
+  // canonical-store.ts), so for such a pair the status ranking below is a TIE
+  // and ARRAY ORDER decided the pick: the sibling could be reported as the
+  // package's row. That is not merely arbitrary metadata — the default install
+  // anchor resolver selects the exactly-one-DEFAULT row, so the identity
+  // backstop in `buildInstalledExtensionReadModel` then found
+  // `anchor.installId !== row.id`, nulled `trust`, and the CG-5 serve gate
+  // DENIED a cube it had served before.
+  //
+  // Only an EXPLICIT `isDefault === false` is demoted — the same "drop a row
+  // ONLY when it is explicitly non-default" reading the two DB-query projection
+  // seams apply (canonical-types.ts) — so a legacy row or a fixture that never
+  // set the flag still counts as the default and every pre-#1040 pick is
+  // unchanged.
+  const isNonDefault = (r: InstalledExtension): boolean => r.isDefault === false;
   const statusRank = (s: InstalledExtension["status"]): number =>
     s === "active" ? 0 : s === "locked" ? 1 : 2; // archived last
   return [...addressable].sort((a, b) => {
+    // Cross-org stays the FIRST key, ahead of single-default: the one-default
+    // invariant is per (org, owner, package), so "the default row" is only
+    // meaningful WITHIN a scope. Ranking it above the scope key would let an
+    // admin's read-model metadata come from another org's default row instead
+    // of their own org's — exactly what the same-org preference exists to stop.
     const orgDelta = Number(isCrossOrg(a)) - Number(isCrossOrg(b));
     if (orgDelta !== 0) return orgDelta;
+    const defaultDelta = Number(isNonDefault(a)) - Number(isNonDefault(b));
+    if (defaultDelta !== 0) return defaultDelta;
     return statusRank(a.status) - statusRank(b.status);
   })[0];
 }
@@ -323,6 +431,50 @@ export async function buildInstalledExtensionReadModel(
   const scope = actorScopeForPick(actor);
   const row = pickAddressableRowForActor(rows, scope);
   if (!row) return absent;
+
+  // AUDIENCE GATE (cinatra#2850) — see "AUDIENCE" in the module header.
+  // Addressability placed the row in the actor's SCOPE; the row's own access
+  // policy decides whether the actor is in its AUDIENCE. Runs BEFORE the anchor
+  // resolution below, so the `org-then-workspace` arm — which resolves a
+  // workspace anchor for an org-scoped actor and is what flips this record from
+  // no-trust to trusted — is reached only by an admitted actor.
+  //
+  // The decision is the platform's own `canExtensionAccess`, never a
+  // restatement of it. `op:"use"` is the data tier: this record is consumed by
+  // the CG-5 serve gate to authorize SERVING a runtime cube's data, so the
+  // audience that governs data consumption is the one that must admit. (Every
+  // policy this codebase writes — `accessTargetToInstallPolicy` and
+  // `DEFAULT_EXTENSION_ACCESS_POLICY` — sets all three visibility fields to the
+  // same token set, so list/read/use coincide today; `use` is the tier that
+  // matches the consumer if they ever diverge.)
+  if (isInstallAccessTargetKind(row.kind)) {
+    let audience: ExtensionAccessDecision;
+    try {
+      const canAccessInstallRow =
+        deps.canAccessInstallRow ??
+        (await import("@cinatra-ai/extensions/enforce-extension-access")).canExtensionAccess;
+      audience = await canAccessInstallRow(
+        {
+          kind: row.kind,
+          resourceId: row.id,
+          owner: {
+            ownerLevel: row.ownerLevel,
+            ownerId: row.ownerId,
+            organizationId: row.organizationId,
+          },
+        },
+        actor,
+        "use",
+      );
+    } catch {
+      // Policy-store outage: we cannot PROVE admission, and an unprovable
+      // audience is not an admission. Fail safe to absent — the same direction
+      // the canonical-store outage above takes, and the same direction
+      // `trust: null` takes at the serve gate.
+      audience = { allowed: false, reason: "not_visible" };
+    }
+    if (!audience.allowed) return absent;
+  }
 
   const isLive = row.status === "active" || row.status === "locked";
   const status: ReadModelStatus = row.status; // active | locked | archived (addressable)
