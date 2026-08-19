@@ -1,0 +1,20 @@
+# chat_thread capture — 2026-08-16T17:53:46.087Z
+chat surface up: composer present
+turn sent (scripted provider, no LLM call)
+conversation list mounted
+WIRE POST /api/lifecycle-views/resolve 200
+  request : {"viewType":"artifact_review_gate","ref":"_L7DaWhKao6b5jYQ-1vWdkaI4xHA2rab0AMyEz7iGG44UQehcFDPic3iiwA3KM319z8seaMRyzb7zPTiEUhKpujB5S0_qbKeX1ON4Poc0vuD_rRYEkgve7piNnIJ7Niqv1bWt7mGvBUU6tgBN0DBNIjaZbEXtt06K37bhHCYTPxkslF1Yq7WWJbeU5EO"}
+  response: {"kind":"artifact_review_gate","state":{"state":"pending","canDecide":true,"canComment":true},"body":null}
+NOTE island did not report loaded in time
+ANCHORS pending {"host":"chat_thread","state":"pending","kind":"artifact_review_gate","conformance":"review-gate-card","insideConversationList":true,"decisionBar":true,"island":true}
+approve pressed on the card floor
+WIRE POST /api/lifecycle-views/decide 200
+  request : {"ref":"_L7DaWhKao6b5jYQ-1vWdkaI4xHA2rab0AMyEz7iGG44UQehcFDPic3iiwA3KM319z8seaMRyzb7zPTiEUhKpujB5S0_qbKeX1ON4Poc0vuD_rRYEkgve7piNnIJ7Niqv1bWt7mGvBUU6tgBN0DBNIjaZbEXtt06K37bhHCYTPxkslF1Yq7WWJbeU5EO","disposition":"approve","comment":null}
+  response: {"outcome":{"kind":"decided","disposition":"approve","idempotent":false}}
+WIRE POST /api/lifecycle-views/resolve 200
+  request : {"viewType":"artifact_review_gate","ref":"_L7DaWhKao6b5jYQ-1vWdkaI4xHA2rab0AMyEz7iGG44UQehcFDPic3iiwA3KM319z8seaMRyzb7zPTiEUhKpujB5S0_qbKeX1ON4Poc0vuD_rRYEkgve7piNnIJ7Niqv1bWt7mGvBUU6tgBN0DBNIjaZbEXtt06K37bhHCYTPxkslF1Yq7WWJbeU5EO"}
+  response: {"kind":"artifact_review_gate","state":{"state":"settled"},"body":null}
+WIRE POST /api/lifecycle-views/resolve 200
+  request : {"viewType":"artifact_review_gate","ref":"_L7DaWhKao6b5jYQ-1vWdkaI4xHA2rab0AMyEz7iGG44UQehcFDPic3iiwA3KM319z8seaMRyzb7zPTiEUhKpujB5S0_qbKeX1ON4Poc0vuD_rRYEkgve7piNnIJ7Niqv1bWt7mGvBUU6tgBN0DBNIjaZbEXtt06K37bhHCYTPxkslF1Yq7WWJbeU5EO"}
+  response: {"kind":"artifact_review_gate","state":{"state":"settled"},"body":null}
+ANCHORS settled {"host":"chat_thread","state":"settled","insideConversationList":true,"sameConversation":1}

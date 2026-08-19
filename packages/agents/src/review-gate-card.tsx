@@ -165,7 +165,7 @@ import {
   useLifecycleCardAuth,
   useLifecycleCardFrame,
   useLifecycleCardHost,
-  useLifecycleCardState,
+  useLifecycleCardResolve,
   type ComposerCommentAction,
   type ComposerCommentResult,
   type ComposerFocusBinding,
@@ -405,12 +405,16 @@ export function ReviewGateCard({
   // the one decision's partition. See `MarkState` for why the binding exists.
   const [markState, setMarkState] = useState<MarkState>(EMPTY_MARKS);
 
-  const state = useLifecycleCardState({
+  // The review kind's envelope carries STATE and no body: §III's target arrives
+  // through the island, server-rendered against the reader, so there is nothing
+  // for a body to add and a body beside this kind is refused at the parse.
+  const resolved = useLifecycleCardResolve({
     viewType: "artifact_review_gate",
     ref: view.ref,
     enabled: present,
     reloadToken,
   });
+  const state: LifecycleCardState | null = resolved?.state ?? null;
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 

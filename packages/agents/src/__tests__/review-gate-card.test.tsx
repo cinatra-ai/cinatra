@@ -55,10 +55,19 @@ const VIEW = {
   ref: "ref-abc-123",
 };
 
+/**
+ * The resolve answer, in the per-kind envelope the card parses (epic S9, S9c).
+ * The review kind carries no body — §III's target arrives through the island —
+ * and the card REFUSES an answer that carries one.
+ */
+function reviewEnvelope(state: LifecycleCardState): unknown {
+  return { kind: "artifact_review_gate", state, body: null };
+}
+
 function mockResolve(state: LifecycleCardState) {
   const fetchMock = vi.fn(
     async () =>
-      new Response(JSON.stringify({ state }), {
+      new Response(JSON.stringify(reviewEnvelope(state)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -472,7 +481,7 @@ describe("the decision seam", () => {
         );
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -522,11 +531,11 @@ describe("the decision seam", () => {
         );
       }
       resolves += 1;
-      const state =
+      const state: LifecycleCardState =
         resolves === 1
           ? { state: "pending", canDecide: true, canComment: true }
           : { state: "settled" };
-      return new Response(JSON.stringify({ state }), {
+      return new Response(JSON.stringify(reviewEnvelope(state)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -545,11 +554,11 @@ describe("the decision seam", () => {
     let resolves = 0;
     globalThis.fetch = vi.fn(async () => {
       resolves += 1;
-      const state =
+      const state: LifecycleCardState =
         resolves === 1
           ? { state: "pending", canDecide: true, canComment: true }
           : { state: "settled" };
-      return new Response(JSON.stringify({ state }), {
+      return new Response(JSON.stringify(reviewEnvelope(state)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -581,7 +590,7 @@ describe("the decision seam", () => {
         });
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -599,7 +608,7 @@ describe("the decision seam", () => {
       const url = String(input);
       if (url === LIFECYCLE_VIEW_DECIDE_PATH) return new Response("nope", { status: 500 });
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -690,7 +699,7 @@ function mockResolveAndDecide(state: LifecycleCardState) {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
-    return new Response(JSON.stringify({ state }), {
+    return new Response(JSON.stringify(reviewEnvelope(state)), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -892,7 +901,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      return new Response(JSON.stringify({ state: surfaced }), {
+      return new Response(JSON.stringify(reviewEnvelope(surfaced)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -934,7 +943,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
       suggestions: CHIPS,
     };
     globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ state: surfaced }), {
+      new Response(JSON.stringify(reviewEnvelope(surfaced)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -972,7 +981,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
       suggestions: CHIPS,
     };
     globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ state: surfaced }), {
+      new Response(JSON.stringify(reviewEnvelope(surfaced)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -1293,7 +1302,7 @@ describe("#2566 composer focus", () => {
         );
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -1345,7 +1354,7 @@ describe("#2566 composer focus", () => {
         );
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -1399,7 +1408,7 @@ describe("#2566 composer focus", () => {
         return new Response("{}", { status: 403 });
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;

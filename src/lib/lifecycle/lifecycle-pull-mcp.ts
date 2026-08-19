@@ -421,14 +421,18 @@ async function renderLifecycleCard(
   if (!parsed.success) return refusal();
   const caller = await resolveLifecycleCaller();
   if (!caller) return refusal();
-  const state = await resolveLifecycleCardState({
+  const resolved = await resolveLifecycleCardState({
     // The two render primitives address a gate-scoped row; the trigger proposal
     // viewType has no producer until S5 (#2569) owns its token and store.
     viewType,
     ref: parsed.data.ref,
     actorCtx: caller,
   });
-  if (state.state === "absent") return refusal();
+  // The ladder answers a per-kind envelope now; the AUTHORIZATION is still its
+  // state, and the body it carries is for a card to draw, never for this
+  // primitive to mint. What travels to the model is what always travelled: a
+  // viewType and the ref the caller already held.
+  if (resolved.state.state === "absent") return refusal();
   return minted(viewType, parsed.data.ref);
 }
 

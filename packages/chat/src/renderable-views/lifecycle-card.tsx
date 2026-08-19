@@ -52,14 +52,14 @@ import {
   LIFECYCLE_VIEW_RESOLVE_PATH,
   LifecycleCardSurfaceProvider,
   useLifecycleCardHost,
-  useLifecycleCardState,
+  useLifecycleCardResolve,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
 
 export {
   LIFECYCLE_VIEW_RESOLVE_PATH,
   LifecycleCardSurfaceProvider,
   useLifecycleCardHost,
-  useLifecycleCardState,
+  useLifecycleCardResolve,
 };
 
 // ---------------------------------------------------------------------------
@@ -109,11 +109,16 @@ export function LifecycleCard({
   // surface, so the card is not part of it. Every DECLARED host draws every
   // kind — the per-surface restriction matrix is gone (owner ruling 2026-08-11).
   const present = host !== null;
-  const state = useLifecycleCardState({
+  // The shell draws from the STATE alone — it is the never-blank floor for a
+  // kind whose own renderer is not built yet, and it must not start drawing a
+  // body it has no design for. The envelope's per-kind body is read by the
+  // owner card each kind's own slice lands.
+  const resolved = useLifecycleCardResolve({
     viewType: view.viewType,
     ref: view.ref,
     enabled: present,
   });
+  const state = resolved?.state ?? null;
 
   if (!present || state === null) return null;
   const line = stateLine(state);

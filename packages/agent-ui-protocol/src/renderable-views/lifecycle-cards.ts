@@ -27,6 +27,14 @@
 import { z } from "zod";
 
 import type { RenderableViewBase } from "../renderable-views";
+// The §VI body schema, imported for the resolve-envelope registry below. This
+// module is already on every route graph that carries the barrel, so the edge
+// costs no locked route a module — which is why the envelope lands HERE rather
+// than in a new leaf of its own.
+import {
+  triggerScheduleProposalViewBodySchema,
+  type TriggerScheduleProposalViewBody,
+} from "./trigger-schedule-proposal-view";
 
 // ---------------------------------------------------------------------------
 // The interaction kinds — the registry's keys (§IX "Card" column)
@@ -495,6 +503,215 @@ export const triggerScheduleProposalViewSchema = lifecycleViewSchema(
 export type TriggerScheduleProposalView = z.infer<
   typeof triggerScheduleProposalViewSchema
 >;
+
+// ---------------------------------------------------------------------------
+// §VII — the VERIFICATION SUMMARY body (epic S9, slice S9c)
+// ---------------------------------------------------------------------------
+//
+// The verification card resolves `advisory`: it asks nothing, so it draws no
+// floor. Until this slice it also carried NOTHING to draw, and a card with no
+// body cannot be drawn at all. This is the body the resolver now returns beside
+// that state.
+//
+// IT IS THE SHIPPED CORE-ANALYSIS READING, SANITIZED. The fields below are the
+// ones the run's own "Core analysis" surface already shows the SAME reader,
+// after the SAME run-read check: the verdict, the two pinned revisions, the
+// inspected scope, and the before/after field diff. What the body deliberately
+// omits is every internal identifier that names nothing on screen — the record
+// id, the gate id, the artifact ids — because a body that carries an addressable
+// id turns a card into a place to read one out of.
+//
+// EVERY FIELD IS BOUNDED. The ceilings are part of the contract, not a
+// formatting nicety: the resolver clamps to them, so a pathological row cannot
+// turn one resolve into an unbounded response, and a body that arrives over a
+// ceiling fails to validate and draws nothing.
+
+/** Current schema version of the verification card body. */
+export const VERIFICATION_SUMMARY_VIEW_VERSION = 1 as const;
+
+/** The closed verdict set. A row carrying anything else is unreadable, and the
+ *  resolver answers `absent` for it rather than drawing an unknown verdict. */
+export const VERIFICATION_SUMMARY_OUTCOMES = ["verified", "drifted", "unmet"] as const;
+
+export type VerificationSummaryOutcome =
+  (typeof VERIFICATION_SUMMARY_OUTCOMES)[number];
+
+/** Ceiling on the diff rows one card may draw. */
+export const VERIFICATION_SUMMARY_MAX_FIELD_DIFF = 200;
+/** Ceiling on the inspected-scope paths one card may draw. */
+export const VERIFICATION_SUMMARY_MAX_SCOPE_PATHS = 200;
+/** Ceiling on one field path / scope path. */
+export const VERIFICATION_SUMMARY_PATH_MAX_LENGTH = 400;
+/** Ceiling on one before/after value. */
+export const VERIFICATION_SUMMARY_VALUE_MAX_LENGTH = 2000;
+/** Ceiling on a pinned revision identifier. */
+export const VERIFICATION_SUMMARY_REVISION_MAX_LENGTH = 128;
+
+/** One before/after row. `null` is the honest "this side had no value". */
+export const verificationSummaryFieldDiffSchema = z
+  .object({
+    field: z.string().min(1).max(VERIFICATION_SUMMARY_PATH_MAX_LENGTH),
+    before: z.string().max(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH).nullable(),
+    after: z.string().max(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH).nullable(),
+  })
+  .strict();
+
+export type VerificationSummaryFieldDiff = z.infer<
+  typeof verificationSummaryFieldDiffSchema
+>;
+
+export const verificationSummaryBodySchema = z
+  .object({
+    version: z.literal(VERIFICATION_SUMMARY_VIEW_VERSION),
+    outcome: z.enum(VERIFICATION_SUMMARY_OUTCOMES),
+    /** The reviewed (base) revision the analysis pinned. */
+    reviewedRevisionId: z
+      .string()
+      .min(1)
+      .max(VERIFICATION_SUMMARY_REVISION_MAX_LENGTH),
+    /** The repaired revision the analysis pinned. */
+    repairedRevisionId: z
+      .string()
+      .min(1)
+      .max(VERIFICATION_SUMMARY_REVISION_MAX_LENGTH),
+    /** The paths the analysis was scoped to. A diff row outside this set is the
+     *  drift the shipped surface marks "out of scope". */
+    scopePaths: z
+      .array(z.string().min(1).max(VERIFICATION_SUMMARY_PATH_MAX_LENGTH))
+      .max(VERIFICATION_SUMMARY_MAX_SCOPE_PATHS),
+    fieldDiff: z
+      .array(verificationSummaryFieldDiffSchema)
+      .max(VERIFICATION_SUMMARY_MAX_FIELD_DIFF),
+  })
+  .strict();
+
+export type VerificationSummaryBody = z.infer<typeof verificationSummaryBodySchema>;
+
+// ---------------------------------------------------------------------------
+// The per-kind RESOLVE ENVELOPE (epic S9, slice S9c)
+// ---------------------------------------------------------------------------
+//
+// The refetch used to answer with a STATE and nothing else, and the client
+// parsed exactly that. Two of the four kinds cannot be drawn from a state: the
+// schedule proposal needs its option rows, the verification card needs its
+// reading. So the answer becomes a DISCRIMINATED ENVELOPE — `{ kind, state,
+// body }` — where the kind selects the one body type that kind is authorized to
+// carry.
+//
+// WHY THE KIND RIDES THE ANSWER. The card already knows which kind it asked
+// for; carrying the kind back lets it check that it got an answer to ITS
+// question. A response whose kind is unknown, undeclared, or simply not the one
+// asked for is refused, and a refused parse leaves the card with no state — so
+// it draws nothing at all, exactly as it does before the first resolve lands.
+// That keeps the two invariants the epic travels on intact under a richer
+// answer: NO DOM BEFORE AN AUTHORIZED RESOLVE, and an `absent` that reveals
+// nothing.
+//
+// `absent` CARRIES NO BODY, EVER. It is the collapse of every denial — no
+// access, no such row, a ref that does not decode, a store that threw — so a
+// body beside it would be the one thing that could tell those apart. The parse
+// REFUSES an `absent` that arrives with a body rather than dropping the body,
+// because a producer that attached one is a producer whose other answers cannot
+// be trusted either.
+//
+// A BODY-CARRYING KIND MUST CARRY ITS BODY. Outside `absent`, the schedule and
+// verification kinds are refused when their body is missing or does not
+// validate. A half-drawn card is not a lesser card; it is a card asserting a
+// reading it does not have.
+//
+// THE RECOMMENDATION HOLD IS NOT IN HERE, and that is structural rather than an
+// omission. It is the one kind whose carriage is `interrupt` — the run is
+// blocked on it — so it never travels on this DATA_PART resolve at all; its
+// state is resolved by its own hold action. `LifecycleDataPartViewType` is what
+// keys the registry below, so the hold cannot be added here by accident, and
+// asking this parser for it fails closed.
+
+/**
+ * The body each kind is AUTHORIZED to carry. `null` means the kind draws from
+ * its state alone — the review card's target arrives through its own island, so
+ * its envelope carries no body and a body beside it is refused.
+ */
+export type LifecycleCardBodyByKind = {
+  artifact_review_gate: null;
+  verification_summary: VerificationSummaryBody;
+  trigger_schedule_proposal: TriggerScheduleProposalViewBody;
+};
+
+/** The discriminated answer one lifecycle resolve returns. */
+export type LifecycleResolveEnvelope = {
+  [K in LifecycleDataPartViewType]: {
+    kind: K;
+    state: LifecycleCardState;
+    body: LifecycleCardBodyByKind[K] | null;
+  };
+}[LifecycleDataPartViewType];
+
+/** The envelope for ONE kind — what a card that asked for that kind receives. */
+export type LifecycleResolveEnvelopeFor<K extends LifecycleDataPartViewType> =
+  Extract<LifecycleResolveEnvelope, { kind: K }>;
+
+/**
+ * The closed runtime registry behind the type map above. A kind with a `null`
+ * entry carries no body; every other entry is the schema its body must satisfy.
+ * `satisfies` over the closed kind set is what keeps the two in step: a new
+ * DATA_PART kind does not compile until it declares which of the two it is.
+ */
+const LIFECYCLE_RESOLVE_BODY_SCHEMAS = {
+  artifact_review_gate: null,
+  verification_summary: verificationSummaryBodySchema,
+  trigger_schedule_proposal: triggerScheduleProposalViewBodySchema,
+} as const satisfies Record<LifecycleDataPartViewType, z.ZodType | null>;
+
+/**
+ * The ONE parse seam for a lifecycle resolve answer. NEVER throws: an
+ * adversarial payload, a forward version, a mismatched kind and a missing body
+ * all answer `null`, and a `null` leaves the card drawing nothing.
+ */
+export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewType>(
+  expectedKind: K,
+  raw: unknown,
+): LifecycleResolveEnvelopeFor<K> | null {
+  try {
+    // An undeclared kind never reaches a schema lookup. A caller can force one
+    // through an untyped edge, and the answer is the same as for a forged wire
+    // payload: nothing.
+    if (!isLifecycleDataPartViewType(expectedKind)) return null;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+    const record = raw as Record<string, unknown>;
+    // The discriminant is checked FIRST and exactly. An answer to a different
+    // question is not a weaker answer to this one.
+    if (record.kind !== expectedKind) return null;
+
+    const state = lifecycleCardStateSchema.safeParse(record.state);
+    if (!state.success) return null;
+
+    const rawBody = record.body;
+    const bodyPresent = rawBody !== undefined && rawBody !== null;
+
+    if (state.data.state === "absent") {
+      if (bodyPresent) return null;
+      return { kind: expectedKind, state: state.data, body: null } as
+        LifecycleResolveEnvelopeFor<K>;
+    }
+
+    const schema: z.ZodType | null = LIFECYCLE_RESOLVE_BODY_SCHEMAS[expectedKind];
+    if (schema === null) {
+      if (bodyPresent) return null;
+      return { kind: expectedKind, state: state.data, body: null } as
+        LifecycleResolveEnvelopeFor<K>;
+    }
+
+    if (!bodyPresent) return null;
+    const body = schema.safeParse(rawBody);
+    if (!body.success) return null;
+    return { kind: expectedKind, state: state.data, body: body.data } as
+      LifecycleResolveEnvelopeFor<K>;
+  } catch {
+    // A throwing getter is a hostile shape; it draws nothing, like every other
+    // answer this parser refuses.
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // The typed INTERRUPT discriminator (cinatra#2568, epic #2564 S4)
