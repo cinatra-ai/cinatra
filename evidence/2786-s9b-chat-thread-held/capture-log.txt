@@ -1,73 +1,147 @@
-[held] sent, zero mention tokens: "run cinatra_blog-draft-writer-agent to draft a blog post about onboarding"
-[held] slackMode===false (no collapsed tool group): true
-[held] parts.length>0 (a part-level card mounted in the turn): true
-runId=eebd31cb-0b9c-480b-8661-8de00bda97ec
+base=http://localhost:3794 queue=cinatra-x2794cap-jobs
+runtime: development (pnpm dev), CINATRA_TEST_LLM_PROVIDER=scripted
+fresh thread: http://localhost:3794/chat/cinatra-ai/cinatra-assistant (recommendation_hold roots on entry = 0)
+[held] sent, mention tokens = 0: "run cinatra_blog-draft-writer-agent to draft a blog post about onboarding"
+runId=569480d9-9a5f-44a7-8aef-c18ab9ea6014   (agent_runs before this turn = 4)
 HELD anchors: {
+ "cards": 1,
+ "kind": "recommendation_hold",
+ "host": "chat_thread",
+ "state": "held",
+ "chatThreadMarker": true,
  "conversationList": true,
- "wrapperInsideConversationList": true,
- "wrapperRunId": "eebd31cb-0b9c-480b-8661-8de00bda97ec",
- "chipRowInsideWrapper": true,
- "confirmAnchorInsideWrapper": true,
- "skipAnchorInsideWrapper": true,
+ "insideConversationList": true,
+ "inlineRunPanels": 1,
+ "cardsOutsideInlineRunPanel": 1,
+ "cardsInsideInlineRunPanel": 0,
+ "summariesInsideInlineRunPanel": 0,
+ "chipRowInsideCard": true,
+ "confirmInsideCard": true,
+ "skipInsideCard": true,
  "decisionSummary": null,
- "outsideInlineRunCardSubtree": true,
+ "decisionSummaryText": null,
  "composerVisible": true
 }
 HELD db: status|human_present = pending_input|true; park = parked
 HELD queue:
-    jobs_ever_created=
-    job_keys=<none>
+    jobs_ever_created=92
     jobs_naming_this_run=0
-HELD text: "The agent is running" absent = true
-HELD text: no surface pointer = true
-captured S9b-1 + S9b-2
-row buttons: ["Skills (0/1)","blog-content","Confirm","Skip"]
-skills disclosure already open
-chip before select: data-selected=false data-forced=true
+    job_keys_naming_this_run=<none>
+captured S9b-1__chat_thread__recommendation-hold-held.png (full page)
+captured S9b-2__chat_thread__hold-wrapper-anchors.png (element: [data-lifecycle-card="recommendation_hold"] [data-conformance-id="run-chip-row"])
+chip before select: data-skill-id=@cinatra-ai/chat:blog-content data-selected=false data-forced=true
 chip after select: data-selected=true
+SELECTED anchors: {
+ "cards": 1,
+ "kind": "recommendation_hold",
+ "host": "chat_thread",
+ "state": "held",
+ "chatThreadMarker": true,
+ "conversationList": true,
+ "insideConversationList": true,
+ "inlineRunPanels": 1,
+ "cardsOutsideInlineRunPanel": 1,
+ "cardsInsideInlineRunPanel": 0,
+ "summariesInsideInlineRunPanel": 0,
+ "chipRowInsideCard": true,
+ "confirmInsideCard": true,
+ "skipInsideCard": true,
+ "decisionSummary": null,
+ "decisionSummaryText": null,
+ "composerVisible": true
+}
+captured S9b-2b__chat_thread__skill-selected-in-chat.png (full page)
 pressed Confirm INSIDE the conversation
 CONFIRMED anchors: {
+ "cards": 1,
+ "kind": "recommendation_hold",
+ "host": "chat_thread",
+ "state": "confirmed",
+ "chatThreadMarker": true,
  "conversationList": true,
- "wrapperInsideConversationList": true,
- "wrapperRunId": "eebd31cb-0b9c-480b-8661-8de00bda97ec",
- "chipRowInsideWrapper": false,
- "confirmAnchorInsideWrapper": false,
- "skipAnchorInsideWrapper": false,
+ "insideConversationList": true,
+ "inlineRunPanels": 1,
+ "cardsOutsideInlineRunPanel": 1,
+ "cardsInsideInlineRunPanel": 0,
+ "summariesInsideInlineRunPanel": 0,
+ "chipRowInsideCard": false,
+ "confirmInsideCard": false,
+ "skipInsideCard": false,
  "decisionSummary": "confirmed",
- "outsideInlineRunCardSubtree": true,
+ "decisionSummaryText": "Skills confirmed (1)@cinatra-ai/chat:blog-content",
  "composerVisible": true
 }
 CONFIRMED db: status|human_present = pending_approval|true; park = released
 CONFIRMED queue:
-    jobs_ever_created=1
-    job_keys=bull:cinatra-s9b2786cap-jobs:eebd31cb-0b9c-480b-8661-8de00bda97ec
+    jobs_ever_created=93
     jobs_naming_this_run=1
-CONFIRMED url unchanged (no navigation): true
-captured S9b-3
-[skip] sent, zero mention tokens: "run cinatra_blog-draft-writer-agent to draft a blog post about onboarding"
-[skip] slackMode===false (no collapsed tool group): true
-[skip] parts.length>0 (a part-level card mounted in the turn): true
-second runId=585e89a5-49c1-4dca-b1ed-f151a76f90ee
-SKIP queue before decision:
-    jobs_ever_created=1
-    job_keys=bull:cinatra-s9b2786cap-jobs:eebd31cb-0b9c-480b-8661-8de00bda97ec
-    jobs_naming_this_run=0
-pressed Skip INSIDE the conversation
-NOTE: no skipped summary rendered (see the README finding)
-SKIPPED anchors: {
+    job_keys_naming_this_run=bull:cinatra-x2794cap-jobs:569480d9-9a5f-44a7-8aef-c18ab9ea6014
+CONFIRMED url at decision : http://localhost:3794/chat/cinatra-ai/cinatra-assistant/77cda07e-c9fb-49d5-a285-40c9fb6a5139
+CONFIRMED url after settle: http://localhost:3794/chat/cinatra-ai/cinatra-assistant/77cda07e-c9fb-49d5-a285-40c9fb6a5139
+CONFIRMED settled without navigation: true
+CONFIRMED settled without reload: true (the driver issues no reload)
+captured S9b-3__chat_thread__confirmed-settled-in-place.png (full page)
+fresh thread: http://localhost:3794/chat/cinatra-ai/cinatra-assistant (recommendation_hold roots on entry = 0)
+[skip] sent, mention tokens = 0: "run cinatra_blog-draft-writer-agent to draft a blog post about onboarding"
+second runId=48b11720-0f86-48bb-975c-525982ad9abd
+HELD-BEFORE-SKIP anchors: {
+ "cards": 1,
+ "kind": "recommendation_hold",
+ "host": "chat_thread",
+ "state": "held",
+ "chatThreadMarker": true,
  "conversationList": true,
- "wrapperInsideConversationList": true,
- "wrapperRunId": "585e89a5-49c1-4dca-b1ed-f151a76f90ee",
- "chipRowInsideWrapper": false,
- "confirmAnchorInsideWrapper": false,
- "skipAnchorInsideWrapper": false,
+ "insideConversationList": true,
+ "inlineRunPanels": 1,
+ "cardsOutsideInlineRunPanel": 1,
+ "cardsInsideInlineRunPanel": 0,
+ "summariesInsideInlineRunPanel": 0,
+ "chipRowInsideCard": true,
+ "confirmInsideCard": true,
+ "skipInsideCard": true,
  "decisionSummary": null,
- "outsideInlineRunCardSubtree": true,
+ "decisionSummaryText": null,
  "composerVisible": true
 }
-SKIPPED db: pending_approval; park = released
+HELD-BEFORE-SKIP db: status|human_present = pending_input|true; park = parked
+HELD-BEFORE-SKIP queue:
+    jobs_ever_created=93
+    jobs_naming_this_run=0
+    job_keys_naming_this_run=<none>
+pressed Skip INSIDE the conversation
+SKIPPED anchors: {
+ "cards": 1,
+ "kind": "recommendation_hold",
+ "host": "chat_thread",
+ "state": "skipped",
+ "chatThreadMarker": true,
+ "conversationList": true,
+ "insideConversationList": true,
+ "inlineRunPanels": 1,
+ "cardsOutsideInlineRunPanel": 1,
+ "cardsInsideInlineRunPanel": 0,
+ "summariesInsideInlineRunPanel": 0,
+ "chipRowInsideCard": false,
+ "confirmInsideCard": false,
+ "skipInsideCard": false,
+ "decisionSummary": "skipped",
+ "decisionSummaryText": "Skill recommendation skipped — running with the default set.",
+ "composerVisible": true
+}
+SKIPPED db: status|human_present = pending_approval|true; park = released
 SKIPPED queue:
-    jobs_ever_created=2
-    job_keys=bull:cinatra-s9b2786cap-jobs:585e89a5-49c1-4dca-b1ed-f151a76f90ee bull:cinatra-s9b2786cap-jobs:eebd31cb-0b9c-480b-8661-8de00bda97ec
+    jobs_ever_created=94
     jobs_naming_this_run=1
-captured S9b-4
+    job_keys_naming_this_run=bull:cinatra-x2794cap-jobs:48b11720-0f86-48bb-975c-525982ad9abd
+SKIPPED per-skill evidence rows: @cinatra-ai/chat:blog-content:user_skipped:NULL
+SKIPPED run-level marker in run_recommendation_skips: 1 row(s); candidate_count=1
+SKIPPED url at decision : http://localhost:3794/chat/cinatra-ai/cinatra-assistant/32983ad1-2c1c-432b-a39b-afdbafaa0d13
+SKIPPED url after settle: http://localhost:3794/chat/cinatra-ai/cinatra-assistant/32983ad1-2c1c-432b-a39b-afdbafaa0d13
+SKIPPED settled without navigation: true
+SKIPPED settled without reload: true (the driver issues no reload)
+captured S9b-4__chat_thread__skipped-settled-in-place.png (full page)
+
+=== ACCEPTANCE, as the round-8 review set it ===
+held: recommendation_hold roots=1 host=chat_thread state=held outsideInlinePanel=1 insideInlinePanel=0 summariesUnderAgenticRunProgress=0
+confirmed: recommendation_hold roots=1 host=chat_thread state=confirmed outsideInlinePanel=1 insideInlinePanel=0 summariesUnderAgenticRunProgress=0
+skipped: recommendation_hold roots=1 host=chat_thread state=skipped outsideInlinePanel=1 insideInlinePanel=0 summariesUnderAgenticRunProgress=0
