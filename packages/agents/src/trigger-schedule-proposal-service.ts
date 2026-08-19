@@ -39,6 +39,8 @@ import "server-only";
 import {
   buildCron,
   describeRecurrence,
+  parseCronToRecurring,
+  DEFAULT_RECURRING_CONFIG,
   type RecurringConfig,
 } from "./trigger-recurrence";
 import {
@@ -88,6 +90,7 @@ import {
   parkInstallIntent,
   readInstallIntent,
   readProposalConsume,
+  readProposalConsumeByRunId,
   releaseInstallIntent,
   spendProposalWithinTx,
   type InstallIntentRow,
@@ -628,4 +631,106 @@ export async function resolveProposalForReader(
     // without enumerating anything about the instance.
     restrictedReason: notRunnable ? PROPOSAL_REFUSALS.notRunnable : null,
   };
+}
+
+/**
+ * Resolve a proposal card for a RUN, for one reader (cinatra#2788, S9d).
+ *
+ * The run-page / review-page identity. Those hosts hold no proposal token, so
+ * they address the card by the run it settled into; this call re-derives the
+ * (viewer, organization, template) binding the plan keys the card by from the
+ * proposal's own CONSUME row — the one row that recorded all three, at the one
+ * moment they were all true.
+ *
+ * FOUR REFUSALS, ALL `absent`, and each is deliberate:
+ *
+ *   · the run came from no proposal — its schedule is the run's own scheduling
+ *     step's and the Trigger tab is that schedule's surface. Drawing it here
+ *     would be a second renderer of one thing on one host.
+ *   · the reader is not the person who confirmed it — the proposal was bound to
+ *     ONE (user, org) pair and stays bound to it. A colleague with run access
+ *     reads the run's own Trigger tab, not somebody else's proposal card.
+ *   · the organization does not match the reader's active one.
+ *   · the run or its template has vanished.
+ *
+ * There is NO proposal phase on this path, and that is structural rather than
+ * an omission: Confirm CREATES the run, so a run exists only after a proposal
+ * was confirmed. The pre-confirm phases live where the proposal does — in the
+ * conversation that made it.
+ */
+export async function resolveProposalForRun(
+  runId: string,
+  actor: ConfirmProposalActor,
+): Promise<ProposalResolution> {
+  const consumed = await readProposalConsumeByRunId(runId);
+  if (!consumed) return { phase: "absent" };
+  // The proposal's own binding, re-checked against the LIVE reader. Neither
+  // half comes from the caller: both are read off the row the confirm
+  // transaction wrote.
+  if (consumed.consumedBy !== actor.userId) return { phase: "absent" };
+  if (consumed.orgId !== actor.orgId) return { phase: "absent" };
+
+  const [template, trigger, intent] = await Promise.all([
+    readAgentTemplateById(consumed.templateId),
+    readRunTriggerByRunId(runId),
+    readInstallIntent(runId),
+  ]);
+  if (!template) return { phase: "absent" };
+  if (template.orgId && template.orgId !== actor.orgId) return { phase: "absent" };
+
+  const triggerType =
+    (trigger?.triggerType as "immediate" | "scheduled" | "recurring" | undefined) ??
+    intent?.triggerType ??
+    null;
+  // Neither a trigger row nor an install intent means there is nothing armed to
+  // draw the chrome of — the install never reached the outbox.
+  if (!triggerType) return { phase: "absent" };
+
+  return {
+    phase: "settled",
+    runId,
+    agentName: template.name ?? template.packageName ?? "this agent",
+    triggerType,
+    // The plain-language line is the SETTLED trigger's, read back from the row
+    // the install wrote rather than from a token this host does not hold.
+    scheduleCopy: describeInstalledSchedule({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+    }),
+    timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+    released: !!trigger?.releasedAt,
+    arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+  };
+}
+
+/**
+ * The settled schedule in plain words, from the INSTALLED row.
+ *
+ * The conversation's settled card reads its line off the proposal token it
+ * still holds; this host has no token, so the line is derived from what was
+ * actually installed. `parseCronToRecurring` + `describeRecurrence` is the SAME
+ * pair the scheduling step and the proposal both use, so the two readings of
+ * one schedule cannot drift; the raw expression is the honest fallback the
+ * Trigger tab already falls back to when no preview can be built.
+ */
+function describeInstalledSchedule(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  cronExpression: string | null;
+}): string {
+  if (input.triggerType === "immediate") return "Runs right after setup";
+  if (input.triggerType === "scheduled") {
+    return input.scheduledAt
+      ? `Once, at ${input.scheduledAt.toISOString().slice(0, 16).replace("T", " ")} UTC`
+      : "Once, at the scheduled time";
+  }
+  if (!input.cronExpression) return "On its recurring schedule";
+  // `parseCronToRecurring` answers a PARTIAL selection — it reads back only what
+  // the expression actually pins — so it is completed against the vocabulary's
+  // own defaults, exactly as the scheduling step completes it before drawing.
+  const selection = parseCronToRecurring(input.cronExpression);
+  return selection
+    ? describeRecurrence({ ...DEFAULT_RECURRING_CONFIG, ...selection })
+    : input.cronExpression;
 }

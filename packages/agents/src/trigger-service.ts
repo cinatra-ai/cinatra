@@ -38,6 +38,11 @@ import {
 // principal (e.g. a cross-org platform admin) — the design's deliberate
 // member-session choice for trigger ops (not a §2d′ non-member site).
 import { verifySessionAuthority } from "@/lib/org-write/authority";
+// The two reads `releaseTriggerNowForActor` (extracted below, cinatra#2788)
+// brings with it from `run-actions.ts`: the archived-org pre-check every
+// dispatch makes, and the monotonic gate write that opens the trigger.
+import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
+import { markTriggerReleased } from "./trigger-gate";
 
 /** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
  *  the CODE, not `instanceof`, so a refusal is recognized across the dynamic
@@ -907,6 +912,151 @@ export async function deleteRunTriggerForActor(
       err,
     );
   });
+
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// releaseTriggerNow — the ACTOR-AWARE half (cinatra#2788, epic #2784 S9d).
+//
+// EXTRACTED, NOT REIMPLEMENTED. The body below is `run-actions.ts`'s
+// `releaseTriggerNow` verbatim, with its session read replaced by the actor
+// envelope every other trigger operation in this module already takes.
+// `releaseTriggerNow` stays exactly where it was and becomes the same thin
+// session wrapper `deleteRunTrigger` has always been — so the run page's
+// transport is unchanged to the byte, and §VI's settled card can reach the
+// SAME path from a surface whose identity does not travel by cookie.
+//
+// WHY THE EXTRACTION HAD TO HAPPEN AT ALL. A `"use server"` module may export
+// nothing but server actions, so an actor-parameterised function could not live
+// beside it: exporting one there would publish an endpoint whose acting user is
+// a client-supplied argument. The actor seam therefore belongs in the service,
+// next to `deleteRunTriggerForActor`, where it is reachable only by a caller
+// that has already proved who it is.
+// ---------------------------------------------------------------------------
+
+export type ReleaseTriggerNowArgs = { runId: string };
+export type ReleaseTriggerNowResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export async function releaseTriggerNowForActor(
+  actor: TriggerActorContext,
+  args: ReleaseTriggerNowArgs,
+): Promise<ReleaseTriggerNowResult> {
+  const userId = actor.userId;
+  if (!userId) return { ok: false, error: "unauthorized" };
+  // ADMIN, RE-CHECKED HERE. The surface hides the control for a non-admin and
+  // the resolved card answers `canRelease: false`; this is the check that
+  // actually decides, and it is on the ACTOR the caller resolved from a real
+  // credential — never on a claim the caller passed in.
+  if (actor.role !== "admin") return { ok: false, error: "forbidden — admin only" };
+
+  const run = await readAgentRunById(args.runId);
+  if (!run) return { ok: false, error: "run not found" };
+
+  const trigger = await readRunTriggerByRunId(args.runId);
+  if (!trigger) return { ok: false, error: "no trigger configured for this run" };
+
+  // cinatra#1940 P3 (Decision 1): refuse BEFORE any side-effect (the gate
+  // flag, the transition) when the org is archived. Fail-open on `null`
+  // (unknown) — this is a pre-check, not the enforcement point; the guarded
+  // transition below refuses regardless.
+  if ((await readOrgArchivedAtForDispatch(run.orgId)) === true) {
+    return {
+      ok: false,
+      error: "This organization is archived — agents cannot start new work.",
+    };
+  }
+
+  // cinatra#2485 C: this is the ONE interactive dispatch that starts SOMEONE
+  // ELSE's run, so the shared dispatch guard's default (authorize the run's
+  // owner) is not enough — the releasing admin must ALSO be inside the agent's
+  // install scope. Admin standing counts at ORG scope only; an org admin who is
+  // not in the owning team/project cannot force-start work that scope reserves
+  // for its members. Asserted BEFORE `markTriggerReleased`, which is a
+  // monotonic gate write that no later refusal can undo.
+  try {
+    const { assertAgentRunDispatchAuthorized } = await import(
+      "./agent-run-serde"
+    );
+    await assertAgentRunDispatchAuthorized({
+      runId: args.runId,
+      stage: "dispatch",
+      actingUserId: userId,
+    });
+  } catch (err) {
+    if (isScopeDenial(err)) {
+      return { ok: false, error: "forbidden — this agent's scope does not include you" };
+    }
+    throw err;
+  }
+
+  await markTriggerReleased(args.runId);
+
+  // Admin (org-role admin, checked above) acts as a member of the run's org.
+  const authority = await verifySessionAuthority(userId, run.orgId);
+
+  // Transition armed → queued so the dispatcher can pick up the run.
+  // Swallow stale_from_status: the run may already be queued (race with the
+  // scheduled release job) or in a terminal state.
+  try {
+    await transitionRunStatus(args.runId, "armed", "queued", undefined, authority);
+  } catch (err) {
+    if (
+      !(err instanceof RunTransitionError && err.code === "stale_from_status")
+    ) {
+      throw err;
+    }
+  }
+
+  // Enqueue an execution job now that the gate is open. Idempotent on jobId.
+  //
+  // cinatra#2485 C — COMPENSATION on a scope denial. The run is already `queued`
+  // at this point, and `enqueueAgentRun` re-asserts the dispatch guard: if the
+  // agent's scope changed in the window between the transition's own guard and
+  // this one, the enqueue throws and the run would otherwise sit `queued`
+  // forever with no job to run it and no operator signal.
+  //
+  // The failure is landed HERE rather than inside the enqueue chokepoint because
+  // this frame already holds a member session `authority` for the run, whereas
+  // the chokepoint would have to mint an org-wide run authority it is
+  // deliberately not allowed to hold (org-write-boundary-gate R2/R5).
+  //
+  // `stale_from_status` is swallowed for the same reason as the transition
+  // above: another writer already moved the run off `queued`.
+  try {
+    await enqueueAgentRun(
+      { runId: args.runId },
+      { jobId: `agent-builder-${args.runId}` },
+    );
+  } catch (err) {
+    if (!isScopeDenial(err)) throw err;
+    try {
+      await transitionRunStatus(
+        args.runId,
+        "queued",
+        "failed",
+        {
+          error:
+            `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
+        },
+        authority,
+      );
+    } catch (compErr) {
+      if (
+        !(compErr instanceof RunTransitionError && compErr.code === "stale_from_status")
+      ) {
+        console.error(
+          "[releaseTriggerNowForActor] run",
+          args.runId,
+          "was refused by the install-scope gate but could not be failed — it stays queued with no job:",
+          compErr instanceof Error ? compErr.message : String(compErr),
+        );
+      }
+    }
+    return { ok: false, error: "forbidden — this agent's scope does not include you" };
+  }
 
   return { ok: true };
 }

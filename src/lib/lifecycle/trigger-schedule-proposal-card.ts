@@ -33,11 +33,16 @@ import "server-only";
 
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
-import { TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
+import {
+  TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
+  proposedScheduleSchema,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 import {
   resolveProposalForReader,
+  resolveProposalForRun,
   describeProposalSchedule,
 } from "@cinatra-ai/agents/trigger-schedule-proposal-service";
+import { decodeScheduleRunRef } from "./lifecycle-card-ref";
 
 const ABSENT: LifecycleCardState = { state: "absent" };
 
@@ -72,7 +77,18 @@ export async function resolveTriggerScheduleProposalCard(params: {
   if (!userId || !orgId) return ABSENT_PROPOSAL_CARD;
 
   try {
-    const resolved = await resolveProposalForReader(ref, { userId, orgId });
+    // TWO REF FAMILIES, ONE CARD (cinatra#2788, S9d). A conversation addresses
+    // this card by the PROPOSAL — the token IS the subject. The run page and
+    // the review page hold no token and know a RUN, so they address it by a
+    // run-scoped ref whose key label is disjoint from every other ref family's:
+    // a gate ref, a proposal token and a schedule run ref can never be mistaken
+    // for one another, so the branch below is a decode, not a guess. The run
+    // ref is tried FIRST because it is a cheap local decode that either
+    // succeeds outright or leaves the token path exactly as it was.
+    const runRef = decodeScheduleRunRef(ref);
+    const resolved = runRef
+      ? await resolveProposalForRun(runRef.runId, { userId, orgId })
+      : await resolveProposalForReader(ref, { userId, orgId });
 
     if (resolved.phase === "absent") return ABSENT_PROPOSAL_CARD;
 
@@ -135,3 +151,184 @@ export async function resolveTriggerScheduleProposalCard(params: {
 }
 
 export { describeProposalSchedule };
+
+// ---------------------------------------------------------------------------
+// The card's DECISIONS (cinatra#2788, epic #2784 S9d).
+//
+// §VI's card operates four things: Confirm and Adjust on the proposal floor,
+// Cancel trigger and Release now on the settled chrome. Until this slice the
+// first two were cookie-bound server actions with zero UI callers and the last
+// two existed only on the run page's Trigger tab — so a card drawn in the
+// widget could show a floor it could never press.
+//
+// THIS FUNCTION IMPLEMENTS NONE OF THEM. Each op is handed to the canonical
+// path that already owns it, with an ACTOR the caller resolved from a real
+// credential. What this module adds is the one thing those paths cannot do for
+// themselves: turn the REF the card was drawn with into the subject the op acts
+// on, server-side, so the client never names a token's template or a trigger's
+// run.
+//
+// DYNAMIC IMPORTS ON THE MUTATION PATHS, deliberately. The resolve route
+// imports this module for `resolveTriggerScheduleProposalCard`; a static edge
+// from here to the confirm transaction, the install outbox and the trigger
+// service would put all three on that route's graph for code no resolve ever
+// runs. `trigger-schedule-proposal-actions.ts` defers for exactly this reason
+// and says so.
+//
+// AN AUTHORIZATION DENIAL IS THE SAME SENTENCE EVERY TIME. A ref that does not
+// decode, a proposal minted for someone else, a run the reader may not touch —
+// all answer `not-permitted` with one fixed string, so the endpoint cannot be
+// used to tell those apart. A STATE refusal (the proposal already expired, the
+// moment has passed, the agent cannot run) is different in kind: it is UI copy
+// the reader needs in order to act, and the service already writes it as such.
+// ---------------------------------------------------------------------------
+
+/** The one refusal for every authorization denial on this card's operations. */
+export const SCHEDULE_DECISION_REFUSAL =
+  "You can't take this action on this schedule.";
+
+export type ScheduleDecisionOp = "confirm" | "adjust" | "cancel" | "release";
+
+export type ScheduleDecisionOutcome =
+  | { kind: "confirmed"; runId: string; alreadyConfirmed: boolean }
+  /** Adjust RE-PROPOSES: the card swaps to the new ref and stays on its floor.
+   *  Nothing was armed and nothing was written. */
+  | { kind: "reproposed"; ref: string; expiresAt: number }
+  | { kind: "cancelled" }
+  | { kind: "released" }
+  | { kind: "not-permitted"; message: string }
+  | { kind: "error"; message: string };
+
+const NOT_PERMITTED: ScheduleDecisionOutcome = {
+  kind: "not-permitted",
+  message: SCHEDULE_DECISION_REFUSAL,
+};
+
+/**
+ * Operate one schedule-proposal card for one reader. NEVER throws.
+ *
+ * The actor is the CALLER's — resolved from a cookie session on a first-party
+ * host or from the widget's own broker token — and every op re-derives its
+ * subject from the ref against that actor before it acts.
+ */
+export async function decideTriggerScheduleProposal(params: {
+  ref: string;
+  op: ScheduleDecisionOp;
+  /** §VI's selections, for `adjust` only. */
+  schedule?: unknown;
+  userId: string;
+  orgId: string;
+  role: string | null;
+}): Promise<ScheduleDecisionOutcome> {
+  const { ref, op, userId, orgId, role } = params;
+  if (!userId || !orgId) return NOT_PERMITTED;
+
+  try {
+    if (op === "confirm") {
+      // The token IS the subject and it is re-verified against this actor
+      // INSIDE the confirm transaction — this frame passes it through and adds
+      // no check of its own that could drift from that one.
+      const { confirmTriggerScheduleProposal } = await import(
+        "@cinatra-ai/agents/trigger-schedule-proposal-service"
+      );
+      const result = await confirmTriggerScheduleProposal(
+        { userId, orgId, role },
+        ref,
+      );
+      return result.ok
+        ? {
+            kind: "confirmed",
+            runId: result.runId,
+            alreadyConfirmed: result.alreadyConfirmed,
+          }
+        : { kind: "error", message: result.error };
+    }
+
+    if (op === "adjust") {
+      // THE TEMPLATE COMES FROM THE VERIFIED TOKEN, never from the body. The
+      // shipped server action takes a `templateId` argument because its only
+      // caller was going to be the surface that minted the proposal; a card on
+      // four hosts must not be able to re-point a proposal at another agent, so
+      // this path reads the template out of the ref it was drawn with.
+      const { resolveProposalForReader, adjustTriggerSchedule, PROPOSAL_REFUSALS } =
+        await import("@cinatra-ai/agents/trigger-schedule-proposal-service");
+      const resolved = await resolveProposalForReader(ref, { userId, orgId });
+      // Adjust re-opens the rows of a proposal that is still a proposal. A
+      // settled one has a run; an absent one is not this reader's.
+      if (resolved.phase !== "proposal") return NOT_PERMITTED;
+      const parsed = proposedScheduleSchema.safeParse(params.schedule);
+      if (!parsed.success) {
+        return { kind: "error", message: PROPOSAL_REFUSALS.invalid };
+      }
+      const proposed = await adjustTriggerSchedule({
+        templateId: resolved.proposal.templateId,
+        userId,
+        orgId,
+        schedule: parsed.data,
+      });
+      return proposed.ok
+        ? { kind: "reproposed", ref: proposed.token, expiresAt: proposed.expiresAt }
+        : { kind: "error", message: PROPOSAL_REFUSALS.invalid };
+    }
+
+    // Cancel and Release act on the RUN the card settled into — resolved here,
+    // never named by the caller.
+    const settled = await resolveSettledRunForReader(ref, { userId, orgId });
+    if (!settled) return NOT_PERMITTED;
+
+    if (op === "cancel") {
+      const { deleteRunTriggerForActor } = await import(
+        "@cinatra-ai/agents/trigger-service"
+      );
+      const result = await deleteRunTriggerForActor(
+        { userId, role, source: "ui" },
+        { runId: settled },
+      );
+      // The service's own refusals are authorization refusals ("forbidden",
+      // "unauthorized") and are collapsed; anything else is state the reader
+      // can act on.
+      if (result.ok) return { kind: "cancelled" };
+      return result.error === "forbidden" || result.error === "unauthorized"
+        ? NOT_PERMITTED
+        : { kind: "error", message: result.error };
+    }
+
+    const { releaseTriggerNowForActor } = await import(
+      "@cinatra-ai/agents/trigger-service"
+    );
+    const result = await releaseTriggerNowForActor(
+      { userId, role, source: "ui" },
+      { runId: settled },
+    );
+    if (result.ok) return { kind: "released" };
+    return result.error.startsWith("forbidden") || result.error === "unauthorized"
+      ? NOT_PERMITTED
+      : { kind: "error", message: result.error };
+  } catch {
+    // A store or transport failure is not an existence signal either.
+    return { kind: "error", message: "That didn't go through. Try again." };
+  }
+}
+
+/**
+ * The run a settled card's controls act on — `null` when this reader has no
+ * settled card for this ref.
+ *
+ * BOTH REF FAMILIES, ONE ANSWER. A conversation's card holds the proposal token;
+ * the run page's and the review page's hold the run-scoped ref. Either way the
+ * run is the resolver's answer, taken against the live reader, so the two hosts
+ * cannot reach different runs from the same press.
+ */
+async function resolveSettledRunForReader(
+  ref: string,
+  actor: { userId: string; orgId: string },
+): Promise<string | null> {
+  const { resolveProposalForReader, resolveProposalForRun } = await import(
+    "@cinatra-ai/agents/trigger-schedule-proposal-service"
+  );
+  const runRef = decodeScheduleRunRef(ref);
+  const resolved = runRef
+    ? await resolveProposalForRun(runRef.runId, actor)
+    : await resolveProposalForReader(ref, actor);
+  return resolved.phase === "settled" ? resolved.runId : null;
+}
