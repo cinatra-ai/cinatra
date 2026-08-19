@@ -1,7 +1,9 @@
 # The resolve envelope, on the real application, host by host
 
-Head under proof: `feat/2787-s9c-resolve-envelope` at `7679b127`.
-Captured 2026-08-16.
+Head under proof: `feat/2787-s9c-resolve-envelope`.
+The three committed host cells were captured 2026-08-16 at `7679b127`; the
+capture index, the drivers and the corrected `site_widget` finding are from the
+2026-08-19 round.
 
 The goal this evidence answers to: the lifecycle screens show up INSIDE the chat,
 and the proof shows them inside the chat. This slice is plumbing, and the
@@ -43,7 +45,7 @@ can check the claim without trusting the file name.
 | **chat_thread** | `s9c-10`, `s9c-11` | yes, in the conversation | `s9c-12`, `s9c-13` — same conversation | **PASS** |
 | **run_card** | `s9c-20-*-pending-*` | yes, in the run panel | `s9c-20-*-settled-*` — settles in place | **PASS** |
 | **page_gate_region** | `s9c-30-*-pending-*` | yes | none — see the finding | **PASS with a recorded limit** |
-| **site_widget** | — | — | — | **NOT CAPTURED** — see the finding |
+| **site_widget** | — | — | — | **NOT CAPTURED** — host reached and card drawn, pair not recorded; see the finding |
 
 ### chat_thread — the one that matters most
 
@@ -78,22 +80,52 @@ the card. The capture asserts it rather than describing it —
 replacement region, not a settled card. Pre-existing page behaviour, untouched by
 this slice.
 
-### site_widget — not captured, and why
+### site_widget — still not captured, but no longer for the reason given before
 
-The widget's card is drawn behind the real hosted-PKCE broker handshake: the
-embed declares `host: "site_widget"` with a `cwu_` credential that only a
-completed sign-in through the CMS-mounted widget produces, and the capture-index
-rule requires the record to be asserted inside the declared `.cw-frame` embed
-frame rather than the main frame. That frame is mounted by the CMS plugin, so the
-cell needs a WordPress container, the plugin, connect-site credentials and the
-broker negotiation — a stack this round did not stand up.
+**The earlier claim in this file was wrong and is withdrawn.** It said the cell
+needs a WordPress container and the CMS plugin. It does not. Round 2 drove the
+broker path on a plain local page and got the real card to draw inside the embed
+frame; what is missing is the recorded pair (anchors + wire, pending AND
+settled), not the ability to reach the host.
 
-The exact assertion the cell would carry: *the same `ReviewGateCard`, resolving
+What round 2 established, with the drivers in `drivers/`:
+
+- The embed mounts in a **plain HTML page that is not the Cinatra app**
+  (`drivers/site-widget-host-page.html`), which speaks the bridge protocol
+  (`cinatra.embed.ready` → `cinatra.embed.context`) exactly as the CMS chrome
+  does. No WordPress, no plugin.
+- The host binding **closes** for that page: `deriveFrameBinding` returns
+  `ok: true` with `agentSlug: "wordpress-content-editor"` once the instance row
+  and the connect-site exist. Both are written by the SHIPPED writers
+  (`writeConnectorConfigToDatabase`, `upsertConnectSiteAndMintCredential`) —
+  see `drivers/02-seed-widget-site.mts`.
+- The **hosted-PKCE ceremony completes end to end**, recorded by the app's own
+  `[widget-auth-audit]`: `init_success` → `page_viewed(login)` →
+  `page_viewed(grant)` → `code_issued` with
+  `grantedScopes: "lifecycle.read lifecycle.decide conversation.read conversation.write tools.confirm"`
+  → `redeem_success`. The frame ends up holding `cit_` + `cwu_`.
+- One real gate was found and cleared: the `cit_` consume refused with
+  `origin_unconfigured` because the connector declares
+  `requiredInstanceFields = [id, name, username, applicationPassword]` and the
+  instance row was short of the last two. With them present the widget
+  negotiation passes and the frame reaches `data-phase="active"`.
+- The **card then draws in the frame**: the review header, the
+  "Awaiting your decision" state chip and the decision-rationale floor, with the
+  conversation composer under it.
+
+What is NOT here, and why it is not claimed: the run that drew the card was
+killed by a host restart before it wrote its log and its settled half. So there
+is no `capture-site_widget.txt` carrying the `ANCHORS pending` /
+`ANCHORS settled` lines and the resolve/decide envelope for this host. Under the
+capture-index rule a picture without its recorded anchors proves nothing, so
+**no site_widget picture is committed** — a shot presented on narration alone is
+the exact anti-pattern that rule exists to catch.
+
+The cell is reproducible from `drivers/README.md` in one pass on a warm stack.
+The assertion it must carry is unchanged: *the same `ReviewGateCard`, resolving
 through the broker path with `X-Cinatra-Widget-User-Token` and no cookie
 fallback, draws pending and then settled inside the `.cw-frame` embed frame with
-`data-lifecycle-card-host="site_widget"`.* It is recorded as missing rather than
-substituted with a main-frame screenshot, which the capture-index rule would
-reject and which would be the exact anti-pattern that rule exists to catch.
+`data-lifecycle-card-host="site_widget"`.*
 
 ## The wire
 
@@ -159,11 +191,39 @@ SEEDED, and none of it is the thing under proof:
   It decides only WHETHER the panel mounts the card; everything the card then
   does is the shipped path.
 
-## Files
+## The capture index — every host named by its RECORDED ANCHORS
 
-- `s9c-10..13-chat-thread-*` — pending page, pending card, settled page, settled card.
-- `s9c-20-run-card-*` — pending page, pending card, settled page, settled card.
-- `s9c-30-page-gate-region-*` — pending page, pending card, after-decision page.
+A file name carries no authority. Each row below names the host from the
+`data-lifecycle-card-host` the card itself published, quoted from the log line
+beside the picture. Read the log, not the file name; where the two ever disagree,
+the log is the record and the file name is the error.
+
+| File | Recorded host (from the card's own DOM) | Recorded state | Where the record is |
+|---|---|---|---|
+| `s9c-10-chat-thread-pending-page.png` | `chat_thread` | `pending` | `capture-chat.txt` → `ANCHORS pending` |
+| `s9c-11-chat-thread-pending-card.png` | `chat_thread` | `pending` | `capture-chat.txt` → `ANCHORS pending` |
+| `s9c-12-chat-thread-settled-page.png` | `chat_thread` | `settled` | `capture-chat.txt` → `ANCHORS settled` |
+| `s9c-13-chat-thread-settled-card.png` | `chat_thread` | `settled` | `capture-chat.txt` → `ANCHORS settled` |
+| `s9c-20-run-card-pending-page.png` | `run_card` | `pending` | `capture-run_card.txt` → `ANCHORS pending` |
+| `s9c-20-run-card-pending-card.png` | `run_card` | `pending` | `capture-run_card.txt` → `ANCHORS pending` |
+| `s9c-20-run-card-settled-page.png` | `run_card` | `settled` | `capture-run_card.txt` → `ANCHORS settled` |
+| `s9c-20-run-card-settled-card.png` | `run_card` | `settled` | `capture-run_card.txt` → `ANCHORS settled` |
+| `s9c-30-page-gate-region-pending-page.png` | `page_gate_region` | `pending` | `capture-page_gate_region.txt` → `ANCHORS pending` |
+| `s9c-30-page-gate-region-pending-card.png` | `page_gate_region` | `pending` | `capture-page_gate_region.txt` → `ANCHORS pending` |
+| `s9c-30-page-gate-region-after-decision-page.png` | `page_gate_region` | **no card** — the host removed it | `capture-page_gate_region.txt` → `AFTER DECISION card instances on this host = 0` |
+
+The chat rows additionally record `insideConversationList: true`, and the settled
+chat row records `sameConversation: 1` — the pending card, the decision and the
+settled card are one card in one conversation.
+
+The last row is deliberately not a settled card, and its log line says so in the
+host's own terms: this host removes the card DOM after a decision, so the picture
+is the page's replacement region. See the finding above.
+
+## The other files
+
 - `capture-chat.txt`, `capture-run_card.txt`, `capture-page_gate_region.txt`,
   `capture-wire.txt` — the unedited capture logs: anchors and every wire line.
 - `production-build-attempt.txt` — the unedited tail of the failed build.
+- `drivers/` — the capture path itself, so this round is reproducible rather than
+  narrated. See `drivers/README.md`.
