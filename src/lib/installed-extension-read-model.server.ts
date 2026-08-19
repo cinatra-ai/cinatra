@@ -95,15 +95,16 @@ import "server-only";
 // resolution above, so the `org-then-workspace` arm is reached only by an actor
 // the row's audience admits.
 //
-// SCOPED TO THE KINDS THAT HAVE ONE. The polymorphic access resource IS the
-// `installed_extension.id` for connector / artifact / workflow and only those —
-// `INSTALL_ACCESS_TARGET_KINDS` / `resolveInstalledExtensionResource`. They are
-// exactly the kinds whose install PERSISTS an audience
-// (`accessTargetToInstallPolicy`), so they are exactly the kinds that have one
-// to consult; the canonical row's `kind` vocabulary is otherwise NOT the
-// permissions resource-kind vocabulary, and keying a policy read on a row id
-// from a different identity space would authorize against the wrong resource.
-// A row of any other kind therefore carries no install-row audience and is
+// SCOPED TO THE KINDS THAT HAVE ONE. The canonical row's `kind` vocabulary
+// (`agent | connector | artifact | skill | workflow`) is NOT the permissions
+// resource-kind vocabulary, so the row kind is narrowed through
+// `installRowResourceKind` (`permissions-kind-hooks.ts`) — the kinds whose
+// polymorphic `resource_id` IS the `installed_extension.id`, which are exactly
+// the kinds whose install persists an audience. For anything else the access
+// resource lives in its own identity table (the skills catalog, `agent_runs`,
+// `nango_connection`), so keying a policy read on an install row id there would
+// authorize against a DIFFERENT resource — a lookup in the wrong identity
+// space, not a stricter one. Such a row carries no install-row audience and is
 // reported exactly as before. The CG-5 serve gate's source packages are
 // connector rows, so the blocker's surface is fully covered.
 
@@ -133,9 +134,9 @@ import type {
   ExtensionAccessDecision,
   ExtensionAccessResource,
 } from "@cinatra-ai/extensions/enforce-extension-access";
-// The kinds whose install row IS the polymorphic access resource — the one
-// vocabulary that decides whether an install-row audience exists to consult.
-import { isInstallAccessTargetKind } from "@cinatra-ai/extensions/install-access-target";
+// Narrows a CANONICAL row kind to the permissions resource kind that addresses
+// that ROW — null when the row is not itself the access resource.
+import { installRowResourceKind } from "@cinatra-ai/extensions/permissions-kind-hooks";
 import { classifyExtensionTrust, type TrustVerdict } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
@@ -447,7 +448,13 @@ export async function buildInstalledExtensionReadModel(
   // `DEFAULT_EXTENSION_ACCESS_POLICY` — sets all three visibility fields to the
   // same token set, so list/read/use coincide today; `use` is the tier that
   // matches the consumer if they ever diverge.)
-  if (isInstallAccessTargetKind(row.kind)) {
+  //
+  // The evaluator is imported HERE rather than at module scope: the extensions
+  // access modules reach the permissions store and its Postgres connection, and
+  // nothing pays for that until a row actually needs authorizing — the same
+  // rationale `installed-catalog-read.ts` records for its own deferred import.
+  const resourceKind = installRowResourceKind(row.kind);
+  if (resourceKind) {
     let audience: ExtensionAccessDecision;
     try {
       const canAccessInstallRow =
@@ -455,7 +462,7 @@ export async function buildInstalledExtensionReadModel(
         (await import("@cinatra-ai/extensions/enforce-extension-access")).canExtensionAccess;
       audience = await canAccessInstallRow(
         {
-          kind: row.kind,
+          kind: resourceKind,
           resourceId: row.id,
           owner: {
             ownerLevel: row.ownerLevel,
