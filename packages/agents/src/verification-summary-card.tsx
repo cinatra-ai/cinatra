@@ -269,9 +269,12 @@ function AuthorizedScope({ paths }: { paths: readonly string[] }): ReactElement 
         </p>
       ) : (
         <ul className="flex flex-wrap gap-1.5">
-          {paths.map((path) => (
+          {paths.map((path, index) => (
             <li
-              key={path}
+              // Positional, like the diff rows: the manifest is a bounded LIST,
+              // not a set, and nothing upstream de-duplicates it — a repeated
+              // path would otherwise collide on its React key.
+              key={`${index}:${path}`}
               className="rounded-chip border border-line bg-surface-muted px-1.5 py-0.5 font-mono text-badge-2xs text-foreground"
               data-authorized-path={path}
             >

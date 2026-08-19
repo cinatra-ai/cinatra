@@ -69,6 +69,7 @@ beforeEach(() => {
   // `clearAllMocks` clears CALLS, not implementations, so a per-test
   // `mockResolvedValue` would otherwise leak into the next test. The advisory
   // read's default is "no comments" — the shape most cases want.
+  readAdvisoryCommentsForGates.mockReset();
   readAdvisoryCommentsForGates.mockResolvedValue([] as never);
 });
 
@@ -385,6 +386,26 @@ describe("verification_summary — advisory, and now a reading to draw (§VII)",
     readReviewGate.mockResolvedValue({ id: "gate-row-1" });
     readVerificationRecordForGate.mockResolvedValue(RECORD);
     readAdvisoryCommentsForGates.mockRejectedValue(new Error("store down") as never);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    expect(resolved.state).toEqual({ state: "advisory" });
+    expect((resolved.body as { advisoryComments: unknown[] }).advisoryComments).toEqual([]);
+  });
+
+  it("…and a SYNCHRONOUS throw from that store keeps the reading too", async () => {
+    // A `.catch()` on the call would not cover this shape: a store that throws
+    // before returning a promise throws before the handler is attached, and the
+    // module's outer guard would turn the whole card into an `absent`. The
+    // reading is already authorized at this point; only the panel may be lost.
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockImplementation(() => {
+      throw new TypeError("not a function on this build");
+    });
     const resolved = await resolveLifecycleCardState({
       viewType: "verification_summary",
       ref: REF,

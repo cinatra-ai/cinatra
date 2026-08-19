@@ -281,7 +281,18 @@ async function resolveVerificationSummary(
   // store that fails here is not allowed to collapse the whole reading into an
   // `absent`: the verdict and the diff are still authorized, and the card says
   // "no advisory comments" rather than vanishing.
-  const comments = await readAdvisoryCommentsForGates([gate.id]).catch(() => []);
+  //
+  // A `try` BLOCK, not a `.catch()` on the call. A synchronous throw — a store
+  // that is not a function on some build, a driver that validates its argument
+  // eagerly — happens BEFORE a `.catch` can be attached, so it would escape to
+  // this module's outer handler and become an `absent`: exactly the collapse
+  // the line above says cannot happen. The block catches both shapes.
+  let comments: readonly { authorKind: string; body: string }[] = [];
+  try {
+    comments = await readAdvisoryCommentsForGates([gate.id]);
+  } catch {
+    comments = [];
+  }
   // A record this build cannot read is indistinguishable from no record at all.
   const body = projectVerificationBody(record, comments);
   if (!body) return absent;
