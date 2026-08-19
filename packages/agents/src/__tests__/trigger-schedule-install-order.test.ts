@@ -93,6 +93,13 @@ async function loadService() {
   vi.doMock("../trigger-schedule-proposal-store", () => ({
     ProposalAlreadyConsumedError: class extends Error {},
     claimPendingInstallIntents: vi.fn(async () => []),
+    // The lineage-latest ratchet (cinatra#2837). This suite drives CONFIRM and
+    // the install drain, neither of which re-proposes, so the pair is present
+    // to keep the module's export shape honest and nothing more.
+    readLineageReproposal: vi.fn(async () => null),
+    claimLineageReproposal: vi.fn(
+      async (input: { consumeKey: string; token: string; expiresAt: Date }) => input,
+    ),
     markInstallIntentArmed,
     markInstallIntentDone,
     readInstallIntent: vi.fn(async () => null),

@@ -538,3 +538,118 @@ describe("the local re-proposal is SCOPED to the ref it was made from", () => {
     expect(adjustExpiredScheduleProposal).toHaveBeenCalledWith({ token: OTHER_REF });
   });
 });
+
+describe("an IN-FLIGHT re-proposal is bound to the ref it was issued under", () => {
+  // The reset above covers the ref changing while the card SITS there. It does
+  // not, on its own, cover the press that is still in flight when it changes:
+  // Adjust awaits a dynamic import and then a server action, so proposal A's
+  // replacement can land after the instance has been handed proposal B. Storing
+  // whatever arrives would draw A's live schedule on B's card — a schedule B's
+  // reader was never shown and could then confirm.
+
+  const OTHER_REF = "a-different-proposal-ref";
+  const OTHER_VIEW = { ...PROPOSAL_VIEW, ref: OTHER_REF };
+
+  function answers() {
+    return {
+      [EXPIRED_REF]: { state: { state: "settled" }, view: EXPIRED_BODY },
+      [FRESH_REF]: {
+        state: { state: "pending", canDecide: true, canComment: false },
+        view: PENDING_BODY,
+      },
+      [OTHER_REF]: { state: { state: "settled" }, view: EXPIRED_BODY },
+    };
+  }
+
+  /** An Adjust whose answer is released by the TEST, not by the microtask queue. */
+  function deferredAdjust() {
+    let release: (value: unknown) => void = () => {};
+    adjustExpiredScheduleProposal.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    return async (value: unknown) => {
+      await act(async () => {
+        release(value);
+      });
+    };
+  }
+
+  it("drops a completion that lands AFTER the card moved to another proposal", async () => {
+    const fetchMock = mockResolveByRef(answers());
+    const release = deferredAdjust();
+    const { container, rerender } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <LifecycleCard view={PROPOSAL_VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    // The press is issued under EXPIRED_REF and does not answer yet.
+    const adjust = await screen.findByRole("button", { name: "Adjust" });
+    await act(async () => {
+      fireEvent.click(adjust);
+    });
+    expect(adjustExpiredScheduleProposal).toHaveBeenCalledWith({ token: EXPIRED_REF });
+
+    // The SAME instance is handed a DIFFERENT proposal while that press is in
+    // flight, and settles on its own expired reading.
+    await act(async () => {
+      rerender(
+        <LifecycleCardSurfaceProvider host="chat_thread">
+          <LifecycleCard view={OTHER_VIEW} />
+        </LifecycleCardSurfaceProvider>,
+      );
+    });
+    await waitFor(() =>
+      expect(container.querySelector('[data-lifecycle-card-state="settled"]')).not.toBeNull(),
+    );
+    fetchMock.mockClear();
+
+    // Only NOW does the first proposal's replacement arrive.
+    await release({ ok: true, token: FRESH_REF, expiresAt: 2_000_000_000 });
+
+    // It changes nothing: this card still draws the proposal it is actually
+    // showing, and the stale replacement is never resolved under it.
+    expect(container.querySelector('[data-lifecycle-card-state="settled"]')).not.toBeNull();
+    expect(screen.getByText(/expired/i)).toBeTruthy();
+    expect(container.querySelector('[data-lifecycle-card-state="pending"]')).toBeNull();
+    const asked = fetchMock.mock.calls.map(
+      (call) => JSON.parse((call[1] as { body: string }).body).ref as string,
+    );
+    expect(asked).not.toContain(FRESH_REF);
+    expect(asked).not.toContain(EXPIRED_REF);
+
+    // And the card still acts as itself: the next press carries ITS ref.
+    adjustExpiredScheduleProposal.mockReset();
+    adjustExpiredScheduleProposal.mockResolvedValue({
+      ok: true,
+      token: FRESH_REF,
+      expiresAt: 2_000_000_000,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Adjust" }));
+    });
+    expect(adjustExpiredScheduleProposal).toHaveBeenCalledWith({ token: OTHER_REF });
+  });
+
+  it("still swaps in a completion that lands under an UNCHANGED ref", async () => {
+    // The positive control for the same binding: nothing moved underneath the
+    // card, so a late answer is still this card's answer and takes effect.
+    mockResolveByRef(answers());
+    const release = deferredAdjust();
+    const { container } = renderInChat();
+    const adjust = await screen.findByRole("button", { name: "Adjust" });
+    await act(async () => {
+      fireEvent.click(adjust);
+    });
+    expect(container.querySelector('[data-lifecycle-card-state="pending"]')).toBeNull();
+
+    await release({ ok: true, token: FRESH_REF, expiresAt: 2_000_000_000 });
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-lifecycle-card-state="pending"]')).not.toBeNull(),
+    );
+    expect(screen.queryByText(/expired/i)).toBeNull();
+  });
+});

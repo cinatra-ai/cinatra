@@ -18,13 +18,17 @@ import "server-only";
 //              to mutate — which is why Adjust needs no authority at all and can
 //              never half-arm a schedule.
 //
-// ADJUST HAS TWO FORMS, and they differ in exactly one place. Editing the rows
+// ADJUST HAS TWO FORMS, and they differ in exactly two places. Editing the rows
 // on a DRAWN card asks a different question, so it gets a fresh consume identity
-// and the superseded card stays separately answerable. Adjusting an EXPIRED card
-// re-asks the SAME question off the same ref, so its replacement INHERITS the
-// original's consume identity: one lineage, one row in the consume table, one
-// run — whatever order a re-propose and an in-flight Confirm land in. See
-// `reproposeExpiredScheduleProposal`.
+// and the superseded card stays separately answerable; it writes nothing at all.
+// Adjusting an EXPIRED card re-asks the SAME question off the same ref, so (a)
+// its replacement INHERITS the original's consume identity — one lineage, one
+// row in the consume table, one run, whatever order a re-propose and an
+// in-flight Confirm land in — and (b) it is IDEMPOTENT WHILE LIVE: the lineage
+// records the replacement holding its window open, and pressing Adjust again
+// hands that same token back rather than minting another. The expired ref is
+// readable forever by design, and that is the only thing stopping it being an
+// unbounded token mill. See `reproposeExpiredScheduleProposal`.
 //
 // THE AI CANNOT ARM ANYTHING. The producer is a read-only render primitive; it
 // mints a card. Confirm is a HUMAN SESSION action: it runs under a live cookie
@@ -93,11 +97,13 @@ import { setRunTriggerForActor } from "./trigger-service";
 import { assertAgentPackageRunnable } from "./runtime-install-gate";
 import {
   ProposalAlreadyConsumedError,
+  claimLineageReproposal,
   claimPendingInstallIntents,
   markInstallIntentArmed,
   markInstallIntentDone,
   parkInstallIntent,
   readInstallIntent,
+  readLineageReproposal,
   readProposalConsume,
   releaseInstallIntent,
   spendProposalWithinTx,
@@ -702,10 +708,39 @@ export async function resolveProposalForReader(
  * `adjustScheduleProposal` (which does take the rows, because a reader editing
  * them is choosing new ones) stays exactly as it is for the drawn form.
  *
- * Re-proposing needs NO authority, by §VI's own argument: it writes nothing, so
- * there is nothing to be authorized for. What the reader ends up holding is a
- * new question — whether they may answer it is re-resolved at render and again
- * at Confirm, as it always was.
+ * Re-proposing needs NO authority, by §VI's own argument: it creates no run, no
+ * trigger row and no record that this proposal was accepted, so there is nothing
+ * to be authorized for. What the reader ends up holding is a new question —
+ * whether they may answer it is re-resolved at render and again at Confirm, as
+ * it always was. The one row it does write is the lineage ratchet below, which
+ * is a bound ON this act rather than a product of it.
+ *
+ * IDEMPOTENT WHILE LIVE — the lineage-latest ratchet (codex round-4 finding 2).
+ * An expired ref reads as authenticated contents FOREVER; that is deliberate
+ * (§VI's expired card depends on it) and it means the ref in a transcript is a
+ * re-proposal capability with no end date. The consume edge caps the lineage at
+ * one RUN and caps minting at nothing: before this, every press produced another
+ * fresh-TTL token, so a reader — or anyone holding a lifted transcript who can
+ * authenticate as them — could keep an answerable window open indefinitely and
+ * accumulate unbounded live tokens for one question.
+ *
+ * The bound is a single row keyed by the consume key this function already
+ * derives (`trigger_schedule_proposal_lineage`). It names the replacement
+ * currently holding the window open; while that replacement is un-expired,
+ * Adjust RETURNS IT, and only once it has itself expired may another be minted.
+ * Three consequences:
+ *
+ *   - at most ONE live token per lineage at any moment, so "how many
+ *     confirmable copies of this question exist" has the answer 1, not n;
+ *   - the confirmation window rolls forward by at most one TTL per REAL expiry,
+ *     never by one per press;
+ *   - the UX is unchanged — the reader may press Adjust as often as they like
+ *     and always gets a live card back; it is simply the same one.
+ *
+ * A SUPERSEDED replacement's own ref keeps working exactly as any other expired
+ * member of the lineage: it resolves to the expired reading, and its Adjust
+ * answers with the CURRENT live replacement rather than opening a third branch —
+ * the lineage has one identity, and now one live token.
  *
  * ONLY AN EXPIRED READING RE-PROPOSES (codex round-3 finding 1). The earlier
  * cut read the token's status and never required it, so an authenticated caller
@@ -761,7 +796,10 @@ export async function reproposeExpiredScheduleProposal(
   }
   const { proposal } = reading;
 
-  const consumed = await readProposalConsume(proposalConsumeKey(proposal.nonce));
+  // The lineage's ONE identity — spent by Confirm, and keyed on by the ratchet
+  // below. Derived once here; both questions are about the same lineage.
+  const consumeKey = proposalConsumeKey(proposal.nonce);
+  const consumed = await readProposalConsume(consumeKey);
   if (consumed) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
 
   // A ONE-SHOT WHOSE MOMENT HAS PASSED cannot be re-proposed as it stands, and
@@ -779,6 +817,28 @@ export async function reproposeExpiredScheduleProposal(
     }
   }
 
+  // THE LINEAGE-LATEST RATCHET. If this lineage is already holding a
+  // replacement open, that replacement IS the answer — pressing Adjust again
+  // does not mint a second one. The stored token is re-read against the reader
+  // asking, exactly as their own ref was, so the ratchet can never hand back a
+  // token this reader is not entitled to and can never disagree with the
+  // token's own clock about whether it is still live.
+  const latest = await readLineageReproposal(consumeKey);
+  if (latest) {
+    const held = readTriggerScheduleProposalToken({
+      token: latest.token,
+      expectedUserId: actor.userId,
+      expectedOrgId: actor.orgId,
+    });
+    if (held?.status === "live") {
+      return {
+        ok: true,
+        token: latest.token,
+        expiresAt: held.proposal.expiresAt,
+      };
+    }
+  }
+
   const proposed = await reproposeTriggerScheduleInLineage({
     templateId: proposal.templateId,
     userId: actor.userId,
@@ -793,5 +853,24 @@ export async function reproposeExpiredScheduleProposal(
   // deleted or moved out of reach since; either way the card can no longer be
   // re-proposed, which is what `invalid` says.
   if (!proposed.ok) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
-  return { ok: true, token: proposed.token, expiresAt: proposed.expiresAt };
+
+  // Claim the lineage's live slot for it — or yield to a replacement a
+  // concurrent press established first, whose token is then the one the reader
+  // gets. The claim is one conditional statement, so "two live replacements"
+  // is not a race this code has to win either; see `claimLineageReproposal`.
+  // A mint that loses the claim is simply discarded: it wrote no run and armed
+  // nothing, so nothing has to be unwound.
+  const held = await claimLineageReproposal({
+    consumeKey,
+    token: proposed.token,
+    expiresAt: new Date(proposed.expiresAt * 1000),
+    orgId: actor.orgId,
+    templateId: proposal.templateId,
+    reproposedBy: actor.userId,
+  });
+  return {
+    ok: true,
+    token: held.token,
+    expiresAt: Math.floor(held.expiresAt.getTime() / 1000),
+  };
 }

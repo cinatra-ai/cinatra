@@ -21,10 +21,13 @@
 // ADJUST TRAVELS THE CARD'S OWN REF, NOTHING ELSE. The expired token already
 // carries the template and the schedule server-side and already proves the
 // reader was minted this proposal, so no agent id and no rows go to the client
-// and back. Re-proposing writes nothing — it mints a replacement token that
+// and back. Re-proposing arms nothing — it mints a replacement token that
 // INHERITS the original's consume identity, so the whole lineage addresses ONE
 // primary-keyed consume row and only one member of it can ever become a run —
 // which is why the button needs no authority and can never half-arm a schedule.
+// It is also IDEMPOTENT WHILE LIVE: pressing it again while the replacement it
+// already produced is un-expired hands the SAME token back, so a button the
+// reader can keep pressing is not a way to keep minting.
 //
 // ADJUST IS COOKIE-BOUND, SO IT IS GATED ON THE COOKIE-SESSION SURFACE.
 // `adjustExpiredScheduleProposal` is a SERVER ACTION: it proves the caller by
@@ -80,8 +83,19 @@ export function TriggerScheduleProposalExpired({
   view: TriggerScheduleProposalExpiredView;
   /** The ref this card resolved under — the expired proposal itself. */
   cardRef: string;
-  /** Hand the freshly minted proposal back so the card re-resolves under it. */
-  onReproposed: (token: string) => void;
+  /**
+   * Hand the freshly minted proposal back so the card re-resolves under it,
+   * TOGETHER WITH the ref the press was issued under.
+   *
+   * The origin travels because the answer can outlive the question. This press
+   * awaits a dynamic import and then a server action, and the card instance it
+   * was made from is reused by index — so by the time the replacement arrives
+   * the shell may be showing a DIFFERENT proposal, which correctly forgot this
+   * one. The shell compares the origin against what it is showing now and drops
+   * a completion that no longer belongs to it; this component states which
+   * proposal it asked about and lets it decide.
+   */
+  onReproposed: (token: string, originRef: string) => void;
 }): ReactElement {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -115,7 +129,10 @@ export function TriggerScheduleProposalExpired({
         setError(result.error);
         return;
       }
-      onReproposed(result.token);
+      // `cardRef` is the ref THIS press was issued under — the shell needs it
+      // to tell a completion that is still about the card in front of the
+      // reader from one that is not.
+      onReproposed(result.token, cardRef);
     } catch {
       // A transport failure is not a refusal: say the neutral thing and leave
       // the expired card exactly as it was, still pressable.

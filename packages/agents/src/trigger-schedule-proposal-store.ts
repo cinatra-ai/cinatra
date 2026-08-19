@@ -3,13 +3,18 @@ import "server-only";
 // ---------------------------------------------------------------------------
 // The trigger schedule PROPOSAL store (cinatra#2569, epic #2564 S5).
 //
-// Two durable facts and nothing else:
+// Three durable facts and nothing else:
 //
 //   1. THE CONSUME EDGE — this proposal has been spent, and here is the run it
 //      produced. A PRIMARY KEY on `consume_key`, so "spent twice" is a database
 //      error rather than a race the application has to notice.
 //   2. THE INSTALL INTENT — this run's schedule still has to be armed and
 //      installed. An outbox row drained in a PINNED ORDER.
+//   3. THE LINEAGE-LATEST RATCHET — this proposal lineage is already holding a
+//      live replacement open, and here it is. A PRIMARY KEY on `consume_key`
+//      again, so re-proposing an expired card is IDEMPOTENT WHILE LIVE instead
+//      of minting without bound. Unlike the other two it hangs off no run (it
+//      exists before one does) — see `claimLineageReproposal`.
 //
 // WHY BOTH ARE WRITTEN WITH THE RUN, IN ONE TRANSACTION. Confirm has to produce
 // three things together: the proposal is spent, the run exists, the schedule is
@@ -39,14 +44,16 @@ import "server-only";
 // crash anywhere between simply leaves the intent claimable again.
 // ---------------------------------------------------------------------------
 
-import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "./db";
 import {
   triggerScheduleInstallOutbox,
   triggerScheduleProposalConsumes,
+  triggerScheduleProposalLineage,
   type TriggerScheduleInstallOutboxRow,
+  type TriggerScheduleProposalLineageRow,
 } from "./schema";
 import type { GuardedRunTx } from "./org-write-run-seam";
 
@@ -175,6 +182,126 @@ export async function readProposalConsume(
     templateId: row.templateId,
     consumedBy: row.consumedBy,
     consumedAt: row.consumedAt,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The lineage-latest ratchet
+// ---------------------------------------------------------------------------
+
+/** The replacement a lineage is currently holding open. */
+export type LineageReproposalRecord = {
+  consumeKey: string;
+  token: string;
+  expiresAt: Date;
+};
+
+function projectLineage(
+  row: TriggerScheduleProposalLineageRow,
+): LineageReproposalRecord {
+  return {
+    consumeKey: row.consumeKey,
+    token: row.latestToken,
+    expiresAt: row.expiresAt,
+  };
+}
+
+/**
+ * Read the replacement this lineage is currently holding open, if any.
+ *
+ * Answers the row whatever its expiry: whether it is still LIVE is decided by
+ * the caller, by re-reading the token against the reader asking — the same
+ * authenticated read the ref itself went through, so the ratchet can never hand
+ * back a token this reader is not entitled to and can never disagree with the
+ * token's own clock.
+ */
+export async function readLineageReproposal(
+  consumeKey: string,
+  executor: Executor = db,
+): Promise<LineageReproposalRecord | null> {
+  const rows = await (executor as typeof db)
+    .select()
+    .from(triggerScheduleProposalLineage)
+    .where(eq(triggerScheduleProposalLineage.consumeKey, consumeKey))
+    .limit(1);
+  return rows[0] ? projectLineage(rows[0]) : null;
+}
+
+/**
+ * CLAIM the lineage's live slot for a freshly minted replacement — or YIELD to
+ * the one already in it.
+ *
+ * ONE STATEMENT, because the check and the write have to be the same act. Two
+ * Adjusts racing on the same expired ref both read "no live replacement" and
+ * both mint; if each then wrote its own token, the lineage would be holding two
+ * live tokens at once and the bound this table exists for would be exactly as
+ * absent as before. So the upsert carries the condition: it overwrites the row
+ * ONLY when the replacement already there has expired (`setWhere`), and returns
+ * nothing when it has not. The loser then reads the winner's row and answers
+ * with THAT token — its own mint is discarded unreturned, which costs nothing,
+ * because minting writes no run and arms nothing.
+ *
+ * Returns the AUTHORITATIVE latest replacement — the caller hands the reader
+ * whatever comes back, never assuming it is the token it passed in.
+ */
+export async function claimLineageReproposal(input: {
+  consumeKey: string;
+  token: string;
+  expiresAt: Date;
+  orgId: string;
+  templateId: string;
+  reproposedBy: string;
+}): Promise<LineageReproposalRecord> {
+  const claimed = await db
+    .insert(triggerScheduleProposalLineage)
+    .values({
+      consumeKey: input.consumeKey,
+      latestToken: input.token,
+      expiresAt: input.expiresAt,
+      orgId: input.orgId,
+      templateId: input.templateId,
+      reproposedBy: input.reproposedBy,
+    })
+    .onConflictDoUpdate({
+      target: triggerScheduleProposalLineage.consumeKey,
+      set: {
+        latestToken: input.token,
+        expiresAt: input.expiresAt,
+        orgId: input.orgId,
+        templateId: input.templateId,
+        reproposedBy: input.reproposedBy,
+        updatedAt: sql`now()`,
+      },
+      // THE RATCHET, in SQL. A live replacement is never overwritten, so the
+      // window can only roll forward once the last one has genuinely closed.
+      setWhere: lte(triggerScheduleProposalLineage.expiresAt, sql`now()`),
+    })
+    .returning();
+  if (claimed[0]) return projectLineage(claimed[0]);
+
+  // The row was there and still LIVE: somebody else holds the slot. Answer with
+  // theirs. The `gt` is belt-and-braces — the same condition the upsert just
+  // refused on — so a row that expired in the microseconds between the two
+  // statements is not returned as live; the caller then simply mints again on
+  // the next press.
+  const held = await db
+    .select()
+    .from(triggerScheduleProposalLineage)
+    .where(
+      and(
+        eq(triggerScheduleProposalLineage.consumeKey, input.consumeKey),
+        gt(triggerScheduleProposalLineage.expiresAt, sql`now()`),
+      ),
+    )
+    .limit(1);
+  if (held[0]) return projectLineage(held[0]);
+  // Neither claimed nor held — the row was deleted (a retention pass) between
+  // the two statements. Nothing is holding the slot, so the caller's own mint is
+  // the honest answer; the next press re-establishes the row.
+  return {
+    consumeKey: input.consumeKey,
+    token: input.token,
+    expiresAt: input.expiresAt,
   };
 }
 

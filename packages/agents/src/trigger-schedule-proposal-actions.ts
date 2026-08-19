@@ -102,9 +102,16 @@ export async function adjustScheduleProposal(args: {
  * also why this cannot be steered at a template the caller was never proposed.
  *
  * A HUMAN SESSION action like its siblings: the user and org come from the live
- * cookie session and never from an argument. It arms nothing — re-proposing
- * writes nothing at all — so the "the AI can present a schedule and can never
- * arm one" property is untouched.
+ * cookie session and never from an argument. It arms nothing — the one row it
+ * writes is the lineage-latest RATCHET, which records which replacement is
+ * holding this lineage's window open and nothing about a run, a trigger or a
+ * schedule — so the "the AI can present a schedule and can never arm one"
+ * property is untouched.
+ *
+ * IDEMPOTENT WHILE LIVE. Pressing Adjust again on a card whose replacement is
+ * still un-expired returns THAT replacement rather than minting another, so a
+ * ref lifted from a transcript is not an unbounded token mill and the
+ * confirmation window rolls by at most one TTL per real expiry.
  */
 export async function adjustExpiredScheduleProposal(args: {
   token: string;

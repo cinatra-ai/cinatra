@@ -22,6 +22,15 @@
 //     proposal loses the insert and its whole transaction — including the run it
 //     was about to create — rolls back.
 //
+//   trigger_schedule_proposal_lineage — the LINEAGE-LATEST RATCHET (cinatra#2837).
+//     An expired ref is readable forever, so Adjust off a transcript is a
+//     re-proposal capability that never dies. One row per lineage records the
+//     replacement it is currently holding open; while that replacement is
+//     un-expired, Adjust HANDS IT BACK instead of minting another. One live
+//     token per lineage at any moment, and the confirmation window rolls by at
+//     most one TTL per real expiry. Full argument on
+//     `reproposeExpiredScheduleProposal`.
+//
 //   trigger_schedule_install_outbox — the install INTENT. A trigger has two
 //     halves in two systems (the durable row and the BullMQ scheduler), so
 //     Confirm commits an intent and a drain installs it in a PINNED ORDER: ARM
@@ -30,8 +39,21 @@
 //     one-shot fire is lost. Full argument in
 //     `packages/agents/src/trigger-schedule-proposal-store.ts`.
 //
-// Both cascade from `agent_runs(id)` and are keyed one row per run, so deleting
-// a run collects them and neither grows independently of the run population.
+// The first two cascade from `agent_runs(id)` and are keyed one row per run, so
+// deleting a run collects them and neither grows independently of the run
+// population.
+//
+// THE THIRD CANNOT, and that is a property of what it is for rather than an
+// oversight: the ratchet row exists precisely BEFORE any run does — a lineage
+// that is re-proposed and never confirmed has no run to hang from, and the row
+// whose whole job is to bound minting cannot be keyed on the thing minting has
+// not produced. It is bounded instead by its own shape: ONE row per lineage,
+// UPSERTED and never appended, so the table is the set of proposals a person
+// actually pressed Adjust on after they expired. Every row is worthless the
+// moment `expires_at` passes — a reaper may delete any of them at any time with
+// no coordination and no correctness cost, because the only consequence is that
+// the next Adjust mints a fresh replacement, which is exactly what it would
+// have done anyway. `..._expires_idx` is there for that pass.
 
 export function triggerScheduleProposalSchemaQueries(
   schemaName: string,
@@ -55,6 +77,32 @@ export function triggerScheduleProposalSchemaQueries(
       consumed_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS trigger_schedule_proposal_consumes_run_idx ON "${s}"."trigger_schedule_proposal_consumes" (run_id)` },
+    // trigger_schedule_proposal_lineage: the LINEAGE-LATEST RATCHET for
+    // re-proposing an EXPIRED proposal (cinatra#2837). A proposal token stays
+    // readable long past its own `exp` — that is what makes the expired card
+    // possible — so the ref sitting in a transcript is an Adjust capability with
+    // no end date, and the consume edge above caps RUNS at one while capping
+    // minting at nothing. This row is the cap: `consume_key` is the PK, so the
+    // lineage has exactly one, and it names the replacement currently holding
+    // the window open. Adjust returns that token while `expires_at` is in the
+    // future and only mints past it, which is what makes the act IDEMPOTENT
+    // WHILE LIVE. `latest_token` is the proposal ciphertext — the same
+    // authenticated, reader-bound, org-bound bytes the transcript already
+    // persists in `assistant_turns.content`, held here for at most one TTL.
+    // NO run reference: the row exists before any run does, which is the point.
+    { text: `CREATE TABLE IF NOT EXISTS "${s}"."trigger_schedule_proposal_lineage" (
+      consume_key text PRIMARY KEY,
+      latest_token text NOT NULL,
+      expires_at timestamptz NOT NULL,
+      org_id text NOT NULL,
+      template_id text NOT NULL,
+      reproposed_by text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    // Non-unique, for the retention pass described in the header: every row is
+    // discardable the moment its replacement expires.
+    { text: `CREATE INDEX IF NOT EXISTS trigger_schedule_proposal_lineage_expires_idx ON "${s}"."trigger_schedule_proposal_lineage" (expires_at)` },
     // trigger_schedule_install_outbox: the schedule-INSTALL intent (cinatra#2569).
     // A trigger has two halves in two systems — the durable row and the BullMQ
     // scheduler — so Confirm commits an INTENT and a drain installs in a PINNED

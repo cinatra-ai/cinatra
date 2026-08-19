@@ -56,6 +56,8 @@ const assertAgentPackageRunnable = vi.fn();
 const createAgentRunPendingInput = vi.fn();
 const spendProposalWithinTx = vi.fn();
 const claimPendingInstallIntents = vi.fn();
+const readLineageReproposal = vi.fn();
+const claimLineageReproposal = vi.fn();
 
 /**
  * The ONE primitive the lineage argument rests on, standing in for
@@ -75,6 +77,20 @@ type ConsumeRow = {
   consumedAt: Date;
 };
 const ledger = new Map<string, ConsumeRow>();
+
+/**
+ * The SECOND primitive the lineage argument now rests on, standing in for
+ * `trigger_schedule_proposal_lineage`: a map keyed by `consume_key` again, and
+ * an upsert that REFUSES to overwrite a row whose replacement is still live.
+ *
+ * Modelled rather than mocked away for the same reason the consume ledger is —
+ * "at most one live replacement per lineage" is a claim about exactly this
+ * conditional write, and a `vi.fn()` returning a canned token would prove the
+ * canned token. The clock is `Date.now()`, so the suite's fake timers move it
+ * the way `now()` moves in the real statement.
+ */
+type LineageRow = { consumeKey: string; token: string; expiresAt: Date };
+const lineage = new Map<string, LineageRow>();
 /** Every run row the fake `createAgentRunPendingInput` actually COMMITTED. */
 const committedRuns: string[] = [];
 
@@ -106,6 +122,8 @@ vi.mock("../runtime-install-gate", () => ({
 }));
 vi.mock("../trigger-schedule-proposal-store", () => ({
   ProposalAlreadyConsumedError: FakeProposalAlreadyConsumedError,
+  claimLineageReproposal: (...args: unknown[]) => claimLineageReproposal(...args),
+  readLineageReproposal: (...args: unknown[]) => readLineageReproposal(...args),
   claimPendingInstallIntents: (...args: unknown[]) =>
     claimPendingInstallIntents(...args),
   markInstallIntentArmed: vi.fn(),
@@ -155,6 +173,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   ledger.clear();
+  lineage.clear();
   committedRuns.length = 0;
   runSeq = 0;
   readAgentTemplateById.mockResolvedValue({
@@ -169,6 +188,24 @@ beforeEach(() => {
   readRunTriggerByRunId.mockResolvedValue(null);
   assertAgentPackageRunnable.mockResolvedValue(null);
   claimPendingInstallIntents.mockResolvedValue([]);
+  readLineageReproposal.mockImplementation(
+    async (key: string) => lineage.get(key) ?? null,
+  );
+  // The conditional upsert: a LIVE row is never overwritten, and the caller is
+  // answered with whatever the lineage is actually holding.
+  claimLineageReproposal.mockImplementation(
+    async (input: { consumeKey: string; token: string; expiresAt: Date }) => {
+      const held = lineage.get(input.consumeKey);
+      if (held && held.expiresAt.getTime() > Date.now()) return held;
+      const row: LineageRow = {
+        consumeKey: input.consumeKey,
+        token: input.token,
+        expiresAt: input.expiresAt,
+      };
+      lineage.set(input.consumeKey, row);
+      return row;
+    },
+  );
 });
 
 afterEach(() => {
@@ -533,6 +570,134 @@ describe("re-propose refuses anything that is not an EXPIRED reading", () => {
   });
 });
 
+describe("the lineage holds ONE live replacement — Adjust is idempotent while it lives", () => {
+  // WHAT THIS REPLACES. The suite used to pin that re-proposing "stays in the
+  // same lineage, however many times the reader presses Adjust" — which was
+  // true, and was also the defect: an expired ref reads as authenticated
+  // contents FOREVER (§VI's expired card depends on it), so every press minted
+  // another fresh-TTL token. The consume edge caps the lineage at one RUN; it
+  // caps minting at nothing, and it does not stop the confirmation window being
+  // rolled forward indefinitely by a button.
+  //
+  // The bound is the lineage-latest ratchet, and the shape it has to have is
+  // IDEMPOTENT WHILE LIVE: the same token comes back while it is un-expired, a
+  // new one only once it is not. Pressing Adjust as often as you like still
+  // works — you simply get the card you already have.
+
+  beforeEach(() => {
+    wireCreateRun();
+  });
+
+  it("returns the SAME token while the replacement it minted is still live", async () => {
+    const original = mintExpired();
+    const first = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    if (!first.ok) throw new Error("expected a fresh proposal");
+
+    // Press it again, and again. Nothing new is minted: the reader is handed
+    // the live card they already have.
+    const second = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    const third = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    if (!second.ok || !third.ok) throw new Error("expected the live replacement back");
+    expect(second.token).toBe(first.token);
+    expect(third.token).toBe(first.token);
+    // …and the window did not roll: same expiry, not three fresh TTLs.
+    expect(second.expiresAt).toBe(first.expiresAt);
+    expect(third.expiresAt).toBe(first.expiresAt);
+    // One live token for this lineage, whatever the reader does.
+    expect(lineage.size).toBe(1);
+  });
+
+  it("mints a NEW one only once that replacement has itself expired", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-17T10:00:00Z"));
+    const original = mintExpired();
+    const first = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    if (!first.ok) throw new Error("expected a fresh proposal");
+
+    // One second before the replacement's own expiry: still the same token.
+    vi.setSystemTime(new Date((first.expiresAt - 1) * 1000));
+    const stillLive = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    if (!stillLive.ok) throw new Error("expected the live replacement back");
+    expect(stillLive.token).toBe(first.token);
+
+    // Past it: the window has genuinely closed, so a new one may be minted —
+    // and it is still the SAME lineage, so still one run at most.
+    vi.setSystemTime(new Date((first.expiresAt + 1) * 1000));
+    const renewed = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    if (!renewed.ok) throw new Error("expected a fresh proposal");
+    expect(renewed.token).not.toBe(first.token);
+    expect(renewed.expiresAt).toBeGreaterThan(first.expiresAt);
+    expect(consumeKeyOf(renewed.token)).toBe(original.consumeKey);
+    // The window rolled by ONE TTL for one real expiry, not by one per press.
+    expect(renewed.expiresAt - first.expiresAt).toBe(
+      PROPOSAL_TTL_SECONDS + 1,
+    );
+    expect(lineage.size).toBe(1);
+  });
+
+  it("answers a SUPERSEDED replacement's own Adjust with the CURRENT live one", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-17T10:00:00Z"));
+    const original = mintExpired();
+    const superseded = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    if (!superseded.ok) throw new Error("expected a fresh proposal");
+
+    // That replacement expires; the reader presses Adjust and gets its successor.
+    vi.setSystemTime(new Date((superseded.expiresAt + 1) * 1000));
+    const current = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    if (!current.ok) throw new Error("expected a fresh proposal");
+    expect(current.token).not.toBe(superseded.token);
+
+    // The SUPERSEDED replacement's own ref is still a card in a transcript. It
+    // reads exactly as any other expired member of the lineage…
+    const resolved = await service.resolveProposalForReader(superseded.token, READER);
+    expect(resolved.phase).toBe("expired");
+
+    // …and pressing ITS Adjust joins the lineage where it already is, rather
+    // than opening a third branch.
+    const fromSuperseded = await service.reproposeExpiredScheduleProposal(
+      READER,
+      superseded.token,
+    );
+    if (!fromSuperseded.ok) throw new Error("expected the live replacement back");
+    expect(fromSuperseded.token).toBe(current.token);
+    expect(consumeKeyOf(fromSuperseded.token)).toBe(original.consumeKey);
+    expect(lineage.size).toBe(1);
+  });
+
+  it("hands the WINNER's token to both of two racing presses", async () => {
+    // Two Adjusts on the same expired ref, interleaved so both read "no live
+    // replacement" before either writes. Only one claim can land — the other
+    // reads the winner's row and answers with THAT token, so no reader ever
+    // holds a token the lineage is not holding open.
+    const original = mintExpired();
+    const [a, b] = await Promise.all([
+      service.reproposeExpiredScheduleProposal(READER, original.token),
+      service.reproposeExpiredScheduleProposal(READER, original.token),
+    ]);
+    if (!a.ok || !b.ok) throw new Error("expected both to have succeeded");
+    expect(a.token).toBe(b.token);
+    expect(lineage.size).toBe(1);
+    expect(lineage.get(original.consumeKey)?.token).toBe(a.token);
+  });
+
+  it("refuses a SPENT lineage without touching the ratchet at all", async () => {
+    // The consume check runs first and is unchanged: a settled lineage is not
+    // re-proposed, and no live slot is opened for one.
+    const original = mintExpired();
+    ledgerSpend(original.consumeKey, {
+      runId: "run_already",
+      orgId: ORG,
+      templateId: TEMPLATE,
+      consumedBy: USER,
+    });
+    const result = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    expect(result.ok).toBe(false);
+    expect(claimLineageReproposal).not.toHaveBeenCalled();
+    expect(lineage.size).toBe(0);
+  });
+});
+
 describe("ONE consume identity per lineage — old and new can never BOTH be spent", () => {
   beforeEach(() => {
     wireCreateRun();
@@ -544,11 +709,6 @@ describe("ONE consume identity per lineage — old and new can never BOTH be spe
     if (!result.ok) throw new Error("expected a fresh proposal");
     expect(result.token).not.toBe(original.token);
     expect(consumeKeyOf(result.token)).toBe(original.consumeKey);
-    // …and re-proposing again stays in the same lineage, however many times the
-    // reader presses Adjust.
-    const again = await service.reproposeExpiredScheduleProposal(READER, original.token);
-    if (!again.ok) throw new Error("expected a fresh proposal");
-    expect(consumeKeyOf(again.token)).toBe(original.consumeKey);
   });
 
   it("cannot yield two confirmable identities when Confirm commits MID-re-propose", async () => {

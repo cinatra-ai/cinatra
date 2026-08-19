@@ -1240,6 +1240,54 @@ export type TriggerScheduleProposalConsumeRow =
   typeof triggerScheduleProposalConsumes.$inferSelect;
 
 /**
+ * The LINEAGE-LATEST RATCHET — one row per proposal lineage, naming the
+ * replacement currently holding its confirmation window open (cinatra#2837).
+ *
+ * The consume edge above bounds RUNS at one per lineage. It bounds nothing
+ * about MINTING, and minting is the other half of the capability: a proposal
+ * token stays readable long past its own `exp` (that is what lets the expired
+ * card exist at all), so the ref sitting in a transcript is an Adjust that
+ * never dies. Without this row, every press produced another fresh-TTL token —
+ * unbounded live tokens for one question, and a confirmation window the reader
+ * could roll forward indefinitely by pressing a button.
+ *
+ * So a re-proposal is IDEMPOTENT WHILE LIVE: `consume_key` is the PRIMARY KEY,
+ * the row names the lineage's latest replacement, and Adjust HANDS THAT TOKEN
+ * BACK while `expires_at` is still in the future. A new one may be minted only
+ * once the last one has itself expired, which the upsert enforces in SQL rather
+ * than in the caller (`claimLineageReproposal`). One live token per lineage at
+ * any moment; the window rolls by at most one TTL per real expiry.
+ *
+ * NO `run_id`, and therefore no cascade: this row exists precisely BEFORE any
+ * run does. It is bounded by being UPSERTED rather than appended — one row per
+ * lineage, ever — and every row is discardable the moment `expires_at` passes,
+ * because the only consequence of losing it is the fresh mint that would have
+ * happened anyway. `expires_at` is indexed for that pass.
+ */
+export const triggerScheduleProposalLineage = cinatraSchema.table(
+  "trigger_schedule_proposal_lineage",
+  {
+    /** sha256 of the lineage's nonce — the SAME identity the consume edge spends. */
+    consumeKey:   text("consume_key").primaryKey(),
+    /** The replacement holding the window open. Reader- and org-bound ciphertext. */
+    latestToken:  text("latest_token").notNull(),
+    /** That replacement's own expiry — the whole ratchet condition. */
+    expiresAt:    timestamp("expires_at", { withTimezone: true }).notNull(),
+    orgId:        text("org_id").notNull(),
+    templateId:   text("template_id").notNull(),
+    reproposedBy: text("reproposed_by").notNull(),
+    createdAt:    timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt:    timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    expiresIdx: index("trigger_schedule_proposal_lineage_expires_idx").on(t.expiresAt),
+  }),
+);
+
+export type TriggerScheduleProposalLineageRow =
+  typeof triggerScheduleProposalLineage.$inferSelect;
+
+/**
  * The schedule-INSTALL outbox intent.
  *
  * A trigger has TWO halves: the durable row, and the BullMQ scheduler that

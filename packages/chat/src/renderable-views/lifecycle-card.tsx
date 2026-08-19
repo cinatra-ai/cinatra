@@ -130,19 +130,31 @@ export function LifecycleCard({
   view: { viewType: LifecycleDataPartViewType; schemaVersion: number; ref: string };
 }): ReactElement | null {
   const host = useLifecycleCardHost();
-  // The proposal this card is CURRENTLY showing. It starts as the transcript's
-  // own ref and changes exactly once: when Adjust re-proposes an expired card,
-  // the fresh token becomes the identity the runtime re-resolves under, so the
-  // reader watches the card come back to life in place. It is local by design —
-  // a proposal has no server record until Confirm, so there is nothing to
-  // persist, and a reload honestly returns to the expired reading.
-  const [adjustedRef, setAdjustedRef] = useState<string | null>(null);
+  // WHAT THIS CARD IS CURRENTLY SHOWING, as ONE value.
+  //
+  //   `sourceRef`     — the transcript's own ref, i.e. the last `view.ref` this
+  //                     instance adopted.
+  //   `reproposedRef` — the replacement Adjust minted FROM that source, or
+  //                     `null`. It is local by design: a proposal has no server
+  //                     record until Confirm, so there is nothing to persist,
+  //                     and a reload honestly returns to the expired reading.
+  //
+  // The two are one state atom rather than two because they share one
+  // invariant — a re-proposal only means anything ALONGSIDE the source it was
+  // made from — and because holding them together is what lets the completion
+  // handler below decide, from the LATEST committed value and nothing else,
+  // whether an answer that has just arrived is still about the card in front of
+  // the reader.
+  const [showing, setShowing] = useState<{
+    sourceRef: string;
+    reproposedRef: string | null;
+  }>({ sourceRef: view.ref, reproposedRef: null });
   // THE LOCAL RE-PROPOSAL IS SCOPED TO THE REF IT WAS MADE FROM.
   //
   // Renderable views are keyed BY INDEX in the transcript, so React reuses one
   // `LifecycleCard` instance when the list changes underneath it — a new turn
   // arriving, an earlier part being dropped, a thread being switched. Without
-  // this, the instance would keep `adjustedRef` from the PREVIOUS proposal and
+  // this, the instance would keep the re-proposal from the PREVIOUS proposal and
   // go on resolving and acting on it under a card that is now showing a
   // different one: the reader would press Adjust on proposal B and re-propose
   // proposal A. Nothing downstream could catch it, because every layer below is
@@ -153,18 +165,43 @@ export function LifecycleCard({
   // run yet, so an effect-based reset would leave one committed frame — and one
   // issued resolve — under the previous proposal's identity. React re-runs this
   // component before committing, so `activeRef` below is already the new ref.
-  const [sourceRef, setSourceRef] = useState(view.ref);
-  const sourceRefChanged = sourceRef !== view.ref;
+  const sourceRefChanged = showing.sourceRef !== view.ref;
   if (sourceRefChanged) {
-    setSourceRef(view.ref);
-    setAdjustedRef(null);
+    setShowing({ sourceRef: view.ref, reproposedRef: null });
   }
   // `sourceRefChanged` is read here as well as above so that even the render
-  // React is about to THROW AWAY computes the new ref: the two `set…` calls
-  // above only land on the re-run, and a discarded pass must not be the one
+  // React is about to THROW AWAY computes the new ref: the `setShowing` call
+  // above only lands on the re-run, and a discarded pass must not be the one
   // that hands a stale identity to the resolve hook.
-  const activeRef = sourceRefChanged ? view.ref : (adjustedRef ?? view.ref);
-  const onReproposed = useCallback((token: string) => setAdjustedRef(token), []);
+  const activeRef = sourceRefChanged
+    ? view.ref
+    : (showing.reproposedRef ?? view.ref);
+  // A COMPLETION IS BOUND TO THE REF THE PRESS WAS ISSUED UNDER.
+  //
+  // The reset above covers the ref changing while the card sits there; it does
+  // NOT cover an Adjust that is still IN FLIGHT when it changes. That press
+  // awaits a dynamic import and then a server action, so the answer can land
+  // arbitrarily late — after this instance has been handed a different proposal
+  // and correctly forgotten the old one. A handler that stored whatever arrived
+  // would then paint proposal A's replacement onto proposal B's card, and B's
+  // reader would be looking at, and able to confirm, a schedule they were never
+  // shown.
+  //
+  // So the child hands back the ref it issued the press under, and this compares
+  // it against what the card is showing NOW. "Now" is read inside the updater —
+  // never off a closure — because the closure that issued the press captured the
+  // OLD identity and would happily agree with itself. A completion whose origin
+  // is no longer the active ref is DROPPED: the stale replacement is never
+  // resolved, never drawn, and never re-proposed from. Nothing is cancelled
+  // server-side, because there is nothing to cancel — a re-proposal writes no
+  // run and arms nothing, so an ignored one simply ages out.
+  const onReproposed = useCallback((token: string, originRef: string) => {
+    setShowing((current) =>
+      originRef === (current.reproposedRef ?? current.sourceRef)
+        ? { ...current, reproposedRef: token }
+        : current,
+    );
+  }, []);
   // The one surface gate: a subtree that declared no host is not a lifecycle
   // surface, so the card is not part of it. Every DECLARED host draws every
   // kind — the per-surface restriction matrix is gone (owner ruling 2026-08-11).
