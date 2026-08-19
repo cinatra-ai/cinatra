@@ -367,6 +367,7 @@
       "@cinatra-ai/llm/openai-model-capabilities": ["./packages/llm/src/providers/openai-model-capabilities.ts"],
       "@cinatra-ai/llm/scripted-test-provider": ["./packages/llm/src/scripted-test-provider.ts"],
       "@cinatra-ai/llm/execution-plane": ["./packages/llm/src/execution-plane/index.ts"],
+      "@cinatra-ai/llm/mcp-access": ["./packages/llm/src/mcp-access.ts"],
       "@cinatra-ai/llm/mcp-materializer": ["./packages/llm/src/mcp-materializer.ts"],
       "@cinatra-ai/llm/structured-json": ["./packages/llm/src/structured-json.ts"],
       "@cinatra-ai/llm/usage-metering": ["./packages/llm/src/usage-metering.ts"],

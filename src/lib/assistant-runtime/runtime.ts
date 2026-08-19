@@ -38,6 +38,7 @@ import {
   isDelegatedChatMcpToolAllowed,
 } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
+import { buildCapabilityKeyResolver } from "@/lib/assistant-runtime/chat-mcp-capability-key";
 import {
   detectExplicitDispatchDirective,
   detectExplicitDispatchPackage,
@@ -575,10 +576,11 @@ function warnOnUnclassifiedVehicles(
 //                 connector inventory uses.
 //
 // The capability key for a primitive is derived from the LIVE connector
-// catalog rather than from a table: a primitive whose name is prefixed with a
-// catalog connector's key is gated on that connector. A connector installed
-// tomorrow gates its own primitives with no code change here, and a primitive
-// whose prefix matches no catalog connector is never gated.
+// catalog rather than from a table: a primitive whose name matches a catalog
+// connector's declared `mcpPrimitivePrefixes` is gated on that connector,
+// longest prefix winning. A connector installed tomorrow gates its own
+// primitives with no code change here, and a primitive whose name matches no
+// catalog prefix is never gated. See `chat-mcp-capability-key.ts`.
 //
 // Failure posture is fail-OPEN to the authoritative gate, never fail-closed
 // onto the user. If state cannot be resolved the turn runs unrestricted and
@@ -608,13 +610,13 @@ async function resolveChatMcpCatalogState(input: {
         .filter((row) => row.hasAuthorizedConnection)
         .map((row) => row.connectorKey),
     );
-    // Longest key first so a more specific connector key wins over a prefix of
-    // itself, making the derivation independent of catalog order.
-    const orderedKeys = inventory.connectors
-      .map((row) => row.connectorKey)
-      .sort((a, b) => b.length - a.length);
-    const capabilityKeyFor = (name: string): string | null =>
-      orderedKeys.find((key) => name.startsWith(`${key}_`)) ?? null;
+    // The capability key comes from each row's catalog-declared
+    // `mcpPrimitivePrefixes` (`gmail-connector` -> `gmail_`), LONGEST PREFIX
+    // WINS. It cannot come from `connectorKey`: that is a slug
+    // (`gmail-connector`) and primitives are underscore-named
+    // (`gmail_aliases_list`), so a key-based match admits no name at all and
+    // the filter silently gates nothing.
+    const capabilityKeyFor = buildCapabilityKeyResolver(inventory.connectors);
 
     // The INTERIM seeding site (cinatra#2817 replaces it wholesale). Admission
     // still comes from the legacy allowlist, and since the owner's ruling a
