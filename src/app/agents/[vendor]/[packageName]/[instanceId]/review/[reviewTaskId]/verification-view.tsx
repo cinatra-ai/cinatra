@@ -1,162 +1,95 @@
-import { ScanSearch, ArrowRight } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
+
+import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
+import { VerificationSummaryCard } from "@cinatra-ai/agents/verification-summary-card";
 
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 
 import { ReviewPinnedCapture } from "./review-pinned-capture";
 
 /**
- * The S4 post-change VERIFICATION view (cinatra#2042, re-anchored 2026-07-25) —
- * mounted on the run-embedded review surface, reached from the run rail's "Core
- * analysis" entry (`?view=verification`). It shows the before/after FIELD-LEVEL
- * diff between the reviewed (base) and repaired revisions, the verdict, and the
- * advisory comments the core lanes attached — all chrome labeled **"Core
- * analysis"** so no output implies a broader inspection than occurred (the
- * provenance principle; the diff shows exactly the fields that were inspected).
+ * The run-embedded VERIFICATION region (cinatra#2042, re-anchored 2026-07-25) —
+ * reached from the run rail's "Core analysis" entry (`?view=verification`).
  *
- * S6 (#2044 L-D) adds the field diff's VISUAL counterpart for a target that has
- * pinned captures: what was REVIEWED beside what was actually APPLIED, with the
- * read-back's own out-of-scope paths outlined on the applied side — so drift is
- * not only a row in a table, it is visible on the page. Both pictures were pinned
- * when they were taken; the site is never fetched at view time.
+ * WHAT MOVED, AND WHAT DID NOT (cinatra#2789, epic #2784 S9e). This component
+ * used to DRAW §VII itself: the Core-analysis chrome, the outcome pill, the
+ * revision pins, the before/after table and the advisory comments were all
+ * composed here, and the same reading in a chat transcript drew the S1 shell
+ * instead. That was the epic's parallel-renderer problem in its plainest form —
+ * two drawings of one reading, free to drift — so the CORE is now
+ * `VerificationSummaryCard`, the one component the chat thread, the run card
+ * and this page all mount. The page-only ADJUNCTS stay here, because they are
+ * genuinely the page's and no transcript could carry them:
+ *
+ *   · the PINNED VISUAL PAIR (#2044 L-D) — what was reviewed beside what was
+ *     actually applied, with the read-back's out-of-scope paths outlined on the
+ *     applied side. It is a server-side store read over pinned captures, sized
+ *     for a page column; a card in a turn has neither the width nor the server
+ *     pass to draw it.
+ *   · the NAVIGATION back to the review gate — a route affordance, which only a
+ *     route has.
+ *
+ * Neither is a second drawing of the reading. They compose AROUND the one core,
+ * which is why deleting this file wholesale would have been the wrong move: it
+ * would have taken the visual pair with it.
+ *
+ * THE PAGE PASSES A REF, NOT A READING. The card resolves its own body from the
+ * server against the live reader, exactly as it does in a transcript, so this
+ * surface cannot hand it a reading the resolver would not have authorized.
  */
-export interface VerificationViewFieldDiff {
-  field: string;
-  before?: string;
-  after?: string;
-}
-
-export interface VerificationAdvisoryComment {
-  id: string;
-  authorKind: string;
-  body: string;
-}
-
 export interface VerificationViewProps {
-  outcome: string;
-  reviewedRevisionId: string;
-  repairedRevisionId: string;
-  fieldDiff: VerificationViewFieldDiff[];
-  scopePaths: string[];
-  advisoryComments: VerificationAdvisoryComment[];
-  /** Link back to the review gate this analysis annotates. */
+  /**
+   * The gate-scoped card ref, minted server-side by the page. `null` when the
+   * instance cannot mint one (no app secret) — the core then draws nothing
+   * rather than falling back to a second composition.
+   */
+  cardRef: string | null;
+  /** Link back to the review gate this audit annotates. */
   gateHref: string;
   /** S6 (#2044 L-D) — the reviewed/applied picture pair, when the target has
-   * pinned captures. `null` for every target that has none (the analysis then
+   * pinned captures. `null` for every target that has none (the reading then
    * reads exactly as it did before). */
   visualPair?: PinnedCapturePairView | null;
 }
 
-const OUTCOME_COPY: Record<string, { label: string; tone: string }> = {
-  verified: { label: "Verified", tone: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700" },
-  drifted: { label: "Out-of-scope drift", tone: "border-amber-500/40 bg-amber-500/10 text-amber-700" },
-  unmet: { label: "Findings not met", tone: "border-rose-500/40 bg-rose-500/10 text-rose-700" },
-};
-
 export function VerificationView({
-  outcome,
-  reviewedRevisionId,
-  repairedRevisionId,
-  fieldDiff,
-  scopePaths,
-  advisoryComments,
+  cardRef,
   gateHref,
   visualPair = null,
 }: VerificationViewProps) {
-  const oc = OUTCOME_COPY[outcome] ?? { label: outcome, tone: "border-line bg-surface-muted text-muted-foreground" };
-  const scope = new Set(scopePaths);
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-4" data-conformance-id="run-surface" data-surface="verification">
-      {/* Header — chrome labeled "Core analysis". */}
-      <div className="flex flex-wrap items-center gap-2.5">
-        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
-          <ScanSearch aria-hidden="true" className="size-4" />
-        </span>
-        <span className="font-sans text-sm font-bold text-foreground" data-verification-chrome="Core analysis">
-          Core analysis
-        </span>
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold ${oc.tone}`} data-verification-outcome={outcome}>
-          {oc.label}
-        </span>
-      </div>
+    <div
+      className="flex min-w-0 flex-1 flex-col gap-4"
+      data-conformance-id="run-surface"
+      data-surface="verification"
+    >
+      {/* §VII's core — the ONE renderer, on this page's host. */}
+      <LifecycleCardSurfaceProvider host="page_gate_region">
+        {cardRef ? (
+          <VerificationSummaryCard
+            view={{
+              viewType: "verification_summary",
+              schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+              ref: cardRef,
+            }}
+          />
+        ) : null}
+      </LifecycleCardSurfaceProvider>
 
-      <p className="max-w-[72ch] text-xs leading-relaxed text-muted-foreground">
-        Post-change verification of the repaired revision against the reviewed one. The
-        before/after below shows exactly the fields that were inspected — nothing more.
-      </p>
-
-      {/* The immutable revision pins. */}
-      <div className="flex flex-wrap items-center gap-2 font-mono text-badge-2xs text-muted-foreground">
-        <span title="reviewed revision">{reviewedRevisionId}</span>
-        <ArrowRight aria-hidden="true" className="size-3" />
-        <span title="repaired revision">{repairedRevisionId}</span>
-      </div>
-
-      {/* Before/after FIELD-LEVEL diff (the content_change_proposal precedent). */}
-      <div className="overflow-x-auto rounded-panel border border-line" data-verification-field-diff="">
-        {fieldDiff.length === 0 ? (
-          <p className="px-4 py-6 text-xs text-muted-foreground">
-            No field-level changes were projected for this revision (a type-aware content
-            projection surfaces field diffs; a target that carries pinned page captures also
-            shows the visual before/after below).
-          </p>
-        ) : (
-          <table className="w-full border-collapse text-left text-xs">
-            <thead>
-              <tr className="border-b border-line text-badge-2xs uppercase tracking-widest text-muted-foreground">
-                <th className="px-3 py-2 font-medium">Field</th>
-                <th className="px-3 py-2 font-medium">Before</th>
-                <th className="px-3 py-2 font-medium">After</th>
-              </tr>
-            </thead>
-            <tbody>
-              {fieldDiff.map((f) => {
-                const inScope = scope.has(f.field);
-                return (
-                  <tr key={f.field} className="border-b border-line/60 align-top" data-diff-field={f.field} data-diff-in-scope={inScope ? "true" : "false"}>
-                    <td className="px-3 py-2 font-mono text-foreground">
-                      {f.field}
-                      {!inScope ? (
-                        <span className="ms-1.5 rounded-chip bg-amber-500/15 px-1.5 py-0.5 text-badge-2xs uppercase tracking-wide text-amber-700">
-                          out of scope
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-2 text-muted-foreground line-through decoration-rose-400/60">{f.before ?? "—"}</td>
-                    <td className="px-3 py-2 text-foreground">{f.after ?? "—"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* S6 (#2044 L-D) — the VISUAL counterpart of the diff above: reviewed vs
+      {/* PAGE-ONLY ADJUNCT — the field diff's VISUAL counterpart: reviewed vs
           applied, drift outlined from the record's own out-of-scope paths. */}
       <ReviewPinnedCapture pair={visualPair} />
 
-      {/* Advisory comments (the S0 attach/list seam; core lanes are its first writers). */}
-      <div className="flex flex-col gap-2" data-verification-advisory="">
-        <span className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
-          Advisory comments
-        </span>
-        {advisoryComments.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No advisory comments on this analysis.</p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {advisoryComments.map((c) => (
-              <li key={c.id} className="rounded-panel border border-line bg-surface-muted px-3 py-2 text-xs" data-advisory-comment={c.id}>
-                <span className="font-mono text-badge-2xs uppercase tracking-wide text-muted-foreground">{c.authorKind}</span>
-                <p className="mt-1 text-foreground">{c.body}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
+      {/* PAGE-ONLY ADJUNCT — the route affordance back to the gate. */}
       <div>
-        <Link href={gateHref} className="text-xs font-medium text-mustard-ink underline-offset-2 hover:underline" data-verification-back-to-gate="">
+        <Link
+          href={gateHref}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-mustard-ink underline-offset-2 hover:underline"
+          data-verification-back-to-gate=""
+        >
+          <ArrowLeft aria-hidden="true" className="size-3" />
           Back to the review gate
         </Link>
       </div>

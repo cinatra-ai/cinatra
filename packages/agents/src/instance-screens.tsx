@@ -26,6 +26,11 @@ import { readRecommendationParkForRun } from "./recommendation-hold";
 import { deriveRunHitlContext } from "./hitl-context";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+// §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
+// mount below for what it draws and what it deliberately does not.
+import { VerificationSummaryCard } from "./verification-summary-card";
+import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
+import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
@@ -515,6 +520,38 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       })
     : { entries: [], activeOrdinal: null };
   const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
+  // ── §VII's audit card, on the `run_card` host (cinatra#2789, epic #2784 S9e) ──
+  //
+  // THE MOUNT. The rail above already weaves a "Core analysis" ENTRY beneath
+  // each gate that has a verification record — a link into the review page's
+  // `?view=verification`. That entry is navigation; it is not the reading. This
+  // is the reading, drawn on the run page itself under its own
+  // `LifecycleCardSurfaceProvider host="run_card"`, so the person looking at the
+  // run can see what the audit found without leaving it.
+  //
+  // ONE REF PER RECORD, AND ONLY WHERE A RECORD EXISTS. The refs are minted
+  // from the records this run actually has (`railVerifications`, already read
+  // above for the rail — no second query), keyed to the gate's own
+  // `reviewTaskId`, so a run with no post-change audit mounts NOTHING and pays
+  // for nothing. The card is still the authority on whether it draws: the
+  // resolver re-runs the reader's run access and answers `absent` for anyone who
+  // may not read the record, and `absent` draws no DOM at all.
+  //
+  // A RUN THAT CANNOT MINT A REF DRAWS NO CARD, rather than a second
+  // composition. An instance with no app secret is a configuration fault to
+  // fix, not a reason to fork §VII.
+  const verificationCardRefs = run
+    ? railVerifications
+        .map((v) => gateTaskById.get(v.gateId))
+        .filter((reviewTaskId): reviewTaskId is string => Boolean(reviewTaskId))
+        .map((reviewTaskId) => ({
+          reviewTaskId,
+          ref: encodeLifecycleGateRef({ runId: run.id, reviewTaskId }),
+        }))
+        .filter(
+          (entry): entry is { reviewTaskId: string; ref: string } => entry.ref !== null,
+        )
+    : [];
   // cinatra#2739 — the merged rail's NON-SPINE entries: review gates, their
   // verifications, lifecycle policy decisions, and any surplus stepResult row
   // past the policy spine. On the stepper branch the panel's own LIVE column is
@@ -644,6 +681,26 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     agentPackageName={template.packageName ?? ""}
                     wireRef={null}
                   />
+                </LifecycleCardSurfaceProvider>
+              ) : null}
+              {/* §VII's audit card (cinatra#2789, S9e) — the run page's own
+                  reading of what the post-change analysis found, drawn by the
+                  SAME component the chat transcript and the review page mount.
+                  One per verification record this run carries; none at all when
+                  it carries none, and none for a reader the resolver answers
+                  `absent`. */}
+              {verificationCardRefs.length > 0 ? (
+                <LifecycleCardSurfaceProvider host="run_card">
+                  {verificationCardRefs.map((entry) => (
+                    <VerificationSummaryCard
+                      key={entry.reviewTaskId}
+                      view={{
+                        viewType: "verification_summary",
+                        schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                        ref: entry.ref,
+                      }}
+                    />
+                  ))}
                 </LifecycleCardSurfaceProvider>
               ) : null}
               {/* Render setup INTERRUPT events inline on the Setup tab.

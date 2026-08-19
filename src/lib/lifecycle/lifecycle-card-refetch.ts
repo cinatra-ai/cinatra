@@ -40,6 +40,7 @@ import {
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import {
   enforceReviewRunAccess,
+  readAdvisoryCommentsForGates,
   readReviewGate,
   readReviewGateState,
 } from "@cinatra-ai/agents/artifact-review-gate-store";
@@ -52,11 +53,15 @@ import type {
   LifecycleDataPartViewType,
   LifecycleResolveEnvelope,
   LifecycleResolveEnvelopeFor,
+  VerificationSummaryAdvisoryComment,
   VerificationSummaryBody,
   VerificationSummaryFieldDiff,
   VerificationSummaryOutcome,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
+  VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH,
+  VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH,
+  VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS,
   VERIFICATION_SUMMARY_MAX_FIELD_DIFF,
   VERIFICATION_SUMMARY_MAX_SCOPE_PATHS,
   VERIFICATION_SUMMARY_OUTCOMES,
@@ -162,15 +167,30 @@ function clamp(value: string, max: number): string {
 /**
  * Project one persisted verification record into §VII's SANITIZED body.
  *
- * WHAT TRAVELS. The verdict, the two pinned revisions, the inspected scope and
- * the before/after field diff — the same reading the run's own "Core analysis"
- * surface already shows this reader, who has cleared run READ and whose gate and
- * record were both found. Nothing here is new disclosure; it is the existing
- * disclosure, reached through the card instead of the page.
+ * WHAT TRAVELS. The verdict, the two pinned revisions, the AUTHORIZED SCOPE,
+ * the before/after field diff and §VII's advisory comments — the same reading
+ * the run's own "Core analysis" surface already shows this reader, who has
+ * cleared run READ and whose gate and record were both found. Nothing here is
+ * new disclosure; it is the existing disclosure, reached through the card
+ * instead of the page.
  *
- * WHAT DOES NOT. The record id, the gate id and the artifact ids. They name
- * nothing on screen, and an addressable id inside a card body is an invitation
- * to read one out of it.
+ * WHAT THE SCOPE IS (plan course correction, 2026-08-19). `scopePaths` is the
+ * review's SCOPE MANIFEST — the closed set of paths the accepted findings
+ * authorized the repair to change. The reading is the landed change measured
+ * against that authorization, and the card draws it as such. It is never a list
+ * of the agent's skills, and this projection has no skill input to make one from.
+ *
+ * WHY THE COMMENTS ARE HERE AND NOT A PROP (epic S9, slice S9e). §VII puts the
+ * reading's PROVENANCE in the body of a service comment rather than on a line
+ * of its own, so a card drawn without the comments states a verdict with no
+ * provenance. The review page could pass them; a chat transcript has nobody to
+ * pass them, and the ONE renderer must draw the same core on every host — so
+ * they travel on the authorized answer, behind the same run-READ check as the
+ * rest of the reading.
+ *
+ * WHAT DOES NOT TRAVEL. The record id, the gate id, the artifact ids and the
+ * comment ids. They name nothing on screen, and an addressable id inside a card
+ * body is an invitation to read one out of it.
  *
  * WHAT MAKES IT `null`. A verdict outside the closed set. That is a row this
  * build cannot read, and an unreadable row draws nothing rather than an unknown
@@ -181,6 +201,7 @@ function clamp(value: string, max: number): string {
  */
 function projectVerificationBody(
   record: VerificationRecordRead,
+  comments: readonly { authorKind: string; body: string }[],
 ): VerificationSummaryBody | null {
   const outcomes: readonly string[] = VERIFICATION_SUMMARY_OUTCOMES;
   if (!outcomes.includes(record.outcome)) return null;
@@ -208,6 +229,23 @@ function projectVerificationBody(
     .slice(0, VERIFICATION_SUMMARY_MAX_SCOPE_PATHS)
     .map((p) => clamp(p, VERIFICATION_SUMMARY_PATH_MAX_LENGTH));
 
+  // §VII's advisory comments, in store order, clamped like everything else. A
+  // row with no author kind or no body is DROPPED rather than drawn blank: the
+  // panel is "author kind over the comment", and half of that is not a comment.
+  const advisoryComments: VerificationSummaryAdvisoryComment[] = comments
+    .filter(
+      (c) =>
+        typeof c?.authorKind === "string" &&
+        c.authorKind.length > 0 &&
+        typeof c?.body === "string" &&
+        c.body.length > 0,
+    )
+    .slice(0, VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS)
+    .map((c) => ({
+      authorKind: clamp(c.authorKind, VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH),
+      body: clamp(c.body, VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH),
+    }));
+
   return {
     version: VERIFICATION_SUMMARY_VIEW_VERSION,
     outcome: record.outcome as VerificationSummaryOutcome,
@@ -215,6 +253,7 @@ function projectVerificationBody(
     repairedRevisionId: clamp(repairedRevisionId, VERIFICATION_SUMMARY_REVISION_MAX_LENGTH),
     scopePaths,
     fieldDiff,
+    advisoryComments,
   };
 }
 
@@ -237,8 +276,14 @@ async function resolveVerificationSummary(
   if (!gate) return absent;
   const record = await readVerificationRecordForGate(gate.id);
   if (!record) return absent;
+  // §VII's advisory comments hang off the SAME gate row, behind the SAME run
+  // READ check that has already been cleared above — no second access axis. A
+  // store that fails here is not allowed to collapse the whole reading into an
+  // `absent`: the verdict and the diff are still authorized, and the card says
+  // "no advisory comments" rather than vanishing.
+  const comments = await readAdvisoryCommentsForGates([gate.id]).catch(() => []);
   // A record this build cannot read is indistinguishable from no record at all.
-  const body = projectVerificationBody(record);
+  const body = projectVerificationBody(record, comments);
   if (!body) return absent;
   // §VII: the verification card "carries no floor at all — it asks nothing, so
   // it draws nothing to press". What it DOES have is a reading, and the reading

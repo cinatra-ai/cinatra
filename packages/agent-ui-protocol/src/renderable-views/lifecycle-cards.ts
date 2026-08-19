@@ -516,7 +516,13 @@ export type TriggerScheduleProposalView = z.infer<
 // IT IS THE SHIPPED CORE-ANALYSIS READING, SANITIZED. The fields below are the
 // ones the run's own "Core analysis" surface already shows the SAME reader,
 // after the SAME run-read check: the verdict, the two pinned revisions, the
-// inspected scope, and the before/after field diff. What the body deliberately
+// AUTHORIZED SCOPE, the before/after field diff and §VII's advisory comments.
+//
+// WHAT THE READING IS OF (plan course correction, 2026-08-19). `scopePaths` is
+// the review's own SCOPE MANIFEST — the closed set of paths the accepted
+// findings authorized the repair to change — and the whole reading is the
+// landed change measured against it. It is not a list of the agent's skills,
+// and nothing that draws this body may present it as one. What the body deliberately
 // omits is every internal identifier that names nothing on screen — the record
 // id, the gate id, the artifact ids — because a body that carries an addressable
 // id turns a card into a place to read one out of.
@@ -546,6 +552,42 @@ export const VERIFICATION_SUMMARY_PATH_MAX_LENGTH = 400;
 export const VERIFICATION_SUMMARY_VALUE_MAX_LENGTH = 2000;
 /** Ceiling on a pinned revision identifier. */
 export const VERIFICATION_SUMMARY_REVISION_MAX_LENGTH = 128;
+/** Ceiling on the advisory comments one card may draw. */
+export const VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS = 50;
+/** Ceiling on one comment's author-kind label. */
+export const VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH = 64;
+/** Ceiling on one advisory comment body. */
+export const VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH = 4000;
+
+/**
+ * One ADVISORY COMMENT (epic S9, slice S9e).
+ *
+ * §VII closes the card with "Advisory comments: a label over one panel per
+ * comment, each carrying its author kind in mono above the comment itself", and
+ * fixes where the reading's PROVENANCE lives: "the body of a service comment
+ * there, not a line of its own". So the comments are not decoration the page
+ * happened to have — they are the only place the card says where its reading
+ * came from, and a card drawn without them asserts a verdict with no provenance
+ * at all. They therefore travel in the body, on every host, rather than being a
+ * prop only the review page could supply.
+ *
+ * NO ID TRAVELS, deliberately — the same rule the rest of this body keeps. A
+ * comment's row id names nothing on screen (the card draws the comments in
+ * store order and keys them positionally), and an addressable id inside a card
+ * body is an invitation to read one out of it.
+ */
+export const verificationSummaryAdvisoryCommentSchema = z
+  .object({
+    /** The comment's author KIND — "service", "agent", a person's role. Drawn
+     *  in mono above the body, exactly as §VII draws it. */
+    authorKind: z.string().min(1).max(VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH),
+    body: z.string().min(1).max(VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH),
+  })
+  .strict();
+
+export type VerificationSummaryAdvisoryComment = z.infer<
+  typeof verificationSummaryAdvisoryCommentSchema
+>;
 
 /** One before/after row. `null` is the honest "this side had no value". */
 export const verificationSummaryFieldDiffSchema = z
@@ -582,6 +624,12 @@ export const verificationSummaryBodySchema = z
     fieldDiff: z
       .array(verificationSummaryFieldDiffSchema)
       .max(VERIFICATION_SUMMARY_MAX_FIELD_DIFF),
+    /** §VII's advisory comments, in store order. Empty is a legitimate reading
+     *  (the card says so); ABSENT is not — a body that omits the field cannot
+     *  be told apart from one whose producer forgot the provenance. */
+    advisoryComments: z
+      .array(verificationSummaryAdvisoryCommentSchema)
+      .max(VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS),
   })
   .strict();
 

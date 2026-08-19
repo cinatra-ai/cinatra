@@ -16,11 +16,14 @@ const enforceReviewRunAccess = vi.fn();
 const readReviewGateState = vi.fn();
 const readReviewGate = vi.fn();
 const readVerificationRecordForGate = vi.fn();
+const readAdvisoryCommentsForGates = vi.fn(async () => []);
 
 vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
   enforceReviewRunAccess: (...args: unknown[]) => enforceReviewRunAccess(...args),
   readReviewGateState: (...args: unknown[]) => readReviewGateState(...args),
   readReviewGate: (...args: unknown[]) => readReviewGate(...args),
+  readAdvisoryCommentsForGates: (...args: unknown[]) =>
+    readAdvisoryCommentsForGates(...(args as [])),
 }));
 
 vi.mock("@cinatra-ai/agents/lifecycle-verification-read-store", () => ({
@@ -29,6 +32,9 @@ vi.mock("@cinatra-ai/agents/lifecycle-verification-read-store", () => ({
 }));
 
 import {
+  VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH,
+  VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH,
+  VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS,
   VERIFICATION_SUMMARY_MAX_FIELD_DIFF,
   VERIFICATION_SUMMARY_MAX_SCOPE_PATHS,
   VERIFICATION_SUMMARY_PATH_MAX_LENGTH,
@@ -60,6 +66,10 @@ function accessFor(granted: string[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` clears CALLS, not implementations, so a per-test
+  // `mockResolvedValue` would otherwise leak into the next test. The advisory
+  // read's default is "no comments" — the shape most cases want.
+  readAdvisoryCommentsForGates.mockResolvedValue([] as never);
 });
 
 describe("the ref codec", () => {
@@ -283,8 +293,105 @@ describe("verification_summary — advisory, and now a reading to draw (§VII)",
         repairedRevisionId: "rev-fixed",
         scopePaths: ["content.title"],
         fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+        advisoryComments: [],
       },
     });
+  });
+
+  it("carries §VII's advisory comments — where the reading's PROVENANCE lives", async () => {
+    // §VII puts the provenance in the body of a service comment rather than on
+    // a line of its own, so a body without the comments is a verdict with no
+    // provenance on every host that is not the review page. They ride the same
+    // authorized answer as the rest of the reading (epic S9, slice S9e).
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockResolvedValue([
+      {
+        id: "cmt-1",
+        gateId: "gate-row-1",
+        authorId: "svc",
+        authorKind: "service",
+        body: "Core analysis of 1 disclosed field(s). [provenance] lane=core-analysis-lane",
+        createdAt: new Date(0),
+      },
+    ] as never);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    expect(resolved.body).toMatchObject({
+      advisoryComments: [
+        {
+          authorKind: "service",
+          body: "Core analysis of 1 disclosed field(s). [provenance] lane=core-analysis-lane",
+        },
+      ],
+    });
+    // The comment's own row id is NOT addressable from the card.
+    expect(JSON.stringify(resolved.body)).not.toContain("cmt-1");
+    expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
+  });
+
+  it("drops a half-formed comment rather than drawing an empty panel", async () => {
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockResolvedValue([
+      { id: "c1", authorKind: "", body: "no author kind" },
+      { id: "c2", authorKind: "service", body: "" },
+      { id: "c3", authorKind: "agent", body: "kept" },
+    ] as never);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    expect((resolved.body as { advisoryComments: unknown[] }).advisoryComments).toEqual([
+      { authorKind: "agent", body: "kept" },
+    ]);
+  });
+
+  it("clamps the comments to their own ceilings", async () => {
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockResolvedValue(
+      Array.from({ length: 200 }, (_unused, i) => ({
+        id: `c${i}`,
+        authorKind: "service".padEnd(200, "x"),
+        body: "b".repeat(9000),
+      })) as never,
+    );
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    const comments = (resolved.body as {
+      advisoryComments: { authorKind: string; body: string }[];
+    }).advisoryComments;
+    expect(comments).toHaveLength(VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS);
+    expect(comments[0]!.authorKind.length).toBe(VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH);
+    expect(comments[0]!.body.length).toBe(VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH);
+    expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
+  });
+
+  it("a comment-store failure keeps the READING — it does not collapse into `absent`", async () => {
+    // The verdict and the diff are already authorized; losing the comments must
+    // cost the provenance panel, not the whole card.
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockRejectedValue(new Error("store down") as never);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    expect(resolved.state).toEqual({ state: "advisory" });
+    expect((resolved.body as { advisoryComments: unknown[] }).advisoryComments).toEqual([]);
   });
 
   it("the body names NO addressable identifier — not the record, gate or artifact", async () => {

@@ -31,6 +31,7 @@ import { CitationGroupCard } from "./citation-group-card";
 import { ChangeHistoryCard } from "./change-history-card";
 import { LifecycleCard } from "./lifecycle-card";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
+import { VerificationSummaryCard } from "@cinatra-ai/agents/verification-summary-card";
 
 type ComponentFor<K extends KnownRenderableViewType> = (props: {
   view: Extract<ParsedRenderableView, { viewType: K }>;
@@ -62,7 +63,11 @@ const RENDERABLE_VIEW_COMPONENTS: {
   // The other two kinds keep the S1 shell until their own slices draw them
   // (S5 for the schedule proposal, the verification card with §VII).
   artifact_review_gate: ReviewGateCard,
-  verification_summary: LifecycleCard,
+  // S9e (#2789) swapped the verification line the same way: `verification_summary`
+  // now dispatches to the DRAWN `VerificationSummaryCard` — §VII's Core-analysis
+  // chrome, outcome pill, revision pins, authorized scope, before/after table and
+  // advisory comments — and the S1 shell is RETIRED for this kind.
+  verification_summary: VerificationSummaryCard,
   trigger_schedule_proposal: LifecycleCard,
 };
 

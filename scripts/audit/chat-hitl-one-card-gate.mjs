@@ -26,8 +26,8 @@
  *      Anywhere else, declaring a component whose name is that card's — or a
  *      `Prefixed…` look-alike of it — is a violation.
  *
- *   R2 THE RETIRED PARALLELS ARE GONE. The three renderers the epic ordered
- *      deleted may not come back, by name:
+ *   R2 THE RETIRED PARALLELS ARE GONE. The renderers the epic ordered deleted
+ *      may not come back, by name (or, for §VII, by anchor):
  *        · the review REDIRECT card (`ArtifactReviewRedirectCard`) — the
  *          display-only "Continue to review" link that sent a reader away;
  *        · a DIRECT `<RunRecommendationChipRow` mount on a lifecycle HOST — the
@@ -36,6 +36,11 @@
  *          mounted by the page instead of by the card. (Scoped to the BAR: the
  *          page's own ROUTE-LEVEL `ReviewGateBlocked` panel is legitimate and
  *          uses the shipped component — see the entry's own note.)
+ *        · the review page's DIRECT §VII composition — `VerificationView`
+ *          drawing the verification core itself instead of mounting
+ *          `VerificationSummaryCard`. (Scoped to the §VII ANCHORS, not to the
+ *          component name: `VerificationView` legitimately survives as the
+ *          page's adjunct composition — see the entry's own note.)
  *
  *   R3 EVERY MOUNT IS HOST-DECLARED. A lifecycle card may only be mounted
  *      inside a `LifecycleCardSurfaceProvider` subtree, so the fail-closed host
@@ -99,17 +104,21 @@ export const CARD_OWNERS = Object.freeze({
     component: "RecommendationHoldCard",
     owner: "packages/agents/src/run-recommendation-chip-row.tsx",
   },
-  // The verification and schedule-proposal kinds are BOTH drawn by the S1 shell
-  // `LifecycleCard`, and that is the truth rather than a placeholder: neither
-  // has been given its own drawn component yet (S5 shipped the schedule
-  // proposal's producer, token and install order, not a second renderer). One
-  // component serving two kinds still satisfies "exactly one implementation per
-  // interaction"; two components serving one kind would not. If either gets its
-  // own drawing later, this row changes and the gate follows it.
+  // S9e (cinatra#2789) DREW the verification card, so this row moves off the S1
+  // shell — the "retire the shell for this kind" half of the slice, expressed
+  // where the gate can see it. `VerificationSummaryCard` is now the sole module
+  // that may define this card, and a second implementation anywhere in the tree
+  // is an R1 violation exactly as it is for the review gate.
   verification_summary: {
-    component: "LifecycleCard",
-    owner: "packages/chat/src/renderable-views/lifecycle-card.tsx",
+    component: "VerificationSummaryCard",
+    owner: "packages/agents/src/verification-summary-card.tsx",
   },
+  // The schedule-proposal kind is still drawn by the S1 shell `LifecycleCard`,
+  // and that is the truth rather than a placeholder: §VI has not been given its
+  // own drawn component yet (S5 shipped the proposal's producer, token and
+  // install order, not a second renderer; S9d owns the drawing). One component
+  // serving one remaining kind still satisfies "exactly one implementation per
+  // interaction"; two components serving one kind would not.
   trigger_schedule_proposal: {
     component: "LifecycleCard",
     owner: "packages/chat/src/renderable-views/lifecycle-card.tsx",
@@ -131,13 +140,34 @@ export function cardDefinitionPattern(component) {
 }
 
 /**
- * R2 — the three retired parallel renderers, as exact JSX/identifier forms.
+ * R2 — the retired parallel renderers, as exact JSX / identifier / anchor forms.
  *
  * Each entry names WHAT was deleted and WHY it may not return, because the ban
  * is the whole content of the criterion. `allow` lists the modules where the
  * token is legitimate: the component's own definition module, and (for the
  * decision bar / blocked state) the ONE card that composes them.
  */
+/**
+ * The STRUCTURAL ANCHORS of §VII's core — the data attributes that identify the
+ * verification drawing itself, independently of what any component is called.
+ *
+ * Exported because two things read them and they must not drift: the R2 rule
+ * below (which bans them outside the owner module) and the slice's own
+ * one-renderer test (which asserts the owner really emits every one of them, so
+ * the ban can never go vacuous by the anchors quietly disappearing).
+ *
+ * They are the sections §VII names: the Core-analysis chrome, the outcome pill,
+ * the authorized-scope region, the field-by-field before/after, and the advisory
+ * comments.
+ */
+export const VERIFICATION_CORE_ANCHORS = Object.freeze([
+  "chrome",
+  "outcome",
+  "authorized-scope",
+  "field-diff",
+  "advisory",
+]);
+
 export const RETIRED_PARALLELS = Object.freeze([
   {
     id: "review-redirect-card",
@@ -178,6 +208,34 @@ export const RETIRED_PARALLELS = Object.freeze([
     fix: "Mount <RecommendationHoldCard> under a declared host; the card composes the row.",
   },
   {
+    id: "page-direct-verification-composition",
+    // The review page's `VerificationView` DRAWING §VII itself. Before S9e
+    // (cinatra#2789) that component composed the whole reading — the
+    // Core-analysis chrome, the outcome pill, the revision pins, the
+    // field-by-field before/after and the advisory comments — while the same
+    // reading in a chat transcript drew the S1 shell. Two drawings of one
+    // reading is exactly the drift this gate exists to catch, so the core moved
+    // into `VerificationSummaryCard` and `VerificationView` became a composition
+    // of that card plus its two page-only adjuncts (the pinned visual pair, the
+    // navigation back to the gate).
+    //
+    // BANNED BY THE §VII ANCHORS, NOT BY A COMPONENT NAME, and deliberately so.
+    // `VerificationView` still exists and must — it is the legitimate adjunct
+    // composition — so banning its name would ban the right answer. What may
+    // not come back is the DRAWING, and the drawing is identified by the
+    // structural anchors §VII's core carries: the Core-analysis chrome, the
+    // outcome pill, the authorized-scope region, the before/after table and the
+    // advisory-comment list. Emitting any of those outside the owner module is
+    // a second §VII renderer whatever it is called — which also catches the
+    // look-alike that R1's name patterns structurally cannot see.
+    re: new RegExp(
+      String.raw`data-verification-(?:${VERIFICATION_CORE_ANCHORS.join("|")})\b`,
+      "g",
+    ),
+    allow: ["packages/agents/src/verification-summary-card.tsx"],
+    fix: "`VerificationView` mounts <VerificationSummaryCard> and keeps only its page-only adjuncts; the card owns §VII's core.",
+  },
+  {
     id: "page-direct-decision-composition",
     // The review PAGE composing the DECISION FLOOR itself. S2 moved the bar into
     // the card so all four hosts draw one floor, bound to one decision module.
@@ -199,7 +257,8 @@ export const RETIRED_PARALLELS = Object.freeze([
 ]);
 
 /** R3 — the JSX mounts that are lifecycle CARD mounts. */
-const CARD_MOUNT_RE = /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard)\b/g;
+const CARD_MOUNT_RE =
+  /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard|VerificationSummaryCard)\b/g;
 const HOST_PROVIDER_RE = /<\s*LifecycleCardSurfaceProvider\b/;
 
 /**

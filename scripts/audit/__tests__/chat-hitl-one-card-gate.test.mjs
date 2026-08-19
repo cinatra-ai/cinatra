@@ -29,9 +29,11 @@ import {
   CARD_OWNERS,
   cardDefinitionPattern,
   RETIRED_PARALLELS,
+  VERIFICATION_CORE_ANCHORS,
   REGISTRY_MODULE,
   REGISTRY_KINDS,
   HOST_PROVIDED_BY_PARENT,
+  collectFiles,
   collectViolations,
   isExempt,
   scanModule,
@@ -86,6 +88,8 @@ describe("R2 — each retired parallel renderer is banned by name", () => {
         "review-redirect-card": "return <ArtifactReviewRedirectCard gate={g} />;",
         "direct-chip-row-mount": "return <RunRecommendationChipRow runId={id} />;",
         "page-direct-decision-composition": "return <ReviewDecisionBar action={a} />;",
+        "page-direct-verification-composition":
+          'return <div data-verification-chrome="Core analysis">Core analysis</div>;',
       }[parallel.id];
       const hits = scanModule("src/app/new-surface/page.tsx", sample);
       expect(hits.map((h) => h.rule)).toContain("R2");
@@ -154,6 +158,75 @@ describe("R4 — one registry row per data-part kind", () => {
     expect(scanRegistry(read(REGISTRY_MODULE))).toEqual([]);
     // …and the interrupt-carried kind is deliberately NOT there.
     expect(REGISTRY_KINDS).not.toContain("recommendation_hold");
+  });
+});
+
+/**
+ * §VII's ONE RENDERER, as a structural property of the tree (cinatra#2789,
+ * epic #2784 S9e).
+ *
+ * R1 keys on a component NAME, which a look-alike can simply not use. The
+ * verification card is therefore ALSO pinned by its drawing: the anchors §VII's
+ * core carries may be emitted by exactly one module, that module must emit all
+ * of them, and the review page — the one surface that used to draw them itself
+ * — must mount the card instead of re-emitting any.
+ */
+describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
+  const OWNER = CARD_OWNERS.verification_summary.owner;
+  const VERIFICATION_VIEW = [
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review",
+    "[reviewTaskId]/verification-view.tsx",
+  ].join("/");
+
+  it("the owner module emits EVERY §VII anchor — the ban is not vacuous", () => {
+    const src = read(OWNER);
+    for (const anchor of VERIFICATION_CORE_ANCHORS) {
+      expect(
+        src.includes(`data-verification-${anchor}`),
+        `${OWNER} no longer emits data-verification-${anchor}`,
+      ).toBe(true);
+    }
+  });
+
+  it("NO other module in the tree emits a §VII anchor", () => {
+    const emitters = collectFiles()
+      .filter((rel) =>
+        VERIFICATION_CORE_ANCHORS.some((a) => read(rel).includes(`data-verification-${a}`)),
+      );
+    expect(emitters).toEqual([OWNER]);
+  });
+
+  it("the review page MOUNTS the card and draws none of the core itself", () => {
+    const src = read(VERIFICATION_VIEW);
+    // It composes the one renderer…
+    expect(src).toMatch(/<\s*VerificationSummaryCard\b/);
+    // …under its own host declaration (R3's per-file rule)…
+    expect(src).toMatch(/<\s*LifecycleCardSurfaceProvider\b/);
+    // …and emits no §VII anchor of its own.
+    for (const anchor of VERIFICATION_CORE_ANCHORS) {
+      expect(src.includes(`data-verification-${anchor}`)).toBe(false);
+    }
+    // The page-only ADJUNCTS survive — deleting them was never the ask.
+    expect(src).toMatch(/<\s*ReviewPinnedCapture\b/);
+    expect(src).toContain("data-verification-back-to-gate");
+  });
+
+  it("a second §VII drawing anywhere is an R2 violation, whatever it is called", () => {
+    for (const anchor of VERIFICATION_CORE_ANCHORS) {
+      const hits = scanModule(
+        "src/app/some/new/surface.tsx",
+        `return <div data-verification-${anchor}="">x</div>;`,
+      );
+      expect(hits.map((h) => h.rule), anchor).toContain("R2");
+    }
+  });
+
+  it("the back-to-gate adjunct is NOT an anchor — the page may keep it", () => {
+    const hits = scanModule(
+      VERIFICATION_VIEW,
+      'return <a data-verification-back-to-gate="">Back</a>;',
+    );
+    expect(hits).toEqual([]);
   });
 });
 
