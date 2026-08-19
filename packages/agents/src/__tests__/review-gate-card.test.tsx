@@ -239,11 +239,15 @@ describe("the two absences are distinct", () => {
 });
 
 // ---------------------------------------------------------------------------
-// §IX — one renderer, three first-party hosts, host-specific frame only
+// §IX — one renderer, four first-party hosts, host-specific frame only
 // ---------------------------------------------------------------------------
 
-describe("one renderer, three first-party hosts", () => {
-  const HOSTS = ["chat_thread", "run_card", "page_gate_region"] as const;
+describe("one renderer, four first-party hosts", () => {
+  // The site widget is DECLARED with the same production surface as the other
+  // three (owner ruling 2026-08-11: it is not a reduced surface), and it is
+  // served by the registry rather than by a JSX mount — which is exactly why it
+  // has to be driven here by name. A host nothing drives has no counted proof.
+  const HOSTS = ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const;
 
   it("draws the SAME card on every first-party host, differing only in the frame", async () => {
     const drawn: Record<string, string> = {};
@@ -266,6 +270,7 @@ describe("one renderer, three first-party hosts", () => {
     }
     expect(drawn.run_card).toBe(drawn.chat_thread);
     expect(drawn.page_gate_region).toBe(drawn.chat_thread);
+    expect(drawn.site_widget).toBe(drawn.chat_thread);
   });
 
   // The ratified root contract, asserted on real DOM: the card's own identity,
@@ -277,7 +282,7 @@ describe("one renderer, three first-party hosts", () => {
   it("the root carries its lifecycle-card identity, its host and its state", async () => {
     // The hosts are named as literals, one per line, because this test IS the
     // record of which hosts were actually driven.
-    for (const host of ["chat_thread", "run_card", "page_gate_region"] as const) {
+    for (const host of ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
       const { container, unmount } = renderOn(host);
       await waitFor(() =>

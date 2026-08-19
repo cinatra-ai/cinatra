@@ -314,7 +314,11 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     instanceProof: {
       file: "packages/agents/src/__tests__/review-gate-card.test.tsx",
       testName: "the root carries its lifecycle-card identity, its host and its state",
-      hosts: ["chat_thread", "run_card", "page_gate_region"],
+      // The registry-served hosts are named here TOO. `jsxHosts` below can only
+      // see hosts with a JSX mount, so a registry-served host would otherwise
+      // carry no counted instance proof at all — the declaration would say four
+      // hosts and the count would cover three.
+      hosts: ["chat_thread", "run_card", "page_gate_region", "site_widget"],
     },
   },
 
@@ -930,6 +934,19 @@ export function assertsExactlyOneInstance(block, rootSelector) {
   ).test(block);
 }
 
+/**
+ * Does `block` assert ANYTHING at all?
+ *
+ * The weakest possible reading of "this test proves something": it runs at
+ * least one expectation. Comments are stripped first, so an assertion that has
+ * been commented out does not count. This does not judge WHAT is asserted —
+ * only that the named test is not empty, which is the shape that let a proof
+ * name stand in for a proof.
+ */
+export function assertsSomething(block) {
+  return /\bexpect\s*\(/.test(stripComments(block));
+}
+
 /** Every requirement a kind has recorded as open, flattened to plain strings. */
 export function openRequirements(contract) {
   const out = new Set();
@@ -1105,9 +1122,16 @@ export function scanHostMounts(kind, contract, mountedIn, registrySource, readMo
         } else if (!new RegExp(String.raw`\bexport\s+(?:function|const)\s+${exclusion.selector}\b`).test(stripComments(source))) {
           push(`'${kind}': ${exclusion.module} does not export the exclusion selector '${exclusion.selector}' — the picker must be readable, not implied`, exclusion.module);
         }
+        // The proof is read the way the instance proof is read: the named test
+        // is EXTRACTED and must assert something inside its own body. A
+        // file-wide match on the test name passes for a test that is empty, and
+        // an empty test named after a claim is not a proof of the claim.
         const proof = readModule(exclusion.proof.file);
-        if (proof === null || !proof.includes(exclusion.proof.testName)) {
+        const proofBlock = proof === null ? null : extractTestBlock(proof, exclusion.proof.testName);
+        if (proofBlock === null) {
           push(`'${kind}': the exclusion proof "${exclusion.proof.testName}" is not in ${exclusion.proof.file} — an unproven picker is an assumption`, exclusion.proof.file);
+        } else if (!assertsSomething(proofBlock)) {
+          push(`'${kind}': the exclusion proof "${exclusion.proof.testName}" in ${exclusion.proof.file} asserts nothing — an empty test named after a picker proves no branch of it`, exclusion.proof.file);
         }
       }
     }
@@ -1469,6 +1493,23 @@ function main(argv = []) {
   // actually makes. So the done-check is what you get when you run this script.
   // `--audit` is the lenient read, for a lane that wants to see whether it has
   // added a NEW dishonesty on top of the recorded ones. It is not the gate.
+  // `--complete` is RECOGNISED rather than swallowed. #2785 rules that the
+  // done-check has that name, so the name has to keep working — and an
+  // unrecognised flag must not silently select a mode, which is how a typo
+  // ("--audti") reads as a passing done-check.
+  const KNOWN_FLAGS = new Set(["--audit", "--complete"]);
+  const unknown = argv.filter((a) => !KNOWN_FLAGS.has(a));
+  if (unknown.length > 0) {
+    console.error(
+      `[${LABEL}] unknown flag(s): ${unknown.join(", ")} — this gate takes ` +
+        `no flag (the done-check), --complete (the same done-check, named) or --audit (the lenient read).`,
+    );
+    return 2;
+  }
+  if (argv.includes("--audit") && argv.includes("--complete")) {
+    console.error(`[${LABEL}] --audit and --complete ask for different modes — pass one.`);
+    return 2;
+  }
   const complete = !argv.includes("--audit");
   const violations = [
     ...collectViolations(),

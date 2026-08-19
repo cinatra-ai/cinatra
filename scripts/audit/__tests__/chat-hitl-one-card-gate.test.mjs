@@ -416,6 +416,7 @@ describe("R7 — the owner emits its ratified anchors, from code that runs", () 
     expect(proofAssertsAnchor('toContain(\'data-action="skip-x"\')', '[data-action="skip-x"]')).toBe(true);
     expect(proofAssertsAnchor("it('renders')", '[data-action="skip-x"]')).toBe(false);
   });
+
 });
 
 describe("R8 — one declared mount set per host", () => {
@@ -439,7 +440,11 @@ describe("R8 — one declared mount set per host", () => {
   it("PASSES two adapters on one host when a proven picker chooses between them", () => {
     const sources = {
       "packages/fixture/screen.tsx": "export function pickPanel(x) { return 'leaf'; }",
-      "packages/fixture/__tests__/pick.test.ts": "it('covers every branch', () => {});",
+      // The picker's proof has a BODY. The gate extracts this named test and
+      // requires an assertion inside it, so the fixture that passes must be a
+      // test that actually runs one.
+      "packages/fixture/__tests__/pick.test.ts":
+        "it('covers every branch', () => { expect(pickPanel('leaf')).toBe('leaf'); });",
     };
     const hits = scanHostMounts(
       "fixture",
@@ -449,6 +454,61 @@ describe("R8 — one declared mount set per host", () => {
       (rel) => sources[rel] ?? null,
     );
     expect(hits).toEqual([]);
+  });
+
+  it("REJECTS an EMPTY exclusion proof — a test named after the picker that asserts nothing", () => {
+    // The exact shape that passed before: the file contains the test name, so a
+    // file-wide substring match was satisfied by a test with no body at all.
+    const sources = {
+      "packages/fixture/screen.tsx": "export function pickPanel(x) { return 'leaf'; }",
+      "packages/fixture/__tests__/pick.test.ts": "it('covers every branch', () => {});",
+    };
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => sources[rel] ?? null,
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/asserts nothing/);
+  });
+
+  it("REJECTS an exclusion proof whose only assertion is COMMENTED OUT", () => {
+    // The lexical limit stated as a rule: comments are stripped before the
+    // assertion is looked for, so a proof cannot be restored by describing one.
+    const sources = {
+      "packages/fixture/screen.tsx": "export function pickPanel(x) { return 'leaf'; }",
+      "packages/fixture/__tests__/pick.test.ts":
+        "it('covers every branch', () => { /* expect(pickPanel('leaf')).toBe('leaf'); */ });",
+    };
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => sources[rel] ?? null,
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/asserts nothing/);
+  });
+
+  it("REJECTS an exclusion proof that borrows a NEIGHBOURING test's assertions", () => {
+    // The named test is extracted, so assertions that live elsewhere in the
+    // same file are not the named test's assertions.
+    const sources = {
+      "packages/fixture/screen.tsx": "export function pickPanel(x) { return 'leaf'; }",
+      "packages/fixture/__tests__/pick.test.ts": [
+        "it('some other case', () => { expect(pickPanel('stepped')).toBe('screen'); });",
+        "it('covers every branch', () => {});",
+      ].join("\n"),
+    };
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => sources[rel] ?? null,
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/asserts nothing/);
   });
 
   it("REJECTS two adapters on one host with NO named picker — two instances waiting to happen", () => {
@@ -813,6 +873,44 @@ describe("the two modes on the real tree", () => {
     expect(res.status).toBe(0);
     expect(out).toMatch(/no NEW false claim/);
     expect(out).toMatch(/the REQUIRED gate \(no flag\) fails on these/);
+  });
+
+  it("--complete is the RULED name for the done-check and runs the same check", () => {
+    // #2785 names the done-check `--complete`, and `package.json` ships a script
+    // that passes it. The flag is recognised rather than swallowed, so the two
+    // ways of asking for the done-check cannot drift apart.
+    const bare = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
+    const named = spawnSync(process.execPath, [GATE, "--complete"], { cwd: REPO_ROOT, encoding: "utf8" });
+    expect(named.status).toBe(bare.status);
+    expect(named.stdout + named.stderr).toBe(bare.stdout + bare.stderr);
+    expect(named.status).toBe(1);
+  });
+
+  it("an UNRECOGNISED flag is refused, never read as a passing done-check", () => {
+    const res = spawnSync(process.execPath, [GATE, "--audti"], { cwd: REPO_ROOT, encoding: "utf8" });
+    expect(res.status).toBe(2);
+    expect(res.stdout + res.stderr).toMatch(/unknown flag/);
+  });
+
+  it("the two modes may not be asked for at once", () => {
+    const res = spawnSync(process.execPath, [GATE, "--audit", "--complete"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(2);
+  });
+
+  it("package.json ships the ruled scripts for BOTH modes", () => {
+    const pkg = JSON.parse(read("package.json"));
+    expect(pkg.scripts["gate:chat-hitl-one-card"]).toBe(
+      "node scripts/audit/chat-hitl-one-card-gate.mjs",
+    );
+    expect(pkg.scripts["gate:chat-hitl-one-card:complete"]).toBe(
+      "node scripts/audit/chat-hitl-one-card-gate.mjs --complete",
+    );
+    expect(pkg.scripts["gate:chat-hitl-one-card:audit"]).toBe(
+      "node scripts/audit/chat-hitl-one-card-gate.mjs --audit",
+    );
   });
 });
 
