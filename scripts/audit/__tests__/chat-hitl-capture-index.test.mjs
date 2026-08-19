@@ -1149,6 +1149,27 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     expect(record.instance).toMatchObject({ matched: 1, index: 0, id: null });
   });
 
+  it("records matched: 0 when the transcript holds no card, and says so twice", async () => {
+    // The empty case, which the instance field introduced a branch for: there is
+    // nothing to pin, so the capture is not an error — it is a record that
+    // observed no card, and both the instance and the required anchors say so.
+    const page = fakeBrowserPage({
+      url: "http://localhost:3000/chat?thread=t-1",
+      tree: { "[data-conversation-list]": [fakeElement({})] },
+    });
+    const record = await observeCapture({ ...OBSERVE_ARGS, page: drivenPage(page) });
+    expect(record.instance).toEqual({
+      selector: CARD_ROOT,
+      matched: 0,
+      index: 0,
+      id: null,
+      attributes: {},
+    });
+    const violations = validateCaptureRecord(record, { hashOf }).join("\n");
+    expect(violations).toMatch(/the recorded instance matched 0 card\(s\)/);
+    expect(violations).toMatch(/requires \[data-lifecycle-card="recommendation_hold"\] PRESENT/);
+  });
+
   it("REFUSES a chat_thread record that names no instance at all", () => {
     const record = chatRecord();
     delete record.instance;
