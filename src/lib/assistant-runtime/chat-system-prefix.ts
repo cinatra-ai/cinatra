@@ -31,6 +31,16 @@
 //
 // THIS MODULE IS PURE. No I/O, no clock, no environment — so the byte-stability
 // property can be asserted directly in a unit test.
+//
+// WHICH SURFACES THIS TOUCHES, stated precisely (review round, 2026-08-17). It
+// is NOT "the browser chat only": `runAssistantTurn` composes ONE system string
+// for every turn it produces, so the public-site widget turn is re-ordered by
+// exactly the same code. The reachability argument is what makes that safe, not
+// a claim that the widget path was skipped — no fragment is added, dropped or
+// rewritten on any surface, and the directive keeps its authority from its own
+// text. The same correction applies to the attachment manifest in
+// `packages/llm/src/attachments/entry-resolve.ts`, which sits on every
+// attachment-bearing path, not on the chat's alone.
 // ---------------------------------------------------------------------------
 
 /**

@@ -2,35 +2,48 @@
 //
 // A chat turn used to ship a fixed ~24k-token prefix — the whole self-MCP tool
 // catalog plus the system prompt — on every question, and the prefix was not
-// byte-stable, so a provider could not reuse it either. Two levers, both driven
-// here through the REAL `runAssistantTurn`:
+// byte-stable, so a provider could not reuse it either. This file drives the
+// REAL `runAssistantTurn` and pins what this PR now owns:
 //
-//   LEVER 1 — selective exposure. The hosted self-MCP reference now carries the
-//     turn's exposure list. A trivial turn must NOT carry all ~83 primitives,
-//     and a turn that raises a topic must still reach that topic's tools.
 //   LEVER 2 — a byte-stable, ordering-stable prefix. Two consecutively-built
 //     turn payloads for the same conversation must produce a BYTE-IDENTICAL
 //     cacheable projection (system string + tool block).
 //
+// AND THE OWNER RULING (2026-08-17, option A) that governs the other half: the
+// chat's tool list is derived ONLY from package / connection / verified-actor
+// authorization state — NEVER from the question. The narrowing itself landed in
+// #2777 (`resolveChatMcpAllowedTools`, consumed here, never re-derived); what
+// this file pins is that the runtime feeds that resolver STATE and nothing
+// else, so no conversation text can move the tool block. The question-driven
+// topic-selection mechanism this branch first proposed is removed, not patched.
+//
 // WHAT THIS PROVES AND WHAT IT DOES NOT. It proves what the HOST emits. It
 // cannot prove what a provider bills: there is no provider key here and the
 // connector adapters are separate extensions. `cached_input_tokens` is a live
-// measurement and is stated as such on the PR, never inferred from a green
-// test.
+// measurement, tracked in #2847, never inferred from a green test.
 //
-// The harness mirrors `cinatra-parity.test.ts`: the runtime itself is real,
-// its leaf dependencies are stubbed, and `stream()` is captured. The self-MCP
-// builder is stubbed so its ALLOWLIST ARGUMENT — the thing lever 1 wires — is
-// observable directly.
+// The harness mirrors `cinatra-parity.test.ts`: the runtime itself is real, its
+// leaf dependencies are stubbed, and `stream()` is captured. The self-MCP
+// builder is stubbed so the STATE it is handed is observable directly — and the
+// stub derives the allowlist with #2777's own resolver, so what rides the tool
+// block here is the production derivation.
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { delegatedChatAllowedToolNames } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+// #2777's landed, state-derived resolver — the one the production builder
+// calls. Imported, never copied.
+import {
+  resolveChatMcpAllowedTools,
+  type ChatMcpCatalogState,
+} from "@cinatra-ai/llm/mcp-access";
 
 // --- captured seams --------------------------------------------------------
 let capturedStreamInput: Record<string, unknown> | null = null;
-/** The 4th argument of every `buildLlmMcpServerToolForChat` call. */
-const capturedExposures: Array<string[] | null | undefined> = [];
+/** The 4th (options) argument of every `buildLlmMcpServerToolForChat` call. */
+const capturedBuildOptions: Array<Record<string, unknown> | undefined> = [];
+/** What the state-derived resolver produced for each of those calls. */
+const capturedAllowedTools: Array<string[] | null> = [];
 
 const SYSTEM_BODY = "SYSTEM_PROMPT_BODY";
 const CONFIRMATION_POLICY = "\n\nCONFIRMATION_POLICY";
@@ -87,6 +100,17 @@ const volatileState = vi.hoisted(() => ({ pending: "" }));
 vi.mock("../pending-confirmation-context", () => ({
   buildPendingConfirmationContext: vi.fn(async () => volatileState.pending),
 }));
+// The catalog state the runtime derives per turn reads the connector inventory,
+// which is a database read. Stubbed to an EMPTY catalog: no primitive is
+// connection-gated, so the derivation reduces to host admission + declared
+// class over the REAL policy names. The connection-gating half has its own
+// suite over the real catalog (`chat-mcp-capability-gating.test.ts`, #2777) and
+// is deliberately not re-tested here — this file's subject is the PREFIX.
+vi.mock("@/lib/connector-inventory.server", () => ({
+  DEFAULT_CONNECTOR_INVENTORY_DEPS: {},
+  buildConnectorInventory: vi.fn(async () => ({ connectors: [] })),
+  buildCapabilityKeyResolver: () => () => null,
+}));
 vi.mock("@cinatra-ai/llm", () => ({
   hasConfiguredLlmRuntime: vi.fn(async () => true),
   checkPublicMcpReachability: vi.fn(async () => ({
@@ -115,18 +139,28 @@ vi.mock("@cinatra-ai/llm", () => ({
       _provider: unknown,
       _actor: unknown,
       issueActorToken: (a: unknown) => string,
-      allowedTools?: string[] | null,
+      options?: { catalogState?: ChatMcpCatalogState },
     ) => {
-      capturedExposures.push(allowedTools);
-      // The REAL builder's shape: the exposure list and the bearer both ride
-      // the tool, so both land in the cacheable projection below.
+      capturedBuildOptions.push(options as Record<string, unknown> | undefined);
+      // #2777's OWN resolver, imported from `@cinatra-ai/llm/mcp-access` and
+      // not re-implemented: this stub replaces the transport, not the
+      // derivation. The empty-derivation guard is the real builder's too — an
+      // empty allowlist reads as unrestricted on both adapters, so it is sent
+      // as `null` rather than as a widening `[]`.
+      const derived = options?.catalogState
+        ? resolveChatMcpAllowedTools(options.catalogState)
+        : null;
+      const allowedTools = derived && derived.length > 0 ? derived : null;
+      capturedAllowedTools.push(allowedTools);
+      // The REAL builder's shape: the allowlist and the bearer both ride the
+      // tool, so both land in the cacheable projection below.
       return {
         type: "mcp",
         name: "cinatra",
         serverLabel: "cinatra",
         serverUrl: "https://mcp.example.test/api/mcp",
         headers: { Authorization: `Bearer ${issueActorToken({})}` },
-        allowedTools: allowedTools ?? null,
+        allowedTools,
       };
     },
   ),
@@ -189,7 +223,8 @@ function cacheablePrefix(input: Record<string, unknown>): string {
 
 beforeEach(() => {
   capturedStreamInput = null;
-  capturedExposures.length = 0;
+  capturedBuildOptions.length = 0;
+  capturedAllowedTools.length = 0;
   volatileState.pending = "";
 });
 
@@ -202,55 +237,63 @@ function commonPrefixLength(a: string, b: string): number {
 }
 
 // ---------------------------------------------------------------------------
-// LEVER 1 — selective exposure
+// THE OWNER RULING (2026-08-17, option A) — the tool list derives from STATE
+//
+// The branch originally selected tools from the conversation text. The owner
+// ruled that out: the chat's tool list is derived only from installed /
+// connected / authorized state. These cases are the regression pin for that —
+// each of them fails if any question-driven narrowing is reintroduced.
 // ---------------------------------------------------------------------------
-describe("lever 1: a turn pays only for the tools it can plausibly use", () => {
-  it("a trivial turn does NOT carry the whole catalog", async () => {
-    await runTurn(["hi"]);
-    const exposure = capturedExposures.at(-1);
-    expect(Array.isArray(exposure)).toBe(true);
-    expect(exposure!.length).toBeGreaterThan(0);
-    expect(exposure!.length).toBeLessThan(ALL_ALLOWED.length);
-    expect(exposure).not.toContain("dashboards_cube_load");
-    expect(exposure).not.toContain("crm_contact_search");
-    expect(exposure).not.toContain("metric_cost_summary");
+describe("owner ruling A: the tool list derives from state, never from the question", () => {
+  it("hands the builder STATE and no channel for conversation text", async () => {
+    await runTurn(["build me a dashboard of spend by agent"]);
+    const options = capturedBuildOptions.at(-1)!;
+    // The ONLY key is the catalog state. A `conversationText` / `allowedTools`
+    // / topic argument reappearing here is the ruling being violated.
+    expect(Object.keys(options)).toEqual(["catalogState"]);
+    const state = options.catalogState as ChatMcpCatalogState;
+    expect(typeof state.isHostApproved).toBe("function");
+    expect(typeof state.isCapabilityAvailable).toBe("function");
+    expect(state.servable.length).toBeGreaterThan(0);
   });
 
-  it("the exposure list rides the self-MCP tool the model is handed", async () => {
+  it("derives the same list for two completely different questions", async () => {
+    await runTurn(["hi"]);
+    const trivial = capturedAllowedTools.at(-1);
+    await runTurn(["chart the crm contacts and purge the extension"]);
+    const substantive = capturedAllowedTools.at(-1);
+    expect(substantive).toEqual(trivial);
+  });
+
+  it("a trivial turn still reaches the WHOLE admitted catalog", async () => {
+    // The cost lever is no longer "fewer tools for a small question" — with the
+    // same state, a trivial turn is offered exactly what any other turn is.
+    await runTurn(["hi"]);
+    const allowed = capturedAllowedTools.at(-1)!;
+    for (const name of [
+      "connector_inventory_list",
+      "agent_list",
+      "agent_run",
+      "agent_run_get",
+      "dashboards_cube_load",
+    ]) {
+      expect(allowed).toContain(name);
+    }
+  });
+
+  it("every derived name is chat-allowed (the hint can never widen reach)", async () => {
+    const allowed = new Set(ALL_ALLOWED);
+    await runTurn(["purge the extension and chart the crm contacts"]);
+    for (const name of capturedAllowedTools.at(-1)!) {
+      expect(allowed.has(name)).toBe(true);
+    }
+  });
+
+  it("the derived list rides the self-MCP tool the model is handed", async () => {
     const input = await runTurn(["hi"]);
     const tools = input.tools as Array<Record<string, unknown>>;
     expect(tools[0]).toMatchObject({ type: "mcp", serverLabel: "cinatra" });
-    expect(tools[0].allowedTools).toEqual(capturedExposures.at(-1));
-  });
-
-  it("a trivial turn keeps the discovery + dispatch floor", async () => {
-    await runTurn(["which connectors are active?"]);
-    const exposure = capturedExposures.at(-1)!;
-    for (const name of ["connector_inventory_list", "agent_list", "agent_run", "agent_run_get"]) {
-      expect(exposure).toContain(name);
-    }
-  });
-
-  it("a topical turn reaches that topic's tools (no behavior change)", async () => {
-    await runTurn(["build me a dashboard of spend by agent"]);
-    const exposure = capturedExposures.at(-1)!;
-    expect(exposure).toContain("dashboards_cube_load");
-    expect(exposure).toContain("metric_cost_by_agent");
-    // and the floor is still there
-    expect(exposure).toContain("agent_run");
-  });
-
-  it("the FULL catalog is still reachable in one plain-language step", async () => {
-    await runTurn(["show me all tools you have"]);
-    expect(capturedExposures.at(-1)).toEqual([...ALL_ALLOWED]);
-  });
-
-  it("every exposed name is chat-allowed (the list can never widen reach)", async () => {
-    const allowed = new Set(ALL_ALLOWED);
-    await runTurn(["purge the extension and chart the crm contacts"]);
-    for (const name of capturedExposures.at(-1)!) {
-      expect(allowed.has(name)).toBe(true);
-    }
+    expect(tools[0].allowedTools).toEqual(capturedAllowedTools.at(-1));
   });
 });
 
@@ -295,16 +338,18 @@ describe("lever 2: the cacheable prefix is byte-identical across turns", () => {
     );
   });
 
-  it("emits the exposure list in a canonical, sorted order", async () => {
+  it("emits the derived allowlist in a canonical, sorted order", async () => {
     await runTurn(["chart the crm dashboard"]);
-    const exposure = capturedExposures.at(-1)!;
-    expect([...exposure]).toEqual([...new Set(exposure)].sort());
+    const allowed = capturedAllowedTools.at(-1)!;
+    // Sorted and de-duplicated by the resolver, so the same state always emits
+    // the same bytes whatever order the registry enumerated in.
+    expect([...allowed]).toEqual([...new Set(allowed)].sort());
   });
 
-  it("two turns on the same topic emit the same tool block bytes", async () => {
+  it("two turns of different subject matter emit the same tool block bytes", async () => {
     const first = JSON.stringify((await runTurn(["show me a dashboard"])).tools);
     const second = JSON.stringify(
-      (await runTurn(["open another dashboard please"])).tools,
+      (await runTurn(["who are my crm contacts?"])).tools,
     );
     expect(second).toBe(first);
   });
