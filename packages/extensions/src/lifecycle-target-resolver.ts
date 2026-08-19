@@ -193,9 +193,14 @@ export class AmbiguousLifecycleTargetError extends Error {
     public readonly packageName: string,
     public readonly scope: string,
     public readonly count: number,
+    /** The ATTRIBUTABLE reason, where the ambiguity has a named recovery
+     *  (cinatra#2856). Optional and appended, so the message every existing
+     *  ambiguity throws is unchanged. */
+    public readonly reason?: string,
   ) {
     super(
-      `Ambiguous lifecycle target for "${packageName}" in scope ${scope}: ${count} rows match a scope the org-anchor invariant guarantees is unique — refusing (data-integrity fault).`,
+      `Ambiguous lifecycle target for "${packageName}" in scope ${scope}: ${count} rows match a scope the org-anchor invariant guarantees is unique — refusing (data-integrity fault).` +
+        (reason ? ` ${reason}` : ""),
     );
     this.name = "AmbiguousLifecycleTargetError";
   }
@@ -649,6 +654,13 @@ export type LifecycleScopeResolution =
       packageName: string;
       scope: string;
       count: number;
+      /**
+       * An ATTRIBUTABLE refusal message for the one ambiguity that has a named
+       * recovery (cinatra#2856). Absent on every other ambiguity, which keeps
+       * the generic copy it always had. The CODE is unchanged either way, so a
+       * consumer that switches on `code` behaves exactly as before.
+       */
+      reason?: string;
     };
 
 /**
@@ -701,6 +713,10 @@ export type LifecycleScopeResolution =
  *      Resolving to the LIVE BUNDLED row instead would say "Already active" and
  *      leave the archived install permanently unreachable — the one-way door
  *      with better copy.
+ *      Arm (b) reaches that pair only where it is the WHOLE candidate set. The
+ *      ORG-SIBLING variant — the same pair sitting in the platform-admin
+ *      fallback arm, hidden by an organization row supersession just released —
+ *      is {@link strandedOrgSiblingWayBackRow} (cinatra#2856).
  *
  * It selects a candidate and nothing else: standing is still gated over the
  * resolved row by the caller, and no trust, integrity or journal gate moves.
@@ -753,6 +769,104 @@ function narrowByArchivedInstallPrecedence(
   return everyOtherIsLiveBundled ? archivedInstalls : candidates;
 }
 
+/**
+ * The ORG-SIBLING variant of the way back (cinatra#2856), the one shape
+ * {@link narrowByArchivedInstallPrecedence} cannot reach.
+ *
+ * THE DEFECT (groganz, cinatra#2762 round 6). Arm (b) above reopens the
+ * rollback door only where the post-rollback pair is the WHOLE candidate set —
+ * the org-NULL scope on its own. It never sees the pair when an ORGANIZATION
+ * sibling exists, and the reason is the two-arm gate in
+ * {@link resolveLifecycleScope}: the org-NULL rows reach a platform admin's
+ * org-scoped session through arm 2 ({@link addressableLifecycleRows}
+ * `platformFallback`), which is consulted ONLY while arm 1 is empty.
+ *
+ * That gate is exactly what a rollback flips:
+ *   - BEFORE, the workspace install is LIVE, so supersession
+ *     ({@link effectiveInstallRows}) removes the organization sibling, arm 1 is
+ *     empty, arm 2 runs and the platform admin resolves — and operates — the
+ *     app-wide install from their org-scoped session;
+ *   - "Roll back to bundled" archives it. Supersession LIFTS, the organization
+ *     sibling returns to arm 1, and arm 2 goes dark WITH the archived install
+ *     inside it. The page silently retargets to the organization's own row and
+ *     the app-wide install has no affordance at all in that session.
+ * Same one-way door #2774 closed, surviving in the org-sibling variant.
+ *
+ * WHY THIS REFUSES RATHER THAN REOPENING. Arm (b) could resolve its pair
+ * because every op on it meant the same row. Here the two candidates are both
+ * real and mean different rows: the organization's own LIVE install, and the
+ * archived app-wide install that is still restorable. Reopening would have to
+ * pick, and picking the archived org-NULL row over a live own-scope row would
+ * silently retarget an administrator's destructive ops across tiers — breaking
+ * arm 2's standing invariant that it "only ever converts a REFUSAL into a
+ * resolution", never replaces a row the actor resolves today. This module's
+ * doctrine for exactly that state is already written down: where the effective
+ * rule leaves two candidates and no selector is supplied, REFUSE rather than
+ * guess. So the arm does not invent a verdict — it stops HIDING the second
+ * candidate, and the one-way door becomes an ambiguity the operator can
+ * attribute and act on ({@link REASON_ORG_SIBLING_WAYBACK} names the recovery,
+ * which is the half a bare `ambiguous_target` never had).
+ *
+ * DELIBERATELY NARROW, mirroring arm (b) clause for clause — it changes the
+ * verdict for ONE shape and every other case keeps its outcome byte-for-byte:
+ *   - NO SELECTOR. A named tier already reaches the archived install from this
+ *     very session (`addressable.all` is arm 1 PLUS arm 2, filtered by tier), so
+ *     the selector path is not stranded and must not move;
+ *   - arm 1 is NON-EMPTY and every row in it is ORGANIZATION-ANCHORED — the
+ *     sibling supersession just released. This is what makes arm 2 invisible;
+ *     an empty arm 1 already runs arm 2 and lands on arm (b);
+ *   - arm 2 holds the POST-ROLLBACK PAIR and nothing else: at least two rows
+ *     that {@link narrowByArchivedInstallPrecedence} — the SAME predicate arm
+ *     (b) uses, not a second copy of the rule — narrows to exactly one row,
+ *     and that row is an archived default marketplace install at the WORKSPACE
+ *     anchor. A lone archived row, two archived installs, an archived bundle,
+ *     a non-default install or an unknown provenance is not this shape and is
+ *     left alone;
+ *   - arm 2 is non-empty only for a PLATFORM ADMIN in an org-scoped session, so
+ *     no other principal can reach this arm at all.
+ *
+ * Returns the stranded row so the refusal can name it in the resolver's own
+ * terms; it selects nothing and no gate moves.
+ */
+function strandedOrgSiblingWayBackRow(addressable: {
+  own: readonly InstalledExtension[];
+  platformFallback: readonly InstalledExtension[];
+}): InstalledExtension | null {
+  const { own, platformFallback } = addressable;
+  if (own.length === 0) return null;
+  if (!own.every((r) => (r.organizationId ?? null) !== null)) return null;
+  // The PAIR, not merely "a narrowing result": a single-row fallback narrows to
+  // itself, which is not the state a rollback leaves.
+  if (platformFallback.length < 2) return null;
+  const narrowed = narrowByArchivedInstallPrecedence(platformFallback);
+  if (narrowed.length !== 1) return null;
+  const stranded = narrowed[0];
+  return !isLiveRow(stranded) &&
+    isMarketplaceDefaultRow(stranded) &&
+    isWorkspaceAnchoredRow(stranded)
+    ? stranded
+    : null;
+}
+
+/**
+ * The copy for {@link strandedOrgSiblingWayBackRow}'s refusal. It lives here
+ * rather than with the capability strings below because the RESOLVER produces
+ * it — the capability layer only forwards it — and because it is the one
+ * ambiguity message that must stay glued to the arm that can emit it.
+ *
+ * Scope-shaped like the rest of the copy: no row id, no organization id. It
+ * deliberately DOES name "no active organization", the clause cinatra#2698
+ * removed from the standing copy — there it sent an administrator to clear
+ * their active organization for no reason, because a platform admin addresses
+ * an org-NULL row from any session; HERE it is the literal recovery, since a
+ * platform-scoped session is the session in which arm (b) resolves the archived
+ * install and Activate is the way back through the door.
+ */
+const REASON_ORG_SIBLING_WAYBACK =
+  "Two installs match your scope: this organization's own install, and the " +
+  "archived app-wide install. Clear your active organization to restore the " +
+  "app-wide install.";
+
 export function resolveLifecycleScope(
   rows: readonly InstalledExtension[],
   actor: Actor,
@@ -793,6 +907,23 @@ export function resolveLifecycleScope(
       count: candidates.length,
     };
   }
+  // cinatra#2856 — the ORG-SIBLING way back. Only where arm 1 resolved cleanly
+  // and arm 2 is therefore dark: the arm speaks about the candidate the gate
+  // above HID, so it is consulted after the ordinary verdicts, never instead of
+  // them. An already-ambiguous set keeps the generic refusal it always had.
+  if (!selector) {
+    const stranded = strandedOrgSiblingWayBackRow(addressable);
+    if (stranded !== null) {
+      return {
+        ok: false,
+        code: "ambiguous_target",
+        packageName: candidates[0].packageName,
+        scope: scopeLabel(actor),
+        count: candidates.length + 1,
+        reason: REASON_ORG_SIBLING_WAYBACK,
+      };
+    }
+  }
   return { ok: true, row: candidates[0] };
 }
 
@@ -815,6 +946,7 @@ export function pickLifecycleTargetRow(
     resolution.packageName,
     resolution.scope,
     resolution.count,
+    resolution.reason,
   );
 }
 
@@ -1089,7 +1221,9 @@ export function evaluateLifecycleCapability(
   if (!resolution.ok) {
     return resolution.code === "no_addressable_row"
       ? deny(op, "no_addressable_row", noAddressableRowReason(rows, actor))
-      : deny(op, "ambiguous_target", REASON_AMBIGUOUS);
+      : // cinatra#2856: the resolver attributes the one ambiguity that has a
+        // named recovery; every other one keeps the generic copy verbatim.
+        deny(op, "ambiguous_target", resolution.reason ?? REASON_AMBIGUOUS);
   }
   if (actorHasWriteStandingOverRow(actor, resolution.row.organizationId)) {
     return allow(op);
