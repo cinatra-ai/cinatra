@@ -26,7 +26,13 @@
 
 import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-import type { ActorRoleHints } from "./auth-policy";
+import {
+  enforceRunAccess,
+  resolveEffectivePolicy,
+  type ActorRoleHints,
+} from "./auth-policy";
+import { actorFromSession } from "@/lib/authz/build-actor-context";
+import { SELECTION_SOURCES } from "@cinatra-ai/skills/recommendation";
 import {
   writeRunRejectedRecommendations,
   SKIP_RECOMMENDATION_SOURCE,
@@ -34,10 +40,13 @@ import {
 
 import {
   readRunSelectedSkillRevisions,
+  readRunRejectedRecommendations,
   hasRunRecommendationSkip,
+  type RunRejectedRecommendation,
+  type RunSelectedSkillRevision,
 } from "@/lib/run-selected-skill-revisions";
 
-import { readAgentRunById, readAgentTemplateById } from "./store";
+import { readAgentRunById, readAgentTemplateById, readRunCoOwners } from "./store";
 import { getRunRecommendations } from "./recommendation-interception";
 import {
   RECOMMENDATION_DECISION_REFUSAL,
@@ -57,6 +66,24 @@ export type RunRecommendationDecisionResult =
   | { ok: true; dispatched: boolean }
   | { ok: false; error: string; code?: string; settingsHref?: string };
 
+/**
+ * What ONE chip recorded, for the SETTLED reading the ratified drawing fixes
+ * (design `specs/app-lifecycle-cards.html` §V at 60b27dfbb8a2: "one chip per
+ * skill, each showing what it recorded"). Derived from the run's OWN durable
+ * evidence — nothing new is written to represent it:
+ *
+ *   confirmed — a selection row whose source is `recommended_confirmed`
+ *               (the reader took the skill as scored);
+ *   adjusted  — a selection row whose source is `user_forced` (the reader
+ *               edited that skill's selection onto the run);
+ *   skipped   — a rejected-recommendation row (`recommended_not_kept` from a
+ *               confirm that left it out, or `user_skipped` from a skip).
+ */
+export type RunRecommendationDecidedSkill = {
+  skillId: string;
+  mark: "confirmed" | "adjusted" | "skipped";
+};
+
 export type RunRecommendationHoldState =
   | { state: "none" }
   | {
@@ -72,9 +99,82 @@ export type RunRecommendationHoldState =
        * run-scoped behaviour rather than becoming un-decidable.
        */
       holdRef: string;
+      /**
+       * Whether THIS reader may shape the run — §V's read-only reading, which
+       * draws every chip with its three affordances DISABLED and the reason
+       * under the row.
+       *
+       * PRESENTATION ONLY, and deliberately so. The decision actions each
+       * re-authorize from the session on their own (`confirmRunSkillSelection‑
+       * Action` enforces execute tier; the skip path enforces the run's trigger
+       * ownership) and neither reads this flag, so it can neither grant nor
+       * remove any authority. It is therefore derived FAIL-OPEN: a derivation
+       * that cannot answer says `true`, because withholding the affordances from
+       * a reader who may in fact decide would be a regression on the shipped
+       * card, while showing them to a reader who may not costs one honest
+       * refusal line — exactly what ships today.
+       */
+      canDecide: boolean;
     }
-  | { state: "confirmed"; skillNames: string[] }
-  | { state: "skipped" };
+  | {
+      state: "confirmed";
+      skillNames: string[];
+      decided: RunRecommendationDecidedSkill[];
+    }
+  | { state: "skipped"; decided: RunRecommendationDecidedSkill[] };
+
+/**
+ * Build §V's settled per-chip reading out of the two durable halves the run
+ * already writes. A selection row wins over a rejected row for the same skill
+ * (a skill that is IN the run's authoritative set was kept, whatever else was
+ * recorded on the way), and the order is by skill id so the settled row is
+ * stable across reads.
+ */
+export function decidedSkillsFromEvidence(
+  selected: Pick<RunSelectedSkillRevision, "skillId" | "selectionSource">[],
+  rejected: Pick<RunRejectedRecommendation, "skillId">[],
+): RunRecommendationDecidedSkill[] {
+  const marks = new Map<string, RunRecommendationDecidedSkill["mark"]>();
+  for (const row of selected) {
+    marks.set(
+      row.skillId,
+      row.selectionSource === SELECTION_SOURCES.userForced ? "adjusted" : "confirmed",
+    );
+  }
+  for (const row of rejected) {
+    if (!marks.has(row.skillId)) marks.set(row.skillId, "skipped");
+  }
+  return [...marks.entries()]
+    .map(([skillId, mark]) => ({ skillId, mark }))
+    .sort((a, b) => (a.skillId < b.skillId ? -1 : a.skillId > b.skillId ? 1 : 0));
+}
+
+/**
+ * Can this session DECIDE this run's recommendation? The same execute-tier gate
+ * `confirmRunSkillSelectionAction` enforces before it writes, read here so the
+ * card can draw §V's read-only chips instead of offering a press that would only
+ * ever be refused. FAIL-OPEN by contract — see `canDecide` above.
+ */
+async function readerMayDecide(
+  run: Awaited<ReturnType<typeof readAgentRunById>>,
+  session: Parameters<typeof actorFromSession>[0] | null,
+  roleHints: ActorRoleHints,
+): Promise<boolean> {
+  if (!run || !session) return true;
+  try {
+    const runTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
+    const coOwnerUserIds = (await readRunCoOwners(run.id).catch(() => [])).map((r) => r.userId);
+    await enforceRunAccess(
+      { ...run, effectivePolicy: resolveEffectivePolicy(run, runTemplate), coOwnerUserIds },
+      actorFromSession(session),
+      "execute",
+      roleHints,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The run-start recommendation hold state for the chat-mounted run panel
@@ -134,8 +234,20 @@ export async function getRunRecommendationHoldStateAction(input: {
     // disclosure boundary. The LIVE candidate row below is the surface this
     // change actually widens, and that one IS intersected.
     const selected = readRunSelectedSkillRevisions(input.runId);
-    if (selected.length > 0) return { state: "confirmed", skillNames: selected.map((s) => s.skillId) };
-    if (hasRunRecommendationSkip(input.runId)) return { state: "skipped" };
+    // §V's settled row states each skill's OWN outcome, so the rejected half of
+    // the same evidence is read beside the accepted half. Best-effort: a store
+    // that cannot answer costs the per-chip marks, never the settled card.
+    let rejected: RunRejectedRecommendation[] = [];
+    try {
+      rejected = readRunRejectedRecommendations(input.runId);
+    } catch {
+      rejected = [];
+    }
+    const decided = decidedSkillsFromEvidence(selected, rejected);
+    if (selected.length > 0) {
+      return { state: "confirmed", skillNames: selected.map((s) => s.skillId), decided };
+    }
+    if (hasRunRecommendationSkip(input.runId)) return { state: "skipped", decided };
     return { state: "none" };
   }
 
@@ -173,6 +285,7 @@ export async function getRunRecommendationHoldStateAction(input: {
     state: "held",
     agentPackageName: packageName,
     promptText,
+    canDecide: await readerMayDecide(run, session, roleHints),
     holdRef: encodeRecommendationHoldRef({ runId: input.runId, holdId: park.id }) ?? "",
     recommendations: recs.map((r) => ({
       skillId: r.skillId,
