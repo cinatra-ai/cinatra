@@ -1572,7 +1572,7 @@ export function isChatLaunchFrame(frame: unknown): boolean {
 //
 // An enqueue failure THROWS after reverting this function's own CAS, so no
 // caller can ever be handed a `queued` result for a run with no job behind it.
- 
+
 
 /** The creation inputs the caller owns. Presence and initial status are NOT
  *  among them: this module derives both from the launch frame, so no caller can

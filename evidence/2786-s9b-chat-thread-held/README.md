@@ -162,17 +162,17 @@ settled summary. The owner ruled option (a), and it is implemented:
   recorded;
 - the evidence write is no longer best-effort. A failed write refuses the
   decision and leaves the run parked and retryable, because releasing while
-  losing the record is exactly what made the card vanish. An EMPTY row is not a
-  failed write and still releases, so nobody is left holding a card they cannot
-  dismiss.
+  losing the record is exactly what made the card vanish.
 
 Measured in this capture: `decisionSummary: "skipped"`, controls gone, park
 `released`, run advanced off `pending_input`, and exactly one queue job naming
 that run. `skip-recapture-log.txt` is the unedited machine output.
 
-The cleaner home for this evidence is a single run-level skip record rather than
-one row per candidate; that needs a schema change, so this carries it on the
-sanctioned fallback — the existing rejection table, with a nullable rank.
+The run-level skip record now exists: `run_recommendation_skips`, keyed by
+`run_id` (bootstrap leaf + migration `core__0094`). It is the marker the settled
+card reads, it is verified before the run's park is released, and the per-skill
+rows beside it name only the candidates the row actually offered. The captures
+below predate it — they are re-shot on the capture lane.
 
 ## Re-record planned through the canonical capture index
 
