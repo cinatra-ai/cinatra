@@ -14,11 +14,17 @@
  *      record produces exactly the vanishing card the fix exists to remove, so a
  *      failed write refuses the decision and leaves the run parked and
  *      retryable.
- *   3. EVERY successful skip leaves a durable marker — there is no releasing
- *      path that records nothing. When drift leaves no candidate to name (the
- *      scorer and the assignments both come back empty, or the template reads
- *      back with no package), the marker names the RUN instead of a skill. The
- *      only non-recording ending is a REFUSAL, which keeps the hold.
+ *   3. EVERY successful skip leaves a durable RUN-LEVEL marker
+ *      (`run_recommendation_skips`, keyed by run_id) — there is no releasing
+ *      path that records nothing, and the marker is VERIFIED before the release.
+ *      When drift leaves no candidate to name (the scorer comes back empty, or
+ *      the template reads back with no package), the per-skill half is simply
+ *      empty and the marker still stands. The only non-recording ending is a
+ *      REFUSAL, which keeps the hold.
+ *   4. Per-skill efficacy rows come from the EXACT scored candidate result and
+ *      never from the assigned set — candidate generation intersects with the
+ *      installed catalog and caps at 50, so the assigned set can name skills the
+ *      row never offered.
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/run-recommendation-skip-evidence.test.ts
@@ -35,20 +41,19 @@ const resolveRecommendationCandidateSkillIds = vi.fn();
 const getRunRecommendations = vi.fn();
 const triggerAgentRun = vi.fn();
 const writeRunRejectedRecommendations = vi.fn();
+const writeRunRecommendationSkip = vi.fn();
 const publishRecommendationHoldResume = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
   requireActorContext: (...a: unknown[]) => requireActorContext(...a),
 }));
-/** The reserved id the run-level skip marker occupies (see the store module). */
-const RUN_LEVEL_SKIP_SENTINEL = "__run_level_skip__";
 vi.mock("@/lib/run-selected-skill-revisions", () => ({
   readRunSelectedSkillRevisions: vi.fn(() => []),
   hasRunRecommendationSkip: vi.fn(() => false),
   writeRunRejectedRecommendations: (...a: unknown[]) => writeRunRejectedRecommendations(...a),
+  writeRunRecommendationSkip: (...a: unknown[]) => writeRunRecommendationSkip(...a),
   SKIP_RECOMMENDATION_SOURCE: "user_skipped",
-  RUN_LEVEL_SKIP_SENTINEL_SKILL_ID: "__run_level_skip__",
 }));
 vi.mock("../store", () => ({
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...a),
@@ -106,6 +111,8 @@ beforeEach(() => {
   getRunRecommendations.mockResolvedValue(CANDIDATES);
   triggerAgentRun.mockResolvedValue({ ok: true });
   writeRunRejectedRecommendations.mockReturnValue(undefined);
+  // The store VERIFIES the marker and returns whether it read back.
+  writeRunRecommendationSkip.mockReturnValue(true);
 });
 
 describe("skip evidence covers every offered candidate", () => {
@@ -180,67 +187,99 @@ describe("the evidence write is not best-effort", () => {
     expect(triggerAgentRun).not.toHaveBeenCalled();
   });
 
-  it("records the skip against the ASSIGNED set when the scorer drifted to empty", async () => {
+  it("marks the RUN and writes NO per-skill row when the scorer drifted to empty", async () => {
     // A live hold proves a non-empty offered set existed, so an empty scorer
-    // result at decision time is DRIFT, not an empty row. The assignments behind
-    // the hold are still the offered set, so the skip is recorded against them
-    // and the card settles.
+    // result at decision time is DRIFT. The old code answered that drift by
+    // writing every ASSIGNED id as rejected — but candidate generation
+    // intersects the assigned ids with the INSTALLED catalog and caps at 50, so
+    // the assigned set can name skills the row never offered. The run-level
+    // marker is the answer instead; no skill is invented.
     getRunRecommendations.mockResolvedValue([]);
 
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
-    const written = writeRunRejectedRecommendations.mock.calls[0][0] as {
-      rejected: Array<{ skillId: string; skillRevisionId: string | null; recommendedRank: number | null }>;
-    };
-    expect(written.rejected.map((r) => r.skillId)).toEqual(["skill-ranked", "skill-forced"]);
-    // Offered, never ranked, and no revision the scorer could pin.
-    expect(written.rejected.every((r) => r.recommendedRank === null)).toBe(true);
-    expect(written.rejected.every((r) => r.skillRevisionId === null)).toBe(true);
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
+    expect(writeRunRecommendationSkip.mock.calls[0][0]).toMatchObject({
+      runId: RUN_ID,
+      skippedBy: USER,
+      // Nothing was offered, and the marker says so rather than guessing.
+      candidateCount: 0,
+    });
     expect(result.ok).toBe(true);
     expect(triggerAgentRun).toHaveBeenCalled();
   });
 
-  it("marks the RUN when the drift left no candidate to name", async () => {
-    // Both the scorer AND the assignments came back empty. Releasing here
-    // unrecorded is what made this Skip fail to settle: the state reader found
-    // no selection and no skip row, answered `none`, and the card disappeared.
-    // The marker names the run instead of a skill.
-    getRunRecommendations.mockResolvedValue([]);
-    resolveRecommendationCandidateSkillIds.mockResolvedValue([]);
-
-    const result = await skipRunRecommendationAction({ runId: RUN_ID });
-
-    const written = writeRunRejectedRecommendations.mock.calls[0][0] as {
-      rejected: Array<{ skillId: string; recommendationSource: string; recommendedRank: number | null }>;
-    };
-    expect(written.rejected).toHaveLength(1);
-    expect(written.rejected[0].skillId).toBe(RUN_LEVEL_SKIP_SENTINEL);
-    expect(written.rejected[0].recommendationSource).toBe("user_skipped");
-    expect(written.rejected[0].recommendedRank).toBeNull();
-    expect(result.ok).toBe(true);
-    expect(triggerAgentRun).toHaveBeenCalled();
-  });
-
-  it("marks the RUN when the template reads back with no package name", async () => {
-    // A template that genuinely carries no package is a fact, not a fault — it
-    // is the other branch that leaves nothing to name, and it takes the same
-    // run-level marker rather than releasing on no record at all.
-    readAgentTemplateById.mockResolvedValue({ id: "tpl-1", packageName: null });
+  it("NEVER records an assigned id the scorer did not return (uninstalled / past the cap)", async () => {
+    // The exact defect: `resolveRecommendationCandidateSkillIds` is the
+    // pre-intersection superset, so it can carry ids that are uninstalled or
+    // beyond DEFAULT_MAX_CANDIDATES. Only the scored result may become an
+    // efficacy row.
+    resolveRecommendationCandidateSkillIds.mockResolvedValue([
+      "skill-ranked",
+      "skill-uninstalled",
+      ...Array.from({ length: 60 }, (_, i) => `skill-past-cap-${i}`),
+    ]);
+    getRunRecommendations.mockResolvedValue([CANDIDATES[0]]);
 
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
     const written = writeRunRejectedRecommendations.mock.calls[0][0] as {
       rejected: Array<{ skillId: string }>;
     };
-    expect(written.rejected).toHaveLength(1);
-    expect(written.rejected[0].skillId).toBe(RUN_LEVEL_SKIP_SENTINEL);
+    expect(written.rejected.map((r) => r.skillId)).toEqual(["skill-ranked"]);
+    expect(written.rejected.map((r) => r.skillId)).not.toContain("skill-uninstalled");
+    expect(written.rejected.some((r) => r.skillId.startsWith("skill-past-cap"))).toBe(false);
+    expect(result.ok).toBe(true);
+  });
+
+  it("marks the RUN when the template reads back with no package name", async () => {
+    // A template that genuinely carries no package is a fact, not a fault — it
+    // leaves the per-skill half empty, and the run-level marker still records
+    // the decision rather than releasing on no record at all.
+    readAgentTemplateById.mockResolvedValue({ id: "tpl-1", packageName: null });
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
     expect(triggerAgentRun).toHaveBeenCalled();
   });
 
-  it("NEVER releases without a durable marker, on any successful path", async () => {
+  it("REFUSES the skip when the marker does not READ BACK — a silent no-op is not a decision", async () => {
+    // The writer is ON CONFLICT DO NOTHING, so "the statement did not throw" is
+    // not the same fact as "the marker is on record". The store reads it back;
+    // an unverified marker leaves the park LIVE and returns the typed code.
+    writeRunRecommendationSkip.mockReturnValue(false);
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(result.ok).toBe(false);
+    expect((result as { code?: string }).code).toBe("recommendation_skip_not_recorded");
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES the skip when the MARKER WRITE throws — the park stays live", async () => {
+    writeRunRecommendationSkip.mockImplementation(() => {
+      throw new Error("marker store down");
+    });
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(result.ok).toBe(false);
+    expect((result as { code?: string }).code).toBe("recommendation_skip_not_recorded");
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("NEVER releases without a VERIFIED run-level marker, on any successful path", async () => {
     // The invariant the individual cases above add up to, asserted as one
     // statement so a new branch cannot quietly join the list without a marker.
+    // The assertion is on the RUN-LEVEL marker, not on the per-skill rows: those
+    // are legitimately empty under drift, and demanding a non-empty argument
+    // there is what the assigned-set fallback was invented to satisfy.
     const drifts: Array<() => void> = [
       () => undefined,
       () => getRunRecommendations.mockResolvedValue([]),
@@ -263,16 +302,25 @@ describe("the evidence write is not best-effort", () => {
       resolveRecommendationCandidateSkillIds.mockResolvedValue(["skill-ranked", "skill-forced"]);
       getRunRecommendations.mockResolvedValue(CANDIDATES);
       triggerAgentRun.mockResolvedValue({ ok: true });
+      writeRunRecommendationSkip.mockReturnValue(true);
       drift();
 
       const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
       expect(result.ok).toBe(true);
-      expect(writeRunRejectedRecommendations).toHaveBeenCalledTimes(1);
-      const written = writeRunRejectedRecommendations.mock.calls[0][0] as {
-        rejected: unknown[];
-      };
-      expect(written.rejected.length).toBeGreaterThan(0);
+      // The marker is written for the RUN, verified, and names its owner.
+      expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
+      expect(writeRunRecommendationSkip.mock.calls[0][0]).toMatchObject({
+        runId: RUN_ID,
+        skippedBy: USER,
+      });
+      // Whatever per-skill rows were written named ONLY scored candidates.
+      const perSkill = writeRunRejectedRecommendations.mock.calls[0]?.[0] as
+        | { rejected: Array<{ skillId: string }> }
+        | undefined;
+      for (const row of perSkill?.rejected ?? []) {
+        expect(CANDIDATES.map((c) => c.skillId)).toContain(row.skillId);
+      }
     }
   });
 
@@ -304,6 +352,7 @@ describe("skip is a runBy-owner decision, fail-closed", () => {
 
     expect(result.ok).toBe(false);
     expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(writeRunRecommendationSkip).not.toHaveBeenCalled();
     expect(triggerAgentRun).not.toHaveBeenCalled();
   });
 
@@ -325,6 +374,7 @@ describe("skip is a runBy-owner decision, fail-closed", () => {
 
     expect(result.ok).toBe(false);
     expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(writeRunRecommendationSkip).not.toHaveBeenCalled();
     expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
     expect(triggerAgentRun).not.toHaveBeenCalled();
   });
@@ -333,6 +383,7 @@ describe("skip is a runBy-owner decision, fail-closed", () => {
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
     expect(writeRunRejectedRecommendations).toHaveBeenCalledTimes(1);
+    expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
     expect(triggerAgentRun).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
   });
