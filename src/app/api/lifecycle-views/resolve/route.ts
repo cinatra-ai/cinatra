@@ -9,6 +9,7 @@ import {
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
+import { attachLifecycleSettledOutcome } from "@/lib/lifecycle/lifecycle-settled-outcome";
 import { resolveTriggerScheduleProposalCard } from "@/lib/lifecycle/trigger-schedule-proposal-card";
 import { resolveWidgetLifecycleActorContext } from "@/lib/lifecycle/widget-lifecycle-actor";
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
@@ -192,8 +193,24 @@ export async function POST(request: Request): Promise<Response> {
     parsed.data.ref,
   );
 
+  // §IV's SETTLED READING (cinatra#2855; plan §4.2). Composed HERE for the same
+  // reason the chips are, and the reason is the same sentence: the resolver is
+  // on all five route-locked module budgets through the MCP pull, which uses it
+  // as the authorization ladder and never names a decider.
+  //
+  // The state is again the authorization — the ladder's own answer for this
+  // reader and this ref, with every denial already collapsed into `absent`,
+  // which carries no outcome. And the composition ORDER carries nothing: the
+  // chips read the gate's suggestion snapshot, the outcome reads the gate row's
+  // recorded disposition, and neither reads the other's answer.
+  const withOutcome = await attachLifecycleSettledOutcome(
+    withChips,
+    parsed.data.viewType,
+    parsed.data.ref,
+  );
+
   return Response.json(
-    { kind: envelope.kind, state: withChips, body: envelope.body },
+    { kind: envelope.kind, state: withOutcome, body: envelope.body },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

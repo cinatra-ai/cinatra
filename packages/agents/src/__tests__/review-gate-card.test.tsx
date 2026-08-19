@@ -1431,3 +1431,150 @@ describe("#2566 composer focus", () => {
     expect(store.getCommentAction(VIEW.ref)).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// §IV — the SETTLED card names its outcome, and Refresh goes with the ambiguity
+// (cinatra#2855; plan §4.2)
+// ---------------------------------------------------------------------------
+
+describe("a settled card that knows its outcome", () => {
+  const HOSTS = ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const;
+
+  async function settledWith(
+    outcome: "approved" | "rejected" | "changes_requested",
+    decidedByName?: string,
+    host: (typeof HOSTS)[number] = "chat_thread",
+  ) {
+    mockResolve(
+      decidedByName
+        ? { state: "settled", outcome, decidedByName }
+        : { state: "settled", outcome },
+    );
+    const { container } = renderOn(host);
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-gate-settled"]'),
+      ).not.toBeNull(),
+    );
+    return container;
+  }
+
+  it("names the outcome AND the decider", async () => {
+    const container = await settledWith("approved", "Dana Okonkwo");
+    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain(
+      "The gate is resolved and the run has been released to continue.",
+    );
+    expect(
+      container
+        .querySelector('[data-conformance-id="review-gate-settled"]')
+        ?.getAttribute("data-review-outcome"),
+    ).toBe("approved");
+  });
+
+  it("names each of the three recorded outcomes", async () => {
+    const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
+      ["approved", "Approved by Dana Okonkwo"],
+      ["rejected", "Rejected by Dana Okonkwo"],
+      ["changes_requested", "Changes requested by Dana Okonkwo"],
+    ];
+    for (const [outcome, title] of cases) {
+      const container = await settledWith(outcome, "Dana Okonkwo");
+      expect(container.textContent).toContain(title);
+      cleanup();
+    }
+  });
+
+  it("DROPS the Refresh affordance — and the generic reading with it", async () => {
+    // The button existed to resolve "decided, or did the run move on?". A named
+    // outcome has already answered that, so a Refresh beside it would offer to
+    // resolve an ambiguity that is not there.
+    const container = await settledWith("rejected", "Dana Okonkwo");
+    expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
+    expect(
+      container.querySelector('[data-conformance-id="review-gate-blocked"]'),
+    ).toBeNull();
+    expect(container.textContent).not.toContain("This review is no longer open");
+    // Still a settled card: no floor to press, no target to draw.
+    expect(
+      container.querySelector('[data-conformance-id="review-decision-bar"]'),
+    ).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(
+      container.querySelector('[data-lifecycle-card-state="settled"]'),
+    ).not.toBeNull();
+  });
+
+  it("states the outcome ALONE when no decider can be named", async () => {
+    // The resolver drops a decider it cannot name safely rather than reaching
+    // for an identifier, so the card must read as a finished sentence without
+    // one — never "Approved by" and a dangling nothing.
+    const container = await settledWith("approved");
+    expect(container.textContent).toContain("Approved");
+    expect(container.textContent).not.toContain("Approved by");
+    expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
+  });
+
+  it("draws the SAME reading on all four hosts", async () => {
+    // §IX parity: the renderer decides, never the surface it is read on.
+    const drawn: string[] = [];
+    for (const host of HOSTS) {
+      const container = await settledWith("approved", "Dana Okonkwo", host);
+      drawn.push(
+        container.querySelector('[data-conformance-id="review-gate-settled"]')!.outerHTML,
+      );
+      cleanup();
+    }
+    for (const html of drawn) {
+      expect(html).toBe(drawn[0]);
+      expect(html).toContain("Approved by Dana Okonkwo");
+    }
+  });
+
+  it("keeps the recorded suggestion partition above the named outcome", async () => {
+    mockResolve({
+      state: "settled",
+      outcome: "approved",
+      decidedByName: "Dana Okonkwo",
+      suggestions: [
+        {
+          id: "sug-1",
+          label: "content.body",
+          op: "replace",
+          message: "Tighten the opening sentence.",
+          mark: "accepted",
+        },
+      ],
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-gate-settled"]'),
+      ).not.toBeNull(),
+    );
+    expect(container.textContent).toContain("content.body");
+    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+  });
+});
+
+describe("a settled card that does NOT know its outcome", () => {
+  it("reads exactly as it always has, Refresh and all", async () => {
+    // The record that predates the outcome, and the disposition this build
+    // cannot read, both land here. Neither is a card that may guess.
+    mockResolve({ state: "settled" });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-gate-blocked"]'),
+      ).not.toBeNull(),
+    );
+    expect(
+      container.querySelector('[data-conformance-id="review-gate-settled"]'),
+    ).toBeNull();
+    expect(container.textContent).toContain("This review is no longer open");
+    expect(container.textContent).toContain(
+      "The gate was already decided or the run moved on.",
+    );
+    expect(screen.getByRole("button", { name: /refresh/i })).not.toBeNull();
+  });
+});

@@ -172,7 +172,11 @@ import {
   type LifecycleCardFrame,
 } from "./lifecycle-card-runtime";
 import { ReviewDecisionBar, type SubmitReviewDecisionAction } from "./review-decision-bar";
-import { ReviewGateBlocked, ReviewGateLoading } from "./review-gate-states";
+import {
+  ReviewGateBlocked,
+  ReviewGateLoading,
+  ReviewGateSettled,
+} from "./review-gate-states";
 
 // Re-exported so a HOST that mounts the card does not have to reach into the
 // protocol package for the one constant it needs to name a payload. The card is
@@ -665,17 +669,35 @@ function renderState(args: {
       );
 
     case "settled":
-      // §IV "no longer open": the gate was already decided or the run moved on.
-      // A Refresh, never a stale decision slipping through — and, when the gate
-      // carried suggestions, the partition that was RECORDED against them, drawn
-      // in the same chips with no live affordance. The decision stays readable
-      // on the surface it was made on.
+      // §IV settled — and, when the gate carried suggestions, the partition that
+      // was RECORDED against them, drawn in the same chips with no live
+      // affordance. The decision stays readable on the surface it was made on.
+      //
+      // TWO READINGS, AND THE RESOLVER PICKS (cinatra#2855; plan §4.2).
+      //
+      //   WITH an outcome — the card names it and its decider and draws NO
+      //     Refresh. The button existed to resolve an ambiguity ("decided, or the
+      //     run moved on?") that a named outcome has already resolved; leaving it
+      //     there would offer a re-pull that can only return the same answer.
+      //
+      //   WITHOUT one — byte-for-byte what shipped before: the generic "This
+      //     review is no longer open", its one line naming both possibilities,
+      //     and the Refresh. A gate resolved before the outcome travelled, and a
+      //     disposition this build cannot read, both land here, and neither is a
+      //     card that may guess.
       return (
         <>
           {state.suggestions && state.suggestions.length > 0 ? (
             <SuggestionChips suggestions={state.suggestions} recorded />
           ) : null}
-          <ReviewGateBlocked reason="no-longer-pending" onRefresh={onRefresh} />
+          {state.outcome ? (
+            <ReviewGateSettled
+              outcome={state.outcome}
+              decidedByName={state.decidedByName}
+            />
+          ) : (
+            <ReviewGateBlocked reason="no-longer-pending" onRefresh={onRefresh} />
+          )}
         </>
       );
 

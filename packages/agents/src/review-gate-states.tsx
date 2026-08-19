@@ -1,12 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { CircleX } from "lucide-react";
+import { CheckCheck, CircleX, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   reviewBlockedCopy,
+  reviewSettledCopy,
   type ReviewBlockedReason,
+  type ReviewSettledOutcome,
 } from "@/lib/artifacts/review-surface-model";
 
 /**
@@ -56,6 +58,59 @@ export function ReviewGateBlocked({
       >
         Refresh
       </Button>
+    </div>
+  );
+}
+
+/**
+ * The gate-level SETTLED state with a RECORDED OUTCOME (cinatra#2855; plan
+ * §4.2). The card that knows what happened says so: "Approved by …" /
+ * "Rejected by …" / "Changes requested by …", over the shipped sentence for
+ * that outcome, and with the recorded suggestion chips still drawn above it by
+ * the caller.
+ *
+ * NO REFRESH, AND THAT IS THE POINT. `ReviewGateBlocked` carries one because its
+ * copy cannot say which of two things happened, so a fresh pull is the reader's
+ * only way to find out. Here the pull has already answered. A Refresh beside a
+ * named outcome would offer to resolve an ambiguity that is not there, and
+ * invite the reader to press it as though something might still change.
+ *
+ * A gate this build cannot read an outcome for never reaches this component:
+ * the caller draws `ReviewGateBlocked` for it, unchanged, Refresh and all.
+ *
+ * Conformance anchor: `review-gate-settled`.
+ */
+export function ReviewGateSettled({
+  outcome,
+  decidedByName,
+}: {
+  outcome: ReviewSettledOutcome;
+  /** A SURFACE-SAFE display name. Never an id — the resolver drops a decider it
+   *  cannot name safely, and the copy then states the outcome alone. */
+  decidedByName?: string;
+}) {
+  const copy = reviewSettledCopy(outcome, decidedByName);
+  const Icon =
+    outcome === "approved" ? CheckCheck : outcome === "rejected" ? CircleX : RotateCcw;
+  // The status palette's own tokens (`--success` / `--destructive` / `--warning`),
+  // in the tint-over-token shape the shipped status chips already use.
+  const tone =
+    outcome === "approved"
+      ? "bg-success/10 text-success"
+      : outcome === "rejected"
+        ? "bg-destructive/10 text-destructive"
+        : "bg-warning/10 text-warning";
+  return (
+    <div
+      data-conformance-id="review-gate-settled"
+      data-review-outcome={outcome}
+      className="rounded-control border border-line bg-surface-strong px-4 py-5 text-center"
+    >
+      <div className={`mx-auto mb-2.5 grid size-9 place-items-center rounded-lg ${tone}`}>
+        <Icon aria-hidden="true" className="size-[18px]" />
+      </div>
+      <p className="font-sans text-sm font-semibold text-foreground">{copy.title}</p>
+      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">{copy.body}</p>
     </div>
   );
 }
