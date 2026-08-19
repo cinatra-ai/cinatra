@@ -120,6 +120,17 @@ npx vitest run --config .../drivers/stage-hold.config.ts               # the hol
 node evidence/2833-2835-notification-proofs/drivers/capture.mjs        <baseUrl> <outDir> <state.json> <cell> [arg] [arg2]
 ```
 
+One correction was made to the drivers AFTER the session, and it is disclosed
+rather than quietly folded in: both staging drivers passed the role literal
+`"owner"` to `sessionAuthorityFromResolvedRole`, which is not a member of the
+kernel's `Role` union (the typed name for this actor is `org_owner`) and which
+the repository typecheck refuses. The literal was INERT for what these drivers
+did: `sessionAuthorityFromResolvedRole` only consults the role when a
+capability's rule is not `"member"`, and `EFFECTIVE_GRANTS["owner"]` does not
+exist — reaching that branch would have thrown and failed the staging outright.
+The staging succeeded, so the branch was never taken, and correcting the literal
+cannot change what was captured.
+
 `cells/capture-log.txt` is the session log, kept whole. It includes earlier
 attempts against a first, synthetic batch subject whose targets carried no real
 representation and whose gate therefore refused its decision

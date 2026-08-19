@@ -67,7 +67,7 @@ it("stages one run and three agent-produced events for the batch partition", asy
       title: "Quarterly report pack",
       sourceType: "agent_builder",
     },
-    sessionAuthorityFromResolvedRole(ORG, "owner"),
+    sessionAuthorityFromResolvedRole(ORG, "org_owner"),
   );
 
   const events: string[] = [];

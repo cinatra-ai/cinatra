@@ -58,7 +58,7 @@ it("dispatches a human-present run and leaves it HELD on the recommendation", as
       inputParams: {},
       humanPresent: true,
     },
-    sessionAuthorityFromResolvedRole(ORG, "owner"),
+    sessionAuthorityFromResolvedRole(ORG, "org_owner"),
   );
   const runId = created.id;
 
