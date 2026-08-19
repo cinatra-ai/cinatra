@@ -711,7 +711,7 @@ export function AgenticRunPanel({
   const submitFocusedReviewComment = useCallback(
     async (value: Record<string, unknown> | string | number | boolean): Promise<void> => {
       const action = composerBoundRef
-        ? composerFocusStore?.getCommentAction(composerBoundRef)
+        ? composerFocusStore?.getCardActions(composerBoundRef)?.comment
         : undefined;
       // A comment is TEXT. A caller that treated this like a field gate and sent
       // an object or an approval primitive is refused rather than serialized into

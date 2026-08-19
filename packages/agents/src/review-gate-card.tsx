@@ -155,9 +155,12 @@ import type {
   ReviewDisposition,
   SuggestionDecisionPartition,
 } from "@/lib/artifacts/artifact-review-decision";
-import type {
-  ReviewDecisionPermissions,
-  ReviewSubmitOutcome,
+import {
+  reviewBlockedCopy,
+  reviewDecideDisabledReason,
+  reviewSettledCopy,
+  type ReviewDecisionPermissions,
+  type ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
 
 import {
@@ -166,8 +169,10 @@ import {
   useLifecycleCardFrame,
   useLifecycleCardHost,
   useLifecycleCardResolve,
+  type ComposerCardActions,
   type ComposerCommentAction,
   type ComposerCommentResult,
+  type ComposerDecideAction,
   type ComposerFocusBinding,
   type LifecycleCardFrame,
 } from "./lifecycle-card-runtime";
@@ -371,6 +376,55 @@ function composerCommentResult(outcome: ReviewSubmitOutcome): ComposerCommentRes
 }
 
 /**
+ * Say back, in one line, what a TYPED TERMINAL DECISION did (cinatra#2853, plan
+ * §2.2 — "the prompt window acts on the active card").
+ *
+ * NOT ONE NEW SENTENCE. Every line below is composed from the copy this review
+ * already owns: `reviewSettledCopy` is where the decision bar's own post-press
+ * sentence comes from ("Approved" + "The gate is resolved and the run has been
+ * released to continue."), `reviewBlockedCopy` is the blocked reading the bar
+ * and the settled card both draw, and the retry tail is the bar's own. A reader
+ * who types the decision and a reader who presses it are told the same thing in
+ * the same words, because there is only one set of words.
+ *
+ * IDENTIFIER-FREE, like the comment reading beside it: this text is persisted
+ * into the transcript, which is LLM-visible.
+ */
+function composerDecisionResult(outcome: ReviewSubmitOutcome): ComposerCommentResult {
+  switch (outcome.kind) {
+    case "decided": {
+      // A `comment` disposition cannot come back from a terminal submit, but the
+      // union carries it — read it with the comment vocabulary rather than
+      // announcing a decision that was not taken.
+      if (outcome.disposition === "comment") return composerCommentResult(outcome);
+      const copy = reviewSettledCopy(
+        outcome.disposition === "approve" ? "approved" : "rejected",
+      );
+      return {
+        ok: true,
+        message: `${copy.title}. ${copy.body}${
+          outcome.idempotent ? " (This decision had already been recorded.)" : ""
+        }`,
+      };
+    }
+    case "blocked": {
+      const copy = reviewBlockedCopy(outcome.reason);
+      return { ok: false, message: `${copy.title}. ${copy.body}` };
+    }
+    case "error":
+      // The bar's own tail: a failure is never reported as a landed decision.
+      return {
+        ok: false,
+        message: `${outcome.message} The decision did not commit — you can retry.`,
+      };
+    case "changes-requested":
+    case "annotated":
+    case "not-permitted":
+      return composerCommentResult(outcome);
+  }
+}
+
+/**
  * The REVIEW card. `view` is S1's wire payload — a viewType, a schemaVersion and
  * an opaque ref, and nothing else; every fact drawn below is resolved from the
  * server against the live reader.
@@ -483,6 +537,71 @@ export function ReviewGateCard({
     return outcome;
   };
 
+  // §VIII — the marks, RE-BOUND to whatever is surfaced right now.
+  //
+  // HOISTED ABOVE THE COMPOSER HOOKS (cinatra#2853), and unchanged in every other
+  // respect. The floor receives `partition` as a prop and re-reads it on every
+  // render; the composer receives it inside the card's own published closure,
+  // and a closure cannot read a value computed after it. Computing it here is
+  // what lets a TYPED decision carry exactly the marks a PRESSED one carries.
+  //
+  // Before the first resolve there is nothing surfaced and nothing to rebind, so
+  // the identity is held as it stands and this block is the no-op it already was
+  // at that point in the render — no mark is made, cleared or reported.
+  //
+  // A mark is meaningful only against the exact set it was made on, and that set
+  // can change under the reviewer between resolves: a snapshot row edited
+  // underneath the store stops verifying and surfaces NOTHING, and a transport
+  // failure draws no chips either. Two things must not happen when it does.
+  //
+  // A MARK MUST NOT BE SILENTLY LOST. Intersecting the marks with the new set
+  // and submitting the remainder would let an approve land WITHOUT the items the
+  // reviewer believes they accepted — an identity-version-1 decision recording
+  // nothing, from a reviewer who marked something. So a changed surface CLEARS
+  // the marks and says so on screen, before any decision, and the reviewer
+  // decides from what they can currently see.
+  //
+  // A MARK MUST NOT CROSS GATES. A suggestion id derives from (lane, projection
+  // digest, op, pointer) and NOT from the gate, so two gates shown the same text
+  // legitimately mint the SAME ids. The binding is therefore the REF as well as
+  // the id set — a card reused for another gate can never apply the previous
+  // gate's marks to identically-named suggestions.
+  const surfaced =
+    state !== null && "suggestions" in state ? (state.suggestions ?? []) : [];
+  const surfacedIdentity =
+    state === null
+      ? markState.identity
+      : `${view.ref} ${surfaced
+          .map((s) => s.id)
+          .sort()
+          .join("")}`;
+  let marks = markState.marks;
+  let marksCleared = markState.cleared;
+  if (markState.identity !== surfacedIdentity) {
+    // React's documented "adjust state when a prop changes" shape, for the same
+    // reason the resolve hook uses it: an effect would leave one painted frame
+    // in which marks made against the OLD set sit under the new one.
+    //
+    // THE NOTICE IS STICKY UNTIL THE REVIEWER ACTS. It cannot be recomputed from
+    // "were there marks a moment ago", because the second change in a row would
+    // then answer no — the first change already emptied them — and the warning
+    // would vanish while the loss it reported stood. A transient store failure
+    // that drops the chips and then restores them is exactly two changes in a
+    // row, and it would otherwise leave the reviewer looking at chips at rest
+    // with nothing to say their marks are gone. Only `onToggleMark` clears it.
+    //
+    // A DIFFERENT GATE STARTS CLEAN, though: the notice is about marks lost on
+    // THIS review, and carrying it onto another one would be a warning about
+    // nothing.
+    const sameGate = markState.ref === view.ref;
+    marksCleared = sameGate
+      ? markState.cleared || Object.keys(markState.marks).length > 0
+      : false;
+    marks = {};
+    setMarkState({ ref: view.ref, identity: surfacedIdentity, marks, cleared: marksCleared });
+  }
+  const partition = buildPartition(surfaced, marks);
+
   // #2566's COMPOSER COMMENT — the card's own comment path, published to the
   // composer rather than re-implemented by it.
   //
@@ -515,6 +634,66 @@ export function ReviewGateCard({
     [submitAction, refBoundSubmit, refresh],
   );
 
+  // The floor's permissions, as the SERVER answered them, lifted out of the
+  // render branch so the composer's terminal control is gated on exactly what
+  // the buttons are gated on. `null` on every state that draws no floor.
+  const decidePermissions: ReviewDecisionPermissions | null =
+    state !== null && (state.state === "pending" || state.state === "restricted")
+      ? { canDecide: state.canDecide, canComment: state.canComment }
+      : null;
+
+  // #2853's TYPED TERMINAL DECISION — the card's own Approve / Reject, published
+  // to the composer exactly as the comment path above is.
+  //
+  // THE SAME ACT AS THE PRESS, NOT A SECOND ONE. It is `submitAndRefresh` with
+  // the stated disposition and the note the reader stated with it, so it travels
+  // on this host's credential, lands in the same decision module with the same
+  // validation order and the same CAS, carries §VIII's partition exactly as the
+  // floor does, and re-resolves the card afterwards. There is no second
+  // transport, no second authorization and no second reading of the answer.
+  //
+  // THE FLOOR DECIDES WHETHER, AND IT ALREADY HAS. A reader whose Approve /
+  // Reject is drawn DISABLED gets back the very line the bar renders under those
+  // disabled buttons — the card's own refusal, in the card's own words. Mirroring
+  // the disabled button rather than posting is what makes "the same authorization
+  // as the card's own controls" true on this path too: the typed decision cannot
+  // reach further than the pressed one.
+  const composerDecide = useCallback<ComposerDecideAction>(
+    async (decision, note) => {
+      const refusal =
+        decidePermissions === null ? null : reviewDecideDisabledReason(decidePermissions);
+      if (refusal !== null) return { ok: false, message: refusal };
+      return composerDecisionResult(
+        await submitAndRefresh({
+          disposition: decision,
+          comment: note,
+          // Omitted rather than nulled when there is no partition, so a typed
+          // decision posts the byte-identical body a pressed one posts — and
+          // lands the identity-version-1 fingerprint S6b pinned.
+          ...(partition ? { suggestionDecisions: partition } : {}),
+        }),
+      );
+    },
+    // `submitAndRefresh` is rebuilt every render and closes over exactly these
+    // three; the permissions and the partition are the rest of what this closure
+    // reads. Rebuilding it as the marks change is free: the runtime registers a
+    // STABLE delegator and always calls the current closure through it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      submitAction,
+      refBoundSubmit,
+      refresh,
+      decidePermissions?.canDecide,
+      decidePermissions?.canComment,
+      partition,
+    ],
+  );
+
+  const composerActions = useMemo<ComposerCardActions>(
+    () => ({ comment: composerComment, decide: composerDecide }),
+    [composerComment, composerDecide],
+  );
+
   // The gate takes composer input only while the SERVER says it is open to this
   // reader's comment. `canComment` is the same answer the floor's Comment button
   // is gated on, so a reader who may look but not respond registers nothing and
@@ -525,8 +704,9 @@ export function ReviewGateCard({
     state.canComment;
   const focusBinding = useComposerFocusBinding({
     ref: view.ref,
+    kind: "artifact_review_gate",
     eligible: composerEligible,
-    comment: composerComment,
+    actions: composerActions,
   });
 
   // Nothing renders until an authorized resolve has answered (S1's contract) —
@@ -534,56 +714,6 @@ export function ReviewGateCard({
   // itself an existence oracle.
   if (!present || state === null) return null;
 
-  // §VIII — the marks, RE-BOUND to whatever is surfaced right now.
-  //
-  // A mark is meaningful only against the exact set it was made on, and that set
-  // can change under the reviewer between resolves: a snapshot row edited
-  // underneath the store stops verifying and surfaces NOTHING, and a transport
-  // failure draws no chips either. Two things must not happen when it does.
-  //
-  // A MARK MUST NOT BE SILENTLY LOST. Intersecting the marks with the new set
-  // and submitting the remainder would let an approve land WITHOUT the items the
-  // reviewer believes they accepted — an identity-version-1 decision recording
-  // nothing, from a reviewer who marked something. So a changed surface CLEARS
-  // the marks and says so on screen, before any decision, and the reviewer
-  // decides from what they can currently see.
-  //
-  // A MARK MUST NOT CROSS GATES. A suggestion id derives from (lane, projection
-  // digest, op, pointer) and NOT from the gate, so two gates shown the same text
-  // legitimately mint the SAME ids. The binding is therefore the REF as well as
-  // the id set — a card reused for another gate can never apply the previous
-  // gate's marks to identically-named suggestions.
-  const surfaced = "suggestions" in state ? (state.suggestions ?? []) : [];
-  const surfacedIdentity = `${view.ref} ${surfaced
-    .map((s) => s.id)
-    .sort()
-    .join("")}`;
-  let marks = markState.marks;
-  let marksCleared = markState.cleared;
-  if (markState.identity !== surfacedIdentity) {
-    // React's documented "adjust state when a prop changes" shape, for the same
-    // reason the resolve hook uses it: an effect would leave one painted frame
-    // in which marks made against the OLD set sit under the new one.
-    //
-    // THE NOTICE IS STICKY UNTIL THE REVIEWER ACTS. It cannot be recomputed from
-    // "were there marks a moment ago", because the second change in a row would
-    // then answer no — the first change already emptied them — and the warning
-    // would vanish while the loss it reported stood. A transient store failure
-    // that drops the chips and then restores them is exactly two changes in a
-    // row, and it would otherwise leave the reviewer looking at chips at rest
-    // with nothing to say their marks are gone. Only `onToggleMark` clears it.
-    //
-    // A DIFFERENT GATE STARTS CLEAN, though: the notice is about marks lost on
-    // THIS review, and carrying it onto another one would be a warning about
-    // nothing.
-    const sameGate = markState.ref === view.ref;
-    marksCleared = sameGate
-      ? markState.cleared || Object.keys(markState.marks).length > 0
-      : false;
-    marks = {};
-    setMarkState({ ref: view.ref, identity: surfacedIdentity, marks, cleared: marksCleared });
-  }
-  const partition = buildPartition(surfaced, marks);
 
   const frame = HOST_FRAME[host];
   const body = renderState({

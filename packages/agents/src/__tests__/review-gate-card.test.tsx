@@ -1151,7 +1151,7 @@ describe("#2566 composer focus", () => {
    * registers in a passive effect, so the row lands in the commit and the
    * registration lands in the effect flush that follows it. `waitFor` observes
    * the DOM through a MutationObserver — a microtask off the commit — and can
-   * therefore return in the window between the two, where `getCommentAction`
+   * therefore return in the window between the two, where `getCardActions`
    * is still `undefined` and calling it throws. It is entered rarely and
    * nondeterministically — measured on this card at 1-2 of 120 renders on an
    * idle machine, on this branch AND on the code before it — which is why it
@@ -1168,7 +1168,7 @@ describe("#2566 composer focus", () => {
     store: ComposerFocusStore,
     ref: string,
   ): Promise<void> {
-    await waitFor(() => expect(typeof store.getCommentAction(ref)).toBe("function"));
+    await waitFor(() => expect(typeof store.getCardActions(ref)?.comment).toBe("function"));
   }
 
   it("NO composer on the surface ⇒ no affordance and no registration at all", async () => {
@@ -1206,7 +1206,9 @@ describe("#2566 composer focus", () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { store, container } = renderWithComposer(card(VIEW));
     await waitForComposerRegistration(store, VIEW.ref);
-    expect(store.getSnapshot().eligible).toEqual([VIEW.ref]);
+    expect(store.getSnapshot().eligible).toEqual([
+      { ref: VIEW.ref, kind: "artifact_review_gate" },
+    ]);
     const row = container.querySelector('[data-conformance-id="review-composer-focus"]')!;
     expect(row.getAttribute("data-composer-bound")).toBe("true");
     expect(container.querySelector('[data-conformance-id="review-composer-bound"]')).not.toBeNull();
@@ -1310,7 +1312,7 @@ describe("#2566 composer focus", () => {
     const { store } = renderWithComposer(card(VIEW));
     await waitForComposerRegistration(store, VIEW.ref);
 
-    const result = await store.getCommentAction(VIEW.ref)!("shorten the intro");
+    const result = await store.getCardActions(VIEW.ref)!.comment("shorten the intro");
     // The SAME gate-scoped entry, the SAME opaque ref, the `comment` disposition
     // the floor's Comment button posts — not a second transport.
     const decide = calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH);
@@ -1383,7 +1385,7 @@ describe("#2566 composer focus", () => {
 
     // And it is not merely drawn: the registered action posts the comment on
     // the card's own decision path, from the loading state.
-    const result = await store.getCommentAction(VIEW.ref)!("the intro is too long");
+    const result = await store.getCardActions(VIEW.ref)!.comment("the intro is too long");
     expect(result.ok).toBe(true);
     expect(calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)!.body).toMatchObject({
       ref: VIEW.ref,
@@ -1397,7 +1399,7 @@ describe("#2566 composer focus", () => {
     const { store } = renderWithComposer(card(VIEW));
     await waitForComposerRegistration(store, VIEW.ref);
     const before = fetchMock.mock.calls.length;
-    const result = await store.getCommentAction(VIEW.ref)!("   ");
+    const result = await store.getCardActions(VIEW.ref)!.comment("   ");
     expect(result.ok).toBe(false);
     expect(fetchMock.mock.calls.length).toBe(before);
   });
@@ -1414,9 +1416,185 @@ describe("#2566 composer focus", () => {
     }) as unknown as typeof fetch;
     const { store } = renderWithComposer(card(VIEW));
     await waitForComposerRegistration(store, VIEW.ref);
-    const result = await store.getCommentAction(VIEW.ref)!("please fix the heading");
+    const result = await store.getCardActions(VIEW.ref)!.comment("please fix the heading");
     expect(result.ok).toBe(false);
     expect(result.message.length).toBeGreaterThan(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // #2853 — THE PROMPT WINDOW ACTS ON THE ACTIVE CARD (plan §2.2)
+  //
+  // The property under test is not "typing approves". It is that a TYPED
+  // decision and a PRESSED one are the SAME ACT: the same gate-scoped entry,
+  // the same opaque ref, the same disposition, the same per-item partition, the
+  // same permission answer, and the same sentence read back. Anything the typed
+  // path could do that the pressed path cannot is a second decision route, and
+  // a second decision route is the thing #2566 and #1796 both exist to forbid.
+  // -------------------------------------------------------------------------
+
+  it("a typed APPROVE posts what the Approve BUTTON posts — same path, same body", async () => {
+    const calls: Array<{ url: string; body: unknown; init?: RequestInit }> = [];
+    globalThis.fetch = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null, init });
+      if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+        return new Response(
+          JSON.stringify({
+            outcome: { kind: "decided", disposition: "approve", idempotent: false },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
+
+    const result = await store.getCardActions(VIEW.ref)!.decide("approve", null);
+
+    const decide = calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH);
+    expect(decide).toBeDefined();
+    // THE SERVER-SIDE AUTHORIZATION IS THE BUTTON'S. The typed decision reaches
+    // the gate-scoped endpoint with the same opaque ref, so the server re-runs
+    // the identical validation order and the identical CAS; the composer adds
+    // no credential, no route and no claim of its own.
+    expect(decide!.body).toMatchObject({
+      ref: VIEW.ref,
+      disposition: "approve",
+      comment: null,
+    });
+    expect(decide!.init?.method).toBe("POST");
+    // The reading back is the decision bar's own sentence, verbatim.
+    expect(result.ok).toBe(true);
+    expect(result.message).toBe(
+      "Approved. The gate is resolved and the run has been released to continue.",
+    );
+    expect(result.message).not.toContain(VIEW.ref);
+  });
+
+  it("a typed REJECT carries the stated rationale as the card's own note", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+        return new Response(
+          JSON.stringify({
+            outcome: { kind: "decided", disposition: "reject", idempotent: true },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
+
+    const result = await store
+      .getCardActions(VIEW.ref)!
+      .decide("reject", "the second paragraph overstates the result");
+
+    expect(calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)!.body).toMatchObject({
+      ref: VIEW.ref,
+      disposition: "reject",
+      comment: "the second paragraph overstates the result",
+    });
+    // A repeat ends in the bar's own idempotence suffix rather than a new claim.
+    expect(result.message).toBe(
+      "Rejected. The gate is resolved and the reviewed work has been turned back." +
+        " (This decision had already been recorded.)",
+    );
+  });
+
+  it("a reader whose Approve is DISABLED is refused — with the floor's own line, and NO request", async () => {
+    // §IV `restricted`: the reader may comment but not decide. The bar draws
+    // the two terminal buttons disabled with this exact reason under them, so
+    // the typed path must not reach further than the pressed one does.
+    const fetchMock = mockResolve({
+      state: "restricted",
+      canDecide: false,
+      canComment: true,
+      reason: "You can comment on this review but not decide it.",
+    });
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
+
+    const before = fetchMock.mock.calls.length;
+    const result = await store.getCardActions(VIEW.ref)!.decide("approve", null);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe(
+      "A terminal Approve / Reject needs approve access on the run — you can Comment, but not decide.",
+    );
+    // Nothing was posted at all: a disabled button sends no request either.
+    expect(fetchMock.mock.calls.length).toBe(before);
+  });
+
+  it("a typed decision carries the reviewer's MARKS, exactly as the floor does", async () => {
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    });
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+
+    // §VIII: a mark is LOCAL until a TERMINAL decision carries it — and it must
+    // ride the TYPED one identically. An approve that landed without the items
+    // the reviewer believes they accepted is exactly the silent loss §VIII
+    // forbids, and a typed path that dropped them would reintroduce it.
+    fireEvent.click(chipFor(container, "subject")); // accepted
+    fireEvent.click(chipFor(container, "items · 0 · bcc")); // accepted
+    fireEvent.click(chipFor(container, "items · 0 · bcc")); // dismissed
+    await waitFor(() =>
+      expect(chipFor(container, "items · 0 · bcc").getAttribute("data-suggestion-state")).toBe(
+        "dismissed",
+      ),
+    );
+
+    await store.getCardActions(VIEW.ref)!.decide("approve", null);
+
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    const body = decideBodies(fetchMock)[0]!;
+    expect(body.disposition).toBe("approve");
+    // Byte for byte the partition the PRESSED approve posts, in the same test
+    // file's §VIII case above.
+    expect(body.suggestionDecisions).toEqual({ accepted: ["sug-1"], dismissed: ["sug-2"] });
+  });
+
+  it("a typed COMMENT still carries NO partition — a comment resolves nothing", async () => {
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    });
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(chipFor(container, "subject"));
+    await waitFor(() =>
+      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
+    );
+
+    await store.getCardActions(VIEW.ref)!.comment("shorten the intro");
+
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    expect("suggestionDecisions" in decideBodies(fetchMock)[0]!).toBe(false);
   });
 
   it("a card that unmounts takes its composer binding with it", async () => {
@@ -1425,10 +1603,14 @@ describe("#2566 composer focus", () => {
     const { unmount } = render(
       <LifecycleComposerFocusProvider store={store}>{card(VIEW)}</LifecycleComposerFocusProvider>,
     );
-    await waitFor(() => expect(store.getSnapshot().eligible).toEqual([VIEW.ref]));
+    await waitFor(() =>
+      expect(store.getSnapshot().eligible).toEqual([
+        { ref: VIEW.ref, kind: "artifact_review_gate" },
+      ]),
+    );
     unmount();
     expect(store.getSnapshot().eligible).toEqual([]);
-    expect(store.getCommentAction(VIEW.ref)).toBeUndefined();
+    expect(store.getCardActions(VIEW.ref)).toBeUndefined();
   });
 });
 

@@ -39,6 +39,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -49,6 +50,7 @@ import {
 import {
   parseLifecycleResolveEnvelope,
   type LifecycleCardHost,
+  type LifecycleCardKind,
   type LifecycleDataPartViewType,
   type LifecycleResolveEnvelopeFor,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -227,9 +229,16 @@ export function useLifecycleCardHost(): LifecycleCardHost | null {
 }
 
 // ---------------------------------------------------------------------------
-// COMPOSER FOCUS — which review card the chat composer is bound to
+// COMPOSER FOCUS — which LIFECYCLE CARD the chat composer is bound to
 // (cinatra#2566's composer-focus deliverable; the program Done-definition is
-// cinatra#2573: "multiple concurrent gates require explicit composer focus").
+// cinatra#2573: "multiple concurrent gates require explicit composer focus";
+// generalised beyond reviews by cinatra#2853, plan §2.1/§2.2).
+//
+// KIND-GENERIC, BY CONSTRUCTION. Plan §2.2 makes the prompt window act on the
+// ACTIVE CARD, whatever kind it is — so a card registers its KIND alongside its
+// ref and publishes the subset of its own controls the composer may drive. This
+// module still knows nothing about reviews, schedules or skills: it carries the
+// kind for the refusal to name, and calls closures the CARD built.
 //
 // WHY IT LIVES HERE. It is the same shape as the host declaration above and it
 // has the same two-sided reach problem: the CARD (this package) offers the focus
@@ -278,14 +287,67 @@ export type ComposerCommentResult = {
  */
 export type ComposerCommentAction = (comment: string) => Promise<ComposerCommentResult>;
 
-/** What the composer knows about the review gates on screen right now. */
+/**
+ * The TERMINAL verbs a card's own floor can be asked for in words (cinatra#2853,
+ * plan §2.2). A CLOSED set, and deliberately only what some card's controls
+ * already offer: "no card gains an action its controls do not already have", so
+ * a verb enters this union when a floor that has it publishes it, never before.
+ */
+export type ComposerDecision = "approve" | "reject";
+
+/**
+ * The card's own TERMINAL control, handed to the composer.
+ *
+ * `note` is the rationale the card's own field would have carried, or `null`
+ * when the reader stated the decision on its own. Everything else — the
+ * credential, the per-item partition, the post-decision re-resolve — stays
+ * inside the card's closure, which is what makes a typed decision the SAME act
+ * as the press rather than a second path that could drift from it.
+ */
+export type ComposerDecideAction = (
+  decision: ComposerDecision,
+  note: string | null,
+) => Promise<ComposerCommentResult>;
+
+/**
+ * WHAT ONE CARD LETS THE PROMPT WINDOW DO (cinatra#2853; plan §2.2 "the prompt
+ * window acts on the active card").
+ *
+ * Both members are the CARD's own controls, published rather than
+ * re-implemented — the composer owns no transport and no copy of its own. Both
+ * are REQUIRED, because the alternative is worse than a kind having to write
+ * one refusal: an absent `decide` would leave a typed "approve it" quietly
+ * recorded as a comment, and a decision silently downgraded to a remark is the
+ * exact failure this module exists to prevent. A kind whose floor has no
+ * terminal verb publishes a `decide` that returns ITS OWN refusal, so the reader
+ * is answered by the card they were looking at.
+ */
+export type ComposerCardActions = {
+  comment: ComposerCommentAction;
+  decide: ComposerDecideAction;
+};
+
+/**
+ * ONE CARD THE COMPOSER COULD ACT ON — its ref and WHICH KIND it is.
+ *
+ * The kind travels because the binding is no longer review-only (cinatra#2853,
+ * plan §2.1: the deterministic pick-the-card binding covers every lifecycle card
+ * kind). It is carried, never branched on here: this module stays generic, and
+ * the only reader is the refusal that has to name what is waiting.
+ */
+export type ComposerEligibleCard = {
+  ref: string;
+  kind: LifecycleCardKind;
+};
+
+/** What the composer knows about the lifecycle cards on screen right now. */
 export type ComposerFocusSnapshot = {
   /**
-   * The refs of the gates that may currently take a composer comment, in the
-   * order their cards registered. The ORDER is not a priority — nothing reads
-   * "the latest one"; it exists only so the snapshot is stable and printable.
+   * The cards that may currently take composer input, in the order they
+   * registered. The ORDER is not a priority — nothing reads "the latest one";
+   * it exists only so the snapshot is stable and printable.
    */
-  eligible: readonly string[];
+  eligible: readonly ComposerEligibleCard[];
   /** The ref the reader explicitly focused, or `null` if they have not. */
   focused: string | null;
   /**
@@ -311,9 +373,9 @@ export type ComposerTargetResolution =
    * reader's own choice from the single-gate case #2566 allows to bind on its
    * own, because only an EXPLICIT choice may outrank an open field gate.
    */
-  | { kind: "target"; ref: string; explicit: boolean }
-  /** Several gates could take it and the reader has not said which. */
-  | { kind: "ambiguous"; count: number };
+  | { kind: "target"; ref: string; cardKind: LifecycleCardKind; explicit: boolean }
+  /** Several cards could take it and the reader has not said which. */
+  | { kind: "ambiguous"; count: number; cards: readonly ComposerEligibleCard[] };
 
 const EMPTY_FOCUS_SNAPSHOT: ComposerFocusSnapshot = {
   eligible: [],
@@ -343,12 +405,19 @@ export function resolveComposerTarget(
 ): ComposerTargetResolution {
   const eligible = snapshot.eligible;
   if (eligible.length === 0) return { kind: "none" };
-  if (snapshot.focused !== null && eligible.includes(snapshot.focused)) {
-    return { kind: "target", ref: snapshot.focused, explicit: true };
+  const focused =
+    snapshot.focused === null
+      ? undefined
+      : eligible.find((card) => card.ref === snapshot.focused);
+  if (focused) {
+    return { kind: "target", ref: focused.ref, cardKind: focused.kind, explicit: true };
   }
   if (snapshot.released) return { kind: "none" };
-  if (eligible.length === 1) return { kind: "target", ref: eligible[0]!, explicit: false };
-  return { kind: "ambiguous", count: eligible.length };
+  if (eligible.length === 1) {
+    const only = eligible[0]!;
+    return { kind: "target", ref: only.ref, cardKind: only.kind, explicit: false };
+  }
+  return { kind: "ambiguous", count: eligible.length, cards: eligible };
 }
 
 /**
@@ -361,18 +430,18 @@ export type ComposerFocusStore = {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => ComposerFocusSnapshot;
   /**
-   * Declare a gate able to take a composer comment, WITH the action that takes
-   * it. Returns the un-register.
+   * Declare a CARD able to take composer input, WITH the actions that take it.
+   * Returns the un-register.
    *
-   * REF-COUNTED: the same gate can legitimately be mounted twice (a run card and
+   * REF-COUNTED: the same card can legitimately be mounted twice (a run card and
    * a thread card for one gate, React's development double-invoke), and one
    * unmount must not strike an identity another mount is still showing. The
-   * LATEST registration owns the action, so a re-registering card replaces its
-   * own closure rather than accumulating stale ones.
+   * LATEST registration owns the actions, so a re-registering card replaces its
+   * own closures rather than accumulating stale ones.
    */
-  registerEligible: (ref: string, comment: ComposerCommentAction) => () => void;
-  /** The comment path of an eligible gate, or `undefined` if it is not one. */
-  getCommentAction: (ref: string) => ComposerCommentAction | undefined;
+  registerEligible: (card: ComposerEligibleCard, actions: ComposerCardActions) => () => void;
+  /** The published controls of an eligible card, or `undefined` if it is not one. */
+  getCardActions: (ref: string) => ComposerCardActions | undefined;
   /** The reader chose this card. */
   focus: (ref: string) => void;
   /** The reader took the binding back; the composer is a chat box again. */
@@ -380,7 +449,10 @@ export type ComposerFocusStore = {
 };
 
 export function createComposerFocusStore(): ComposerFocusStore {
-  const entries = new Map<string, { count: number; comment: ComposerCommentAction }>();
+  const entries = new Map<
+    string,
+    { count: number; kind: LifecycleCardKind; actions: ComposerCardActions }
+  >();
   let focused: string | null = null;
   let released = false;
   // Cached because `useSyncExternalStore` compares snapshots by identity: a
@@ -389,7 +461,11 @@ export function createComposerFocusStore(): ComposerFocusStore {
   const listeners = new Set<() => void>();
 
   const publish = (): void => {
-    snapshot = { eligible: Array.from(entries.keys()), focused, released };
+    snapshot = {
+      eligible: Array.from(entries, ([ref, entry]) => ({ ref, kind: entry.kind })),
+      focused,
+      released,
+    };
     for (const listener of listeners) listener();
   };
 
@@ -403,17 +479,18 @@ export function createComposerFocusStore(): ComposerFocusStore {
     getSnapshot() {
       return snapshot;
     },
-    getCommentAction(ref) {
-      return entries.get(ref)?.comment;
+    getCardActions(ref) {
+      return entries.get(ref)?.actions;
     },
-    registerEligible(ref, comment) {
+    registerEligible(card, actions) {
+      const ref = card.ref;
       const existing = entries.get(ref);
-      // A release is scoped to the reviews that were open when the reader made
-      // it. When the last one closes and a NEW one arrives later, the composer
-      // is offered again — otherwise one release early in a thread would
-      // silently disable the binding for every review after it.
+      // A release is scoped to the cards that were open when the reader made it.
+      // When the last one closes and a NEW one arrives later, the composer is
+      // offered again — otherwise one release early in a thread would silently
+      // disable the binding for every card after it.
       if (entries.size === 0) released = false;
-      entries.set(ref, { count: (existing?.count ?? 0) + 1, comment });
+      entries.set(ref, { count: (existing?.count ?? 0) + 1, kind: card.kind, actions });
       publish();
       let unregistered = false;
       return () => {
@@ -508,36 +585,42 @@ export type ComposerFocusBinding = {
 };
 
 /**
- * Register THIS card's gate as able to take a composer comment for as long as
- * `eligible` holds, and report how the composer is currently bound.
+ * Register THIS card as able to take composer input for as long as `eligible`
+ * holds, and report how the composer is currently bound.
  *
- * The registered closure is a STABLE delegator over a ref-held `comment`, and
- * that is load-bearing rather than tidy. Registering the caller's closure
- * directly would put its identity in the effect's dependencies, so a host whose
- * action is rebuilt each render (any card whose credential or submit prop is an
- * inline object) would re-register on every render — and since registering
- * publishes, and publishing re-renders every subscribed card, that is a render
- * loop, not a bit of churn. Holding the action in a ref also means the composer
- * always calls the CURRENT one rather than the one captured when the gate opened.
+ * The registered closures are STABLE delegators over ref-held `actions`, and
+ * that is load-bearing rather than tidy. Registering the caller's closures
+ * directly would put their identity in the effect's dependencies, so a host
+ * whose actions are rebuilt each render (any card whose credential or submit
+ * prop is an inline object) would re-register on every render — and since
+ * registering publishes, and publishing re-renders every subscribed card, that
+ * is a render loop, not a bit of churn. Holding the actions in a ref also means
+ * the composer always calls the CURRENT ones rather than the ones captured when
+ * the card first resolved — which is what lets a typed decision carry the marks
+ * the reader made after the gate opened.
  */
 export function useComposerFocusBinding(params: {
   ref: string;
+  kind: LifecycleCardKind;
   eligible: boolean;
-  comment: ComposerCommentAction;
+  actions: ComposerCardActions;
 }): ComposerFocusBinding {
-  const { ref, eligible, comment } = params;
+  const { ref, kind, eligible, actions } = params;
   const store = useComposerFocusStore();
   const snapshot = useComposerFocusSnapshot();
-  const commentRef = useRef(comment);
-  commentRef.current = comment;
-  const stableComment = useCallback<ComposerCommentAction>(
-    (text) => commentRef.current(text),
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
+  const stableActions = useMemo<ComposerCardActions>(
+    () => ({
+      comment: (text) => actionsRef.current.comment(text),
+      decide: (decision, note) => actionsRef.current.decide(decision, note),
+    }),
     [],
   );
   useEffect(() => {
     if (!store || !eligible) return;
-    return store.registerEligible(ref, stableComment);
-  }, [store, eligible, ref, stableComment]);
+    return store.registerEligible({ ref, kind }, stableActions);
+  }, [store, eligible, ref, kind, stableActions]);
   const target = resolveComposerTarget(snapshot);
   const bound = target.kind === "target" && target.ref === ref;
   // The press is a TOGGLE on the binding as the reader sees it, not on the

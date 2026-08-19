@@ -49,8 +49,12 @@ import {
   resolveComposerRouting,
   resolveExtractedGateValues,
 } from "./inline-hitl-classify";
-// cinatra#2566's composer focus: the store the review cards register with, and
-// the pure resolver that says which gate (if any) the composer is bound to.
+// cinatra#2853: what the reader's own words ask the bound card for. Pure, and
+// deliberately model-free — see the module for why a decision path has no
+// fallback that could originate one.
+import { interpretComposerMessage } from "./composer-card-intent";
+// cinatra#2566's composer focus: the store the lifecycle cards register with,
+// and the pure resolver that says which card (if any) the composer is bound to.
 import {
   createComposerFocusStore,
   resolveComposerTarget,
@@ -909,10 +913,12 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // truth) and does NOT trigger an LLM turn; a non-response falls through
     // to normal chat routing below.
     //
-    // A FOCUSED REVIEW CARD (cinatra#2566) is the other thing the composer can
-    // be bound to. Where it goes — and when it refuses to guess — is decided by
-    // the pure `resolveComposerRouting`; this block only carries the outcome
-    // out. See that function for the precedence and why ambiguity is refused.
+    // A FOCUSED LIFECYCLE CARD (cinatra#2566, generalised by #2853) is the other
+    // thing the composer can be bound to. Where it goes — and when it refuses to
+    // guess — is decided by the pure `resolveComposerRouting`, and WHAT it asks
+    // that card for by the pure `interpretComposerMessage`; this block only
+    // carries the outcome out. See those functions for the precedence, for why
+    // ambiguity is refused, and for why no model reads a decision.
     // -----------------------------------------------------------------------
     {
       // Append an assistant ack AND persist it, mirroring the immediate
@@ -956,23 +962,31 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       const composerRouting = resolveComposerRouting({
         target: resolveComposerTarget(composerFocusStore.getSnapshot()),
         latestOpenGate: getLatestOpenGate(),
-        commentActionFor: composerFocusStore.getCommentAction,
+        actionsFor: composerFocusStore.getCardActions,
       });
 
       if (composerRouting.kind === "refuse-ambiguous") {
-        // Nothing was sent — not to a review, not to the model. Said out loud,
-        // because the alternative is a comment landing on a review the reader
-        // did not choose.
-        persistAck(ambiguousComposerRefusal(composerRouting.count));
+        // Nothing was sent — not to a card, not to the model. Said out loud,
+        // because the alternative is a decision or a comment landing on a card
+        // the reader did not choose.
+        persistAck(ambiguousComposerRefusal(composerRouting.cards));
         return;
       }
 
-      if (composerRouting.kind === "review-comment") {
-        // The reader's text IS the comment — no classifier, no field wrap. The
-        // action is the CARD's own, so this lands in the same decision module,
-        // with the same validation order, that pressing Comment on the card
-        // lands in.
-        const result = await composerRouting.comment(trimmed);
+      if (composerRouting.kind === "card-action") {
+        // THE PROMPT WINDOW ACTS ON THE ACTIVE CARD (cinatra#2853, plan §2.2).
+        //
+        // Which of the card's own controls the words ask for is decided by the
+        // pure `interpretComposerMessage` — deterministically, with no model in
+        // the path: the assistant interprets, it never originates. Whichever it
+        // is, the closure called is the CARD's, so the act lands in the same
+        // decision module, on the same credential, with the same validation
+        // order and the same permission answer as pressing the control would.
+        const intent = interpretComposerMessage(trimmed);
+        const result =
+          intent.kind === "decision"
+            ? await composerRouting.actions.decide(intent.decision, intent.note)
+            : await composerRouting.actions.comment(intent.text);
         persistAck(result.message);
         return;
       }

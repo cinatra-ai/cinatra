@@ -16,9 +16,11 @@
  *  - mid-run single-field wraps under fields[0].name
  */
 
+import type { LifecycleCardKind } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 import type {
-  ComposerCommentAction,
+  ComposerCardActions,
+  ComposerEligibleCard,
   ComposerTargetResolution,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
 
@@ -298,14 +300,25 @@ export function createChatGateRegistry(): ChatGateRegistry {
 // ---------------------------------------------------------------------------
 
 export type ComposerRouting =
-  /** No gate takes this message — normal chat routing, unchanged. */
+  /** No card takes this message — normal chat routing, unchanged. */
   | { kind: "chat" }
   /** A HITL gate the run is blocked on: classify and submit as before. */
   | { kind: "field-gate"; gate: ChatGateDescriptor }
-  /** The bound review gate takes the message VERBATIM as a comment. */
-  | { kind: "review-comment"; ref: string; comment: ComposerCommentAction }
-  /** Several reviews could take it and none is chosen: ask, never guess. */
-  | { kind: "refuse-ambiguous"; count: number };
+  /**
+   * The BOUND CARD takes the message, through its own published controls
+   * (cinatra#2853). WHICH control is a separate, pure reading of the words —
+   * `interpretComposerMessage` — kept apart from this one because "where does
+   * this go" and "what does it ask for" are two questions and only the first
+   * one is about routing.
+   */
+  | {
+      kind: "card-action";
+      ref: string;
+      cardKind: LifecycleCardKind;
+      actions: ComposerCardActions;
+    }
+  /** Several cards could take it and none is chosen: ask, never guess. */
+  | { kind: "refuse-ambiguous"; count: number; cards: readonly ComposerEligibleCard[] };
 
 /**
  * Where a composer message goes.
@@ -342,10 +355,10 @@ export function resolveComposerRouting(args: {
   target: ComposerTargetResolution;
   /** What the chat gate registry holds right now. */
   latestOpenGate: ChatGateDescriptor | undefined;
-  /** The bound card's own comment action, by ref. */
-  commentActionFor: (ref: string) => ComposerCommentAction | undefined;
+  /** The bound card's own published controls, by ref. */
+  actionsFor: (ref: string) => ComposerCardActions | undefined;
 }): ComposerRouting {
-  const { target, latestOpenGate, commentActionFor } = args;
+  const { target, latestOpenGate, actionsFor } = args;
   // A `review_comment` descriptor is NOT a field gate: it carries no fields to
   // classify and its submit is comment-only. It is read as a review below, by
   // ref, never fed to the field ladder.
@@ -353,14 +366,19 @@ export function resolveComposerRouting(args: {
     latestOpenGate && latestOpenGate.kind !== "review_comment" ? latestOpenGate : undefined;
 
   if (target.kind === "target") {
-    const comment = commentActionFor(target.ref);
-    if (comment && (target.explicit || fieldGate === undefined)) {
-      return { kind: "review-comment", ref: target.ref, comment };
+    const actions = actionsFor(target.ref);
+    if (actions && (target.explicit || fieldGate === undefined)) {
+      return {
+        kind: "card-action",
+        ref: target.ref,
+        cardKind: target.cardKind,
+        actions,
+      };
     }
   }
   if (fieldGate) return { kind: "field-gate", gate: fieldGate };
   if (target.kind === "ambiguous") {
-    return { kind: "refuse-ambiguous", count: target.count };
+    return { kind: "refuse-ambiguous", count: target.count, cards: target.cards };
   }
   return { kind: "chat" };
 }
@@ -369,11 +387,25 @@ export function resolveComposerRouting(args: {
  * The line the composer says back when it refuses to guess. Kept beside the
  * rule so the refusal and the reason cannot drift, and identifier-free because
  * it is persisted into an LLM-visible transcript.
+ *
+ * IT NAMES WHAT IS WAITING (plan §2.1). A set of reviews reads exactly as plan
+ * §2.1 pins it, word for word — that sentence is the shipped one and this slice
+ * does not touch it. A set that is NOT all reviews cannot honestly say
+ * "reviews", so the same sentence is said about cards; the reader is asked the
+ * same question about the same control, in the same shape, with the only word
+ * that would have been untrue replaced.
  */
-export function ambiguousComposerRefusal(count: number): string {
+export function ambiguousComposerRefusal(
+  cards: readonly ComposerEligibleCard[],
+): string {
+  const allReviews = cards.every((card) => card.kind === "artifact_review_gate");
+  const waiting = allReviews ? "reviews" : "cards";
+  const choose = allReviews
+    ? "Choose the review you want to reply to"
+    : "Choose the card you want to answer";
   return (
-    `${count} reviews are waiting for you, so this message was not sent anywhere. ` +
-    `Choose the review you want to reply to — press “Reply from the chat box” on its ` +
+    `${cards.length} ${waiting} are waiting for you, so this message was not sent anywhere. ` +
+    `${choose} — press “Reply from the chat box” on its ` +
     `card — and send it again. To keep chatting normally, press that control twice ` +
     `on any one of them.`
   );

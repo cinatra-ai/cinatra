@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
-import type { ComposerCommentAction } from "@cinatra-ai/agents/lifecycle-card-runtime";
+import type {
+  ComposerCardActions,
+  ComposerCommentAction,
+  ComposerDecideAction,
+  ComposerEligibleCard,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
 import {
   ambiguousComposerRefusal,
   classifyPromptForGate,
@@ -268,11 +273,20 @@ describe("createChatGateRegistry", () => {
 // ---------------------------------------------------------------------------
 
 const reviewComment: ComposerCommentAction = async () => ({ ok: true, message: "ok" });
-const commentFor =
+const reviewDecide: ComposerDecideAction = async () => ({ ok: true, message: "ok" });
+const cardActions: ComposerCardActions = { comment: reviewComment, decide: reviewDecide };
+const actionsFor =
   (...refs: string[]) =>
-  (ref: string): ComposerCommentAction | undefined =>
-    refs.includes(ref) ? reviewComment : undefined;
-const noComments = () => undefined;
+  (ref: string): ComposerCardActions | undefined =>
+    refs.includes(ref) ? cardActions : undefined;
+const noActions = () => undefined;
+
+/** A review card, and the non-review kind the binding also covers (#2853). */
+const review = (ref: string): ComposerEligibleCard => ({ ref, kind: "artifact_review_gate" });
+const schedule = (ref: string): ComposerEligibleCard => ({
+  ref,
+  kind: "trigger_schedule_proposal",
+});
 
 /** A field gate, as AgenticRunPanel publishes one (only the read fields). */
 const fieldGate = (runId: string): ChatGateDescriptor =>
@@ -293,7 +307,7 @@ describe("resolveComposerRouting", () => {
       resolveComposerRouting({
         target: { kind: "none" },
         latestOpenGate: undefined,
-        commentActionFor: noComments,
+        actionsFor: noActions,
       }),
     ).toEqual({ kind: "chat" });
   });
@@ -304,34 +318,38 @@ describe("resolveComposerRouting", () => {
       resolveComposerRouting({
         target: { kind: "none" },
         latestOpenGate: gate,
-        commentActionFor: noComments,
+        actionsFor: noActions,
       }),
     ).toEqual({ kind: "field-gate", gate });
   });
 
   it("ONE review open and nothing else → the message is that review's comment", () => {
     const routing = resolveComposerRouting({
-      target: { kind: "target", ref: "ref-a", explicit: false },
+      target: { kind: "target", ref: "ref-a", cardKind: "artifact_review_gate", explicit: false },
       latestOpenGate: reviewGate("run-1", "ref-a"),
-      commentActionFor: commentFor("ref-a"),
+      actionsFor: actionsFor("ref-a"),
     });
-    expect(routing).toMatchObject({ kind: "review-comment", ref: "ref-a" });
+    expect(routing).toMatchObject({ kind: "card-action", ref: "ref-a", cardKind: "artifact_review_gate" });
   });
 
   it("TWO reviews and no focus → REFUSED, and nothing is routed", () => {
     const routing = resolveComposerRouting({
-      target: { kind: "ambiguous", count: 2 },
+      target: { kind: "ambiguous", count: 2, cards: [review("ref-a"), review("ref-b")] },
       latestOpenGate: reviewGate("run-2", "ref-b"),
-      commentActionFor: commentFor("ref-a", "ref-b"),
+      actionsFor: actionsFor("ref-a", "ref-b"),
     });
-    expect(routing).toEqual({ kind: "refuse-ambiguous", count: 2 });
+    expect(routing).toEqual({
+      kind: "refuse-ambiguous",
+      count: 2,
+      cards: [review("ref-a"), review("ref-b")],
+    });
     // The message is NOT quietly turned into an LLM turn either: with reviews
     // waiting, silently sending it to the model loses what the reader wrote.
     expect(routing.kind).not.toBe("chat");
   });
 
   it("the refusal names how many and how to fix it, with no identifiers", () => {
-    const line = ambiguousComposerRefusal(2);
+    const line = ambiguousComposerRefusal([review("ref-a"), review("ref-b")]);
     expect(line).toContain("2 reviews");
     expect(line).toContain("Reply from the chat box");
     // Identifier-free: this line is persisted into an LLM-visible transcript.
@@ -340,11 +358,11 @@ describe("resolveComposerRouting", () => {
 
   it("an EXPLICIT focus outranks an open field gate — the reader said so", () => {
     const routing = resolveComposerRouting({
-      target: { kind: "target", ref: "ref-a", explicit: true },
+      target: { kind: "target", ref: "ref-a", cardKind: "artifact_review_gate", explicit: true },
       latestOpenGate: fieldGate("run-9"),
-      commentActionFor: commentFor("ref-a"),
+      actionsFor: actionsFor("ref-a"),
     });
-    expect(routing).toMatchObject({ kind: "review-comment", ref: "ref-a" });
+    expect(routing).toMatchObject({ kind: "card-action", ref: "ref-a", cardKind: "artifact_review_gate" });
   });
 
   it("an IMPLICIT single review does NOT outrank an open field gate", () => {
@@ -353,9 +371,9 @@ describe("resolveComposerRouting", () => {
     const gate = fieldGate("run-9");
     expect(
       resolveComposerRouting({
-        target: { kind: "target", ref: "ref-a", explicit: false },
+        target: { kind: "target", ref: "ref-a", cardKind: "artifact_review_gate", explicit: false },
         latestOpenGate: gate,
-        commentActionFor: commentFor("ref-a"),
+        actionsFor: actionsFor("ref-a"),
       }),
     ).toEqual({ kind: "field-gate", gate });
   });
@@ -366,7 +384,7 @@ describe("resolveComposerRouting", () => {
     const routing = resolveComposerRouting({
       target: { kind: "none" },
       latestOpenGate: reviewGate("run-1", "ref-a"),
-      commentActionFor: commentFor("ref-a"),
+      actionsFor: actionsFor("ref-a"),
     });
     expect(routing).toEqual({ kind: "chat" });
   });
@@ -375,32 +393,90 @@ describe("resolveComposerRouting", () => {
     const gate = fieldGate("run-9");
     expect(
       resolveComposerRouting({
-        target: { kind: "target", ref: "ref-a", explicit: true },
+        target: { kind: "target", ref: "ref-a", cardKind: "artifact_review_gate", explicit: true },
         latestOpenGate: gate,
-        commentActionFor: noComments,
+        actionsFor: noActions,
       }),
     ).toEqual({ kind: "field-gate", gate });
     expect(
       resolveComposerRouting({
-        target: { kind: "target", ref: "ref-a", explicit: true },
+        target: { kind: "target", ref: "ref-a", cardKind: "artifact_review_gate", explicit: true },
         latestOpenGate: undefined,
-        commentActionFor: noComments,
+        actionsFor: noActions,
       }),
     ).toEqual({ kind: "chat" });
   });
 
-  it("the comment carried out is the CARD's own action, not a rebuilt one", async () => {
-    const action = vi.fn(async (text: string) => ({ ok: true, message: `said: ${text}` }));
+  it("the actions carried out are the CARD's own, not rebuilt ones", async () => {
+    const comment = vi.fn(async (text: string) => ({ ok: true, message: `said: ${text}` }));
+    const decide = vi.fn<ComposerDecideAction>(async (decision) => ({
+      ok: true,
+      message: `did: ${decision}`,
+    }));
     const routing = resolveComposerRouting({
-      target: { kind: "target", ref: "ref-a", explicit: true },
+      target: { kind: "target", ref: "ref-a", cardKind: "artifact_review_gate", explicit: true },
       latestOpenGate: undefined,
-      commentActionFor: (ref) => (ref === "ref-a" ? action : undefined),
+      actionsFor: (ref) => (ref === "ref-a" ? { comment, decide } : undefined),
     });
-    if (routing.kind !== "review-comment") throw new Error("expected a review comment");
-    expect(await routing.comment("shorten the intro")).toEqual({
+    if (routing.kind !== "card-action") throw new Error("expected a card action");
+    expect(await routing.actions.comment("shorten the intro")).toEqual({
       ok: true,
       message: "said: shorten the intro",
     });
-    expect(action).toHaveBeenCalledTimes(1);
+    expect(await routing.actions.decide("approve", null)).toEqual({
+      ok: true,
+      message: "did: approve",
+    });
+    expect(comment).toHaveBeenCalledTimes(1);
+    expect(decide).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // KIND-GENERIC ROUTING (cinatra#2853, plan §2.1 acceptance 3)
+  // -------------------------------------------------------------------------
+
+  it("a NON-review lifecycle card is routed to exactly as a review is", () => {
+    const routing = resolveComposerRouting({
+      target: {
+        kind: "target",
+        ref: "sched-1",
+        cardKind: "trigger_schedule_proposal",
+        explicit: false,
+      },
+      latestOpenGate: undefined,
+      actionsFor: actionsFor("sched-1"),
+    });
+    expect(routing).toMatchObject({
+      kind: "card-action",
+      ref: "sched-1",
+      cardKind: "trigger_schedule_proposal",
+    });
+  });
+
+  it("a MIXED ambiguous set routes NOWHERE, and the refusal says cards, not reviews", () => {
+    const cards = [review("ref-a"), schedule("sched-1")];
+    const routing = resolveComposerRouting({
+      target: { kind: "ambiguous", count: 2, cards },
+      latestOpenGate: undefined,
+      actionsFor: actionsFor("ref-a", "sched-1"),
+    });
+    expect(routing).toEqual({ kind: "refuse-ambiguous", count: 2, cards });
+
+    const line = ambiguousComposerRefusal(cards);
+    // It cannot claim two REVIEWS are waiting when one of them is a schedule.
+    expect(line).toContain("2 cards are waiting for you");
+    expect(line).not.toContain("reviews");
+    // The control it names is the shipped one, and it stays identifier-free.
+    expect(line).toContain("Reply from the chat box");
+    expect(line).not.toMatch(/ref-|run-|[0-9a-f]{8}-[0-9a-f]{4}/);
+  });
+
+  it("an ALL-REVIEW refusal is plan §2.1's sentence, word for word", () => {
+    expect(ambiguousComposerRefusal([review("ref-a"), review("ref-b")])).toBe(
+      "2 reviews are waiting for you, so this message was not sent anywhere. " +
+        "Choose the review you want to reply to — press \u201CReply from the chat box\u201D on its " +
+        "card — and send it again. To keep chatting normally, press that control twice " +
+        "on any one of them.",
+    );
   });
 });
