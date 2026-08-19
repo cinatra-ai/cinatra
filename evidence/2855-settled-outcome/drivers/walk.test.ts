@@ -123,6 +123,7 @@ async function main() {
     const reviewTaskId = st[`reviewTaskId_${slot}`];
     if (!runId || !reviewTaskId) throw new Error(`REF: missing recorded state for slot ${slot}`);
     const ref = encodeLifecycleGateRef({ runId, reviewTaskId });
+    if (!ref) throw new Error(`REF: the codec returned null for slot ${slot}`);
     saveState({ [`ref_${slot}`]: ref });
     say("REF", { slot, refLength: ref.length });
   }
