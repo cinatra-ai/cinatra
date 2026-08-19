@@ -199,18 +199,22 @@ describe("runAssistantTurn(cinatra) → stream() byte-parity on the covered path
     expect("model" in (capturedStreamInput as object)).toBe(false);
   });
 
-  it("assembles the system prompt in the legacy order (directive + prompt + userCtx + instanceCtx + policy)", async () => {
+  it("assembles the system prompt stable-head-first (prompt + instanceCtx + policy, then userCtx)", async () => {
     const send = vi.fn();
     await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
     const system = capturedStreamInput!.system as string;
     // No explicit-dispatch directive (""), no instance identity ("").
     expect(system.startsWith(SYSTEM_BODY)).toBe(true);
-    // The formatting-rule user-context wrapper follows the system prompt.
+    // The formatting-rule user-context wrapper is still present.
     expect(system).toContain("\n\nUser context:\n");
-    // The confirmation policy is concatenated LAST.
-    expect(system.endsWith(CONFIRMATION_POLICY)).toBe(true);
-    expect(system.indexOf(SYSTEM_BODY)).toBeLessThan(system.indexOf("User context:"));
-    expect(system.indexOf("User context:")).toBeLessThan(system.indexOf(CONFIRMATION_POLICY));
+    // cinatra#2771 lever 2 — ORDER CHANGED DELIBERATELY. The user context
+    // carries live wizard/staging state that chat tool calls mutate during the
+    // same session, so it is a VOLATILE fragment and now follows the stable
+    // head (persona → skills → instance namespace → confirmation policy). The
+    // fragments themselves are unchanged; only their order is, so a provider
+    // can reuse the head across turns instead of re-billing it.
+    expect(system.indexOf(SYSTEM_BODY)).toBeLessThan(system.indexOf(CONFIRMATION_POLICY));
+    expect(system.indexOf(CONFIRMATION_POLICY)).toBeLessThan(system.indexOf("User context:"));
   });
 
   it("assembles tools = [self-MCP, ...external, ...skill, web_search] with an empty allow-list (no filter)", async () => {

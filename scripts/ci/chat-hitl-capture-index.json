@@ -1,0 +1,24 @@
+{
+  "$comment": [
+    "THE CANONICAL CAPTURE INDEX for lifecycle-card evidence (cinatra#2821, epic #2784 S9h).",
+    "",
+    "A cell name is a CLAIM. This file is where a claim is answered by a RECORD: the host the",
+    "picture declares, the URL it was taken on, the screenshot with its SHA-256, and the anchors",
+    "that were counted on that screen, in the frame they were counted in. The rules live in",
+    "scripts/ci/lib/capture-record-contract.mjs; scripts/ci/chat-hitl-evidence-gate.mjs binds every",
+    "acceptance-manifest cell that names a host to a record here. An unindexed screenshot counts",
+    "as zero.",
+    "",
+    "IT IS EMPTY ON PURPOSE. Adopting the earlier S7 captures would be exactly the fabrication",
+    "this index exists to refuse: that run never looked for [data-conversation-list], so writing a",
+    "count for it would be inventing an observation nobody made. The records arrive from one run",
+    "of the recorder against a live app, which belongs to the canonical re-capture slice",
+    "(#2791, S9g). Until then the two chat cells are grandfathered findings in the rollout policy.",
+    "",
+    "A record is TEXT, and text is forgeable: a person can hand-write one with a real image and",
+    "invented counts. What the contract does catch is the accidental mislabel, the anchor nobody",
+    "measured, the drifted hash, the re-used picture, and the cell that cites nothing at all."
+  ],
+  "recorder": "chat-hitl-capture-recorder@1",
+  "records": []
+}

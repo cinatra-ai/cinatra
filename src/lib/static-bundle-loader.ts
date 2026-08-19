@@ -32,6 +32,9 @@ import {
   ExtensionModuleAbsentError,
   isDegradedExtensionLoad,
 } from "@/lib/extension-load-guard";
+// cinatra#2762: what this loader puts in service, recorded where the version is
+// known. Descriptive only — nothing gates on it.
+import { recordServingImplementation } from "@/lib/extension-capabilities-registry";
 
 /**
  * Split-brain guard — the StaticBundleLoader lifecycle gate, now a STRICT
@@ -131,7 +134,65 @@ export async function loadStaticBundleExtensions(): Promise<ActivationResult[]> 
     );
   }
 
-  return runStaticBundleActivation(records, {
+  const results = await runStaticBundleActivation(records, staticActivationOptions());
+  // cinatra#2762: record WHAT this pass put in service. At boot the bundled
+  // records activate first and the RuntimePackageLoader's installs then replace
+  // them, so the last successful writer per package is the truth — and a package
+  // whose install never registers keeps the bundled record, which is exactly the
+  // "installed but not in service" state the settings surface must name.
+  recordBundledActivations(records, results);
+  return results;
+}
+
+/**
+ * Record the bundled version of every record that actually REGISTERED. Never
+ * throws: a descriptive record must not be able to fail a boot pass.
+ *
+ * The recorder is co-located in the host capability registry, which is already in
+ * every route graph this loader is in, so recording costs no NEW module in the
+ * baselined dev-perf route-graph (cinatra#732 — those ceilings may only shrink).
+ */
+function recordBundledActivations(
+  records: readonly LoaderRecord[],
+  results: readonly ActivationResult[],
+): void {
+  try {
+    const registered = new Set(
+      results
+        .filter((r) => r.status === "registered" || r.status === "bootstrapped")
+        .map((r) => r.packageName),
+    );
+    if (registered.size === 0) return;
+    // A package emits ONE result per phase, so a register-passes /
+    // bootstrap-throws activation yields both a success and a failure. Only a
+    // clean activation is serving (the `summarizeActivation` rule).
+    const failed = new Set(
+      results.filter((r) => r.status === "failed").map((r) => r.packageName),
+    );
+    const versionByPackage = new Map(
+      STATIC_EXTENSION_RECORDS.map((r) => [r.packageName, r.version ?? null]),
+    );
+    for (const packageName of registered) {
+      if (failed.has(packageName)) continue;
+      if (!records.some((r) => r.packageName === packageName)) continue;
+      recordServingImplementation({
+        packageName,
+        origin: "bundled",
+        version: versionByPackage.get(packageName) ?? null,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      "[static-bundle-loader] could not record what the bundled pass put in service: %s",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/** The activation options BOTH the boot pass and the targeted reactivation seam
+ *  use, so a package reactivated on its own is wired exactly as boot wires it. */
+function staticActivationOptions() {
+  return {
     // A `guardedOptional` server entry whose module is absent post-build
     // resolves the standardized degraded result — convert it to a THROWN
     // typed error so the shared driver records a failure-isolated
@@ -162,6 +223,127 @@ export async function loadStaticBundleExtensions(): Promise<ActivationResult[]> 
     // ABI verdict: does the frozen host SDK ABI satisfy the record's declared
     // sdkAbiRange? Unpinned ranges permit; a declared-but-incompatible range
     // (or a host below the range floor) is refused before any extension code runs.
-    abiCompatible: (rec) => isSdkAbiRangeSatisfied(SDK_EXTENSIONS_ABI_VERSION, rec.sdkAbiRange),
+    abiCompatible: (rec: LoaderRecord) =>
+      isSdkAbiRangeSatisfied(SDK_EXTENSIONS_ABI_VERSION, rec.sdkAbiRange),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// TARGETED BUNDLED REACTIVATION.
+//
+// Putting the image-bundled implementation back in service for ONE package,
+// after a marketplace override was archived because it could not activate.
+//
+// Why this is its own seam and not a call to the activator or the boot loader:
+//   - `activateInstalledPackageInProcess` resolves an exact-org RUNTIME anchor.
+//     Once the override row is archived there is no anchor to resolve, and the
+//     bundled implementation has no install anchor at all: its bytes ship in the
+//     image. It simply cannot reach the bundled code.
+//   - `loadStaticBundleExtensions` would re-run every bundled record in the
+//     image. Re-registering dozens of unrelated packages to recover one is a
+//     much larger blast radius than the failure being compensated.
+//
+// So this activates exactly one record, under the SAME per-package install lock
+// every other lifecycle path holds, and tears down whatever partial runtime
+// registrations the failed override left behind first: a half-registered
+// override still owns global names, and activating the bundled module beneath it
+// would leave two registrations racing for them.
+// ---------------------------------------------------------------------------
+export async function reactivateBundledFallbackInProcess(
+  packageName: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const { withInstallLock } = await import("@cinatra-ai/agents");
+  return withInstallLock(packageName, async () => {
+    const record = STATIC_EXTENSION_RECORDS.find((r) => r.packageName === packageName);
+    if (!record) {
+      return { ok: false as const, reason: "this package does not ship in the image" };
+    }
+    if (typeof record.serverEntry !== "string" || record.serverEntry.length === 0) {
+      // Nothing to register: a metadata-only bundled record is served from the
+      // manifest, so archiving the override already restored it.
+      return { ok: true as const };
+    }
+    // Drop whatever the failed override registered before the bundled module
+    // registers, so the two never coexist.
+    //
+    // VERIFIED, not assumed. The teardown hook swallows its own failures by
+    // contract (it is best-effort for the purge path it was written for), so a
+    // try/catch around it proves nothing. The registry is therefore re-read
+    // afterwards: if the package still holds registrations, the teardown did not
+    // take, and activating the bundled module on top would leave two
+    // registrations serving one package. Refusing is the safe answer, because
+    // the boot loader brings the bundled version back cleanly on the next start.
+    try {
+      const { fireExtensionCapabilityTeardown } = await import("@cinatra-ai/extensions");
+      await fireExtensionCapabilityTeardown(packageName);
+    } catch (err) {
+      // CONSTANT format string with %s placeholders: the package name reaches the
+      // log as an ARGUMENT, never in the format position. It is already bounded
+      // here (it matched a bundled record above), and the repo keeps this shape
+      // everywhere so no caller can turn a log line into a format string.
+      console.warn(
+        "[static-bundle-loader] capability teardown before bundled reactivation of %s threw (continuing): %s",
+        record.packageName,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    try {
+      const { hasExtensionUiForPackage } = await import("@/lib/extension-ui-registry");
+      if (hasExtensionUiForPackage(packageName)) {
+        return {
+          ok: false as const,
+          reason:
+            "the previous registrations for this package could not be torn down, so the " +
+            "bundled version was not activated on top of them",
+        };
+      }
+    } catch {
+      /* the registry read is a safety check; its own failure must not block the
+         recovery the operator asked for. */
+    }
+    const loaderRecord: LoaderRecord = {
+      packageName: record.packageName,
+      serverEntry: record.serverEntry,
+      requestedHostPorts: record.requestedHostPorts,
+      sdkAbiRange: record.sdkAbiRange ?? undefined,
+      envOverrides: record.envOverrides ?? undefined,
+      resolution: record.resolution,
+    };
+    let results: ActivationResult[];
+    try {
+      results = await runStaticBundleActivation([loaderRecord], staticActivationOptions());
+    } catch (err) {
+      return {
+        ok: false as const,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
+    const result = results[0];
+    // The driver reports `registered` (a register(ctx) that succeeded) or
+    // `bootstrapped` (register plus a bootstrap hook). Anything else, including
+    // `skipped`, means the bundled implementation is NOT serving.
+    const activated = result?.status === "registered" || result?.status === "bootstrapped";
+    if (!activated) {
+      return {
+        ok: false as const,
+        reason: result?.reason ?? result?.status ?? "the bundled module did not activate",
+      };
+    }
+    // The image's version is what serves this package now (cinatra#2762). The
+    // teardown above already dropped whatever the failed override recorded, so
+    // this replaces rather than races it.
+    recordServingImplementation({
+      packageName,
+      origin: "bundled",
+      version: record.version ?? null,
+    });
+    // The registries changed, so the generation-keyed caches must rebuild.
+    try {
+      const { bumpActivationGeneration } = await import("@/lib/extension-activation-generation");
+      bumpActivationGeneration("activate");
+    } catch {
+      /* a missing generation bump only costs a stale cache read; never fatal here. */
+    }
+    return { ok: true as const };
   });
 }

@@ -211,12 +211,12 @@ async function visibleSet(actorCtx: ReviewActorContext): Promise<string[]> {
   const visible: string[] = [];
   for (const run of RUNS) {
     const ref = encodeLifecycleGateRef({ runId: run.id, reviewTaskId: "task-1" })!;
-    const state = await resolveLifecycleCardState({
+    const resolved = await resolveLifecycleCardState({
       viewType: "artifact_review_gate",
       ref,
       actorCtx,
     });
-    if (state.state !== "absent") visible.push(run.id);
+    if (resolved.state.state !== "absent") visible.push(run.id);
   }
   return visible;
 }

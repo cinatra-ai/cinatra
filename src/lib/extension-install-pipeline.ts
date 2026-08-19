@@ -15,7 +15,7 @@ import "server-only";
 import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
 
 import { capturePriorOwnershipGrants, recordAndAutoApproveOwnershipGrants, unwindOwnershipGrants, type OwnershipGrantInstallHooks } from "@/lib/extension-capability-ownership-grants";
-import { classifyExtensionTrust } from "@/lib/extension-trust";
+import { classifyExtensionTrust, UntrustedInstallRefusedError } from "@/lib/extension-trust";
 import {
   readAccessDeclarationInertly,
   persistAccessDeclarationAtFinalize,
@@ -323,6 +323,16 @@ export type InstallPipelineDeps = {
    * wires the host probe). DO NOT chase probe-vs-live fidelity here — the rollback is
    * the boundary.
    */
+  /**
+   * The host's trusted activation hosts and the unsigned-bootstrap lever.
+   *
+   * Injectable so a unit test can state the host policy it is testing instead of
+   * reaching into deployment configuration through the environment. Production
+   * callers omit both and the real config readers are used. The classifier
+   * itself is NEVER injectable: what counts as trusted is not a test fixture.
+   */
+  trustedActivationHosts?: () => string[];
+  allowMarketplaceBootstrapTrust?: () => boolean;
   verifyActivatableBeforeFinalize: (input: {
     packageName: string;
     orgId: string | null;
@@ -331,13 +341,15 @@ export type InstallPipelineDeps = {
     contentHash: string;
     approvedPorts: readonly string[];
     storeRoot?: string;
-  }) => Promise<{ supersedes: false } | { supersedes: true; ok: true } | { supersedes: true; ok: false; reason: string }>;
+  }) => Promise<{ supersedes: boolean; ok: boolean; reason?: string }>;
   /**
    * GC a single just-materialized (failed) store dir + its sibling `.tgz`. Called
-   * ONLY when `verifyActivatableBeforeFinalize` rejects a NEW update digest, so a
-   * bad new digest never lingers on disk to trip the boot duplicate-name gate
-   * against the (intact) previous install. Best-effort. Optional (the default
-   * factory wires `rm`).
+   * by every pre-finalize refusal that owns the dir: the host-compat gate, the
+   * untrusted-install gate, and a rejected activation probe (for a fresh install
+   * as well as an update), so failed bytes never linger on disk to trip the boot
+   * duplicate-name gate against an intact previous install. Never called when the
+   * materialized dir IS the live install's dir. Best-effort. Optional (the
+   * default factory wires `rm`).
    */
   gcStoreDir: (storeDir: string) => Promise<void>;
   /**
@@ -569,6 +581,23 @@ export async function installExtensionFromRegistry(
   // (package, org) row (see the capture comment further down).
   const priorOp = await deps.readInstallOp?.(input.packageName, input.orgId);
 
+  // FAIL-SAFE same-digest guard, defined ONCE for every seam that may GC the
+  // just-materialized dir on a refusal.
+  //
+  // A LEGACY finalized op recorded no digest (`digest: null`). On a same-bytes
+  // re-install of such a package the just-materialized dir IS the live dir, so a
+  // strict `priorOp.digest === mat.digest` comparison reads FALSE and would GC a
+  // working install. An undeterminable prior digest is therefore treated as LIVE:
+  // this never GCs when it cannot prove the dir is disposable. Over-keeping a dir
+  // is recovered by a later retry's store gate; over-deleting one is not.
+  //
+  // Sharing it matters as much as its shape: two refusal seams with two spellings
+  // of "is this dir disposable" is exactly how one of them ends up deleting a
+  // live install.
+  const materializedDirIsLive = (): boolean =>
+    priorOp?.phase === "finalized" &&
+    (priorOp.digest == null || priorOp.digest === mat.digest);
+
   // HOST-COMPAT GATE — the extension → host/SDK half of the compatibility
   // contract. The materialized (SRI-verified) manifest's `cinatra.sdkAbiRange`
   // must admit this host's frozen SDK ABI — the SAME verdict both loaders gate
@@ -692,8 +721,7 @@ export async function installExtensionFromRegistry(
     // undeterminable prior digest as LIVE: it never GCs when it cannot prove the
     // dir is disposable. Over-keeping a dir is recovered by a later retry's
     // store gate; over-deleting one is not.
-    isLiveDigest: () =>
-      priorOp?.phase === "finalized" && (priorOp.digest == null || priorOp.digest === mat.digest),
+    isLiveDigest: materializedDirIsLive,
   });
 
   // Classify the in-process import trust tier (vendor-agnostic). The host
@@ -712,8 +740,10 @@ export async function installExtensionFromRegistry(
     // carries a plan the verdict is NEVER undefined and a non-true verdict
     // already refused the install before any write (cinatra#181).
     signatureVerified,
-    trustedActivationHosts: trustedActivationHosts(),
-    allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
+    trustedActivationHosts: (deps.trustedActivationHosts ?? trustedActivationHosts)(),
+    allowMarketplaceBootstrapTrust: (
+      deps.allowMarketplaceBootstrapTrust ?? allowMarketplaceBootstrapTrust
+    )(),
   });
 
   // Capability split: auto-granting privileged host ports AND
@@ -723,6 +753,58 @@ export async function installExtensionFromRegistry(
   // admin and its declared migrations do NOT auto-run. An admin can later approve
   // the pending grant out-of-band.
   const autoGrantPrivileged = verdict.tier === "trusted-signed";
+
+  // UNTRUSTED-INSTALL GATE. An install whose trust verdict is NOT trusted can
+  // never activate in this process: the loader refuses the import. Letting it
+  // continue is what produced the committed-but-unactivated state: the journal,
+  // grant and provenance were all written, the row finalized live, and the
+  // refusal only surfaced afterwards, leaving a package that shadowed the
+  // working bundled implementation and served nothing.
+  //
+  // It refuses HERE instead, before `beginInstallOp` and therefore before any
+  // durable mutation, with the SAME inertness contract as the host-compat gate
+  // above: a prior install's journal stays `finalized`, its grant and provenance
+  // are untouched, and the just-materialized dir is GC'd unless it IS the live
+  // install's dir (the same-digest re-install guard).
+  //
+  // The failure names the EXACT verdict the classifier produced (an unverifiable
+  // signature, an absent signature with bootstrap disabled, a registry host that
+  // is not allow-listed). The generic "anchor-refused" summary hid which of those
+  // it was, which is the one thing an operator needs in order to act.
+  //
+  // Nothing here loosens the classifier. The safe fallback for a package that
+  // fails it is the implementation bundled in the image, never a weaker trust
+  // decision for the new bytes.
+  if (!verdict.trusted) {
+    const isLiveDigest = materializedDirIsLive();
+    // Whether the materialized bytes are actually gone. The refusal SAYS what it
+    // did, so a swallowed GC failure must not be reported as a removal: a
+    // leftover dir is real state a later boot can trip over, and telling an
+    // operator it was cleaned up when it was not is the kind of small lie that
+    // costs an hour. A same-digest re-install never GCs (that dir IS the live
+    // install's), so it is reported as retained too.
+    let bytesRemoved = false;
+    if (deps.gcStoreDir && !isLiveDigest) {
+      try {
+        await deps.gcStoreDir(mat.storeDir);
+        bytesRemoved = true;
+      } catch (gcErr) {
+        console.warn(
+          "[extension-install-pipeline] refused install left its materialized dir in place for %s: %s",
+          input.packageName,
+          gcErr instanceof Error ? gcErr.message : String(gcErr),
+        );
+      }
+    }
+    throw new UntrustedInstallRefusedError(
+      input.packageName,
+      resolvedVersion,
+      verdict.reason,
+      priorOp?.phase === "finalized" ? "update" : "install",
+      bytesRemoved,
+      isLiveDigest,
+    );
+  }
 
   // HOT-UPDATE pre-finalize activation gate. If the
   // just-materialized digest SUPERSEDES an existing one (an UPDATE), PROVE the new
@@ -776,7 +858,7 @@ export async function installExtensionFromRegistry(
   // untrusted update's REAL safety boundary is unchanged — the post-commit
   // hot-update activation runs under the loader's trust gate (which refuses
   // the import) and the durable rollback restores the OLD install.
-  if (deps.verifyActivatableBeforeFinalize && verdict.trusted) {
+  if (deps.verifyActivatableBeforeFinalize) {
     // EFFECTIVE ports the new digest will activate with (see the block comment):
     // a `trusted-signed` install self-grants its requested ports; otherwise the
     // probe must equal what activation will grant AFTER `recordRequestedGrant` +
@@ -808,14 +890,27 @@ export async function installExtensionFromRegistry(
       approvedPorts: probeApprovedPorts,
       ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
     });
-    if (gate.supersedes && !gate.ok) {
-      // GC the failed new digest so two dirs never coexist for the boot
-      // duplicate-name gate (the previous install's dir is the sole survivor).
-      if (deps.gcStoreDir) {
+    if (!gate.ok) {
+      // GC the failed digest so two dirs never coexist for the boot duplicate-name
+      // gate. GUARDED on `isLiveDigest`, the same guard the host-compat and
+      // untrusted gates use: a same-version re-install materializes to the SAME
+      // dir as the LIVE install, so deleting it on a probe failure would destroy
+      // the working install this refusal is supposed to protect. That guard used
+      // to be implicit here, because only a superseding UPDATE reached this branch
+      // and a superseding digest is by definition not the live one; extending the
+      // probe to fresh installs removed that guarantee, so the guard is explicit.
+      const gcIsLiveDigest = materializedDirIsLive();
+      let gcBytesRemoved = false;
+      if (deps.gcStoreDir && !gcIsLiveDigest) {
         try {
           await deps.gcStoreDir(mat.storeDir);
-        } catch {
-          /* best-effort GC — a leftover dir is recovered by a later retry's gate. */
+          gcBytesRemoved = true;
+        } catch (gcErr) {
+          console.warn(
+            "[extension-install-pipeline] refused install left its materialized dir in place for %s: %s",
+            input.packageName,
+            gcErr instanceof Error ? gcErr.message : String(gcErr),
+          );
         }
       }
       // Do NOT journal this failed attempt. `beginInstallOp` deliberately has not
@@ -826,10 +921,23 @@ export async function installExtensionFromRegistry(
       // version. The journal correctly stays the old `finalized` op;
       // the bad new digest is already GC'd above; the throw below is the
       // authoritative failure signal.
+      // The message states what is actually on disk. A swallowed GC failure, or a
+      // dir kept because it IS the live install's, must never be reported as a
+      // removal.
+      const bytesNote = gcBytesRemoved
+        ? "the failed digest was GC'd"
+        : gcIsLiveDigest
+          ? "the materialized dir was kept because it is the live install's"
+          : "the materialized bytes are still on disk and need clearing";
       throw new Error(
-        `update of ${input.packageName}@${input.version} could not activate the new digest ` +
-          `(${gate.reason}) — the previous install is left durably intact (journal, grant, ` +
-          `provenance + store dir unchanged) and the failed new digest was GC'd; no finalize.`,
+        gate.supersedes
+          ? `update of ${input.packageName}@${input.version} could not activate the new digest ` +
+            `(${gate.reason}): the previous install is left durably intact (journal, grant, ` +
+            `provenance and store dir unchanged), ${bytesNote}; no finalize.`
+          : `install of ${input.packageName}@${input.version} could not activate ` +
+            `(${gate.reason}): nothing was committed. No install-op journal, grant or ` +
+            `provenance was written, ${bytesNote}, and the implementation bundled in the ` +
+            `image stays in service.`,
       );
     }
   }

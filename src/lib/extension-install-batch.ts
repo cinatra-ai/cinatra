@@ -93,34 +93,8 @@ export type BatchInstallResult = {
   installedSideBySide: { packageName: string; version: string; evidence?: string }[];
   /** Closure members that were already present at the pin and were skipped. */
   alreadyInstalled: string[];
-  /**
-   * Members that COMMITTED (the real-integrity pipeline finalized, the canonical
-   * row is real + anchorable) but whose in-process hot-activation was refused
-   * this call. It is the third install outcome, carried by the
-   * `INSTALL_ACTIVATION_DEFERRED` code. These members are NOT failures: the
-   * install landed and the package loads on the next boot, so the batch keeps
-   * them, never compensates them, and reports the caveat instead of an error.
-   * Empty on a fully-activated batch.
-   */
-  activationDeferred: { packageName: string; version: string }[];
   batchId: string | null; // null = root-only fast path (no ledger row)
 };
-
-/**
- * Recognize the activation-deferred outcome from a thrown member install.
- *
- * String-literal code, walked over the `cause` chain. Deliberately NO import
- * from @cinatra-ai/extensions (that would close an import cycle back into the
- * package this host module serves). Same no-cross-package-import contract the
- * `REQUIRES_REBUILD` and `AGENT_PACKAGE_CONTRACT_VIOLATION` passthroughs below
- * already use. Bounded depth so a cyclic cause chain can never loop forever.
- */
-function isActivationDeferred(cause: unknown, depth = 0): boolean {
-  if (depth > 6 || cause == null || typeof cause !== "object") return false;
-  const obj = cause as { code?: unknown; cause?: unknown };
-  if (obj.code === "INSTALL_ACTIVATION_DEFERRED") return true;
-  return "cause" in obj ? isActivationDeferred(obj.cause, depth + 1) : false;
-}
 
 export class BatchMemberInstallError extends Error {
   constructor(
@@ -1197,28 +1171,16 @@ export async function installExtensionWithDependencies(
       // durable update pipeline, not a fresh install. A fresh depless install
       // stays exactly as before (installMember).
       const rootIsUpdate = root.action === "update";
-      // The root COMMITTED but its hot-activation was refused this call
-      // (INSTALL_ACTIVATION_DEFERRED). That is the third outcome, not a failure:
-      // the canonical row is finalized + anchorable and the dispatcher
-      // deliberately left it intact, so the fast path keeps it and reports the
-      // caveat. Any OTHER throw still propagates unchanged.
-      let rootActivationDeferred = false;
-      try {
-        await deps.withSagaOwnedFanout(input.packageName, () =>
-          rootIsUpdate
-            ? // #1042 slice-1: the depless root is always `input.packageName`, so
-              // forward the CAS precondition (undefined for manual callers).
-              deps.updateMemberPackage(root, input.actor, input.expectedRootInstalledVersion)
-            : deps.installMember(root, input.actor),
-        );
-      } catch (rootErr) {
-        if (!isActivationDeferred(rootErr)) throw rootErr;
-        rootActivationDeferred = true;
-      }
+      await deps.withSagaOwnedFanout(input.packageName, () =>
+        rootIsUpdate
+          ? // #1042 slice-1: the depless root is always `input.packageName`, so
+            // forward the CAS precondition (undefined for manual callers).
+            deps.updateMemberPackage(root, input.actor, input.expectedRootInstalledVersion)
+          : deps.installMember(root, input.actor),
+      );
       await maybeReloadAgentRuntime([root]);
       const rootEntry = { packageName: root.packageName, version: root.version };
       return {
-        activationDeferred: rootActivationDeferred ? [rootEntry] : [],
         rootPackage: input.packageName,
         // The PLANNED root version (dev "latest" already resolved concrete).
         rootVersion: root.version,
@@ -1256,10 +1218,6 @@ export async function installExtensionWithDependencies(
       /** cinatra#2696: the member's own anchor — drives compensation targeting. */
       rowOwnership?: RowOwnership;
     }[] = [];
-    // Members that COMMITTED but whose in-process hot-activation was refused
-    // this call. They stay installed (the row is finalized + anchorable), so the
-    // batch reports them as a CAVEAT on a successful result, never as a failure.
-    const activationDeferred: { packageName: string; version: string }[] = [];
     // cinatra#2415: the member whose install THREW but which durably CREATED a
     // canonical row before failing (e.g. the dispatcher finalized the row and
     // then threw on the "did not hot-activate" check, which deliberately leaves
@@ -1458,33 +1416,19 @@ export async function installExtensionWithDependencies(
                 : deps.installMember(member, input.actor),
             );
           } catch (installErr) {
-            // ACTIVATION-DEFERRED is NOT a member failure. The real-integrity
-            // pipeline finalized, so this member's canonical row is committed and
-            // anchorable. It simply did not hot-activate in THIS process and
-            // loads on the next boot. Tearing it down here would delete a
-            // committed install and report a failure the operator cannot act on.
-            // Record the caveat and fall through to the member's normal success
-            // bookkeeping (ledger `installed`, provenance capture).
-            if (isActivationDeferred(installErr)) {
-              activationDeferred.push({
-                packageName: member.packageName,
-                version: member.version,
-              });
-            } else {
-              // The install THREW. Capture the provenance anyway (still inside the
-              // lock): a dispatcher that finalized a row and then threw leaves a
-              // durable row this batch created, and the invariant says it must not
-              // survive the abort. Recorded, then compensated with the rest.
-              //
-              // `null` = the capture itself failed. That is NOT "created nothing":
-              // the member is queued anyway so the compensation rule REFUSES it
-              // loudly (ROLLBACK INCOMPLETE) instead of dropping it silently.
-              const createdOnFailure = await captureCreatedRows(member, preRowIds, true);
-              if (createdOnFailure === null || createdOnFailure.length > 0) {
-                failedMemberWithRows = member;
-              }
-              throw installErr;
+            // The install THREW. Capture the provenance anyway (still inside the
+            // lock): a dispatcher that finalized a row and then threw leaves a
+            // durable row this batch created, and the invariant says it must not
+            // survive the abort. Recorded, then compensated with the rest.
+            //
+            // `null` = the capture itself failed. That is NOT "created nothing":
+            // the member is queued anyway so the compensation rule REFUSES it
+            // loudly (ROLLBACK INCOMPLETE) instead of dropping it silently.
+            const createdOnFailure = await captureCreatedRows(member, preRowIds, true);
+            if (createdOnFailure === null || createdOnFailure.length > 0) {
+              failedMemberWithRows = member;
             }
+            throw installErr;
           }
           // Track the durable install/update IMMEDIATELY — before the ledger write —
           // so a ledger failure right after a successful member op still routes it
@@ -1577,7 +1521,6 @@ export async function installExtensionWithDependencies(
           return { packageName, version, ...(evidence ? { evidence } : {}) };
         }),
       alreadyInstalled,
-      activationDeferred,
       batchId: batch.batchId,
     };
 

@@ -359,7 +359,12 @@ describe("makeDefaultInstallPipelineDeps — flag ON (broker grant/proxy)", () =
       registryUrl: FINAL_REGISTRY,
       signature,
     });
-    const deps = await makeDefaultInstallPipelineDeps();
+    // See the probe note in the unsigned case below: the fresh-install probe is
+    // stubbed because this test asserts grant and trust wiring, not activation.
+    const deps = {
+      ...(await makeDefaultInstallPipelineDeps()),
+      verifyActivatableBeforeFinalize: async () => ({ supersedes: false, ok: true }),
+    };
     const result = await installExtensionFromRegistry(
       { packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null },
       deps,
@@ -381,7 +386,20 @@ describe("makeDefaultInstallPipelineDeps — flag ON (broker grant/proxy)", () =
     // No signing key configured → the package is at most `trusted-bootstrap` (it may
     // import, but its grant stays PENDING). The vendor-agnostic classifier never
     // reads scope; the auto-grant gate is the signature, not the package scope.
-    const deps = await makeDefaultInstallPipelineDeps();
+    // The pre-finalize activation probe now runs for FRESH installs too. It is
+    // not what this test is about (these assert the grant/trust wiring), and the
+    // real probe reaches modules this suite deliberately does not mock, so it is
+    // stubbed to a pass here.
+    const probeStub = {
+      verifyActivatableBeforeFinalize: async () => ({ supersedes: false, ok: true }),
+      // The subject here is the CAPABILITY SPLIT: a bootstrap-trusted package may
+      // import in-process while its grant stays pending. Bootstrap trust has to
+      // be ON for that state to exist at all; with it OFF an unsigned package is
+      // simply untrusted and the install is now refused before it commits, which
+      // a separate suite covers.
+      allowMarketplaceBootstrapTrust: () => true,
+    } as const;
+    const deps = { ...(await makeDefaultInstallPipelineDeps()), ...probeStub };
     const result = await installExtensionFromRegistry(
       { packageName: "@third-party/foo", version: "1.0.0", orgId: null },
       deps,

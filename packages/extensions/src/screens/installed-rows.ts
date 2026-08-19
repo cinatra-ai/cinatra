@@ -43,6 +43,7 @@ import {
 } from "../runtime-discovery-host";
 import { listInstalledExtensions } from "../canonical-store";
 import type { ExtensionKind, InstalledExtension } from "../canonical-types";
+import { applyInstallRowPrecedence } from "../static-bundle-anchor";
 import { sourceVersion } from "../lifecycle-ui";
 import { isRegistryUnreachable } from "./registry-failure-class";
 import { resolveInstalledVendorName } from "./installed-vendor";
@@ -512,7 +513,6 @@ export async function loadInstalledCardRows(
   // identity is locked, the card carries the locked indicator). requiredInProd
   // ORs across the visible identities.
   const STATUS_RANK: Record<string, number> = { locked: 0, active: 1, archived: 2 };
-  const canonicalByKey = new Map<string, { row: InstalledExtension; requiredInProd: boolean }>();
   // cinatra#2698 (S4, change 5): the card is annotated from the package's
   // EFFECTIVE row. A live workspace install supersedes every organization row of
   // the same package, so a superseded row must not contribute its version,
@@ -531,14 +531,47 @@ export async function loadInstalledCardRows(
       )
       .map((r) => r.packageName),
   );
+  /** A row supersession has already ruled out: an organization row of a package
+   *  that has a live workspace install. */
+  const isSuperseded = (row: InstalledExtension): boolean =>
+    (row.organizationId ?? null) !== null &&
+    packagesWithLiveWorkspaceRow.has(row.packageName);
+
+  // SOURCE PRECEDENCE (the shared policy): when a package ships in the image and
+  // also has a product install, both rows are live, and which one the card
+  // represents decides which version Archive / Activate / Reinstall act on. The
+  // Settings card must name the SAME row setup, action dispatch and the provider
+  // writer resolve.
+  //
+  // It runs AFTER supersession and only over what supersession leaves. The two
+  // rules answer different questions and must not re-decide each other: which
+  // PRODUCT-INSTALLED row is in force is supersession's answer (a live workspace
+  // install beats every organization row), and precedence never revisits it.
+  // Precedence answers only whether a product install outranks the copy bundled
+  // in the image, and refuses to guess between rows that are genuinely peers.
+  // Feeding it the superseded rows would make an org row and the workspace row
+  // that replaced it look like competing peers, and the card would name neither.
+  //
+  // Applied over the LIVE rows only, so the archived-tombstone collapse below is
+  // untouched. Precedence is a PER-PACKAGE policy, so the live rows are grouped
+  // by the same kind::packageName key the card map uses before it is applied.
+  const liveByKey = new Map<string, InstalledExtension[]>();
   for (const row of canonicalRows) {
     if (!manifestVisibleToScope(row, scope)) continue;
-    if (
-      (row.organizationId ?? null) !== null &&
-      packagesWithLiveWorkspaceRow.has(row.packageName)
-    ) {
-      continue;
-    }
+    if (STATUS_RANK[row.status] >= 2) continue;
+    if (isSuperseded(row)) continue;
+    const key = rowKey(row.kind, row.packageName);
+    liveByKey.set(key, [...(liveByKey.get(key) ?? []), row]);
+  }
+  const rankedLiveIds = new Set<string>();
+  for (const rows of liveByKey.values()) {
+    for (const row of applyInstallRowPrecedence(rows)) rankedLiveIds.add(row.id);
+  }
+  const canonicalByKey = new Map<string, { row: InstalledExtension; requiredInProd: boolean }>();
+  for (const row of canonicalRows) {
+    if (!manifestVisibleToScope(row, scope)) continue;
+    if (isSuperseded(row)) continue;
+    if (STATUS_RANK[row.status] < 2 && !rankedLiveIds.has(row.id)) continue;
     const key = rowKey(row.kind, row.packageName);
     const existing = canonicalByKey.get(key);
     if (!existing) {

@@ -52,13 +52,18 @@ import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports"
 // which rows exist. Only a malformed request (400) and no session (401) are
 // distinguishable, and neither depends on the ref.
 //
-// THE OPTIONAL `view` (cinatra#2569). Three of the four interaction kinds draw
-// their content from a row the card can address; the SCHEDULE PROPOSAL cannot,
-// because §VI's "nothing exists until the reader confirms" means there is no
-// row until Confirm. Its body therefore travels with the state, in an ADDITIVE
-// `view` field that is absent for every other kind — S1's response shape for
-// the three existing kinds is byte-unchanged, and a client that ignores `view`
-// behaves exactly as it did.
+// THE ANSWER IS A PER-KIND ENVELOPE (epic S9, slice S9c): `{ kind, state, body }`.
+// The state ladder is shared by every kind and unchanged; the BODY is per-kind,
+// and the kind selects the one body type that kind may carry. Two of the three
+// DATA_PART kinds cannot be drawn without one — the schedule proposal needs its
+// option rows, the verification card its reading — and the review card carries
+// no body at all, because its target arrives through its own island.
+//
+// The kind travels back with the answer so a card can check it got an answer to
+// ITS question. A client parse that refuses (unknown kind, wrong kind, a body
+// beside `absent`, a missing body on a kind that must carry one) leaves the card
+// with no state, so it draws nothing — the same posture it holds before the
+// first resolve lands.
 // ---------------------------------------------------------------------------
 
 const requestSchema = z
@@ -155,12 +160,16 @@ export async function POST(request: Request): Promise<Response> {
       isAdmin: actorCtx.roleHints?.platformRole === "platform_admin",
     });
     return Response.json(
-      { state: card.state, view: card.view },
+      {
+        kind: "trigger_schedule_proposal",
+        state: card.state,
+        body: card.view,
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   }
 
-  const state = await resolveLifecycleCardState({
+  const envelope = await resolveLifecycleCardState({
     viewType: parsed.data.viewType,
     ref: parsed.data.ref,
     actorCtx,
@@ -178,10 +187,13 @@ export async function POST(request: Request): Promise<Response> {
   // answer rather than the wire payload, so the DATA_PART in the persisted,
   // LLM-visible transcript still carries a ref and nothing else.
   const withChips = await attachLifecycleSuggestions(
-    state,
+    envelope.state,
     parsed.data.viewType,
     parsed.data.ref,
   );
 
-  return Response.json({ state: withChips }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json(
+    { kind: envelope.kind, state: withChips, body: envelope.body },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

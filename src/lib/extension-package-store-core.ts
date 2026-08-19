@@ -595,6 +595,31 @@ export function isExtensionStoreKind(value: unknown): value is ExtensionStoreKin
   return typeof value === "string" && (EXTENSION_STORE_KINDS as readonly string[]).includes(value);
 }
 
+/**
+ * The store kinds that ship NO hot-loadable server module (cinatra#793).
+ *
+ * Their run surface is projected by the NATIVE handler (agents, skills) or by
+ * the artifact bridge rescan — never by the runtime package loader. So
+ * "activated in this process" is not a question that has an answer for them:
+ * `activate.ts` returns `skipped/no-server-entry` for every one, by design and
+ * on a perfectly healthy install.
+ *
+ * Stated ONCE, here, because two very different paths must agree on it: the
+ * install pipeline (which must not durably roll back on the loader's inevitable
+ * skip) and boot reconciliation (which must not treat that skip as a stranded
+ * install). Deriving it twice is what let them drift.
+ */
+export const METADATA_ONLY_STORE_KINDS: ReadonlySet<string> = new Set<string>([
+  "agent",
+  "skill",
+  "artifact",
+]);
+
+/** Does this canonical row's kind ship a server module the loader can activate? */
+export function isMetadataOnlyStoreKind(kind: unknown): boolean {
+  return typeof kind === "string" && METADATA_ONLY_STORE_KINDS.has(kind);
+}
+
 /** Same-filesystem staging dir under the data root (dot-dir → invisible to discovery). */
 export const STORE_STAGING_DIRNAME = ".staging";
 

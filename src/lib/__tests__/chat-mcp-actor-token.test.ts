@@ -25,6 +25,7 @@ vi.mock("@cinatra-ai/mcp-server/credentials", () => ({
 }));
 
 import {
+  chatMcpActorTokenIssuedAt,
   issueChatMcpActorToken,
   verifyChatMcpActorToken,
   type ChatMcpActor,
@@ -58,12 +59,14 @@ function decodePayload(token: string): { exp: number; iat: number } {
 
 describe("chat-mcp-actor-token TTL", () => {
   it("issues a token with the agreed 30-minute TTL", () => {
-    const before = Math.floor(Date.now() / 1000);
+    const at = Math.floor(Date.now() / 1000);
     const token = issueChatMcpActorToken(ACTOR);
-    const after = Math.floor(Date.now() / 1000);
     const { iat, exp } = decodePayload(token);
-    expect(iat).toBeGreaterThanOrEqual(before);
-    expect(iat).toBeLessThanOrEqual(after);
+    // cinatra#2771: `iat` is FLOORED to a bucket, so it is at or before the
+    // mint instant — never after it, and never more than one bucket behind.
+    expect(iat).toBeLessThanOrEqual(at);
+    expect(at - iat).toBeLessThan(5 * 60);
+    expect(iat).toBe(chatMcpActorTokenIssuedAt(Date.now()));
     expect(exp - iat).toBe(30 * 60);
   });
 
@@ -103,6 +106,91 @@ describe("chat-mcp-actor-token TTL", () => {
         expectedIssuer: PUBLIC_AUTH_URL,
       });
       expect(verifiedAfter31m).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2771 lever 2 — the token is part of the REQUEST PREFIX.
+//
+// The chat turn's first tool is the hosted MCP reference, and this token is its
+// `headers.Authorization`. A provider caches the longest matching request
+// prefix, so a token whose bytes changed every second re-billed the whole tool
+// catalog on every turn however closely spaced. Quantizing the mint clock makes
+// consecutive turns byte-identical, without ever extending a token's life.
+// ---------------------------------------------------------------------------
+describe("chat-mcp-actor-token prefix byte-stability", () => {
+  it("mints byte-identical tokens for two turns inside one bucket", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-17T09:01:00Z"));
+      const first = issueChatMcpActorToken(ACTOR);
+      // A second turn 90 s later — the shape the issue measured as a cache miss.
+      vi.setSystemTime(new Date("2026-08-17T09:02:30Z"));
+      const second = issueChatMcpActorToken(ACTOR);
+      expect(second).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("mints a different token once the bucket rolls over", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-17T09:04:59Z"));
+      const inBucket = issueChatMcpActorToken(ACTOR);
+      vi.setSystemTime(new Date("2026-08-17T09:05:01Z"));
+      const nextBucket = issueChatMcpActorToken(ACTOR);
+      expect(nextBucket).not.toBe(inBucket);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never extends a token's life beyond the unquantized mint (non-widening)", () => {
+    vi.useFakeTimers();
+    try {
+      const mintAt = new Date("2026-08-17T09:04:59Z");
+      vi.setSystemTime(mintAt);
+      const { iat, exp } = decodePayload(issueChatMcpActorToken(ACTOR));
+      const unquantizedExp = Math.floor(mintAt.getTime() / 1000) + 30 * 60;
+      expect(exp).toBeLessThanOrEqual(unquantizedExp);
+      expect(exp - iat).toBe(30 * 60);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still verifies well past the longest turn the runtime allows (120 s)", () => {
+    vi.useFakeTimers();
+    try {
+      // Worst case: minted at the very END of a bucket, so the remaining life
+      // is the shortest it can ever be.
+      vi.setSystemTime(new Date("2026-08-17T09:04:59Z"));
+      const token = issueChatMcpActorToken(ACTOR);
+      vi.setSystemTime(new Date("2026-08-17T09:24:00Z"));
+      expect(
+        verifyChatMcpActorToken({
+          authHeader: `Bearer ${token}`,
+          request: new Request(PUBLIC_MCP_URL),
+          expectedAudience: PUBLIC_MCP_URL,
+          expectedIssuer: PUBLIC_AUTH_URL,
+        }),
+      ).toEqual(ACTOR);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still separates two different actors", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-17T09:01:00Z"));
+      const mine = issueChatMcpActorToken(ACTOR);
+      const theirs = issueChatMcpActorToken({ ...ACTOR, userId: "u-other" });
+      expect(theirs).not.toBe(mine);
     } finally {
       vi.useRealTimers();
     }

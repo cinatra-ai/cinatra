@@ -59,10 +59,42 @@ const WIDGET_AUTH = {
   credentials: "omit" as const,
 };
 
+/**
+ * The resolve answer, in the per-kind envelope the card parses (epic S9, S9c).
+ * The kind is ECHOED from the request the card issued, so a test that renders a
+ * different viewType still gets an answer to its own question.
+ */
+function lifecycleEnvelope(state: LifecycleCardState, init?: RequestInit): unknown {
+  let kind = "artifact_review_gate";
+  try {
+    kind = JSON.parse(String(init?.body ?? "{}")).viewType ?? kind;
+  } catch {
+    // A test that issued no body keeps the review kind.
+  }
+  return {
+    kind,
+    state,
+    body: kind === "verification_summary" && state.state !== "absent"
+      ? VERIFICATION_BODY
+      : null,
+  };
+}
+
+/** A §VII reading — the verification kind carries one on every drawn state, and
+ *  a card that receives none fails closed rather than half-drawing. */
+const VERIFICATION_BODY = {
+  version: 1,
+  outcome: "verified",
+  reviewedRevisionId: "rev-base",
+  repairedRevisionId: "rev-fixed",
+  scopePaths: ["content.title"],
+  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+};
+
 function mockResolve(state: LifecycleCardState) {
   const fetchMock = vi.fn(
     async (_input: unknown, _init?: RequestInit) =>
-      new Response(JSON.stringify({ state }), {
+      new Response(JSON.stringify(lifecycleEnvelope(state, _init)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),

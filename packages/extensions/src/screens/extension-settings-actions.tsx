@@ -159,7 +159,7 @@ export function ArchiveActionForm({
         toast.error(copy);
       }
     } catch (err) {
-      if (isRedirectError(err)) throw err; // success — let Next.js navigate.
+      if (isRedirectError(err)) throw err; // success: let Next.js navigate.
       // Defense in depth: an unexpected THROWN failure (masked in production) —
       // show the generic non-technical copy rather than crash.
       const copy = removalFailureCopy({ ok: false, reason: "error" }, "archive", displayName);
@@ -185,6 +185,71 @@ export function ArchiveActionForm({
       </form>
       {error ? (
         <p data-slot="archive-error" role="alert" className="max-w-xs text-right text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * cinatra#2762, the recovery pair (Retry activation / Roll back to bundled).
+ *
+ * Same contract as ArchiveActionForm: the bound action redirects on success and
+ * RETURNS on failure, so a returned value always means it did not take. The
+ * failure copy is supplied by the caller because the two actions fail in
+ * genuinely different ways, and neither message is a generic apology: each says
+ * what is true of the app right now.
+ */
+export function RecoveryActionForm({
+  action,
+  label,
+  pendingLabel,
+  failureMessage,
+}: {
+  action: () => void | Promise<{ ok: false } | void>;
+  label: string;
+  pendingLabel: string;
+  failureMessage: string;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  async function handle() {
+    setError(null);
+    setPending(true);
+    try {
+      const result = await action();
+      if (result && result.ok === false) {
+        setError(failureMessage);
+        toast.error(failureMessage);
+      }
+    } catch (err) {
+      if (isRedirectError(err)) throw err; // success: let Next.js navigate.
+      setError(failureMessage);
+      toast.error(failureMessage);
+    } finally {
+      setPending(false);
+    }
+  }
+  return (
+    <div className="flex flex-none flex-col items-end gap-1.5">
+      <form action={handle}>
+        <Button
+          type="submit"
+          variant="outline"
+          className="flex-none"
+          disabled={pending}
+          data-slot="recovery-action"
+        >
+          {pending ? pendingLabel : label}
+        </Button>
+      </form>
+      {error ? (
+        <p
+          data-slot="recovery-error"
+          role="alert"
+          className="max-w-xs text-right text-xs text-destructive"
+        >
           {error}
         </p>
       ) : null}

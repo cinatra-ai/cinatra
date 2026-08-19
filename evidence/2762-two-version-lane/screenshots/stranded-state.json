@@ -1,0 +1,52 @@
+{
+  "package": "@cinatra-ai/stranded-fixture-connector",
+  "namedOnSurface": true,
+  "retryOffered": true,
+  "lifecycle": {
+    "buttons": [
+      {
+        "label": "Workspace: All",
+        "disabled": false,
+        "slot": "popover-trigger",
+        "reason": null
+      },
+      {
+        "label": "Update",
+        "disabled": true,
+        "slot": "disabled-action",
+        "reason": "Already up to date"
+      },
+      {
+        "label": "Archive",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      },
+      {
+        "label": "Activate",
+        "disabled": true,
+        "slot": "disabled-action",
+        "reason": "Already active"
+      },
+      {
+        "label": "Retry activation",
+        "disabled": false,
+        "slot": "recovery-action",
+        "reason": null
+      },
+      {
+        "label": "Reinstall latest",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      },
+      {
+        "label": "Force-delete…",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      }
+    ],
+    "visibleReasons": []
+  }
+}
