@@ -646,7 +646,7 @@ cinatra#673). The suite moves together as one coupled group:
 | `@opentelemetry/semantic-conventions` (root) | `^1.41.1` | `^1.43.0` (in-range) |
 | `@opentelemetry/api` | `^1.9.1` | unchanged (2.x SDK peers api 1.x) |
 
-**Code adaptation** (the predicted peer-line breakage, plus one more):
+**Code adaptation** (required by the SDK 2.x API changes, plus one more):
 
 1. `src/lib/otel-bootstrap.ts`: `new Resource({...})` →
    `defaultResource().merge(resourceFromAttributes({...}))` (the 2.x provider
