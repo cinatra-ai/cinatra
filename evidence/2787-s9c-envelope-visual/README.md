@@ -1,9 +1,10 @@
 # The resolve envelope, on the real application, host by host
 
 Head under proof: `feat/2787-s9c-resolve-envelope`.
-The three committed host cells were captured 2026-08-16 at `7679b127`; the
-capture index, the drivers and the corrected `site_widget` finding are from the
-2026-08-19 round.
+The first three host cells were captured 2026-08-16 at `7679b127`; the capture
+index, the drivers and the fourth cell (`site_widget`) are from the 2026-08-19
+round, on the lane-private stack the `site_widget` section names. All four hosts
+are now captured.
 
 The goal this evidence answers to: the lifecycle screens show up INSIDE the chat,
 and the proof shows them inside the chat. This slice is plumbing, and the
@@ -45,7 +46,7 @@ can check the claim without trusting the file name.
 | **chat_thread** | `s9c-10`, `s9c-11` | yes, in the conversation | `s9c-12`, `s9c-13` — same conversation | **PASS** |
 | **run_card** | `s9c-20-*-pending-*` | yes, in the run panel | `s9c-20-*-settled-*` — settles in place | **PASS** |
 | **page_gate_region** | `s9c-30-*-pending-*` | yes | none — see the finding | **PASS with a recorded limit** |
-| **site_widget** | — | — | — | **NOT CAPTURED** — host reached and card drawn, pair not recorded; see the finding |
+| **site_widget** | `s9c-40-*-pending-*` | yes, inside the embed frame | `s9c-40-*-settled-*` — settles in place | **PASS with a recorded limit** |
 
 ### chat_thread — the one that matters most
 
@@ -80,15 +81,69 @@ the card. The capture asserts it rather than describing it —
 replacement region, not a settled card. Pre-existing page behaviour, untouched by
 this slice.
 
-### site_widget — still not captured, but no longer for the reason given before
+### site_widget — captured, on a plain page that is not the Cinatra app
 
 **The earlier claim in this file was wrong and is withdrawn.** It said the cell
-needs a WordPress container and the CMS plugin. It does not. Round 2 drove the
-broker path on a plain local page and got the real card to draw inside the embed
-frame; what is missing is the recorded pair (anchors + wire, pending AND
-settled), not the ability to reach the host.
+needs a WordPress container and the CMS plugin. It does not. The cell is now
+captured: the same `ReviewGateCard` draws pending and then settled inside the
+`.cw-frame` embed frame, on a plain HTML page, over the broker path.
 
-What round 2 established, with the drivers in `drivers/`:
+Its stack is the lane-private Compose project `s9c2795w` — own Postgres
+(`127.0.0.1:55473`), own Redis (`127.0.0.1:56409`), dev runtime on port 3072,
+host page on 5573. The operator's containers were never referenced. The whole
+path is in `drivers/README.md`.
+
+The recorded pair, from `capture-site_widget.txt`:
+
+```
+ANCHORS pending {"present":true,"cards":1,"host":"site_widget","state":"pending",
+ "kind":"artifact_review_gate","conformance":"review-gate-card","decisionBar":true,
+ "island":true,"insideEmbedFrame":true}
+ANCHORS settled {"present":true,"cards":1,"host":"site_widget","state":"settled",
+ "kind":"artifact_review_gate","conformance":"review-gate-card","decisionBar":false,
+ "island":false,"insideEmbedFrame":true}
+```
+
+The envelope on the wire, every call from inside the frame:
+
+```
+POST /api/lifecycle-views/resolve 200
+  {"userToken":"present (cwu_)","assistant":"wordpress","origin":"http://localhost:5573",
+   "authorization":"present (cit_ bearer)","cookie":"absent"}
+  {"kind":"artifact_review_gate","state":{"state":"pending","canDecide":true,"canComment":true},"body":null}
+POST /api/lifecycle-views/decide  200
+  {"outcome":{"kind":"decided","disposition":"approve","idempotent":false}}
+POST /api/lifecycle-views/resolve 200
+  {"kind":"artifact_review_gate","state":{"state":"settled"},"body":null}
+```
+
+`cookie: absent` on all three: this host reaches the envelope through
+`X-Cinatra-Widget-User-Token` alone, with no cookie fallback. The decision was
+real — the gate row moved `pending` → `resolved`, written by the shipped writer.
+The card settles IN PLACE (`cards:1`, `state:"settled"`), the way `chat_thread`
+does; this host does not remove the card DOM the way `page_gate_region` does.
+
+**The recorded limit — the pending card's target island shows its fallback.**
+`s9c-40-site-widget-pending-card.png` draws the review header, the
+"Awaiting your decision" chip and the decision floor, but where the sibling cells
+show the artifact preview this one shows the card's own
+"The preview did not load … This does not block your decision below". That is a
+dev cold-compile artifact of this run, not a host difference: both routes behind
+the island answered **200**, after the island's client-side load deadline had
+already passed —
+
+```
+GET /lifecycle/review-island?ref=…                      200 in 15.3s   (first hit, compiling)
+GET /api/artifacts/…/versions/…/preview                 200 in 18.6s   (first hit, compiling)
+```
+
+The anchors record `island: true`, so the island element is mounted; only its
+content missed the deadline. The warm re-run that would show the loaded preview
+was **not taken**: the host's memory guard raised its halt flag during this
+round, and that flag forbids starting another heavy step. The cell is claimed on
+what the log records and nothing more.
+
+What this round also established, with the drivers in `drivers/`:
 
 - The embed mounts in a **plain HTML page that is not the Cinatra app**
   (`drivers/site-widget-host-page.html`), which speaks the bridge protocol
@@ -113,19 +168,10 @@ What round 2 established, with the drivers in `drivers/`:
   "Awaiting your decision" state chip and the decision-rationale floor, with the
   conversation composer under it.
 
-What is NOT here, and why it is not claimed: the run that drew the card was
-killed by a host restart before it wrote its log and its settled half. So there
-is no `capture-site_widget.txt` carrying the `ANCHORS pending` /
-`ANCHORS settled` lines and the resolve/decide envelope for this host. Under the
-capture-index rule a picture without its recorded anchors proves nothing, so
-**no site_widget picture is committed** — a shot presented on narration alone is
-the exact anti-pattern that rule exists to catch.
-
-The cell is reproducible from `drivers/README.md` in one pass on a warm stack.
-The assertion it must carry is unchanged: *the same `ReviewGateCard`, resolving
-through the broker path with `X-Cinatra-Widget-User-Token` and no cookie
-fallback, draws pending and then settled inside the `.cw-frame` embed frame with
-`data-lifecycle-card-host="site_widget"`.*
+The assertion the cell had to carry, and now does: *the same `ReviewGateCard`,
+resolving through the broker path with `X-Cinatra-Widget-User-Token` and no
+cookie fallback, draws pending and then settled inside the `.cw-frame` embed
+frame with `data-lifecycle-card-host="site_widget"`.*
 
 ## The wire
 
@@ -211,19 +257,31 @@ the log is the record and the file name is the error.
 | `s9c-30-page-gate-region-pending-page.png` | `page_gate_region` | `pending` | `capture-page_gate_region.txt` → `ANCHORS pending` |
 | `s9c-30-page-gate-region-pending-card.png` | `page_gate_region` | `pending` | `capture-page_gate_region.txt` → `ANCHORS pending` |
 | `s9c-30-page-gate-region-after-decision-page.png` | `page_gate_region` | **no card** — the host removed it | `capture-page_gate_region.txt` → `AFTER DECISION card instances on this host = 0` |
+| `s9c-40-site-widget-pending-page.png` | `site_widget` | `pending` | `capture-site_widget.txt` → `ANCHORS pending` |
+| `s9c-40-site-widget-pending-card.png` | `site_widget` | `pending` | `capture-site_widget.txt` → `ANCHORS pending` |
+| `s9c-40-site-widget-settled-page.png` | `site_widget` | `settled` | `capture-site_widget.txt` → `ANCHORS settled` |
+| `s9c-40-site-widget-settled-card.png` | `site_widget` | `settled` | `capture-site_widget.txt` → `ANCHORS settled` |
 
 The chat rows additionally record `insideConversationList: true`, and the settled
 chat row records `sameConversation: 1` — the pending card, the decision and the
 settled card are one card in one conversation.
 
-The last row is deliberately not a settled card, and its log line says so in the
-host's own terms: this host removes the card DOM after a decision, so the picture
-is the page's replacement region. See the finding above.
+The `page_gate_region` after-decision row is deliberately not a settled card, and
+its log line says so in the host's own terms: this host removes the card DOM
+after a decision, so the picture is the page's replacement region. See the
+finding above.
+
+The `site_widget` rows additionally record `insideEmbedFrame: true` — the card
+those pictures show is inside the `.cw-frame` embed frame on a page that is not
+the Cinatra app. Their pending pictures carry the island's load-failure fallback,
+and the log line beside them records why; the row claims the anchors, not the
+preview.
 
 ## The other files
 
 - `capture-chat.txt`, `capture-run_card.txt`, `capture-page_gate_region.txt`,
-  `capture-wire.txt` — the unedited capture logs: anchors and every wire line.
+  `capture-site_widget.txt`, `capture-wire.txt` — the unedited capture logs:
+  anchors and every wire line.
 - `production-build-attempt.txt` — the unedited tail of the failed build.
 - `drivers/` — the capture path itself, so this round is reproducible rather than
   narrated. See `drivers/README.md`.
