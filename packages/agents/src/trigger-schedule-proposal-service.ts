@@ -822,7 +822,9 @@ export async function reproposeExpiredScheduleProposal(
   // does not mint a second one. The stored token is re-read against the reader
   // asking, exactly as their own ref was, so the ratchet can never hand back a
   // token this reader is not entitled to and can never disagree with the
-  // token's own clock about whether it is still live.
+  // token's own clock about whether it is still live. BOTH places a stored
+  // token can reach the reader do this read — here, and the post-claim yield
+  // below; the second one used to only claim to.
   const latest = await readLineageReproposal(consumeKey);
   if (latest) {
     const held = readTriggerScheduleProposalToken({
@@ -860,17 +862,78 @@ export async function reproposeExpiredScheduleProposal(
   // is not a race this code has to win either; see `claimLineageReproposal`.
   // A mint that loses the claim is simply discarded: it wrote no run and armed
   // nothing, so nothing has to be unwound.
-  const held = await claimLineageReproposal({
+  //
+  // WHAT THE LOSER PATHS OWE, and did not pay (codex round-5, both findings).
+  // Winning is the easy half: the token handed back is the one this call just
+  // minted for this actor, so it is live and theirs by construction. Losing is
+  // where the two invariants actually have to be re-established, and neither
+  // was:
+  //
+  //   `yielded`  — the token belongs to whoever won, and it arrives here
+  //                straight out of a table row. Nothing between the row and the
+  //                reader had re-read it, so the ratchet's own promise — "the
+  //                stored token is re-read against the reader asking, exactly
+  //                as their own ref was" — was written in a comment and not in
+  //                the code. See the read below.
+  //   `vanished` — see `claimLineageReproposal`: the slot was neither claimed
+  //                nor is anyone holding it. The earlier cut returned this
+  //                call's OWN mint and called that honest. It was not: that
+  //                token is in no lineage row, so the reader would walk away
+  //                with a live token the ratchet is not counting, and a
+  //                subsequent press could mint a second one alongside it —
+  //                exactly the "at most ONE live token per lineage" the whole
+  //                table exists to guarantee, broken by the one branch that
+  //                claimed to be conceding.
+  const claimInput = {
     consumeKey,
     token: proposed.token,
     expiresAt: new Date(proposed.expiresAt * 1000),
     orgId: actor.orgId,
     templateId: proposal.templateId,
     reproposedBy: actor.userId,
-  });
-  return {
-    ok: true,
-    token: held.token,
-    expiresAt: Math.floor(held.expiresAt.getTime() / 1000),
   };
+  let claim = await claimLineageReproposal(claimInput);
+  // ONE BOUNDED RETRY, and one is the right number. `vanished` says the slot is
+  // free right now, so the same conditional statement can simply be re-run into
+  // it — no new mint, no new state, and the claim is still the thing deciding.
+  // A second `vanished` means the row is being churned under us faster than a
+  // claim can land; looping would be a spin, and the honest answer is the
+  // refusal below rather than an untracked mint.
+  if (claim.outcome === "vanished") {
+    claim = await claimLineageReproposal(claimInput);
+  }
+
+  if (claim.outcome === "claimed") {
+    // Ours, and the lineage row names it. `proposed.expiresAt` is the mint's own
+    // stamp — the row was written from it.
+    return { ok: true, token: claim.record.token, expiresAt: proposed.expiresAt };
+  }
+
+  if (claim.outcome === "yielded") {
+    // THE WINNER'S TOKEN, READ AS THE READER'S OWN REF WAS. Same call, same
+    // expectations, same clock — so the ratchet can never hand back a token
+    // this reader was not minted, and can never disagree with the token's own
+    // TTL about whether the window is open. A stored token that fails either
+    // test is not returned at all: the reader gets the same `invalid` sentence
+    // the initial read would have given them, which is also what they would
+    // have got had that token been their starting ref.
+    const adopted = readTriggerScheduleProposalToken({
+      token: claim.record.token,
+      expectedUserId: actor.userId,
+      expectedOrgId: actor.orgId,
+    });
+    if (adopted?.status !== "live") {
+      return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+    }
+    return {
+      ok: true,
+      token: claim.record.token,
+      expiresAt: adopted.proposal.expiresAt,
+    };
+  }
+
+  // Still `vanished` after the retry. Nothing of ours is installed anywhere, so
+  // there is nothing to unwind and nothing to hand over. The next press starts
+  // clean.
+  return { ok: false, error: PROPOSAL_REFUSALS.invalid };
 }

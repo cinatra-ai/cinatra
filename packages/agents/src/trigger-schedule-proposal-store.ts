@@ -196,6 +196,30 @@ export type LineageReproposalRecord = {
   expiresAt: Date;
 };
 
+/**
+ * WHAT THE CONDITIONAL CLAIM ACTUALLY DID — three outcomes, named, because the
+ * caller must treat them differently and a bare record cannot tell them apart.
+ *
+ *   `claimed`  — the slot is now OURS; `record.token` is the token we passed in
+ *                and the lineage row names it.
+ *   `yielded`  — a live replacement was already there and still is; `record` is
+ *                THEIRS. Our mint is discarded, and their token has not been
+ *                read against the reader asking — the caller must do that.
+ *   `vanished` — the claim refused (a live row was there) and yet no live row
+ *                could be read back: it expired or was deleted between the two
+ *                statements. NOTHING is holding the slot and nothing of ours is
+ *                installed in it, so there is no token here to hand anybody.
+ *
+ * The third one used to be collapsed into "answer with the caller's own mint",
+ * which is why it now has a name: that mint was never written to the lineage
+ * row, so returning it put a live token in a reader's hands that the ratchet
+ * was not holding. See `claimLineageReproposal`.
+ */
+export type LineageClaimResult =
+  | { outcome: "claimed"; record: LineageReproposalRecord }
+  | { outcome: "yielded"; record: LineageReproposalRecord }
+  | { outcome: "vanished" };
+
 function projectLineage(
   row: TriggerScheduleProposalLineageRow,
 ): LineageReproposalRecord {
@@ -241,8 +265,14 @@ export async function readLineageReproposal(
  * with THAT token — its own mint is discarded unreturned, which costs nothing,
  * because minting writes no run and arms nothing.
  *
- * Returns the AUTHORITATIVE latest replacement — the caller hands the reader
- * whatever comes back, never assuming it is the token it passed in.
+ * Returns WHICH OF THE THREE OUTCOMES happened rather than a bare record, and
+ * that distinction is the fix for codex round-5 finding 2. A record alone
+ * cannot say whether the token in it is installed in the lineage row: `claimed`
+ * and `yielded` both name a token the row is holding, and the third case names
+ * none at all. Collapsing the third into "here is your own mint" handed out a
+ * live token the ratchet had never heard of. The caller decides what to do with
+ * `vanished` (`reproposeExpiredScheduleProposal` re-claims once, then refuses);
+ * this function's job is only to report it truthfully.
  */
 export async function claimLineageReproposal(input: {
   consumeKey: string;
@@ -251,7 +281,7 @@ export async function claimLineageReproposal(input: {
   orgId: string;
   templateId: string;
   reproposedBy: string;
-}): Promise<LineageReproposalRecord> {
+}): Promise<LineageClaimResult> {
   const claimed = await db
     .insert(triggerScheduleProposalLineage)
     .values({
@@ -277,13 +307,14 @@ export async function claimLineageReproposal(input: {
       setWhere: lte(triggerScheduleProposalLineage.expiresAt, sql`now()`),
     })
     .returning();
-  if (claimed[0]) return projectLineage(claimed[0]);
+  if (claimed[0]) {
+    return { outcome: "claimed", record: projectLineage(claimed[0]) };
+  }
 
   // The row was there and still LIVE: somebody else holds the slot. Answer with
   // theirs. The `gt` is belt-and-braces — the same condition the upsert just
   // refused on — so a row that expired in the microseconds between the two
-  // statements is not returned as live; the caller then simply mints again on
-  // the next press.
+  // statements is not returned as live.
   const held = await db
     .select()
     .from(triggerScheduleProposalLineage)
@@ -294,15 +325,13 @@ export async function claimLineageReproposal(input: {
       ),
     )
     .limit(1);
-  if (held[0]) return projectLineage(held[0]);
-  // Neither claimed nor held — the row was deleted (a retention pass) between
-  // the two statements. Nothing is holding the slot, so the caller's own mint is
-  // the honest answer; the next press re-establishes the row.
-  return {
-    consumeKey: input.consumeKey,
-    token: input.token,
-    expiresAt: input.expiresAt,
-  };
+  if (held[0]) return { outcome: "yielded", record: projectLineage(held[0]) };
+  // Neither claimed nor held — the row expired into overwritability, or was
+  // deleted outright (a retention pass), between the two statements. Nothing is
+  // holding the slot AND nothing of ours was written into it, so there is no
+  // token here that this function may honestly call the lineage's. Say so; the
+  // caller re-claims into the slot it now knows is free.
+  return { outcome: "vanished" };
 }
 
 // ---------------------------------------------------------------------------

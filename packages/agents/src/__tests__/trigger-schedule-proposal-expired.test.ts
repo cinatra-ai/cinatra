@@ -15,6 +15,27 @@
  * Seam tier: the stores are mocked, the TOKEN is real. What is under test is
  * which reading a resolve answers with, and that is decided by real crypto
  * against a real clock — mocking the token would test the mock.
+ *
+ * WHAT THE IN-MEMORY LINEAGE MODEL DOES AND DOES NOT EXERCISE (the convention
+ * this suite keeps: say what a pin proves, and say what it stands in for).
+ *
+ * IT DOES exercise, for real: the conditional write itself — a live row is
+ * never overwritten, an expired or absent one is claimed — and every decision
+ * the SERVICE makes off the outcome, which is where both round-5 defects lived.
+ * The tokens those decisions are made about are real, so "the adopted token is
+ * re-read against the asking reader" is pinned by real crypto refusing a real
+ * foreign token, not by a flag.
+ *
+ * IT DOES NOT exercise: the SQL. `setWhere` against `now()`, the `gt` re-read,
+ * the PRIMARY KEY on `consume_key` and the row's ON DELETE CASCADE are Postgres
+ * behaviours a `Map` cannot have; the lineage-schema parity test and the
+ * integration suite cover those. Nor can this model produce a genuine
+ * claim/read interleaving: two statements are one JS turn apart here, so the
+ * `vanished` outcome — the row disappearing between them — is DRIVEN by
+ * overriding the claim mock for a press rather than raced into existence. That
+ * is the honest shape of the pin: the interleaving is stipulated, and what is
+ * under test is the service's response to it (re-claim once, then refuse),
+ * which is the part that was wrong.
  */
 import { describe, it, expect, afterEach, beforeAll, beforeEach, vi } from "vitest";
 
@@ -91,6 +112,37 @@ const ledger = new Map<string, ConsumeRow>();
  */
 type LineageRow = { consumeKey: string; token: string; expiresAt: Date };
 const lineage = new Map<string, LineageRow>();
+
+/**
+ * The conditional upsert, in the three outcomes the real statement has: a LIVE
+ * row is never overwritten (`yielded`, answering with what the lineage is
+ * actually holding), a free slot is taken (`claimed`), and the claim can refuse
+ * against a live row that is then GONE by the time the loser reads it back
+ * (`vanished` — nothing claimed, nothing held).
+ *
+ * `vanished` cannot arise from this map on its own: one JS turn separates no
+ * two statements here, so the suite drives it by overriding the mock for a
+ * press. That is honest about what is modelled — the interleaving is real in
+ * Postgres and stubbed here — and the branch under test is the SERVICE's
+ * response to it, which is what the pin is about.
+ */
+async function fakeClaimLineage(input: {
+  consumeKey: string;
+  token: string;
+  expiresAt: Date;
+}) {
+  const held = lineage.get(input.consumeKey);
+  if (held && held.expiresAt.getTime() > Date.now()) {
+    return { outcome: "yielded" as const, record: held };
+  }
+  const row: LineageRow = {
+    consumeKey: input.consumeKey,
+    token: input.token,
+    expiresAt: input.expiresAt,
+  };
+  lineage.set(input.consumeKey, row);
+  return { outcome: "claimed" as const, record: row };
+}
 /** Every run row the fake `createAgentRunPendingInput` actually COMMITTED. */
 const committedRuns: string[] = [];
 
@@ -191,21 +243,7 @@ beforeEach(() => {
   readLineageReproposal.mockImplementation(
     async (key: string) => lineage.get(key) ?? null,
   );
-  // The conditional upsert: a LIVE row is never overwritten, and the caller is
-  // answered with whatever the lineage is actually holding.
-  claimLineageReproposal.mockImplementation(
-    async (input: { consumeKey: string; token: string; expiresAt: Date }) => {
-      const held = lineage.get(input.consumeKey);
-      if (held && held.expiresAt.getTime() > Date.now()) return held;
-      const row: LineageRow = {
-        consumeKey: input.consumeKey,
-        token: input.token,
-        expiresAt: input.expiresAt,
-      };
-      lineage.set(input.consumeKey, row);
-      return row;
-    },
-  );
+  claimLineageReproposal.mockImplementation(fakeClaimLineage);
 });
 
 afterEach(() => {
@@ -679,6 +717,104 @@ describe("the lineage holds ONE live replacement — Adjust is idempotent while 
     expect(a.token).toBe(b.token);
     expect(lineage.size).toBe(1);
     expect(lineage.get(original.consumeKey)?.token).toBe(a.token);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE LOSER PATHS (codex round-5). Winning the claim is the easy half. Both
+  // ways of losing hand the reader something that did NOT come from this call's
+  // own mint, and each has to re-establish an invariant before it does.
+  // -------------------------------------------------------------------------
+
+  it("REFUSES rather than return an adopted token the asking reader cannot read", async () => {
+    // The ratchet's stated promise is that a stored token is re-read against
+    // the reader asking, exactly as their own ref was. The post-claim loser
+    // path did not do it: it returned `held.token` straight out of the row.
+    //
+    // Modelled by putting a token in the lineage slot that belongs to a
+    // DIFFERENT ORG — the one thing `readTriggerScheduleProposalToken` refuses
+    // on that a live/expired check cannot see. (Its binding check is what makes
+    // the org the discriminator here; a token for another USER in this org is
+    // refused by the same branch, and the suite does not need both to pin that
+    // the read happens at all.)
+    const original = mintExpired();
+    const foreign = mintTriggerScheduleProposalToken({
+      templateId: TEMPLATE,
+      userId: USER,
+      orgId: "org_someone_else_entirely",
+      schedule: WEEKDAYS_9AM,
+    });
+    if (!foreign) throw new Error("expected the foreign mint to have succeeded");
+    // The lineage is holding it, and holding it LIVE, so the claim will yield.
+    lineage.set(original.consumeKey, {
+      consumeKey: original.consumeKey,
+      token: foreign.token,
+      expiresAt: new Date(foreign.expiresAt * 1000),
+    });
+
+    const result = await service.reproposeExpiredScheduleProposal(READER, original.token);
+
+    // The refusal, and not the token — the same sentence the initial read gives.
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal");
+    expect(result.error).toBe(service.PROPOSAL_REFUSALS.invalid);
+
+    // Belt and braces on the thing that actually matters: the foreign token
+    // never appears in an answer, and the lineage still holds exactly it (this
+    // reader's discarded mint did not displace a live row).
+    expect(lineage.get(original.consumeKey)?.token).toBe(foreign.token);
+    expect(lineage.size).toBe(1);
+  });
+
+  it("RE-CLAIMS when the row it lost to has vanished, and returns a TRACKED token", async () => {
+    // The interleaving: the conditional claim refuses against a live row, and
+    // by the time the loser reads that row back it is GONE — expired into
+    // overwritability, or deleted by a retention pass. The slot is free, and
+    // nothing of this call's is in it.
+    //
+    // The earlier cut answered with its own unclaimed mint and called that
+    // honest. It was not: the lineage would name no token while the reader held
+    // a live one, so a later press could mint a SECOND live token beside it.
+    const original = mintExpired();
+    claimLineageReproposal.mockImplementationOnce(async () => {
+      // The row was there when the claim ran, and is not there now.
+      lineage.delete(original.consumeKey);
+      return { outcome: "vanished" as const };
+    });
+
+    const result = await service.reproposeExpiredScheduleProposal(READER, original.token);
+    if (!result.ok) throw new Error("expected the retry to have claimed");
+
+    // ONE bounded retry, and it landed.
+    expect(claimLineageReproposal).toHaveBeenCalledTimes(2);
+    // TRACKED: the lineage row afterwards names EXACTLY the token returned, so
+    // "how many live tokens does this lineage have" still answers 1.
+    expect(lineage.size).toBe(1);
+    expect(lineage.get(original.consumeKey)?.token).toBe(result.token);
+    // …and it is still the one lineage, so still one run at most.
+    expect(consumeKeyOf(result.token)).toBe(original.consumeKey);
+  });
+
+  it("REFUSES rather than hand out an unclaimed mint when the retry also vanishes", async () => {
+    // The slot is being churned faster than a claim can land. Looping would be
+    // a spin; the give-up branch must refuse, because the only other thing it
+    // holds is a token no lineage row names.
+    const original = mintExpired();
+    claimLineageReproposal.mockImplementation(async () => {
+      lineage.delete(original.consumeKey);
+      return { outcome: "vanished" as const };
+    });
+
+    const result = await service.reproposeExpiredScheduleProposal(READER, original.token);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a refusal, not an untracked mint");
+    expect(result.error).toBe(service.PROPOSAL_REFUSALS.invalid);
+    // Bounded: two attempts, not a spin.
+    expect(claimLineageReproposal).toHaveBeenCalledTimes(2);
+    // Nothing was installed, so there is nothing to unwind and no live token
+    // loose in the world.
+    expect(lineage.size).toBe(0);
+    expect(committedRuns).toEqual([]);
   });
 
   it("refuses a SPENT lineage without touching the ratchet at all", async () => {

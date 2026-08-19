@@ -98,7 +98,10 @@ async function loadService() {
     // to keep the module's export shape honest and nothing more.
     readLineageReproposal: vi.fn(async () => null),
     claimLineageReproposal: vi.fn(
-      async (input: { consumeKey: string; token: string; expiresAt: Date }) => input,
+      async (input: { consumeKey: string; token: string; expiresAt: Date }) => ({
+        outcome: "claimed" as const,
+        record: input,
+      }),
     ),
     markInstallIntentArmed,
     markInstallIntentDone,
