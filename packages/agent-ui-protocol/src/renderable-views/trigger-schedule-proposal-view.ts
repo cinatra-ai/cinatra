@@ -250,8 +250,6 @@ export type TriggerScheduleProposalExpiredView = z.infer<
 >;
 
 /**
-
-/**
  * The one body a proposal card resolves to. `null` is not part of the union:
  * "there is nothing to draw" is expressed by S1's `absent` STATE, and a state
  * that draws nothing carries no body at all.
