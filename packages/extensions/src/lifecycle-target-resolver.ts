@@ -820,15 +820,38 @@ function narrowByArchivedInstallPrecedence(
  *     on the sibling's TIER: a `user`- or `team`-anchored row inside the same
  *     organization strands the install identically, and a tier check there
  *     would fix the reviewer's example while leaving its twin silent;
- *   - arm 2 holds the POST-ROLLBACK PAIR and nothing else: at least two rows
- *     that {@link narrowByArchivedInstallPrecedence} — the SAME predicate arm
- *     (b) uses, not a second copy of the rule — narrows to exactly one row,
- *     and that row is an archived default marketplace install at the WORKSPACE
+ *   - arm 2 NARROWS TO THE WAY-BACK ROW: at least two rows that
+ *     {@link narrowByArchivedInstallPrecedence} — the SAME predicate arm (b)
+ *     uses, not a second copy of the rule — reduces to exactly one row, and
+ *     that row is an archived default marketplace install at the WORKSPACE
  *     anchor. A lone archived row, two archived installs, an archived bundle,
  *     a non-default install or an unknown provenance is not this shape and is
- *     left alone;
+ *     left alone.
+ *     Deliberately NOT "the pair and nothing else". That predicate's own
+ *     clause is "every OTHER candidate is a LIVE BUNDLED fallback row", so ANY
+ *     NUMBER of live bundled anchors may accompany the single archived install.
+ *     The literal {bundled, archived install} pair is the MINIMUM, not the
+ *     maximum, and the extra bundled rows change nothing this arm reads: the
+ *     archived install is stranded for the same reason (a non-empty arm 1 hides
+ *     ALL of arm 2, not some row-counted part of it), and the recovery the copy
+ *     names works identically, because clearing the active organization makes
+ *     arm 2 the actor's OWN scope and arm (b) applies THIS SAME narrowing to
+ *     THESE SAME rows. Tightening to exactly two would re-silence a genuinely
+ *     stranded shape — the defect this arm exists to close — over a row count
+ *     neither the stranding nor the recovery depends on;
  *   - arm 2 is non-empty only for a PLATFORM ADMIN in an org-scoped session, so
  *     no other principal can reach this arm at all.
+ *
+ * THE COUNT the refusal reports is CANDIDATES, not rows: arm 1's post-narrowing
+ * candidate (exactly one — with more, the generic `ambiguous_target` above has
+ * already returned) plus arm 2's post-narrowing candidate (exactly one, which
+ * is precisely what the clause above establishes). So it is 2 for the literal
+ * pair and 2 for any wider bundled set, because the live bundled anchors are
+ * not TARGETS: the same narrowing collapses them away in the recovery session
+ * too, so counting them would report a choice the operator is never offered and
+ * contradict the copy printed beside it. Every other verdict in this resolver
+ * counts the same thing — `candidates` AFTER
+ * {@link narrowByInstallSourcePrecedence}, never the raw scoped rows.
  *
  * Returns the stranded row so the refusal can name it in the resolver's own
  * terms; it selects nothing and no gate moves.
@@ -840,8 +863,10 @@ function strandedOrgSiblingWayBackRow(addressable: {
   const { own, platformFallback } = addressable;
   if (own.length === 0) return null;
   if (!own.every((r) => (r.organizationId ?? null) !== null)) return null;
-  // The PAIR, not merely "a narrowing result": a single-row fallback narrows to
-  // itself, which is not the state a rollback leaves.
+  // At least TWO rows, not merely "a narrowing result": a single-row fallback
+  // narrows to ITSELF, which is not the state a rollback leaves. Above two the
+  // arm does not count — the narrowing below admits any number of live bundled
+  // anchors beside the one archived install, and each is the same strand.
   if (platformFallback.length < 2) return null;
   const narrowed = narrowByArchivedInstallPrecedence(platformFallback);
   if (narrowed.length !== 1) return null;
@@ -924,6 +949,9 @@ export function resolveLifecycleScope(
         code: "ambiguous_target",
         packageName: candidates[0].packageName,
         scope: scopeLabel(actor),
+        // CANDIDATES, not rows: arm 1's single post-narrowing candidate plus
+        // arm 2's, which `strandedOrgSiblingWayBackRow` just proved is exactly
+        // one. Always 2 — a wider bundled fallback adds rows, not targets.
         count: candidates.length + 1,
         reason: REASON_ORG_SIBLING_WAYBACK,
       };

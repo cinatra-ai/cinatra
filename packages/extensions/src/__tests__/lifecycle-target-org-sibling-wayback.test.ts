@@ -250,6 +250,102 @@ describe("the recovery the refusal names actually works", () => {
   });
 });
 
+describe("the strand is the NARROWING, not a row count (round 2)", () => {
+  // The arm's firing condition is "arm 2 narrows to exactly one archived
+  // default WORKSPACE install", and `narrowByArchivedInstallPrecedence` admits
+  // ANY NUMBER of live bundled anchors beside that install. So a THREE-row
+  // fallback is the same strand as the literal pair, and these pin that the
+  // doc, the code and the reported count all say so.
+  const secondBundle = () =>
+    bundled({
+      id: "iext_bundled_b",
+      source: { type: "bundled", version: "0.0.9" } as InstalledExtension["source"],
+    });
+
+  /** The same post-rollback strand with a SECOND live bundled anchor in arm 2. */
+  const strandedWide = () => [
+    bundled(),
+    secondBundle(),
+    marketplace({ status: "archived" }),
+    orgSibling(),
+  ];
+
+  it("a THREE-row fallback still refuses, and still names the recovery", () => {
+    // Tightening the arm to `platformFallback.length === 2` would resolve
+    // `iext_org` here and re-silence a genuinely stranded archived install —
+    // the exact defect cinatra#2856 exists to close.
+    const res = resolveLifecycleScope(strandedWide(), platformAdminInOrg);
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+    expect(!res.ok && res.code === "ambiguous_target" && res.reason).toContain(
+      "app-wide install",
+    );
+  });
+
+  it("counts TARGETS, not rows — still 2 with four rows in play", () => {
+    // The extra bundled anchor is not a target: the SAME narrowing collapses it
+    // away in the recovery session below, so counting it would advertise a
+    // choice the operator is never offered — and contradict the copy beside it,
+    // which names exactly two installs.
+    const res = resolveLifecycleScope(strandedWide(), platformAdminInOrg);
+    expect(!res.ok && res.code === "ambiguous_target" && res.count).toBe(2);
+    try {
+      pickLifecycleTargetRow(strandedWide(), platformAdminInOrg);
+      throw new Error("unreachable");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AmbiguousLifecycleTargetError);
+      expect((err as AmbiguousLifecycleTargetError).count).toBe(2);
+    }
+  });
+
+  it("the named recovery works there too — arm (b) applies the SAME narrowing", () => {
+    // This is WHY the wide set may fire: clearing the active organization makes
+    // arm 2 the actor's own scope, and `narrowByArchivedInstallPrecedence` runs
+    // over THESE SAME rows to THE SAME single row. The recovery never read the
+    // row count, so the firing condition must not either.
+    const res = resolveLifecycleScope(strandedWide(), platformAdminNullOrg);
+    expect(res.ok && res.row.id).toBe("iext_installed");
+    expect(res.ok && res.row.status).toBe("archived");
+    expect(
+      evaluateLifecycleCapabilities(strandedWide(), platformAdminNullOrg).activate.allowed,
+    ).toBe(true);
+  });
+
+  it("a wide fallback whose narrowing FAILS is still left alone", () => {
+    // The counterpart, at the width this round admits: FOUR fallback rows that
+    // do NOT reduce to one — two archived installs have no single answer to
+    // "which did the operator mean" — keep their old verdict. The loosened arm
+    // is bounded by the narrowing and by nothing else, at every width. The
+    // three-row form of this is pinned below and stays.
+    const res = resolveLifecycleScope(
+      [
+        bundled(),
+        secondBundle(),
+        marketplace({ status: "archived" }),
+        marketplace({ id: "iext_other", status: "archived" }),
+        orgSibling(),
+      ],
+      platformAdminInOrg,
+    );
+    expect(res.ok && res.row.id).toBe("iext_org");
+  });
+
+  it("a wide fallback of only LIVE bundles strands nothing", () => {
+    const res = resolveLifecycleScope(
+      [bundled(), secondBundle(), orgSibling()],
+      platformAdminInOrg,
+    );
+    expect(res.ok && res.row.id).toBe("iext_org");
+  });
+
+  it("every row-scoped capability carries the reason for the wide set too", () => {
+    const caps = evaluateLifecycleCapabilities(strandedWide(), platformAdminInOrg);
+    for (const op of ["archive", "activate", "uninstall"] as const) {
+      expect(caps[op].allowed, `${op} must be refused`).toBe(false);
+      expect(caps[op].reason).toContain("app-wide install");
+    }
+  });
+});
+
 describe("the org-sibling arm refuses to widen anything else", () => {
   it("supersession still runs FIRST — a LIVE workspace install hides the sibling", () => {
     const res = resolveLifecycleScope(
