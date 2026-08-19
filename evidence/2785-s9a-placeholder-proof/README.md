@@ -180,12 +180,17 @@ capture programs, all committed here.
   and a real verification record bound to it, outcome `drifted`. No seed arm was
   added and no row was hand-written.
 
-## The layout, asserted before any pixel
+## The layout, recorded before any pixel
 
 Two mentions flip the thread into Slack layout, which suppresses `parts` — and
 `parts` is the only mount point at a tool-call position. Both driving messages
-carry **zero** mention tokens, and both captures assert the layout against the
-app's own persisted thread before a screenshot is taken:
+carry **zero** mention tokens, and both captures READ the layout off the app's
+own persisted thread and record it in their logs before a screenshot is taken.
+"Record", not "assert": the programs `say()` these values, they do not throw on
+them, so what follows is a reading a reader can check against the logs rather
+than a condition the run enforced. The log lines themselves are quoted verbatim
+below and in `capture-a-log.txt` / `capture-b-log.txt`, where they carry the
+programs' original wording.
 
 | | cell (a) | cell (b) |
 |---|---|---|

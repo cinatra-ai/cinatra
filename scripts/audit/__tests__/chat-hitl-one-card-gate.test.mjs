@@ -417,6 +417,20 @@ describe("R7 — the owner emits its ratified anchors, from code that runs", () 
     expect(proofAssertsAnchor("it('renders')", '[data-action="skip-x"]')).toBe(false);
   });
 
+  it("THE LIMIT: inside the block the anchor rule is lexical — a COMMENT counts", () => {
+    // Recorded as a known reading, not as a strength. `extractTestBlock` fences
+    // the search to the named test's own body, which is what stops one card
+    // borrowing another case's assertions; it does not make the search semantic.
+    // An anchor mentioned only in a comment inside that body still reads as
+    // named here — so this rule is never the proof on its own. The same named
+    // test is EXECUTED by vitest, and there the anchor must come back off real
+    // DOM; that run is what a comment cannot satisfy.
+    const commentOnly = "it('renders', () => { /* [data-action=\"skip-x\"] is drawn elsewhere */ });";
+    expect(proofAssertsAnchor(commentOnly, '[data-action="skip-x"]')).toBe(true);
+    // …and the fence that IS load-bearing still holds: a body that does not name
+    // the anchor at all fails, however much the rest of the file names it.
+    expect(proofAssertsAnchor("it('renders', () => { expect(1).toBe(1); });", '[data-action="skip-x"]')).toBe(false);
+  });
 });
 
 describe("R8 — one declared mount set per host", () => {

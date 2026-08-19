@@ -888,6 +888,14 @@ export const REQUIRED_ROOT_ATTRIBUTES = Object.freeze([
  * attribute in rendered HTML (`toContain('data-action="skip-…"')`). Both are the
  * same assertion about the same pixels, so both count. What does NOT count is a
  * test that never names the anchor at all.
+ *
+ * THE LIMIT, stated rather than left to be discovered: this is LEXICAL inside
+ * the extracted block. The block is the named test's own body — that is what
+ * `extractTestBlock` buys — but within it, an anchor named only in a comment or
+ * only in dead code reads as named. So this rule cannot be the proof on its
+ * own, and it is not asked to be: the same named test is EXECUTED by vitest,
+ * where the anchor has to come back off real DOM. A negative fixture pins this
+ * limit so it stays a known reading rather than an assumed strength.
  */
 export function proofAssertsAnchor(proofSource, anchor) {
   const selector = /^\[([a-zA-Z0-9-]+)(?:=["']([^"']+)["'])?\]$/.exec(anchor);
