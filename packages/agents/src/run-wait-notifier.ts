@@ -487,6 +487,17 @@ export async function dispatchRecommendationHoldCleared(input: {
  * so a notification failure can NEVER fail orchestration (matching every other
  * emitter in this codebase). NOT exported from the package index — an
  * intra-package leaf the store imports directly, so it adds no public surface. */
+/**
+ * KNOWN, TRACKED, NOT FIXED HERE — https://github.com/cinatra-ai/cinatra/issues/2864.
+ * This dispatch and `dispatchAutoGateResolved` below are a best-effort pair with
+ * no ordering between them: a resolve that deletes while this insert is still in
+ * flight matches nothing, the insert then commits, and the row outlives the gate
+ * it announces. Pre-existing (the single-artifact path always had it), but
+ * cinatra#2833 extends this seam from one opening path to four, so the number of
+ * paths that can reach the window grew. The recommendation hold closed the same
+ * shape with a write-time fence plus a durable clear obligation; this pair has
+ * neither, and choosing between those two shapes is #2864's job, not this slice's.
+ */
 export async function dispatchAutoGateOpen(input: {
   runId: string;
   reviewTaskId: string;
