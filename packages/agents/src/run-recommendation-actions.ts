@@ -29,8 +29,8 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { ActorRoleHints } from "./auth-policy";
 import {
   writeRunRejectedRecommendations,
+  writeRunRecommendationSkip,
   SKIP_RECOMMENDATION_SOURCE,
-  RUN_LEVEL_SKIP_SENTINEL_SKILL_ID,
 } from "@/lib/run-selected-skill-revisions";
 
 import {
@@ -300,9 +300,10 @@ export async function confirmRunRecommendationAction(input: {
 }
 
 /**
- * SKIP: persist durable skip evidence (a `user_skipped` rejected row per
- * recommended candidate — distinguishable from no-decision AND from confirm),
- * write NO selection row (the run falls back to the computed default set), then
+ * SKIP: persist durable skip evidence — the RUN-LEVEL skip record (the marker
+ * the settled card reads, keyed by run_id and VERIFIED before any release) plus
+ * one `user_skipped` rejected row per candidate the row actually offered — write
+ * NO selection row (the run falls back to the computed default set), then
  * release the hold and dispatch.
  */
 export async function skipRunRecommendationAction(input: {
@@ -352,28 +353,34 @@ export async function skipRunRecommendationAction(input: {
   // write may NOT fall through to the release: releasing a run while losing the
   // record of the decision is precisely the outcome that made Skip vanish.
   //
-  // The evidence covers EVERY candidate the row offered, not only the
+  // The evidence has TWO HALVES, and only one of them can be empty.
+  //
+  // The PER-SKILL half covers every candidate the row offered, not only the
   // scorer-recommended ones. The hold fires whenever there is any candidate at
   // all, so a row can be — and in practice often is — made entirely of FORCED
   // candidates; writing evidence only for recommended ones left those skips
   // unrecorded. A forced candidate is written with a NULL rank, which is what
   // keeps "offered but not recommended" distinguishable from "recommended at
-  // rank n" in the same table.
+  // rank n" in the same table. This half is empty whenever drift retired the
+  // offered set, and that is allowed.
+  //
+  // The RUN-LEVEL half is the marker, and it is never empty on a successful
+  // skip.
   //
   // EVERY SUCCESSFUL SKIP LEAVES A DURABLE MARKER — there is no releasing path
-  // through here that records nothing. Candidates are recorded per candidate;
-  // when drift leaves no candidate to name, the marker names the RUN instead
-  // (`RUN_LEVEL_SKIP_SENTINEL_SKILL_ID`, the ruled fallback until a run-level
-  // skip record has a schema of its own). The only non-recording ending is a
-  // REFUSAL, which keeps the hold and leaves the card decidable.
+  // through here that records nothing. The marker is the RUN-LEVEL skip record
+  // (`run_recommendation_skips`, keyed by run_id alone), written and VERIFIED
+  // below on every branch; the per-skill efficacy rows are a separate, optional
+  // accompaniment. The only non-recording ending is a REFUSAL, which keeps the
+  // hold and leaves the card decidable.
   //
   // A READ FAILURE IS A FAILURE, NOT AN ANSWER. The template read is INSIDE the
   // try and carries no `.catch(() => null)`: swallowing it would turn "the
   // database did not answer" into "this run has no package", walk past the
   // evidence write, and release — the same lost decision a failed write
   // produces, arriving by a quieter route. A template that genuinely reads back
-  // WITHOUT a package name is a different fact and is handled on its own branch
-  // below, next to the other case that leaves nothing to name.
+  // WITHOUT a package name is a different fact: it simply leaves the per-skill
+  // half empty, and the run-level marker still records the decision.
   try {
     const template = await readAgentTemplateById(run.templateId);
     const packageName = template?.packageName;
@@ -401,6 +408,23 @@ export async function skipRunRecommendationAction(input: {
         intent: { promptText: intentPromptText },
         restrictToSkillIds: assignedSkillIds,
       });
+      // PER-SKILL EFFICACY ROWS COME FROM THE EXACT SCORED RESULT, AND ONLY IT.
+      //
+      // Every row written here is read back as "this skill was OFFERED to a
+      // human and not kept", so it may only name a skill the row actually
+      // offered. `recommendations` is that set by construction: candidate
+      // generation intersects the assigned ids with the INSTALLED catalog and
+      // caps the result at `DEFAULT_MAX_CANDIDATES` (`recommend.server.ts`), so
+      // the scored result is the offered set and the assigned set is merely its
+      // superset.
+      //
+      // There used to be a fallback here that wrote every ASSIGNED id when the
+      // scorer came back empty. It recorded rejections for skills that were
+      // never offered — uninstalled ones the intersection had dropped, and
+      // everything past the cap on an agent assigned more than fifty — which is
+      // efficacy telemetry stating something that did not happen. Drift is real,
+      // but the answer to "the offered set is gone" is the RUN-LEVEL marker
+      // below, not a guess at what was on the row.
       rejectedRows = recommendations.map((r) => ({
         skillId: r.skillId,
         skillRevisionId: r.skillRevisionId,
@@ -408,56 +432,45 @@ export async function skipRunRecommendationAction(input: {
         // NULL for a forced candidate: it was offered, never ranked.
         recommendedRank: r.recommended ? r.rank : null,
       }));
-
-      // THE OFFERED SET IS RE-DERIVED HERE, AND RE-DERIVATION CAN DRIFT.
-      //
-      // The hold parks only when the scorer returned at least one candidate
-      // (`maybeHoldRunForRecommendation`), so a LIVE hold proves a non-empty
-      // offered set existed. An empty set at decision time therefore never means
-      // "the row had nothing on it" — it means something moved while the run sat
-      // parked: a revision was published, the scorer changed its mind, an
-      // assignment or entitlement was withdrawn.
-      //
-      // The FALLBACK recovers the common half of that drift. The assigned
-      // candidate ids come from the same run-actor seam that bounded the hold's
-      // own candidates, so when the scorer drifts to empty but the assignments
-      // survive, those ids ARE the offered set, and the skip is recorded against
-      // them with a NULL rank (offered, never ranked) and no pinned revision.
-      // The card settles, which is the whole point of the evidence.
-      if (rejectedRows.length === 0 && assignedSkillIds.length > 0) {
-        rejectedRows = assignedSkillIds.map((skillId) => ({
-          skillId,
-          skillRevisionId: null,
-          recommendationSource: SKIP_RECOMMENDATION_SOURCE,
-          recommendedRank: null,
-        }));
-      }
     }
 
-    if (rejectedRows.length === 0) {
-      // NOTHING LEFT TO NAME — AND STILL A DECISION.
-      //
-      // Two ways to arrive: the template reads back with no package name, or
-      // every assignment behind the offered set is gone. Both are drift, and
-      // neither makes the skip less of a decision. Releasing here unrecorded is
-      // what made those Skips fail to settle: the state reader found no
-      // selection and no skip row, answered `none`, and the card disappeared
-      // from the conversation.
-      //
-      // So the marker names the RUN instead of a skill. One reserved-id row,
-      // the ruled fallback until a run-level skip record has a schema of its
-      // own — used on exactly these paths and nowhere else, so "every
-      // successful skip leaves a durable marker" holds without exception.
-      rejectedRows = [
-        {
-          skillId: RUN_LEVEL_SKIP_SENTINEL_SKILL_ID,
-          skillRevisionId: null,
-          recommendationSource: SKIP_RECOMMENDATION_SOURCE,
-          recommendedRank: null,
-        },
-      ];
+    // The per-skill half is OPTIONAL — it is empty whenever drift retired the
+    // offered set, or the template reads back with no package name. Neither
+    // makes the skip less of a decision, and neither is allowed to invent a
+    // rejected skill.
+    if (rejectedRows.length > 0) {
+      writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
     }
-    writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
+
+    // THE MARKER, AND IT IS VERIFIED BEFORE ANYTHING IS RELEASED.
+    //
+    // This is the record that makes the card settle: the state reader answers
+    // `skipped` from it, and with no marker it answers `none` and the card
+    // disappears from the conversation instead of settling. It is keyed by the
+    // RUN, so it exists on every branch above — including the ones with no
+    // candidate left to name.
+    //
+    // `writeRunRecommendationSkip` READS THE MARKER BACK and returns whether it
+    // is durably there. A write that quietly did nothing is therefore not
+    // mistaken for a decision on record: the release below is gated on the
+    // verified fact, not on the absence of an exception.
+    const recorded = writeRunRecommendationSkip({
+      runId: input.runId,
+      skippedBy: userId,
+      candidateCount: rejectedRows.length,
+    });
+    if (!recorded) {
+      console.error(
+        "[skipRunRecommendationAction] skip marker did not read back for run",
+        input.runId,
+        "— refusing to release",
+      );
+      return {
+        ok: false,
+        error: RECOMMENDATION_SKIP_NOT_RECORDED,
+        code: RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
+      };
+    }
   } catch (err) {
     // A FAILED WRITE, on the other hand, is fatal to the decision. The run id is
     // request-controlled, so it is passed as a discrete argument and never

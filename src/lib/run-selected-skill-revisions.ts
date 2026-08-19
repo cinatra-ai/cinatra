@@ -216,58 +216,125 @@ export function writeRunRejectedRecommendations(input: {
  */
 export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
 
-/**
- * THE RUN-LEVEL SKIP MARKER, carried on the sanctioned fallback.
- *
- * A skip is a decision about the RUN, and the run's card settles only when that
- * decision is on record. This table is keyed by (run_id, skill_id), so a skip
- * that names no skill — every offered candidate drifted away while the run sat
- * parked, or the template reads back with no package — had no row to occupy and
- * released unrecorded, and the card then vanished instead of settling.
- *
- * The proper home is a run-level skip record of its own. Until that schema
- * exists, the ruled fallback is this table with a RESERVED skill id, used
- * consistently: one row, `user_skipped`, no revision, no rank. It is what makes
- * "every successful skip leaves a durable marker" true without exception.
- *
- * The id is deliberately not a possible skill id — skill ids are opaque store
- * ids, never a double-underscore sentinel — so it can never collide with a real
- * candidate, and `readRunRejectedRecommendations` filters it out so the
- * recommendation-efficacy split never counts it as a rejected skill.
- */
-export const RUN_LEVEL_SKIP_SENTINEL_SKILL_ID = "__run_level_skip__" as const;
+// ---------------------------------------------------------------------------
+// THE RUN-LEVEL SKIP RECORD (cinatra#2794 S9b) — its own table, keyed by run.
+//
+// A skip is a decision about the RUN, and the run's card settles only when that
+// decision is on record. The rejected table above is keyed (run_id, skill_id),
+// so a skip that names no skill — every offered candidate drifted away while the
+// run sat parked, or the template reads back with no package — had no row to
+// occupy. The stop-gap was a RESERVED skill id, `__run_level_skip__`, written
+// into that table as though it were a skill.
+//
+// That stop-gap is GONE, because it was only safe while nobody typed a
+// particular string: skill ids are caller-provided text (`createOrUpdateSkill`
+// takes `input.skillId` verbatim) and no constraint excluded the reserved value.
+// One collision produced two failures — the efficacy reader filtered the id out,
+// silently dropping a genuine rejected skill from the accepted/rejected split,
+// and a genuine rejection could be misread as a run-level marker.
+//
+// `run_recommendation_skips` is that record: PK `run_id`, so the write is
+// idempotent per run and the marker needs no skill to name. See the bootstrap
+// leaf in `@/lib/artifacts/artifact-review-gate-schema` and its migration twin
+// core__0094 for the shape rationale.
+// ---------------------------------------------------------------------------
 
 /**
- * Whether a run carries durable SKIP evidence (at least one `user_skipped`
- * rejected-recommendation row). Distinguishes an explicit skip from a no-decision
- * run (issue #2067 AC-3 store evidence).
+ * Persist the RUN-LEVEL skip marker AND VERIFY IT LANDED. Returns whether the
+ * marker is READABLE afterwards — the caller releases the run's park only on
+ * `true`.
+ *
+ * WHY A VERIFIED WRITE, AND NOT JUST A WRITE. The insert is `ON CONFLICT
+ * (run_id) DO NOTHING` so a retried skip converges instead of duplicating — but
+ * that also means the statement reports success both when it inserted and when
+ * it silently did nothing. "The write did not throw" is therefore NOT the same
+ * fact as "the marker is on record", and the release must turn on the latter:
+ * releasing a run while losing the record of its decision is exactly the
+ * vanishing card this whole path exists to remove.
+ *
+ * The read-back rides the SAME `runPostgresQueriesSync` call, which is NOT
+ * transactional (no `transaction: true`) — so the insert has autocommitted by
+ * the time the select runs on that connection, and a row the select returns is a
+ * COMMITTED row rather than one visible only inside an open transaction.
+ *
+ * Throws on a genuine DB error; the caller wraps both outcomes into the one
+ * typed refusal.
+ */
+export function writeRunRecommendationSkip(input: {
+  runId: string;
+  /** The principal whose decision this was — the fail-closed owner guard has
+   * already proved it is the run's `runBy`. */
+  skippedBy: string;
+  /** How many per-skill efficacy rows rode with this skip (0 = drift left
+   * nothing to name; the marker still stands). */
+  candidateCount: number;
+}): boolean {
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema;
+  const table = `"${schema.replaceAll('"', '""')}"."run_recommendation_skips"`;
+  const [, verified] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `INSERT INTO ${table} (run_id, skipped_by, candidate_count)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (run_id) DO NOTHING`,
+        values: [input.runId, input.skippedBy, input.candidateCount],
+      },
+      {
+        text: `SELECT 1 FROM ${table} WHERE run_id = $1 LIMIT 1`,
+        values: [input.runId],
+      },
+    ],
+  });
+  return (verified?.rows?.length ?? 0) > 0;
+}
+
+/**
+ * Whether a run carries durable SKIP evidence. Distinguishes an explicit skip
+ * from a no-decision run (issue #2067 AC-3 store evidence) — the fact the state
+ * reader turns into a settled `skipped` card.
+ *
+ * TWO SOURCES, ON PURPOSE. The run-level record is the authority for every skip
+ * taken since cinatra#2794. Runs skipped BEFORE it carry their evidence only as
+ * `user_skipped` rows in the rejected table, and core__0094 deliberately ships
+ * no backfill (it would have to invent a `skipped_by` those rows never
+ * recorded), so the legacy arm keeps an already-skipped run's card settling
+ * instead of regressing it to `none`. The legacy arm keys on the SOURCE column,
+ * never on a reserved skill id, so a real skill named `__run_level_skip__` is
+ * irrelevant to it.
  */
 export function hasRunRecommendationSkip(runId: string): boolean {
   const connectionString = getPostgresConnectionString();
   const schema = postgresSchema;
-  const [result] = runPostgresQueriesSync({
+  const q = schema.replaceAll('"', '""');
+  const [runLevel, legacy] = runPostgresQueriesSync({
     connectionString,
     queries: [
       {
+        text: `SELECT 1 FROM "${q}"."run_recommendation_skips" WHERE run_id = $1 LIMIT 1`,
+        values: [runId],
+      },
+      {
         text: `SELECT 1
-               FROM "${schema.replaceAll('"', '""')}"."run_rejected_recommendations"
+               FROM "${q}"."run_rejected_recommendations"
                WHERE run_id = $1 AND recommendation_source = $2
                LIMIT 1`,
         values: [runId, SKIP_RECOMMENDATION_SOURCE],
       },
     ],
   });
-  return (result?.rows?.length ?? 0) > 0;
+  return (runLevel?.rows?.length ?? 0) > 0 || (legacy?.rows?.length ?? 0) > 0;
 }
 
 /**
  * Read the durable rejected-recommendation rows for a run (ordered by skill_id).
  *
- * The run-level skip marker is EXCLUDED. This reader feeds the recommendation
- * efficacy split, where every row means "this skill was offered and not kept" —
- * and the marker names no skill. Counting it would invent a rejected candidate
- * out of a run that had none left to reject. `hasRunRecommendationSkip` is the
- * reader that wants it, and it keys on the source rather than on this list.
+ * NO ROW IS EXCLUDED. Every row here means "this skill was offered and not
+ * kept", and that is now true of every row without exception: the run-level skip
+ * marker has its own table, so this reader no longer has to filter a reserved
+ * skill id out — which is what used to make a legitimate skill id
+ * `__run_level_skip__` unreadable in the efficacy split.
  */
 export function readRunRejectedRecommendations(runId: string): RunRejectedRecommendation[] {
   const connectionString = getPostgresConnectionString();
@@ -278,9 +345,9 @@ export function readRunRejectedRecommendations(runId: string): RunRejectedRecomm
       {
         text: `SELECT skill_id, skill_revision_id, recommendation_source, recommended_rank
                FROM "${schema.replaceAll('"', '""')}"."run_rejected_recommendations"
-               WHERE run_id = $1 AND skill_id <> $2
+               WHERE run_id = $1
                ORDER BY skill_id ASC`,
-        values: [runId, RUN_LEVEL_SKIP_SENTINEL_SKILL_ID],
+        values: [runId],
       },
     ],
   });
