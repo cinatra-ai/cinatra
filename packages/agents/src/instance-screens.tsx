@@ -45,6 +45,11 @@ import { OrchestratorStepperPanel } from "./orchestrator-stepper-panel";
 import { TriggerScreenClient } from "./trigger-screen-client";
 import { estimateRunDuration } from "./trigger-duration-estimate";
 import { TriggerTabClient } from "./trigger-tab-client";
+// §VI's card on the `run_card` host (cinatra#2788, epic #2784 S9d) — see the
+// mount below for why it is here and what it is exclusive with.
+import { ScheduleProposalCard } from "./schedule-proposal-card";
+import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
+import { encodeScheduleRunRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { readRunTriggerByRunId } from "./trigger-store";
 import type { GatedStep } from "./trigger-infer-side-effects";
 import cronstrue from "cronstrue";
@@ -1105,6 +1110,32 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // Server-side cron preview (mirrors the client-side cronstrue formatting
   // in trigger-screen-client.tsx) so the persistent tab renders the same
   // human-readable schedule label without re-parsing on the client.
+  // ── §VI's card, on the `run_card` host (cinatra#2788, epic #2784 S9d) ──
+  //
+  // THE MOUNT. This screen is the run page's schedule surface: it draws either
+  // the persistent Trigger tab (a scheduled/recurring row exists) or the
+  // first-step scheduling form. The plan (§9) puts the proposal card here —
+  // "the armed schedule has Cancel / Release on the Trigger tab → S9d adds the
+  // proposal state there" — so this is where the card mounts, under its own
+  // `LifecycleCardSurfaceProvider host="run_card"`.
+  //
+  // EXCLUSIVE WITH THE PERSISTENT TAB, BY THE SCREEN'S OWN SELECTOR. Two
+  // renderers of one trigger on one host is exactly what the mount rule
+  // forbids, and `shouldShowPersistentTab` is the branch that already decides
+  // which surface owns the schedule — exported, pinned by its own test, and
+  // read here rather than re-derived. Where the tab draws, the card does not;
+  // where it does not, the card is the run page's only reading of what was
+  // confirmed (an immediate proposal, or a schedule still arming, neither of
+  // which the tab covers).
+  //
+  // THE REF IS RUN-SCOPED AND MINTED SERVER-SIDE. The resolver re-derives the
+  // proposal's (viewer, organization, template) binding from its consume row
+  // and answers `absent` for a run no proposal produced — so a schedule armed
+  // from the form below draws no card at all. A run that cannot mint a ref (no
+  // app secret) draws none either, rather than a second composition.
+  const scheduleCardRef =
+    run && !showPersistentTab ? encodeScheduleRunRef({ runId: run.id }) : null;
+
   let cronPreview: string | null = null;
   if (trigger?.triggerType === "recurring" && trigger.cronExpression) {
     try {
@@ -1178,6 +1209,22 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
           </AgentPanelBody>
         ) : (
           <AgentPanelBody role="narrow">
+          {/* §VI's card (cinatra#2788, S9d) — the run page's reading of a
+              schedule that was CONFIRMED from a proposal, above the form that
+              arms one directly. It draws nothing at all for a run no proposal
+              produced, which is every run whose schedule came from the form
+              below; the resolver decides that, not this mount. */}
+          {scheduleCardRef ? (
+            <LifecycleCardSurfaceProvider host="run_card">
+              <ScheduleProposalCard
+                view={{
+                  viewType: "trigger_schedule_proposal",
+                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                  ref: scheduleCardRef,
+                }}
+              />
+            </LifecycleCardSurfaceProvider>
+          ) : null}
           {/*
             cinatra#2482 — finished-run CONTEXT, above the form rather than
             instead of it.

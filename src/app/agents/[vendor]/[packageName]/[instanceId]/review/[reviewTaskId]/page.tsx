@@ -57,7 +57,11 @@ import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
-import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import { ScheduleProposalCard } from "@cinatra-ai/agents/schedule-proposal-card";
+import {
+  encodeLifecycleGateRef,
+  encodeScheduleRunRef,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 
 import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
@@ -230,6 +234,24 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // has no envelope to read.
   const gateCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
 
+  // §VI's card in the SAME gate region (cinatra#2788, epic #2784 S9d).
+  //
+  // THE MOUNT. §IX marks every card present in every channel, and the plan's
+  // §9 row for this screen reads "nothing today → S9d (keyed by the run's
+  // template — section 10.5)". This page reaches its subject by route params and
+  // holds no turn, so the card is addressed the way the run page addresses it:
+  // by a run-scoped ref minted here, whose resolver re-derives the proposal's
+  // (viewer, organization, template) binding from its own consume row.
+  //
+  // THE AUTHORIZATION READER IS THIS PAGE'S OWN. The route already resolves the
+  // reviewing actor and has already enforced run READ to render at all; the
+  // card's resolve re-runs that ladder from scratch on the endpoint, against the
+  // live reader, and answers `absent` for a run this reader did not confirm a
+  // proposal for. So a reviewer who may read the run still sees no schedule card
+  // unless the schedule is theirs — the review page shows the reader their own
+  // confirmed schedule, never somebody else's.
+  const scheduleCardRef = encodeScheduleRunRef({ runId });
+
   return (
     <ReviewShell>
       <div className="flex items-start gap-6">
@@ -260,6 +282,17 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
                   ref: gateCardRef,
                 }}
                 submitAction={submitAction}
+              />
+            ) : null}
+            {/* §VI — the same component the chat thread, the widget and the run
+                page mount. The page composes no schedule chrome of its own. */}
+            {scheduleCardRef ? (
+              <ScheduleProposalCard
+                view={{
+                  viewType: "trigger_schedule_proposal",
+                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                  ref: scheduleCardRef,
+                }}
               />
             ) : null}
           </LifecycleCardSurfaceProvider>

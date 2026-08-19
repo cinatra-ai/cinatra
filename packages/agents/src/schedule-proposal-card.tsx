@@ -105,7 +105,7 @@
 // already have.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { CalendarClock, Check, Pencil, Repeat, Zap } from "lucide-react";
 
 import {
@@ -120,7 +120,18 @@ import type {
   TriggerScheduleProposalSettledView,
   TriggerScheduleProposalExpiredView,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
+import Link from "next/link";
+
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import {
   useCookieSessionSurface,
@@ -278,7 +289,15 @@ export function ScheduleProposalCard({
   // without the turn changing. The wire ref is the starting point; a successful
   // adjust replaces it and the card re-resolves against the new proposal.
   const [liveRef, setLiveRef] = useState(view.ref);
-  useEffect(() => setLiveRef(view.ref), [view.ref]);
+  // The WIRE ref changed — a different turn, a different proposal. Adjusted
+  // during render rather than in an effect: an effect would let one paint go out
+  // with the previous proposal's ref still live, and this card's ref is what
+  // every decision is taken against.
+  const [wireRef, setWireRef] = useState(view.ref);
+  if (wireRef !== view.ref) {
+    setWireRef(view.ref);
+    setLiveRef(view.ref);
+  }
   const [reloadToken, setReloadToken] = useState(0);
 
   const resolved = useLifecycleCardResolve({
@@ -320,6 +339,10 @@ export function ScheduleProposalCard({
   const drawn =
     body.phase === "proposal" ? (
       <ProposalPhase
+        // A re-resolve that brings a DIFFERENT proposal remounts the phase, so
+        // the rows always show what the server says was proposed and a stale
+        // local edit can never survive into another proposal's floor.
+        key={JSON.stringify(body.schedule)}
         body={body}
         state={state}
         onDecide={decide}
@@ -383,13 +406,6 @@ function ProposalPhase({
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
   const [pending, setPending] = useState<null | "confirm" | "adjust">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
-
-  // A re-resolve that brings a different proposal replaces the draft: the rows
-  // must show what the SERVER says was proposed, never a stale local edit.
-  useEffect(() => {
-    setDraft(body.schedule);
-    setAdjusting(false);
-  }, [body.schedule]);
 
   // §IV: a reader who may see the proposal but not confirm it gets a DRAWN card
   // with a disabled floor and the reason on screen — never a dropped one.
@@ -609,7 +625,7 @@ function SettledPhase({
               <li key={step.stepId} className="font-mono text-xs">
                 {step.agentPath.length > 0 ? `${step.agentPath.join(" › ")} › ` : ""}
                 {step.toolName}
-                <span className="ml-2 text-[11px] uppercase">{step.inferredOrManual}</span>
+                <span className="ml-2 text-badge-2xs uppercase">{step.inferredOrManual}</span>
               </li>
             ))}
           </ul>
@@ -643,13 +659,14 @@ function SettledPhase({
           </p>
         ) : null}
         {firstParty ? (
-          <a
-            data-conformance-id="schedule-open-run"
-            className="mr-auto text-sm text-muted-foreground underline underline-offset-2"
-            href={`/agents/runs/${encodeURIComponent(body.runId)}`}
-          >
-            Open the run
-          </a>
+          <Button asChild variant="ghost" size="sm" className="mr-auto">
+            <Link
+              data-conformance-id="schedule-open-run"
+              href={`/agents/runs/${encodeURIComponent(body.runId)}`}
+            >
+              Open the run
+            </Link>
+          </Button>
         ) : null}
         <Button
           type="button"
@@ -848,10 +865,10 @@ export function ScheduleOptionRows({
       >
         <div className="ml-7 flex flex-wrap gap-4">
           <Field label="Run at">
-            <input
+            <Input
               type="datetime-local"
               data-field="schedule-run-at"
-              className={FIELD_CLASS}
+              className="w-56"
               disabled={!editable}
               value={schedule.kind === "scheduled" ? schedule.runAt : defaultRunAt()}
               onChange={(e) =>
@@ -860,10 +877,10 @@ export function ScheduleOptionRows({
             />
           </Field>
           <Field label="Timezone">
-            <input
+            <Input
               type="text"
               data-field="schedule-timezone"
-              className={FIELD_CLASS}
+              className="w-56"
               disabled={!editable}
               value={timezone}
               onChange={(e) =>
@@ -889,38 +906,40 @@ export function ScheduleOptionRows({
         <div className="ml-7 flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">Repeat every</span>
-            <select
-              data-field="recurring-interval"
-              aria-label="Repeat every"
-              className={FIELD_CLASS}
+            <Select
               disabled={!editable}
               value={String(recurring.interval)}
-              onChange={(e) => updateRecurring({ interval: Number(e.target.value) })}
+              onValueChange={(v) => updateRecurring({ interval: Number(v) })}
             >
-              {[1, 2, 3, 4, 6, 8, 12].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-            <select
-              data-field="recurring-frequency"
-              aria-label="Frequency"
-              className={FIELD_CLASS}
+              <SelectTrigger data-field="recurring-interval" aria-label="Repeat every" className="w-20">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[1, 2, 3, 4, 6, 8, 12].map((n) => (
+                  <SelectItem key={n} value={String(n)}>
+                    {n}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
               disabled={!editable}
               value={recurring.frequency}
-              onChange={(e) =>
-                updateRecurring({
-                  frequency: e.target.value as RecurringSelection["frequency"],
-                })
+              onValueChange={(v) =>
+                updateRecurring({ frequency: v as RecurringSelection["frequency"] })
               }
             >
-              <option value="daily">day(s)</option>
-              <option value="weekly">week(s)</option>
-              <option value="monthly">month(s)</option>
-              <option value="quarterly">quarter</option>
-              <option value="yearly">year</option>
-            </select>
+              <SelectTrigger data-field="recurring-frequency" aria-label="Frequency" className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="daily">day(s)</SelectItem>
+                <SelectItem value="weekly">week(s)</SelectItem>
+                <SelectItem value="monthly">month(s)</SelectItem>
+                <SelectItem value="quarterly">quarter</SelectItem>
+                <SelectItem value="yearly">year</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           {recurring.frequency === "weekly" ? (
@@ -959,42 +978,46 @@ export function ScheduleOptionRows({
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">At</span>
-            <select
-              data-field="recurring-hour"
-              aria-label="Hour"
-              className={FIELD_CLASS}
+            <Select
               disabled={!editable}
               value={String(recurring.hour)}
-              onChange={(e) => updateRecurring({ hour: Number(e.target.value) })}
+              onValueChange={(v) => updateRecurring({ hour: Number(v) })}
             >
-              {Array.from({ length: 24 }, (_, i) => (
-                <option key={i} value={i}>
-                  {String(i).padStart(2, "0")}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger data-field="recurring-hour" aria-label="Hour" className="w-20">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: 24 }, (_, i) => (
+                  <SelectItem key={i} value={String(i)}>
+                    {String(i).padStart(2, "0")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <span className="text-muted-foreground">:</span>
-            <select
-              data-field="recurring-minute"
-              aria-label="Minute"
-              className={FIELD_CLASS}
+            <Select
               disabled={!editable}
               value={String(recurring.minute)}
-              onChange={(e) => updateRecurring({ minute: Number(e.target.value) })}
+              onValueChange={(v) => updateRecurring({ minute: Number(v) })}
             >
-              {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
-                <option key={m} value={m}>
-                  {String(m).padStart(2, "0")}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger data-field="recurring-minute" aria-label="Minute" className="w-20">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((m) => (
+                  <SelectItem key={m} value={String(m)}>
+                    {String(m).padStart(2, "0")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <Field label="Timezone">
-            <input
+            <Input
               type="text"
               data-field="recurring-timezone"
-              className={FIELD_CLASS}
+              className="w-56"
               disabled={!editable}
               value={timezone}
               onChange={(e) =>
@@ -1021,9 +1044,6 @@ export function ScheduleOptionRows({
   );
 }
 
-const FIELD_CLASS =
-  "h-8 rounded-control border border-input bg-background px-2 text-sm text-foreground disabled:opacity-100";
-
 /** A one-off's default moment when the reader switches to that row: an hour out,
  *  as a timezone-NAIVE wall clock, exactly what the form's datetime-local emits
  *  and what the wire schema accepts. */
@@ -1035,10 +1055,10 @@ function defaultRunAt(): string {
 
 function Field({ label, children }: { label: string; children: ReactElement }): ReactElement {
   return (
-    <label className="flex flex-col gap-1 text-sm text-muted-foreground">
-      <span className="font-normal">{label}</span>
+    <div className="flex flex-col gap-1">
+      <Label className="font-normal">{label}</Label>
       {children}
-    </label>
+    </div>
   );
 }
 
@@ -1072,12 +1092,13 @@ function OptionRow({
         chosen ? "border-primary bg-primary/5" : "border-input"
       }`}
     >
-      <button
+      <Button
         type="button"
+        variant="ghost"
         disabled={!editable}
         aria-pressed={chosen}
         onClick={onChoose}
-        className="flex items-center gap-3 text-left disabled:cursor-default"
+        className="h-auto justify-start gap-3 p-0 text-left hover:bg-transparent disabled:cursor-default disabled:opacity-100"
       >
         <span
           className={`flex size-4 shrink-0 items-center justify-center rounded-full border-2 ${
@@ -1088,7 +1109,7 @@ function OptionRow({
         </span>
         {icon}
         <span className="text-sm font-medium text-foreground">{label}</span>
-      </button>
+      </Button>
       {/* The chosen row OWNS ITS FIELDS (§VI): the other rows' fields are not
           drawn at all, so there is never more than one live set of inputs. */}
       {chosen ? children ?? null : null}

@@ -99,20 +99,23 @@ export const CARD_OWNERS = Object.freeze({
     component: "RecommendationHoldCard",
     owner: "packages/agents/src/run-recommendation-chip-row.tsx",
   },
-  // The verification and schedule-proposal kinds are BOTH drawn by the S1 shell
-  // `LifecycleCard`, and that is the truth rather than a placeholder: neither
-  // has been given its own drawn component yet (S5 shipped the schedule
-  // proposal's producer, token and install order, not a second renderer). One
-  // component serving two kinds still satisfies "exactly one implementation per
-  // interaction"; two components serving one kind would not. If either gets its
-  // own drawing later, this row changes and the gate follows it.
+  // The VERIFICATION kind is still drawn by the S1 shell `LifecycleCard`, and
+  // that is the truth rather than a placeholder: §VII has not been given its own
+  // drawn component yet (S9e owns that). One component serving one remaining
+  // kind still satisfies "exactly one implementation per interaction"; two
+  // components serving one kind would not.
   verification_summary: {
     component: "LifecycleCard",
     owner: "packages/chat/src/renderable-views/lifecycle-card.tsx",
   },
+  // S9d (cinatra#2788) DREW the schedule proposal, so this row moves off the
+  // shell — which is the "retire the S1 shell for this kind" half of the slice,
+  // expressed where the gate can see it. `ScheduleProposalCard` is now the sole
+  // module that may define this card, and a second implementation anywhere in
+  // the tree is an R1 violation exactly as it is for the review gate.
   trigger_schedule_proposal: {
-    component: "LifecycleCard",
-    owner: "packages/chat/src/renderable-views/lifecycle-card.tsx",
+    component: "ScheduleProposalCard",
+    owner: "packages/agents/src/schedule-proposal-card.tsx",
   },
 });
 
@@ -199,7 +202,8 @@ export const RETIRED_PARALLELS = Object.freeze([
 ]);
 
 /** R3 — the JSX mounts that are lifecycle CARD mounts. */
-const CARD_MOUNT_RE = /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard)\b/g;
+const CARD_MOUNT_RE =
+  /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard|ScheduleProposalCard)\b/g;
 const HOST_PROVIDER_RE = /<\s*LifecycleCardSurfaceProvider\b/;
 
 /**

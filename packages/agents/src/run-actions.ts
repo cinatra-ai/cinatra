@@ -10,10 +10,6 @@ import { AuthzError } from "@/lib/authz";
 // acting MEMBER's session (owner / org-admin, already checked above). A member
 // mint fail-closes if membership was revoked — acceptable per the design.
 import { verifySessionAuthority } from "@/lib/org-write/authority";
-// cinatra#1940 P3 (Decision 1): the archived-org pre-check for the admin
-// releaseTriggerNow fire path (routing/UX only — the kernel's run.execute
-// ruling on the subsequent transition is the real backstop).
-import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
 import { resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
@@ -49,20 +45,10 @@ import {
   type ReleaseTriggerNowResult,
 } from "./trigger-service";
 import type { TriggerType } from "./trigger-store";
-import { readRunTriggerByRunId } from "./trigger-store";
-import { markTriggerReleased } from "./trigger-gate";
 import {
   maybeHoldRunForRecommendation,
   readRecommendationParkForRun,
 } from "./recommendation-hold";
-/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
- *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
- *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
- *  for OBO_CEILING_DISJOINT_CODE). */
-const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
-const isScopeDenial = (err: unknown): err is { reason: string } =>
-  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
-
 export type TriggerAgentRunArgs = {
   runId: string;
   templateSlug: string; // used for run/template consistency check
