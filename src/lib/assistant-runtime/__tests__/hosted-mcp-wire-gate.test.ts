@@ -56,8 +56,13 @@
 // Counting is scoped to the RESERVED self-MCP reference: unrelated external MCP
 // references and legitimate non-catalog function tools are permitted.
 //
-// Prefix stability is a REPORTED diagnostic at the end of this file, not a
-// gated assertion (see its comment).
+//   7. PREFIX STABILITY: the cacheable projection of the outbound request is
+//      byte-identical across two identical turns (cinatra#2771 lever 2), and
+//      that projection COVERS THE DELEGATED BEARER (hashed, never printed) —
+//      minted by the real issuer at two instants 90 s apart. See its comment at
+//      the end of this file for what it does and does not claim.
+
+import { createHash } from "node:crypto";
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
@@ -854,27 +859,68 @@ describe("Gemini — conversation-only, with NO tools block on the wire", () => 
 });
 
 // ---------------------------------------------------------------------------
-// PREFIX STABILITY — a REPORTED diagnostic, NOT a gated assertion.
+// PREFIX STABILITY — now a GATED assertion (cinatra#2771 lever 2).
 //
-// The prompt-cache precondition (#2771 lever 2) is byte-equality of the
-// cacheable PREFIX across two identical-config turns. It is reported, never
-// gated: a log-only comparison must not be dressed up as a passing assertion,
-// and provider-side cache accounting cannot be established against a fake
-// endpoint. The projection is canonical and credential-free — headers'
-// Authorization / authorization_token redacted, conversation input and
-// turn/run ids excluded.
+// It shipped as a report because nothing yet HELD the property: the runtime
+// concatenated turn-varying fragments ahead of the stable prompt, and the
+// delegated MCP bearer inside the first tool changed its bytes every second, so
+// an equality assertion would only have recorded a known failure. #2771 fixes
+// both, so the property is now asserted here — on the REAL connector
+// serialization, through the real provider SDKs, at the `fetch` capture point.
+//
+// THE BEARER IS IN SCOPE (round item 4, 2026-08-17). This gate used to be BLIND
+// to the one value #2771 actually changed: `@/lib/chat-mcp-actor-token` was
+// stubbed to the constant `"chat-token"`, and the projection replaced every
+// Authorization header with `"[redacted]"`. Two turns therefore compared equal
+// no matter what the mint clock did, so a green assertion here said nothing
+// about the token fix. Both halves are closed below:
+//
+//   · the self-MCP fixture's Authorization is minted by the REAL issuer
+//     (`vi.importActual`, not the stub) at two instants 90 s apart — the exact
+//     spacing the issue measured as a cache miss;
+//   · the projection HASHES credential material instead of dropping it, so the
+//     bearer's bytes participate in the comparison while no credential can ever
+//     reach a log or a failure message.
+//
+// A negative control follows the positive case: two mints that STRADDLE a
+// bucket boundary must make the projection differ. Without it, "stable" could
+// still mean "the projection cannot see the token". The mint MATH itself stays
+// pinned where the round put it — `src/lib/__tests__/chat-mcp-actor-token.test.ts`
+// is the authority for `iat`/`exp`; this file only proves the value reaches the
+// wire and holds still there.
+//
+// WHAT IT STILL DOES NOT CLAIM. Byte-equality of the outbound prefix is the
+// PRECONDITION for provider prompt caching, not proof of it. Provider-side
+// cache accounting (`cached_input_tokens`) cannot be established against a fake
+// endpoint and needs a live measurement with a real key — tracked in #2847.
+//
+// The projection is deliberately LOCAL to this file and is NOT the host-side
+// `projectCacheablePrefix` that #2777 landed: that one reduces `LlmTool`
+// objects BEFORE the adapter runs, while everything here is the provider's own
+// serialized wire shape (`instructions`/`mcp_servers`/`tools` as the SDK
+// emitted them). Same idea, different subject; neither is a copy of the other.
 // ---------------------------------------------------------------------------
 
-function redactAuth(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactAuth);
+/**
+ * Replace credential material with a stable digest of itself.
+ *
+ * NOT redaction: a constant would make the comparison blind to exactly the
+ * value #2771 changes. A digest keeps the bearer's bytes load-bearing in the
+ * equality while keeping the credential out of any output.
+ */
+function digestAuth(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(digestAuth);
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       if (k === "Authorization" || k === "authorization" || k === "authorization_token") {
-        out[k] = "[redacted]";
+        out[k] =
+          typeof v === "string"
+            ? `sha256:${createHash("sha256").update(v).digest("hex")}`
+            : v;
         continue;
       }
-      out[k] = redactAuth(v);
+      out[k] = digestAuth(v);
     }
     return out;
   }
@@ -886,12 +932,47 @@ function cacheablePrefixProjection(body: Record<string, unknown>): string {
   return JSON.stringify({
     model: body.model ?? null,
     system: body.instructions ?? body.system ?? null,
-    tools: redactAuth(body.tools ?? null),
-    mcp_servers: redactAuth(body.mcp_servers ?? null),
+    tools: digestAuth(body.tools ?? null),
+    mcp_servers: digestAuth(body.mcp_servers ?? null),
   });
 }
 
-describe("prefix stability (REPORTED diagnostic — not a gate)", () => {
+/** The two mint instants: 90 s apart, inside ONE five-minute bucket. */
+const MINT_T0 = "2026-08-17T09:01:00Z";
+const MINT_T0_PLUS_90S = "2026-08-17T09:02:30Z";
+/** …and a pair that straddles a bucket boundary, for the negative control. */
+const MINT_BUCKET_END = "2026-08-17T09:04:59Z";
+const MINT_NEXT_BUCKET = "2026-08-17T09:05:01Z";
+
+/**
+ * Mint a REAL delegated chat bearer at a chosen instant.
+ *
+ * `vi.importActual` deliberately bypasses this file's constant-token stub — the
+ * stub keeps the OTHER cases free of a secret, and this one needs the real
+ * thing. The clock is faked only around the synchronous mint, so nothing in the
+ * turn (fetch, SSE, promises) ever runs on a fake timer.
+ */
+async function mintRealChatBearerAt(instant: string): Promise<string> {
+  const actual = await vi.importActual<typeof import("@/lib/chat-mcp-actor-token")>(
+    "@/lib/chat-mcp-actor-token",
+  );
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date(instant));
+    return `Bearer ${actual.issueChatMcpActorToken({
+      delegation: "chat",
+      userId: "u-wire-gate",
+      orgId: "org-wire-gate",
+      platformRole: "member",
+    })}`;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe("prefix stability (GATED — cinatra#2771 lever 2)", () => {
+  const BEFORE_AUTH_SECRET = process.env.BETTER_AUTH_SECRET;
+
   beforeEach(() => {
     state.provider = "openai";
     state.defaultModel = "gpt-5.5";
@@ -899,32 +980,61 @@ describe("prefix stability (REPORTED diagnostic — not a gate)", () => {
       createOpenAIProviderAdapter({ apiKey: "sk-wire-gate-test" }),
     );
     responder = () => openAiSse();
+    // The real issuer signs with this. A dev-only value, local to these cases.
+    process.env.BETTER_AUTH_SECRET = "test-secret-for-wire-gate-prefix";
   });
 
-  it("reports byte-equality of the cacheable projection across two identical turns", async () => {
-    const send = vi.fn();
-    await runAssistantTurn(
-      buildCinatraAssistantRuntimeConfig(),
-      turnArgs(send, surfaces()[0]),
-    );
-    const first = cacheablePrefixProjection(captured[0].body);
+  afterEach(() => {
+    if (BEFORE_AUTH_SECRET === undefined) delete process.env.BETTER_AUTH_SECRET;
+    else process.env.BETTER_AUTH_SECRET = BEFORE_AUTH_SECRET;
+  });
 
+  /** One turn, minting the self-MCP bearer for real at `instant`. */
+  async function projectionForTurnMintedAt(instant: string): Promise<string> {
+    state.selfMcpTool = {
+      ...selfMcpToolFixture(),
+      headers: { Authorization: await mintRealChatBearerAt(instant) },
+    };
     captured.length = 0;
     await runAssistantTurn(
       buildCinatraAssistantRuntimeConfig(),
-      turnArgs(send, surfaces()[0]),
+      turnArgs(vi.fn(), surfaces()[0]),
     );
-    const second = cacheablePrefixProjection(captured[0].body);
+    expect(captured.length, "no provider request reached the wire").toBeGreaterThan(0);
+    return cacheablePrefixProjection(captured[0].body);
+  }
 
-    // REPORT — deliberately not an equality assertion.
+  it("the cacheable projection is BYTE-IDENTICAL across two turns 90 s apart", async () => {
+    const first = await projectionForTurnMintedAt(MINT_T0);
+    const second = await projectionForTurnMintedAt(MINT_T0_PLUS_90S);
+
     console.info(
-      `[hosted-mcp wire gate] prefix-stability diagnostic: ` +
+      `[hosted-mcp wire gate] prefix stability: ` +
         `${first === second ? "STABLE" : "UNSTABLE"} ` +
         `(${first.length} vs ${second.length} bytes)`,
     );
-    // The only thing asserted is that the diagnostic actually ran on two real
-    // captured prefixes — never that they matched.
+    // The projection ran on two real captured prefixes...
     expect(first.length).toBeGreaterThan(0);
     expect(second.length).toBeGreaterThan(0);
+    // ...and they match, byte for byte — INCLUDING the delegated bearer, which
+    // is hashed into the projection rather than redacted out of it. A failure
+    // here names a turn-varying value that reached the request prefix; the
+    // whole catalog after it is re-billed on every turn until it is removed.
+    expect(second).toBe(first);
+  });
+
+  it("NEGATIVE CONTROL: a bearer minted in the next bucket moves the projection", async () => {
+    // Proves the assertion above is not passing because the projection cannot
+    // SEE the token — the exact blindness the 2026-08-17 round found. The two
+    // instants are 2 s apart but on either side of a bucket boundary, so the
+    // mint differs by design and the projection must say so.
+    const endOfBucket = await projectionForTurnMintedAt(MINT_BUCKET_END);
+    const nextBucket = await projectionForTurnMintedAt(MINT_NEXT_BUCKET);
+    expect(nextBucket).not.toBe(endOfBucket);
+    // …and the ONLY difference is the credential digest: everything else in the
+    // prefix — the system string and the whole tool block — is unchanged.
+    const stripDigests = (projection: string) =>
+      projection.replace(/sha256:[0-9a-f]{64}/g, "sha256:<digest>");
+    expect(stripDigests(nextBucket)).toBe(stripDigests(endOfBucket));
   });
 });

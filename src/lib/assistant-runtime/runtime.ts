@@ -107,6 +107,11 @@ import {
 } from "@/lib/execution/surface-execution-session";
 import { evaluateExecutionProvenance } from "@cinatra-ai/llm/execution-plane";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
+// cinatra#2771 lever 2 — the stable-head-first system-string composer.
+import {
+  composeChatSystemPrompt,
+  type ChatSystemPromptFragments,
+} from "./chat-system-prefix";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 // The scripted widget turn's REAL self-MCP dispatcher (cinatra#2683). Imported
 // unconditionally (a module, not a side effect); CONSTRUCTED only inside the
@@ -459,7 +464,32 @@ async function buildUserContext(userId?: string): Promise<string> {
 // the namespace here lets the LLM emit the correct `@<vendor>/<slug>` package
 // name from the first scaffold, instead of pattern-matching off the shipped
 // Cinatra examples.
-function buildInstanceContext(): string {
+// SPLIT INTO IDENTITY + FREEZE STATE (cinatra#2771, codex round-2 finding 2).
+//
+// These two things have DIFFERENT LIFETIMES and used to share one sentence:
+//
+//   · the namespace and its substitution rule are fixed for the deployment —
+//     `instanceNamespace` is assigned once and the rest of the text is a
+//     constant template around it, so it belongs in the cacheable head;
+//   · the FREEZE NOTE is `firstPublishedAt !== null`, and the tool that sets
+//     `firstPublishedAt` is `agent_source_publish` — a chat tool. A user can
+//     publish their first package IN THE MIDDLE OF A CONVERSATION, and the next
+//     turn of that same conversation then renders a longer instance sentence.
+//
+// While they were one string, "the stable head is byte-identical across turns"
+// was false on exactly that transition, and nothing caught it: the composer
+// test only mutated already-volatile keys and the runtime test stubs
+// `readInstanceIdentity` to null so neither half was ever exercised. Splitting
+// them makes the classification honest — the identity half really is stable,
+// and the freeze half is declared volatile and composed in the tail.
+//
+// ONE READ, TWO FRAGMENTS: the identity store is read once and both strings are
+// derived from that single observation, so the two fragments can never disagree
+// about the namespace they describe.
+function buildInstanceContext(): {
+  identity: string;
+  freezeState: string;
+} {
   let identity: ReturnType<typeof readInstanceIdentity> | null = null;
   try {
     identity = readInstanceIdentity();
@@ -467,22 +497,26 @@ function buildInstanceContext(): string {
     /* identity store may be uninitialised in early boot — silently skip */
   }
   if (!identity || !identity.instanceNamespace) {
-    return "";
+    return { identity: "", freezeState: "" };
   }
   const ns = identity.instanceNamespace;
   const frozen = identity.firstPublishedAt !== null;
-  const frozenNote = frozen
-    ? ` This namespace is FROZEN (first package already published) and cannot be renamed; never propose changing it.`
-    : "";
-  return (
-    `\n\nInstance vendor namespace: "${ns}".${frozenNote} ` +
-    `When SKILL.md templates reference \`<vendor>\` in a package name (e.g. \`@<vendor>/<slug>\`), always substitute ` +
-    `\`<vendor>\` with "${ns}". Every package name MUST be \`@${ns}/<slug>\` — never \`@cinatra/<slug>\` unless the ` +
-    `operator's namespace literally happens to be "cinatra". The disk layout is currently fixed to ` +
-    `\`extensions/cinatra-ai/<packageSlug>/...\` regardless of vendor. The server-side write ` +
-    `handler normalizes \`package.json#name\` to "@${ns}/<packageSlug>" defensively, but you should still emit the right ` +
-    `value the first time.`
-  );
+  return {
+    identity:
+      `\n\nInstance vendor namespace: "${ns}". ` +
+      `When SKILL.md templates reference \`<vendor>\` in a package name (e.g. \`@<vendor>/<slug>\`), always substitute ` +
+      `\`<vendor>\` with "${ns}". Every package name MUST be \`@${ns}/<slug>\` — never \`@cinatra/<slug>\` unless the ` +
+      `operator's namespace literally happens to be "cinatra". The disk layout is currently fixed to ` +
+      `\`extensions/cinatra-ai/<packageSlug>/...\` regardless of vendor. The server-side write ` +
+      `handler normalizes \`package.json#name\` to "@${ns}/<packageSlug>" defensively, but you should still emit the right ` +
+      `value the first time.`,
+    // Its own sentence, and self-contained: it names the namespace again so it
+    // still reads correctly at its new position in the volatile tail, far from
+    // the identity fragment it used to be spliced into.
+    freezeState: frozen
+      ? `\n\nThe vendor namespace "${ns}" is FROZEN (first package already published) and cannot be renamed; never propose changing it.`
+      : "",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1281,7 +1315,10 @@ export async function runAssistantTurn(
   // it stops emitting hardcoded `@cinatra/<slug>` package names on non-cinatra
   // deployments. The SKILL.md uses `@<vendor>/<slug>` as a placeholder;
   // this context substitutes the real vendor.
-  const instanceContext = buildInstanceContext();
+  // Two fragments from one read: stable identity for the cacheable head, and
+  // the MUTABLE freeze state for the volatile tail (codex round-2, finding 2).
+  const { identity: instanceContext, freezeState: instanceFreezeState } =
+    buildInstanceContext();
 
   const extensionConfirmationPolicy = buildExtensionImplementationConfirmationPolicy();
 
@@ -1600,6 +1637,32 @@ export async function runAssistantTurn(
     noProgressAbort.abort(noProgressAbortReason);
   };
 
+  // cinatra#2771 lever 2 — the turn's system fragments, named. Collecting them
+  // into one typed record is what lets the composer own the ORDER (stable head
+  // first, volatile tail last) and lets a unit test assert byte-stability on
+  // the exact same structure the turn builds.
+  const chatSystemFragments: ChatSystemPromptFragments = {
+    systemPrompt,
+    // The provider's skill contribution: an availability cue (Anthropic
+    // container listing; empty for OpenAI shell delivery, which must not be
+    // told about a read_skill tool) or, on an inline provider, the expanded
+    // skill bodies.
+    skillSystemContext,
+    instanceContext,
+    extensionConfirmationPolicy,
+    userContext,
+    // Volatile: `agent_source_publish` can flip this mid-conversation, so it
+    // must not sit in the head (codex round-2, finding 2). It follows
+    // `userContext` because it is policy-bearing text and policy is read after
+    // user-controlled content, never before it (finding 1).
+    instanceFreezeState,
+    pendingConfirmationContext,
+    explicitDispatchDirective,
+    // AC#5: the conversation-only degrade notice (empty for tool-capable
+    // providers).
+    conversationOnlyNotice,
+  };
+
   try {
     await stream({
       provider: adapter.provider,
@@ -1608,23 +1671,12 @@ export async function runAssistantTurn(
       // An explicit `model` pref overrides the connection default; absent, the
       // field is omitted so the call is byte-identical to the legacy chat.
       ...(modelPrefs.model ? { model: modelPrefs.model } : {}),
-      system:
-        explicitDispatchDirective +
-        systemPrompt +
-        // The provider's skill contribution: an availability cue (Anthropic
-        // container listing; empty for OpenAI shell delivery, which must not be
-        // told about a read_skill tool) or, on an inline provider, the expanded
-        // skill bodies. Separated explicitly — the fragment carries no leading
-        // blank line of its own, and a trimmed/fallback persona would otherwise
-        // run straight into its first heading.
-        (skillSystemContext ? `\n\n${skillSystemContext}` : "") +
-        userContext +
-        instanceContext +
-        extensionConfirmationPolicy +
-        pendingConfirmationContext +
-        // AC#5: the conversation-only degrade notice (empty for tool-capable
-        // providers, so their system string is byte-identical to before).
-        conversationOnlyNotice,
+      // cinatra#2771 lever 2 — composed STABLE HEAD FIRST. The same eight
+      // fragments as before, re-ordered so every one that can differ between
+      // two turns of a conversation lands after every one that cannot. The
+      // composer is pure, so the byte-stability property is unit-asserted
+      // rather than inferred (see `chat-system-prefix.ts`).
+      system: composeChatSystemPrompt(chatSystemFragments),
       messages: messages.map((m) => ({
         role: m.role,
         content: m.content,
