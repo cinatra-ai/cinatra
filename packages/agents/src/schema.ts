@@ -956,6 +956,23 @@ export const runRejectedRecommendations = cinatraSchema.table("run_rejected_reco
   runIdx:       index("run_rejected_recommendations_run_idx").on(t.runId),
 }));
 
+/** THE RUN-LEVEL SKIP RECORD (cinatra#2794 S9b) — a skip is a decision about the
+ * RUN, so it is keyed by run_id ALONE. Replaces the reserved-skill-id marker
+ * (`__run_level_skip__`) that had to squat in run_rejected_recommendations
+ * because that table is keyed (run_id, skill_id): skill ids are caller-provided
+ * text, so the reserved id was collidable, and the efficacy reader's filter for
+ * it silently dropped a genuine rejected skill. candidate_count carries the fact
+ * the sentinel destroyed — how many per-skill efficacy rows rode with the skip
+ * (0 = drift left nothing to name). FK-less, matching both siblings above. */
+export const runRecommendationSkips = cinatraSchema.table("run_recommendation_skips", {
+  runId:          text("run_id").primaryKey(),
+  skippedBy:      text("skipped_by").notNull(),
+  candidateCount: integer("candidate_count").notNull().default(0),
+  skippedAt:      timestamp("skipped_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  skippedAtIdx: index("run_recommendation_skips_skipped_at_idx").on(t.skippedAt),
+}));
+
 // ---------------------------------------------------------------------------
 // agent_run_messages — per-run LLM conversation thread checkpoint
 // ---------------------------------------------------------------------------
