@@ -929,6 +929,169 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
     expect(swept.holdNotificationsCleared).toBe(0);
   });
 
+  // -------------------------------------------------------------------------
+  // FAIR SELECTION (cinatra#2838, Codex convergence round 4). The drain is
+  // BOUNDED — at most `limit` obligations per pass — and a dispatch that fails
+  // leaves its obligation standing. Unordered, those two facts multiply into a
+  // starvation bound rather than a work bound: `limit` deterministically-failing
+  // obligations (a recipient that no longer exists, a park whose run row was
+  // hard-deleted) hold the page on EVERY pass, and everything queued behind them
+  // is never attempted — not delayed, never attempted.
+  //
+  // Ordering is a property of the database, not of a mock (the same reason the
+  // TOCTOU cases above use two real sessions), so these run against the real
+  // table, with the parks' `created_at` written to fixed, distinct instants so the
+  // model has ONE possible claim order.
+  // -------------------------------------------------------------------------
+
+  /** Retire every obligation this file's earlier cases may have left standing, so
+   * a fairness model is exactly the rows it seeds — nothing older sorts ahead. */
+  async function clearOutstandingObligations() {
+    await withClient((c) =>
+      c.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+            SET hold_notification = 'cleared' WHERE hold_notification = 'live'`,
+      ),
+    );
+  }
+
+  /** Pin the park's age, so "oldest first" is decided by the test, not the clock. */
+  async function ageParkBy(parkId: string, minutes: number) {
+    await withClient((c) =>
+      c.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+            SET created_at = now() - ($2 || ' minutes')::interval WHERE id = $1`,
+        [parkId, String(minutes)],
+      ),
+    );
+  }
+
+  /** The retry cursor, read raw: null until the drain has claimed the obligation. */
+  async function attemptedAt(parkId: string): Promise<Date | null> {
+    return withClient(async (c) => {
+      const { rows } = await c.query(
+        `SELECT hold_notify_attempted_at FROM "${q(TEST_SCHEMA)}"."lifecycle_continuation_park" WHERE id = $1`,
+        [parkId],
+      );
+      return (rows[0]?.hold_notify_attempted_at ?? null) as Date | null;
+    });
+  }
+
+  /**
+   * The production host writer, with the clear POISONED for a named set of parks
+   * and RECORDING every park it was asked to clear, in order. A poisoned park
+   * throws — the same shape as a notifier that is up but can never satisfy this
+   * particular row — so `dispatchRecommendationHoldCleared` returns false and the
+   * obligation stands. Every other park clears for real, through the real service.
+   */
+  async function poisonedNotifier(poison: ReadonlySet<string>, seen: string[]) {
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    const real = hostNotifier.runWaitNotifier;
+    setRunWaitNotifier({
+      ...real,
+      onClearRecommendationHold: async (input: { runId: string; parkId: string }) => {
+        seen.push(input.parkId);
+        if (poison.has(input.parkId)) throw new Error("notifier cannot satisfy this row");
+        return (await real.onClearRecommendationHold?.(input)) ?? false;
+      },
+    } as RunWaitNotifier);
+  }
+
+  it("A PAGE OF POISON DELAYS, IT DOES NOT STARVE: the row behind it dispatches on the next sweep", async () => {
+    await clearOutstandingObligations();
+    const LIMIT = 2; // == the number of poison rows, so they FILL a page exactly.
+
+    // Two obligations whose clear can never commit, both OLDER than the healthy
+    // one behind them — so an unordered page picks them, every time, forever.
+    const poisonA = await heldRun();
+    const poisonB = await heldRun();
+    const healthy = await heldRun();
+    await ageParkBy(poisonA.parkId, 30);
+    await ageParkBy(poisonB.parkId, 20);
+    await ageParkBy(healthy.parkId, 10);
+
+    const seen: string[] = [];
+    await poisonedNotifier(new Set([poisonA.parkId, poisonB.parkId]), seen);
+
+    // SWEEP 1 — the page is the two poison rows, and it retires nothing.
+    const first = await parkStore.sweepParks({
+      releasedParkIds: [poisonA.parkId, poisonB.parkId, healthy.parkId],
+      limit: LIMIT,
+    });
+    expect(first.released).toBe(3);
+    expect(first.holdNotificationsCleared).toBe(0);
+    // The PAGE is what the claim decides; the order the two dispatches happen in
+    // inside one pass is not a property (both happen before the pass returns).
+    expect([...seen].sort()).toEqual([poisonA.parkId, poisonB.parkId].sort());
+    // The healthy obligation was not even ATTEMPTED — its cursor is untouched.
+    expect(await attemptedAt(healthy.parkId)).toBeNull();
+    expect(await parkState(healthy.parkId)).toMatchObject({ hold_notification: "live" });
+    // ...while both poison rows now carry a cursor: they have been to the front.
+    expect(await attemptedAt(poisonA.parkId)).not.toBeNull();
+    expect(await attemptedAt(poisonB.parkId)).not.toBeNull();
+
+    // SWEEP 2 — THE PIN. The poison rows have rotated behind the one obligation
+    // that has never been attempted, so the healthy row is served and its bell
+    // goes away. Under the unordered page this sweep dispatched the same two
+    // poison rows again, and every sweep after it would have too.
+    seen.length = 0;
+    const second = await parkStore.sweepParks({ limit: LIMIT });
+    expect(seen).toContain(healthy.parkId);
+    expect(second.holdNotificationsCleared).toBe(1);
+    expect(await parkState(healthy.parkId)).toMatchObject({ hold_notification: "cleared" });
+    expect(await notificationRows(healthy.runId)).toHaveLength(0);
+
+    // NOTHING WAS DROPPED to buy that: both poison obligations are still standing,
+    // still `live`, with their bells intact — and they are RETRIED, not abandoned,
+    // the moment the notifier can satisfy them.
+    expect(await parkState(poisonA.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await parkState(poisonB.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(poisonA.runId)).toHaveLength(1);
+    expect(await notificationRows(poisonB.runId)).toHaveLength(1);
+
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier(hostNotifier.runWaitNotifier satisfies RunWaitNotifier);
+    const third = await parkStore.sweepParks({ limit: LIMIT });
+    expect(third.holdNotificationsCleared).toBe(2);
+    expect(await parkState(poisonA.parkId)).toMatchObject({ hold_notification: "cleared" });
+    expect(await parkState(poisonB.parkId)).toMatchObject({ hold_notification: "cleared" });
+    expect(await notificationRows(poisonA.runId)).toHaveLength(0);
+    expect(await notificationRows(poisonB.runId)).toHaveLength(0);
+  });
+
+  it("the claim order is a ROUND ROBIN over the outstanding obligations, oldest cursor first", async () => {
+    await clearOutstandingObligations();
+
+    // Three obligations, none of which can be satisfied — so none is ever retired
+    // and the queue's ORDER is the only thing that moves. ONE ROW PER PAGE, because
+    // the claim's guarantee is about which obligations a page CONTAINS (the whole
+    // page is dispatched in the same pass, so the order inside it is not a
+    // property anyone should depend on) — at limit 1, the page IS the order.
+    const first = await heldRun();
+    const second = await heldRun();
+    const third = await heldRun();
+    await ageParkBy(first.parkId, 30);
+    await ageParkBy(second.parkId, 20);
+    await ageParkBy(third.parkId, 10);
+
+    const seen: string[] = [];
+    await poisonedNotifier(new Set([first.parkId, second.parkId, third.parkId]), seen);
+
+    await parkStore.sweepParks({
+      releasedParkIds: [first.parkId, second.parkId, third.parkId],
+      limit: 1,
+    });
+    for (let pass = 0; pass < 3; pass++) await parkStore.sweepParks({ limit: 1 });
+
+    // Oldest-untried first (creation order), then the same cycle again as each
+    // failed attempt sends its row to the back — no row is served twice before
+    // every other row has been served once.
+    expect(seen).toEqual([first.parkId, second.parkId, third.parkId, first.parkId]);
+    expect(await parkState(first.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await parkState(second.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await parkState(third.parkId)).toMatchObject({ hold_notification: "live" });
+  });
+
   it("a forced strand REFUSES to abandon an outstanding obligation", async () => {
     // The park row is the only place the obligation lives. Deleting it while a
     // clear is owed would strand the notification with nothing left to re-drive

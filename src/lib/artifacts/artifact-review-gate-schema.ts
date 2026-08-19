@@ -457,6 +457,22 @@ END $$`,
   ON "${q}"."lifecycle_continuation_park" (hold_notification, status)
   WHERE hold_notification = 'live'`,
     },
+    // The drain's RETRY CURSOR (cinatra#2838). The obligation drain used to take an
+    // UNORDERED page of `limit` live obligations and merely SKIP the ones whose
+    // dispatch failed, leaving them exactly as it found them — so `limit`
+    // permanently-failing obligations could hold the page on every pass and
+    // everything queued behind them was never attempted at all. The drain now
+    // CLAIMS its page ordered by `coalesce(hold_notify_attempted_at, created_at)`
+    // ASC and stamps this column in the same statement, so an attempted obligation
+    // rotates to the back of the queue before its dispatch is even made: poison
+    // delays the rows behind it by a pass, and can never starve them. NULLABLE with
+    // no default on purpose — null reads as "never attempted", ordered by the
+    // park's creation (how long it has actually waited), and a null default keeps
+    // the ADD COLUMN catalog-only on a deployed table.
+    {
+      text: `ALTER TABLE "${q}"."lifecycle_continuation_park"
+  ADD COLUMN IF NOT EXISTS hold_notify_attempted_at timestamptz`,
+    },
   ];
 }
 

@@ -4,8 +4,12 @@
 // already route-reachable src/lib/artifacts/artifact-review-gate-schema.ts, spread
 // into buildCreateStoreSchemaQueries), shipped in the SAME PR.
 //
-// ONE CHANGE, PURELY ADDITIVE: `lifecycle_continuation_park.hold_notification`,
-// a text column defaulting to 'none', plus its value CHECK and a PARTIAL index.
+// TWO CHANGES, BOTH PURELY ADDITIVE, on `lifecycle_continuation_park`:
+// `hold_notification`, a text column defaulting to 'none', plus its value CHECK
+// and a PARTIAL index; and `hold_notify_attempted_at`, the drain's nullable retry
+// cursor. The second column ships in the same (still unmerged) migration as the
+// first because it is the same obligation's machinery — it has no meaning without
+// `hold_notification`, and no deployed database has ever seen either.
 //
 // WHY THE COLUMN EXISTS. A run-start recommendation hold mints a durable "needs
 // your input" notification for the run's initiator, and that row must disappear
@@ -28,12 +32,32 @@
 //   clear  — the sweeper deletes the row and retires this column to 'cleared'
 //            ONLY on an awaited, successful delete.
 //
+// WHY THE SECOND COLUMN EXISTS (cinatra#2838). The sweeper's drain takes a page of
+// at most `limit` live obligations per pass, and a dispatch that fails leaves its
+// obligation standing — by design. Unordered, that bound is a STARVATION bound: a
+// deterministic poison (a recipient that no longer exists, a park whose run row was
+// hard-deleted) fills the page on every single pass, and an obligation queued
+// behind it is never attempted at all — not delayed, never attempted. So the drain
+// now CLAIMS its page ordered by `coalesce(hold_notify_attempted_at, created_at)`
+// ASC and stamps this column in the same statement, which rotates a claimed row to
+// the back of the queue before its dispatch is even made. Every row's cursor
+// advances only when that row is served, so every row reaches the front: poison
+// delays, it cannot starve. NULLABLE with NO DEFAULT: null reads as "never
+// attempted", which the ordering resolves to the park's creation time — how long
+// that obligation has genuinely waited — and a null default keeps this ADD COLUMN
+// catalog-only. Stamping at CLAIM rather than at failure is deliberate: a sweeper
+// that dies mid-dispatch must not leave its row sorting first again forever.
+//
 // "Park no longer `parked` AND hold_notification = 'live'" is thus a DURABLE,
 // RETRYABLE clear obligation: a notifier failure or a dead process leaves work for
 // the next sweep rather than a bell pointing forever at a card nobody can act on.
 //
-// NO DATA MOVES AND NOTHING IS RE-INTERPRETED. The column is new, so every
-// pre-existing park row takes the 'none' default — which is the truthful value for
+// NO DATA MOVES AND NOTHING IS RE-INTERPRETED. Both columns are new, so every
+// pre-existing park row takes 'none' for the first and null for the second (which
+// the drain reads as "never attempted" and orders by `created_at`; every such park
+// predates the fenced write path and owes nothing anyway, so it is never selected
+// at all). For `hold_notification`, every pre-existing park row takes the 'none'
+// default — which is the truthful value for
 // them: no park that predates this migration ever had a notification written under
 // the fenced write path, so none owes a clear. There is no backfill to get wrong
 // and no emptiness tripwire to need (contrast core__0092, which changed a column's
@@ -41,8 +65,11 @@
 // the ADD COLUMN does not rewrite the table.
 //
 // MARKED destructive:true BECAUSE THE ARTIFACT IS REQUIRED, NOT BECAUSE DATA IS AT
-// RISK. The schema-migration gate classifies a NOT NULL column added to a deployed
-// table, and an ADD CONSTRAINT CHECK over existing rows, as user-land-affecting —
+// RISK — and it is `hold_notification` that earns the mark, not the nullable cursor
+// beside it (a nullable, defaultless ADD COLUMN is the gate's additive class and
+// takes no scan). The schema-migration gate classifies a NOT NULL column added to a
+// deployed table, and an ADD CONSTRAINT CHECK over existing rows, as
+// user-land-affecting —
 // and it is right to: both take an ACCESS EXCLUSIVE lock on
 // lifecycle_continuation_park, and the CHECK validates with a table scan. What it
 // cannot do is FAIL: the only value any pre-existing row can hold is the 'none'
@@ -52,7 +79,7 @@
 // null obligation has no meaning here — every park either owes a clear or does not,
 // and the sweeper's drain predicate would have to invent an answer for null.
 //
-// IDEMPOTENT: ADD COLUMN IF NOT EXISTS, an ADD CONSTRAINT wrapped in the
+// IDEMPOTENT: ADD COLUMN IF NOT EXISTS (twice), an ADD CONSTRAINT wrapped in the
 // duplicate_object guard (ADD CONSTRAINT has no IF NOT EXISTS), and CREATE INDEX
 // IF NOT EXISTS. Statement for statement, in the same order, as the bootstrap
 // twin. A re-run over an already-migrated schema is a no-op. Unqualified names
@@ -65,7 +92,7 @@
 // train). migrations/** is HIGH-RISK: owner approval required; the lane never
 // merges.
 //
-// DOWN. Drops the index, the constraint and the column. HONEST COST: an
+// DOWN. Drops the index, the constraint and both columns. HONEST COST: an
 // outstanding clear obligation recorded at the moment of the down is lost, so a
 // hold notification whose park had already gone terminal but had not yet been
 // cleared would survive as a stale row (its park is terminal, so nothing re-drives
@@ -88,6 +115,9 @@ export const holdNotificationStateDdlSql = `
   CREATE INDEX IF NOT EXISTS lifecycle_continuation_park_hold_notify_idx
     ON lifecycle_continuation_park (hold_notification, status)
     WHERE hold_notification = 'live';
+
+  ALTER TABLE lifecycle_continuation_park
+    ADD COLUMN IF NOT EXISTS hold_notify_attempted_at timestamptz;
 `;
 
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
@@ -98,6 +128,8 @@ export function up(pgm) {
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function down(pgm) {
   pgm.sql(`
+    ALTER TABLE lifecycle_continuation_park
+      DROP COLUMN IF EXISTS hold_notify_attempted_at;
     DROP INDEX IF EXISTS lifecycle_continuation_park_hold_notify_idx;
     ALTER TABLE lifecycle_continuation_park
       DROP CONSTRAINT IF EXISTS lifecycle_continuation_park_hold_notification_chk;

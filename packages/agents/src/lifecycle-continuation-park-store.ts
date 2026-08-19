@@ -222,6 +222,10 @@ export interface SweepParksResult {
  *     round-2 fix delivered is unchanged in behaviour; and
  *   - anything that goes wrong leaves the obligation standing, and EVERY later
  *     sweep re-drains it. Delete-by-key is idempotent, so over-retrying is free.
+ *     That second claim is only true of a FAIR page (cinatra#2838): the drain is
+ *     bounded per pass, so an unordered page let `limit` permanently-failing
+ *     obligations hold it forever while the ones behind them were never attempted.
+ *     The page is claimed oldest-retry-cursor-first — see `drainHoldNotifications`.
  *
  * BOTH arms are covered — a decision-resolved release and a TTL fail-close alike
  * end the human's ability to act — and so is a park some OTHER sweep transitioned,
@@ -299,6 +303,48 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  * and index-backed by the partial `…_hold_notify_idx` so the scan sees only parks
  * that actually owe something.
  *
+ * FAIR SELECTION, OR THE BOUND IS A STARVATION BOUND (Codex convergence round 4).
+ * The page used to be an UNORDERED `limit`, and a failed dispatch was simply
+ * skipped with the row left exactly as the scan found it. So `limit` obligations
+ * whose dispatch always fails — a notification whose recipient no longer exists, a
+ * park whose run row was hard-deleted, any deterministic poison — could occupy the
+ * page on EVERY pass, and every obligation behind them was never attempted at all.
+ * Not delayed: never attempted. "Every later sweep re-drains every outstanding
+ * obligation" was false for anything queued behind the poison.
+ *
+ * The page is now a CLAIM, ordered by a retry cursor the claim itself advances:
+ *
+ *   ORDER BY coalesce(hold_notify_attempted_at, created_at) ASC, id ASC
+ *
+ * — least-recently-touched first, where a never-attempted obligation is ordered by
+ * when it was created (the truthful reading of a null cursor: it has waited since
+ * the park was written). Claiming STAMPS `hold_notify_attempted_at = now()` on the
+ * page in the same statement that selects it, so an attempted row goes to the BACK
+ * of the queue before its dispatch is even made. A poison page can therefore delay
+ * the obligations behind it by one pass — never starve them: the cursor of every
+ * row advances only when that row is served, so each one reaches the front.
+ *
+ * STAMPED AT CLAIM, NOT AT FAILURE. The weaker shape — bump only when the dispatch
+ * comes back false — leaves the same hole one level down: a sweeper that DIES
+ * mid-dispatch (or a dispatch that hangs past the loop's lifetime) never records
+ * the attempt, so the row it was holding sorts first again on the next pass, and a
+ * poison that kills sweepers keeps its place forever. Stamping at claim costs one
+ * bounded UPDATE of rows we are about to dispatch for anyway, and makes the
+ * rotation independent of how the attempt ends.
+ *
+ * NOTHING IS DROPPED. The stamp moves a cursor; it does not retire an obligation.
+ * A failed dispatch leaves the row `live` and it is re-drained on a later pass,
+ * exactly as before — the only change is WHERE in the queue it comes back.
+ *
+ * FOR UPDATE SKIP LOCKED because sweeps genuinely overlap: the ~60s
+ * gate-maintenance loop (`releaseResolvedAutoGateParks`) is not the only driver —
+ * `releaseRecommendationParkForRun` sweeps synchronously on a human's confirm/skip,
+ * and a deployment runs more than one host. Correctness never depended on it (the
+ * delete is idempotent and the ack is a CAS off `'live'`, so a doubly-claimed
+ * obligation is dispatched twice and retired once), but without it two concurrent
+ * sweeps claim the SAME page and the second does no useful work. With it, the
+ * second sweeper skips the locked page and drains the next one.
+ *
  * DELETE-THEN-ACK, never the reverse. The ack is a CAS off `'live'`, so two sweeps
  * racing the same park both delete (idempotent) and exactly one acks. Acking first
  * would be the one ordering that can lose an obligation: a crash between the ack
@@ -306,11 +352,11 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  * standing, and nothing would ever look at it again.
  */
 async function drainHoldNotifications(limit: number): Promise<number> {
-  const owing = await db
-    .select({
-      id: lifecycleContinuationPark.id,
-      runId: lifecycleContinuationPark.runId,
-    })
+  // The claim page: the `limit` least-recently-attempted live obligations, locked
+  // against a concurrent sweeper. A bare UPDATE has no ORDER BY/LIMIT, so the page
+  // is chosen by the subquery and the UPDATE stamps exactly what it returns.
+  const claimIds = db
+    .select({ id: lifecycleContinuationPark.id })
     .from(lifecycleContinuationPark)
     .where(
       and(
@@ -319,7 +365,25 @@ async function drainHoldNotifications(limit: number): Promise<number> {
         eq(lifecycleContinuationPark.checkpoint, RECOMMENDATION_HOLD_CHECKPOINT),
       ),
     )
-    .limit(limit);
+    .orderBy(
+      sql`coalesce(${lifecycleContinuationPark.holdNotifyAttemptedAt}, ${lifecycleContinuationPark.createdAt}) asc`,
+      lifecycleContinuationPark.id,
+    )
+    .limit(limit)
+    .for("update", { skipLocked: true });
+
+  // RETURNING has no defined order, and none is needed: WHICH obligations make up
+  // the page is the fairness property, and every row in the page is dispatched in
+  // this same pass. The order WITHIN a page changes nothing about which
+  // obligations get a turn.
+  const owing = await db
+    .update(lifecycleContinuationPark)
+    .set({ holdNotifyAttemptedAt: sql`now()` })
+    .where(inArray(lifecycleContinuationPark.id, claimIds))
+    .returning({
+      id: lifecycleContinuationPark.id,
+      runId: lifecycleContinuationPark.runId,
+    });
 
   let cleared = 0;
   // Sequential: the set is bounded by `limit`, each dispatch is a swallowed
@@ -330,7 +394,7 @@ async function drainHoldNotifications(limit: number): Promise<number> {
       runId: park.runId,
       parkId: park.id,
     });
-    if (!committed) continue; // obligation stands; the next sweep retries it.
+    if (!committed) continue; // obligation stands, cursor moved; a later sweep retries it.
     const acked = await db
       .update(lifecycleContinuationPark)
       .set({ holdNotification: HOLD_NOTIFICATION_CLEARED })

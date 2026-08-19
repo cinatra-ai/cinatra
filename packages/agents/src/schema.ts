@@ -708,6 +708,14 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
   // insert was attempted — and "terminal park still live" is a durable, retryable
   // clear obligation rather than a lost best-effort call.
   holdNotification:   text("hold_notification").notNull().default("none"),
+  // cinatra#2838 — the drain's RETRY CURSOR. Null until the obligation has been
+  // claimed for a dispatch; stamped `now()` by every claim. The drain orders by
+  // `coalesce(hold_notify_attempted_at, created_at)` ASC, so a claimed row rotates
+  // to the back of the queue and a page of permanently-failing obligations can
+  // delay the ones behind it by a pass but can never starve them. Null is not a
+  // missing value here — it is "never attempted", ordered by when the park was
+  // written, which is exactly how long that obligation has been waiting.
+  holdNotifyAttemptedAt: timestamp("hold_notify_attempted_at", { withTimezone: true }),
   ttlExpiresAt:       timestamp("ttl_expires_at", { withTimezone: true }).notNull(),
   createdAt:          timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   resolvedAt:         timestamp("resolved_at", { withTimezone: true }),
