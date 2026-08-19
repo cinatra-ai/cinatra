@@ -119,10 +119,10 @@ async function main() {
     // The SHIPPED ref codec — the same one the emission path mints with.
     const st = loadState();
     const { encodeLifecycleGateRef } = await import("@/lib/lifecycle/lifecycle-card-ref");
-    const ref = encodeLifecycleGateRef({
-      runId: st[`runId_${slot}`],
-      reviewTaskId: st[`reviewTaskId_${slot}`],
-    });
+    const runId = st[`runId_${slot}`];
+    const reviewTaskId = st[`reviewTaskId_${slot}`];
+    if (!runId || !reviewTaskId) throw new Error(`REF: missing recorded state for slot ${slot}`);
+    const ref = encodeLifecycleGateRef({ runId, reviewTaskId });
     saveState({ [`ref_${slot}`]: ref });
     say("REF", { slot, refLength: ref.length });
   }
