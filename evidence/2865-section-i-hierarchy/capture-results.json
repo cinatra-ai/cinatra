@@ -1,0 +1,483 @@
+{
+ "$comment": [
+  "The machine record beside the pixels. NOTE ON ORDER: from the B3 round on, this",
+  "recorder takes the PICTURE FIRST and counts SECOND, because the settled decision bar is replaced by the",
+  "card's own authoritative re-resolve within about a second - so counts taken before the shot could describe",
+  "a state the picture no longer showed. The first B3 attempt hit exactly that and is kept as B3b."
+ ],
+ "results": [
+  {
+   "cell": "B1__review-card__chat_thread__pending",
+   "requestedPath": "/chat/cinatra-ai/cinatra-assistant/section-i-hierarchy",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-hierarchy",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "div.relative.flex.min-h-0.flex-1.flex-col:has([data-conversation-list]):has([data-conformance-id=\"chat-composer-primary\"])",
+   "pixels": {
+    "width": 1944,
+    "height": 2872
+   },
+   "sha256": "a33261160cdbaccb9e0e8f5e6cde63cd89e3297fa6f28adf73d9b4a25366578c",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"focus-review-composer\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "chips": [],
+   "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nreplace\nPress a suggestion to accept it, again to dismiss it, again to clear the mark. Nothing is recorded until you approve or reject below.\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove",
+   "pageErrors": []
+  },
+  {
+   "cell": "B2__review-card__chat_thread__pending-dark",
+   "requestedPath": "/chat/cinatra-ai/cinatra-assistant/section-i-dark-reading",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-dark-reading",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "div.relative.flex.min-h-0.flex-1.flex-col:has([data-conversation-list]):has([data-conformance-id=\"chat-composer-primary\"])",
+   "themeReadback": {
+    "htmlClass": [
+     "dark"
+    ],
+    "colorScheme": "dark",
+    "bodyBackground": "lab(1.76974 1.32743 -9.28855)"
+   },
+   "pixels": {
+    "width": 1944,
+    "height": 2872
+   },
+   "sha256": "0ea7030485903fc888d1385a6c176516b59e66e1b8f4a8cdd776bd13cab7506e",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"focus-review-composer\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "chips": [],
+   "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nreplace\nPress a suggestion to accept it, again to dismiss it, again to clear the mark. Nothing is recorded until you approve or reject below.\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove",
+   "pageErrors": []
+  },
+  {
+   "cell": "B3__review-card__chat_thread__decided-note-disabled",
+   "requestedPath": "/chat/cinatra-ai/cinatra-assistant/section-i-settled-two",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-settled-two",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"review-gate-card\"]",
+   "pixels": {
+    "width": 1472,
+    "height": 1652
+   },
+   "sha256": "b977927b57636350448555073257db05700a53072a7f806688b07eaf5b9d23ff",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]:disabled",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-blocked\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "chips": [],
+   "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nreplace\nPress a suggestion to accept it, again to dismiss it, again to clear the mark. Nothing is recorded until you approve or reject below.\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nApproved. The gate is resolved and the run has been released to continue.",
+   "pageErrors": []
+  },
+  {
+   "cell": "B3b__review-card__chat_thread__decided-blocked-after-reresolve",
+   "requestedPath": "/chat/cinatra-ai/cinatra-assistant/section-i-settled",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-settled",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"review-gate-card\"]",
+   "pixels": {
+    "width": 1472,
+    "height": 618
+   },
+   "sha256": "451c1ac16b9da994acf56b19ec72989cba50718656903266594fb08c27c17bc2",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]:disabled",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-blocked\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "chips": [],
+   "cardText": "CORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nreplace\nThese are the per-item choices this review recorded.\nThis review is no longer open\nThe gate was already decided or the run moved on.\nRefresh",
+   "pageErrors": []
+  },
+  {
+   "cell": "B4__review-card__chat_thread__pending-composer-bound",
+   "requestedPath": "/chat/cinatra-ai/cinatra-assistant/section-i-hierarchy",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-hierarchy",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"review-gate-card\"]",
+   "pixels": {
+    "width": 1472,
+    "height": 1674
+   },
+   "sha256": "9f3c155ecd873e027eaffc75d66935b660630661781fa877ec5efabb971004d1",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"focus-review-composer\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "chips": [],
+   "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nreplace\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nreplace\nPress a suggestion to accept it, again to dismiss it, again to clear the mark. Nothing is recorded until you approve or reject below.\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove",
+   "pageErrors": []
+  },
+  {
+   "cell": "B5__widget-column__site_widget__composer-primary",
+   "requestedPath": "the host page on the other origin",
+   "finalUrl": "/embed/assistant?assistant=wordpress&instanceId=capb-local-site",
+   "framedOn": "the embed's conversation column",
+   "pixels": {
+    "width": 920,
+    "height": 1520
+   },
+   "sha256": "a61eaf73e94e10e43c0b464f55461d30b60c039257b55da48ebc346761968189",
+   "observed": [
+    {
+     "selector": "[data-embed-assistant]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-embed-assistant][data-phase=\"active\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    }
+   ],
+   "widgetLog": [
+    "embed frame url: http://localhost:3182/embed/assistant?assistant=wordpress&instanceId=capb-local-site",
+    "embed frame drew after ~0s",
+    "bridge: [\"frame src = http://localhost:3182/embed/assistant?assistant=wordpress&instanceId=capb-local-site\",\"<- {\\\"type\\\":\\\"cinatra.embed.ready\\\",\\\"protocolVersion\\\":2,\\\"nonce\\\":\\\"5XD_PgYlbQgOwiiDhfjWVKte\\\",\\\"seq\\\":0}\",\"-> {\\\"type\\\":\\\"cinatra.embed.context\\\",\\\"protocolVersion\\\":2,\\\"correlationId\\\":\\\"yG23xaaOj8Vg_xHJoT7pM3ObADjkGGSc\\\",\\\"nonceEcho\\\":\\\"5XD_PgYlbQgOwiiDhfjWVKte\\\",\\\"seq\\\":0,\\\"session\\\":{\\\"threadId\\\":\\\"s9c-widget-Z0-mhdv7qKGsDHzc\\\",\\\"assistant\\\":\\\"wordpress\\\"},\\\"cms\\\":{\\\"instanceId\\\":\\\"capb-local-site\\\"}}\"]",
+    "frame is anonymous \u2014 running the frame's own PKCE sign-in",
+    "popup: http://localhost:3182/widget-auth?txn=4b63a479-83e1-4551-8049-844b2412b3de&n=eb4ffeec88be83004bc56e008231225baa9adda77c2b369cc5003ed7bf8c317a",
+    "popup after sign-in: <closed>",
+    "popup closed: true",
+    "frame left its anonymous state after ~0s",
+    "frame reached phase=active after ~0s",
+    "observed: {\"phase\":\"active\",\"embed\":1,\"embedActive\":1,\"list\":1,\"composerPrimary\":1,\"columnFound\":true,\"bodyText\":\"Type a message...\\nCommand Palette\\n\\nSearch for a command to run...\"}"
+   ],
+   "bodyTextInFrame": "Type a message...\nCommand Palette\n\nSearch for a command to run..."
+  }
+ ]
+}

@@ -1,0 +1,490 @@
+{
+ "$comment": [
+  "CAPTURE RECORDS for cinatra#2865 (PR #2867), in the shape",
+  "scripts/ci/lib/capture-record-contract.mjs validates.",
+  "",
+  "NONE of these records is registered in scripts/ci/chat-hitl-capture-index.json. The five chat_thread",
+  "records satisfy the contract's chat_thread anchors, but four of them are PENDING/DECIDED readings of a",
+  "card this branch did not change, filed to prove an INPUT-WEIGHT claim rather than a card state; the",
+  "widget record deliberately carries no card at all. Registering them would answer acceptance-manifest",
+  "cells they were not taken for. Each record prints the contract's own verdict on it instead."
+ ],
+ "recorder": "cinatra-lifecycle-capture-recorder@1",
+ "records": [
+  {
+   "cell": "B1__review-card__chat_thread__pending",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "pending",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-hierarchy",
+   "screenshot": "evidence/2865-section-i-hierarchy/captures/B1__review-card__chat_thread__pending.png",
+   "sha256": "a33261160cdbaccb9e0e8f5e6cde63cd89e3297fa6f28adf73d9b4a25366578c",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"focus-review-composer\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T22:34:25.134Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5f76efce, unmodified.",
+   "note": "LIGHT. The whole conversation column at the wide measure: the chat composer at the foot and, in the same frame, the review card carrying its note field. The two inputs, one drawing.",
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  },
+  {
+   "cell": "B2__review-card__chat_thread__pending-dark",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "pending",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-dark-reading",
+   "screenshot": "evidence/2865-section-i-hierarchy/captures/B2__review-card__chat_thread__pending-dark.png",
+   "sha256": "0ea7030485903fc888d1385a6c176516b59e66e1b8f4a8cdd776bd13cab7506e",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"focus-review-composer\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T23:19:08.306Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5f76efce, unmodified.",
+   "note": "DARK. The same frame under prefers-color-scheme: dark.",
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  },
+  {
+   "cell": "B3__review-card__chat_thread__decided-note-disabled",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "decided",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-settled-two",
+   "screenshot": "evidence/2865-section-i-hierarchy/captures/B3__review-card__chat_thread__decided-note-disabled.png",
+   "sha256": "b977927b57636350448555073257db05700a53072a7f806688b07eaf5b9d23ff",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]:disabled",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-blocked\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T22:50:58.596Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5f76efce, unmodified.",
+   "note": "LIGHT, in the window that follows a TERMINAL Approve pressed on the card's own floor: the bar has settled, the note field keeps the SAME dashed rule with no box and no fill, and it is now disabled.",
+   "contractVerdict": [
+    {
+     "code": "record/decided-still-offers-decision",
+     "detail": "a decided capture still shows \"[data-conformance-id=\"review-decision-bar\"]\" -- it is not decided"
+    }
+   ]
+  },
+  {
+   "cell": "B3b__review-card__chat_thread__decided-blocked-after-reresolve",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "decided",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-settled",
+   "screenshot": "evidence/2865-section-i-hierarchy/captures/B3b__review-card__chat_thread__decided-blocked-after-reresolve.png",
+   "sha256": "451c1ac16b9da994acf56b19ec72989cba50718656903266594fb08c27c17bc2",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]:disabled",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-blocked\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T22:45:13.198Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5f76efce, unmodified.",
+   "note": "The SAME gate on a fresh load once the decision has landed: the card's authoritative re-resolve answers with the BLOCKED panel and the note field is not rendered at all. Recorded because it is what a reader sees a moment later, and it is the reason the settled cell above had to be taken in the window it was.",
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  },
+  {
+   "cell": "B4__review-card__chat_thread__pending-composer-bound",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "pending",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/section-i-hierarchy",
+   "screenshot": "evidence/2865-section-i-hierarchy/captures/B4__review-card__chat_thread__pending-composer-bound.png",
+   "sha256": "9f3c155ecd873e027eaffc75d66935b660630661781fa877ec5efabb971004d1",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-testid=\"review-rationale\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"focus-review-composer\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"reject-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T22:35:13.043Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5f76efce, unmodified.",
+   "note": "The composer-binding row in its BOUND state, framed on the card root.",
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  },
+  {
+   "cell": "B5__widget-column__site_widget__composer-primary",
+   "declaredHost": "site_widget",
+   "declaredKind": null,
+   "declaredState": "active",
+   "finalUrl": "/embed/assistant?assistant=wordpress&instanceId=capb-local-site",
+   "screenshot": "evidence/2865-section-i-hierarchy/captures/B5__widget-column__site_widget__composer-primary.png",
+   "sha256": "a61eaf73e94e10e43c0b464f55461d30b60c039257b55da48ebc346761968189",
+   "assertions": [
+    {
+     "selector": "[data-embed-assistant]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-embed-assistant][data-phase=\"active\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+     "scope": "frame",
+     "count": 1
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": null,
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5f76efce, unmodified. The frame was loaded inside a PLAIN page on a DIFFERENT loopback origin and signed itself in through the shipped hosted-PKCE popup, so it carried no Cinatra cookie.",
+   "note": "The embedded conversation column, framed on the column itself INSIDE the embed frame. No lifecycle card is claimed here: the cell is about the composer, and the contract's card anchors are therefore absent by construction, not by omission.",
+   "contractVerdict": [
+    {
+     "code": "record/anchor-never-observed",
+     "detail": "\".cw-frame\" (page-scoped) was never looked for -- an unmeasured anchor counts as zero"
+    },
+    {
+     "code": "record/anchor-never-observed",
+     "detail": "\"[data-lifecycle-card-host=\"site_widget\"]\" (frame-scoped) was never looked for -- an unmeasured anchor counts as zero"
+    }
+   ]
+  }
+ ]
+}
