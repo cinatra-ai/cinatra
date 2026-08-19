@@ -812,9 +812,14 @@ function narrowByArchivedInstallPrecedence(
  *   - NO SELECTOR. A named tier already reaches the archived install from this
  *     very session (`addressable.all` is arm 1 PLUS arm 2, filtered by tier), so
  *     the selector path is not stranded and must not move;
- *   - arm 1 is NON-EMPTY and every row in it is ORGANIZATION-ANCHORED — the
- *     sibling supersession just released. This is what makes arm 2 invisible;
- *     an empty arm 1 already runs arm 2 and lands on arm (b);
+ *   - arm 1 is NON-EMPTY — that, and only that, is what makes arm 2 invisible;
+ *     an empty arm 1 already runs arm 2 and lands on arm (b). The clause below
+ *     restates what arm 1 already guarantees whenever arm 2 is populated (every
+ *     own-scope row is anchored to the actor's organization), so the arm can
+ *     never be inherited by some future arm-1 content. It keys on the ARM, not
+ *     on the sibling's TIER: a `user`- or `team`-anchored row inside the same
+ *     organization strands the install identically, and a tier check there
+ *     would fix the reviewer's example while leaving its twin silent;
  *   - arm 2 holds the POST-ROLLBACK PAIR and nothing else: at least two rows
  *     that {@link narrowByArchivedInstallPrecedence} — the SAME predicate arm
  *     (b) uses, not a second copy of the rule — narrows to exactly one row,

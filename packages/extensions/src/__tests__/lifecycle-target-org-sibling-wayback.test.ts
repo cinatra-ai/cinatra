@@ -259,6 +259,26 @@ describe("the org-sibling arm refuses to widen anything else", () => {
     expect(res.ok && res.row.id).toBe("iext_installed");
   });
 
+  it("keys on the ARM, not the sibling's tier — a user-anchored sibling strands too", () => {
+    // The mechanism is "arm 1 is non-empty", so any row anchored inside the
+    // actor's organization hides arm 2. Refusing only for `ownerLevel:
+    // 'organization'` would fix the reviewer's example and leave its twin
+    // silent, which is the same door with a narrower frame.
+    const userRow = row("iext_user", {
+      ownerLevel: "user",
+      ownerId: "u-someone",
+      organizationId: "org-a",
+    });
+    const res = resolveLifecycleScope(
+      [bundled(), marketplace({ status: "archived" }), userRow],
+      platformAdminInOrg,
+    );
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+    expect(!res.ok && res.code === "ambiguous_target" && res.reason).toContain(
+      "app-wide install",
+    );
+  });
+
   it("an ORG ADMIN is untouched — arm 2 is empty for them, their row resolves", () => {
     // No platform standing means no fallback arm, so nothing was ever hidden
     // from them and nothing may be taken away.
