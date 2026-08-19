@@ -32,8 +32,11 @@ import {
   HELD_TURN_ROW,
   ROOT_DECLARATION_OBLIGATIONS,
   RULED_KINDS,
+  HELD_TURN_MOUNT_OBLIGATIONS,
   evaluateHeldTurnProjection,
   findDecisionPathPointers,
+  findUnmountedSurfacePointers,
+  heldTurnMountIsOwed,
   isHeldDispatch,
   projectsOwnerCard,
   runIdOf,
@@ -349,5 +352,108 @@ describe("the per-kind table", () => {
         expect(row.foreignHostSubtrees).not.toContain(anchor);
       }
     }
+  });
+});
+
+describe("a cardless held turn: the exemption, and what it costs", () => {
+  /**
+   * THE SENTENCE NO DECISION-VERB PATTERN MATCHES. It names the surface as a
+   * bare noun and never conjugates confirm/approve/decide, so every entry in
+   * `DECISION_PATH_POINTER_PATTERNS` reads it as clean — which is the finding
+   * this block answers. Pinned as a literal for the same reason the first-round
+   * sentence is.
+   */
+  const VERBLESS_POINTER = "The controls you need are in run details.";
+
+  const cardless = (text: string): TurnProjection => ({ parts: heldParts(text), nodes: [] });
+
+  it("the verb-anchored ban does NOT catch it — stated so the gap is not re-argued", () => {
+    expect(findDecisionPathPointers(VERBLESS_POINTER)).toEqual([]);
+  });
+
+  it("the cardless arm DOES catch it, with no verb to anchor on", () => {
+    expect(findUnmountedSurfacePointers(VERBLESS_POINTER).map((h) => h.patternId)).toEqual([
+      "surface-named-with-no-card",
+    ]);
+  });
+
+  it("FAILS a held turn that mounts no card and points at another surface", () => {
+    const codes = evaluateHeldTurnProjection(cardless(VERBLESS_POINTER), HELD_TURN_ROW).map(
+      (v) => v.code,
+    );
+    // The always-on arm, with no `requireMount` asked for: the obligation row
+    // still permits the missing card, and the pointer is refused anyway.
+    expect(codes).toContain("surface_pointer_without_card");
+  });
+
+  it("PASSES the cardless turn main actually ships today", () => {
+    // The exemption is real, not a slow no. Today's dispatch text names no
+    // surface, so a held turn with no card is still clean while the row stands.
+    expect(evaluateHeldTurnProjection(cardless(CLEAN_DISPATCH_TEXT), HELD_TURN_ROW)).toEqual([]);
+  });
+
+  it("stops applying the cardless arm once the card IS mounted", () => {
+    // The trade-off, stated as a case: prose about another surface is honest
+    // beside a working card, and only the relocated DECISION is banned there.
+    const mounted: TurnProjection = {
+      parts: heldParts("The run page shows every step."),
+      nodes: [cardNode()],
+    };
+    expect(evaluateHeldTurnProjection(mounted, HELD_TURN_ROW)).toEqual([]);
+    expect(
+      evaluateHeldTurnProjection(cardless("The run page shows every step."), HELD_TURN_ROW).map(
+        (v) => v.code,
+      ),
+    ).toContain("surface_pointer_without_card");
+  });
+
+  it("refuses a bare run URL in a cardless turn", () => {
+    expect(
+      evaluateHeldTurnProjection(
+        cardless("Everything is at /agents/proof/pkg/run-1 now."),
+        HELD_TURN_ROW,
+      ).map((v) => v.code),
+    ).toContain("surface_pointer_without_card");
+  });
+});
+
+describe("the positive arm is the DEFAULT, and the obligation list is its only exemption", () => {
+  it("exempts exactly the kinds whose mount is still owed", () => {
+    for (const kind of RULED_KINDS) {
+      expect(heldTurnMountIsOwed(kind)).toBe(HELD_TURN_MOUNT_OBLIGATIONS.includes(kind));
+    }
+  });
+
+  it("does NOT demand the card for the owed kind, so the ratchet still stands", () => {
+    // `recommendation_hold` is on the list today. Turning the arm on for it
+    // would red CI on main, which is the thing the list exists to avoid.
+    expect(heldTurnMountIsOwed(HELD_TURN_ROW.kind)).toBe(true);
+    expect(
+      evaluateHeldTurnProjection(
+        { parts: heldParts(CLEAN_DISPATCH_TEXT), nodes: [] },
+        HELD_TURN_ROW,
+      ).map((v) => v.code),
+    ).not.toContain("card_not_mounted");
+  });
+
+  it("DEMANDS the card for a kind whose row is struck, without anyone passing a flag", () => {
+    // The point of the default. A row struck from the obligation list turns the
+    // assertion on by itself; it used to also need a caller to opt in, and every
+    // caller that did not read as exempt.
+    const landed = { ...HELD_TURN_ROW, kind: "artifact_review_gate" as const };
+    expect(heldTurnMountIsOwed(landed.kind)).toBe(false);
+    expect(
+      evaluateHeldTurnProjection({ parts: heldParts(CLEAN_DISPATCH_TEXT), nodes: [] }, landed).map(
+        (v) => v.code,
+      ),
+    ).toContain("card_not_mounted");
+  });
+
+  it("still lets a caller ask for the arm explicitly", () => {
+    expect(
+      evaluateHeldTurnProjection({ parts: heldParts(CLEAN_DISPATCH_TEXT), nodes: [] }, HELD_TURN_ROW, {
+        requireMount: true,
+      }).map((v) => v.code),
+    ).toContain("card_not_mounted");
   });
 });

@@ -30,6 +30,11 @@
  *      to go elsewhere TO DECIDE. A card that is genuinely mounted makes the
  *      prose harmless; the ban exists so a regression is named in words too.
  *
+ *   3. `findUnmountedSurfacePointers` — the SAME ban with the verb requirement
+ *      dropped, and it applies only when the turn mounts no card. Which rule a
+ *      turn gets is decided structurally, by whether the card is there, so a
+ *      pointer written without a decision verb cannot ride the cardless state.
+ *
  * THE PER-KIND CONTRACT TABLE. `CHAT_THREAD_CARRIAGE_CONTRACT` has one row per
  * ruled chat_thread carriage, keyed off the protocol package's own closed set of
  * kinds and its carriage map, so a fifth kind cannot appear without a row. Each
@@ -48,12 +53,22 @@
  * THE HONEST LIMIT. The always-on arm is NEGATIVE: if the owner anchors appear
  * at all, they must appear in the triggering part's OWN container and OUTSIDE
  * every foreign-host subtree, and the turn's text must carry no decision-path
- * pointer. The POSITIVE arm — the anchors must be there at all — runs with
- * `requireMount`, and the kinds whose production chat_thread mount is not on
- * main yet are listed in `HELD_TURN_MOUNT_OBLIGATIONS`. That list is a ratchet,
- * not a waiver: the transcript test measures the PRODUCTION view and asserts the
+ * pointer. The POSITIVE arm — the anchors must be there at all — is ON BY
+ * DEFAULT, and the kinds whose production chat_thread mount is not on main yet
+ * are listed in `HELD_TURN_MOUNT_OBLIGATIONS`. That list is a ratchet, not a
+ * waiver: the transcript test measures the PRODUCTION view and asserts the
  * OBSERVED unmounted set equals it, so the day the mount lands the row must be
  * struck or CI goes red.
+ *
+ * WHY THE DEFAULT MOVED. The arm used to be off unless a caller asked for it,
+ * which made "must a held turn show its card?" a property of the CALL rather
+ * than of the contract — every kind read as exempt, including the ones whose
+ * mount had landed, and the only thing standing between a cardless held turn and
+ * a green suite was a finite list of decision-verb regexes. Now the obligation
+ * list is the single ruled reason the card may be missing, and a turn that takes
+ * that exemption pays for it under (3) above: no card, no pointers, no verb
+ * required. Card-absence is still legitimate — for exactly one kind, for exactly
+ * as long as its row stands.
  */
 
 import {
@@ -179,6 +194,45 @@ export const DECISION_PATH_POINTER_PATTERNS: readonly DecisionPathPointerPattern
     },
   ]);
 
+/**
+ * THE RULE FOR A TURN THAT MOUNTS NO CARD — and why it is a different, blunter
+ * rule rather than more entries in the list above.
+ *
+ * The patterns above are anchored on a decision VERB because they run while a
+ * card is on screen, where "the run page shows every step" is honest prose
+ * beside a working card and only the relocated DECISION is the defect. That
+ * anchoring is also their ceiling: a pointer written without a decision verb —
+ * "The controls you need are in run details" — walks past every one of them,
+ * and no amount of extending the verb list closes a class defined by not being
+ * on it.
+ *
+ * So the vocabulary is not what decides. THE STRUCTURE IS. When the turn mounts
+ * no card at all, the sentence is not beside the answer — the sentence IS the
+ * answer, and any sentence that points at another surface is the anti-pattern
+ * whether or not it conjugates a verb this module knows. That needs no verb,
+ * and these patterns require none: naming another surface, or handing over a
+ * run URL, is enough on its own.
+ *
+ * The cost is stated too: this arm would reject "the run page shows every step"
+ * in a cardless turn, which is honest prose. That is deliberate. A cardless held
+ * turn has nothing to be secondary to, so prose about another surface has
+ * nowhere legitimate to stand, and the ratchet that permits the cardless turn
+ * (`HELD_TURN_MOUNT_OBLIGATIONS`) is what this arm is paying for.
+ */
+export const UNMOUNTED_SURFACE_POINTER_PATTERNS: readonly DecisionPathPointerPattern[] =
+  Object.freeze([
+    {
+      id: "surface-named-with-no-card",
+      why: "names another surface in a turn that mounts no card, so the sentence stands in for one",
+      pattern: new RegExp(`\\b(${SURFACE_NOUNS})\\s+(${SURFACE_PARTS})\\b`, "i"),
+    },
+    {
+      id: "run-url-with-no-card",
+      why: "hands the human a URL in a turn that mounts no card",
+      pattern: /(^|[\s(\[`"'])\/agents\/[A-Za-z0-9@._~%-]+\/[^\s)\]`"']+/,
+    },
+  ]);
+
 export type DecisionPathPointerHit = {
   patternId: string;
   why: string;
@@ -186,17 +240,32 @@ export type DecisionPathPointerHit = {
   match: string;
 };
 
+function matchAll(
+  patterns: readonly DecisionPathPointerPattern[],
+  text: string,
+): DecisionPathPointerHit[] {
+  const hits: DecisionPathPointerHit[] = [];
+  for (const p of patterns) {
+    const m = p.pattern.exec(text);
+    if (m) hits.push({ patternId: p.id, why: p.why, match: m[0].trim() });
+  }
+  return hits;
+}
+
 /**
  * Every decision-path pointer in a piece of deterministic dispatch text. Empty
  * means the text is clean.
  */
 export function findDecisionPathPointers(text: string): DecisionPathPointerHit[] {
-  const hits: DecisionPathPointerHit[] = [];
-  for (const p of DECISION_PATH_POINTER_PATTERNS) {
-    const m = p.pattern.exec(text);
-    if (m) hits.push({ patternId: p.id, why: p.why, match: m[0].trim() });
-  }
-  return hits;
+  return matchAll(DECISION_PATH_POINTER_PATTERNS, text);
+}
+
+/**
+ * Every pointer at another surface, for text in a turn that mounts NO card.
+ * Verb-free by design — see `UNMOUNTED_SURFACE_POINTER_PATTERNS`.
+ */
+export function findUnmountedSurfacePointers(text: string): DecisionPathPointerHit[] {
+  return matchAll(UNMOUNTED_SURFACE_POINTER_PATTERNS, text);
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +431,21 @@ export const HELD_TURN_MOUNT_OBLIGATIONS: readonly LifecycleCardKind[] = Object.
 ]);
 
 /**
+ * Is this kind's chat_thread mount still OWED?
+ *
+ * This is what makes the positive arm structural instead of optional. The
+ * evaluator used to leave "must the card be there?" to whichever caller
+ * remembered to pass `requireMount`, so the default answer for every kind — the
+ * mounted ones included — was NO. The obligation list is the only ruled reason a
+ * held turn may show no card, so it is the only thing that turns the arm off:
+ * a kind not on it is asserted, and the day a row is struck the assertion turns
+ * on by itself rather than waiting for someone to also flip a flag.
+ */
+export function heldTurnMountIsOwed(kind: LifecycleCardKind): boolean {
+  return HELD_TURN_MOUNT_OBLIGATIONS.includes(kind);
+}
+
+/**
  * Kinds whose shipped owner component does not yet emit the RULED root
  * declaration (`data-lifecycle-card` + `data-lifecycle-card-host`).
  *
@@ -451,7 +535,8 @@ export type HeldTurnViolation = {
     | "no_durable_result"
     | "anchors_in_foreign_host"
     | "anchors_off_position"
-    | "card_not_mounted";
+    | "card_not_mounted"
+    | "surface_pointer_without_card";
   detail: string;
 };
 
@@ -502,9 +587,17 @@ function atTriggerPosition(
  * Evaluate a held turn against its contract row.
  *
  * `requireMount` turns on the POSITIVE arm (the card must actually be there).
- * With it off, the check is the always-on negative arm: no text pointer, and any
- * anchors that DO appear must appear at the triggering slot and outside every
- * foreign-host subtree.
+ * IT DEFAULTS TO THE CONTRACT, not to off: a kind whose chat_thread mount has
+ * landed is asserted, and only a kind on `HELD_TURN_MOUNT_OBLIGATIONS` — the
+ * ruled, ratcheted reason a held turn may show no card — is exempt. Passing it
+ * explicitly still wins, which is what lets the fixture suite drive both arms.
+ *
+ * AND THE EXEMPTION IS PAID FOR. A turn that ends up mounting no card is held to
+ * `UNMOUNTED_SURFACE_POINTER_PATTERNS` as well: with no card on screen the prose
+ * is the whole answer, so it may not point at another surface at all, verb or no
+ * verb. That is what keeps "the controls you need are in run details" — a
+ * sentence no decision-verb pattern matches — from passing while the obligation
+ * stands.
  */
 export function evaluateHeldTurnProjection(
   projection: TurnProjection,
@@ -512,6 +605,7 @@ export function evaluateHeldTurnProjection(
   options: { requireMount?: boolean } = {},
 ): HeldTurnViolation[] {
   const violations: HeldTurnViolation[] = [];
+  const requireMount = options.requireMount ?? !heldTurnMountIsOwed(row.kind);
 
   // 1. No text in the turn may present another surface as the decision path.
   for (const part of projection.parts) {
@@ -578,17 +672,34 @@ export function evaluateHeldTurnProjection(
   //    The set, not one node: a card's root carries its identity attributes and
   //    its own controls carry the action anchors, so the wrapper, the row and
   //    the two decision controls are several elements of one card.
-  if (options.requireMount) {
-    const covered = new Set<string>();
-    for (const node of cleanNodes) for (const a of node.anchors) covered.add(a);
-    const missing = row.ownerAnchors.filter((a) => !covered.has(a));
-    if (missing.length > 0) {
-      violations.push({
-        code: "card_not_mounted",
-        detail:
-          `the held turn does not project ${row.owner}: [${missing.join(", ")}] ` +
-          "render nowhere at the triggering position outside every foreign host",
-      });
+  const covered = new Set<string>();
+  for (const node of cleanNodes) for (const a of node.anchors) covered.add(a);
+  const missing = row.ownerAnchors.filter((a) => !covered.has(a));
+  if (requireMount && missing.length > 0) {
+    violations.push({
+      code: "card_not_mounted",
+      detail:
+        `the held turn does not project ${row.owner}: [${missing.join(", ")}] ` +
+        "render nowhere at the triggering position outside every foreign host",
+    });
+  }
+
+  // 5. NO CARD MEANS NO POINTERS. When the turn mounts nothing, the sentence is
+  //    not beside the answer — it is the answer, and a sentence that sends the
+  //    reader to another surface is the anti-pattern whatever verb it uses. This
+  //    is the arm that does not depend on a decision-verb list, and it is the
+  //    price of the obligation list permitting a cardless held turn at all.
+  if (missing.length > 0) {
+    for (const part of projection.parts) {
+      if (part.kind !== "text") continue;
+      for (const hit of findUnmountedSurfacePointers(part.text)) {
+        violations.push({
+          code: "surface_pointer_without_card",
+          detail:
+            `the held turn mounts no ${row.owner} and its text part at slot ${part.slot} ` +
+            `${hit.why} (${hit.patternId}): "${hit.match}"`,
+        });
+      }
     }
   }
 
