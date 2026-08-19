@@ -137,7 +137,33 @@ export function LifecycleCard({
   // a proposal has no server record until Confirm, so there is nothing to
   // persist, and a reload honestly returns to the expired reading.
   const [adjustedRef, setAdjustedRef] = useState<string | null>(null);
-  const activeRef = adjustedRef ?? view.ref;
+  // THE LOCAL RE-PROPOSAL IS SCOPED TO THE REF IT WAS MADE FROM.
+  //
+  // Renderable views are keyed BY INDEX in the transcript, so React reuses one
+  // `LifecycleCard` instance when the list changes underneath it — a new turn
+  // arriving, an earlier part being dropped, a thread being switched. Without
+  // this, the instance would keep `adjustedRef` from the PREVIOUS proposal and
+  // go on resolving and acting on it under a card that is now showing a
+  // different one: the reader would press Adjust on proposal B and re-propose
+  // proposal A. Nothing downstream could catch it, because every layer below is
+  // told, truthfully, that `activeRef` is the ref this card is showing.
+  //
+  // Reset DURING RENDER (React's documented "adjust state when a prop changes"),
+  // not in an effect: on the render where `view.ref` changes the effect has not
+  // run yet, so an effect-based reset would leave one committed frame — and one
+  // issued resolve — under the previous proposal's identity. React re-runs this
+  // component before committing, so `activeRef` below is already the new ref.
+  const [sourceRef, setSourceRef] = useState(view.ref);
+  const sourceRefChanged = sourceRef !== view.ref;
+  if (sourceRefChanged) {
+    setSourceRef(view.ref);
+    setAdjustedRef(null);
+  }
+  // `sourceRefChanged` is read here as well as above so that even the render
+  // React is about to THROW AWAY computes the new ref: the two `set…` calls
+  // above only land on the re-run, and a discarded pass must not be the one
+  // that hands a stale identity to the resolve hook.
+  const activeRef = sourceRefChanged ? view.ref : (adjustedRef ?? view.ref);
   const onReproposed = useCallback((token: string) => setAdjustedRef(token), []);
   // The one surface gate: a subtree that declared no host is not a lifecycle
   // surface, so the card is not part of it. Every DECLARED host draws every
@@ -165,6 +191,12 @@ export function LifecycleCard({
       className="my-3 rounded-lg border border-line bg-surface-muted p-3 text-xs text-muted-foreground"
       data-lifecycle-card={view.viewType}
       data-lifecycle-card-state={state.state}
+      // The HOST this card actually drew on. It is the surface's own
+      // declaration — never anything about the subject — so it discloses
+      // nothing the page does not already know about itself, and it makes the
+      // three facts a screenshot has to prove (which kind, which host, which
+      // state) readable off the card's own root rather than asserted beside it.
+      data-lifecycle-card-host={host}
     >
       <div className="font-semibold text-foreground">{CARD_TITLES[view.viewType]}</div>
       {expired === null ? (

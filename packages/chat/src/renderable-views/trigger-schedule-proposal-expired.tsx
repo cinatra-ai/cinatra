@@ -21,9 +21,32 @@
 // ADJUST TRAVELS THE CARD'S OWN REF, NOTHING ELSE. The expired token already
 // carries the template and the schedule server-side and already proves the
 // reader was minted this proposal, so no agent id and no rows go to the client
-// and back. Re-proposing writes nothing — it mints a new token with a new
-// consume identity — which is why the button needs no authority and can never
-// half-arm a schedule.
+// and back. Re-proposing writes nothing — it mints a replacement token that
+// INHERITS the original's consume identity, so the whole lineage addresses ONE
+// primary-keyed consume row and only one member of it can ever become a run —
+// which is why the button needs no authority and can never half-arm a schedule.
+//
+// ADJUST IS COOKIE-BOUND, SO IT IS GATED ON THE COOKIE-SESSION SURFACE.
+// `adjustExpiredScheduleProposal` is a SERVER ACTION: it proves the caller by
+// the first-party session cookie and by nothing else. The card, however, draws
+// on every DECLARED host — including the brokered site widget, which mounts
+// with `credentials: "omit"` precisely because its embed frame is same-origin
+// to the app and an ambient Cinatra cookie belonging to WHOEVER ELSE uses that
+// browser would otherwise ride along. Firing a cookie-bound action from there
+// is the exact shape `lifecycle-card-runtime`'s credential rule forbids: it
+// either 401s, or — worse — succeeds as the wrong reader.
+//
+// The broker credential cannot carry this call, because a server action has no
+// place to put it: the credential is a HEADER the runtime attaches to a fetch,
+// and the action's transport is not ours to shape. Re-proposing over the broker
+// would need its own ref-bound, broker-authenticated endpoint — a surface the
+// widget does not have today and which belongs with the slice that turns the
+// widget's proposal affordances on. So the honest answer here is the second one
+// the shape allows: on a non-cookie surface the button is DRAWN and DISABLED
+// with the reason, and no request is issued at all. The reader still sees the
+// card and still learns the proposal expired; they are simply told where the
+// re-proposing happens rather than handed a control that would answer as
+// somebody else.
 //
 // THE FRESH PROPOSAL IS HELD LOCALLY, exactly as propose-purity requires: a
 // proposal has no server record until Confirm, so the re-proposed card lives
@@ -35,10 +58,19 @@ import { useCallback, useState, type ReactElement } from "react";
 
 import { Button } from "@/components/ui/button";
 
+import { useCookieSessionSurface } from "@cinatra-ai/agents/lifecycle-card-runtime";
+
 import type { TriggerScheduleProposalExpiredView } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
 /** What the card says happened. Names no id, no org and no policy. */
 const EXPIRED_LINE = "This proposal expired before it was confirmed.";
+
+/**
+ * Why Adjust is disabled off a cookie-session surface. Says where the reader
+ * can do it and nothing else — no host name, no credential vocabulary, no
+ * identifier. A reader on the widget learns what to do, not how we authenticate.
+ */
+const ADJUST_UNAVAILABLE_LINE = "You can propose this again from the full app.";
 
 export function TriggerScheduleProposalExpired({
   view,
@@ -53,8 +85,17 @@ export function TriggerScheduleProposalExpired({
 }): ReactElement {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // TRUE only inside a well-formed cookie-session host declaration. False for a
+  // brokered host, for a refused declaration, and for no provider at all — so
+  // the default is the silent one. See the header note for why the broker
+  // credential cannot carry a server action.
+  const cookieSession = useCookieSessionSurface();
 
   const onAdjust = useCallback(async () => {
+    // Belt as well as braces: the button is disabled off a cookie surface, but
+    // the guard is here too, because "the control was disabled" is a rendering
+    // fact and this is the thing that actually issues the call.
+    if (!cookieSession) return;
     setBusy(true);
     setError(null);
     try {
@@ -82,7 +123,7 @@ export function TriggerScheduleProposalExpired({
     } finally {
       setBusy(false);
     }
-  }, [cardRef, onReproposed]);
+  }, [cardRef, onReproposed, cookieSession]);
 
   return (
     <div data-lifecycle-card-phase="expired">
@@ -96,12 +137,21 @@ export function TriggerScheduleProposalExpired({
           variant="outline"
           size="xs"
           onClick={() => void onAdjust()}
-          disabled={busy}
+          disabled={busy || !cookieSession}
           data-lifecycle-action="adjust"
+          // The REASON travels with the control, so the disabled state is never
+          // a mystery to a pointer, a screen reader or a capture.
+          data-lifecycle-action-disabled={cookieSession ? undefined : "no_cookie_session"}
+          title={cookieSession ? undefined : ADJUST_UNAVAILABLE_LINE}
         >
           {busy ? "Proposing…" : "Adjust"}
         </Button>
       </div>
+      {cookieSession ? null : (
+        <div className="mt-2" role="note">
+          {ADJUST_UNAVAILABLE_LINE}
+        </div>
+      )}
       {error === null ? null : (
         <div className="mt-2 text-destructive" role="status">
           {error}

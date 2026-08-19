@@ -680,8 +680,19 @@ export async function resolveProposalForReader(
 // ---------------------------------------------------------------------------
 
 /**
- * Re-propose the schedule an expired card is showing: a FRESH token, a fresh
- * consume identity, nothing mutated.
+ * Re-propose the schedule an expired card is showing: a FRESH token on the
+ * ORIGINAL's consume identity, nothing mutated.
+ *
+ * The token is genuinely new — fresh IV, fresh ciphertext, fresh `iat`/`exp`,
+ * so the reader gets a real new window. What it deliberately does NOT get is a
+ * new consume identity: the replacement is minted with the ORIGINAL's nonce, so
+ * the whole lineage derives ONE `consume_key` and therefore addresses one
+ * primary-keyed row in `trigger_schedule_proposal_consumes`. Whichever member
+ * of the lineage is confirmed first is the only run, and every other card in it
+ * resolves settled against that run. "Old and new both confirmed" is not a race
+ * this code has to win; it is a state the database cannot hold. (An earlier
+ * revision of this comment said "a fresh consume identity" — that was the
+ * pre-fix behaviour and it was exactly the double-confirm defect.)
  *
  * It takes the CARD'S OWN REF rather than a template id and a schedule, and
  * that is the point. The expired token already carries both, server-side, and

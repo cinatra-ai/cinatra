@@ -1,0 +1,88 @@
+Lane x2837f — capture log, host chat_thread, PR #2837 (issue #2836)
+Captured at: 2026-08-19T13:41:46.757Z
+Surface:     http://localhost:13837/chat/cinatra-ai/cinatra-assistant/x2837f-expired-proposal-f76cea0b-cdde-4620-aebb-35af3acac52e
+Reader:      userId=60b6ae95-504a-4a60-b4ee-3c25e6a7ec13  activeOrganizationId=760eb3f8-330e-4d8a-b0e1-d82c2b9c63fe
+Transcript data part: {"viewType": "trigger_schedule_proposal", "schemaVersion": 1, "ref": "iZDYzcxlua2jf5mujhvOTy1-4tYoXFH_\u2026(truncated, 318 chars)"}
+
+The ref is an opaque signed token. It is truncated in this log on purpose:
+it is a bearer value for this reader's own proposal, and the anchors below
+do not need it in full to be checkable.
+
+========================================================================
+ANCHORS — read off the card's OWN root immediately before each shot
+========================================================================
+
+--- before-adjust (expired card on chat_thread)
+    pictures: x2837f-10-chat-thread-expired-*
+    data-lifecycle-card              = "trigger_schedule_proposal"
+    data-lifecycle-card-host         = "chat_thread"
+    data-lifecycle-card-state        = "settled"
+    data-lifecycle-card-phase        = "expired"
+    data-lifecycle-action-disabled   = null
+    adjust button present            = true
+    adjust button disabled           = false
+    card text                        = "Schedule proposalThis proposal expired before it was confirmed.Blog Draft Writer Agent \u2014 Every weekday at 09:00Adjust"
+    page path                        = "/chat/cinatra-ai/cinatra-assistant/x2837f-expired-proposal-f76cea0b-cdde-4620-aebb-35af3acac52e"
+
+--- after-adjust (re-proposed card in place)
+    pictures: x2837f-11-chat-thread-after-adjust-*
+    data-lifecycle-card              = "trigger_schedule_proposal"
+    data-lifecycle-card-host         = "chat_thread"
+    data-lifecycle-card-state        = "pending"
+    data-lifecycle-card-phase        = null
+    data-lifecycle-action-disabled   = null
+    adjust button present            = false
+    adjust button disabled           = null
+    card text                        = "Schedule proposalWaiting for your decision."
+    page path                        = "/chat/cinatra-ai/cinatra-assistant/x2837f-expired-proposal-f76cea0b-cdde-4620-aebb-35af3acac52e"
+
+--- after-reload (back to the transcript's own expired ref)
+    pictures: x2837f-12-chat-thread-after-reload-*
+    data-lifecycle-card              = "trigger_schedule_proposal"
+    data-lifecycle-card-host         = "chat_thread"
+    data-lifecycle-card-state        = "settled"
+    data-lifecycle-card-phase        = "expired"
+    data-lifecycle-action-disabled   = null
+    adjust button present            = true
+    adjust button disabled           = false
+    card text                        = "Schedule proposalThis proposal expired before it was confirmed.Blog Draft Writer Agent \u2014 Every weekday at 09:00Adjust"
+    page path                        = "/chat/cinatra-ai/cinatra-assistant/x2837f-expired-proposal-f76cea0b-cdde-4620-aebb-35af3acac52e"
+
+========================================================================
+WIRE — every POST /api/lifecycle-views/resolve the PAGE itself made
+========================================================================
+
+  resolve #1  HTTP 200
+    request.ref  = TRANSCRIPT-REF  (iZDYzcxlua2jf5mujhvOTy1-…)
+    state.state  = "settled"
+    view.phase   = "expired"
+    view.agentName    = "Blog Draft Writer Agent"
+    view.scheduleCopy = "Every weekday at 09:00"
+
+  resolve #2  HTTP 200
+    request.ref  = RE-PROPOSED-REF  (uiFr9hVRkgLw8fgA16gE2qTq…)
+    state.state  = "pending"
+    view.phase   = "proposal"
+    view.agentName    = "Blog Draft Writer Agent"
+
+  resolve #3  HTTP 200
+    request.ref  = TRANSCRIPT-REF  (iZDYzcxlua2jf5mujhvOTy1-…)
+    state.state  = "settled"
+    view.phase   = "expired"
+    view.agentName    = "Blog Draft Writer Agent"
+    view.scheduleCopy = "Every weekday at 09:00"
+
+========================================================================
+LINEAGE — the replacement Adjust minted, read back with the real crypto
+========================================================================
+
+  original    status=expired  nonce=7siL7dJXBBcCNUg3pP6cAw
+              consumeKey=d3c8147a6bef2290170306218b6d2d46de539a5631db7edd6a17f851322468ac
+              expiresAt=1787146768  templateId=ffb387cb-bd62-4115-a279-8b1efaea76ed
+  replacement status=live     nonce=7siL7dJXBBcCNUg3pP6cAw
+              consumeKey=d3c8147a6bef2290170306218b6d2d46de539a5631db7edd6a17f851322468ac
+              expiresAt=1787148727  templateId=ffb387cb-bd62-4115-a279-8b1efaea76ed
+
+  sameToken      = false   (a genuinely different token, on its own fresh window)
+  sameConsumeKey = true    (ONE consume identity for the whole lineage)
+

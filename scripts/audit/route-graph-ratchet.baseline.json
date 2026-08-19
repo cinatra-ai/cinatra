@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 218,
     "/api/mcp": 1714,
-    "/chat": 9999,
+    "/chat": 1797,
     "/api/a2a": 1719,
     "/api/llm-bridge": 1729
   },
@@ -28,9 +28,9 @@
     },
     "/chat": {
       "from": 1793,
-      "to": 9999,
+      "to": 1797,
       "pr": 2837,
-      "reason": "PLACEHOLDER"
+      "reason": "An EXPIRED schedule proposal must stay VISIBLE with an Adjust that re-proposes, instead of resolving to the undrawn state reserved for a reader who may not see the subject. Drawing a reading that did not exist before costs this route FOUR modules, and these are the four, enumerated by name because the count and the list have to agree: (1) packages/chat/src/renderable-views/trigger-schedule-proposal-expired.tsx, the expired reading's own component; and the three the Adjust edge pulls in behind it, (2) packages/agents/src/trigger-schedule-proposal-actions.ts, the server-action module the press handler reaches, (3) packages/agents/src/trigger-schedule-proposal-service.ts and (4) packages/agents/src/trigger-schedule-proposal-store.ts, which that action module imports in turn. Exactly three for the action edge because this route already carries the session graph the action sits on, and the action is reached through a DYNAMIC import inside the press handler so the confirm and propose half stays off the initial graph. The kind's view-schema leaf, packages/agent-ui-protocol/src/renderable-views/trigger-schedule-proposal-view.ts, costs this route NOTHING and is deliberately not in the list: it was already reachable from /chat before this change, and after rebasing onto S9c's resolve envelope (PR #2795) the shell no longer imports it at RUNTIME at all — the envelope is parsed once at the protocol's own seam and the shell reads an already-typed body, so its only remaining protocol import is type-only and erased. An earlier revision of this record named that leaf as one of the four, which made the count and the enumeration disagree by one; the enumeration above is measured as the reachable-module set difference between this head and origin/main, with the companion extension tree cloned pinned on BOTH sides (1793 -> 1797), and it is exactly these four and nothing else. The 1793 base is PR #2834's ceiling, whose own absorb record this one supersedes on the same route. No other locked route moves. The alternatives were rejected: a dedicated API route for one button widens the surface more than the modules it would save; folding Adjust into an actions module already on this graph would undo the split that keeps the confirm transaction and the install outbox off the five locked MCP route graphs; and leaving the card undrawn is the defect itself. The reading is drawn once, in the shell every declared host already renders, so it costs no new host mount."
     }
   }
 }
