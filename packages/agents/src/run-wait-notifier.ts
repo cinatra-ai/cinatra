@@ -24,9 +24,6 @@
 // ---------------------------------------------------------------------------
 
 import type { AgentRunStatus } from "./store";
-// TYPE-ONLY (erased at compile), so the true-leaf property in the header holds:
-// this module still pulls NOTHING at runtime from the package graph.
-import type { RunWaitInterruptKind } from "./run-surface-status";
 
 /**
  * Which flavour of human gate a run just entered.
@@ -49,26 +46,20 @@ export type RunHumanWaitReason = "pending_approval" | "pending_input";
  * host impl; this seam adds a second backstop (see `dispatchRunWaitTransition`).
  */
 export interface RunWaitNotifier {
-  /** A run parked on a human gate — mint/refresh the durable notification. */
+  /**
+   * A run parked on a human gate — mint/refresh the durable notification.
+   *
+   * The wait's INPUT-vs-APPROVAL flavour is DERIVED by the host from the run's
+   * live HITL context (`deriveRunHitlContext` → `classifyRunWaitInterrupt`), never
+   * stated by the caller: every caller of this seam is `transitionRunStatus`, and
+   * a status transition carries no such knowledge. The one wait that DOES know its
+   * own flavour — the run-start recommendation hold, which is not an interrupt and
+   * has no context to derive from — does not ride a status transition either, and
+   * has its own seam (`onEnterRecommendationHold`) that states it there.
+   */
   onEnterHumanWait(input: {
     runId: string;
     reason: RunHumanWaitReason;
-    /**
-     * cinatra#2835 — the wait's INPUT-vs-APPROVAL flavour, when the CALLER
-     * already knows it. The host otherwise re-derives this from the run's live
-     * HITL context (`deriveRunHitlContext` → `classifyRunWaitInterrupt`), which
-     * only ever answers for a `pending_approval` interrupt; a wait that is NOT
-     * an interrupt at all — the run-start recommendation HOLD, which parks an
-     * already-`pending_input` run on a card rather than moving its status — has
-     * no context to derive from and would fail closed to the generic
-     * "waiting on you to continue" copy with a run-page link.
-     *
-     * PRESENTATION + DESTINATION only, exactly like the derived classification
-     * it stands in for: `"input"` selects the "needs your input" copy and the
-     * conversation deep-link (#2729's ruling). Omitted → the pre-existing
-     * derivation, unchanged for every existing caller.
-     */
-    waitKind?: RunWaitInterruptKind;
   }): void | Promise<void>;
   /** A run left a human-wait state — hard-delete the notification (idempotent). */
   onLeaveHumanWait(input: { runId: string }): void | Promise<void>;
@@ -286,8 +277,10 @@ export const HOLD_PARK_TABLE = "lifecycle_continuation_park" as const;
  *   `none`    — nothing was ever written for this park (no initiator to notify, a
  *               non-recommendation checkpoint, a fence that refused). Nothing owed.
  *   `live`    — a notification row EXISTS for this hold. Set in the SAME
- *               transaction as the insert, so it can never claim a row that was
- *               not written, and never miss one that was.
+ *               STATEMENT as the insert, and gated on that insert's `RETURNING`
+ *               output, so it can never claim a row that was not written — not
+ *               even when the insert no-ops on the dedupe conflict — and never
+ *               misses one that was (cinatra#2838).
  *   `cleared` — the row has been deleted. Set only AFTER an awaited, successful
  *               delete, so the ack can never run ahead of the effect it acks.
  *
@@ -305,12 +298,15 @@ export type HoldNotificationState =
   | typeof HOLD_NOTIFICATION_CLEARED;
 
 /**
- * A single SQL statement, in the shape every host query runner in this codebase
- * takes. Declared locally so this leaf keeps its zero-runtime-imports property.
+ * The fence SQL, in the shape the host's fenced writer takes: one shared
+ * placeholder array (the whole fence is one statement, so it has one parameter
+ * space) and the statement texts that number their placeholders from `$1` over it.
+ * Declared locally so this leaf keeps its zero-runtime-imports property.
  */
-export interface HoldFenceStatement {
-  text: string;
+export interface HoldFenceSql {
   values: unknown[];
+  guard: string;
+  mark: string;
 }
 
 /**
@@ -319,9 +315,9 @@ export interface HoldFenceStatement {
  *
  * `guard` is a `SELECT … FOR UPDATE` that yields ONE row while — and only while —
  * the named park exists, belongs to the named run, is a recommendation hold, and
- * is still `parked`. `mark` records the write on that same row. The host runs
- * BOTH in ONE transaction on ONE connection, with the notification INSERT
- * sandwiched between them and fed FROM the guard, so:
+ * is still `parked`. `mark` records the write on that same row. The host composes
+ * BOTH into ONE statement on ONE connection, with the notification INSERT between
+ * them, fed FROM the guard and feeding the mark, so:
  *
  *   - the insert is a `SELECT`-driven insert over the guard's rows: an invented
  *     park id yields zero rows and therefore writes NOTHING. The fabrication
@@ -337,28 +333,49 @@ export interface HoldFenceStatement {
  *     can no longer land BETWEEN a liveness check and the write it was checking
  *     for, because there is no gap left to land in (finding 1).
  *
- * PURE — string building only. Callers pass the resolved schema name; the
- * placeholders start at `$1` and are independent of the notification insert's own
- * (each statement runs as its own query inside the shared transaction).
+ *   - the mark is gated on the INSERT'S OWN `RETURNING` output, not merely placed
+ *     after it (cinatra#2838). A guard row is necessary for the insert but not
+ *     sufficient: the insert also carries `ON CONFLICT … DO NOTHING`, so an
+ *     initiator who already holds a row on this run's per-run key writes nothing
+ *     while the park is perfectly `parked`. A mark that ran anyway recorded `live`
+ *     for a row carrying no park id of this hold's, and the park-scoped clear then
+ *     matched nothing and reported the obligation discharged — the hold announced
+ *     to nobody, with the ledger claiming otherwise. Gating on the insert's own
+ *     output makes `live` mean exactly "a row for THIS hold exists".
+ *
+ * PURE — string building only. Callers pass the resolved schema name and the name
+ * of the CTE the host binds the insert's `RETURNING` to; `values` is shared by
+ * both statements (the host composes them into ONE statement, whose row values are
+ * numbered behind these).
  */
 export function buildHoldNotificationFence(input: {
   schema: string;
   parkId: string;
   runId: string;
-}): { guard: HoldFenceStatement; mark: HoldFenceStatement } {
+  /**
+   * The CTE the host's fenced writer binds the notification INSERT's `RETURNING`
+   * output to — `NOTIFICATION_WRITE_CTE`, exported by
+   * `@cinatra-ai/notifications/server`. PASSED IN rather than imported: this
+   * module is a TRUE LEAF (see the header) and may pull nothing at runtime from
+   * the package graph, and the host is the one module that speaks both
+   * vocabularies. One literal, owned by the package that composes the statement.
+   */
+  insertedCte: string;
+}): HoldFenceSql {
   const table = `"${input.schema.replaceAll('"', '""')}"."${HOLD_PARK_TABLE}"`;
+  const insertedCte = `"${input.insertedCte.replaceAll('"', '""')}"`;
   const match = `id = $1 AND run_id = $2 AND checkpoint = $3 AND status = 'parked'`;
-  const values = [input.parkId, input.runId, RECOMMENDATION_HOLD_CHECKPOINT];
   return {
+    values: [input.parkId, input.runId, RECOMMENDATION_HOLD_CHECKPOINT],
     // LIMIT 1 is belt-and-braces (`id` is the primary key): it makes "at most one
     // row feeds the insert" true by construction rather than by key knowledge.
-    guard: { text: `SELECT id FROM ${table} WHERE ${match} LIMIT 1 FOR UPDATE`, values },
-    // Same predicate as the guard, so a fence that refused the insert cannot mark
-    // a park `live` — the two statements agree about what they are looking at.
-    mark: {
-      text: `UPDATE ${table} SET hold_notification = '${HOLD_NOTIFICATION_LIVE}' WHERE ${match}`,
-      values,
-    },
+    guard: `SELECT id FROM ${table} WHERE ${match} LIMIT 1 FOR UPDATE`,
+    // Same predicate as the guard (so a fence that refused the insert cannot mark
+    // a park `live`), AND the insert's own output (so a fence that PASSED but whose
+    // insert no-opped on the dedupe conflict cannot either).
+    mark:
+      `UPDATE ${table} SET hold_notification = '${HOLD_NOTIFICATION_LIVE}' ` +
+      `WHERE ${match} AND EXISTS (SELECT 1 FROM ${insertedCte})`,
   };
 }
 

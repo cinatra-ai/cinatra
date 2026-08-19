@@ -63,6 +63,10 @@ vi.mock("@cinatra-ai/notifications/server", () => ({
   deleteNotificationsByDedupeKeyForUser,
   deleteHoldNotificationForUser,
   resolveAgentRunHref,
+  // cinatra#2838 — the real value, not a stand-in: the host hands it to the park
+  // package so the `mark` can gate itself on the insert's RETURNING, and a test
+  // double that renamed it would let a broken gate pass.
+  NOTIFICATION_WRITE_CTE: "notification_write",
 }));
 
 import {
@@ -357,71 +361,22 @@ describe("runWaitNotifier.onEnterHumanWait — emit-on-wait", () => {
   });
 
   // -------------------------------------------------------------------------
-  // THE RECOMMENDATION HOLD (cinatra#2835)
+  // THE RECOMMENDATION HOLD IS NOT THIS SEAM (cinatra#2838)
   //
-  // A hold parks an already-`pending_input` run on a card, so there is no HITL
-  // interrupt to derive a classification from — `deriveRunHitlContext` is not
-  // even consulted for a `pending_input` reason. The caller therefore states the
-  // classification, and it must buy BOTH halves of the #2729 ruling: the "needs
-  // your input" copy AND the return trip to the conversation.
+  // A hold used to be able to reach the copy through this seam, by handing it a
+  // `waitKind` the transition caller never had. No production caller ever did —
+  // `transitionRunStatus` is the only caller here, and it knows only that a status
+  // changed — so the field was dead and is gone. The hold enters through
+  // `onEnterRecommendationHold` (its own describe block below), which is where its
+  // classification, its conversation link and its fenced write are pinned.
+  //
+  // What stays pinned HERE is the other side of that removal: this seam DERIVES,
+  // and a `pending_input` wait it cannot derive an interrupt for keeps the generic
+  // continue-copy and the run page.
   // -------------------------------------------------------------------------
-  it("an explicit input waitKind mints the 'needs your input' copy for a HELD run", async () => {
-    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
-
-    await runWaitNotifier.onEnterHumanWait({
-      runId: "R1",
-      reason: "pending_input",
-      waitKind: "input",
-    });
-
-    const input = createNotificationForRecipient.mock.calls[0][1];
-    expect(input.title).toBe('"Blog draft" needs your input');
-    expect(input.body).toBe("Open the run to fill in the requested fields.");
-    // The row is still the SAME family + per-run key as every other human wait,
-    // so a held run and a later gate on it can never double up.
-    expect(input.dedupeKey).toBe(runAwaitingHumanDedupeKey("R1"));
-    // The reason payload is the run's UNMODIFIED status — presentation changed,
-    // state did not.
-    expect(input.metadata).toMatchObject({
-      category: RUN_AWAITING_HUMAN_CATEGORY,
-      runAwaitingHuman: { runId: "R1", reason: "pending_input" },
-    });
-  });
-
-  it("returns a HELD run's notification to the conversation it was started in", async () => {
-    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
-    findChatConversationPathForAgentRun.mockReturnValue(
-      "/chat/cinatra-ai/cinatra-assistant/blog-draft",
-    );
-
-    await runWaitNotifier.onEnterHumanWait({
-      runId: "R1",
-      reason: "pending_input",
-      waitKind: "input",
-    });
-
-    expect(findChatConversationPathForAgentRun).toHaveBeenCalledWith("R1");
-    const input = createNotificationForRecipient.mock.calls[0][1];
-    expect(input.href).toBe("/chat/cinatra-ai/cinatra-assistant/blog-draft");
-  });
-
-  it("falls back to the run page for a hold started outside a conversation", async () => {
-    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
-    findChatConversationPathForAgentRun.mockReturnValue(null);
-
-    await runWaitNotifier.onEnterHumanWait({
-      runId: "R1",
-      reason: "pending_input",
-      waitKind: "input",
-    });
-
-    const input = createNotificationForRecipient.mock.calls[0][1];
-    expect(input.href).toBe("/agents/acme/sales/R1");
-  });
-
-  it("without a waitKind, a pending_input wait keeps its pre-existing copy and destination", async () => {
-    // The #1058 stop-run-hitl pause — the other flagged `pending_input` wait —
-    // must be untouched by this slice.
+  it("a pending_input wait keeps its pre-existing copy and destination", async () => {
+    // The #1058 stop-run-hitl pause — the flagged `pending_input` wait — must be
+    // untouched by this slice.
     readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
     findChatConversationPathForAgentRun.mockReturnValue("/chat/cinatra-ai/cinatra-assistant/t1");
 
@@ -431,18 +386,6 @@ describe("runWaitNotifier.onEnterHumanWait — emit-on-wait", () => {
     expect(input.title).toBe('"Blog draft" is waiting on you to continue');
     expect(findChatConversationPathForAgentRun).not.toHaveBeenCalled();
     expect(input.href).toBe("/agents/acme/sales/R1");
-  });
-
-  it("a hold on a run with NO initiator notifies nobody (safe no-op)", async () => {
-    readAgentRunById.mockResolvedValue({ id: "R1", runBy: null, title: "Blog draft", status: "pending_input" });
-
-    await runWaitNotifier.onEnterHumanWait({
-      runId: "R1",
-      reason: "pending_input",
-      waitKind: "input",
-    });
-
-    expect(createNotificationForRecipient).not.toHaveBeenCalled();
   });
 
   it("still emits when the conversation lookup throws (best-effort)", async () => {
@@ -705,16 +648,21 @@ describe("runWaitNotifier.onEnterRecommendationHold — the fenced write", () =>
     const [recipient, input, options] = createNotificationForRecipient.mock.calls[0] as unknown as [
       { kind: string; userId: string },
       { title: string; href?: string; metadata?: Record<string, unknown> },
-      { recipientUserIds?: string[]; fence?: { precondition: { text: string; values: unknown[] }; after?: Array<{ text: string }> } },
+      { recipientUserIds?: string[]; fence?: { values: unknown[]; precondition: string; after?: string[] } },
     ];
     expect(recipient).toEqual({ kind: "user", userId: "user-1" });
     // The precondition names THIS park and THIS run, and takes the row lock. The
     // host does not re-spell it — it comes from the package that owns the table.
-    expect(options.fence?.precondition.values).toEqual(["park-7", "R1", "recommendation"]);
-    expect(options.fence?.precondition.text).toContain("FOR UPDATE");
-    expect(options.fence?.precondition.text).toContain("lifecycle_continuation_park");
-    // ...and the obligation mark rides the same transaction, after the insert.
-    expect(options.fence?.after?.[0].text).toContain("hold_notification = 'live'");
+    expect(options.fence?.values).toEqual(["park-7", "R1", "recommendation"]);
+    expect(options.fence?.precondition).toContain("FOR UPDATE");
+    expect(options.fence?.precondition).toContain("lifecycle_continuation_park");
+    // ...and the obligation mark rides the same statement, GATED on the insert's
+    // own RETURNING (cinatra#2838) — a mark that merely followed the insert would
+    // record `live` for an insert that no-opped on the dedupe conflict.
+    expect(options.fence?.after?.[0]).toContain("hold_notification = 'live'");
+    expect(options.fence?.after?.[0]).toContain(
+      'EXISTS (SELECT 1 FROM "notification_write")',
+    );
     // A single, already-resolved recipient: one lock, one insert.
     expect(options.recipientUserIds).toEqual(["user-1"]);
     // The row carries the park id, which is what makes the clear addressable.
@@ -730,8 +678,8 @@ describe("runWaitNotifier.onEnterRecommendationHold — the fenced write", () =>
     findChatConversationPathForAgentRun.mockReturnValue("/chat/thread-9");
     await runWaitNotifier.onEnterRecommendationHold!({ runId: "R1", parkId: "park-7" });
     const [, input] = createNotificationForRecipient.mock.calls[0] as [unknown, { title: string; href?: string }];
-    // The #2729 ruling: a held run has no HITL interrupt to classify, so the
-    // caller-side `waitKind` selects the input copy and the conversation link.
+    // The #2729 ruling: a held run has no HITL interrupt to classify, so this
+    // seam states the input classification and gets the conversation link.
     expect(input.title).toBe('"Nightly sync" needs your input');
     expect(input.href).toBe("/chat/thread-9");
   });

@@ -513,6 +513,85 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
   });
 
   // -------------------------------------------------------------------------
+  // cinatra#2838 — the insert can no-op even when the fence holds.
+  //
+  // The guard admitting the write is not the same fact as the write happening:
+  // the insert carries `ON CONFLICT (user_id, dedupe_key) DO NOTHING`, and the
+  // hold's key is the run's PER-RUN awaiting-human key. So an initiator who
+  // already holds a row on that key — an earlier wait on the same run whose clear
+  // has not landed — makes the insert write nothing while the park is perfectly
+  // `parked`. This is the case a mark that only repeated the guard's predicate got
+  // wrong, and it got it wrong in the worst direction: it recorded the park `live`,
+  // the park-scoped clear then matched no row (none carried this hold's park id)
+  // and acked the obligation discharged, and the hold was never announced to
+  // anybody while the ledger said it had been.
+  // -------------------------------------------------------------------------
+
+  it("A NO-OPPED INSERT MARKS NOTHING: a pre-existing row on the run's key leaves the park owing nothing", async () => {
+    const runId = `run-2838-${randomUUID()}`;
+    await seedRun(runId);
+
+    // A DIFFERENT writer already holds this run's per-run key — a real approval
+    // gate the run reached first, carrying no hold park id.
+    const squatterId = randomUUID();
+    await withClient((c) =>
+      c.query(
+        `INSERT INTO "${q(TEST_SCHEMA)}"."notifications"
+           (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, dedupe_key, metadata, created_at)
+         VALUES ($1, $2, 'user', $2, 'user', 'warning', 'A run is awaiting your approval', '', $3,
+                 jsonb_build_object('runAwaitingHuman', jsonb_build_object('runId', $4::text, 'reason', 'pending_approval')), now())`,
+        [squatterId, USER, `run-awaiting-human:${runId}`, runId],
+      ),
+    );
+
+    const parked = await parkRecommendation(runId);
+    expect(parked.parked).toBe(true);
+    if (!parked.parked) throw new Error("unreachable: park failed");
+    await dispatchRecommendationHoldEntered({ runId, parkId: parked.parkId });
+
+    // The insert no-opped: the key still holds exactly the earlier row, untouched.
+    const rows = await notificationRows(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(squatterId);
+    expect(rows[0].hold_park_id).toBeNull();
+
+    // AND THE PARK SAYS SO. `live` would be a lie here — no row carries this
+    // hold's park id, so the park-scoped clear could never find one, and acking it
+    // would retire an obligation that was never incurred.
+    expect(await parkState(parked.parkId)).toMatchObject({
+      status: "parked",
+      hold_notification: "none",
+    });
+  });
+
+  it("...and the sweep that follows discharges nothing and destroys nothing", async () => {
+    // The other half of the same defect: with the park marked `none`, the drain
+    // has no obligation to chase, so the squatting row of a DIFFERENT wait cannot
+    // be collateral of a hold that never wrote anything.
+    const runId = `run-2838b-${randomUUID()}`;
+    await seedRun(runId);
+    await withClient((c) =>
+      c.query(
+        `INSERT INTO "${q(TEST_SCHEMA)}"."notifications"
+           (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, dedupe_key, metadata, created_at)
+         VALUES ($1, $2, 'user', $2, 'user', 'warning', 'A run is awaiting your approval', '', $3,
+                 jsonb_build_object('runAwaitingHuman', jsonb_build_object('runId', $4::text, 'reason', 'pending_approval')), now())`,
+        [randomUUID(), USER, `run-awaiting-human:${runId}`, runId],
+      ),
+    );
+    const parked = await parkRecommendation(runId);
+    if (!parked.parked) throw new Error("unreachable: park failed");
+    await dispatchRecommendationHoldEntered({ runId, parkId: parked.parkId });
+
+    await parkStore.sweepParks({ releasedParkIds: [parked.parkId] });
+
+    const rows = await notificationRows(runId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].hold_park_id).toBeNull();
+    expect(rows[0].title).toContain("awaiting your approval");
+  });
+
+  // -------------------------------------------------------------------------
   // Finding 2 — fabrication, refused by the database.
   // -------------------------------------------------------------------------
 
@@ -609,6 +688,7 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
       schema: TEST_SCHEMA,
       parkId: parked.parkId,
       runId,
+      insertedCte: "notification_write",
     });
 
     const enter = new Client({ connectionString: DB_URL });
@@ -619,7 +699,7 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
       // The enter opens its transaction and takes the park's row lock, exactly as
       // the fenced INSERT does.
       await enter.query("BEGIN");
-      const guarded = await enter.query(fence.guard.text, fence.guard.values);
+      const guarded = await enter.query(fence.guard, fence.values);
       expect(guarded.rowCount).toBe(1);
 
       // The sweeper's own CAS, verbatim. It must not be able to transition the
@@ -669,6 +749,7 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
       schema: TEST_SCHEMA,
       parkId: parked.parkId,
       runId,
+      insertedCte: "notification_write",
     });
 
     const sweeper = new Client({ connectionString: DB_URL });
@@ -685,7 +766,7 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
       );
 
       let guardSettled = false;
-      const guard = enter.query(fence.guard.text, fence.guard.values).then((r) => {
+      const guard = enter.query(fence.guard, fence.values).then((r) => {
         guardSettled = true;
         return r;
       });

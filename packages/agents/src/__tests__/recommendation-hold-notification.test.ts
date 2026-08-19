@@ -13,8 +13,8 @@
  * is ALREADY `pending_input` (created that way) and is simply never dispatched,
  * parked on a continuation park instead. So this slice adds the direct seam
  * (`dispatchRecommendationHoldEntered` / `dispatchRecommendationHoldCleared`) and
- * the `waitKind` classification the host cannot derive for a run that carries no
- * HITL interrupt.
+ * the input classification the host cannot derive for a run that carries no HITL
+ * interrupt.
  *
  * This file covers the PACKAGE side: the seam dispatchers, the FENCE SQL they are
  * written behind, and the hold's own wiring (a NEW hold notifies exactly once with
@@ -250,16 +250,17 @@ describe("cinatra#2835 — the hold-notification write fence", () => {
     schema: "cinatra_test",
     parkId: "park-1",
     runId: "run-9",
+    insertedCte: "notification_write",
   });
 
   it("the guard matches the park on ALL FOUR facts a fabricated binding could lie about", () => {
     // id (the park exists), run_id (it is THIS run's), checkpoint (it is a hold
     // and not an auto-gate `review` park), status (the wait is not already over).
-    expect(fence.guard.text).toContain("id = $1");
-    expect(fence.guard.text).toContain("run_id = $2");
-    expect(fence.guard.text).toContain("checkpoint = $3");
-    expect(fence.guard.text).toContain("status = 'parked'");
-    expect(fence.guard.values).toEqual(["park-1", "run-9", "recommendation"]);
+    expect(fence.guard).toContain("id = $1");
+    expect(fence.guard).toContain("run_id = $2");
+    expect(fence.guard).toContain("checkpoint = $3");
+    expect(fence.guard).toContain("status = 'parked'");
+    expect(fence.values).toEqual(["park-1", "run-9", "recommendation"]);
   });
 
   it("the guard takes the park's ROW LOCK — the whole TOCTOU fix", () => {
@@ -268,29 +269,55 @@ describe("cinatra#2835 — the hold-notification write fence", () => {
     // and the insert would commit afterwards into a wait that is already over.
     // With it, the guard and the sweeper's `status = 'parked'` CAS contend for the
     // same lock and one of them provably goes second.
-    expect(fence.guard.text).toContain("FOR UPDATE");
+    expect(fence.guard).toContain("FOR UPDATE");
   });
 
   it("it reads the park table, and never the notifications table", () => {
-    expect(fence.guard.text).toContain('"cinatra_test"."lifecycle_continuation_park"');
-    expect(fence.guard.text).not.toContain("notifications");
+    expect(fence.guard).toContain('"cinatra_test"."lifecycle_continuation_park"');
+    expect(fence.guard).not.toContain("notifications");
   });
 
   it("the mark records the write under the SAME predicate that admitted it", () => {
     // A fence that refused the insert must not be able to mark the park `live`,
     // or the sweeper would chase a clear obligation for a row nobody wrote.
-    expect(fence.mark.text).toContain("hold_notification = 'live'");
-    expect(fence.mark.text).toContain("status = 'parked'");
-    expect(fence.mark.values).toEqual(fence.guard.values);
+    expect(fence.mark).toContain("hold_notification = 'live'");
+    expect(fence.mark).toContain("status = 'parked'");
   });
 
-  it("the schema name is quoted, not interpolated raw", () => {
+  // cinatra#2838 — THE PREDICATE IS NOT ENOUGH.
+  //
+  // The guard admitting the write does not mean the write happened: the insert
+  // carries `ON CONFLICT (user_id, dedupe_key) DO NOTHING`, and the hold's key is
+  // the run's PER-RUN awaiting-human key. An initiator who already holds a row on
+  // that key — an earlier wait on the same run — makes the insert no-op while the
+  // park is perfectly `parked` and the guard perfectly satisfied. A mark that only
+  // repeated the guard's predicate then recorded `live` for a row carrying no park
+  // id of this hold's, and the park-scoped clear later matched nothing and acked
+  // the obligation as discharged: the hold announced to nobody, on the record as
+  // announced. So the mark hangs off the insert's own RETURNING.
+  it("the mark ALSO hangs off the insert's own RETURNING, not just the predicate", () => {
+    expect(fence.mark).toContain('EXISTS (SELECT 1 FROM "notification_write")');
+  });
+
+  it("the CTE name is the writer's, never hand-spelled here", () => {
+    const renamed = buildHoldNotificationFence({
+      schema: "cinatra_test",
+      parkId: "park-1",
+      runId: "run-9",
+      insertedCte: "some_other_cte",
+    });
+    expect(renamed.mark).toContain('EXISTS (SELECT 1 FROM "some_other_cte")');
+  });
+
+  it("the schema name AND the CTE name are quoted, not interpolated raw", () => {
     const hostile = buildHoldNotificationFence({
       schema: 'we"ird',
       parkId: "p",
       runId: "r",
+      insertedCte: 'od"d',
     });
-    expect(hostile.guard.text).toContain('"we""ird"."lifecycle_continuation_park"');
+    expect(hostile.guard).toContain('"we""ird"."lifecycle_continuation_park"');
+    expect(hostile.mark).toContain('"od""d"');
   });
 });
 

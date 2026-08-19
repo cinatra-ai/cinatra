@@ -702,9 +702,11 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
   reevaluationIntent: boolean("reevaluation_intent").notNull().default(false),
   status:             text("status").notNull().default("parked"), // parked | released | policy_unresolved
   // cinatra#2835 — what this park owes the notification feed: none | live | cleared.
-  // Written to `live` in the SAME transaction as the hold notification's INSERT and
-  // retired to `cleared` only after an awaited delete, so "terminal park still live"
-  // is a durable, retryable clear obligation rather than a lost best-effort call.
+  // Written to `live` in the SAME STATEMENT as the hold notification's INSERT, gated
+  // on that insert's RETURNING (cinatra#2838), and retired to `cleared` only after an
+  // awaited delete. So `live` means a row for THIS hold exists — not merely that the
+  // insert was attempted — and "terminal park still live" is a durable, retryable
+  // clear obligation rather than a lost best-effort call.
   holdNotification:   text("hold_notification").notNull().default("none"),
   ttlExpiresAt:       timestamp("ttl_expires_at", { withTimezone: true }).notNull(),
   createdAt:          timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

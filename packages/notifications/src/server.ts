@@ -39,6 +39,10 @@ export {
   // cinatra#2835 — the hold-scoped clear: same key, but additionally pinned to the
   // park id the row carries, so a hold can only ever delete its OWN row.
   deleteHoldNotificationForUser,
+  // cinatra#2838 — the CTE a fenced insert's RETURNING is bound to. Part of the
+  // fence contract: an `after` statement gates itself on it, so a follow-up never
+  // records a row the insert did not write.
+  NOTIFICATION_WRITE_CTE,
 } from "./service";
 export type { CreateNotificationOptions } from "./service";
 export type { NotificationWriteFence, NotificationWriteStatement } from "./service";

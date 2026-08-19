@@ -163,7 +163,9 @@ export function buildAutoGateOpenNotificationInput(input: {
  * fail closed to the generic continue-copy — while the hold is, by the #2729
  * ruling, exactly an INPUT wait. An explicit `"input"` therefore selects the
  * input copy for EITHER reason; anything else leaves the pre-existing
- * reason+interrupt derivation untouched.
+ * reason+interrupt derivation untouched. Its ONE caller is
+ * `onEnterRecommendationHold` — the transition seam derives instead of stating
+ * (cinatra#2838 dropped the field the transition seam never filled).
  */
 export function buildRunAwaitingHumanNotificationInput(input: {
   runId: string;
@@ -295,7 +297,7 @@ function isRunWaitStatus(status: string | undefined): boolean {
  * pull the notifications service graph onto a cold import graph.
  */
 export const runWaitNotifier: RunWaitNotifier = {
-  async onEnterHumanWait({ runId, reason, waitKind }) {
+  async onEnterHumanWait({ runId, reason }) {
     try {
       await import("@/lib/notifications-host");
       // No actor argument → the store's access-gate block is bypassed (this
@@ -347,12 +349,15 @@ export const runWaitNotifier: RunWaitNotifier = {
       // conversation (a run started outside chat, a turn not yet persisted, a
       // store that cannot answer) keeps the run page, the pre-existing
       // destination.
-      // cinatra#2835 — an explicit `waitKind` from the caller stands in for the
-      // derived classification (a recommendation hold has no interrupt to
-      // derive from), so a held run lands on its conversation exactly as an
-      // unanswered input field does.
+      //
+      // The classification is DERIVED here and never stated by the caller: every
+      // caller of this seam is `transitionRunStatus`, which knows only that a
+      // status changed. The one wait that states its own flavour — the
+      // recommendation hold, which carries no interrupt to derive from — enters
+      // through `onEnterRecommendationHold` below instead (cinatra#2838 dropped the
+      // unused caller-supplied field from this seam).
       let href = runHref;
-      if (waitKind === "input" || classifyRunWaitInterrupt(interrupt) === "input") {
+      if (classifyRunWaitInterrupt(interrupt) === "input") {
         const { findChatConversationPathForAgentRun } = await import(
           "@/lib/assistant-thread-store"
         );
@@ -369,7 +374,6 @@ export const runWaitNotifier: RunWaitNotifier = {
           runTitle: run.title,
           href,
           interrupt,
-          waitKind,
         }),
       );
     } catch (err) {
@@ -480,8 +484,14 @@ export const runWaitNotifier: RunWaitNotifier = {
   //     clear precedes the write it was meant to remove.
   //
   // The fence's `mark` records `hold_notification = 'live'` on the same park in the
-  // same transaction, which is what makes the matching clear RETRYABLE (finding 3):
-  // see `onClearRecommendationHold` below.
+  // same statement, which is what makes the matching clear RETRYABLE (finding 3):
+  // see `onClearRecommendationHold` below. It is gated on the INSERT's `RETURNING`
+  // output (cinatra#2838), because a guard row does not by itself mean a row was
+  // written: the insert also carries `ON CONFLICT … DO NOTHING`, and an initiator
+  // who already holds a row on this run's key writes nothing. Marking `live` there
+  // would have claimed a row no park id of this hold's ever reached, and the
+  // park-scoped clear below would then match nothing and ack the obligation as
+  // discharged — a hold announced to nobody, recorded as announced.
   //
   // `waitKind: "input"` and the conversation deep-link are the #2729 ruling for a
   // held run (it carries no HITL interrupt to derive a classification from), and
@@ -499,16 +509,22 @@ export const runWaitNotifier: RunWaitNotifier = {
       const { buildHoldNotificationFence } = await import(
         "@cinatra-ai/agents/run-wait-notifier"
       );
+      const {
+        resolveAgentRunHref,
+        createNotificationForRecipient,
+        NOTIFICATION_WRITE_CTE,
+      } = await import("@cinatra-ai/notifications/server");
       // The park-side SQL comes from the package that OWNS the park table; this
       // module is only the translator that knows both vocabularies (and is the one
-      // place that can reach both tables on a single connection).
+      // place that can reach both tables on a single connection). The insert's CTE
+      // name travels the same way — the notifications package owns it, and the
+      // park package's `mark` gates itself on it (cinatra#2838).
       const holdFence = buildHoldNotificationFence({
         schema: appSchemaName(),
         parkId,
         runId,
+        insertedCte: NOTIFICATION_WRITE_CTE,
       });
-      const { resolveAgentRunHref, createNotificationForRecipient } =
-        await import("@cinatra-ai/notifications/server");
       const runHref = await resolveAgentRunHref({ runId });
       // A held run belongs to the conversation it was started in — the same
       // destination an unanswered input field gets. Best-effort: no resolvable
@@ -535,7 +551,11 @@ export const runWaitNotifier: RunWaitNotifier = {
           // lock once per recipient, in separate transactions — correct, but not a
           // shape any caller needs today.)
           recipientUserIds: [userId],
-          fence: { precondition: holdFence.guard, after: [holdFence.mark] },
+          fence: {
+            values: holdFence.values,
+            precondition: holdFence.guard,
+            after: [holdFence.mark],
+          },
         },
       );
     } catch (err) {

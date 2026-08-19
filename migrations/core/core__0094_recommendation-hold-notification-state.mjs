@@ -17,10 +17,14 @@
 // write is the park row itself:
 //
 //   enter  — the INSERT is fed from `SELECT … FOR UPDATE` of the park and this
-//            column is set to 'live' beside it, one transaction, one connection.
-//            The mark therefore never claims a row that was not written, and the
-//            row lock serializes the write against the sweeper's `status =
-//            'parked'` CAS (which is what closes the enter/clear TOCTOU).
+//            column is set to 'live' beside it, one STATEMENT, one connection,
+//            with the mark GATED ON THE INSERT'S OWN `RETURNING` (cinatra#2838).
+//            The guard alone is not enough: the insert carries `ON CONFLICT … DO
+//            NOTHING`, so an initiator already holding a row on this run's key
+//            writes nothing while the park is perfectly `parked`. Gated, the mark
+//            never claims a row that was not written; and the row lock serializes
+//            the write against the sweeper's `status = 'parked'` CAS (which is
+//            what closes the enter/clear TOCTOU).
 //   clear  — the sweeper deletes the row and retires this column to 'cleared'
 //            ONLY on an awaited, successful delete.
 //

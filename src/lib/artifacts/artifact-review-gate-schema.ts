@@ -426,8 +426,10 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     // `parked`. The notification lives in `notifications`, written through the
     // host's own connection, so the delete cannot ride the park's status CAS
     // transaction. This column carries the OBLIGATION instead: the enter sets it
-    // to 'live' in the same transaction as the INSERT (so it never claims a row
-    // that was not written), the CAS leaves it alone, and the sweeper retires it
+    // to 'live' in the same STATEMENT as the INSERT, gated on that INSERT's own
+    // RETURNING (cinatra#2838 — the insert can still no-op on its ON CONFLICT DO
+    // NOTHING dedupe arbiter, so a guard row alone does not mean a row was
+    // written), the CAS leaves it alone, and the sweeper retires it
     // to 'cleared' only after an awaited, successful delete. "Park no longer
     // parked AND hold_notification = 'live'" is therefore a durable, retryable
     // clear obligation — a process that dies mid-clear leaves work for the next
