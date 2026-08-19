@@ -386,10 +386,13 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       const found = (record.assertions ?? []).find(
         (a) => a?.selector === req.selector && (a?.frame ?? "main") === req.frame,
       );
+      // PRESENT means painted. The binding asks the same question the record's
+      // own validator does, so a screenshot whose card is attached-but-unrendered
+      // cannot satisfy a manifest row here after failing there.
       const ok =
         found &&
         (found.expect ?? "present") === wanted &&
-        (wanted === "present" ? found.count >= 1 : found.count === 0);
+        (wanted === "present" ? found.count >= 1 && found.visible >= 1 : found.count === 0);
       if (!ok) {
         violations.push(
           `manifest row ${claim.row}: the record for "${claim.cell}" does not observe ` +

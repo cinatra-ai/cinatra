@@ -31,9 +31,23 @@
  * inner anchors there. Nothing about the frames or the counts is accepted from
  * the caller, because a recorder that writes down what it was told is a
  * transcription of the claim, not evidence against it. The browser reaches this
- * module through a tiny `CapturePage` port (`url`, `count`, `frame`,
- * `screenshot`), so the audit tier stays dependency-free and runnable without an
- * install while the real driver is Playwright.
+ * module through a tiny `CapturePage` port (`url`, `count`, `countVisible`,
+ * `identifyWithin`, `countWithin`, `countWithinVisible`, `frame`, `screenshot`),
+ * so the audit tier stays dependency-free and runnable without an install while
+ * the real driver is Playwright.
+ *
+ * IT MEASURES ONE CARD, AND SAYS WHICH. Everything a chat_thread record claims
+ * about the card is counted inside a card root, and a transcript can hold
+ * several roots of one kind. So the instance is resolved ONCE per capture, its
+ * own attributes are read off the element and written into the record, and a
+ * page with several candidate cards and no declaration is REFUSED rather than
+ * answered with the first match.
+ *
+ * IT REQUIRES THE PIXELS. Every anchor is counted twice: attached, and PAINTED.
+ * `present` needs a painted match, because a card behind `display:none` or
+ * collapsed to nothing satisfies a selector while appearing nowhere in the
+ * screenshot the record is filed with. `absent` stays answered by attachment, so
+ * a decision control that is merely hidden can never read as gone.
  *
  * ---------------------------------------------------------------------------
  * THE HONEST LIMIT, stated because a gate that overclaims is worse than none.
@@ -48,10 +62,11 @@
  * So be exact about what IS closed. This gate catches the mislabel and the
  * omission: a capture whose recorded URL contradicts its declared host, a
  * required anchor that was never looked for, one that was looked for and not
- * found, a cell name that contradicts its own record, a hash that does not match
- * the file, and — since the duplicate check below — one image doing duty as the
- * proof of several different cells. Those are the failures that actually
- * happened. Deliberate fabrication is a review and trust problem, and this
+ * found, one that was found only as unpainted DOM, a capture that cannot say
+ * which of several same-kind cards it measured, a cell name that contradicts its
+ * own record, a hash that does not match the file, and — since the duplicate
+ * check below — one image doing duty as the proof of several different cells.
+ * Those are the failures that actually happened. Deliberate fabrication is a review and trust problem, and this
  * module does not pretend to solve it.
  */
 
@@ -259,18 +274,95 @@ export function collectAssertions(specs, queryCount) {
 }
 
 /**
+ * PIN THE CARD INSTANCE this capture measures.
+ *
+ * WHY THIS IS NOT "THE FIRST ONE". Everything a chat_thread record says about
+ * the card — its host declaration, its decision controls, its settled marker —
+ * is counted INSIDE the card root. A transcript can hold several cards of one
+ * kind, and `.first()` silently answers every one of those counts from whichever
+ * happens to lead the DOM. The record then describes a card the reader may never
+ * find in the screenshot, and nothing in it says which card was meant. So the
+ * instance is resolved ONCE, here, and written into the record.
+ *
+ * WHAT COUNTS AS IDENTITY. Whatever the element itself renders. The recorder
+ * reads the matched roots' own attributes and writes them down rather than
+ * looking for a blessed `data-run-id`: a closed list of identity spellings is a
+ * list a renamed attribute walks past, and a card that carries no identifying
+ * attribute at all is a fact worth recording, not one worth guessing around.
+ *
+ * THE AMBIGUITY RULE. One match needs no declaration. Several matches need one,
+ * and it must select exactly one of them; otherwise the capture FAILS. A gate
+ * that answers an ambiguous question with the first available answer is the
+ * mislabeling this module exists to refuse.
+ */
+export async function resolveCardInstance(page, selector, declaredInstance = null) {
+  if (typeof page.identifyWithin !== "function") {
+    throw new Error(
+      `capture cannot pin a card instance for ${selector}: the page port has no ` +
+        "identifyWithin(), so every card-scoped count would silently fall back to " +
+        "whichever match leads the DOM",
+    );
+  }
+  const matches = (await page.identifyWithin(selector)) ?? [];
+  const attributesAt = (i) => (matches[i] && typeof matches[i] === "object" ? matches[i] : {});
+
+  if (matches.length === 0) {
+    // Not an error: the required-anchor check below reports the missing card
+    // with an observed count of zero, which is the failure stated as evidence.
+    return { selector, matched: 0, index: 0, id: declaredInstance, attributes: {} };
+  }
+
+  if (declaredInstance !== null && declaredInstance !== undefined) {
+    const hits = matches
+      .map((attrs, index) => ({ attrs, index }))
+      .filter(({ attrs }) => Object.values(attrs ?? {}).includes(declaredInstance));
+    if (hits.length !== 1) {
+      throw new Error(
+        `capture declares instance "${declaredInstance}" for ${selector}, and ${hits.length} of ` +
+          `the ${matches.length} matching card(s) carry that value in an attribute — a ` +
+          "declaration that does not select exactly one card selects none",
+      );
+    }
+    return {
+      selector,
+      matched: matches.length,
+      index: hits[0].index,
+      id: declaredInstance,
+      attributes: hits[0].attrs,
+    };
+  }
+
+  if (matches.length > 1) {
+    throw new Error(
+      `capture found ${matches.length} elements matching ${selector} and the cell declares no ` +
+        "instance — every card-scoped count would describe one of them and the record would not " +
+        "say which. Add `instance` to the cell, naming a value the intended card renders",
+    );
+  }
+
+  return { selector, matched: 1, index: 0, id: null, attributes: attributesAt(0) };
+}
+
+/**
  * OBSERVE one capture cell and write the record from what was seen.
  *
  * `page` is the CapturePage port:
  *   · `url()`               — the URL the page actually ended on
  *   · `count(selector)`     — how many elements match, in the MAIN frame
- *   · `countWithin(root, selector)` — how many match INSIDE the first `root`.
- *                             Card-relative anchors go through this, so a host
- *                             declaration on an unrelated wrapper cannot stand
- *                             in for the card's own
+ *   · `countVisible(selector)` — how many of those are actually PAINTED
+ *   · `identifyWithin(selector)` — one attribute map per match, in DOM order,
+ *                             read off the elements' own attributes. This is
+ *                             what lets a record name WHICH card it measured
+ *   · `countWithin(root, selector, index)` — how many match inside the `index`-th
+ *                             `root`. Card-relative anchors go through this, so a
+ *                             host declaration on an unrelated wrapper cannot
+ *                             stand in for the card's own — and the INDEX is
+ *                             pinned once per capture rather than re-resolved to
+ *                             "whichever comes first" per selector
+ *   · `countWithinVisible(root, selector, index)` — the painted subset of that
  *   · `frame(selector)`     — resolve the frame element `selector` reaches and
- *                             return `{ url(), count(selector) }` for INSIDE it,
- *                             or null when it does not resolve
+ *                             return the same readers for INSIDE it, or null
+ *                             when it does not resolve
  *   · `screenshot(absPath)` — write the image
  *
  * The recorder does the resolving, entering and counting. Nothing about frames,
@@ -288,6 +380,15 @@ export async function observeCapture({
   state = "pending",
   screenshot,
   build,
+  /**
+   * WHICH card instance this cell photographs, when the page holds more than
+   * one of the kind. It is a SELECTOR of the instance, not a fact about it:
+   * the value has to appear in some attribute the card itself renders, and the
+   * attributes actually found are what get written down. A page with one card
+   * needs no declaration; a page with several and no declaration is refused as
+   * ambiguous rather than answered with the first match.
+   */
+  instance: declaredInstance = null,
   extraAssertions = [],
   repoRoot = process.cwd(),
   readImpl = readFileSync,
@@ -321,6 +422,15 @@ export async function observeCapture({
     ...extraAssertions,
   ];
 
+  // 2b. PIN THE INSTANCE every card-scoped count is answered from, and record
+  //     it. Without this the `within` counts are answered by "whichever card
+  //     root leads the DOM" and the record never says which card that was.
+  const instances = new Map();
+  for (const spec of specs) {
+    if (!spec.within || instances.has(spec.within)) continue;
+    instances.set(spec.within, await resolveCardInstance(page, spec.within, declaredInstance));
+  }
+
   const measure = async () => {
     const out = [];
     for (const spec of specs) {
@@ -332,12 +442,22 @@ export async function observeCapture({
         expect: spec.expect ?? "present",
         // An unresolved frame counts ZERO rather than skipping the assertion.
         count: 0,
+        // How many of those matches were PAINTED. A second number rather than a
+        // filter on the first, because the two claims need different evidence:
+        // `present` is answered by what the screenshot could actually show, and
+        // `absent` stays answered by ATTACHMENT, so a control that is merely
+        // hidden can never read as gone.
+        visible: 0,
       };
       if (spec.within) entry.within = spec.within;
       if (reader) {
+        const at = instances.get(spec.within)?.index ?? 0;
         entry.count = spec.within
-          ? await reader.countWithin(spec.within, spec.selector)
+          ? await reader.countWithin(spec.within, spec.selector, at)
           : await reader.count(spec.selector);
+        entry.visible = spec.within
+          ? await reader.countWithinVisible(spec.within, spec.selector, at)
+          : await reader.countVisible(spec.selector);
       }
       out.push(entry);
     }
@@ -357,12 +477,16 @@ export async function observeCapture({
   const after = await measure();
   const drifted = assertions
     .map((a, i) => ({ a, b: after[i] }))
-    .filter(({ a, b }) => !b || a.count !== b.count);
+    .filter(({ a, b }) => !b || a.count !== b.count || a.visible !== b.visible);
   if (drifted.length > 0) {
     throw new Error(
       `capture "${cell}" is not stable: ` +
         drifted
-          .map(({ a, b }) => `${a.selector} counted ${a.count} then ${b?.count ?? "n/a"}`)
+          .map(
+            ({ a, b }) =>
+              `${a.selector} counted ${a.count}/${a.visible} visible then ` +
+              `${b?.count ?? "n/a"}/${b?.visible ?? "n/a"} visible`,
+          )
           .join("; ") +
         ". The screen changed between the measurement and the screenshot.",
     );
@@ -381,6 +505,11 @@ export async function observeCapture({
   };
   if (kind) record.kind = kind;
   if (declaredHost === "chat_thread") record.state = state;
+  // WHICH card the card-scoped counts came from. Written for every capture that
+  // has a card root at all, so the record names an instance rather than leaving
+  // a reader to assume the screenshot holds only one.
+  const [pinned] = instances.values();
+  if (pinned) record.instance = pinned;
   if (Object.keys(frames).length > 0) {
     record.frames = Object.fromEntries(
       Object.entries(frames).map(([name, f]) => [name, { selector: f.selector, url: f.url }]),
@@ -565,6 +694,15 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
       v.push(`${label}: count must be the observed non-negative integer`);
       continue;
     }
+    // A record written before the painted count existed cannot be read as
+    // having observed one. Missing is a violation, not a zero and not a pass.
+    if (!Number.isInteger(a?.visible) || a.visible < 0 || a.visible > a.count) {
+      v.push(
+        `${label}: visible must be the observed count of PAINTED matches, ` +
+          `between 0 and ${a.count}; it is ${JSON.stringify(a?.visible)}`,
+      );
+      continue;
+    }
     const expected = a.expect ?? "present";
     if (expected !== "present" && expected !== "absent") {
       v.push(`${label}: expect must be "present" or "absent"`);
@@ -572,6 +710,16 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
     }
     if (expected === "present" && a.count < 1) {
       v.push(`${label}: recorded as present but observed ${a.count} times`);
+    }
+    // ATTACHED IS NOT SHOWN. A card in a collapsed panel, behind `display:none`
+    // or sized to nothing counts as present to a selector and appears nowhere in
+    // the screenshot — which is a capture whose record describes a screen the
+    // image does not show, the exact defect this index exists to catch.
+    if (expected === "present" && a.count >= 1 && a.visible < 1) {
+      v.push(
+        `${label}: recorded as present with ${a.count} match(es), and NONE of them was ` +
+          "painted — attached DOM is not a photograph",
+      );
     }
     if (expected === "absent" && a.count !== 0) {
       v.push(`${label}: recorded as absent but observed ${a.count} times`);
@@ -593,6 +741,57 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
       v.push(
         `${where}: a chat_thread record must declare the lifecycle \`kind\` it photographed ` +
           `(one of ${LIFECYCLE_KINDS.join("/")}) — it declares "${record?.kind}"`,
+      );
+    }
+  }
+
+  // --- the record names WHICH card it measured ---
+  // Every card-scoped count is answered from one resolved root. A record that
+  // does not say which root that was is a measurement of "a card of this kind
+  // somewhere on the page", and the reader comparing it to the screenshot has
+  // no way to check the two describe the same thing.
+  const cardRoot =
+    host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.kind)
+      ? `[data-lifecycle-card="${record.kind}"]`
+      : null;
+  if (cardRoot !== null) {
+    const inst = record?.instance;
+    if (inst === null || typeof inst !== "object") {
+      v.push(
+        `${where}: a chat_thread record must carry the \`instance\` its card-scoped counts were ` +
+          "read from — without it the counts describe whichever card led the DOM",
+      );
+    } else if (inst.selector !== cardRoot) {
+      v.push(
+        `${where}: the recorded instance pins ${inst.selector}, but this record's card-scoped ` +
+          `counts are taken inside ${cardRoot}`,
+      );
+    } else if (!Number.isInteger(inst.matched) || inst.matched < 1) {
+      v.push(
+        `${where}: the recorded instance matched ${JSON.stringify(inst.matched)} card(s) — a ` +
+          "record whose card root was never found asserts nothing about a card",
+      );
+    } else if (!Number.isInteger(inst.index) || inst.index < 0 || inst.index >= inst.matched) {
+      v.push(
+        `${where}: the recorded instance index ${JSON.stringify(inst.index)} is not one of the ` +
+          `${inst.matched} card(s) it matched`,
+      );
+    } else if (inst.matched > 1 && !isNonEmptyString(inst.id)) {
+      v.push(
+        `${where}: ${inst.matched} cards matched ${cardRoot} and the record names no instance id — ` +
+          "a capture that cannot say which of several cards it photographed is ambiguous, and " +
+          "an ambiguous capture is a mislabeled one waiting to happen",
+      );
+    } else if (inst.attributes === null || typeof inst.attributes !== "object") {
+      v.push(
+        `${where}: the recorded instance carries no observed attributes — identity is read OFF ` +
+          "the element, and a record that read none says so with an empty object, not by omission",
+      );
+    } else if (isNonEmptyString(inst.id) && !Object.values(inst.attributes).includes(inst.id)) {
+      v.push(
+        `${where}: the record pins instance "${inst.id}", and no attribute observed on the card ` +
+          `carries that value (${JSON.stringify(inst.attributes)}) — the id names a card the ` +
+          "recorder did not find",
       );
     }
   }
@@ -632,6 +831,12 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
       v.push(
         `${where}: host "${host}" requires ${req.selector} PRESENT in the ${req.frame} frame; ` +
           `the record observed ${found.count}`,
+      );
+    } else if (wanted === "present" && !(found.visible >= 1)) {
+      v.push(
+        `${where}: host "${host}" requires ${req.selector} PRESENT in the ${req.frame} frame; ` +
+          `the record observed ${found.count} attached and ${found.visible} painted — a required ` +
+          "anchor that renders nowhere is not in the photograph",
       );
     }
     if (wanted === "absent" && found.count !== 0) {

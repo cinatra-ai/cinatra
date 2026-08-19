@@ -51,6 +51,7 @@ import {
   chatThreadCellClaims,
   screenshotProofInventory,
 } from "../chat-hitl-acceptance-gate.mjs";
+import { playwrightPage } from "../lib/chat-hitl-capture-driver.mjs";
 import { CHAT_THREAD_CARRIAGE_CONTRACT } from "@/lib/lifecycle/held-turn-card-contract";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -63,9 +64,31 @@ const hashOf = (rel) => {
   return HASH;
 };
 
-/** Every anchor a chat_thread capture of `kind` owes, observed present. */
-function chatAssertions(kind = "recommendation_hold") {
-  return chatThreadRequirementsFor(kind).map((r) => ({ ...r, expect: "present", count: 1 }));
+/**
+ * Every anchor a chat_thread capture of `kind` owes, observed present AND
+ * painted. `visible` tracks `count` here because that is what an honest capture
+ * of a rendered card looks like; the fixtures that pull them apart are the
+ * attached-but-unrendered cases below.
+ */
+function chatAssertions(kind = "recommendation_hold", state = "pending") {
+  return chatThreadRequirementsFor(kind, state).map((r) => ({
+    ...r,
+    expect: r.expect ?? "present",
+    count: (r.expect ?? "present") === "absent" ? 0 : 1,
+    visible: (r.expect ?? "present") === "absent" ? 0 : 1,
+  }));
+}
+
+/** The card instance a single-card capture pins. */
+function chatInstance(kind = "recommendation_hold", over = {}) {
+  return {
+    selector: `[data-lifecycle-card="${kind}"]`,
+    matched: 1,
+    index: 0,
+    id: null,
+    attributes: { "data-lifecycle-card": kind, "data-lifecycle-card-host": "chat_thread" },
+    ...over,
+  };
 }
 
 /** A clean, host-anchored chat_thread record. */
@@ -82,6 +105,7 @@ function chatRecord(over = {}) {
     capturedAt: "2026-08-16T09:00:00.000Z",
     recordedBy: RECORDER_ID,
     assertions: chatAssertions(),
+    instance: chatInstance(),
     ...over,
   };
 }
@@ -111,7 +135,7 @@ describe("the mislabeled capture — the defect this index was built after", () 
     const record = chatRecord({
       finalUrl: "http://localhost:3000/agents/proof/pkg/run-1/review/task-1",
       assertions: [
-        { frame: "main", selector: "main", expect: "present", count: 1 },
+        { frame: "main", selector: "main", expect: "present", count: 1, visible: 1 },
       ],
     });
     const violations = validateCaptureRecord(record, { hashOf });
@@ -143,7 +167,9 @@ describe("the mislabeled capture — the defect this index was built after", () 
 
   it("REFUSES a required anchor that was looked for and not found", () => {
     const assertions = chatAssertions().map((a) =>
-      a.selector === '[data-lifecycle-card-host="chat_thread"]' ? { ...a, count: 0 } : a,
+      a.selector === '[data-lifecycle-card-host="chat_thread"]'
+        ? { ...a, count: 0, visible: 0 }
+        : a,
     );
     expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
       /recorded as present but observed 0 times/,
@@ -153,7 +179,7 @@ describe("the mislabeled capture — the defect this index was built after", () 
   it("REFUSES a required anchor that was never asserted at all", () => {
     const record = chatRecord({
       assertions: [
-        { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1 },
+        { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1, visible: 1 },
       ],
     });
     expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
@@ -193,12 +219,13 @@ describe("the mislabeled capture — the defect this index was built after", () 
       capturedAt: "2026-08-16T09:00:00.000Z",
       recordedBy: RECORDER_ID,
       assertions: [
-        { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1 },
+        { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1, visible: 1 },
         {
           frame: "main",
           selector: '[data-lifecycle-card-host="site_widget"]',
           expect: "present",
           count: 1,
+          visible: 1,
         },
       ],
     };
@@ -240,6 +267,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
           selector: '[data-lifecycle-card-host="run_card"]',
           expect: "present",
           count: 1,
+          visible: 1,
         },
       ],
     });
@@ -255,6 +283,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
           selector: '[data-lifecycle-card-host="page_gate_region"]',
           expect: "present",
           count: 1,
+          visible: 1,
         },
       ],
     });
@@ -283,13 +312,15 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
           selector: '[data-embed-assistant][data-phase="active"]',
           expect: "present",
           count: 1,
+          visible: 1,
         },
-        { frame: "widget", selector: "[data-conversation-list]", expect: "present", count: 1 },
+        { frame: "widget", selector: "[data-conversation-list]", expect: "present", count: 1, visible: 1 },
         {
           frame: "widget",
           selector: '[data-lifecycle-card-host="site_widget"]',
           expect: "present",
           count: 1,
+          visible: 1,
         },
       ],
     };
@@ -305,6 +336,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
           selector: '[data-action="cancel-trigger-schedule"]',
           expect: "absent",
           count: 0,
+          visible: 0,
         },
       ],
     });
@@ -320,6 +352,7 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
           selector: '[data-action="cancel-trigger-schedule"]',
           expect: "absent",
           count: 2,
+          visible: 2,
         },
       ],
     });
@@ -396,44 +429,83 @@ describe("the shared recorder", () => {
  * frame, count it, enter it, read the frame's own URL, and count the inner
  * anchors there — never take any of it from the caller.
  */
-function fakePage({ url, counts = {}, frame = null, frameUrl = "", frameCounts = {} }) {
+function fakePage({
+  url,
+  counts = {},
+  /**
+   * PAINTED counts, keyed exactly like `counts`. Anything unlisted is painted
+   * as often as it is attached — the honest default — so only the tests about
+   * hidden DOM have to say anything.
+   */
+  visible = {},
+  /**
+   * `identifyWithin` answers, keyed by root selector: one attribute map per
+   * match. Unlisted roots answer with as many synthetic cards as `counts` says
+   * are there, each carrying its own `data-card-instance`, so an ambiguity test
+   * only has to raise the count.
+   */
+  instances = {},
+  frame = null,
+  frameUrl = "",
+  frameCounts = {},
+  frameVisible = {},
+}) {
   const log = [];
+  const scoped = (table, root, selector, fallback) => {
+    const hit = table[`${root}>>${selector}`];
+    return hit === undefined ? (table[selector] ?? fallback) : hit;
+  };
+  const paintedOf = (table, counted, key) => (table[key] === undefined ? counted : table[key]);
+
+  const readerFor = (name, countTable, visibleTable, urlOf) => ({
+    url: urlOf,
+    count: async (selector) => {
+      log.push(`${name}.count:${selector}`);
+      return countTable[selector] ?? 0;
+    },
+    countVisible: async (selector) => {
+      log.push(`${name}.countVisible:${selector}`);
+      return paintedOf(visibleTable, countTable[selector] ?? 0, selector);
+    },
+    identifyWithin: async (selector) => {
+      log.push(`${name}.identifyWithin:${selector}`);
+      if (instances[selector] !== undefined) return instances[selector];
+      return Array.from({ length: countTable[selector] ?? 0 }, (_, i) => ({
+        "data-lifecycle-card": selector.replace(/^\[data-lifecycle-card="|"\]$/g, ""),
+        "data-lifecycle-card-host": "chat_thread",
+        "data-card-instance": `card-${i}`,
+      }));
+    },
+    // Card-scoped reads. The fake keys them by "root>>selector" so a test can
+    // say what lives INSIDE the card and what merely lives on the page. The
+    // INDEX is logged too: the recorder pinning a card is the behaviour under
+    // test, not an implementation detail.
+    countWithin: async (root, selector, index = 0) => {
+      log.push(`${name}.countWithin:${root}#${index}>>${selector}`);
+      return scoped(countTable, root, selector, 0);
+    },
+    countWithinVisible: async (root, selector, index = 0) => {
+      log.push(`${name}.countWithinVisible:${root}#${index}>>${selector}`);
+      const counted = scoped(countTable, root, selector, 0);
+      const key = visibleTable[`${root}>>${selector}`] === undefined ? selector : `${root}>>${selector}`;
+      return paintedOf(visibleTable, counted, key);
+    },
+  });
+
   const page = {
     log,
     written: [],
-    url: async () => {
+    ...readerFor("page", counts, visible, async () => {
       log.push("page.url");
       return url;
-    },
-    count: async (selector) => {
-      log.push(`page.count:${selector}`);
-      return counts[selector] ?? 0;
-    },
-    // Card-scoped reads. The fake keys them by "root>>selector" so a test can
-    // say what lives INSIDE the card and what merely lives on the page.
-    countWithin: async (root, selector) => {
-      log.push(`page.countWithin:${root}>>${selector}`);
-      const scoped = counts[`${root}>>${selector}`];
-      return scoped === undefined ? (counts[selector] ?? 0) : scoped;
-    },
+    }),
     frame: async (selector) => {
       log.push(`page.frame:${selector}`);
       if (!frame) return null;
-      return {
-        url: async () => {
-          log.push("frame.url");
-          return frameUrl;
-        },
-        count: async (sel) => {
-          log.push(`frame.count:${sel}`);
-          return frameCounts[sel] ?? 0;
-        },
-        countWithin: async (root, sel) => {
-          log.push(`frame.countWithin:${root}>>${sel}`);
-          const scoped = frameCounts[`${root}>>${sel}`];
-          return scoped === undefined ? (frameCounts[sel] ?? 0) : scoped;
-        },
-      };
+      return readerFor("frame", frameCounts, frameVisible, async () => {
+        log.push("frame.url");
+        return frameUrl;
+      });
     },
     screenshot: async (abs) => {
       log.push("page.screenshot");
@@ -475,7 +547,9 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
     // the card root rather than anywhere on the page.
     for (const req of chatThreadRequirementsFor("recommendation_hold")) {
       expect(page.log).toContain(
-        req.within ? `page.countWithin:${req.within}>>${req.selector}` : `page.count:${req.selector}`,
+        req.within
+          ? `page.countWithin:${req.within}#0>>${req.selector}`
+          : `page.count:${req.selector}`,
       );
     }
     expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
@@ -571,11 +645,7 @@ describe("a SETTLED capture owes the absence of its controls", () => {
     return chatRecord({
       cell: "S9x-8__chat_thread__recommendation-hold-settled",
       state: "settled",
-      assertions: chatThreadRequirementsFor("recommendation_hold", "settled").map((r) => ({
-        ...r,
-        expect: r.expect ?? "present",
-        count: (r.expect ?? "present") === "present" ? 1 : 0,
-      })),
+      assertions: chatAssertions("recommendation_hold", "settled"),
       ...over,
     });
   }
@@ -724,7 +794,7 @@ describe("the manifest to capture-index binding", () => {
         chatRecord({
           cell: "X1__chat_thread__held",
           assertions: [
-            { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1 },
+            { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1, visible: 1 },
           ],
         }),
       ]),
@@ -855,5 +925,298 @@ describe("the committed index and the gate CLI", () => {
       expect(run.status, `mode ${args.join(" ") || "audit"}`).toBe(1);
       expect(run.stderr).toMatch(/an unindexed screenshot counts as zero/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHICH CARD, AND WAS IT ON THE SCREEN
+// ---------------------------------------------------------------------------
+
+/**
+ * A fake Playwright page over a hand-built tree, so the DRIVER ADAPTER — the
+ * code that turns a real browser into the `CapturePage` port — is exercised
+ * without a browser and without writing an evidence file.
+ *
+ * Only the surface `playwrightPage` actually uses is modelled: `locator()` with
+ * `count`/`nth`/`first`, per-element `isVisible` and `evaluate`, and nested
+ * `locator()` for card-scoped reads.
+ */
+function fakeElement(attributes, { visible = true, children = {} } = {}) {
+  return { attributes, visible, children };
+}
+
+function fakeLocator(list) {
+  return {
+    count: async () => list.length,
+    nth: (i) => fakeElementLocator(list[i]),
+    // Used ONLY by the pre-fix adapter restated below. The shipped adapter must
+    // not reach for it, which is the whole point of this file's mutation check.
+    first: () => fakeElementLocator(list[0]),
+  };
+}
+
+function fakeElementLocator(el) {
+  return {
+    count: async () => (el ? 1 : 0),
+    isVisible: async () => Boolean(el?.visible),
+    evaluate: async (fn) =>
+      fn({
+        attributes: Object.entries(el?.attributes ?? {}).map(([name, value]) => ({ name, value })),
+      }),
+    locator: (selector) => fakeLocator(el?.children?.[selector] ?? []),
+  };
+}
+
+function fakeBrowserPage({ url, tree }) {
+  return {
+    url: () => url,
+    locator: (selector) => fakeLocator(tree[selector] ?? []),
+    $: async () => null,
+    screenshot: async () => {},
+  };
+}
+
+/**
+ * The SHIPPED adapter, with only its image-writing half stubbed out. These tests
+ * are about what the adapter MEASURES, and a fixture suite has no business
+ * creating an evidence file to prove it.
+ */
+function drivenPage(page) {
+  return { ...playwrightPage(page), screenshot: async () => {} };
+}
+
+const CARD_ROOT = '[data-lifecycle-card="recommendation_hold"]';
+const HOST_ANCHOR = '[data-lifecycle-card-host="chat_thread"]';
+const CONFIRM = '[data-action="confirm-run-recommendation"]';
+const SKIP = '[data-action="skip-run-recommendation"]';
+
+/** One `recommendation_hold` card, painted or not, with its own controls. */
+function heldCard(runId, { visible = true } = {}) {
+  const inner = fakeElement({}, { visible });
+  return fakeElement(
+    { "data-lifecycle-card": "recommendation_hold", "data-run-id": runId },
+    {
+      visible,
+      children: { [HOST_ANCHOR]: [inner], [CONFIRM]: [inner], [SKIP]: [inner] },
+    },
+  );
+}
+
+/**
+ * THE PAGE THE FINDING DESCRIBES: a /chat transcript holding TWO cards of the
+ * same kind. The first in DOM order is collapsed — attached, with every anchor
+ * this gate looks for, and painted nowhere. The second is the one a screenshot
+ * of this page actually shows.
+ */
+function twoCardTranscript() {
+  return fakeBrowserPage({
+    url: "http://localhost:3000/chat?thread=t-1",
+    tree: {
+      "[data-conversation-list]": [fakeElement({})],
+      [CARD_ROOT]: [heldCard("run-A", { visible: false }), heldCard("run-B")],
+    },
+  });
+}
+
+/**
+ * THE ADAPTER AS IT STOOD, restated: card-scoped reads answered from `.first()`,
+ * and attachment taken as presence. Nothing here is a straw man — it is the two
+ * lines this round changed, expressed through today's port so the SAME recorder
+ * and the SAME validator judge both records.
+ */
+function firstMatchAttachedOnlyPage(page) {
+  const countWithin = async (root, selector) => {
+    if ((await page.locator(root).count()) === 0) return 0;
+    return page.locator(root).first().locator(selector).count();
+  };
+  return {
+    url: async () => page.url(),
+    count: async (selector) => page.locator(selector).count(),
+    // Attachment WAS presence: the old adapter had no notion of painted.
+    countVisible: async (selector) => page.locator(selector).count(),
+    // The old adapter recorded no instance at all; the nearest honest
+    // translation is "one card, nothing observed about it".
+    identifyWithin: async () => [{}],
+    countWithin,
+    countWithinVisible: countWithin,
+    frame: async () => null,
+    screenshot: async () => {},
+  };
+}
+
+const OBSERVE_ARGS = {
+  cell: "S9x-mut__chat_thread__recommendation-hold-held",
+  declaredHost: "chat_thread",
+  kind: "recommendation_hold",
+  state: "pending",
+  screenshot: PNG,
+  build: "development",
+  repoRoot: "/anywhere",
+  readImpl: OBSERVER_READ,
+  now: () => "2026-08-19T09:00:00.000Z",
+};
+
+describe("a capture names WHICH card it measured, and whether it was on the screen", () => {
+  it("MUTATION: the pre-fix adapter accepts the mislabeled capture the fixed one refuses", async () => {
+    // The page: card run-A leads the DOM and is painted nowhere; card run-B is
+    // what the screenshot shows. A cell photographing this transcript has to
+    // end up describing ONE of them, and saying which.
+    const page = twoCardTranscript();
+
+    // BEFORE. Every card-scoped anchor is answered from run-A, the collapsed
+    // card, and attachment stands in for presence. The record validates CLEAN:
+    // conversation list, card root, host declaration and BOTH decision controls
+    // all "observed present" — a fully-anchored pending capture, filed with a
+    // screenshot in which none of it appears, and carrying nothing that says
+    // which card the numbers came from.
+    const before = await observeCapture({
+      ...OBSERVE_ARGS,
+      page: firstMatchAttachedOnlyPage(page),
+    });
+    expect(validateCaptureRecord(before, { hashOf })).toEqual([]);
+    for (const selector of [HOST_ANCHOR, CONFIRM, SKIP]) {
+      const a = before.assertions.find((x) => x.selector === selector);
+      expect(a.count).toBe(1);
+    }
+
+    // AFTER. The same page, through the shipped adapter, is not measurable at
+    // all until the capture says which card it means.
+    await expect(
+      observeCapture({ ...OBSERVE_ARGS, page: playwrightPage(page) }),
+    ).rejects.toThrow(/2 elements matching .* and the cell declares no instance/);
+  });
+
+  it("REFUSES the collapsed card even once it is named — attachment is not a photograph", async () => {
+    const record = await observeCapture({
+      ...OBSERVE_ARGS,
+      page: drivenPage(twoCardTranscript()),
+      instance: "run-A",
+    });
+    // It measured the card it was told to measure, and wrote down that nothing
+    // in it was painted.
+    expect(record.instance).toMatchObject({ selector: CARD_ROOT, matched: 2, index: 0, id: "run-A" });
+    for (const selector of [HOST_ANCHOR, CONFIRM, SKIP]) {
+      const a = record.assertions.find((x) => x.selector === selector);
+      expect({ selector, count: a.count, visible: a.visible }).toEqual({
+        selector,
+        count: 1,
+        visible: 0,
+      });
+    }
+    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+      /attached DOM is not a photograph/,
+    );
+  });
+
+  it("ACCEPTS the card that is actually on the screen, and records which one it was", async () => {
+    const record = await observeCapture({
+      ...OBSERVE_ARGS,
+      page: drivenPage(twoCardTranscript()),
+      instance: "run-B",
+    });
+    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    // host + kind + state + URL binding is now host + kind + state + URL +
+    // INSTANCE binding: the record names the card, off the card's own markup.
+    expect(record.instance).toEqual({
+      selector: CARD_ROOT,
+      matched: 2,
+      index: 1,
+      id: "run-B",
+      attributes: { "data-lifecycle-card": "recommendation_hold", "data-run-id": "run-B" },
+    });
+  });
+
+  it("REFUSES an instance declaration that selects no card, rather than falling back", async () => {
+    await expect(
+      observeCapture({
+        ...OBSERVE_ARGS,
+        page: drivenPage(twoCardTranscript()),
+        instance: "run-Z",
+      }),
+    ).rejects.toThrow(/0 of the 2 matching card\(s\) carry that value/);
+  });
+
+  it("needs no declaration when the transcript holds ONE card of the kind", async () => {
+    const page = fakeBrowserPage({
+      url: "http://localhost:3000/chat?thread=t-1",
+      tree: {
+        "[data-conversation-list]": [fakeElement({})],
+        [CARD_ROOT]: [heldCard("run-only")],
+      },
+    });
+    const record = await observeCapture({ ...OBSERVE_ARGS, page: drivenPage(page) });
+    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(record.instance).toMatchObject({ matched: 1, index: 0, id: null });
+  });
+
+  it("REFUSES a chat_thread record that names no instance at all", () => {
+    const record = chatRecord();
+    delete record.instance;
+    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+      /must carry the `instance` its card-scoped counts were read from/,
+    );
+  });
+
+  it("REFUSES a record that measured one of several cards without saying which", () => {
+    const record = chatRecord({ instance: chatInstance("recommendation_hold", { matched: 3 }) });
+    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+      /3 cards matched .* and the record names no instance id/,
+    );
+  });
+
+  it("REFUSES an instance id no observed attribute carries", () => {
+    const record = chatRecord({
+      instance: chatInstance("recommendation_hold", { matched: 2, id: "run-ghost" }),
+    });
+    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+      /the id names a card the recorder did not find/,
+    );
+  });
+
+  it("REFUSES an instance pinned to a root this record does not count inside", () => {
+    const record = chatRecord({
+      instance: chatInstance("recommendation_hold", { selector: '[data-lifecycle-card="verification_summary"]' }),
+    });
+    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+      /the recorded instance pins .* but this record's card-scoped counts are taken inside/,
+    );
+  });
+
+  it("REFUSES a record whose painted count was never observed", () => {
+    const assertions = chatAssertions().map((a) => {
+      const withoutPainted = { ...a };
+      delete withoutPainted.visible;
+      return withoutPainted;
+    });
+    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+      /visible must be the observed count of PAINTED matches/,
+    );
+  });
+
+  it("keeps ABSENT answered by ATTACHMENT, so a merely hidden control is not gone", () => {
+    // The asymmetry stated as a case. If `absent` were judged on the painted
+    // count, a settled capture would pass with its decision controls still in
+    // the DOM and merely hidden — which is a card a reader can still be shown.
+    const assertions = chatAssertions("recommendation_hold", "settled").map((a) =>
+      a.selector === CONFIRM ? { ...a, count: 1, visible: 0 } : a,
+    );
+    expect(
+      validateCaptureRecord(
+        chatRecord({ cell: "S9x-mut__chat_thread__recommendation-hold-settled", state: "settled", assertions }),
+        { hashOf },
+      ).join("\n"),
+    ).toMatch(/recorded as absent but observed 1 times/);
+  });
+
+  it("the BINDING refuses an attached-but-unpainted anchor too, not only the validator", () => {
+    const assertions = chatAssertions().map((a) =>
+      a.selector === CONFIRM ? { ...a, visible: 0 } : a,
+    );
+    expect(
+      auditManifestIndexBinding({
+        manifest: manifestClaiming("X9__chat_thread__recommendation-hold-held"),
+        index: indexOf([chatRecord({ cell: "X9__chat_thread__recommendation-hold-held", assertions })]),
+      }).join("\n"),
+    ).toMatch(/does not observe \[data-action="confirm-run-recommendation"\] present/);
   });
 });
