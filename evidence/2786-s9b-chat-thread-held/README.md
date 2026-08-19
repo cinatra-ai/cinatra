@@ -212,7 +212,8 @@ writes a lifecycle row by hand.
 - `00-fixtures.mts` — the provider presence placeholder and the MCP public base
   URL, both through the SHIPPED writers.
 - `01-signup.mjs` — the instance owner, through the real first-owner sign-up
-  surface. `01-signup.log` is its output.
+  surface. Its own run log is not committed: the repo gitignores `*.log`, and
+  `capture-log.txt` is the record this evidence rests on.
 - `02-capture-chat-thread.mjs` — the five cells: one turn per fresh thread,
   anchors read off the card's own root before every shot, run/park/queue and
   skip-evidence probes at each moment.
