@@ -1,0 +1,787 @@
+{
+ "$comment": [
+  "The machine record beside the pixels: what was requested, what URL answered,",
+  "the HTTP status, the frame the picture was taken on, the pixel size, every anchor count, the",
+  "per-chip DOM read-out (skill id, mark, forced flag, per-button disabled state) and the card's",
+  "own innerText. Nothing here is derived from the record file; both are written by the same run."
+ ],
+ "results": [
+  {
+   "cell": "A1__recommendation-card__run_card__held",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "pixels": {
+    "width": 1536,
+    "height": 138
+   },
+   "sha256": "cd6648b0e73645fe6e7c4d146a6813fe046332ba946e3b52a4fa731c24ca3226",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    }
+   ],
+   "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
+   "pageErrors": []
+  },
+  {
+   "cell": "A2__recommendation-card__run_card__held-mid-decision",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "pixels": {
+    "width": 1536,
+    "height": 138
+   },
+   "sha256": "ad4f56ac58a85ad8ca7582948fe10da131201d0fc6e4d66c33fa69ab8346acaf",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    }
+   ],
+   "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
+   "pageErrors": []
+  },
+  {
+   "cell": "A2b__recommendation-card__run_card__held-adjust-panel",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "pixels": {
+    "width": 2456,
+    "height": 2160
+   },
+   "sha256": "fc4ebe7dd92d1b9c23a3ba566df7a915678fb908caa5977ed1962935abeafef8",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    }
+   ],
+   "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
+   "pageErrors": []
+  },
+  {
+   "cell": "A3__recommendation-card__run_card__settled",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/4a6c484c-60cf-445d-a53a-aad7b6911fc8",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/4a6c484c-60cf-445d-a53a-aad7b6911fc8",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "pixels": {
+    "width": 1536,
+    "height": 190
+   },
+   "sha256": "b7d9d138fbec846d59300c7f73d38f91e5ce43f5b9ce4f4b1540e40f74a47a09",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "confirmed",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "skipped",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "confirmed",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    }
+   ],
+   "cardText": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher\nCONFIRMED\n@cinatra-ai/blog-writing-skill:blog-writing\nSKIPPED\n@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher\nCONFIRMED",
+   "pageErrors": []
+  },
+  {
+   "cell": "A4__recommendation-card__run_card__held-read-only",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/b47813ce-15cf-4319-9b7f-4745a4d9f75b",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b47813ce-15cf-4319-9b7f-4745a4d9f75b",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "pixels": {
+    "width": 1536,
+    "height": 186
+   },
+   "sha256": "c8679f5936fae644c7093b31d987d6f7d9da1cc1d88b54ba35e4bc33403cf408",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    }
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": "true",
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": "true",
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "undecided",
+     "forced": "true",
+     "ariaDisabled": "true",
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/web-research-skill:web-research",
+     "mark": "undecided",
+     "forced": "true",
+     "ariaDisabled": "true",
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": true,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    }
+   ],
+   "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip\nShaping this run needs run access on it.",
+   "pageErrors": []
+  },
+  {
+   "cell": "A5__recommendation-card__run_card__decided-page",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "pixels": {
+    "width": 2456,
+    "height": 2560
+   },
+   "sha256": "6122b77fad16f5907d0f86395f516f938c1ba7118de97451af5772eea7f97c90",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "cardText": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher\nCONFIRMED\n@cinatra-ai/blog-writing-skill:blog-writing\nSKIPPED\n@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher\nCONFIRMED\n@cinatra-ai/web-research-skill:web-research\nCONFIRMED",
+   "pageErrors": []
+  }
+ ]
+}

@@ -1,0 +1,718 @@
+{
+ "$comment": [
+  "CAPTURE RECORDS for cinatra#2841 (PR #2866), in the shape",
+  "scripts/ci/lib/capture-record-contract.mjs validates.",
+  "",
+  "NONE OF THESE RECORDS IS REGISTERED IN scripts/ci/chat-hitl-capture-index.json, and the reason is",
+  "a FINDING about the contract rather than about the pictures: the contract requires a",
+  "recommendation_hold record to have observed [data-lifecycle-card=\"recommendation_hold\"] and",
+  "[data-lifecycle-card-host=\"run_card\"] in the captured frame, and the shipped card emits NEITHER",
+  "attribute anywhere - RunRecommendationChipRow / RecommendationHoldCard declare only",
+  "data-conformance-id=\"run-chip-row\", data-run-recommendation-chip-row and the per-chip markers.",
+  "(ReviewGateCard does emit data-lifecycle-card-host; the recommendation card does not.) Every record",
+  "below therefore carries the count 0 it actually observed for those two anchors and the contract's",
+  "own verdict, rather than being edited to pass. Registering them would turn the gate red on a true",
+  "record, which is the opposite of what the gate is for."
+ ],
+ "recorder": "cinatra-lifecycle-capture-recorder@1",
+ "records": [
+  {
+   "cell": "A1__recommendation-card__run_card__held",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "pending",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "screenshot": "evidence/2841-v-redraw/captures/A1__recommendation-card__run_card__held.png",
+   "sha256": "cd6648b0e73645fe6e7c4d146a6813fe046332ba946e3b52a4fa731c24ca3226",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T21:53:55.431Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
+   "note": "HELD. One chip per offered skill, each carrying its own Confirm / Adjust / Skip. No heading plate above the row and no card-level submit beneath it.",
+   "contractVerdict": [
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
+    },
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
+    }
+   ]
+  },
+  {
+   "cell": "A2__recommendation-card__run_card__held-mid-decision",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "pending",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "screenshot": "evidence/2841-v-redraw/captures/A2__recommendation-card__run_card__held-mid-decision.png",
+   "sha256": "ad4f56ac58a85ad8ca7582948fe10da131201d0fc6e4d66c33fa69ab8346acaf",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T21:54:12.887Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
+   "note": "MID-DECISION. Chip 1 pressed Confirm, chip 2 went through Adjust and was kept, the remaining chips are undecided; the row is still live and every chip is still pressable.",
+   "contractVerdict": [
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
+    },
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
+    }
+   ]
+  },
+  {
+   "cell": "A2b__recommendation-card__run_card__held-adjust-panel",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "pending",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "screenshot": "evidence/2841-v-redraw/captures/A2b__recommendation-card__run_card__held-adjust-panel.png",
+   "sha256": "fc4ebe7dd92d1b9c23a3ba566df7a915678fb908caa5977ed1962935abeafef8",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T21:54:28.312Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
+   "note": "What ADJUST opens. Full page, because the panel is a right-side Sheet in a portal OUTSIDE the card root - it does NOT draw in place, so it cannot be framed on the card.",
+   "contractVerdict": [
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
+    },
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
+    }
+   ]
+  },
+  {
+   "cell": "A3__recommendation-card__run_card__settled",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "decided",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/4a6c484c-60cf-445d-a53a-aad7b6911fc8",
+   "screenshot": "evidence/2841-v-redraw/captures/A3__recommendation-card__run_card__settled.png",
+   "sha256": "b7d9d138fbec846d59300c7f73d38f91e5ce43f5b9ce4f4b1540e40f74a47a09",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T22:11:39.068Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
+   "note": "SETTLED, on a fresh load so the row is the server's own re-resolve. The hold was released by pressing, on the live row: Confirm on chip 1, Skip on chip 2, Adjust then 'Keep it in this run' on chip 3, Skip on chip 4. Each chip now states in place what the run's durable evidence records, and there is nothing left to press.",
+   "contractVerdict": [
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
+    },
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
+    },
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card-state]\" (root-scoped) was observed 0 times on this screen"
+    }
+   ]
+  },
+  {
+   "cell": "A4__recommendation-card__run_card__held-read-only",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "pending",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b47813ce-15cf-4319-9b7f-4745a4d9f75b",
+   "screenshot": "evidence/2841-v-redraw/captures/A4__recommendation-card__run_card__held-read-only.png",
+   "sha256": "c8679f5936fae644c7093b31d987d6f7d9da1cc1d88b54ba35e4bc33403cf408",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T22:16:22.080Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
+   "note": "READ-ONLY. A SECOND signed-in actor who is not the run owner, reading a run whose shipped per-run auth-policy override (agent_runs.auth_policy, the same shape the agent Permissions tab writes) grants run DATA to the organization and run EXECUTE to the owner alone. The reader therefore clears the run-read door and fails the execute tier, which is exactly the canDecide=false reading.",
+   "contractVerdict": [
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
+    },
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
+    }
+   ]
+  },
+  {
+   "cell": "A5__recommendation-card__run_card__decided-page",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "decided",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "screenshot": "evidence/2841-v-redraw/captures/A5__recommendation-card__run_card__decided-page.png",
+   "sha256": "6122b77fad16f5907d0f86395f516f938c1ba7118de97451af5772eea7f97c90",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-19T21:55:46.395Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
+   "note": "The DECIDED run-page reading, whole page: where the settled row sits in the run panel and what surrounds it.",
+   "contractVerdict": [
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
+    },
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
+    },
+    {
+     "code": "record/anchor-count-zero",
+     "detail": "\"[data-lifecycle-card-state]\" (root-scoped) was observed 0 times on this screen"
+    }
+   ]
+  }
+ ]
+}
