@@ -751,6 +751,14 @@ function renderState(args: {
             permissions={permissions}
             submitAction={submit}
             suggestionDecisionsFor={suggestionDecisionsFor}
+            suggestionSummary={
+              state.canDecide && suggestions.length > 0
+                ? {
+                    accepted: suggestions.filter((s) => !dismissed?.[s.id]).length,
+                    total: suggestions.length,
+                  }
+                : undefined
+            }
           />
         </>
       );
@@ -1111,8 +1119,6 @@ export function SuggestionChips({
       : dismissed?.[s.id]
         ? "dismissed"
         : "accepted";
-  const acceptedCount = suggestions.filter((s) => stateOf(s) === "accepted").length;
-
   return (
     <div
       data-conformance-id="suggestion-chips"
@@ -1189,19 +1195,6 @@ export function SuggestionChips({
             : interactive
               ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below."
               : "Deciding these needs approve access on this run."}
-        </p>
-      ) : null}
-      {interactive && suggestions.length > 0 ? (
-        // §VIII's floor line: what the decision below is about to carry. It
-        // replaces the shipped reject warning outright — a reject is no longer
-        // refused, it records these as not taken.
-        <p
-          data-conformance-id="suggestion-accepted-count"
-          className="text-xs leading-relaxed text-muted-foreground"
-        >
-          {`${acceptedCount} of ${suggestions.length} ${
-            suggestions.length === 1 ? "suggestion" : "suggestions"
-          } accepted — they ride this decision. A reject records them as not taken.`}
         </p>
       ) : null}
     </div>

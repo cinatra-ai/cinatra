@@ -59,6 +59,7 @@ export function ReviewDecisionBar({
   permissions,
   submitAction,
   suggestionDecisionsFor,
+  suggestionSummary,
 }: {
   permissions: ReviewDecisionPermissions;
   submitAction: SubmitReviewDecisionAction;
@@ -79,6 +80,14 @@ export function ReviewDecisionBar({
    * byte-identical to what it was before this parameter existed.
    */
   suggestionDecisionsFor?: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
+  /**
+   * §VIII's floor line — what the decision below is about to carry. The ratified
+   * drawing composes it INSIDE the decision floor, above the terminal row. It
+   * replaces the shipped reject warning outright: a reject is no longer refused,
+   * it records the surfaced suggestions as not taken. Absent when the surface
+   * shows no suggestions or the reader cannot decide.
+   */
+  suggestionSummary?: { accepted: number; total: number };
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -135,6 +144,16 @@ export function ReviewDecisionBar({
       data-conformance-id="review-decision-bar"
       className="overflow-hidden rounded-control border border-line bg-surface-strong"
     >
+      {suggestionSummary ? (
+        <p
+          data-conformance-id="suggestion-accepted-count"
+          className="px-4 pt-3 text-xs leading-relaxed text-muted-foreground"
+        >
+          {`${suggestionSummary.accepted} of ${suggestionSummary.total} ${
+            suggestionSummary.total === 1 ? "suggestion" : "suggestions"
+          } accepted — they ride this decision. A reject records them as not taken.`}
+        </p>
+      ) : null}
       {/* Decision rationale (§IV) — optional on approve, expected on reject, the
           substance of a comment. Travels into the audit trail + the resume note. */}
       <div className="px-4 pt-3">
