@@ -329,6 +329,51 @@ export function projectLifecycleSuggestions(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// The SETTLED READING — what a decided gate says about itself (cinatra#2855)
+// ---------------------------------------------------------------------------
+//
+// A settled review card used to know only that it was settled, so every one of
+// them read the generic "This review is no longer open" and carried a Refresh
+// as the escape hatch for that ambiguity (plan §4.2). The outcome and the
+// decider travel HERE, on the state, because the review kind's envelope carries
+// no body at all — its target arrives through its own island — and a settled
+// card is exactly a card with no target left to draw.
+//
+// THE SET IS CLOSED AND IT IS THE STORE'S. These three are the dispositions a
+// gate row can be RESOLVED with: `approve` and `reject` from the decision core's
+// terminal CAS, `changes_requested` from the lifecycle prompt-window path that
+// closes the base gate and opens a repair. A `comment` never resolves a gate, so
+// it is not an outcome a settled card can carry.
+//
+// BOTH ENDS FAIL CLOSED, and they fail closed DIFFERENTLY on purpose. The
+// producer refuses to project a disposition outside this set and attaches no
+// outcome at all, so the card falls back to the generic reading it has always
+// drawn. The parser refuses a state carrying a value outside it, so a card
+// cannot be talked into naming an outcome this build does not understand — a
+// refused parse leaves the card with no state, and a card with no state draws
+// nothing.
+//
+// THE DECIDER IS A DISPLAY NAME, NEVER AN IDENTIFIER. `decidedByName` is the
+// same class of value as `restricted.reason`: a surface-safe phrase, bounded,
+// meant to be read by a person. The user id that resolved the gate, the row id
+// and the address it was reached at never travel — a body carrying an
+// addressable id turns a card into a place to read one out of. A gate whose
+// decider has no displayable name carries the OUTCOME ALONE rather than a
+// stand-in, because "Approved" is true and "Approved by 4f3a…" is a leak.
+
+/** The closed set of outcomes a RESOLVED review gate can carry. */
+export const LIFECYCLE_SETTLED_OUTCOMES = [
+  "approved",
+  "rejected",
+  "changes_requested",
+] as const;
+
+export type LifecycleSettledOutcome = (typeof LIFECYCLE_SETTLED_OUTCOMES)[number];
+
+/** Ceiling on the decider's display name. Bounded like every other wire field. */
+export const LIFECYCLE_DECIDER_NAME_MAX_LENGTH = 80;
+
 /**
  * The resolved card state as the refetch contract returns it. Discriminated so
  * a renderer cannot read a decision affordance off an `absent`/`settled` state
@@ -361,7 +406,23 @@ export type LifecycleCardState =
       reason: string;
       suggestions?: LifecycleSuggestion[];
     }
-  | { state: "settled"; suggestions?: LifecycleSuggestion[] }
+  | {
+      state: "settled";
+      suggestions?: LifecycleSuggestion[];
+      /**
+       * The recorded outcome, when this build could read one. ABSENT IS LEGAL
+       * and is not a signal: a gate resolved before the outcome travelled, a
+       * disposition outside the closed set and a projection that was not asked
+       * for one all answer the same way, and the card draws its generic reading.
+       */
+      outcome?: LifecycleSettledOutcome;
+      /**
+       * The decider as a SURFACE-SAFE display name — never a user id, never an
+       * email address. Only ever present alongside an `outcome`: a name with no
+       * outcome beside it names a person for nothing.
+       */
+      decidedByName?: string;
+    }
   | { state: "advisory" }
   | { state: "absent" };
 
@@ -385,7 +446,24 @@ export const lifecycleCardStateSchema: z.ZodType<LifecycleCardState> = z.union([
       suggestions: suggestionsField,
     })
     .strict(),
-  z.object({ state: z.literal("settled"), suggestions: suggestionsField }).strict(),
+  z
+    .object({
+      state: z.literal("settled"),
+      suggestions: suggestionsField,
+      outcome: z.enum(LIFECYCLE_SETTLED_OUTCOMES).optional(),
+      decidedByName: z
+        .string()
+        .min(1)
+        .max(LIFECYCLE_DECIDER_NAME_MAX_LENGTH)
+        .optional(),
+    })
+    .strict()
+    // A decider with no outcome beside it is refused rather than trimmed: it
+    // names a person for a decision the card cannot state, and a producer that
+    // sent one is a producer whose other answers cannot be trusted either.
+    .refine((v) => v.decidedByName === undefined || v.outcome !== undefined, {
+      message: "decidedByName requires an outcome",
+    }),
   z.object({ state: z.literal("advisory") }).strict(),
   z.object({ state: z.literal("absent") }).strict(),
 ]);

@@ -450,3 +450,46 @@ describe("the recommendation hold stays outside the DATA_PART envelope", () => {
     expect(declared).not.toContain("recommendation_hold");
   });
 });
+
+describe("the settled reading survives the parse seam (cinatra#2855)", () => {
+  it("carries an outcome and a decider through, on the kind that has no body", () => {
+    const state = {
+      state: "settled",
+      outcome: "approved",
+      decidedByName: "Dana Okonkwo",
+    };
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state,
+        body: null,
+      }),
+    ).toEqual({ kind: "artifact_review_gate", state, body: null });
+  });
+
+  it("REFUSES an outcome this build cannot read, rather than dropping it", () => {
+    // A refused parse leaves the card with no state, so it draws nothing. A
+    // parser that silently dropped the unknown field would instead hand the card
+    // a bare `settled` and let it claim the pre-#2855 reading for a gate whose
+    // real outcome it could not understand.
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "settled", outcome: "withdrawn" },
+        body: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("still refuses a BODY beside the settled reading", () => {
+    // The review kind draws its target through its own island; the outcome
+    // riding the STATE does not buy the kind a body.
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "settled", outcome: "approved" },
+        body: { anything: true },
+      }),
+    ).toBeNull();
+  });
+});
