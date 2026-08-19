@@ -19,6 +19,12 @@ import {
 import type { TrustVerdict } from "@/lib/extension-trust";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import { PLATFORM_OWNER_SENTINEL } from "@cinatra-ai/extensions/canonical-types";
+// The REAL source-precedence policy and the REAL bundled-source builder
+// (cinatra#2774) — the cases below drive them, never a local restatement.
+import {
+  applyInstallRowPrecedence,
+  staticBundleAnchorSource,
+} from "@cinatra-ai/extensions/static-bundle-anchor";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import {
   evaluateExtensionAccess,
@@ -646,6 +652,221 @@ describe("buildInstalledExtensionReadModel — the trust verdict describes the P
     expect(asked).toEqual([{ installId: "iext_other", organizationId: "org-OTHER" }]);
     expect(rm.ownerScope?.organizationId).toBe("org-OTHER");
     expect(rm.trust?.trusted).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2850 (round 4) — SOURCE PRECEDENCE sits between supersession and the
+// single-default rule: supersession -> precedence -> single-default -> status.
+//
+// The case precedence decides is the one supersession CANNOT: a package that
+// ships in the image AND has a marketplace install holds a live bundled row and
+// a live marketplace default row at the same time. Neither is the workspace
+// anchor, so `effectiveInstallRows` leaves BOTH candidates standing, and both
+// are addressable and both are `isDefault` — so the cross-org and single-default
+// keys are ties and the STATUS ranking (or, on a status tie, array order) picked
+// the row. Precedence is what makes that pick truthful: the marketplace install
+// is the OVERRIDE, the bundled row is the fallback underneath it.
+//
+// These drive the REAL `applyInstallRowPrecedence` (cinatra#2774, the one place
+// the policy is written down) through the real read model — the module consumes
+// the helper and never re-derives it, so the cases below assert the read model's
+// pick AGAINST the helper's own verdict on the same rows.
+// ---------------------------------------------------------------------------
+
+describe("buildInstalledExtensionReadModel — source precedence between supersession and single-default (cinatra#2850 r4)", () => {
+  /** The image-shipped fallback row, built from the REAL bundled-source helper. */
+  const bundledRow = (partial: Partial<InstalledExtension> = {}): InstalledExtension =>
+    row({
+      id: "iext_bundled",
+      ownerLevel: "platform",
+      ownerId: null,
+      organizationId: null,
+      source: staticBundleAnchorSource("@cinatra-ai/demo-connector", "1.0.0", "sha256-img"),
+      kind: "agent",
+      ...partial,
+    });
+
+  /** The marketplace install that OVERRIDES it — org-scoped, default, verdaccio. */
+  const marketplaceRow = (partial: Partial<InstalledExtension> = {}): InstalledExtension =>
+    row({ id: "iext_market", organizationId: "org-1", isDefault: true, kind: "connector", ...partial });
+
+  /**
+   * THE CASE PRECEDENCE DECIDES. Supersession leaves BOTH rows (neither is the
+   * workspace anchor); both are own-scope and both are default, so cross-org and
+   * single-default are ties. The bundled row is `active` and FIRST in the array
+   * while the override is `locked`, so the pre-#2774 order — single-default then
+   * STATUS — reported the bundled row. Precedence runs first and the override wins.
+   */
+  const bundledFirstOverrideLocked = async (): Promise<InstalledExtension[]> => [
+    bundledRow({ status: "active" }),
+    marketplaceRow({ status: "locked" }),
+  ];
+
+  it("the marketplace override is reported even though the bundled row wins the STATUS ranking", async () => {
+    const rows = await bundledFirstOverrideLocked();
+    // The policy's own verdict on exactly these rows — the read model must agree.
+    expect(applyInstallRowPrecedence(rows).map((r) => r.id)).toEqual(["iext_market"]);
+
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: bundledFirstOverrideLocked,
+    });
+    expect(rm.kind).toBe("connector"); // the OVERRIDE's kind, not the bundled row's
+    expect(rm.status).toBe("locked"); // and its status — the better-status fallback lost
+    expect(rm.ownerScope).toEqual({
+      ownerLevel: "organization",
+      ownerId: null,
+      organizationId: "org-1",
+    });
+  });
+
+  it("ORDER PIN: precedence runs BEFORE single-default — a non-default bundled row does not change the winner", async () => {
+    // Had single-default run first it would have demoted the bundled row for the
+    // flag rather than for its provenance; the override still wins, and the pin
+    // is that the winner is the same row either way.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [
+        bundledRow({ status: "active", isDefault: false }),
+        marketplaceRow({ status: "locked" }),
+      ],
+    });
+    expect(rm.kind).toBe("connector");
+    expect(rm.status).toBe("locked");
+  });
+
+  it("array order does not decide it: the override wins whichever way the rows arrive", async () => {
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [marketplaceRow({ status: "locked" }), bundledRow({ status: "active" })],
+    });
+    expect(rm.kind).toBe("connector");
+    expect(rm.status).toBe("locked");
+  });
+
+  it("the serve gate keeps SERVING: the anchor answers for the OVERRIDE, so the picked row's trust survives", async () => {
+    // The consequence, not the metadata. The anchor resolver applies the SAME
+    // precedence, so it answers for `iext_market`. A read model that still picked
+    // the bundled row would make `anchor.installId !== row.id`, the identity
+    // backstop would null `trust`, and the CG-5 gate would deny a serving cube.
+    const asked: ReadModelAnchorTarget[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...trustDeps,
+      readRows: bundledFirstOverrideLocked,
+      resolveTrustAnchor: anchorsByRow(
+        { iext_market: anchorForRow("iext_market", TRUSTED_REGISTRY) },
+        asked,
+      ),
+    });
+    expect(asked).toEqual([{ installId: "iext_market", organizationId: "org-1" }]);
+    expect(rm.trust?.trusted).toBe(true);
+    expect(
+      decideRuntimeCubeServe({
+        cubeId: "runtime.demo",
+        isRuntimeCube: () => true,
+        facts: { actorVisible: rm.actorVisible, status: rm.status, trust: rm.trust },
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  // --- NARROWNESS: what precedence must NOT move -----------------------------
+
+  it("INVARIANT PIN: no override present — the bundled fallback is still the reported row", async () => {
+    const rows = [bundledRow({ status: "active" })];
+    expect(applyInstallRowPrecedence(rows)).toEqual(rows); // the policy selects nothing
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => rows,
+    });
+    expect(rm.kind).toBe("agent");
+    expect(rm.status).toBe("active");
+  });
+
+  it("INVARIANT PIN: a NON-default marketplace sibling never becomes the override", async () => {
+    // Only a DEFAULT marketplace row is an override. With none, precedence returns
+    // the pair untouched and the pre-existing ranking decides — status picks the
+    // `active` bundled row over the `locked` sibling, exactly as before.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [
+        bundledRow({ status: "active" }),
+        marketplaceRow({ id: "iext_sbs", status: "locked", isDefault: false }),
+      ],
+    });
+    expect(rm.kind).toBe("agent");
+    expect(rm.status).toBe("active");
+  });
+
+  it("LIVENESS: an ARCHIVED override does not outrank the live bundled row", async () => {
+    // Precedence's override test does not read `status`, so it is applied to the
+    // LIVE rows only. Handed the archived row it would have selected it and
+    // inverted the status ranking — the read model would report `archived` for a
+    // package that is serving from the image.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [
+        bundledRow({ status: "active" }),
+        marketplaceRow({ status: "archived" }),
+      ],
+    });
+    expect(rm.kind).toBe("agent");
+    expect(rm.status).toBe("active");
+  });
+
+  it("SCOPE: precedence does not reach across orgs — an admin still reads their OWN org's row", async () => {
+    // The override lives in ANOTHER org. Ranking it over the admin's own-org row
+    // would be the same bleed the same-org preference exists to stop, so the
+    // policy is applied within the actor's own scope and the cross-org row stays
+    // ranked below it.
+    const platformAdmin: ActorContext = { ...actor, platformRole: "platform_admin" };
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", platformAdmin, {
+      ...baseDeps,
+      readRows: async () => [
+        marketplaceRow({ id: "iext_other", status: "active", organizationId: "org-OTHER" }),
+        bundledRow({ status: "locked" }),
+      ],
+    });
+    expect(rm.ownerScope?.organizationId).toBeNull();
+    expect(rm.kind).toBe("agent"); // the own-scope bundled row
+  });
+
+  it("AMBIGUITY falls through to the pre-#2774 ranking — two live overrides do not blank the model", async () => {
+    // The helper drops EVERY candidate for two live marketplace defaults and
+    // delegates the fail-closed to the caller's own rule. The seams that BIND a
+    // row resolve that to null; this caller RANKS, and the read model is
+    // descriptive — reporting `absent` (its word for uninstalled) while two
+    // installs stand live would be an untruth. The safety is one layer down and
+    // unchanged: the anchor resolver applies the same policy, finds the same
+    // ambiguity, returns no anchor, and `trust` degrades to null.
+    const rows = [
+      marketplaceRow({ id: "iext_a", status: "active" }),
+      marketplaceRow({ id: "iext_b", status: "active", ownerLevel: "team", ownerId: "team-A" }),
+    ];
+    expect(applyInstallRowPrecedence(rows)).toEqual([]); // the ambiguity arm
+
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => rows,
+    });
+    expect(rm.status).toBe("active"); // NOT `absent`
+    expect(rm.actorVisible).toBe(true);
+    expect(rm.trust).toBeNull(); // no anchor agrees, so no verdict is claimed
+  });
+
+  it("ORDER PIN: supersession still runs FIRST — a live workspace row beats the marketplace override", async () => {
+    // Precedence is inserted BELOW supersession, so it only ever ranks what
+    // supersession leaves. The workspace row supersedes the org row, and the
+    // override never reaches the policy at all.
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [
+        marketplaceRow({ status: "active" }),
+        workspaceRow({ status: "locked", kind: "skill" }),
+      ],
+    });
+    expect(rm.kind).toBe("skill");
+    expect(rm.ownerScope?.ownerLevel).toBe("workspace");
   });
 });
 

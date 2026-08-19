@@ -115,6 +115,10 @@ import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types"
 // THE supersession rule, expressed once (cinatra#2698 S4). This module CONSUMES
 // it; it never re-derives it. See `pickAddressableRowForActor` below.
 import { effectiveInstallRows } from "@cinatra-ai/extensions/lifecycle-target-resolver";
+// THE install-row source-precedence policy, expressed once (cinatra#2774). Same
+// contract as the line above: CONSUMED here, never re-derived. It is the step
+// between supersession and the single-default rule in `pickAddressableRowForActor`.
+import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
 import {
   type PackageStoreFs,
   type PackageStoreRecord,
@@ -318,13 +322,12 @@ function actorScopeForPick(actor: ActorContext): ActorScopeForPick {
  * set that helper is defined over. With no live workspace row it returns `rows`
  * unchanged, so every pre-S4 pick is byte-identical.
  *
- * THEN THE SINGLE-DEFAULT RULE, then the status ranking (cinatra#2850). The
- * full order is: supersession -> [precedence] -> single-default -> status.
- * The `[precedence]` slot is RESERVED, not implemented here: version-precedence
- * lands with cinatra#2774, and this pick is to be rebase-aligned to
- * supersession -> precedence -> single-default once that PR is in. Nothing in
- * this function anticipates it — the slot is named so the alignment is a single
- * insertion rather than a re-derivation.
+ * THEN SOURCE PRECEDENCE, then the single-default rule, then the status ranking.
+ * The full order is: supersession -> precedence -> single-default -> status
+ * (cinatra#2850). The `[precedence]` slot this comment reserved is now FILLED by
+ * the real policy {@link applyInstallRowPrecedence}, which landed on main with
+ * cinatra#2774 — CONSUMED exactly like {@link effectiveInstallRows} above, never
+ * re-derived. See the step itself in the body for what it does and does not move.
  */
 function pickAddressableRowForActor(
   rows: readonly InstalledExtension[],
@@ -344,6 +347,44 @@ function pickAddressableRowForActor(
     r.organizationId !== null &&
     scope.organizationId !== null &&
     r.organizationId !== scope.organizationId;
+  // SOURCE PRECEDENCE (cinatra#2774), the step BETWEEN supersession and the
+  // single-default rule. A package that ships in the image AND has a marketplace
+  // install holds two live default rows at once; the marketplace row is the
+  // OVERRIDE and the bundled row is the fallback that stays underneath it. The
+  // policy is written down once, in `applyInstallRowPrecedence`, and this module
+  // CONSUMES it so the read model can never disagree with the anchor resolver and
+  // the write-side seams about which row IS the package.
+  //
+  // OVER THE LIVE OWN-SCOPE ROWS, for two reasons the helper's own contract states.
+  // (1) LIVE: it is defined over live candidates ("the caller filters to live rows
+  // first"), and its override test does not read `status` — handed an archived
+  // marketplace default beside a live bundled row it would select the ARCHIVED
+  // one, inverting the status ranking below. Non-live rows therefore bypass this
+  // step entirely and stay in the candidate set, ranked last by `statusRank` as
+  // before. (2) OWN-SCOPE: precedence ranks provenance WITHIN a scope, the way
+  // `pickExactOrgActiveRow` applies it after its own org filter. Run across orgs
+  // it would let a platform admin's read come from another org's default row —
+  // exactly what the same-org preference above exists to stop.
+  const isLive = (r: InstalledExtension): boolean =>
+    r.status === "active" || r.status === "locked";
+  const ownScopeLive = addressable.filter((r) => !isCrossOrg(r) && isLive(r));
+  const ranked = applyInstallRowPrecedence(ownScopeLive);
+  // The helper's AMBIGUITY arm (more than one live marketplace default) returns
+  // `[]` and delegates the fail-closed to "the caller's own rule". The seams that
+  // BIND a row have an exactly-one rule, so `[]` correctly resolves to null there.
+  // This caller's rule is a RANKING that always yields a row, and the read model
+  // is DESCRIPTIVE: reporting `absent` — the model's word for uninstalled — while
+  // two installs stand live would be an untruth, not a safe default. The safety
+  // is already carried one layer down and unchanged: the anchor resolver applies
+  // the SAME precedence, so on ambiguity it returns no anchor, the identity
+  // backstop in `buildInstalledExtensionReadModel` nulls `trust`, and the CG-5
+  // serve gate denies. So ambiguity falls through to the pre-#2774 ranking
+  // BYTE-IDENTICALLY: this step only ever changes the pick when precedence
+  // actually RESOLVES a bundled-versus-marketplace pair.
+  const candidates =
+    ranked.length === 0
+      ? addressable
+      : addressable.filter((r) => !ownScopeLive.includes(r) || ranked.includes(r));
   // SINGLE-DEFAULT RULE (cinatra#1040 S1), ranked BEFORE the status ranking.
   // Exactly one row per (org, owner, package) owns the package's unversioned
   // global name — `isDefault`, DB-enforced by a partial-unique index. A
@@ -368,7 +409,7 @@ function pickAddressableRowForActor(
   const isNonDefault = (r: InstalledExtension): boolean => r.isDefault === false;
   const statusRank = (s: InstalledExtension["status"]): number =>
     s === "active" ? 0 : s === "locked" ? 1 : 2; // archived last
-  return [...addressable].sort((a, b) => {
+  return [...candidates].sort((a, b) => {
     // Cross-org stays the FIRST key, ahead of single-default: the one-default
     // invariant is per (org, owner, package), so "the default row" is only
     // meaningful WITHIN a scope. Ranking it above the scope key would let an
