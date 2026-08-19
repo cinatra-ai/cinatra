@@ -108,10 +108,9 @@
 import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { CalendarClock, Check, Pencil, Repeat, Zap } from "lucide-react";
 
-import {
-  LIFECYCLE_VIEW_SCHEMA_VERSION,
-  type LifecycleCardHost,
-  type LifecycleCardState,
+import type {
+  LifecycleCardHost,
+  LifecycleCardState,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import type {
   ProposedSchedule,
@@ -141,8 +140,6 @@ import {
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import { WEEKDAY_LABELS } from "./trigger-recurrence";
-
-export { LIFECYCLE_VIEW_SCHEMA_VERSION };
 
 /** The one decision entry — the SAME endpoint the review card's floor posts to
  *  (`src/app/api/lifecycle-views/decide/route.ts`), branched by kind. §VI's card
@@ -815,7 +812,7 @@ function browserTimezone(): string {
  * copy and the selection vocabulary are the step's; only the widget primitive
  * differs, for the same reason the confirmation strip is not a modal.
  */
-export function ScheduleOptionRows({
+function ScheduleOptionRows({
   schedule,
   editable,
   onChange,
