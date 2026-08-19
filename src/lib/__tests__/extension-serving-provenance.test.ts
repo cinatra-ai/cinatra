@@ -191,6 +191,24 @@ describe("the activation seams record what they put in service", () => {
     }
   });
 
+  it("…but the RuntimePackageLoader gates on the DEFAULT record's own outcome, not the package's", async () => {
+    // Round-6 blocker. The runtime loader activates SIDE-BY-SIDE versions, so
+    // its package-wide `failedNames` is the union of every record's outcome — a
+    // failing NON-DEFAULT sibling suppressed the write for a default that had
+    // registered perfectly well, and the surviving bundled record then accused a
+    // healthy install. The default record's own outcome is both halves and only
+    // those: the settle-hook capture (register) plus `bootstrap-threw`, which
+    // the default-only bootstrap pass makes the default's by construction.
+    // Behaviour is pinned in extension-serving-record-default-outcome.test.ts.
+    const runtime = await read("../runtime-package-loader.ts");
+    const write = runtime.slice(runtime.indexOf('origin: "install"') - 600);
+    expect(write).toContain("!bootstrapFailedNames.has(result.packageName)");
+    expect(write).not.toContain("!failedNames.has(result.packageName) &&\n      servingVersionByPackage");
+    expect(runtime).toMatch(
+      /bootstrapFailedNames = new Set\(\s*activationResults\s*\.filter\(\(r\) => r\.status === "failed" && r\.reason === "bootstrap-threw"\)/,
+    );
+  });
+
   // -------------------------------------------------------------------------
   // WHAT THE NEXT TWO TESTS CAN AND CANNOT PROVE (round-5 convergence).
   //

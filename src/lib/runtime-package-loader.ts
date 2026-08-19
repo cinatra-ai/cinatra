@@ -628,9 +628,10 @@ export async function loadRuntimePackageExtensions(
     onRegisterSettled: (record, registered) => {
       // Serving provenance, from THIS record (cinatra#2762). Defaults only: the
       // default version is what owns the package's unversioned global names, so
-      // it is what a request reaches. The per-package no-failure rule still
-      // gates the actual write below — a register-passes/bootstrap-throws
-      // activation must not claim a half-activated version is serving.
+      // it is what a request reaches. This captures the register half of the
+      // default record's own outcome; the write below adds the bootstrap half
+      // (`bootstrapFailedNames`) — a register-passes/bootstrap-throws activation
+      // must not claim a half-activated version is serving.
       if (registered && record.isDefault !== false) {
         servingVersionByPackage.set(record.packageName, record.version ?? null);
       }
@@ -682,13 +683,41 @@ export async function loadRuntimePackageExtensions(
   const failedNames = new Set(
     activationResults.filter((r) => r.status === "failed").map((r) => r.packageName),
   );
+  // cinatra#2762 round-6: the DEFAULT record's OWN bootstrap outcome, which is
+  // the one part of that record's outcome the settle hook cannot see. The
+  // bootstrap pass runs for DEFAULT records only (a non-default sibling
+  // registers and stops), so a `bootstrap-threw` failure is BY CONSTRUCTION the
+  // default's own — no other record can put a name in this set.
+  const bootstrapFailedNames = new Set(
+    activationResults
+      .filter((r) => r.status === "failed" && r.reason === "bootstrap-threw")
+      .map((r) => r.packageName),
+  );
   // cinatra#2762: the version of each INSTALL that actually registered, so a
   // request-time surface can tell "the installed version is serving" from "the
   // row is live but the image's copy is what serves". The version comes from
   // `servingVersionByPackage`, captured at the per-record settle hook from the
   // DEFAULT record whose registration succeeded — never from a name-keyed
   // pre-pass lookup, which could attribute another default record's version to
-  // this one. Same per-package no-failure rule as the marker below.
+  // this one.
+  //
+  // Gated on THAT DEFAULT RECORD'S OWN OUTCOME, never on the package-wide
+  // `failedNames` (round-6 blocker). The package-wide set is the union of every
+  // record's outcome, so a failing NON-DEFAULT sibling suppressed the write for
+  // a default that had registered perfectly well — and because the boot path
+  // runs no capability teardown, the bundled record from the static pass then
+  // stood, and the settings surface accused a healthy install of being
+  // "Installed but not in service", greying Activate and Update. The default
+  // record is what owns the package's unversioned global names, so it alone
+  // decides whether the install is serving; a sibling that never claimed those
+  // names cannot make the install's own version untrue. Both halves of that
+  // record's outcome are still required, so the half-activated case the
+  // package-wide rule was protecting is unchanged:
+  //   - REGISTER: `servingVersionByPackage` is set at the per-record settle hook
+  //     ONLY for a default record whose own register succeeded, so a default
+  //     that failed to register leaves no entry and nothing is written;
+  //   - BOOTSTRAP: `bootstrapFailedNames` suppresses a register-passes /
+  //     bootstrap-throws default, which must not claim to be serving.
   for (const result of activationResults) {
     if (
       (result.status === "registered" || result.status === "bootstrapped") &&
@@ -699,7 +728,7 @@ export async function loadRuntimePackageExtensions(
     }
     if (
       (result.status === "registered" || result.status === "bootstrapped") &&
-      !failedNames.has(result.packageName) &&
+      !bootstrapFailedNames.has(result.packageName) &&
       servingVersionByPackage.has(result.packageName)
     ) {
       recordServingImplementation({
