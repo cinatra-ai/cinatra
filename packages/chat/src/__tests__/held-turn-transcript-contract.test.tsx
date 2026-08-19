@@ -40,10 +40,16 @@
  */
 
 import React from "react";
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+
+import {
+  owedExportsByModule,
+  owedReachesFrom,
+  type SourceGraph,
+} from "./owed-card-export-graph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -872,6 +878,29 @@ describe("the mount ratchet does not depend on today's selector NAMES", () => {
   });
 });
 
+const CHAT_SRC = join(__dirname, "..");
+const AGENTS_SRC = join(__dirname, "..", "..", "..", "agents", "src");
+// ONLY the modules of kinds whose chat mount is still owed. `review-gate-card`
+// is deliberately absent: the review kind's chat mount has LANDED, through the
+// renderable-views registry, and forbidding it would be forbidding the thing
+// this program is trying to achieve.
+// BOTH SPELLINGS. The card's drawing module is reachable as its own filename
+// and through the `@cinatra-ai/agents/run-recommendation-card` alias the
+// carriage slice adds; a list carrying only one of them would miss the import
+// that lands the mount.
+const OWED_OWNER_MODULES = ["run-recommendation-chip-row", "run-recommendation-card"];
+const OWED_OWNER_SYMBOLS = ["RecommendationHoldCard", "RunRecommendationChipRow"];
+
+function chatSourceFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "__tests__" || entry.name === "node_modules") continue;
+    const abs = join(dir, entry.name);
+    if (entry.isDirectory()) chatSourceFiles(abs, out);
+    else if (/\.(ts|tsx)$/.test(entry.name)) out.push(abs);
+  }
+  return out;
+}
+
 describe("the production mount points, read from the import graph", () => {
   // WHY SOURCE AT ALL. The inline run panel is replaced in this suite (its graph
   // reaches the server runtime), so a hold card mounted INSIDE that panel would
@@ -884,8 +913,9 @@ describe("the production mount points, read from the import graph", () => {
   // moving that branch into a helper component. A MODULE SPECIFIER survives
   // both: the drawing code has to name the module it comes from, wherever in
   // this package it ends up living.
-  const CHAT_SRC = join(__dirname, "..");
-  const AGENTS_SRC = join(__dirname, "..", "..", "..", "agents", "src");
+  // CHAT_SRC / AGENTS_SRC / OWED_OWNER_* / chatSourceFiles are module-scoped so
+  // the reachability check at the bottom of this file reads the SAME owed list
+  // these scans do; two lists would drift and neither would be authoritative.
   // ONLY the modules of kinds whose chat mount is still owed. `review-gate-card`
   // is deliberately absent: the review kind's chat mount has LANDED, through the
   // renderable-views registry, and forbidding it would be forbidding the thing
@@ -894,21 +924,9 @@ describe("the production mount points, read from the import graph", () => {
   // and through the `@cinatra-ai/agents/run-recommendation-card` alias the
   // carriage slice adds; a list carrying only one of them would miss the import
   // that lands the mount.
-  const OWED_OWNER_MODULES = ["run-recommendation-chip-row", "run-recommendation-card"];
-  const OWED_OWNER_SYMBOLS = ["RecommendationHoldCard", "RunRecommendationChipRow"];
   // The barrels a chat import could reach the card through without ever naming
   // its module. Watched below, which is what closes the re-export route.
   const AGENTS_BARRELS = ["index.ts", "client-entry.ts"];
-
-  function chatSourceFiles(dir: string, out: string[] = []): string[] {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === "__tests__" || entry.name === "node_modules") continue;
-      const abs = join(dir, entry.name);
-      if (entry.isDirectory()) chatSourceFiles(abs, out);
-      else if (/\.(ts|tsx)$/.test(entry.name)) out.push(abs);
-    }
-    return out;
-  }
 
   it("no production file in the chat package imports an OWED lifecycle card's drawing module", () => {
     // When the chat mount lands it will import one of these, and this is what
@@ -981,5 +999,219 @@ describe("the production mount points, read from the import graph", () => {
     expect(view).toContain('part.name === "agent_run"');
     expect(view).toContain("<InlineAgentRunCard");
     expect(view).toContain("<UndoActionChip");
+  });
+});
+
+describe("the re-export route, closed by REACHABILITY rather than by spelling", () => {
+  // The scans above watch three spellings: the drawing module's name in a
+  // `from` clause, the owed symbols as literal substrings, and two named
+  // barrels. The agents package publishes ~90 subpath exports, and chat already
+  // imports several of them — `lifecycle-card-runtime`, `client-entry`,
+  // `review-gate-card`. So an agents-side module that is NEITHER barrel can
+  // re-export the card under another name and be imported by chat while every
+  // one of those three scans stays green. This asks the question they cannot:
+  // by ANY name, through ANY module, can chat production code get the card?
+  const AGENTS_PKG = join(AGENTS_SRC, "..");
+  const agentsExports: Record<string, string> = JSON.parse(
+    readFileSync(join(AGENTS_PKG, "package.json"), "utf8"),
+  ).exports;
+
+  function resolveFile(base: string): string | null {
+    for (const candidate of [
+      base,
+      `${base}.ts`,
+      `${base}.tsx`,
+      join(base, "index.ts"),
+      join(base, "index.tsx"),
+    ]) {
+      if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+    }
+    return null;
+  }
+
+  /** A specifier as written, resolved to a file in this repo — or null. */
+  function resolveSpec(fromFile: string, spec: string): string | null {
+    if (spec.startsWith(".")) return resolveFile(resolvePath(dirname(fromFile), spec));
+    if (spec !== "@cinatra-ai/agents" && !spec.startsWith("@cinatra-ai/agents/")) return null;
+    const sub = spec === "@cinatra-ai/agents" ? "." : `.${spec.slice("@cinatra-ai/agents".length)}`;
+    const target = agentsExports[sub];
+    return typeof target === "string" ? resolveFile(join(AGENTS_PKG, target)) : null;
+  }
+
+  function agentsSourceFiles(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "__tests__" || entry.name === "node_modules") continue;
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) agentsSourceFiles(abs, out);
+      else if (/\.(ts|tsx)$/.test(entry.name)) out.push(abs);
+    }
+    return out;
+  }
+
+  const realGraph: SourceGraph = {
+    files: agentsSourceFiles(AGENTS_SRC),
+    read: (file) => readFileSync(file, "utf8"),
+    resolve: resolveSpec,
+  };
+
+  /** The modules that DRAW the owed card, and the names they draw it under. */
+  function owedSeeds(): Map<string, string[]> {
+    const seeds = new Map<string, string[]>();
+    for (const mod of OWED_OWNER_MODULES) {
+      for (const ext of [".ts", ".tsx"]) {
+        const file = join(AGENTS_SRC, `${mod}${ext}`);
+        if (!existsSync(file)) continue;
+        const source = readFileSync(file, "utf8");
+        const drawn = OWED_OWNER_SYMBOLS.filter((symbol) =>
+          new RegExp(`export\\s+(?:async\\s+)?(?:function|const|class)\\s+${symbol}\\b`).test(source),
+        );
+        if (drawn.length > 0) seeds.set(file, drawn);
+      }
+    }
+    return seeds;
+  }
+
+  it("finds the owed card where it is actually drawn — the analysis is not seeded empty", () => {
+    // The negative control for everything below: an empty seed set would make
+    // every reachability answer trivially green.
+    const seeds = owedSeeds();
+    expect(seeds.size).toBeGreaterThan(0);
+    expect([...seeds.values()].flat()).toContain("RecommendationHoldCard");
+  });
+
+  it("no chat production module can reach an owed card export, under ANY name", () => {
+    const owed = owedExportsByModule(realGraph, owedSeeds());
+    const offenders = owedReachesFrom(realGraph, chatSourceFiles(CHAT_SRC), owed, (f) =>
+      f.slice(CHAT_SRC.length + 1),
+    );
+    if (HOLD_MOUNT_OWED) {
+      expect(
+        offenders,
+        "chat production code can now obtain a lifecycle card whose chat mount is still " +
+          "owed — if that is the mount landing, strike the obligation row; the name it " +
+          "arrived under does not matter to this check",
+      ).toEqual([]);
+    } else {
+      expect(
+        offenders.length,
+        "the obligation row is struck, so chat production code must be able to reach the " +
+          "card it now mounts — nothing can",
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("the agents package re-exports the owed card to a bounded, reviewed set of modules", () => {
+    // The inventory, so a NEW re-export site is a visible diff rather than a
+    // silent widening of the surface chat could import from.
+    const owed = owedExportsByModule(realGraph, owedSeeds());
+    const sites = [...owed.entries()]
+      .filter(([, names]) => names.size > 0)
+      .map(([file, names]) => `${file.slice(AGENTS_SRC.length + 1)}: ${[...names].sort().join(", ")}`)
+      .sort();
+    expect(sites).toEqual([
+      "run-recommendation-chip-row.tsx: RecommendationHoldCard, RunRecommendationChipRow",
+    ]);
+  });
+
+  it("FOLLOWS a renamed re-export through a module that is neither barrel", () => {
+    // THE ATTACK, as a case. `hold-widgets` is not `index.ts`, not
+    // `client-entry.ts`, and its specifier contains no watched module substring;
+    // the name chat imports contains no watched symbol. Every spelling-based
+    // scan in this file reads it as clean.
+    const virtual: Record<string, string> = {
+      "/agents/run-recommendation-chip-row.tsx": "export function RecommendationHoldCard() {}",
+      "/agents/hold-widgets.ts":
+        'export { RecommendationHoldCard as HoldPanel } from "./run-recommendation-chip-row";',
+      "/agents/deeper.ts": 'export { HoldPanel as Panel } from "./hold-widgets";',
+      "/chat/view.tsx": 'import { Panel } from "@cinatra-ai/agents/deeper";\nexport const V = Panel;',
+    };
+    const graph: SourceGraph = {
+      files: Object.keys(virtual).filter((f) => f.startsWith("/agents/")),
+      read: (file) => virtual[file] ?? "",
+      resolve: (from, spec) => {
+        if (spec.startsWith("@cinatra-ai/agents/")) {
+          const name = spec.slice("@cinatra-ai/agents/".length);
+          return virtual[`/agents/${name}.ts`] !== undefined ? `/agents/${name}.ts` : null;
+        }
+        if (!spec.startsWith(".")) return null;
+        const base = `/agents/${spec.replace(/^\.\//, "")}`;
+        for (const candidate of [`${base}.ts`, `${base}.tsx`]) {
+          if (virtual[candidate] !== undefined) return candidate;
+        }
+        return null;
+      },
+    };
+
+    // The spelling-based scans, run over the same chat source: all clean.
+    const chatSource = virtual["/chat/view.tsx"]!;
+    for (const mod of OWED_OWNER_MODULES) {
+      expect(new RegExp(`from\\s+["'][^"']*${mod}["']`).test(chatSource)).toBe(false);
+    }
+    for (const symbol of OWED_OWNER_SYMBOLS) expect(chatSource.includes(symbol)).toBe(false);
+
+    // Reachability is not.
+    const owed = owedExportsByModule(graph, new Map([
+      ["/agents/run-recommendation-chip-row.tsx", ["RecommendationHoldCard"]],
+    ]));
+    expect(owed.get("/agents/deeper.ts")).toEqual(new Set(["Panel"]));
+    expect(owedReachesFrom(graph, ["/chat/view.tsx"], owed)).toEqual([
+      "/chat/view.tsx → @cinatra-ai/agents/deeper as Panel",
+    ]);
+  });
+
+  it("FOLLOWS a dynamic import, which no `from` regex sees", () => {
+    const virtual: Record<string, string> = {
+      "/agents/run-recommendation-chip-row.tsx": "export function RecommendationHoldCard() {}",
+      "/chat/lazy.tsx":
+        'const M = await import("@cinatra-ai/agents/run-recommendation-chip-row");\nexport const V = M;',
+    };
+    const graph: SourceGraph = {
+      files: ["/agents/run-recommendation-chip-row.tsx"],
+      read: (file) => virtual[file] ?? "",
+      resolve: (_from, spec) =>
+        spec === "@cinatra-ai/agents/run-recommendation-chip-row"
+          ? "/agents/run-recommendation-chip-row.tsx"
+          : null,
+    };
+    // `from\s+["']…["']` requires the word `from`; `import("…")` has none.
+    expect(/from\s+["'][^"']*run-recommendation-chip-row["']/.test(virtual["/chat/lazy.tsx"]!)).toBe(
+      false,
+    );
+    const owed = owedExportsByModule(graph, new Map([
+      ["/agents/run-recommendation-chip-row.tsx", ["RecommendationHoldCard"]],
+    ]));
+    expect(owedReachesFrom(graph, ["/chat/lazy.tsx"], owed)).toEqual([
+      "/chat/lazy.tsx → @cinatra-ai/agents/run-recommendation-chip-row (whole module; owed: RecommendationHoldCard)",
+    ]);
+  });
+
+  it("does NOT flag a module that merely SITS BESIDE the card in the same package", () => {
+    // The false positive worth avoiding, stated as a case. `client-entry`
+    // re-exports the run panel, and the run panel draws the hold card INSIDE the
+    // run_card host — which is the ruled place for it. Module-level taint would
+    // call that an offence and make the check unusable; export-level does not.
+    const virtual: Record<string, string> = {
+      "/agents/run-recommendation-chip-row.tsx": "export function RecommendationHoldCard() {}",
+      "/agents/panel.tsx":
+        'import { RecommendationHoldCard } from "./run-recommendation-chip-row";\n' +
+        "export function AgenticRunPanel() { return RecommendationHoldCard; }",
+      "/agents/client-entry.ts": 'export { AgenticRunPanel } from "./panel";',
+      "/chat/inline.tsx": 'import { AgenticRunPanel } from "@cinatra-ai/agents/client-entry";',
+    };
+    const graph: SourceGraph = {
+      files: ["/agents/run-recommendation-chip-row.tsx", "/agents/panel.tsx", "/agents/client-entry.ts"],
+      read: (file) => virtual[file] ?? "",
+      resolve: (_from, spec) => {
+        if (spec === "@cinatra-ai/agents/client-entry") return "/agents/client-entry.ts";
+        if (spec === "./panel") return "/agents/panel.tsx";
+        if (spec === "./run-recommendation-chip-row") return "/agents/run-recommendation-chip-row.tsx";
+        return null;
+      },
+    };
+    const owed = owedExportsByModule(graph, new Map([
+      ["/agents/run-recommendation-chip-row.tsx", ["RecommendationHoldCard"]],
+    ]));
+    expect(owed.get("/agents/panel.tsx") ?? new Set()).toEqual(new Set());
+    expect(owedReachesFrom(graph, ["/chat/inline.tsx"], owed)).toEqual([]);
   });
 });
