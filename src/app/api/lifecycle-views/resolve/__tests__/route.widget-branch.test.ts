@@ -19,6 +19,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveReviewActorContext = vi.fn();
 const resolveWidgetLifecycleActorContext = vi.fn();
+// cinatra#2754 — the route imports the island mint from the same module as the
+// door. It is declared (and answers `null`) so THIS suite stays about the door.
+const mintWidgetReviewIslandUrl = vi.fn(() => null);
 const resolveAssistantWidgetBinding = vi.fn();
 const resolveLifecycleCardState = vi.fn();
 const attachLifecycleSuggestions = vi.fn();
@@ -31,6 +34,7 @@ vi.mock(
 vi.mock("@/lib/lifecycle/widget-lifecycle-actor", () => ({
   resolveWidgetLifecycleActorContext: (...a: unknown[]) =>
     resolveWidgetLifecycleActorContext(...a),
+  mintWidgetReviewIslandUrl: () => mintWidgetReviewIslandUrl(),
 }));
 vi.mock("@/lib/assistant-widget-handles", () => ({
   resolveAssistantWidgetBinding: (...a: unknown[]) => resolveAssistantWidgetBinding(...a),

@@ -50,7 +50,7 @@ import {
   parseLifecycleResolveEnvelope,
   type LifecycleCardHost,
   type LifecycleDataPartViewType,
-  type LifecycleResolveEnvelopeFor,
+  type LifecycleResolveAnswerFor,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 /** The server route that re-authorizes a ref and answers with the card envelope. */
@@ -616,7 +616,7 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
   ref: string;
   enabled: boolean;
   reloadToken?: number;
-}): LifecycleResolveEnvelopeFor<K> | null {
+}): LifecycleResolveAnswerFor<K> | null {
   const { viewType, ref, enabled, reloadToken = 0 } = params;
   // The host's credential declaration (cinatra#2577). Read here so the resolve
   // callback closes over ONE value; a host that declares none keeps S1's exact
@@ -649,7 +649,7 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
   const identity = `${viewType}\u0000${ref}\u0000${enabled ? "1" : "0"}\u0000${activationRef.current}`;
   const [resolved, setResolved] = useState<{
     identity: string;
-    envelope: LifecycleResolveEnvelopeFor<K>;
+    envelope: LifecycleResolveAnswerFor<K>;
   } | null>(null);
   // Monotonic request id. Mount and focus can overlap, and a slow earlier
   // answer must never overwrite a fresher one — otherwise a card could settle
