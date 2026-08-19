@@ -53,24 +53,23 @@
 // the next sweep rather than a bell pointing forever at a card nobody can act on.
 //
 // NO DATA MOVES AND NOTHING IS RE-INTERPRETED. Both columns are new, so every
-// pre-existing park row takes 'none' for the first and null for the second (which
-// the drain reads as "never attempted" and orders by `created_at`; every such park
-// predates the fenced write path and owes nothing anyway, so it is never selected
-// at all). For `hold_notification`, every pre-existing park row takes the 'none'
-// default — which is the truthful value for
-// them: no park that predates this migration ever had a notification written under
-// the fenced write path, so none owes a clear. There is no backfill to get wrong
+// pre-existing park row takes the 'none' default for `hold_notification` — which is
+// the truthful value for them: no park that predates this migration ever had a
+// notification written under the fenced write path, so none owes a clear — and null
+// for `hold_notify_attempted_at`, which the drain reads as "never attempted" and
+// orders by `created_at`. A park owing nothing is never selected by the drain at
+// all, so that cursor is read for none of them. There is no backfill to get wrong
 // and no emptiness tripwire to need (contrast core__0092, which changed a column's
-// MEANING). Postgres 11+ applies a non-volatile DEFAULT as catalog metadata, so
-// the ADD COLUMN does not rewrite the table.
+// MEANING). Postgres 11+ applies a non-volatile DEFAULT as catalog metadata, and a
+// DEFAULT-less nullable column stores nothing at all, so neither ADD COLUMN
+// rewrites the table.
 //
 // MARKED destructive:true BECAUSE THE ARTIFACT IS REQUIRED, NOT BECAUSE DATA IS AT
 // RISK — and it is `hold_notification` that earns the mark, not the nullable cursor
 // beside it (a nullable, defaultless ADD COLUMN is the gate's additive class and
 // takes no scan). The schema-migration gate classifies a NOT NULL column added to a
 // deployed table, and an ADD CONSTRAINT CHECK over existing rows, as
-// user-land-affecting —
-// and it is right to: both take an ACCESS EXCLUSIVE lock on
+// user-land-affecting — and it is right to: both take an ACCESS EXCLUSIVE lock on
 // lifecycle_continuation_park, and the CHECK validates with a table scan. What it
 // cannot do is FAIL: the only value any pre-existing row can hold is the 'none'
 // default this migration gives it, which the CHECK admits. So the honest cost to an
