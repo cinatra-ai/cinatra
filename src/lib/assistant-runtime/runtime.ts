@@ -28,6 +28,18 @@ import "@/lib/register-host-connector-services";
 import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
+  buildCapabilityKeyResolver,
+  buildConnectorInventory,
+  DEFAULT_CONNECTOR_INVENTORY_DEPS,
+} from "@/lib/connector-inventory.server";
+import { connectionSubjectUserId } from "@/lib/connection-use-gate";
+import {
+  delegatedChatAllowedToolNames,
+  resolveDelegatedChatClass,
+  isDelegatedChatMcpToolAllowed,
+} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
+import {
   detectExplicitDispatchDirective,
   detectExplicitDispatchPackage,
 } from "@/app/api/chat/explicit-dispatch";
@@ -548,6 +560,85 @@ function warnOnUnclassifiedVehicles(
       `— recorded as delivered/vehicle=unknown: ` +
       unclassified.map((r) => `${r.skillId} (mode=${r.deliveryMode})`).join(", "),
   );
+}
+
+// ---------------------------------------------------------------------------
+// The chat surface's self-MCP catalog state (cinatra#2771).
+//
+// The catalog the model is offered is DERIVED, never listed. Three inputs, all
+// already available to this turn:
+//
+//   SERVABLE      every primitive the delegated-chat perimeter can serve.
+//   ADMISSION     the authoritative policy predicate, the only thing that may
+//                 admit a name.
+//   AVAILABILITY  the connector keys this VERIFIED actor holds an authorized
+//                 connection for, read through the same per-row `use` gate the
+//                 connector inventory uses.
+//
+// The capability key for a primitive is derived from the LIVE connector
+// catalog rather than from a table: a primitive whose name matches a catalog
+// connector's declared `mcpPrimitivePrefixes` is gated on that connector,
+// longest prefix winning. A connector installed tomorrow gates its own
+// primitives with no code change here, and a primitive whose name matches no
+// catalog prefix is never gated. See `connector-inventory.server.ts`.
+//
+// Failure posture is fail-OPEN to the authoritative gate, never fail-closed
+// onto the user. If state cannot be resolved the turn runs unrestricted and
+// the transport still decides what is callable. A narrowing hint must never be
+// the reason a turn loses its tools.
+// ---------------------------------------------------------------------------
+async function resolveChatMcpCatalogState(input: {
+  actorContext: ActorContext;
+  userId: string;
+  sessionOrgId: string | null;
+}): Promise<ChatMcpCatalogState | undefined> {
+  try {
+    const inventory = await buildConnectorInventory({
+      ...DEFAULT_CONNECTOR_INVENTORY_DEPS,
+      // The turn already holds a verified actor. The default resolver reads an
+      // MCP request frame, which does not exist on a chat turn, so the turn's
+      // own actor is supplied instead.
+      resolveActor: async () => ({
+        actor: input.actorContext,
+        subjectUserId: connectionSubjectUserId(input.actorContext) ?? input.userId,
+        organizationId: input.sessionOrgId,
+      }),
+    });
+
+    const authorizedKeys = new Set(
+      inventory.connectors
+        .filter((row) => row.hasAuthorizedConnection)
+        .map((row) => row.connectorKey),
+    );
+    // The capability key comes from each row's catalog-declared
+    // `mcpPrimitivePrefixes` (`gmail-connector` -> `gmail_`), LONGEST PREFIX
+    // WINS. It cannot come from `connectorKey`: that is a slug
+    // (`gmail-connector`) and primitives are underscore-named
+    // (`gmail_aliases_list`), so a key-based match admits no name at all and
+    // the filter silently gates nothing.
+    const capabilityKeyFor = buildCapabilityKeyResolver(inventory.connectors);
+
+    // The INTERIM seeding site (cinatra#2817 replaces it wholesale). Admission
+    // still comes from the legacy allowlist, and since the owner's ruling a
+    // primitive with no class in force is unexposed, each seeded name carries
+    // the class `resolveDelegatedChatClass` puts in force for it — the interim
+    // one here, because nothing in the tree declares yet. Seeding no class
+    // would empty the catalog, which is exactly the failure the shim prevents.
+    const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map((name) => ({
+      name,
+      declaredClass: resolveDelegatedChatClass(name, undefined),
+      capabilityKey: capabilityKeyFor(name),
+    }));
+
+    return {
+      servable,
+      isHostApproved: isDelegatedChatMcpToolAllowed,
+      isCapabilityAvailable: (key) => authorizedKeys.has(key),
+    };
+  } catch {
+    // Unresolvable state means no hint, not a smaller turn.
+    return undefined;
+  }
 }
 
 /**
@@ -1121,6 +1212,13 @@ export async function runAssistantTurn(
         adapter.provider,
         { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
         issueChatMcpActorToken,
+        {
+          catalogState: await resolveChatMcpCatalogState({
+            actorContext,
+            userId,
+            sessionOrgId,
+          }),
+        },
       );
   if (!chatCinatraMcpTool) {
     send("error", {

@@ -103,6 +103,7 @@ import "server-only";
 
 import { getActorContext } from "@cinatra-ai/llm/actor-context";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import type { DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import {
   resolveVersionKeyedMcpTool,
@@ -660,13 +661,23 @@ export async function dispatchPlannedExtensionMcpTool(
 // TOOL DISCOVERY UNION (cinatra#1392 S8)
 // ---------------------------------------------------------------------------
 
-/** The default-registry tool shape the planner consumes (registry entry). */
+/**
+ * The default-registry tool shape the planner consumes (registry entry).
+ *
+ * This is a HAND-COPIED field list, not a structural alias, so a field added to
+ * `HostMcpToolRegistration` is silently DROPPED here unless it is copied down —
+ * which is exactly what would have happened to the delegated-chat declaration
+ * (cinatra#2771). It is carried explicitly below so the declaration survives
+ * versioned discovery and reaches the registration hop intact.
+ */
 export type DiscoveryDefaultTool = {
   name: string;
   packageName: string;
   description?: string;
   inputSchema?: unknown;
   handler: (input: unknown) => unknown | Promise<unknown>;
+  /** The registration's typed delegated-chat declaration. Narrow-only. */
+  delegatedChat?: DelegatedChatToolClass;
 };
 
 /** One tool a per-request MCP server build must register for the CURRENT caller. */
@@ -880,8 +891,19 @@ export type SelfInvokerRetainedTool = {
 };
 
 export type SelfInvokerRetainedUnionPlan = {
-  /** Names to register behind the strict versioned-only dispatch, in input order. */
-  register: Array<{ name: string; packageName: string; version: string }>;
+  /**
+   * Names to register behind the strict versioned-only dispatch, in input
+   * order. Carries the retained registration's typed delegated-chat
+   * declaration (cinatra#2771) so the self-invoker's name-keyed map is no
+   * longer lossy about it — a call-time lookup can apply the SAME narrow-only
+   * rule the live transport applies at registration.
+   */
+  register: Array<{
+    name: string;
+    packageName: string;
+    version: string;
+    delegatedChat?: DelegatedChatToolClass;
+  }>;
   /** Effective-set entries for the names actually registered (merge/upsert semantics). */
   effective: Array<{ name: string; packageName: string }>;
   /**
@@ -915,7 +937,7 @@ export function planSelfInvokerRetainedUnion(
     extensionClaimedNames: ReadonlySet<string>;
   },
 ): SelfInvokerRetainedUnionPlan {
-  const register: Array<{ name: string; packageName: string; version: string }> = [];
+  const register: SelfInvokerRetainedUnionPlan["register"] = [];
   const effective: Array<{ name: string; packageName: string }> = [];
   const skippedHostCollisions: Array<{ name: string; packageName: string }> = [];
   const dedupedExtensionNames: Array<{ name: string; packageName: string; version: string }> = [];
@@ -931,7 +953,12 @@ export function planSelfInvokerRetainedUnion(
       continue;
     }
     claimed.add(name);
-    register.push({ name, packageName: r.packageName, version: r.version });
+    register.push({
+      name,
+      packageName: r.packageName,
+      version: r.version,
+      delegatedChat: r.tool.delegatedChat,
+    });
     effective.push({ name, packageName: r.packageName });
   }
   return { register, effective, skippedHostCollisions, dedupedExtensionNames };

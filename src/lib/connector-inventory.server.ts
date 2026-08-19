@@ -28,7 +28,13 @@ import "server-only";
 // tool answers a smaller question with a stable contract:
 //
 //     connector key + display name + authorized-connection presence
-//     (+ the authorized connection ids behind that presence)
+//     (+ the authorized connection ids behind that presence, + the catalog's
+//     MCP primitive-name prefixes for the connector)
+//
+// The prefixes are BUILD-TIME CATALOG DATA, not actor state (cinatra#2771):
+// they are what lets a caller map an underscore-named primitive
+// (`gmail_aliases_list`) onto the slug-named connector (`gmail-connector`)
+// that gates it. They describe the catalog, never who may use it.
 //
 // EXPLICIT EXCLUSIONS of the narrow shape, so a reader never mistakes it for
 // the page:
@@ -79,6 +85,24 @@ export type ConnectorInventoryRow = {
    * they are not credentials: every downstream use re-authorizes live.
    */
   authorizedConnectionIds: string[];
+  /**
+   * The catalog's MCP primitive-name prefixes for this connector (e.g.
+   * `["gmail_"]`), verbatim from the descriptor's `mcpPrimitivePrefixes`.
+   *
+   * WHY IT IS ON THE ROW (cinatra#2771). The row is the ONE carrier from the
+   * build-time catalog to a caller that must decide which primitives this
+   * connector gates. Primitives are underscore-named (`gmail_aliases_list`)
+   * while `connectorKey` is a SLUG (`gmail-connector`), so a caller holding
+   * only the key cannot derive that mapping and silently gates nothing.
+   *
+   * MODEL-FACING, AND DELIBERATELY SO. This is public build-time catalog data
+   * — the same strings the CLI-importable descriptor file ships — carrying no
+   * actor, tenant, connection or credential material, and it grants nothing:
+   * the transport re-authorizes every call. It widens the projection by one
+   * field, which is why it is added to the allowlist below and to the
+   * snapshot test in the same change, so a reviewer sees it.
+   */
+  mcpPrimitivePrefixes: string[];
 };
 
 export type ConnectorInventoryResult = {
@@ -95,6 +119,7 @@ export const CONNECTOR_INVENTORY_ROW_FIELDS = [
   "displayName",
   "hasAuthorizedConnection",
   "authorizedConnectionIds",
+  "mcpPrimitivePrefixes",
 ] as const;
 
 /** The allowlisted TOP-LEVEL result keys (same rule as the row fields). */
@@ -109,12 +134,16 @@ export function projectConnectorInventoryRow(input: {
   connectorKey: string;
   displayName: string;
   authorizedConnectionIds: string[];
+  mcpPrimitivePrefixes?: readonly string[];
 }): ConnectorInventoryRow {
   return {
     connectorKey: input.connectorKey,
     displayName: input.displayName,
     hasAuthorizedConnection: input.authorizedConnectionIds.length > 0,
     authorizedConnectionIds: [...input.authorizedConnectionIds],
+    // Copied, never aliased: the catalog's array must not be mutable through
+    // a serialized row (`listConnectorDescriptors` defends the same way).
+    mcpPrimitivePrefixes: [...(input.mcpPrimitivePrefixes ?? [])],
   };
 }
 
@@ -123,6 +152,8 @@ export type ConnectorInventoryCatalogEntry = {
   packageId: string;
   connectorKey: string;
   displayName: string;
+  /** The descriptor's `mcpPrimitivePrefixes`. Absent reads as "gates nothing". */
+  mcpPrimitivePrefixes?: readonly string[];
 };
 
 /**
@@ -195,10 +226,83 @@ export async function buildConnectorInventory(
       displayName: entry.displayName,
       // Sorted so the same workspace state serializes identically turn to turn.
       authorizedConnectionIds: [...(authorizedByPackageId.get(entry.packageId) ?? [])].sort(),
+      mcpPrimitivePrefixes: entry.mcpPrimitivePrefixes,
     }),
   );
 
   return { connectors };
+}
+
+
+// ---------------------------------------------------------------------------
+// Capability-key derivation for the chat self-MCP catalog (cinatra#2771).
+//
+// HOMED HERE, NOT IN A NEW MODULE. This module already owns the row that
+// carries `mcpPrimitivePrefixes` and is already on every locked route graph
+// that reaches the chat catalog resolver, so a dedicated file would have cost
+// +1 module on `/chat`, `/api/mcp`, `/api/a2a` and `/api/llm-bridge` (measured:
+// the ratchet failed on exactly those four) to buy nothing. Same call the
+// replay seams made in the previous round.
+//
+// THE QUESTION. Given a servable primitive name, which connector's authorized
+// connection gates it — if any?
+//
+// THE ANSWER IS THE LIVE CATALOG, NOT A TABLE. Every connector descriptor
+// declares `mcpPrimitivePrefixes` (`gmail-connector` -> `["gmail_"]`), which
+// is precisely the primitive-name-space that connector owns. A connector added
+// tomorrow gates its own primitives with no code change, and a primitive
+// matching no catalog prefix is never gated.
+//
+// WHY NOT THE CONNECTOR KEY. The key is a SLUG (`gmail-connector`); primitives
+// are underscore-named (`gmail_aliases_list`). Matching a primitive against the
+// key admits nothing — no name is ever prefixed with a slug — so a key-based
+// derivation silently gates NOTHING and hands every actor the whole list. That
+// is the defect this derivation exists to make impossible.
+//
+// LONGEST PREFIX WINS. Prefixes may nest (`google_` vs `google_calendar_`), so
+// the most specific declaration decides and the result is independent of
+// catalog order. Ties on length break on connector key so the derivation is
+// total and deterministic rather than order-dependent; a catalog declaring the
+// SAME prefix on two connectors is a catalog defect, and picking arbitrarily
+// would make it unreproducible instead of merely wrong.
+//
+// The returned key is the CONNECTOR KEY, because that is what the availability
+// set is keyed by — the same `connectorKey` the row above carries.
+// ---------------------------------------------------------------------------
+
+/** The catalog identity this derivation needs — one inventory row's worth. */
+export type CapabilityKeySource = {
+  connectorKey: string;
+  mcpPrimitivePrefixes?: readonly string[];
+};
+
+/**
+ * Build the primitive-name -> capability-key resolver for a catalog.
+ *
+ * Returns `null` for a name no catalog prefix claims: NOT GATED, which keeps
+ * host/platform primitives (`connector_inventory_list`, `projects_list`)
+ * reachable without a connection, exactly as before.
+ */
+export function buildCapabilityKeyResolver(
+  catalog: readonly CapabilityKeySource[],
+): (primitiveName: string) => string | null {
+  // Flattened to (prefix, key) pairs once, then ordered longest-first so
+  // `find` below returns the most specific match. Empty prefixes are dropped:
+  // `""` prefixes every name and would gate the entire catalog on one
+  // connector.
+  const ordered = catalog
+    .flatMap((entry) =>
+      (entry.mcpPrimitivePrefixes ?? [])
+        .filter((prefix) => typeof prefix === "string" && prefix.length > 0)
+        .map((prefix) => ({ prefix, connectorKey: entry.connectorKey })),
+    )
+    .sort(
+      (a, b) =>
+        b.prefix.length - a.prefix.length || a.connectorKey.localeCompare(b.connectorKey),
+    );
+
+  return (primitiveName: string): string | null =>
+    ordered.find((entry) => primitiveName.startsWith(entry.prefix))?.connectorKey ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +341,7 @@ export const DEFAULT_CONNECTOR_INVENTORY_DEPS: ConnectorInventoryDeps = {
       packageId: entry.packageId,
       connectorKey: entry.slug,
       displayName: entry.displayName,
+      mcpPrimitivePrefixes: entry.mcpPrimitivePrefixes,
     }));
   },
   listConnectionRows: async (organizationId, subjectUserId) => {

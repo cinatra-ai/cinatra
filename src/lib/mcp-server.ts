@@ -2,6 +2,19 @@ import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { admitToolInputSchema, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
+// Re-exported so `@/lib/mcp-server` stays the single import surface for the
+// self-primitive map's shape, while the testable seams live alongside the
+// registry they replay — a module a unit test can import without this file's
+// connector/DB graph, and one already on every route this file is on.
+export {
+  buildReplayedExtensionToolConfig,
+  createSelfPrimitiveRecordingServer,
+} from "./extension-mcp-registry";
+export type {
+  CapturedHostPrimitive,
+  CapturedMcpToolHandler,
+  ReplayedExtensionRegistration,
+} from "./extension-mcp-registry";
 import {
   resolveDurableRunContext,
   recordMcpRunContextServedBy,
@@ -47,11 +60,13 @@ import { auth } from "@/lib/auth";
 import { getAuthSession } from "@/lib/auth-session";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
 import { resolveProviderAdapter } from "@cinatra-ai/llm";
-import { z } from "zod";
 import {
   listExtensionMcpTools,
   markEffectiveExtensionMcpTools,
   unmarkEffectiveExtensionMcpToolCollisions,
+  buildReplayedExtensionToolConfig,
+  createSelfPrimitiveRecordingServer,
+  type CapturedHostPrimitive,
 } from "@/lib/extension-mcp-registry";
 // Edge-bound serving chokepoint (cinatra#1392 Gap 1 wiring): an extension tool
 // dispatch consults the TRUSTED dependent identity and — when its resolved edge
@@ -326,12 +341,7 @@ export async function registerAllCapabilities(
     try {
       (server.registerTool as (...a: unknown[]) => unknown)(
         name,
-        {
-          title: name,
-          description: registration.description ?? name,
-          // Standard Schema (zod) — the MCP SDK validates against `~standard`.
-          inputSchema: (registration.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
-        },
+        buildReplayedExtensionToolConfig(name, registration),
         async (input: unknown) => {
           const raw = await dispatchPlanned(input);
           return wrapExtensionToolResult(raw);
@@ -365,45 +375,23 @@ export async function registerAllCapabilities(
 }
 
 /** A captured MCP tool handler — the SDK callback `(args, extra) => CallToolResult`. */
-type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
 /**
- * Build the host's UNIVERSAL in-process primitive-handler map
- * so `ctx.mcp.callPrimitive(name, input)` can invoke ANY host primitive by name,
- * the same code path the live MCP transport uses. Captures every registered
- * module's `registerTool(name, config, handler)` plus the replayed extension tools into a
- * `name → handler` map by running the SAME registration pass against a pure
- * RECORDING server (no real transport, no live server mutated). The captured
- * handler is the MCP-SDK callback `(args, extra) => CallToolResult`; the
- * self-invoker (`@/lib/extension-self-mcp`) runs it under the caller's resolved
- * MCP request-context and unwraps the result envelope.
+ * One captured host primitive: its handler PLUS the typed delegated-chat
+ * declaration its registration carried (cinatra#2771).
  *
- * The recording server stubs the non-`registerTool` surface
- * (`registerResource`/`registerPrompt`/`registerScreen`) as no-ops — module
- * registrations only call `registerTool`, but the stubs keep an errant call from
- * throwing. The capability modules register idempotently (replace-by-id), so
- * building this map alongside the live registration is side-effect-safe; callers
- * should still MEMOISE it (see `extension-self-mcp`) to build it at most once.
+ * The map used to be a bare `name → handler`, which is precisely the lossy hop
+ * the #2771 review named: a declaration that survived the registry, versioned
+ * discovery and the replay was still dropped before the in-process
+ * self-invoker could see it, so a delegated-restricted self-invocation and the
+ * live transport would have disagreed about the same registration. Carrying
+ * the declaration alongside the handler is what lets
+ * `@/lib/extension-self-mcp` apply the SAME narrow-only rule
+ * `policedRegisterTool` applies.
  */
-export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, CapturedMcpToolHandler>> {
-  const handlers = new Map<string, CapturedMcpToolHandler>();
-  const recordingServer = {
-    registerTool: (name: string, _config: unknown, handler: CapturedMcpToolHandler) => {
-      // Mirror the live server: the MCP SDK rejects a duplicate tool name, so a
-      // silent overwrite here would let the self-call surface diverge from the
-      // live transport. Fail loudly instead.
-      if (handlers.has(name)) {
-        throw new Error(
-          `[mcp] duplicate tool registration "${name}" during self-primitive capture (the live server would reject it)`,
-        );
-      }
-      handlers.set(name, handler);
-      return undefined as never;
-    },
-    registerResource: () => undefined as never,
-    registerPrompt: () => undefined as never,
-    registerScreen: () => undefined,
-  } as unknown as McpRuntimeToolServer;
+export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, CapturedHostPrimitive>> {
+  const handlers = new Map<string, CapturedHostPrimitive>();
+  const recordingServer = createSelfPrimitiveRecordingServer(handlers);
 
   // Platform + manifest-discovered connector modules in the SAME order the
   // live server registers them (pre-connector platform block, connector block,
@@ -441,14 +429,19 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
       unionSkipped.push({ name: tool.name, packageName: tool.packageName });
       continue;
     }
-    handlers.set(tool.name, async (input: unknown) => {
-      // Edge-bound serve (cinatra#1392 Gap 1) — same chokepoint as the live
-      // transport replay, so the in-process self-invoker serves identically.
-      // (No plan-pinning here: this map applies no schema validation, so the
-      // dispatch-time decision is authoritative — see
-      // dispatchPlannedExtensionMcpTool's doc.)
-      const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
-      return wrapExtensionToolResult(raw);
+    handlers.set(tool.name, {
+      // The registry already normalized the declaration structurally, so this
+      // is either a valid class or `undefined` (undeclared / neutral).
+      delegatedChat: tool.delegatedChat,
+      handler: async (input: unknown) => {
+        // Edge-bound serve (cinatra#1392 Gap 1) — same chokepoint as the live
+        // transport replay, so the in-process self-invoker serves identically.
+        // (No plan-pinning here: this map applies no schema validation, so the
+        // dispatch-time decision is authoritative — see
+        // dispatchPlannedExtensionMcpTool's doc.)
+        const raw = await dispatchExtensionMcpToolEdgeBound(tool, input);
+        return wrapExtensionToolResult(raw);
+      },
     });
     unionEffective.push({ name: tool.name, packageName: tool.packageName });
   }
@@ -473,9 +466,12 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   });
   for (const entry of retainedUnion.register) {
     const target = { packageName: entry.packageName, name: entry.name };
-    handlers.set(entry.name, async (input: unknown) => {
-      const raw = await dispatchVersionedOnlyExtensionMcpTool(target, input);
-      return wrapExtensionToolResult(raw);
+    handlers.set(entry.name, {
+      delegatedChat: entry.delegatedChat,
+      handler: async (input: unknown) => {
+        const raw = await dispatchVersionedOnlyExtensionMcpTool(target, input);
+        return wrapExtensionToolResult(raw);
+      },
     });
   }
   for (const deduped of retainedUnion.dedupedExtensionNames) {

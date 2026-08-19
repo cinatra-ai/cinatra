@@ -473,6 +473,9 @@ export type {
   ExtensionMcpContentBlock,
   ExtensionMcpToolConfig,
   ExtensionPrimitiveRequest,
+  // The typed delegated-chat declaration carried by BOTH registration paths
+  // (cinatra#2771). Narrow-only; never authorization on its own.
+  DelegatedChatToolClass,
 } from "./mcp-connector-contract";
 
 // The SEMANTIC-ARTIFACT manifest contract (the `./artifact-contract` subpath) so
