@@ -38,9 +38,17 @@
  *   3. PUSH-DOWN — a row carrying a genuinely wrapped (≥2 line) reason is
  *      taller than an ordinary single-line row, i.e. the rail GREW rather
  *      than clamping the text away. Pre-fix every row measured 32px.
- *   4. UNCHANGED — ordinary rows with no reason still measure exactly the
- *      2rem row box they always had (the `min-h-8` floor), on the mixed rail,
- *      the single-line lifecycle rail and the lifecycle-free control rail.
+ *   4. UNCHANGED — a reason-free row's TRIGGER box still measures exactly the
+ *      2rem it always had (the `min-h-8` floor), on the mixed rail, the
+ *      single-line lifecycle rail and the lifecycle-free control rail.
+ *      Read the scope precisely: it is the trigger box (`ROW_BOX`) that is
+ *      2rem, not the enclosing StepperItem — an item that still has a
+ *      following separator measures 44px (32 + the `!h-2` separator + its
+ *      margins), and only the LAST item of a rail measures 32px. And a
+ *      lifecycle row is never 2rem even when its reason does not wrap: the
+ *      reason is a block beneath the label, so that row is honestly two lines
+ *      (measured 38px). "Exactly 32px" is a claim about reason-free TRIGGER
+ *      boxes and nothing wider.
  *   5. FIRST-LINE ALIGNMENT — a lifecycle row's indicator centres on the FIRST
  *      LINE of its title, for a wrapped reason AND for a SHORT one that does
  *      not wrap. The fix applies `items-start` to EVERY lifecycle trigger, so
@@ -115,8 +123,21 @@ async function firstLineAndIndicator(row: Locator) {
   );
 }
 
-/** The viewports the report names: the reported desktop, and a narrow width
- *  where the reason wraps to more lines still. */
+/**
+ * Two viewports: the desktop width the report names, and a narrow one.
+ *
+ * Be accurate about what the narrow arm buys. It does NOT wrap the reason to
+ * more lines: the rail is a FIXED-WIDTH column (`w-52` on the panel's root,
+ * run-step-rail-panel.tsx:73) and the reason column inside it is a fixed
+ * `max-w-36`, so the wrap point does not move with the viewport. Measured on
+ * this fixture, the row heights at 900px are IDENTICAL to those at 1440px
+ * ([44, 44, 98, 114, 32] on the wrapped rail at both).
+ *
+ * So the 900px arm is a REGRESSION GUARD that the fix's geometry is
+ * viewport-independent — worth asserting, because a future clamp or a
+ * responsive width on the rail would break exactly here. It is not evidence
+ * about narrower wrapping, and this suite does not claim to be.
+ */
 const VIEWPORTS = [
   { name: "desktop 1440x900", width: 1440, height: 900 },
   { name: "narrow 900x900", width: 900, height: 900 },
