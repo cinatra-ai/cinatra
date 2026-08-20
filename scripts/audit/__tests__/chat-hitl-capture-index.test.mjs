@@ -1308,6 +1308,36 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     );
   });
 
+  it("REFUSES a root-scoped count taken inside a DIFFERENT root", () => {
+    // `within` names the root a root-scoped count was taken inside, and it was
+    // written into the record and then never compared. Keying observations by
+    // scope closed the frame-wide stand-in; this closes the rest of it, because
+    // a count taken inside a verification card answers nothing about the
+    // recommendation card this record claims to photograph.
+    const assertions = chatAssertions().map((a) =>
+      a.selector === CONFIRM
+        ? { ...a, within: '[data-lifecycle-card="verification_summary"]' }
+        : a,
+    );
+    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
+      /requires \[data-action="confirm-run-recommendation"\] root-scoped inside/,
+    );
+  });
+
+  it("the BINDING compares `within` too, not only scope", () => {
+    const assertions = chatAssertions().map((a) =>
+      a.selector === CONFIRM
+        ? { ...a, within: '[data-lifecycle-card="verification_summary"]' }
+        : a,
+    );
+    expect(
+      auditManifestIndexBinding({
+        manifest: manifestClaiming("X9__chat_thread__recommendation-hold-held"),
+        index: indexOf([chatRecord({ cell: "X9__chat_thread__recommendation-hold-held", assertions })]),
+      }).join("\n"),
+    ).toMatch(/does not observe \[data-action="confirm-run-recommendation"\] present/);
+  });
+
   it("REFUSES a painted count above its own attached count, at EITHER tier", () => {
     // The line between an omission and a false claim. A record may decline to
     // report a painted count; it may not report one it could not have observed.

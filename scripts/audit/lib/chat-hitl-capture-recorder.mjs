@@ -677,14 +677,24 @@ export async function observeCapture({
   // THE CANONICAL FIELD NAMES. This tier wrote `kind` / `state`; the ratified
   // contract reads `declaredKind` / `declaredState`, and it wins.
   if (kind) record.declaredKind = kind;
-  // EVERY HOST DECLARES ITS STATE, not only chat_thread. The state-derived
-  // requirements are chat_thread's alone (see the honest limit in the header),
-  // but the DECLARATION is not: the canonical half reads
-  // `record.declaredState ?? claim.state`, so a run_card or site_widget record
-  // that omits it hands the question back to the file name — the one thing this
-  // index exists to refuse to take anyone's word for. Omitted, a cell called
-  // `__decided` silently answers for a capture photographed pending, and the
-  // two halves disagree about what the record even claims.
+  // EVERY HOST DECLARES ITS STATE, not only chat_thread. The canonical half
+  // reads `record.declaredState ?? claim.state`, so a run_card or site_widget
+  // record that omits it hands the question back to the file name — the one
+  // thing this index exists to refuse to take anyone's word for. Omitted, a cell
+  // called `__decided` silently answers for a capture photographed pending, and
+  // the two halves disagree about what the record even claims.
+  //
+  // THE ASYMMETRY, DISCLOSED HERE RATHER THAN DISCOVERED. What is DECLARED for
+  // four hosts is OBSERVED for one. `captureRequirementsFor` derives anchors
+  // from the state for chat_thread ONLY: a pending chat capture owes its
+  // decision controls and a decided one owes their measured absence, and no
+  // other host has a requirement set that reads `state` at all. So a run_card
+  // record declaring `decided` is checked for AGREEMENT with its cell name by
+  // both halves — a contradiction is caught — and for nothing else. The
+  // declaration is a claim under a name, not a claim under a measurement, and
+  // the difference is worth naming at the line that writes it. It closes when
+  // those hosts get a state-derived requirement set of their own, which is the
+  // slice that produces their records, not this one.
   if (state) record.declaredState = state;
   // WHICH card the root-scoped counts came from, so the record names an instance
   // rather than leaving a reader to assume the screenshot holds only one.
@@ -995,6 +1005,11 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
   // --- a chat_thread record names the KIND it photographed ---
   // Without it the record proves a transcript was on screen, not that a card
   // was in it, which is the whole distance between a capture and evidence.
+  // …AND IT IS ENFORCED, as a requirement set, for chat_thread ALONE. Every host
+  // writes `declaredState` (see `observeCapture`); this arm is where the
+  // asymmetry lives — only chat_thread must carry one that is a valid state, and
+  // only chat_thread's anchors are derived from it. For the other three the
+  // declaration is checked against the cell name and no further.
   if (host === "chat_thread") {
     if (!CAPTURE_STATES.includes(record?.declaredState)) {
       v.push(
@@ -1074,10 +1089,20 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
     host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.declaredKind)
       ? captureRequirementsFor(host, record.declaredKind, record.declaredState ?? "pending")
       : captureRequirementsFor(host);
-  const observationFor = (selector, scope) =>
-    assertions.find((a) => a?.selector === selector && (a?.scope ?? "frame") === scope);
-  const satisfiedAtLeastOnce = (selector, scope) => {
-    const found = observationFor(selector, scope);
+  // Keyed by scope, selector AND `within`. A root-scoped requirement names the
+  // root it is counted inside; an observation that declares a DIFFERENT root
+  // answers a different question, and matching on scope alone let it stand in.
+  // An observation that declares no root is the canonical spelling and is read
+  // as answering the requirement, which is how that half reads it.
+  const observationFor = (selector, scope, within) =>
+    assertions.find(
+      (a) =>
+        a?.selector === selector &&
+        (a?.scope ?? "frame") === scope &&
+        (a?.within === undefined || within === undefined || a.within === within),
+    );
+  const satisfiedAtLeastOnce = (selector, scope, within) => {
+    const found = observationFor(selector, scope, within);
     return Boolean(found) && found.count >= 1;
   };
   for (const req of hostRequirements) {
@@ -1087,11 +1112,15 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
     // The canonical `any` group: Confirm OR Skip answers the requirement. This
     // tier requires every member (see `captureRequirementsFor`), so the group is
     // honoured only in the graded tier.
-    if (!strict && req.any && req.any.some((sel) => satisfiedAtLeastOnce(sel, req.scope))) {
+    if (
+      !strict &&
+      req.any &&
+      req.any.some((sel) => satisfiedAtLeastOnce(sel, req.scope, req.within))
+    ) {
       continue;
     }
     const wanted = req.expect ?? "present";
-    const found = observationFor(req.selector, req.scope);
+    const found = observationFor(req.selector, req.scope, req.within);
     if (!found) {
       v.push(
         `${where}: host "${host}" requires ${req.selector} ${req.scope}-scoped` +

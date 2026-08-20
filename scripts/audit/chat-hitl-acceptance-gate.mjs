@@ -403,14 +403,20 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       );
       continue;
     }
-    // Observations are keyed by SCOPE and selector — the canonical contract's own
-    // key. The earlier arm matched on frame alone and IGNORED `within`, so a
-    // frame-wide count satisfied a requirement meant to be taken INSIDE the card
-    // root: exactly the borrowed-marker bypass the requirement set exists to
-    // close, reopened at the binding.
-    const observationFor = (selector, scope) =>
+    // Observations are keyed by SCOPE, selector AND `within` — the canonical
+    // contract's own key plus the root a root-scoped count names. An earlier arm
+    // matched on frame alone, so a frame-wide count satisfied a requirement meant
+    // to be taken INSIDE the card root; the scope key closed that, and `within`
+    // closes the rest of it: an observation taken inside a DIFFERENT root
+    // answers a different question and can no longer stand in for this one. An
+    // observation that names no root is the canonical spelling, read as
+    // answering the requirement exactly as that half reads it.
+    const observationFor = (selector, scope, within) =>
       (record.assertions ?? []).find(
-        (a) => a?.selector === selector && (a?.scope ?? "frame") === scope,
+        (a) =>
+          a?.selector === selector &&
+          (a?.scope ?? "frame") === scope &&
+          (a?.within === undefined || within === undefined || a.within === within),
       );
     // PRESENT means painted, WHEN THE RECORD CLAIMS A PAINTED COUNT. The binding
     // asks the same question the record's own validator does, at the same
@@ -419,8 +425,8 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
     // canonical driver — which records attachment only, and labels no
     // observation — is read the way that half reads it rather than refused for
     // fields it never claimed.
-    const satisfies = (selector, scope, wanted) => {
-      const found = observationFor(selector, scope);
+    const satisfies = (selector, scope, within, wanted) => {
+      const found = observationFor(selector, scope, within);
       if (!found || (found.expect ?? wanted) !== wanted) return false;
       if (wanted !== "present") return found.count === 0;
       if (found.count < 1) return false;
@@ -444,11 +450,11 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       if (
         !strict &&
         req.any &&
-        req.any.some((sel) => (observationFor(sel, req.scope)?.count ?? 0) >= 1)
+        req.any.some((sel) => (observationFor(sel, req.scope, req.within)?.count ?? 0) >= 1)
       ) {
         continue;
       }
-      if (!satisfies(req.selector, req.scope, wanted)) {
+      if (!satisfies(req.selector, req.scope, req.within, wanted)) {
         violations.push(
           `manifest row ${claim.row}: the record for "${claim.cell}" does not observe ` +
             `${req.selector} ${wanted} (${req.scope}-scoped)`,

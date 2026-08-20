@@ -158,10 +158,40 @@ const NOT_A_BINDING = new Set(["function", "class", "async", "new", "await", "ty
  * is a namespace this file imported from a specifier that resolves INSIDE the
  * analysed package, so `const x = React.useMemo` and every other member read in
  * the tree is untouched.
+ *
+ * AND IT IS A PLAIN VALUE READ, not the first hop of an expression. `ns.NAME`
+ * bound whole IS the export under a new name; `ns.a.b` is a property of one,
+ * `ns.fn()` is what calling one returned, and `ns.NAME + 1` is neither. Binding
+ * those as the export is a false edge — the gate would then report a card
+ * "reachable" through a value that is not the card. So the read must be the
+ * WHOLE initializer, ended by `;`, a comma, a closing bracket or the line.
+ *
+ * THE DECLARATION MAY BE TYPED. `const Hold: FC = ns.default` is the same read
+ * with an annotation on it, and requiring `=` immediately after the name missed
+ * every one of them — a laundering route that is one `: FC` away from invisible.
+ * An `as` assertion on the read is the same case and is allowed too.
+ *
+ * THE LIMIT, since this is a regex over source: the annotation pattern covers
+ * ordinary type references, generics, arrays and unions, not a function type
+ * (`: () => void`), whose `=>` cannot be told from the initializer's `=` without
+ * a parser. That form is missed, like every other shape the honest-limit block
+ * at the foot of this file already discloses.
  */
 const NS_IMPORT_LOCAL_RE = /import\s*\*\s*as\s+(\w+)\s*from\s*["']([^"']+)["']/g;
-const NS_MEMBER_RE = /(export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(\w+)\s*\.\s*(\w+)/g;
-const DEFAULT_EXPORT_MEMBER_RE = /export\s+default\s+(\w+)\s*\.\s*(\w+)\s*;/g;
+/** A type annotation: `Foo`, `Foo.Bar`, `Foo<A, B>`, `Foo[]`, `A | B`. */
+const TYPE_ANNOTATION = String.raw`(?::\s*[A-Za-z_$][\w$.<>,[\]|&\s]*?)?`;
+/** The read is the whole initializer: nothing may continue the expression. */
+const READ_ENDS = String.raw`(?:\s+as\s+[\w$.<>,[\]|&]+)?(?=[^\S\n]*(?:[;,)\]}]|$))`;
+const NS_MEMBER_RE = new RegExp(
+  String.raw`(export\s+)?(?:const|let|var)\s+(\w+)\s*${TYPE_ANNOTATION}=\s*(\w+)\s*\.\s*(\w+)${READ_ENDS}`,
+  "gm",
+);
+// `export default ns.NAME` — the same read, outbound. The semicolon is OPTIONAL:
+// it was required literally, so the ASI spelling walked straight past.
+const DEFAULT_EXPORT_MEMBER_RE = new RegExp(
+  String.raw`export\s+default\s+(\w+)\s*\.\s*(\w+)${READ_ENDS}`,
+  "gm",
+);
 
 function localReExportsOf(source: string): ReExport[] {
   const locals = new Map<string, { imported: string; spec: string }>();

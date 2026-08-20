@@ -1289,6 +1289,57 @@ describe("the re-export route, closed by REACHABILITY rather than by spelling", 
     ]);
   });
 
+  it("reads a TYPED declaration, and refuses a chain, a call and an expression", () => {
+    // The member arm binds `X` to the export `ns.NAME` names. Three shapes are
+    // NOT that read: `ns.a.b` is a property OF the export, `ns.fn()` is what
+    // calling it returned, and `ns.NAME + 1` is neither — binding any of them
+    // would report a card reachable through a value that is not the card. And
+    // one shape IS that read and was being missed: the annotated declaration,
+    // which is a laundering route one `: FC` away from invisible.
+    const virtual: Record<string, string> = {
+      "/agents/run-recommendation-chip-row.tsx": "export function RecommendationHoldCard() {}",
+      "/agents/default-hop.ts":
+        'import { RecommendationHoldCard } from "./run-recommendation-chip-row";\n' +
+        "export default RecommendationHoldCard;",
+      // TYPED — the same read with an annotation on it.
+      "/agents/ns-typed.ts":
+        'import * as ns from "./default-hop";\n' +
+        "export const Typed: React.FC<Props> = ns.default;",
+      // `export default ns.default` with NO semicolon: the outbound half of the
+      // same read, which a literal `;` in the pattern used to walk past.
+      "/agents/ns-asi.ts":
+        'import * as ns from "./default-hop";\nexport default ns.default',
+      // A CHAIN, a CALL and an EXPRESSION off the same namespace. None of the
+      // three IS the export, so none of them carries it.
+      "/agents/ns-not-a-read.ts":
+        'import * as ns from "./default-hop";\n' +
+        "export const Chained = ns.default.displayName;\n" +
+        "export const Called = ns.default();\n" +
+        "export const Summed = ns.default + 1;",
+    };
+    const graph: SourceGraph = {
+      files: [
+        "/agents/run-recommendation-chip-row.tsx",
+        "/agents/default-hop.ts",
+        "/agents/ns-typed.ts",
+        "/agents/ns-asi.ts",
+        "/agents/ns-not-a-read.ts",
+      ],
+      read: (file) => virtual[file] ?? "",
+      resolve: (_from, spec) =>
+        ({
+          "./run-recommendation-chip-row": "/agents/run-recommendation-chip-row.tsx",
+          "./default-hop": "/agents/default-hop.ts",
+        })[spec] ?? null,
+    };
+    const owed = owedExportsByModule(graph, new Map([
+      ["/agents/run-recommendation-chip-row.tsx", ["RecommendationHoldCard"]],
+    ]));
+    expect(owed.get("/agents/ns-typed.ts")).toEqual(new Set(["Typed"]));
+    expect(owed.get("/agents/ns-asi.ts")).toEqual(new Set(["default"]));
+    expect(owed.get("/agents/ns-not-a-read.ts") ?? new Set()).toEqual(new Set());
+  });
+
   it("does NOT taint a member read off a namespace the analysis cannot resolve", () => {
     // The false positive the member-read arm has to avoid. `const x = React.y`
     // is every other line in this tree; the arm fires only for a namespace
