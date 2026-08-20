@@ -32,7 +32,7 @@ import {
   skipRunRecommendationAction,
   type RunRecommendationHoldState,
 } from "./run-recommendation-actions";
-import type { RunRecommendationDecidedSkill } from "./run-recommendation-evidence";
+import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
 
 // ---------------------------------------------------------------------------
 // RunRecommendationChipRow — the SHARED run-start recommendation chip-row

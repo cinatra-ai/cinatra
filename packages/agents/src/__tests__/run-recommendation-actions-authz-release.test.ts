@@ -36,7 +36,10 @@ vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
   requireActorContext: (...a: unknown[]) => requireActorContext(...a),
 }));
-vi.mock("@/lib/run-selected-skill-revisions", () => ({
+vi.mock("@/lib/run-selected-skill-revisions", async (importOriginal) => ({
+  // Keep the module's PURE exports (decidedSkillsFromEvidence and the row
+  // types' runtime constants) real; stub only the store reads/writes.
+  ...(await importOriginal<typeof import("@/lib/run-selected-skill-revisions")>()),
   readRunSelectedSkillRevisions: (...a: unknown[]) => readRunSelectedSkillRevisions(...a),
   readRunRejectedRecommendations: (...a: unknown[]) => readRunRejectedRecommendations(...a),
   hasRunRecommendationSkip: (...a: unknown[]) => hasRunRecommendationSkip(...a),

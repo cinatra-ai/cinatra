@@ -32,10 +32,7 @@ import {
   type ActorRoleHints,
 } from "./auth-policy";
 import { actorFromSession } from "@/lib/authz/build-actor-context";
-import {
-  decidedSkillsFromEvidence,
-  type RunRecommendationDecidedSkill,
-} from "./run-recommendation-evidence";
+
 import {
   writeRunRejectedRecommendations,
   SKIP_RECOMMENDATION_SOURCE,
@@ -45,6 +42,8 @@ import {
   readRunSelectedSkillRevisions,
   readRunRejectedRecommendations,
   hasRunRecommendationSkip,
+  decidedSkillsFromEvidence,
+  type RunRecommendationDecidedSkill,
   type RunRejectedRecommendation,
   type RunSelectedSkillRevision,
 } from "@/lib/run-selected-skill-revisions";
