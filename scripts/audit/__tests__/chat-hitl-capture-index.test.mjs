@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import {
   CAPTURE_HOSTS,
   CAPTURE_INDEX_SCHEMA_VERSION,
+  DECIDED_SUMMARY_SELECTOR,
   HOST_ANCHOR_REQUIREMENTS,
   KIND_REQUIRED_ACTIONS,
   RECORDER_ID,
@@ -52,6 +53,7 @@ import {
   screenshotProofInventory,
 } from "../chat-hitl-acceptance-gate.mjs";
 import { playwrightPage } from "../lib/chat-hitl-capture-driver.mjs";
+import { validateCaptureRecord as validateCanonicalRecord } from "../../ci/lib/capture-record-contract.mjs";
 import { CHAT_THREAD_CARRIAGE_CONTRACT } from "@/lib/lifecycle/held-turn-card-contract";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -96,8 +98,8 @@ function chatRecord(over = {}) {
   return {
     cell: "S9x-1__chat_thread__recommendation-hold-held",
     declaredHost: "chat_thread",
-    kind: "recommendation_hold",
-    state: "pending",
+    declaredKind: "recommendation_hold",
+    declaredState: "pending",
     finalUrl: "http://localhost:3000/chat?thread=t-1",
     build: "development",
     screenshot: PNG,
@@ -189,9 +191,9 @@ describe("the mislabeled capture — the defect this index was built after", () 
 
   it("REFUSES a chat_thread record that names no lifecycle kind", () => {
     // A transcript was on screen proves nothing about a card being in it.
-    const record = chatRecord({ kind: undefined });
+    const record = chatRecord({ declaredKind: undefined });
     expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
-      /must declare the lifecycle `kind` it photographed/,
+      /must declare the lifecycle `declaredKind` it photographed/,
     );
   });
 
@@ -307,16 +309,29 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
         },
       },
       assertions: [
+        // The outer document's own anchor, counted on the PAGE — the widget
+        // lives on somebody else's site, so this is the one fact about the
+        // embedding page the record carries.
+        { frame: "main", scope: "page", selector: ".cw-frame", expect: "present", count: 1, visible: 1 },
         {
           frame: "widget",
+          scope: "frame",
           selector: '[data-embed-assistant][data-phase="active"]',
           expect: "present",
           count: 1,
           visible: 1,
         },
-        { frame: "widget", selector: "[data-conversation-list]", expect: "present", count: 1, visible: 1 },
         {
           frame: "widget",
+          scope: "frame",
+          selector: "[data-conversation-list]",
+          expect: "present",
+          count: 1,
+          visible: 1,
+        },
+        {
+          frame: "widget",
+          scope: "frame",
           selector: '[data-lifecycle-card-host="site_widget"]',
           expect: "present",
           count: 1,
@@ -476,19 +491,28 @@ function fakePage({
         "data-card-instance": `card-${i}`,
       }));
     },
-    // Card-scoped reads. The fake keys them by "root>>selector" so a test can
-    // say what lives INSIDE the card and what merely lives on the page. The
-    // INDEX is logged too: the recorder pinning a card is the behaviour under
-    // test, not an implementation detail.
-    countWithin: async (root, selector, index = 0) => {
-      log.push(`${name}.countWithin:${root}#${index}>>${selector}`);
-      return scoped(countTable, root, selector, 0);
-    },
-    countWithinVisible: async (root, selector, index = 0) => {
-      log.push(`${name}.countWithinVisible:${root}#${index}>>${selector}`);
-      const counted = scoped(countTable, root, selector, 0);
-      const key = visibleTable[`${root}>>${selector}`] === undefined ? selector : `${root}>>${selector}`;
-      return paintedOf(visibleTable, counted, key);
+    // Root-scoped reads, through the PIN. The fake keys them by "root>>selector"
+    // so a test can say what lives INSIDE the card and what merely lives on the
+    // page; a `root>>selector` entry is the `:scope`-INCLUSIVE count, which is
+    // what the real adapter now answers. The pin is taken ONCE and the index is
+    // logged with it: the recorder resolving a card exactly one time is the
+    // behaviour under test, not an implementation detail.
+    pinWithin: async (root, index = 0) => {
+      log.push(`${name}.pinWithin:${root}#${index}`);
+      if ((countTable[root] ?? 0) <= index) return null;
+      return {
+        count: async (selector) => {
+          log.push(`${name}.countWithin:${root}#${index}>>${selector}`);
+          return scoped(countTable, root, selector, 0);
+        },
+        countVisible: async (selector) => {
+          log.push(`${name}.countWithinVisible:${root}#${index}>>${selector}`);
+          const counted = scoped(countTable, root, selector, 0);
+          const key =
+            visibleTable[`${root}>>${selector}`] === undefined ? selector : `${root}>>${selector}`;
+          return paintedOf(visibleTable, counted, key);
+        },
+      };
     },
   });
 
@@ -556,7 +580,11 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
   });
 
   it("resolves the outer frame, ENTERS it, and reads the inner URL and anchors there", async () => {
-    const inner = HOST_ANCHOR_REQUIREMENTS.site_widget.map((r) => r.selector);
+    // The anchors counted INSIDE the embed frame. `.cw-frame` is `page`-scoped —
+    // it is the handle to the frame, counted on the outer document.
+    const inner = HOST_ANCHOR_REQUIREMENTS.site_widget
+      .filter((r) => r.scope === "frame")
+      .map((r) => r.selector);
     const page = fakePage({
       url: "https://blog.example.com/post",
       counts: { ".cw-frame": 1 },
@@ -644,8 +672,8 @@ describe("a SETTLED capture owes the absence of its controls", () => {
   function settledRecord(over = {}) {
     return chatRecord({
       cell: "S9x-8__chat_thread__recommendation-hold-settled",
-      state: "settled",
-      assertions: chatAssertions("recommendation_hold", "settled"),
+      declaredState: "decided",
+      assertions: chatAssertions("recommendation_hold", "decided"),
       ...over,
     });
   }
@@ -665,7 +693,7 @@ describe("a SETTLED capture owes the absence of its controls", () => {
 
   it("REFUSES a settled record with no decided summary", () => {
     const assertions = settledRecord().assertions.filter(
-      (a) => a.selector !== "[data-run-recommendation-decision]",
+      (a) => a.selector !== DECIDED_SUMMARY_SELECTOR,
     );
     expect(validateCaptureRecord(settledRecord({ assertions }), { hashOf }).join("\n")).toMatch(
       /does not assert it at all/,
@@ -673,8 +701,8 @@ describe("a SETTLED capture owes the absence of its controls", () => {
   });
 
   it("REFUSES a chat_thread record that declares no state at all", () => {
-    expect(validateCaptureRecord(chatRecord({ state: undefined }), { hashOf }).join("\n")).toMatch(
-      /must declare the `state` it photographed/,
+    expect(validateCaptureRecord(chatRecord({ declaredState: undefined }), { hashOf }).join("\n")).toMatch(
+      /must declare the `declaredState` it photographed/,
     );
   });
 });
@@ -685,7 +713,7 @@ describe("the three bypasses an adversarial round found", () => {
     // wrapper, and an unrelated card's settled marker. Page-wide counting called
     // that settled; card-scoped counting does not.
     const kind = "trigger_schedule_proposal";
-    const reqs = chatThreadRequirementsFor(kind, "settled");
+    const reqs = chatThreadRequirementsFor(kind, "decided");
     const counts = { "[data-conversation-list]": 1, [`[data-lifecycle-card="${kind}"]`]: 1 };
     for (const r of reqs) {
       if (!r.within) continue;
@@ -699,7 +727,7 @@ describe("the three bypasses an adversarial round found", () => {
       cell: "S9x-borrow__chat_thread__settled",
       declaredHost: "chat_thread",
       kind,
-      state: "settled",
+      declaredState: "decided",
       screenshot: PNG,
       build: "development",
       repoRoot: "/anywhere",
@@ -744,19 +772,19 @@ describe("the three bypasses an adversarial round found", () => {
   });
 
   it("REFUSES pending evidence for a cell whose name claims a decided state", () => {
-    expect(stateTokenInCell("C2__review-card__chat_thread__decided")).toBe("settled");
+    expect(stateTokenInCell("C2__review-card__chat_thread__decided")).toBe("decided");
     expect(stateTokenInCell("C1__review-card__chat_thread__pending")).toBe("pending");
     const violations = auditManifestIndexBinding({
       manifest: manifestClaiming("C2__review-card__chat_thread__decided.png"),
       index: indexOf([
         chatRecord({
           cell: "C2__review-card__chat_thread__decided",
-          kind: "artifact_review_gate",
-          state: "pending",
+          declaredKind: "artifact_review_gate",
+          declaredState: "pending",
         }),
       ]),
     });
-    expect(violations.join("\n")).toMatch(/cites .* as settled; its record photographs pending/);
+    expect(violations.join("\n")).toMatch(/cites .* as decided; its record photographs pending/);
   });
 });
 
@@ -938,11 +966,43 @@ describe("the committed index and the gate CLI", () => {
  * without a browser and without writing an evidence file.
  *
  * Only the surface `playwrightPage` actually uses is modelled: `locator()` with
- * `count`/`nth`/`first`, per-element `isVisible` and `evaluate`, and nested
- * `locator()` for card-scoped reads.
+ * `count`/`nth`/`first`, per-element `isVisible` and `evaluate`, and `$$` /
+ * `matches` for the pinned, `:scope`-inclusive root reads.
  */
 function fakeElement(attributes, { visible = true, children = {} } = {}) {
   return { attributes, visible, children };
+}
+
+/**
+ * Does the element ITSELF match this selector? The tree keys descendants by
+ * their selector string, but `:scope`-inclusive counting has to ask the root the
+ * same question, and a root carries attributes rather than a child list.
+ */
+function selectorMatchesFake(el, selector) {
+  const m = /^\[([a-z-]+)(?:="([^"]*)")?\]$/.exec(selector);
+  if (!m) return false;
+  const [, name, value] = m;
+  const attributes = el?.attributes ?? {};
+  return name in attributes && (value === undefined || attributes[name] === value);
+}
+
+/** An ElementHandle: what `$$` hands back, and what a pinned root IS. */
+function fakeElementHandle(el) {
+  return {
+    isVisible: async () => Boolean(el?.visible),
+    $$: async (selector) => (el?.children?.[selector] ?? []).map(fakeElementHandle),
+    evaluate: async (fn, arg) =>
+      fn(
+        {
+          attributes: Object.entries(el?.attributes ?? {}).map(([name, value]) => ({
+            name,
+            value,
+          })),
+          matches: (selector) => selectorMatchesFake(el, selector),
+        },
+        arg,
+      ),
+  };
 }
 
 function fakeLocator(list) {
@@ -971,6 +1031,7 @@ function fakeBrowserPage({ url, tree }) {
   return {
     url: () => url,
     locator: (selector) => fakeLocator(tree[selector] ?? []),
+    $$: async (selector) => (tree[selector] ?? []).map(fakeElementHandle),
     $: async () => null,
     screenshot: async () => {},
   };
@@ -1013,6 +1074,9 @@ function twoCardTranscript() {
     url: "http://localhost:3000/chat?thread=t-1",
     tree: {
       "[data-conversation-list]": [fakeElement({})],
+      // The canonical set counts the host declaration FRAME-wide as well as
+      // inside the card, so the transcript carries both.
+      [HOST_ANCHOR]: [fakeElement({}), fakeElement({})],
       [CARD_ROOT]: [heldCard("run-A", { visible: false }), heldCard("run-B")],
     },
   });
@@ -1037,6 +1101,14 @@ function firstMatchAttachedOnlyPage(page) {
     // The old adapter recorded no instance at all; the nearest honest
     // translation is "one card, nothing observed about it".
     identifyWithin: async () => [{}],
+    // The old root reads, restated: `.first()` regardless of the pin, DESCENDANTS
+    // only, and attachment taken as presence.
+    pinWithin: async (root) => {
+      if ((await page.locator(root).count()) === 0) return null;
+      const descendantsOnly = async (selector) =>
+        page.locator(root).first().locator(selector).count();
+      return { count: descendantsOnly, countVisible: descendantsOnly };
+    },
     countWithin,
     countWithinVisible: countWithin,
     frame: async () => null,
@@ -1075,7 +1147,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     });
     expect(validateCaptureRecord(before, { hashOf })).toEqual([]);
     for (const selector of [HOST_ANCHOR, CONFIRM, SKIP]) {
-      const a = before.assertions.find((x) => x.selector === selector);
+      const a = before.assertions.find((x) => x.selector === selector && x.scope === "root");
       expect(a.count).toBe(1);
     }
 
@@ -1096,7 +1168,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     // in it was painted.
     expect(record.instance).toMatchObject({ selector: CARD_ROOT, matched: 2, index: 0, id: "run-A" });
     for (const selector of [HOST_ANCHOR, CONFIRM, SKIP]) {
-      const a = record.assertions.find((x) => x.selector === selector);
+      const a = record.assertions.find((x) => x.selector === selector && x.scope === "root");
       expect({ selector, count: a.count, visible: a.visible }).toEqual({
         selector,
         count: 1,
@@ -1141,6 +1213,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
       url: "http://localhost:3000/chat?thread=t-1",
       tree: {
         "[data-conversation-list]": [fakeElement({})],
+        [HOST_ANCHOR]: [fakeElement({})],
         [CARD_ROOT]: [heldCard("run-only")],
       },
     });
@@ -1218,12 +1291,12 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     // The asymmetry stated as a case. If `absent` were judged on the painted
     // count, a settled capture would pass with its decision controls still in
     // the DOM and merely hidden — which is a card a reader can still be shown.
-    const assertions = chatAssertions("recommendation_hold", "settled").map((a) =>
+    const assertions = chatAssertions("recommendation_hold", "decided").map((a) =>
       a.selector === CONFIRM ? { ...a, count: 1, visible: 0 } : a,
     );
     expect(
       validateCaptureRecord(
-        chatRecord({ cell: "S9x-mut__chat_thread__recommendation-hold-settled", state: "settled", assertions }),
+        chatRecord({ cell: "S9x-mut__chat_thread__recommendation-hold-settled", declaredState: "decided", assertions }),
         { hashOf },
       ).join("\n"),
     ).toMatch(/recorded as absent but observed 1 times/);
@@ -1239,5 +1312,180 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         index: indexOf([chatRecord({ cell: "X9__chat_thread__recommendation-hold-held", assertions })]),
       }).join("\n"),
     ).toMatch(/does not observe \[data-action="confirm-run-recommendation"\] present/);
+  });
+
+
+  it("requires EVERY control of a group, where the canonical contract takes any one", () => {
+    // The one place this tier is deliberately STRICTER than the ratified
+    // contract, stated as a case so the divergence is a decision rather than a
+    // drift. `run-recommendation-chip-row.tsx` renders Confirm and Skip
+    // unconditionally in one row, so a capture that lost Skip photographed a
+    // card that is not the shipped one. Stricter in this direction is safe: a
+    // record this tier accepts is still a record that half accepts.
+    const assertions = chatAssertions().map((a) =>
+      a.selector === SKIP ? { ...a, count: 0, visible: 0 } : a,
+    );
+    expect(
+      validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n"),
+    ).toMatch(/\[data-action="skip-run-recommendation"\] PRESENT \(root-scoped\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SINGLE-ROOT CARD, AND THE TWO HALVES THAT HAVE TO AGREE ABOUT IT
+// ---------------------------------------------------------------------------
+
+const REVIEW_ROOT = '[data-lifecycle-card="artifact_review_gate"]';
+const DECISION_BAR = '[data-conformance-id="review-decision-bar"]';
+const CARD_STATE = "[data-lifecycle-card-state]";
+
+/**
+ * THE SHIPPED MARKUP, as `packages/agents/src/review-gate-card.tsx` renders it:
+ * `data-lifecycle-card`, `data-lifecycle-card-state`, `data-lifecycle-card-host`
+ * and the card's conformance id all sit on ONE root element, and the decision
+ * bar is mounted INSIDE it. That single root is the whole of the finding: a
+ * root-scoped read that counts descendants only answers the card's own host
+ * declaration with zero.
+ */
+function reviewGateTranscript({ state = "pending" } = {}) {
+  const card = fakeElement(
+    {
+      "data-lifecycle-card": "artifact_review_gate",
+      "data-lifecycle-card-state": state === "decided" ? "settled" : "pending",
+      "data-lifecycle-card-host": "chat_thread",
+      "data-conformance-id": "review-gate-card",
+    },
+    {
+      visible: true,
+      children:
+        state === "decided" ? {} : { [DECISION_BAR]: [fakeElement({}, { visible: true })] },
+    },
+  );
+  return fakeBrowserPage({
+    url: "http://localhost:3000/chat?thread=t-1",
+    // ONE element, reachable by each of the selectors it satisfies — which is
+    // what "all three attributes sit on one root" means in a selector tree.
+    tree: {
+      "[data-conversation-list]": [fakeElement({})],
+      [HOST_ANCHOR]: [card],
+      [CARD_STATE]: [card],
+      [REVIEW_ROOT]: [card],
+    },
+  });
+}
+
+/**
+ * THE ADAPTER AS IT STOOD at 5caedc03: root-scoped reads counted DESCENDANTS
+ * only. Everything else — the painted counts, the pin, the port — is today's, so
+ * the only variable between the two records below is `:scope` inclusivity.
+ */
+function descendantOnlyPinPage(page) {
+  return {
+    ...drivenPage(page),
+    pinWithin: async (root, index = 0) => {
+      const el = (await page.$$(root))[index];
+      if (!el) return null;
+      return {
+        count: async (selector) => (await el.$$(selector)).length,
+        countVisible: async (selector) => {
+          let painted = 0;
+          for (const descendant of await el.$$(selector)) {
+            if (await descendant.isVisible()) painted += 1;
+          }
+          return painted;
+        },
+      };
+    },
+  };
+}
+
+function reviewArgs(state) {
+  return {
+    cell: `S9h-1__review-card__chat_thread__${state}`,
+    declaredHost: "chat_thread",
+    kind: "artifact_review_gate",
+    state,
+    screenshot: PNG,
+    build: "development",
+    repoRoot: "/anywhere",
+    readImpl: OBSERVER_READ,
+    now: () => "2026-08-20T09:00:00.000Z",
+  };
+}
+
+/** Judge one record with the ratified CI half, on its own terms. */
+function canonicalViolations(record) {
+  return validateCanonicalRecord(record, {
+    repoRoot: "/anywhere",
+    fileExists: (abs) => abs === `/anywhere/${PNG}`,
+    hashFile: () => HASH,
+  });
+}
+
+describe("the single-root card: `:scope`-inclusive root counting", () => {
+  it.each(["pending", "decided"])(
+    "MUTATION (%s): the descendant-only adapter REFUSES the honest capture the fixed one records",
+    async (state) => {
+      const args = reviewArgs(state);
+
+      // BEFORE. The card's own declarations sit ON the root, so a descendant-only
+      // read counts them zero and an HONEST capture of shipped markup is refused.
+      const before = await observeCapture({
+        ...args,
+        page: descendantOnlyPinPage(reviewGateTranscript({ state })),
+      });
+      const beforeViolations = validateCaptureRecord(before, { hashOf });
+      expect(beforeViolations.join("\n")).toMatch(
+        /\[data-lifecycle-card-host="chat_thread"\] PRESENT \(root-scoped\); the record observed 0/,
+      );
+
+      // AFTER. The shipped adapter counts the root itself when it matches, and
+      // the same page records and validates.
+      const after = await observeCapture({
+        ...args,
+        page: drivenPage(reviewGateTranscript({ state })),
+      });
+      expect(validateCaptureRecord(after, { hashOf })).toEqual([]);
+      const rootHost = after.assertions.find(
+        (a) => a.selector === HOST_ANCHOR && a.scope === "root",
+      );
+      expect({ count: rootHost.count, visible: rootHost.visible }).toEqual({ count: 1, visible: 1 });
+    },
+  );
+
+  it("BOTH HALVES accept the record ONE driver run produces", async () => {
+    for (const state of ["pending", "decided"]) {
+      const record = await observeCapture({
+        ...reviewArgs(state),
+        page: drivenPage(reviewGateTranscript({ state })),
+      });
+      // The canonical field names, written the canonical way.
+      expect(record.declaredKind).toBe("artifact_review_gate");
+      expect(record.declaredState).toBe(state);
+      expect(record.assertions.every((a) => ["page", "frame", "root"].includes(a.scope))).toBe(true);
+      // And the two validators agree.
+      expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+      expect(canonicalViolations(record)).toEqual([]);
+    }
+  });
+
+  it("the DECIDED marker is the canonical one, and the old adapter loses it too", async () => {
+    // `[data-lifecycle-card-state]` is rendered ON the root, so this requirement
+    // is the canonical half's OWN, and the descendant-only adapter breaks it
+    // there as well — the defect was never this tier's alone.
+    const before = await observeCapture({
+      ...reviewArgs("decided"),
+      page: descendantOnlyPinPage(reviewGateTranscript({ state: "decided" })),
+    });
+    expect(canonicalViolations(before).map((x) => x.code)).toContain("record/anchor-count-zero");
+
+    const after = await observeCapture({
+      ...reviewArgs("decided"),
+      page: drivenPage(reviewGateTranscript({ state: "decided" })),
+    });
+    expect(canonicalViolations(after)).toEqual([]);
+    expect(
+      after.assertions.find((a) => a.selector === CARD_STATE && a.scope === "root").count,
+    ).toBe(1);
   });
 });

@@ -97,7 +97,7 @@ async function attributesOfMatches(locator) {
  * scoped to it, which is what lets the widget host be checked where it actually
  * lives instead of in the embedding page.
  *
- * CARD-SCOPED READS TAKE AN INDEX, and the recorder pins it once per capture.
+ * CARD-SCOPED READS ARE PINNED TO AN ELEMENT, once per capture, by `pinWithin`.
  * The earlier `.first()` answered every card-relative count from whichever root
  * led the DOM: on a transcript holding two cards of one kind that silently
  * measures a card the record never names, and the record carried nothing a
@@ -105,22 +105,52 @@ async function attributesOfMatches(locator) {
  * — it hands the recorder the matches' own attributes so the pin is recorded.
  */
 export function playwrightPage(page) {
-  const nthRoot = async (scope, root, index) => {
-    if ((await scope.locator(root).count()) <= index) return null;
-    return scope.locator(root).nth(index);
-  };
   const readerFor = (scope, urlOf) => ({
     url: urlOf,
     count: async (selector) => scope.locator(selector).count(),
     countVisible: async (selector) => paintedCount(scope.locator(selector)),
     identifyWithin: async (selector) => attributesOfMatches(scope.locator(selector)),
-    countWithin: async (root, selector, index = 0) => {
-      const el = await nthRoot(scope, root, index);
-      return el === null ? 0 : el.locator(selector).count();
-    },
-    countWithinVisible: async (root, selector, index = 0) => {
-      const el = await nthRoot(scope, root, index);
-      return el === null ? 0 : paintedCount(el.locator(selector));
+    /**
+     * Resolve the `index`-th `root` ONCE and hand back a reader bound to that
+     * ELEMENT. Two defects close here, and they close together because they are
+     * the same mistake seen from two sides.
+     *
+     * THE PIN IS AN ELEMENT, NOT AN INDEX. The previous reader re-resolved
+     * `locator(root).nth(index)` on every single call. Between the recorder's two
+     * measurements a transcript can reorder — a card streams in above another, an
+     * optimistic row settles — and `.nth(index)` then answers from a DIFFERENT
+     * card. Because the counts are equal, nothing downstream notices. An
+     * ElementHandle keeps pointing at the element it resolved to.
+     *
+     * THE COUNT IS `:scope`-INCLUSIVE. The previous reader counted DESCENDANTS
+     * only. The shipped review-gate card renders `data-lifecycle-card`,
+     * `data-lifecycle-card-host`, `data-lifecycle-card-state` and its conformance
+     * id on ONE element, so a root-scoped count of the card's own declaration
+     * came back zero and an HONEST pending capture was refused. Counting the root
+     * itself when it matches is what `:scope` means in CSS, and it is what the
+     * canonical contract's `root` scope has always meant — its own committed
+     * records carry `[data-lifecycle-card-state]` at `root` with a count of 1.
+     */
+    pinWithin: async (root, index = 0) => {
+      const handles = await scope.$$(root);
+      const el = handles[index];
+      if (!el) return null;
+      const matchesSelf = (selector) =>
+        el.evaluate((node, sel) => node.matches(sel), selector);
+      return {
+        count: async (selector) => {
+          const descendants = await el.$$(selector);
+          return descendants.length + ((await matchesSelf(selector)) ? 1 : 0);
+        },
+        countVisible: async (selector) => {
+          let painted = 0;
+          if ((await matchesSelf(selector)) && (await el.isVisible())) painted += 1;
+          for (const descendant of await el.$$(selector)) {
+            if (await descendant.isVisible()) painted += 1;
+          }
+          return painted;
+        },
+      };
     },
   });
 
@@ -181,7 +211,10 @@ export async function driveCapture({ plan, repoRoot = process.cwd(), log = conso
           for (const v of violations) log(`  ${v}`);
           throw new Error(`cell ${cell.cell} did not satisfy its declared host`);
         }
-        log(`observed ${cell.cell} (${record.declaredHost}/${record.kind}/${record.state})`);
+        log(
+          `observed ${cell.cell} ` +
+            `(${record.declaredHost}/${record.declaredKind}/${record.declaredState})`,
+        );
         records.push(record);
       } finally {
         await context.close();

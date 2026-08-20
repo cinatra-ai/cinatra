@@ -32,16 +32,24 @@
  * the caller, because a recorder that writes down what it was told is a
  * transcription of the claim, not evidence against it. The browser reaches this
  * module through a tiny `CapturePage` port (`url`, `count`, `countVisible`,
- * `identifyWithin`, `countWithin`, `countWithinVisible`, `frame`, `screenshot`),
- * so the audit tier stays dependency-free and runnable without an install while
- * the real driver is Playwright.
+ * `identifyWithin`, `pinWithin`, `frame`, `screenshot`), so the audit tier stays
+ * dependency-free and runnable without an install while the real driver is
+ * Playwright.
  *
  * IT MEASURES ONE CARD, AND SAYS WHICH. Everything a chat_thread record claims
  * about the card is counted inside a card root, and a transcript can hold
- * several roots of one kind. So the instance is resolved ONCE per capture, its
- * own attributes are read off the element and written into the record, and a
- * page with several candidate cards and no declaration is REFUSED rather than
- * answered with the first match.
+ * several roots of one kind. So the ELEMENT is resolved ONCE per capture, its
+ * own attributes are read off it and written into the record, and a page with
+ * several candidate cards and no declaration is REFUSED rather than answered
+ * with the first match. Root-scoped counts are `:scope`-inclusive, because the
+ * shipped cards put the card root's own declarations ON the root.
+ *
+ * IT SPEAKS THE CANONICAL CONTRACT. The record's field names, scopes, selectors
+ * and state spellings are the ratified CI half's (scripts/ci/lib/
+ * capture-record-contract.mjs), imported rather than restated, so ONE driver run
+ * produces a record BOTH halves accept. What this tier adds — painted counts,
+ * measured absences, the pinned instance, frame URLs — it adds as extra fields
+ * that half ignores, never as a rename of one of its own.
  *
  * IT REQUIRES THE PIXELS. Every anchor is counted twice: attached, and PAINTED.
  * `present` needs a painted match, because a card behind `display:none` or
@@ -74,19 +82,32 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+// THE CANONICAL CONTRACT, imported rather than restated. The CI half (#2857) is
+// ratified and on main; a second hand-written copy of the same hosts, kinds,
+// selectors and states is exactly how the two halves drifted into disagreeing
+// about what a record is. Everything below layers this tier's EXTRA rigor --
+// painted counts, absent assertions, instance pinning, frame URLs -- on top of
+// that set. It never renames one of its fields and never contradicts one of its
+// selectors. Zero runtime dependencies on both sides, so the audit tier stays
+// installable-free.
+import {
+  CAPTURE_HOSTS as CANONICAL_CAPTURE_HOSTS,
+  CARD_KINDS,
+  DECIDED_SUMMARY_SELECTOR,
+  requiredAssertionsFor,
+} from "../../ci/lib/capture-record-contract.mjs";
+
 /** The recorder's identity, stamped on every record it writes. */
 export const RECORDER_ID = "scripts/audit/lib/chat-hitl-capture-recorder.mjs@1";
 
 /** The current index schema. Bumping it is a deliberate, reviewed act. */
 export const CAPTURE_INDEX_SCHEMA_VERSION = 1;
 
-/** The four ruled hosts (§IX). */
-export const CAPTURE_HOSTS = Object.freeze([
-  "chat_thread",
-  "run_card",
-  "page_gate_region",
-  "site_widget",
-]);
+/** The four ruled hosts (§IX), re-exported from the canonical contract. */
+export const CAPTURE_HOSTS = Object.freeze([...CANONICAL_CAPTURE_HOSTS]);
+
+/** The canonical decided marker, re-exported so callers have one spelling. */
+export { DECIDED_SUMMARY_SELECTOR };
 
 /** How a capture was built. Dispatch-dependent cells are labeled, never hidden. */
 export const CAPTURE_BUILDS = Object.freeze(["production", "development"]);
@@ -130,111 +151,129 @@ export const HOST_URL_CLASSES = Object.freeze({
 });
 
 /**
- * The frame-scoped anchors a host REQUIRES. Every one must be recorded present
- * with a count of at least one; a required anchor that was never looked for is
- * exactly as bad as one that was not found.
+ * WHICH FRAME the canonical `frame` scope MEANS, per host.
+ *
+ * The canonical contract scopes every observation `page`, `frame` or `root`.
+ * `frame` is "the frame the picture was taken in": the embed frame for the
+ * widget, the main document for everything else. `page` is the outer document
+ * regardless, which is where the widget's own `.cw-frame` is counted.
  */
-export const HOST_ANCHOR_REQUIREMENTS = Object.freeze({
-  chat_thread: Object.freeze([
-    { frame: "main", selector: "[data-conversation-list]" },
-    { frame: "main", selector: '[data-lifecycle-card-host="chat_thread"]' },
-  ]),
-  run_card: Object.freeze([
-    { frame: "main", selector: '[data-lifecycle-card-host="run_card"]' },
-  ]),
-  page_gate_region: Object.freeze([
-    { frame: "main", selector: '[data-lifecycle-card-host="page_gate_region"]' },
-  ]),
-  site_widget: Object.freeze([
-    { frame: "widget", selector: '[data-embed-assistant][data-phase="active"]' },
-    { frame: "widget", selector: "[data-conversation-list]" },
-    { frame: "widget", selector: '[data-lifecycle-card-host="site_widget"]' },
-  ]),
+export const CAPTURE_FRAME_FOR_HOST = Object.freeze({
+  chat_thread: "main",
+  run_card: "main",
+  page_gate_region: "main",
+  site_widget: "widget",
 });
 
+/** The card root a `root`-scoped observation is counted inside. */
+export function cardRootFor(kind) {
+  return CARD_KINDS[kind]?.root ?? null;
+}
+
 /**
- * The DECISION CONTROLS a kind's card must show, per kind.
- *
- * A chat_thread capture of a lifecycle card proves the card is THERE; these
- * prove it is OPERABLE. A screenshot of a card with no controls is a screenshot
- * of a placeholder. Pinned against the held-turn contract's own owner anchors by
- * `chat-hitl-capture-index.test.mjs`, so the two cannot drift.
+ * The DECISION CONTROLS a kind's card must show, per kind — taken from the
+ * canonical contract's `CARD_KINDS` rather than spelled again. This tier used to
+ * carry its own list, and it had drifted: it named `review-gate-card` (the card
+ * ROOT's own conformance id, which is present whatever state the card is in, so
+ * it proved nothing about operability) where the canonical set names
+ * `review-decision-bar` (the control the card actually mounts).
  */
-export const KIND_REQUIRED_ACTIONS = Object.freeze({
-  recommendation_hold: Object.freeze([
-    '[data-action="confirm-run-recommendation"]',
-    '[data-action="skip-run-recommendation"]',
-  ]),
-  artifact_review_gate: Object.freeze(['[data-conformance-id="review-gate-card"]']),
-  trigger_schedule_proposal: Object.freeze([
-    '[data-action="cancel-trigger-schedule"]',
-    '[data-action="release-trigger-now"]',
-  ]),
-  verification_summary: Object.freeze([]),
-});
+export const KIND_REQUIRED_ACTIONS = Object.freeze(
+  Object.fromEntries(
+    Object.entries(CARD_KINDS).map(([kind, spec]) => [
+      kind,
+      Object.freeze([...spec.decisionControls]),
+    ]),
+  ),
+);
 
-export const LIFECYCLE_KINDS = Object.freeze(Object.keys(KIND_REQUIRED_ACTIONS));
+export const LIFECYCLE_KINDS = Object.freeze(Object.keys(CARD_KINDS));
 
 /**
- * The states a capture can photograph, and why the distinction is not cosmetic.
+ * The states a capture can photograph, in the CANONICAL spelling.
  *
- * A PENDING card owes its decision controls; a SETTLED one owes their ABSENCE
+ * This tier used to say `settled` where the canonical contract says `decided`.
+ * That is not a synonym problem: the canonical contract normalizes a cell name's
+ * `settled` token TO `decided`, so a record declaring "settled" contradicted its
+ * own cell name the moment the other half read it.
+ *
+ * A PENDING card owes its decision controls; a DECIDED one owes their ABSENCE
  * and its own decided summary. Requiring the controls on every capture would
- * make an honest settled screenshot unindexable, and requiring nothing would let
- * a placeholder pass as either. So the required set is state-relative, and a
- * record has to say which state it photographed.
+ * make an honest decided screenshot unindexable, and requiring nothing would let
+ * a placeholder pass as either.
  */
-export const CAPTURE_STATES = Object.freeze(["pending", "settled"]);
+export const CAPTURE_STATES = Object.freeze(["pending", "decided"]);
 
-/** What a kind draws once it is decided. */
-export const KIND_SETTLED_MARKERS = Object.freeze({
-  recommendation_hold: "[data-run-recommendation-decision]",
-  artifact_review_gate: '[data-conformance-id="review-gate-blocked"]',
-  trigger_schedule_proposal: '[data-lifecycle-card-state="settled"]',
-  verification_summary: '[data-lifecycle-card-state="settled"]',
-});
+/** The scopes an observation can be counted in, per the canonical contract. */
+export const CAPTURE_SCOPES = Object.freeze(["page", "frame", "root"]);
 
 /**
- * The anchors a chat_thread capture of `kind` must record present, IN THE SAME
- * FRAME: the conversation list, the card's own root, the host declaration, and
- * the kind's decision controls. This is the set the manifest binding requires,
- * so a cell that names chat_thread cannot be satisfied by a photograph of a
- * transcript with no card in it.
+ * THE ONE REQUIREMENT SET, in the canonical contract's vocabulary.
+ *
+ * Built from `requiredAssertionsFor` so the two halves cannot disagree about
+ * which anchors a claim owes. What this tier adds is stated as ADDITIONS, never
+ * as replacements:
+ *
+ *   · the host declaration counted INSIDE the pinned card root, as well as
+ *     frame-wide. The canonical set counts it frame-wide, which a wrapper
+ *     elsewhere on the screen satisfies; counting it in the root too says the
+ *     CARD declared the host, not merely the page.
+ *   · the canonical `forbidden` set, turned into `absent` assertions that are
+ *     MEASURED and written down, so a decided capture's absence is an
+ *     observation rather than an omission.
+ *   · EVERY member of a decision-control group, not any one of them. The
+ *     canonical contract rules Confirm/Skip an `any` group; the shipped
+ *     `run-recommendation-chip-row.tsx` renders both unconditionally in one row,
+ *     so requiring both refuses no honest capture and catches a card that lost
+ *     one. This is strictly STRONGER than the canonical rule, so a record this
+ *     tier accepts is still one that half accepts — the direction that matters.
+ *
+ * Every spec carries the canonical `scope` plus this tier's own `frame` /
+ * `within` / `expect`, which the canonical validator ignores as unknown fields.
+ */
+export function captureRequirementsFor(host, kind = null, state = null) {
+  const { required, forbidden } = requiredAssertionsFor({ host, kind, state });
+  const root = cardRootFor(kind);
+  const frameOf = (scope) =>
+    scope === "page" ? "main" : (CAPTURE_FRAME_FOR_HOST[host] ?? "main");
+  const spec = (r, expect) => {
+    const out = { frame: frameOf(r.scope), scope: r.scope, selector: r.selector, expect };
+    if (r.scope === "root" && root) out.within = root;
+    return out;
+  };
+  const specs = required.map((r) => spec(r, "present"));
+  if (root) {
+    specs.push({
+      frame: frameOf("root"),
+      scope: "root",
+      within: root,
+      selector: `[data-lifecycle-card-host="${host}"]`,
+      expect: "present",
+    });
+  }
+  specs.push(...forbidden.map((r) => spec(r, "absent")));
+  return specs;
+}
+
+/**
+ * The frame-scoped anchors a host REQUIRES, with no card kind in play. Every one
+ * must be recorded present with a count of at least one; a required anchor that
+ * was never looked for is exactly as bad as one that was not found.
+ */
+export const HOST_ANCHOR_REQUIREMENTS = Object.freeze(
+  Object.fromEntries(
+    CAPTURE_HOSTS.map((host) => [host, Object.freeze(captureRequirementsFor(host))]),
+  ),
+);
+
+/**
+ * The anchors a chat_thread capture of `kind` must record, for `state`: the
+ * conversation list, the card's own root, the host declaration (frame-wide AND
+ * inside the card), and the kind's decision controls — present when pending,
+ * absent when decided, beside the decided summary.
  */
 export function chatThreadRequirementsFor(kind, state = "pending") {
-  // The card's own root. Everything that describes THE CARD is counted inside
-  // it: without that, a host declaration on an unrelated wrapper and a settled
-  // marker borrowed from a different card satisfy the set while the card this
-  // record names never settled at all.
-  const root = `[data-lifecycle-card="${kind}"]`;
-  const base = [
-    // The transcript is a page-level fact, so it stays page-scoped.
-    { frame: "main", selector: "[data-conversation-list]" },
-    { frame: "main", selector: root },
-    { frame: "main", within: root, selector: '[data-lifecycle-card-host="chat_thread"]' },
-  ];
-  if (state === "settled") {
-    // The decision is done: its controls must be GONE, and the decided summary
-    // must be there in their place. Both are observations, not inferences.
-    return [
-      ...base,
-      { frame: "main", within: root, selector: KIND_SETTLED_MARKERS[kind], expect: "present" },
-      ...(KIND_REQUIRED_ACTIONS[kind] ?? []).map((selector) => ({
-        frame: "main",
-        within: root,
-        selector,
-        expect: "absent",
-      })),
-    ];
-  }
-  return [
-    ...base,
-    ...(KIND_REQUIRED_ACTIONS[kind] ?? []).map((selector) => ({
-      frame: "main",
-      within: root,
-      selector,
-    })),
-  ];
+  return captureRequirementsFor("chat_thread", kind, state);
 }
 
 /** The frames a host must declare, with the selector that reaches each. */
@@ -262,15 +301,60 @@ export function hashFile(absPath, readImpl = readFileSync) {
  * not observe.
  */
 export function collectAssertions(specs, queryCount) {
-  return specs.map((spec) => {
-    const expected = spec.expect ?? "present";
-    return {
-      frame: spec.frame ?? "main",
-      selector: spec.selector,
-      expect: expected,
-      count: queryCount(spec.frame ?? "main", spec.selector),
-    };
-  });
+  return specs.map((spec) => ({
+    selector: spec.selector,
+    scope: spec.scope ?? "frame",
+    count: queryCount(spec.frame ?? "main", spec.selector),
+    frame: spec.frame ?? "main",
+    expect: spec.expect ?? "present",
+  }));
+}
+
+/**
+ * The path rules a screenshot must satisfy, as a reusable check.
+ *
+ * Shared by the observer and the validator so a path the record would be
+ * REFUSED for is refused BEFORE the shutter. Round 1 wrote the image first and
+ * validated afterwards, which left a file on disk for every capture the gate
+ * then rejected — including paths that escape the tree entirely.
+ */
+export function screenshotPathViolation(screenshot) {
+  if (!isNonEmptyString(screenshot)) return "no screenshot path";
+  if (screenshot.startsWith("/") || screenshot.includes("..")) {
+    return "screenshot must be a repo-relative path inside the tree";
+  }
+  if (!screenshot.startsWith("evidence/")) {
+    return `screenshot must live under evidence/ — it is ${screenshot}`;
+  }
+  return null;
+}
+
+/**
+ * PIN THE ROOT ELEMENT, once per capture.
+ *
+ * `resolveCardInstance` pins an INDEX, and an index is re-resolved against DOM
+ * order on every single read. A transcript that reorders between the two
+ * measurements below — a card streamed in above another, an optimistic row
+ * settling — silently swaps which card the record describes, and because the
+ * COUNTS are equal nothing downstream notices. So the ELEMENT is resolved once,
+ * here, and every root-scoped count in the capture is answered from it.
+ *
+ * The reader it returns is `:scope`-INCLUSIVE: a selector matching the root
+ * ITSELF counts, alongside its descendants. The shipped review-gate card renders
+ * `data-lifecycle-card`, `data-lifecycle-card-host`, `data-lifecycle-card-state`
+ * and its conformance id on ONE element, so a descendant-only reader answers an
+ * honest pending capture with zero and refuses it — which is exactly what this
+ * tier did before.
+ */
+async function pinRoot(reader, rootSelector, index) {
+  if (typeof reader.pinWithin !== "function") {
+    throw new Error(
+      `capture cannot pin the root element for ${rootSelector}: the page port has no ` +
+        "pinWithin(), so every root-scoped count would be re-resolved by DOM order and a " +
+        "reorder with equal counts would swap the card mid-capture",
+    );
+  }
+  return reader.pinWithin(rootSelector, index);
 }
 
 /**
@@ -353,13 +437,14 @@ export async function resolveCardInstance(page, selector, declaredInstance = nul
  *   · `identifyWithin(selector)` — one attribute map per match, in DOM order,
  *                             read off the elements' own attributes. This is
  *                             what lets a record name WHICH card it measured
- *   · `countWithin(root, selector, index)` — how many match inside the `index`-th
- *                             `root`. Card-relative anchors go through this, so a
- *                             host declaration on an unrelated wrapper cannot
- *                             stand in for the card's own — and the INDEX is
- *                             pinned once per capture rather than re-resolved to
- *                             "whichever comes first" per selector
- *   · `countWithinVisible(root, selector, index)` — the painted subset of that
+ *   · `pinWithin(root, index)` — resolve the `index`-th `root` ONCE and return
+ *                             `{count, countVisible}` bound to that ELEMENT.
+ *                             Root-scoped anchors go through this, so a host
+ *                             declaration on an unrelated wrapper cannot stand in
+ *                             for the card's own; the pin is an element rather
+ *                             than an index, so a reorder cannot swap the card
+ *                             mid-capture; and the reader is `:scope`-INCLUSIVE,
+ *                             so a selector matching the root itself counts
  *   · `frame(selector)`     — resolve the frame element `selector` reaches and
  *                             return the same readers for INSIDE it, or null
  *                             when it does not resolve
@@ -396,6 +481,15 @@ export async function observeCapture({
 }) {
   const finalUrl = await page.url();
 
+  // 0. THE PATH, BEFORE THE SHUTTER. Round 1 wrote the image and validated the
+  //    path afterwards, so every capture the gate went on to reject had already
+  //    put a file on disk -- including one named by a path that escapes the
+  //    tree. A path the record would be refused for is refused here instead.
+  const pathViolation = screenshotPathViolation(screenshot);
+  if (pathViolation) {
+    throw new Error(`capture "${cell}" cannot be written: ${pathViolation}`);
+  }
+
   // 1. The frames the host requires: resolve, COUNT, enter, read the URL there.
   const frames = {};
   const frameHandles = new Map();
@@ -412,52 +506,74 @@ export async function observeCapture({
     if (entered) frameHandles.set(req.name, entered);
   }
 
-  // 2. The anchors the host (and kind) require, counted WHERE THEY LIVE.
+  // 2. The anchors the host (and kind) require, in the CANONICAL vocabulary.
   const required =
     declaredHost === "chat_thread" && kind
-      ? chatThreadRequirementsFor(kind, state)
-      : [...HOST_ANCHOR_REQUIREMENTS[declaredHost]];
-  const specs = [
-    ...required.map((r) => ({ ...r, expect: r.expect ?? "present" })),
-    ...extraAssertions,
-  ];
+      ? captureRequirementsFor(declaredHost, kind, state)
+      : captureRequirementsFor(declaredHost);
+  const specs = [...required, ...extraAssertions.map((a) => ({ scope: "frame", ...a }))];
 
-  // 2b. PIN THE INSTANCE every card-scoped count is answered from, and record
-  //     it. Without this the `within` counts are answered by "whichever card
-  //     root leads the DOM" and the record never says which card that was.
-  const instances = new Map();
-  for (const spec of specs) {
-    if (!spec.within || instances.has(spec.within)) continue;
-    instances.set(spec.within, await resolveCardInstance(page, spec.within, declaredInstance));
+  // 2a. The reader each scope is answered from. `page` scope is always the outer
+  //     document; `frame` scope is the frame the picture was taken in.
+  const captureFrame = CAPTURE_FRAME_FOR_HOST[declaredHost] ?? "main";
+  const frameReader = captureFrame === "main" ? page : (frameHandles.get(captureFrame) ?? null);
+  const readerFor = (spec) => {
+    const scope = spec.scope ?? "frame";
+    if (scope === "page") return page;
+    // An explicit `frame` on an extra assertion still wins, so a caller can
+    // measure the outer document deliberately.
+    if (spec.frame === "main") return page;
+    if (spec.frame && spec.frame !== captureFrame) return frameHandles.get(spec.frame) ?? null;
+    return frameReader;
+  };
+
+  // 2b. PIN THE CARD INSTANCE, and then pin the ELEMENT it resolved to. The
+  //     index alone is re-resolved by DOM order on every read, so a transcript
+  //     that reorders between the two measurements below would answer the second
+  //     one from a different card without either count changing.
+  const rootSelector = specs.find((spec) => (spec.scope ?? "frame") === "root")?.within ?? null;
+  let instance = null;
+  let pinnedRoot = null;
+  if (rootSelector) {
+    const rootHost = frameReader ?? page;
+    instance = await resolveCardInstance(rootHost, rootSelector, declaredInstance);
+    pinnedRoot = instance.matched > 0 ? await pinRoot(rootHost, rootSelector, instance.index) : null;
   }
 
   const measure = async () => {
     const out = [];
     for (const spec of specs) {
-      const frameName = spec.frame ?? "main";
-      const reader = frameName === "main" ? page : (frameHandles.get(frameName) ?? null);
+      const scope = spec.scope ?? "frame";
       const entry = {
-        frame: frameName,
+        // The CANONICAL triple, spelled the canonical way.
         selector: spec.selector,
-        expect: spec.expect ?? "present",
-        // An unresolved frame counts ZERO rather than skipping the assertion.
+        scope,
+        // An unresolved frame or an unfound root counts ZERO rather than
+        // skipping the assertion.
         count: 0,
-        // How many of those matches were PAINTED. A second number rather than a
-        // filter on the first, because the two claims need different evidence:
-        // `present` is answered by what the screenshot could actually show, and
-        // `absent` stays answered by ATTACHMENT, so a control that is merely
-        // hidden can never read as gone.
+        // --- additive, beyond the canonical record ---------------------------
+        // Which frame the count was taken in, which root a root-scoped count was
+        // taken inside, what the capture CLAIMS, and how many matches were
+        // PAINTED. `present` needs a painted match, because a card behind
+        // `display:none` satisfies a selector and appears nowhere in the
+        // screenshot; `absent` stays answered by ATTACHMENT, so a control that is
+        // merely hidden can never read as gone.
+        frame: scope === "page" ? "main" : (spec.frame ?? captureFrame),
+        expect: spec.expect ?? "present",
         visible: 0,
       };
       if (spec.within) entry.within = spec.within;
-      if (reader) {
-        const at = instances.get(spec.within)?.index ?? 0;
-        entry.count = spec.within
-          ? await reader.countWithin(spec.within, spec.selector, at)
-          : await reader.count(spec.selector);
-        entry.visible = spec.within
-          ? await reader.countWithinVisible(spec.within, spec.selector, at)
-          : await reader.countVisible(spec.selector);
+      if (scope === "root") {
+        if (pinnedRoot) {
+          entry.count = await pinnedRoot.count(spec.selector);
+          entry.visible = await pinnedRoot.countVisible(spec.selector);
+        }
+      } else {
+        const reader = readerFor(spec);
+        if (reader) {
+          entry.count = await reader.count(spec.selector);
+          entry.visible = await reader.countVisible(spec.selector);
+        }
       }
       out.push(entry);
     }
@@ -503,17 +619,23 @@ export async function observeCapture({
     assertions,
     recordedBy: RECORDER_ID,
   };
-  if (kind) record.kind = kind;
-  if (declaredHost === "chat_thread") record.state = state;
-  // WHICH card the card-scoped counts came from. Written for every capture that
-  // has a card root at all, so the record names an instance rather than leaving
-  // a reader to assume the screenshot holds only one.
-  const [pinned] = instances.values();
-  if (pinned) record.instance = pinned;
+  // THE CANONICAL FIELD NAMES. This tier wrote `kind` / `state`; the ratified
+  // contract reads `declaredKind` / `declaredState`, and it wins.
+  if (kind) record.declaredKind = kind;
+  if (declaredHost === "chat_thread") record.declaredState = state;
+  // WHICH card the root-scoped counts came from, so the record names an instance
+  // rather than leaving a reader to assume the screenshot holds only one.
+  if (instance) record.instance = instance;
   if (Object.keys(frames).length > 0) {
     record.frames = Object.fromEntries(
       Object.entries(frames).map(([name, f]) => [name, { selector: f.selector, url: f.url }]),
     );
+    // ADDITIVE: the canonical contract checks the widget's URL class against
+    // `frameUrl`. Same fact as `frames.widget.url`, under the name that half
+    // already reads, so one record answers both.
+    if (captureFrame !== "main" && frames[captureFrame]) {
+      record.frameUrl = frames[captureFrame].url;
+    }
   }
   return record;
 }
@@ -556,7 +678,12 @@ const CELL_KIND_LABELS = Object.freeze({
 export function stateTokenInCell(cell) {
   if (typeof cell !== "string") return null;
   const lower = cell.toLowerCase();
-  if (/(^|[-_])(settled|decided|confirmed|skipped)([-_]|$)/.test(lower)) return "settled";
+  // Normalized to the CANONICAL spelling: the ratified contract maps a cell's
+  // `settled` token to `decided`, so returning "settled" here made every record
+  // this tier wrote contradict its own cell name the moment that half read it.
+  if (/(^|[-_])(settled|decided|confirmed|skipped|resolved|done)([-_]|$)/.test(lower)) {
+    return "decided";
+  }
   if (/(^|[-_])(pending|held|open)([-_]|$)/.test(lower)) return "pending";
   return null;
 }
@@ -628,12 +755,11 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   }
 
   // --- the screenshot and its hash ---
-  if (!isNonEmptyString(record?.screenshot)) {
-    v.push(`${where}: no screenshot path`);
-  } else if (record.screenshot.startsWith("/") || record.screenshot.includes("..")) {
-    v.push(`${where}: screenshot must be a repo-relative path inside the tree`);
-  } else if (!record.screenshot.startsWith("evidence/")) {
-    v.push(`${where}: screenshot must live under evidence/ — it is ${record.screenshot}`);
+  // The SAME check the observer runs before the shutter, so the two cannot
+  // disagree about which paths are writable.
+  const pathViolation = screenshotPathViolation(record?.screenshot);
+  if (pathViolation) {
+    v.push(`${where}: ${pathViolation}`);
   } else if (!SHA256_RE.test(record?.sha256 ?? "")) {
     v.push(`${where}: sha256 must be 64 lowercase hex characters`);
   } else if (typeof hashOf === "function") {
@@ -690,6 +816,10 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
     if (!knownFrames.has(frame)) {
       v.push(`${label}: frame "${frame}" is not declared on this record`);
     }
+    const scope = a.scope ?? "frame";
+    if (!CAPTURE_SCOPES.includes(scope)) {
+      v.push(`${label}: scope "${scope}" is not one of ${CAPTURE_SCOPES.join("/")}`);
+    }
     if (!Number.isInteger(a?.count) || a.count < 0) {
       v.push(`${label}: count must be the observed non-negative integer`);
       continue;
@@ -730,17 +860,17 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   // Without it the record proves a transcript was on screen, not that a card
   // was in it, which is the whole distance between a capture and evidence.
   if (host === "chat_thread") {
-    if (!CAPTURE_STATES.includes(record?.state)) {
+    if (!CAPTURE_STATES.includes(record?.declaredState)) {
       v.push(
-        `${where}: a chat_thread record must declare the \`state\` it photographed ` +
-          `(${CAPTURE_STATES.join("/")}) — a settled card owes the ABSENCE of its controls, ` +
-          `not their presence; it declares "${record?.state}"`,
+        `${where}: a chat_thread record must declare the \`declaredState\` it photographed ` +
+          `(${CAPTURE_STATES.join("/")}) — a decided card owes the ABSENCE of its controls, ` +
+          `not their presence; it declares "${record?.declaredState}"`,
       );
     }
-    if (!LIFECYCLE_KINDS.includes(record?.kind)) {
+    if (!LIFECYCLE_KINDS.includes(record?.declaredKind)) {
       v.push(
-        `${where}: a chat_thread record must declare the lifecycle \`kind\` it photographed ` +
-          `(one of ${LIFECYCLE_KINDS.join("/")}) — it declares "${record?.kind}"`,
+        `${where}: a chat_thread record must declare the lifecycle \`declaredKind\` it ` +
+          `photographed (one of ${LIFECYCLE_KINDS.join("/")}) — it declares "${record?.declaredKind}"`,
       );
     }
   }
@@ -751,8 +881,8 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   // somewhere on the page", and the reader comparing it to the screenshot has
   // no way to check the two describe the same thing.
   const cardRoot =
-    host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.kind)
-      ? `[data-lifecycle-card="${record.kind}"]`
+    host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.declaredKind)
+      ? cardRootFor(record.declaredKind)
       : null;
   if (cardRoot !== null) {
     const inst = record?.instance;
@@ -797,51 +927,49 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   }
 
   // --- every required host anchor, observed present ---
+  // Keyed by SCOPE and selector — the same pair the canonical contract keys its
+  // own observed map by. The earlier arm matched on frame alone and IGNORED
+  // `within`, so a frame-wide count answered a requirement that was supposed to
+  // be taken inside the card root.
   const hostRequirements =
-    host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.kind)
-      ? chatThreadRequirementsFor(record.kind, record.state ?? "pending")
-      : HOST_ANCHOR_REQUIREMENTS[host];
+    host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.declaredKind)
+      ? captureRequirementsFor(host, record.declaredKind, record.declaredState ?? "pending")
+      : captureRequirementsFor(host);
+  const observationFor = (selector, scope) =>
+    assertions.find((a) => a?.selector === selector && (a?.scope ?? "frame") === scope);
   for (const req of hostRequirements) {
-    const found = assertions.find(
-      (a) =>
-        a?.selector === req.selector &&
-        (a?.frame ?? "main") === req.frame &&
-        (a?.within ?? null) === (req.within ?? null),
-    );
+    const wanted = req.expect ?? "present";
+    const found = observationFor(req.selector, req.scope);
     if (!found) {
       v.push(
-        `${where}: host "${host}" requires ${req.selector} in the ${req.frame} frame` +
-          `${req.within ? `, inside ${req.within}` : ""}, and the record does not assert it at all`,
+        `${where}: host "${host}" requires ${req.selector} ${req.scope}-scoped` +
+          `${req.within ? ` inside ${req.within}` : ""}, and the record does not assert it at all`,
       );
       continue;
     }
-    // The requirement carries its OWN expectation: a settled capture owes the
-    // ABSENCE of the decision controls, and asserting them present there would
-    // reject the honest screenshot.
-    const wanted = req.expect ?? "present";
     const got = found.expect ?? "present";
     if (got !== wanted) {
       v.push(
-        `${where}: host "${host}" requires ${req.selector} ${wanted.toUpperCase()} in the ` +
-          `${req.frame} frame; the record asserts it ${got}`,
+        `${where}: host "${host}" requires ${req.selector} ${wanted.toUpperCase()} ` +
+          `(${req.scope}-scoped); the record asserts it ${got}`,
       );
       continue;
     }
     if (wanted === "present" && !(found.count >= 1)) {
       v.push(
-        `${where}: host "${host}" requires ${req.selector} PRESENT in the ${req.frame} frame; ` +
+        `${where}: host "${host}" requires ${req.selector} PRESENT (${req.scope}-scoped); ` +
           `the record observed ${found.count}`,
       );
     } else if (wanted === "present" && !(found.visible >= 1)) {
       v.push(
-        `${where}: host "${host}" requires ${req.selector} PRESENT in the ${req.frame} frame; ` +
+        `${where}: host "${host}" requires ${req.selector} PRESENT (${req.scope}-scoped); ` +
           `the record observed ${found.count} attached and ${found.visible} painted — a required ` +
           "anchor that renders nowhere is not in the photograph",
       );
     }
     if (wanted === "absent" && found.count !== 0) {
       v.push(
-        `${where}: host "${host}" requires ${req.selector} ABSENT in the ${req.frame} frame; ` +
+        `${where}: host "${host}" requires ${req.selector} ABSENT (${req.scope}-scoped); ` +
           `the record observed ${found.count}`,
       );
     }

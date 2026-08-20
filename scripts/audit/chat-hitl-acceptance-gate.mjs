@@ -356,10 +356,10 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
     // The row's own claim wins over the record's self-declaration. Without
     // this, a proof cited for one kind binds happily to a record photographing
     // another, and the record decides what the row proved.
-    if (claim.claimedKind !== null && claim.claimedKind !== record.kind) {
+    if (claim.claimedKind !== null && claim.claimedKind !== record.declaredKind) {
       violations.push(
         `manifest row ${claim.row} cites "${claim.cell}" for ${claim.claimedKind}; ` +
-          `its record photographs ${record.kind}`,
+          `its record photographs ${record.declaredKind}`,
       );
       continue;
     }
@@ -374,29 +374,44 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       );
       continue;
     }
-    if (claim.claimedState !== null && claim.claimedState !== (record.state ?? "pending")) {
+    if (
+      claim.claimedState !== null &&
+      claim.claimedState !== (record.declaredState ?? "pending")
+    ) {
       violations.push(
         `manifest row ${claim.row} cites "${claim.cell}" as ${claim.claimedState}; ` +
-          `its record photographs ${record.state ?? "pending"}`,
+          `its record photographs ${record.declaredState ?? "pending"}`,
       );
       continue;
     }
-    for (const req of chatThreadRequirementsFor(record.kind, record.state ?? "pending")) {
-      const wanted = req.expect ?? "present";
-      const found = (record.assertions ?? []).find(
-        (a) => a?.selector === req.selector && (a?.frame ?? "main") === req.frame,
+    // Observations are keyed by SCOPE and selector — the canonical contract's own
+    // key. The earlier arm matched on frame alone and IGNORED `within`, so a
+    // frame-wide count satisfied a requirement meant to be taken INSIDE the card
+    // root: exactly the borrowed-marker bypass the requirement set exists to
+    // close, reopened at the binding.
+    const observationFor = (selector, scope) =>
+      (record.assertions ?? []).find(
+        (a) => a?.selector === selector && (a?.scope ?? "frame") === scope,
       );
-      // PRESENT means painted. The binding asks the same question the record's
-      // own validator does, so a screenshot whose card is attached-but-unrendered
-      // cannot satisfy a manifest row here after failing there.
-      const ok =
-        found &&
-        (found.expect ?? "present") === wanted &&
-        (wanted === "present" ? found.count >= 1 && found.visible >= 1 : found.count === 0);
-      if (!ok) {
+    // PRESENT means painted. The binding asks the same question the record's own
+    // validator does, so a screenshot whose card is attached-but-unrendered
+    // cannot satisfy a manifest row here after failing there.
+    const satisfies = (selector, scope, wanted) => {
+      const found = observationFor(selector, scope);
+      if (!found || (found.expect ?? "present") !== wanted) return false;
+      return wanted === "present"
+        ? found.count >= 1 && found.visible >= 1
+        : found.count === 0;
+    };
+    for (const req of chatThreadRequirementsFor(
+      record.declaredKind,
+      record.declaredState ?? "pending",
+    )) {
+      const wanted = req.expect ?? "present";
+      if (!satisfies(req.selector, req.scope, wanted)) {
         violations.push(
           `manifest row ${claim.row}: the record for "${claim.cell}" does not observe ` +
-            `${req.selector} ${wanted} in the ${req.frame} frame`,
+            `${req.selector} ${wanted} (${req.scope}-scoped)`,
         );
       }
     }
