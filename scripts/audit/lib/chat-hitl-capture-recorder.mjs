@@ -531,13 +531,28 @@ export async function observeCapture({
   //     index alone is re-resolved by DOM order on every read, so a transcript
   //     that reorders between the two measurements below would answer the second
   //     one from a different card without either count changing.
-  const rootSelector = specs.find((spec) => (spec.scope ?? "frame") === "root")?.within ?? null;
+  const rootSpecs = specs.filter((spec) => (spec.scope ?? "frame") === "root");
+  const rootSelectors = [...new Set(rootSpecs.map((spec) => spec.within ?? null))];
+  if (rootSelectors.length > 1) {
+    // ONE pin per capture, so more than one root would mean some root-scoped
+    // count was answered from a root it does not belong to — silently, since
+    // every such count still comes back a plausible number.
+    throw new Error(
+      `capture "${cell}" asks for root-scoped counts inside ${rootSelectors.length} different ` +
+        `roots (${rootSelectors.join(", ")}), and a record pins ONE card. Split the capture.`,
+    );
+  }
+  const rootSelector = rootSelectors[0] ?? null;
   let instance = null;
   let pinnedRoot = null;
-  if (rootSelector) {
-    const rootHost = frameReader ?? page;
-    instance = await resolveCardInstance(rootHost, rootSelector, declaredInstance);
-    pinnedRoot = instance.matched > 0 ? await pinRoot(rootHost, rootSelector, instance.index) : null;
+  // The root lives in the frame the picture was taken in. When that frame did
+  // not resolve there is nothing to pin, and the frame's own URL check already
+  // fails the capture — counting the card in the OUTER document instead would
+  // answer a widget's question with the embedding page's DOM.
+  if (rootSelector && frameReader) {
+    instance = await resolveCardInstance(frameReader, rootSelector, declaredInstance);
+    pinnedRoot =
+      instance.matched > 0 ? await pinRoot(frameReader, rootSelector, instance.index) : null;
   }
 
   const measure = async () => {

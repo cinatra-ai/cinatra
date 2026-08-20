@@ -1447,6 +1447,26 @@ describe("the single-root card: `:scope`-inclusive root counting", () => {
     },
   );
 
+  it("REFUSES a capture that would need TWO pins, rather than answering both from one", async () => {
+    // A record pins ONE card. A second root-scoped selector naming a different
+    // root would be answered from the first card's pin and still come back a
+    // plausible number, so the capture fails instead of measuring the wrong DOM.
+    await expect(
+      observeCapture({
+        ...reviewArgs("pending"),
+        page: drivenPage(reviewGateTranscript()),
+        extraAssertions: [
+          {
+            frame: "main",
+            scope: "root",
+            within: '[data-lifecycle-card="recommendation_hold"]',
+            selector: CONFIRM,
+          },
+        ],
+      }),
+    ).rejects.toThrow(/root-scoped counts inside 2 different roots/);
+  });
+
   it("BOTH HALVES accept the record ONE driver run produces", async () => {
     for (const state of ["pending", "decided"]) {
       const record = await observeCapture({
