@@ -165,3 +165,59 @@ describe("score is bounded to [0,1]", () => {
     expect(row.score).toBeGreaterThan(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2841 — the label a surface prints rides the ranked row, and CANNOT
+// move a score. The §V chip-row prints the owning extension's manifest
+// `cinatra.displayName`; the catalog `name` (an extension skill's SKILL.md
+// frontmatter name, i.e. its slug) stays the identity + the token surface.
+// ---------------------------------------------------------------------------
+describe("displayName (cinatra#2841)", () => {
+  it("carries the candidate's declared displayName through unchanged", () => {
+    const [row] = scoreSkillRecommendations({
+      intent: { promptText: "draft a blog post" },
+      candidates: [
+        cand({
+          skillId: "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          name: "blog-post-matcher",
+          displayName: "Blog Post Matcher Skill",
+          description: "classifies a blog post",
+        }),
+      ],
+    });
+    expect(row.displayName).toBe("Blog Post Matcher Skill");
+    // The identity name is untouched — the two are different fields, not one
+    // field renamed.
+    expect(row.name).toBe("blog-post-matcher");
+  });
+
+  it("falls back to the candidate's own name when no manifest declares one", () => {
+    const [row] = scoreSkillRecommendations({
+      intent: {},
+      candidates: [cand({ name: "web-research" })],
+    });
+    // Exactly the label this row carried before the manifest title was
+    // resolved — the honest last resort, never an invented title.
+    expect(row.displayName).toBe("web-research");
+  });
+
+  it("is NOT tokenized: adding it moves no score, no rank and no citation", () => {
+    // The display title shares three tokens with the intent that the candidate's
+    // own name/description do not carry. If it were scored, the score would move.
+    const intent = { promptText: "matcher skill post classification" };
+    const bare = scoreSkillRecommendations({
+      intent,
+      candidates: [cand({ name: "bpm", description: "classifies things" })],
+    });
+    const titled = scoreSkillRecommendations({
+      intent,
+      candidates: [
+        cand({ name: "bpm", description: "classifies things", displayName: "Blog Post Matcher Skill" }),
+      ],
+    });
+    expect(titled[0].score).toBe(bare[0].score);
+    expect(titled[0].rank).toBe(bare[0].rank);
+    expect(titled[0].recommended).toBe(bare[0].recommended);
+    expect(titled[0].scoredFeatures).toEqual(bare[0].scoredFeatures);
+  });
+});

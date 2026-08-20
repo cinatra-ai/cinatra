@@ -234,6 +234,15 @@ export async function getSkillsForAgentAction(
 export type RecommendedSkillForChip = {
   skillId: string;
   skillRevisionId: string;
+  /**
+   * THE LABEL THE CHIP PRINTS (cinatra#2841) — the owning extension's manifest
+   * `cinatra.displayName`, resolved server-side by
+   * `buildRecommendationCandidatesForAgent`, falling back to the skill's own
+   * catalog name where no manifest declares one. ONE label crosses this
+   * boundary on purpose: a second field would let the held chip, the ADJUST
+   * panel and the settled row drift apart. The package-qualified id stays on
+   * `skillId`, which is what the chip's `data-skill-id` carries.
+   */
   name: string;
   score: number;
   rank: number;
@@ -264,7 +273,8 @@ export async function getRunRecommendedSkillsAction(input: {
     return recs.map((r) => ({
       skillId: r.skillId,
       skillRevisionId: r.skillRevisionId,
-      name: r.name,
+      // The RESOLVED display label, not the scored identity name — see the type.
+      name: r.displayName,
       score: r.score,
       rank: r.rank,
       recommended: r.recommended,

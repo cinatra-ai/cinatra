@@ -678,7 +678,7 @@
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
       "screenshot": "evidence/2841-v-redraw/captures/V1__recommendation-card__run_card__held.png",
-      "sha256": "cd6648b0e73645fe6e7c4d146a6813fe046332ba946e3b52a4fa731c24ca3226",
+      "sha256": "6357b228aa6f5248bb730d7d460478586f68d35505682dc8fd4c0aca34e74d4e",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -807,9 +807,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:33:39.482Z",
+      "recordedAt": "2026-08-20T19:56:52.794Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
+      "note": "§V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
     },
     {
       "cell": "V2__recommendation-card__run_card__held__dark",
@@ -818,7 +818,7 @@
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
       "screenshot": "evidence/2841-v-redraw/captures/V2__recommendation-card__run_card__held__dark.png",
-      "sha256": "a36c8e7cff3479033283ece6cbdeea9dfbac56f6caf61b8a3893498645d2a04a",
+      "sha256": "a73f28de395a783289eeb05656c3dbded3396a118602e6acede4b93224a46e56",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -947,7 +947,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:33:49.650Z",
+      "recordedAt": "2026-08-20T19:57:02.608Z",
       "runtime": "dev-runtime",
       "note": "The same held row after pressing the shipped Toggle theme control. Same run, same frame selector as V1."
     },
@@ -958,7 +958,7 @@
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/df5efd82-bd28-4805-8816-934085f3982b",
       "screenshot": "evidence/2841-v-redraw/captures/V3__recommendation-card__run_card__held__mid-decision.png",
-      "sha256": "ca5b6ae4e243f65dd2045d31af7b9cc28b64186b1df928f07f006f48679cc20f",
+      "sha256": "e54e170a76ffd8e857288ffe569634b63ab1ce4e4f83daff34e087a2f54406db",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1087,9 +1087,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:34:01.997Z",
+      "recordedAt": "2026-08-20T19:57:15.084Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
+      "note": "§V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
     },
     {
       "cell": "V4__recommendation-card__run_card__held__adjust-panel",
@@ -1098,7 +1098,7 @@
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
       "screenshot": "evidence/2841-v-redraw/captures/V4__recommendation-card__run_card__held__adjust-panel.png",
-      "sha256": "98ce0c1f93b3c78d407b03d87722af32c5b3068349bb60a1283db0f15e420ac9",
+      "sha256": "e4e9db6065674db1d47ab0cb92aabed440fece0ade8635f427094551d4c47f1a",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1227,7 +1227,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:34:12.506Z",
+      "recordedAt": "2026-08-20T19:57:24.723Z",
       "runtime": "dev-runtime",
       "note": "What ADJUST opens. It is a portalled Sheet OUTSIDE the card root, so this cell is full page; the row itself is untouched underneath."
     },
@@ -1236,9 +1236,9 @@
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
       "screenshot": "evidence/2841-v-redraw/captures/V5__recommendation-card__run_card__settled.png",
-      "sha256": "7a9b711bf364591358df47bbd3d90b0b5e241616beb5cfed52ea21d367d2a50f",
+      "sha256": "6fa953ea0421db932ce6d11dcc4dc5ca4d7f335732b304632fc3539d438d54ba",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1367,18 +1367,18 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:40:16.564Z",
+      "recordedAt": "2026-08-20T19:57:59.190Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
+      "note": "§V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
     },
     {
       "cell": "V6__recommendation-card__run_card__settled__dark",
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
       "screenshot": "evidence/2841-v-redraw/captures/V6__recommendation-card__run_card__settled__dark.png",
-      "sha256": "b284bf5e484a5d2061f0614ed5cf4e7c0d08759103cacc56dd42607b0cde297b",
+      "sha256": "f6b8161902c15637a8d017e0a914cdf6e6e628b7dfe540f3da5900cbc79ccebf",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1507,7 +1507,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:40:26.909Z",
+      "recordedAt": "2026-08-20T19:58:09.383Z",
       "runtime": "dev-runtime",
       "note": "The same settled row after pressing the shipped Toggle theme control. Same run, same frame selector as V5."
     },
@@ -1518,7 +1518,7 @@
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/ba58dfad-52f4-4b6c-9080-3c95ba514558",
       "screenshot": "evidence/2841-v-redraw/captures/V7__recommendation-card__run_card__held__read-only.png",
-      "sha256": "c8679f5936fae644c7093b31d987d6f7d9da1cc1d88b54ba35e4bc33403cf408",
+      "sha256": "f0bd880b0322c0de9a0250616306ce07ef2b77befca9bf3069b53fd9128f9cfa",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1647,9 +1647,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:40:35.118Z",
+      "recordedAt": "2026-08-20T19:58:17.869Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
+      "note": "§V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
     },
     {
       "cell": "V8__recommendation-card__run_card__held__trigger-position",
@@ -1658,7 +1658,7 @@
       "declaredState": "pending",
       "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
       "screenshot": "evidence/2841-v-redraw/captures/V8__recommendation-card__run_card__held__trigger-position.png",
-      "sha256": "0c27dc3649316432608f50ddd550915ed330c6b7c3c2af1396e52567f5f9243c",
+      "sha256": "524dc562232a0b9bc0ca2c6eaf331b08da22bb2199d003e9421b49d1330704a3",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1787,18 +1787,18 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:37:13.065Z",
+      "recordedAt": "2026-08-20T19:58:25.799Z",
       "runtime": "dev-runtime",
-      "note": "\u00a76.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
+      "note": "§6.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
     },
     {
       "cell": "V9__recommendation-card__run_card__decided__page",
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
       "screenshot": "evidence/2841-v-redraw/captures/V9__recommendation-card__run_card__decided__page.png",
-      "sha256": "051c9fbfedd4743e16c5dfb769924e0a4f9e469aba3b442f3c9226bf2c23ee06",
+      "sha256": "8e11cd071d5f2b68147c983c444c4ed0cd233b13adedfbd0edd0c250df76a5d2",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1927,7 +1927,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-20T17:40:42.509Z",
+      "recordedAt": "2026-08-20T19:58:33.351Z",
       "runtime": "dev-runtime",
       "note": "The settled row in its page: nothing is summarised above it and there is nothing left to press."
     }

@@ -121,8 +121,11 @@ beforeEach(() => {
   getRunRecommendations.mockResolvedValue([
     {
       skillId: "org-scoped-skill",
-      skillRevisionId: "org-scoped-skill@1",
-      name: "Org Scoped",
+      // The catalog name is the SLUG for an extension-owned skill; the label a
+      // surface prints is the manifest title (cinatra#2841). Fixtures keep the
+      // two DIFFERENT so a regression back onto `name` fails loudly.
+      name: "org-scoped",
+      displayName: "Org Scoped",
       score: 0.9,
       rank: 1,
       recommended: true,
@@ -411,11 +414,14 @@ describe("the settled reading — one mark per skill, derived from the run's own
   it("finding 2 — the settled rows carry the DISPLAY NAME, resolved the way the held branch resolves it", async () => {
     // §V names skills on BOTH readings. The evidence rows are ids, so the names
     // are joined in from the same candidate seam + scorer the held branch uses.
+    // The name taken is the ranked row's `displayName` — the owning extension's
+    // manifest title — NOT its catalog `name`, which for these ids is the slug.
     getRunRecommendations.mockResolvedValue([
       {
         skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
         skillRevisionId: "rev-b",
-        name: "Blog writing",
+        name: "blog-writing",
+        displayName: "Blog Writing Skill",
         score: 0.9,
         rank: 1,
         recommended: true,
@@ -424,7 +430,8 @@ describe("the settled reading — one mark per skill, derived from the run's own
       {
         skillId: "@cinatra-ai/outreach-skill:schedule-send",
         skillRevisionId: "rev-s",
-        name: "Schedule send",
+        name: "schedule-send",
+        displayName: "Schedule Send Skill",
         score: 0.2,
         rank: 2,
         recommended: true,
@@ -448,26 +455,53 @@ describe("the settled reading — one mark per skill, derived from the run's own
     expect(state).toMatchObject({
       state: "confirmed",
       // The field is called `skillNames`; it now truthfully holds names.
-      skillNames: ["Blog writing"],
+      skillNames: ["Blog Writing Skill"],
       decided: [
         {
           skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
-          name: "Blog writing",
+          name: "Blog Writing Skill",
           mark: "confirmed",
         },
         {
           skillId: "@cinatra-ai/outreach-skill:schedule-send",
-          name: "Schedule send",
+          name: "Schedule Send Skill",
           mark: "skipped",
         },
       ],
     });
+    // THE GRADED DEFECT, pinned as a negative: neither settled chip may print
+    // the slug the catalog row carries.
+    const settled = state.state === "confirmed" ? state.decided : [];
+    expect(settled.map((d) => d.name)).not.toContain("blog-writing");
+    expect(settled.map((d) => d.name)).not.toContain("schedule-send");
     // The name join is NOT viewer-intersected — the decided summary is the set
     // THIS run resolved, exactly as the branch's own comment states.
     expect(resolveRecommendationCandidateSkillIds).toHaveBeenCalledWith({
       run: expect.objectContaining({ id: "run-1" }),
       packageName: "@vendor/agent",
     });
+  });
+
+  it("finding 2 — the HELD row hands the card the SAME resolved label, never the slug", async () => {
+    // The other half of "held and settled label a skill identically": the held
+    // branch maps the ranked row onto `RecommendedSkillForChip`, whose `name` IS
+    // the label the chip prints. It must be the manifest title too. This
+    // describe's `beforeEach` releases the park to reach the settled branch, so
+    // the LIVE hold is put back for this one case.
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-1",
+      checkpoint: "recommendation",
+      status: "parked",
+    });
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "held",
+      recommendations: [
+        expect.objectContaining({ skillId: "org-scoped-skill", name: "Org Scoped" }),
+      ],
+    });
+    const held = state.state === "held" ? state.recommendations : [];
+    expect(held.map((r) => r.name)).not.toContain("org-scoped");
   });
 
   it("finding 2 — an unresolvable name costs the label, never the settled card", async () => {

@@ -284,10 +284,12 @@ export function readRunRejectedRecommendations(runId: string): RunRejectedRecomm
  *               confirm that left it out, or `user_skipped` from a skip).
  *
  * `name` is the skill's DISPLAY NAME — what §V's chips print, held and settled
- * alike ("Enrich contacts", never `@vendor/pkg:enrich`). The evidence rows carry
- * ids only, so the name is joined in by the caller that can resolve it and falls
- * back to the id when nothing can: a settled chip prints the best true name
- * available, never an invented one.
+ * alike ("Enrich contacts", never `@vendor/pkg:enrich` and never the slug
+ * `enrich-contacts`). It is the OWNING EXTENSION'S MANIFEST `cinatra.displayName`,
+ * resolved server-side beside the rest of the skill's metadata; the evidence
+ * rows carry ids only, so the name is joined in by the caller that can resolve
+ * it and falls back to the id when nothing can: a settled chip prints the best
+ * true name available, never an invented one.
  */
 export type RunRecommendationDecidedSkill = {
   skillId: string;

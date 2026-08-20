@@ -206,10 +206,13 @@ function SettledChip({ skillId, name, mark }: RunRecommendationDecidedSkill): Re
       data-chip-mark={mark}
       className={`inline-flex items-center gap-2 rounded-chip border px-3 py-1 text-xs ${MARK_CHIP_CLASS[mark]}`}
     >
-      {/* THE NAME, not the id (cinatra#2841). §V draws "Enrich contacts",
-          "Draft email", "Schedule send" on its settled chips — the same labels
-          its held chips carry — and draws NO second, package-qualified line
-          beside them, so none is rendered. The id stays machine-readable on
+      {/* THE NAME, not the id and not the slug (cinatra#2841). §V draws
+          "Enrich contacts", "Draft email", "Schedule send" on its settled
+          chips — the same labels its held chips carry — and draws NO second,
+          package-qualified line beside them, so none is rendered. The name
+          arrives already resolved: it is the owning extension's manifest
+          `cinatra.displayName`, joined onto the run's id-only evidence by
+          `resolveDecidedSkillNames`. The id stays machine-readable on
           `data-skill-id` where the conformance walk reads it. */}
       <span className="font-medium">{name}</span>
       <span className="inline-flex items-center gap-1 font-mono text-badge-2xs uppercase tracking-kicker text-muted-foreground">
@@ -429,6 +432,11 @@ export function RunRecommendationChipRow({
                     : "Not recommended — adding forces this skill"
                 }
               >
+                {/* The RESOLVED display label (cinatra#2841) — the owning
+                    extension's manifest `cinatra.displayName`, resolved once
+                    server-side and carried on `RecommendedSkillForChip.name`.
+                    Never re-derived here, and never the package id, which stays
+                    on `data-skill-id` above. */}
                 <span className="font-medium">{skill.name}</span>
                 <span className="inline-flex gap-1">
                   <Button
@@ -506,6 +514,8 @@ export function RunRecommendationChipRow({
       >
         <SheetContent side="right" className="w-[480px] sm:max-w-[480px] overflow-y-auto">
           <SheetHeader>
+            {/* The ADJUST panel titles the skill with the SAME resolved label
+                its chip prints (cinatra#2841) — one label, one source. */}
             <SheetTitle className="text-foreground">{detail?.name ?? ""}</SheetTitle>
             <SheetDescription className="text-muted-foreground">
               {detail?.recommended

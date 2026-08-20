@@ -18,7 +18,10 @@ function rec(over: Partial<RankedRecommendation>): RankedRecommendation {
   return {
     skillId: "s1",
     skillRevisionId: "s1@rev1",
-    name: "Skill One",
+    name: "skill-one",
+    // The resolved label a surface prints (cinatra#2841) — distinct from the
+    // catalog `name`, so a fixture can never make the two look interchangeable.
+    displayName: "Skill One",
     score: 0.9,
     rank: 1,
     recommended: true,

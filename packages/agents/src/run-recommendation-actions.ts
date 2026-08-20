@@ -140,10 +140,14 @@ async function readerMayDecide(
  * DISPLAY NAMES FOR THE SETTLED READING (cinatra#2841).
  *
  * §V's chips print a skill's NAME — held and settled alike ("Enrich contacts",
- * never `@vendor/pkg:enrich`). The run's durable evidence carries ids only, so
- * the settled row joins the names in HERE, the same way the held branch below
- * gets them: through the shared run-actor candidate seam and the scorer, which
- * is the one place in this action that knows a skill's name at all.
+ * never `@vendor/pkg:enrich`, and never the slug `enrich-contacts`). The run's
+ * durable evidence carries ids only, so the settled row joins the names in
+ * HERE, the same way the held branch below gets them: through the shared
+ * run-actor candidate seam and the scorer, whose `displayName` is the owning
+ * extension's manifest title resolved once server-side
+ * (`buildRecommendationCandidatesForAgent`). Reading THAT field rather than
+ * the catalog `name` is what keeps the settled row and the held row identical:
+ * both take the same resolved label from the same call.
  *
  * NOT VIEWER-INTERSECTED, deliberately and consistently with the branch that
  * calls it: the decided summary is the set THIS run resolved, which the run's
@@ -178,7 +182,7 @@ async function resolveDecidedSkillNames(
       restrictToSkillIds: candidateSkillIds,
     });
     for (const r of recs) {
-      if (r.skillId && r.name) names.set(r.skillId, r.name);
+      if (r.skillId && r.displayName) names.set(r.skillId, r.displayName);
     }
   } catch {
     /* labels only — an unresolvable name never costs the settled card */
@@ -309,7 +313,10 @@ export async function getRunRecommendationHoldStateAction(input: {
     recommendations: recs.map((r) => ({
       skillId: r.skillId,
       skillRevisionId: r.skillRevisionId,
-      name: r.name,
+      // The RESOLVED display label — the same field `resolveDecidedSkillNames`
+      // reads, so the held row and the settled row cannot label a skill
+      // differently.
+      name: r.displayName,
       score: r.score,
       rank: r.rank,
       recommended: r.recommended,
