@@ -1340,6 +1340,68 @@ describe("the re-export route, closed by REACHABILITY rather than by spelling", 
     expect(owed.get("/agents/ns-not-a-read.ts") ?? new Set()).toEqual(new Set());
   });
 
+  it("refuses those same shapes when the expression CONTINUES on the next line", () => {
+    // The chain and the sum above are refused on one line. An expression does
+    // not end at a line break, and the member patterns are line-anchored, so
+    // "the read ends at the line" let both straight back in:
+    //
+    //     const Chained = ns.default
+    //       .displayName;        // a string, bound as if it were the card
+    //
+    // The direction of that error is over-taint — the gate calls a card
+    // reachable through a value that is not the card. The two guards under it
+    // are the shapes that MUST keep binding: a plain `;` read, and the ASI
+    // spelling at the very end of the source, with no terminator at all.
+    const virtual: Record<string, string> = {
+      "/agents/run-recommendation-chip-row.tsx": "export function RecommendationHoldCard() {}",
+      "/agents/default-hop.ts":
+        'import { RecommendationHoldCard } from "./run-recommendation-chip-row";\n' +
+        "export default RecommendationHoldCard;",
+      // NOT reads: the property, the operand, the call and the tagged template,
+      // each continued onto the line after the one the namespace is read on.
+      "/agents/ns-wrapped.ts":
+        'import * as ns from "./default-hop";\n' +
+        "export const Chained = ns.default\n  .displayName;\n" +
+        "export const Summed = ns.default\n  + 1;\n" +
+        "export const Called = ns.default\n  ();\n" +
+        "export const Picked = ns.default\n  ? a : b;",
+      // IS a read: the line break is followed by a new statement, not by a
+      // continuation of this one.
+      "/agents/ns-wrapped-ok.ts":
+        'import * as ns from "./default-hop";\n' +
+        "export const Held = ns.default\nexport const Unrelated = 1;",
+      // The two regression guards for what round 4 fixed: a plain terminated
+      // read, and the ASI spelling with the source ending mid-statement.
+      "/agents/ns-plain.ts":
+        'import * as ns from "./default-hop";\nexport const Plain = ns.default;',
+      "/agents/ns-eof.ts":
+        'import * as ns from "./default-hop";\nexport const AtEof = ns.default',
+    };
+    const graph: SourceGraph = {
+      files: [
+        "/agents/run-recommendation-chip-row.tsx",
+        "/agents/default-hop.ts",
+        "/agents/ns-wrapped.ts",
+        "/agents/ns-wrapped-ok.ts",
+        "/agents/ns-plain.ts",
+        "/agents/ns-eof.ts",
+      ],
+      read: (file) => virtual[file] ?? "",
+      resolve: (_from, spec) =>
+        ({
+          "./run-recommendation-chip-row": "/agents/run-recommendation-chip-row.tsx",
+          "./default-hop": "/agents/default-hop.ts",
+        })[spec] ?? null,
+    };
+    const owed = owedExportsByModule(graph, new Map([
+      ["/agents/run-recommendation-chip-row.tsx", ["RecommendationHoldCard"]],
+    ]));
+    expect(owed.get("/agents/ns-wrapped.ts") ?? new Set()).toEqual(new Set());
+    expect(owed.get("/agents/ns-wrapped-ok.ts")).toEqual(new Set(["Held"]));
+    expect(owed.get("/agents/ns-plain.ts")).toEqual(new Set(["Plain"]));
+    expect(owed.get("/agents/ns-eof.ts")).toEqual(new Set(["AtEof"]));
+  });
+
   it("does NOT taint a member read off a namespace the analysis cannot resolve", () => {
     // The false positive the member-read arm has to avoid. `const x = React.y`
     // is every other line in this tree; the arm fires only for a namespace

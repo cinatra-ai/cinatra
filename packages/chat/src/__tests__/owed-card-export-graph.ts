@@ -164,24 +164,64 @@ const NOT_A_BINDING = new Set(["function", "class", "async", "new", "await", "ty
  * `ns.fn()` is what calling one returned, and `ns.NAME + 1` is neither. Binding
  * those as the export is a false edge — the gate would then report a card
  * "reachable" through a value that is not the card. So the read must be the
- * WHOLE initializer, ended by `;`, a comma, a closing bracket or the line.
+ * WHOLE initializer, ended by `;`, a comma, a closing bracket, the end of the
+ * source, or a line break the next line does not continue.
+ *
+ * THAT LAST CLAUSE IS NOT DECORATION. An expression carries on across a line
+ * break, and these patterns are line-anchored (`m`), so "ended by the line"
+ * alone let a chain back in through the one door it had just been shut out of:
+ *
+ *     const X = ns.default
+ *       .displayName;          // `X` is a string, and was bound as the card
+ *
+ * A newline therefore ends the read only when the next line does not OPEN with
+ * something that continues the expression.
  *
  * THE DECLARATION MAY BE TYPED. `const Hold: FC = ns.default` is the same read
  * with an annotation on it, and requiring `=` immediately after the name missed
  * every one of them — a laundering route that is one `: FC` away from invisible.
  * An `as` assertion on the read is the same case and is allowed too.
  *
- * THE LIMIT, since this is a regex over source: the annotation pattern covers
- * ordinary type references, generics, arrays and unions, not a function type
- * (`: () => void`), whose `=>` cannot be told from the initializer's `=` without
- * a parser. That form is missed, like every other shape the honest-limit block
- * at the foot of this file already discloses.
+ * THE LIMITS, since this is a regex over source, and both lean the same way:
+ *
+ *   · the annotation pattern covers ordinary type references, generics, arrays
+ *     and unions, not a function type (`: () => void`), whose `=>` cannot be
+ *     told from the initializer's `=` without a parser. That read is MISSED;
+ *   · the continuation set is punctuation. A next line opening with a WORD
+ *     operator — `instanceof`, `in` — still reads as a finished initializer, so
+ *     that expression is bound as the export it is only the first hop of.
+ *
+ * The first shape is a miss, the second an over-taint: it can only report a
+ * card reachable where it is not, a false red, never a silent pass. Both are
+ * named here rather than implied, like every other shape the honest-limit block
+ * at the head of this file already discloses.
  */
 const NS_IMPORT_LOCAL_RE = /import\s*\*\s*as\s+(\w+)\s*from\s*["']([^"']+)["']/g;
 /** A type annotation: `Foo`, `Foo.Bar`, `Foo<A, B>`, `Foo[]`, `A | B`. */
 const TYPE_ANNOTATION = String.raw`(?::\s*[A-Za-z_$][\w$.<>,[\]|&\s]*?)?`;
-/** The read is the whole initializer: nothing may continue the expression. */
-const READ_ENDS = String.raw`(?:\s+as\s+[\w$.<>,[\]|&]+)?(?=[^\S\n]*(?:[;,)\]}]|$))`;
+/**
+ * A character that CONTINUES the expression when it OPENS the next line: `.`,
+ * `[`, `(` and a backtick extend the read into a chain, an index, a call or a
+ * tagged template, and the operators make it one operand of a larger one. ASI
+ * inserts no semicolon before any of them, so the initializer is not over at
+ * that newline.
+ */
+const CONTINUES_EXPR = String.raw`[.\[(+\-*/%<>?&|^=\`]`;
+/**
+ * The read is the whole initializer: nothing may continue the expression.
+ *
+ * Ended by `;`, a comma, a closing bracket, the END OF THE SOURCE (the ASI
+ * spelling), or a newline that the next line does not continue. That last
+ * clause is the whole point: these patterns carry `m`, so a bare `$` matched
+ * at EVERY line end and accepted
+ *
+ *     const X = ns.default
+ *       .displayName;          // a chain, read as if it were the whole read
+ *
+ * as a finished read — the same false edge the single-line `ns.a.b` case is
+ * refused for, one line break away.
+ */
+const READ_ENDS = String.raw`(?:\s+as\s+[\w$.<>,[\]|&]+)?(?=[^\S\n]*(?:[;,)\]}]|\n(?![^\S\n]*${CONTINUES_EXPR})|(?![\s\S])))`;
 const NS_MEMBER_RE = new RegExp(
   String.raw`(export\s+)?(?:const|let|var)\s+(\w+)\s*${TYPE_ANNOTATION}=\s*(\w+)\s*\.\s*(\w+)${READ_ENDS}`,
   "gm",
