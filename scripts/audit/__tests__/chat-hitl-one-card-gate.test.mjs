@@ -159,6 +159,42 @@ describe("R4 — one registry row per data-part kind", () => {
     // …and the interrupt-carried kind is deliberately NOT there.
     expect(REGISTRY_KINDS).not.toContain("recommendation_hold");
   });
+
+  it("flags a row that still counts as ONE but dispatches to the wrong component", () => {
+    // cinatra#2861: counting `kind:` occurrences left the rule half-blind.
+    // Reverting the drawn verification card to the S1 shell keeps the count at
+    // exactly one and used to sail through — silently un-retiring the shell for
+    // a kind the epic has DRAWN. The right-hand side is checked against
+    // CARD_OWNERS, the same table R1 enforces ownership with.
+    const hits = scanRegistry(
+      [
+        "const M = {",
+        "  artifact_review_gate: ReviewGateCard,",
+        "  verification_summary: LifecycleCard,",
+        "  trigger_schedule_proposal: LifecycleCard,",
+        "};",
+      ].join("\n"),
+    );
+    expect(hits.map((h) => h.rule)).toEqual(["R4"]);
+    expect(hits[0].detail).toMatch(/dispatches 'verification_summary' to 'LifecycleCard'/);
+    expect(hits[0].detail).toContain(CARD_OWNERS.verification_summary.component);
+  });
+
+  it("flags a right-hand side it cannot read rather than trusting it", () => {
+    // Fail-closed: an expression in the dispatch slot is not a bare owner
+    // identifier, so the gate reports it instead of letting it through.
+    const hits = scanRegistry(
+      [
+        "const M = {",
+        "  artifact_review_gate: ReviewGateCard,",
+        "  verification_summary: pick(kind),",
+        "  trigger_schedule_proposal: LifecycleCard,",
+        "};",
+      ].join("\n"),
+    );
+    expect(hits.map((h) => h.rule)).toEqual(["R4"]);
+    expect(hits[0].detail).toMatch(/verification_summary/);
+  });
 });
 
 /**

@@ -47,9 +47,12 @@
  *      gate cannot be bypassed by a surface that simply renders the component.
  *      Checked per FILE (a mount and its provider live in one component tree).
  *
- *   R4 ONE REGISTRY ENTRY PER KIND. The renderable-view component registry maps
- *      each lifecycle viewType exactly once; a second dispatch table anywhere is
- *      a parallel registry by another name.
+ *   R4 ONE REGISTRY ENTRY PER KIND, AND IT NAMES THE OWNER. The renderable-view
+ *      component registry maps each lifecycle viewType exactly once, and that
+ *      one line must dispatch to the kind's OWNER from `CARD_OWNERS`. A second
+ *      dispatch table anywhere is a parallel registry by another name; a row
+ *      that still counts as "exactly one" while pointing at a different
+ *      component is the retirement quietly undone.
  *
  * KNOWN RESIDUALS, recorded rather than hidden (same posture as the sibling
  * writer guards):
@@ -295,7 +298,17 @@ export const HOST_PROVIDED_BY_PARENT = Object.freeze({
     "packages/chat/src/chat-messages-view.tsx (<LifecycleCardSurfaceProvider {...lifecycleSurface}>)",
 });
 
-/** R4 — the one registry, and the one line per kind inside it.
+/** R4 — the one registry, the one line per kind inside it, and WHAT that line
+ * dispatches to.
+ *
+ * CHECKING THE RIGHT-HAND SIDE IS THE POINT (cinatra#2861). Counting `kind:`
+ * occurrences alone leaves the rule half-blind: reverting
+ * `verification_summary: VerificationSummaryCard` to
+ * `verification_summary: LifecycleCard` keeps the count at exactly one and
+ * sails through, silently un-retiring the S1 shell for a kind the epic has
+ * DRAWN. So the row's component is compared against `CARD_OWNERS[kind]`, which
+ * is the same table R1 enforces ownership with — one source of truth for who
+ * draws a kind, read from both ends.
  *
  * SCOPED TO THE DATA-PART KINDS. `recommendation_hold` rides a typed INTERRUPT,
  * not a `DATA_PART` (`LIFECYCLE_CARD_CARRIAGE`), so it is correctly absent from
@@ -404,12 +417,32 @@ export function scanRegistry(source) {
   const code = stripComments(source);
   const findings = [];
   for (const kind of REGISTRY_KINDS) {
-    const hits = [...code.matchAll(new RegExp(String.raw`^\s*${kind}\s*:`, "gm"))];
+    // The row and its right-hand side in one match: `kind: Component,`. The
+    // component is a bare identifier in this registry (the map is built from
+    // imported components), so anything else on the right — a call, an inline
+    // arrow, a member expression — does not match and is reported as a row
+    // whose owner could not be read, which is fail-closed.
+    const hits = [
+      ...code.matchAll(new RegExp(String.raw`^\s*${kind}\s*:\s*([A-Za-z_$][\w$]*)?`, "gm")),
+    ];
     if (hits.length !== 1) {
       findings.push({
         rule: "R4",
         detail: `the renderable-view registry maps '${kind}' ${hits.length} time(s) — expected exactly 1`,
         line: hits.length > 0 ? lineOf(code, hits[0].index) : 1,
+      });
+      continue;
+    }
+    const expected = CARD_OWNERS[kind]?.component;
+    const actual = hits[0][1];
+    if (expected && actual !== expected) {
+      findings.push({
+        rule: "R4",
+        detail:
+          `the renderable-view registry dispatches '${kind}' to ` +
+          `${actual ? `'${actual}'` : "an expression this gate cannot read"} — ` +
+          `CARD_OWNERS names '${expected}' (${CARD_OWNERS[kind].owner}) as the one renderer of this kind`,
+        line: lineOf(code, hits[0].index),
       });
     }
   }
