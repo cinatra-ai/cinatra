@@ -30,9 +30,9 @@ import {
   confirmRunRecommendationAction,
   getRunRecommendationHoldStateAction,
   skipRunRecommendationAction,
-  type RunRecommendationDecidedSkill,
   type RunRecommendationHoldState,
 } from "./run-recommendation-actions";
+import type { RunRecommendationDecidedSkill } from "./run-recommendation-evidence";
 
 // ---------------------------------------------------------------------------
 // RunRecommendationChipRow — the SHARED run-start recommendation chip-row
