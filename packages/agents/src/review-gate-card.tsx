@@ -199,17 +199,59 @@ export const REVIEW_TARGET_ISLAND_PATH = "/lifecycle/review-island";
  * render (which is what a `'self'`-only wall does inside a widget, and what
  * made the island blank there). They are opaque selectors: no origin, no URL,
  * nothing a caller writes can put into a policy.
+ *
+ * CROSS-SITE: the resolve answer carries a SERVER-MINTED island URL, and its
+ * credential is taken from there (cinatra#2754). A frame load on a third-party
+ * page sends no cookie, so without it the island is authenticated by nothing
+ * and paints blank; the client cannot mint one, and it never invents one. A
+ * same-site host receives no such URL and this composes exactly what it
+ * composed before.
  */
 export function reviewTargetIslandSrc(
   ref: string,
   frame: LifecycleCardFrame | null,
+  serverIslandSrc?: string | null,
 ): string {
   const params = new URLSearchParams({ ref });
+  const credential = islandCredentialFrom(serverIslandSrc, ref);
+  if (credential) params.set(REVIEW_ISLAND_CREDENTIAL_PARAM, credential);
   if (frame) {
     params.set("assistant", frame.assistant);
     params.set("instanceId", frame.instanceId);
   }
   return `${REVIEW_TARGET_ISLAND_PATH}?${params.toString()}`;
+}
+
+/** The query parameter the island reads its credential from — the client half
+ *  of `src/lib/lifecycle/review-island-credential.ts`. */
+const REVIEW_ISLAND_CREDENTIAL_PARAM = "ic";
+
+/**
+ * The credential OUT of a server-issued island URL — never the URL itself.
+ *
+ * The answer is read over the network, so the card takes the one opaque value
+ * it needs and recomposes the address from its own constants. Adopting the
+ * string wholesale would make an `<iframe src>` out of something a response
+ * body chose; taking only `ic` means a hostile answer can at most supply a
+ * credential the island will refuse. The URL must also name THIS card's ref, or
+ * it is an answer to another question and the credential is dropped with it.
+ */
+function islandCredentialFrom(
+  src: string | null | undefined,
+  ref: string,
+): string | null {
+  if (typeof src !== "string" || src.length === 0) return null;
+  try {
+    // The base is a placeholder: only the path and the query are read, and the
+    // address below is built from `REVIEW_TARGET_ISLAND_PATH` either way.
+    const url = new URL(src, "https://island.invalid");
+    if (url.pathname !== REVIEW_TARGET_ISLAND_PATH) return null;
+    if (url.searchParams.get("ref") !== ref) return null;
+    const credential = url.searchParams.get(REVIEW_ISLAND_CREDENTIAL_PARAM);
+    return credential !== null && credential.length > 0 ? credential : null;
+  } catch {
+    return null;
+  }
 }
 /** The gate-scoped decision entry — decodes the ref, calls the SAME core. */
 export const LIFECYCLE_VIEW_DECIDE_PATH = "/api/lifecycle-views/decide";
@@ -593,9 +635,14 @@ export function ReviewGateCard({
         : null;
 
   const frame = HOST_FRAME[host];
+  // The server-minted island URL, when this answer carried one (cinatra#2754).
+  // Only the widget arm ever does; the cookie hosts resolve `null` here and the
+  // composed `src` below is byte-identical to the one they composed before.
+  const serverIslandSrc = resolved?.islandSrc ?? null;
   const body = renderState({
     state,
-    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame),
+    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame, serverIslandSrc),
+    islandCredentialed: islandCredentialFrom(serverIslandSrc, view.ref) !== null,
     expanded,
     onToggleExpanded: () => setExpanded((v) => !v),
     submit: submitAndRefresh,
@@ -642,6 +689,7 @@ export function ReviewGateCard({
 function renderState(args: {
   state: LifecycleCardState;
   islandSrc: string;
+  islandCredentialed: boolean;
   expanded: boolean;
   onToggleExpanded: () => void;
   submit: SubmitReviewDecisionAction;
@@ -655,6 +703,7 @@ function renderState(args: {
   const {
     state,
     islandSrc,
+    islandCredentialed,
     expanded,
     onToggleExpanded,
     submit,
@@ -727,8 +776,10 @@ function renderState(args: {
               decision below is all-or-nothing across the whole gate. */}
           <ReviewTargetIsland
             src={islandSrc}
+            credentialed={islandCredentialed}
             expanded={expanded}
             onToggleExpanded={onToggleExpanded}
+            onRetryResolve={onRefresh}
           />
           {/* §VIII — the per-item chips, between the target they annotate and
               the floor that decides them. Marks are LIVE only for a reader who
@@ -1256,12 +1307,18 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
  */
 function ReviewTargetIsland({
   src,
+  credentialed,
   expanded,
   onToggleExpanded,
+  onRetryResolve,
 }: {
   src: string;
+  /** True when this `src` carries a server-minted, expiring credential. */
+  credentialed: boolean;
   expanded: boolean;
   onToggleExpanded: () => void;
+  /** Re-resolve the card, so a retry gets a FRESH island URL (cinatra#2754). */
+  onRetryResolve: () => void;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -1301,7 +1358,13 @@ function ReviewTargetIsland({
         // that needs none of them; the authorization is the island's own.
         sandbox="allow-scripts allow-same-origin"
         referrerPolicy="same-origin"
-        loading="lazy"
+        // A CREDENTIALED src is a perishable bearer: it is minted by the resolve
+        // this render came from and dies shortly after, so it cannot wait for a
+        // scroll — a lazily-fetched frame below the fold would present an
+        // expired credential and paint the refusal. A cookie-authenticated src
+        // has no such clock and keeps `lazy`, which is what lets a thread mount
+        // several of these off screen without fetching them all.
+        loading={credentialed ? "eager" : "lazy"}
         className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
           load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
@@ -1321,14 +1384,21 @@ function ReviewTargetIsland({
             <IslandLoadingSkeleton />
           ) : (
             <IslandLoadTimedOut
-              onRetry={() =>
+              onRetry={() => {
+                // A RETRY RE-RESOLVES FIRST (cinatra#2754). A credentialed src
+                // that failed has very likely expired, and remounting the frame
+                // on the same URL would present the same dead credential; the
+                // re-resolve mints a fresh one and the new `src` remounts the
+                // frame by itself. The attempt bump stays for the cookie arm,
+                // where the URL does not change and the remount is the retry.
+                onRetryResolve();
                 setLoad((current) => ({
                   ...current,
                   attempt: current.attempt + 1,
                   loaded: false,
                   timedOut: false,
-                }))
-              }
+                }));
+              }}
             />
           )}
         </div>

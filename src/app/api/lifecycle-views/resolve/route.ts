@@ -5,13 +5,18 @@ import { z } from "zod";
 import {
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
+  type LifecycleCardState,
   type LifecycleDataPartViewType,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
 import { attachLifecycleSettledOutcome } from "@/lib/lifecycle/lifecycle-settled-outcome";
 import { resolveTriggerScheduleProposalCard } from "@/lib/lifecycle/trigger-schedule-proposal-card";
-import { resolveWidgetLifecycleActorContext } from "@/lib/lifecycle/widget-lifecycle-actor";
+import {
+  mintWidgetReviewIslandUrl,
+  resolveWidgetLifecycleActorContext,
+} from "@/lib/lifecycle/widget-lifecycle-actor";
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
@@ -87,6 +92,17 @@ const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
 const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
 
 /**
+ * The widget branch's answer: the reviewing actor AND the claims the presented
+ * `cwu_` was consumed with. The claims are KEPT rather than dropped because the
+ * island credential is derived from them and from nothing else — see
+ * `mintIslandSrcForWidget` below.
+ */
+type WidgetBranch = {
+  actorCtx: ReviewActorContext;
+  claims: Parameters<typeof mintWidgetReviewIslandUrl>[0]["claims"];
+};
+
+/**
  * Resolve the widget branch's reviewing actor from the presented `cwu_`.
  * Returns `null` for every failure — a bad handle, a rejected token, a revoked
  * membership — because the caller turns all of them into the same 401 that a
@@ -95,7 +111,7 @@ const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
 async function resolveWidgetBranchActor(
   request: Request,
   userToken: string,
-): Promise<ReviewActorContext | null> {
+): Promise<WidgetBranch | null> {
   // An empty/whitespace bearer is refused HERE rather than left to the door.
   // The door would refuse it too, but a branch that hands an empty string to a
   // token verifier is one rename away from being a branch that hands it to
@@ -109,7 +125,51 @@ async function resolveWidgetBranchActor(
     agentSlug: binding.agentSlug,
     requestOrigin: request.headers.get(WIDGET_ORIGIN_HEADER),
   });
-  return resolved.ok ? resolved.actorCtx : null;
+  return resolved.ok ? { actorCtx: resolved.actorCtx, claims: resolved.claims } : null;
+}
+
+/**
+ * Mint the island URL for a WIDGET reader whose card is about to draw one.
+ *
+ * WHY THE URL CARRIES IT. The review card frames a same-origin, server-rendered
+ * island. On a genuinely third-party page that frame load sends no header and
+ * no cookie, so the only place a credential can travel is the URL the card puts
+ * in `<iframe src>` — sealed, short-lived and bound to this reader, this gate
+ * and this surface. It authenticates and nothing more: the island re-runs the
+ * reader's real access from scratch, so a credential that arrives without the
+ * standing behind it still paints nothing.
+ *
+ * ONLY FOR A STATE THAT DRAWS AN ISLAND. `pending` and `restricted` are the two
+ * states whose card frames one. A settled or absent answer gets no credential,
+ * because a reader whose card draws no island has no use for one and a minted
+ * bearer that nothing consumes is a bearer for free.
+ *
+ * TTL AND RELOAD, THE POLICY IN ONE PLACE. Every resolve mints a FRESH
+ * credential; nothing is cached and nothing is stored. Within one resolve the
+ * card reuses the URL it was handed — a re-render, an expand/collapse or a
+ * repaint keeps the same `src`, and re-minting there would remount the frame
+ * under the reader for no reason. Across a RELOAD it is always a re-mint: the
+ * card's retry re-resolves before it remounts, and the mount/focus resolves do
+ * the same, so a frame never re-fetches with a credential older than the
+ * resolve that produced it. That is also why the credentialed frame drops
+ * `loading="lazy"` — a URL that expires cannot wait for a scroll.
+ */
+function mintIslandSrcForWidget(
+  branch: WidgetBranch,
+  viewType: LifecycleDataPartViewType,
+  ref: string,
+  state: LifecycleCardState,
+): string | null {
+  if (viewType !== "artifact_review_gate") return null;
+  if (state.state !== "pending" && state.state !== "restricted") return null;
+  const gate = decodeLifecycleGateRef(ref);
+  if (!gate) return null;
+  return mintWidgetReviewIslandUrl({
+    claims: branch.claims,
+    ref,
+    runId: gate.runId,
+    reviewTaskId: gate.reviewTaskId,
+  });
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -127,8 +187,11 @@ export async function POST(request: Request): Promise<Response> {
   // widget, and a widget whose token is unusable is refused.
   const presentedUserToken = request.headers.get(WIDGET_USER_TOKEN_HEADER);
   const isWidgetBranch = presentedUserToken !== null;
-  const actorCtx = isWidgetBranch
+  const widgetBranch = isWidgetBranch
     ? await resolveWidgetBranchActor(request, presentedUserToken.trim())
+    : null;
+  const actorCtx = isWidgetBranch
+    ? (widgetBranch?.actorCtx ?? null)
     : await resolveReviewActorContext();
   if (!actorCtx) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -209,8 +272,21 @@ export async function POST(request: Request): Promise<Response> {
     parsed.data.ref,
   );
 
+  // The island's credential (cinatra#2754) — minted HERE or not at all, and
+  // only on the widget arm. A first-party answer omits the key entirely, so the
+  // three cookie hosts receive the byte-identical response they received
+  // before this slice and keep composing their own island URL.
+  const islandSrc = widgetBranch
+    ? mintIslandSrcForWidget(widgetBranch, parsed.data.viewType, parsed.data.ref, withOutcome)
+    : null;
+
   return Response.json(
-    { kind: envelope.kind, state: withOutcome, body: envelope.body },
+    {
+      kind: envelope.kind,
+      state: withOutcome,
+      body: envelope.body,
+      ...(islandSrc ? { islandSrc } : {}),
+    },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

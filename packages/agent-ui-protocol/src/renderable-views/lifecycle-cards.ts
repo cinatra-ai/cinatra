@@ -794,6 +794,14 @@ export type LifecycleCardBodyByKind = {
   trigger_schedule_proposal: TriggerScheduleProposalViewBody;
 };
 
+/**
+ * Ceiling on a server-issued island `src` (cinatra#2754). The island credential
+ * bounds its own sealed value; this leaves room for the path, the ref and the
+ * frame selectors around it and refuses anything larger, so an oversized value
+ * is a refused answer rather than a URL nobody budgeted for.
+ */
+export const LIFECYCLE_ISLAND_SRC_MAX_LENGTH = 2048;
+
 /** The discriminated answer one lifecycle resolve returns. */
 export type LifecycleResolveEnvelope = {
   [K in LifecycleDataPartViewType]: {
@@ -803,9 +811,31 @@ export type LifecycleResolveEnvelope = {
   };
 }[LifecycleDataPartViewType];
 
-/** The envelope for ONE kind — what a card that asked for that kind receives. */
+/** The envelope for ONE kind — what the resolver produced for that kind. */
 export type LifecycleResolveEnvelopeFor<K extends LifecycleDataPartViewType> =
   Extract<LifecycleResolveEnvelope, { kind: K }>;
+
+/**
+ * What a CARD receives: the envelope plus the island URL the SERVER minted for
+ * this reader (cinatra#2754), or `null` when the answer carried none.
+ *
+ * WHY IT IS ON THE ANSWER AND NOT ON THE ENVELOPE. The envelope is what the
+ * resolution LADDER produces — the same ladder the MCP pull runs — and that
+ * ladder authorizes, it does not mint. The island URL is minted by the one
+ * route that both consumed a widget credential and is about to answer a card,
+ * so it joins the answer there and nowhere else.
+ *
+ * WHY IT TRAVELS AT ALL. A frame load on a genuinely third-party page sends no
+ * header and no cross-site cookie, so a card cannot address an authenticated
+ * island by itself: the credential must be sealed into the URL, and only the
+ * server holds the key. It rides the resolve answer rather than the wire
+ * payload for the same reason the suggestion chips do — the persisted,
+ * model-visible DATA_PART still carries a ref and nothing else.
+ *
+ * A same-site host receives `null` here and keeps composing its own cookie URL.
+ */
+export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
+  LifecycleResolveEnvelopeFor<K> & { islandSrc: string | null };
 
 /**
  * The closed runtime registry behind the type map above. A kind with a `null`
@@ -820,6 +850,26 @@ const LIFECYCLE_RESOLVE_BODY_SCHEMAS = {
 } as const satisfies Record<LifecycleDataPartViewType, z.ZodType | null>;
 
 /**
+ * The server-issued island `src`, read as ONE shape: a root-relative path on
+ * this origin. `null` means the answer carried none; `undefined` means the
+ * answer carried something that is not one of ours, and REFUSES the envelope.
+ *
+ * The value ends up in an `<iframe src>`, so a protocol-relative `//host`, an
+ * absolute URL, a `javascript:` and anything carrying whitespace, a backslash
+ * or a control character are refused OUTRIGHT rather than sanitized. A producer
+ * that attached one of those is a producer whose other answers cannot be
+ * trusted either — the same posture `absent` + body already takes.
+ */
+function readIslandSrc(raw: unknown): string | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "string") return undefined;
+  if (raw.length === 0 || raw.length > LIFECYCLE_ISLAND_SRC_MAX_LENGTH) return undefined;
+  if (!raw.startsWith("/") || raw.startsWith("//")) return undefined;
+  if (/[\u0000-\u001f\u007f\s\\]/.test(raw)) return undefined;
+  return raw;
+}
+
+/**
  * The ONE parse seam for a lifecycle resolve answer. NEVER throws: an
  * adversarial payload, a forward version, a mismatched kind and a missing body
  * all answer `null`, and a `null` leaves the card drawing nothing.
@@ -827,7 +877,7 @@ const LIFECYCLE_RESOLVE_BODY_SCHEMAS = {
 export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewType>(
   expectedKind: K,
   raw: unknown,
-): LifecycleResolveEnvelopeFor<K> | null {
+): LifecycleResolveAnswerFor<K> | null {
   try {
     // An undeclared kind never reaches a schema lookup. A caller can force one
     // through an untyped edge, and the answer is the same as for a forged wire
@@ -844,25 +894,30 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
 
     const rawBody = record.body;
     const bodyPresent = rawBody !== undefined && rawBody !== null;
+    const islandSrc = readIslandSrc(record.islandSrc);
+    if (islandSrc === undefined) return null;
 
     if (state.data.state === "absent") {
-      if (bodyPresent) return null;
-      return { kind: expectedKind, state: state.data, body: null } as
-        LifecycleResolveEnvelopeFor<K>;
+      // `absent` CARRIES NOTHING BESIDE ITSELF. An island URL is addressed to a
+      // gate, so one arriving next to the collapse of every denial would be the
+      // oracle the collapse exists to close — refused exactly like a body.
+      if (bodyPresent || islandSrc !== null) return null;
+      return { kind: expectedKind, state: state.data, body: null, islandSrc: null } as
+        LifecycleResolveAnswerFor<K>;
     }
 
     const schema: z.ZodType | null = LIFECYCLE_RESOLVE_BODY_SCHEMAS[expectedKind];
     if (schema === null) {
       if (bodyPresent) return null;
-      return { kind: expectedKind, state: state.data, body: null } as
-        LifecycleResolveEnvelopeFor<K>;
+      return { kind: expectedKind, state: state.data, body: null, islandSrc } as
+        LifecycleResolveAnswerFor<K>;
     }
 
     if (!bodyPresent) return null;
     const body = schema.safeParse(rawBody);
     if (!body.success) return null;
-    return { kind: expectedKind, state: state.data, body: body.data } as
-      LifecycleResolveEnvelopeFor<K>;
+    return { kind: expectedKind, state: state.data, body: body.data, islandSrc } as
+      LifecycleResolveAnswerFor<K>;
   } catch {
     // A throwing getter is a hostile shape; it draws nothing, like every other
     // answer this parser refuses.
