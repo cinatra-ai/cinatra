@@ -196,8 +196,16 @@ export const triggerScheduleProposalSettledViewSchema = z
     /** The card was ADJUSTED away from before Confirm landed, so the family
      *  settled on other rows (cinatra#2859). `scheduleCopy` already says so
      *  instead of restating times this card cannot vouch for; the flag lets a
-     *  renderer mark it in its own chrome. Absent on every ordinary settled
-     *  card, which is why it is optional rather than a required `false`. */
+     *  renderer mark it in its own chrome.
+     *
+     *  OPTIONAL AND OMITTED, not optional-and-always-sent: a producer emits the
+     *  key ONLY when it is true, and never sends `superseded: false`. This
+     *  schema is `.strict()`, so a client still running the PRE-#2859 bundle
+     *  rejects any settled payload carrying the new key — an unconditional
+     *  emission would blank every ordinary settled card on a stale tab, while
+     *  omission confines that to the genuinely superseded card. Widening this to
+     *  a required boolean, or bumping the view version for it, re-opens exactly
+     *  that. Pinned in `trigger-schedule-proposal-card-wire.test.ts`. */
     superseded: z.boolean().optional(),
     timezone: z.string().min(1).max(64),
     gatedSteps: z.array(gatedStepViewSchema).max(50),
