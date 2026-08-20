@@ -183,9 +183,13 @@ export class NoAddressableRowError extends Error {
   }
 }
 
-/** More than one row matches the actor's resolved scope — a data-integrity
- *  fault (the org-anchor invariant guarantees ≤1 row per (package, org)). Fail
- *  closed rather than pick an arbitrary row (F6). */
+/** More than one row matches the actor's resolved scope. Fail closed rather
+ *  than pick an arbitrary row (F6). Two DIFFERENT refusals share this class,
+ *  and since cinatra#2856 they no longer share one sentence:
+ *   - the ORIGINAL, unchanged: more rows than the org-anchor invariant permits
+ *     at ONE scope, which really is a data-integrity fault;
+ *   - the ATTRIBUTABLE one (`reason` present): two candidates at two DIFFERENT
+ *     tiers, which is a legitimate state of the store and not a fault at all. */
 export class AmbiguousLifecycleTargetError extends Error {
   /** Stable discriminant (cinatra#2416) — see NoAddressableRowError. */
   public readonly code = "AMBIGUOUS_LIFECYCLE_TARGET";
@@ -194,13 +198,23 @@ export class AmbiguousLifecycleTargetError extends Error {
     public readonly scope: string,
     public readonly count: number,
     /** The ATTRIBUTABLE reason, where the ambiguity has a named recovery
-     *  (cinatra#2856). Optional and appended, so the message every existing
-     *  ambiguity throws is unchanged. */
+     *  (cinatra#2856). Optional, and the message every EXISTING ambiguity
+     *  throws is unchanged byte-for-byte while it is absent. */
     public readonly reason?: string,
   ) {
     super(
-      `Ambiguous lifecycle target for "${packageName}" in scope ${scope}: ${count} rows match a scope the org-anchor invariant guarantees is unique — refusing (data-integrity fault).` +
-        (reason ? ` ${reason}` : ""),
+      reason
+        ? // cinatra#2856 round 2 (non-blocking). The generic sentence said
+          // "N ROWS match a scope the org-anchor invariant guarantees is
+          // unique — data-integrity fault", and BOTH halves are wrong here:
+          // `count` counts post-narrowing CANDIDATES, not rows (a wider
+          // bundled fallback puts more rows in play than the number printed),
+          // and the two candidates sit at two different tiers, which the
+          // invariant permits and no operator can repair as a "fault". So the
+          // attributable refusal says candidates, says nothing about integrity,
+          // and lets the reason carry the recovery.
+          `Ambiguous lifecycle target for "${packageName}" in scope ${scope}: ${count} candidates match — refusing. ${reason}`
+        : `Ambiguous lifecycle target for "${packageName}" in scope ${scope}: ${count} rows match a scope the org-anchor invariant guarantees is unique — refusing (data-integrity fault).`,
     );
     this.name = "AmbiguousLifecycleTargetError";
   }
@@ -583,10 +597,30 @@ export function validateLifecycleRowSelectorInput(
  *     cross-org destructive-auth breach this module exists to prevent.
  *
  * WITHOUT an explicit selector, arm 2 is consulted ONLY when arm 1 is empty, so
- * it can never REPLACE a row the actor resolves today: every actor whose own
- * scope holds a row resolves that row, byte-identically to before this slice,
- * and arm 2 only ever converts a REFUSAL into a resolution — for a platform
- * admin only.
+ * it can never REPLACE a row the actor resolves today with a DIFFERENT row: no
+ * op ever silently retargets across tiers, which is the cross-org
+ * destructive-auth breach this split exists to prevent. Arm 2 only ever converts
+ * a REFUSAL into a resolution — for a platform admin only.
+ *
+ * ONE AMENDMENT, cinatra#2856. That sentence used to end "…so every actor whose
+ * own scope holds a row resolves that row, byte-identically to before this
+ * slice". It no longer does, and pretending otherwise would leave the doc
+ * disagreeing with the code. {@link strandedOrgSiblingWayBackRow} may turn ONE
+ * shape's resolution into a REFUSAL that names its recovery — never into a
+ * different target. The bound that keeps this inside the invariant's intent:
+ *
+ *   - it never changes WHICH row an op acts on, so nothing is retargeted;
+ *   - it never touches a session whose own scope holds an ACTIVE row. Every
+ *     own-scope row must be `archived` or `locked` — the only two states a
+ *     workspace supersession can leave an organization row in — so an
+ *     organization install an operator is running today can never be denied an
+ *     op by this arm. It costs a `locked` own-scope row nothing either: the
+ *     package-wide lock already refuses archive / uninstall / force_delete, and
+ *     `activate` on a locked row preserves the lock. And an organization admin
+ *     is never affected at all: arm 2 is empty for them, so the arm cannot
+ *     reach them;
+ *   - what it refuses is the choice between two RESTORABLE candidates at two
+ *     tiers, which is the guess this module exists not to make.
  *
  * WITH a selector the two arms are ONE set: the operator has named a tier, and
  * the whole point of naming it is to reach the app-wide row from a session whose
@@ -794,18 +828,18 @@ function narrowByArchivedInstallPrecedence(
  *
  * WHY THIS REFUSES RATHER THAN REOPENING. Arm (b) could resolve its pair
  * because every op on it meant the same row. Here the two candidates are both
- * real and mean different rows: the organization's own LIVE install, and the
- * archived app-wide install that is still restorable. Reopening would have to
- * pick, and picking the archived org-NULL row over a live own-scope row would
- * silently retarget an administrator's destructive ops across tiers — breaking
- * arm 2's standing invariant that it "only ever converts a REFUSAL into a
- * resolution", never replaces a row the actor resolves today. This module's
- * doctrine for exactly that state is already written down: where the effective
- * rule leaves two candidates and no selector is supplied, REFUSE rather than
- * guess. So the arm does not invent a verdict — it stops HIDING the second
- * candidate, and the one-way door becomes an ambiguity the operator can
- * attribute and act on ({@link REASON_ORG_SIBLING_WAYBACK} names the recovery,
- * which is the half a bare `ambiguous_target` never had).
+ * real and mean different rows: the organization's own row, and the archived
+ * app-wide install. Both are still RESTORABLE, so "which did the operator mean"
+ * has no answer the resolver may invent — and picking the
+ * org-NULL row over the actor's own would retarget an administrator's ops across
+ * tiers, which is the one thing {@link addressableLifecycleRows}'s two-arm split
+ * exists to prevent. This module's doctrine for exactly that state is already
+ * written down: where the effective rule leaves two candidates and no selector
+ * is supplied, REFUSE rather than guess. So the arm does not invent a verdict —
+ * it stops HIDING the second candidate, and the one-way door becomes an
+ * ambiguity the operator can attribute and act on
+ * ({@link REASON_ORG_SIBLING_WAYBACK} names the recovery, which is the half a
+ * bare `ambiguous_target` never had).
  *
  * DELIBERATELY NARROW, mirroring arm (b) clause for clause — it changes the
  * verdict for ONE shape and every other case keeps its outcome byte-for-byte:
@@ -820,6 +854,35 @@ function narrowByArchivedInstallPrecedence(
  *     on the sibling's TIER: a `user`- or `team`-anchored row inside the same
  *     organization strands the install identically, and a tier check there
  *     would fix the reviewer's example while leaving its twin silent;
+ *   - NO OWN-SCOPE ROW IS `active` — THE POST-ROLLBACK SIGNATURE (round 2).
+ *     The rows carry no rollback marker: `transitionExtensionLifecycle` writes
+ *     `status` and `updatedAt` and nothing else, and the rollback reaches it as
+ *     a plain `archive`, so {live bundled, archived install} is also what a
+ *     plain Archive, a soft Uninstall and a boot reconciliation leave. Keying
+ *     on that combination alone therefore fired on any COINCIDENTAL set — an
+ *     app-wide install archived long ago would deny archive / activate /
+ *     uninstall on every organization's own LIVE install for a platform admin
+ *     with an active organization, while an organization admin, who has no arm
+ *     2, kept working on that same row. That is the arm inventing a strand.
+ *     What the rows CAN prove is which of them a supersession touched, and that
+ *     is the whole of the #2856 narrative:
+ *       - `supersedeOrganizationRowsForWorkspaceInstall` archives every `active`
+ *         organization row IN PLACE when a workspace install finalizes, and
+ *         skips exactly one kind — a `locked` row, which it deliberately leaves
+ *         as it is (lifecycle-primitive.ts);
+ *       - {@link assertNoWorkspaceSupersession} then refuses to create OR
+ *         re-activate an organization row while that workspace row lives, and
+ *         {@link effectiveInstallRows} keeps a superseded row out of BOTH arms,
+ *         so no lifecycle `activate` can address one either.
+ *     So `archived` and `locked` are the ONLY two states an organization row can
+ *     be in while a workspace install is in force — and an `active` own-scope
+ *     row is PROOF that this session's organization was not under that install
+ *     when the row went active. Nothing was taken from that session by the
+ *     rollback, there is no strand to name, and the arm stands down. This is the
+ *     clause that keeps the arm inside the two-arm invariant: an organization
+ *     install that is actually SERVING can never be denied an op by it. It does
+ *     not claim to prove a rollback happened — no persisted field can — it
+ *     refuses every state that proves one did not;
  *   - arm 2 NARROWS TO THE WAY-BACK ROW: at least two rows that
  *     {@link narrowByArchivedInstallPrecedence} — the SAME predicate arm (b)
  *     uses, not a second copy of the rule — reduces to exactly one row, and
@@ -834,9 +897,10 @@ function narrowByArchivedInstallPrecedence(
  *     maximum, and the extra bundled rows change nothing this arm reads: the
  *     archived install is stranded for the same reason (a non-empty arm 1 hides
  *     ALL of arm 2, not some row-counted part of it), and the recovery the copy
- *     names works identically, because clearing the active organization makes
- *     arm 2 the actor's OWN scope and arm (b) applies THIS SAME narrowing to
- *     THESE SAME rows. Tightening to exactly two would re-silence a genuinely
+ *     names works identically, because a session whose organization holds no row
+ *     has an EMPTY arm 1, which makes arm 2 the scope it resolves and lets arm
+ *     (b) apply THIS SAME narrowing to THESE SAME rows. Tightening to exactly
+ *     two would re-silence a genuinely
  *     stranded shape — the defect this arm exists to close — over a row count
  *     neither the stranding nor the recovery depends on;
  *   - arm 2 is non-empty only for a PLATFORM ADMIN in an org-scoped session, so
@@ -863,6 +927,14 @@ function strandedOrgSiblingWayBackRow(addressable: {
   const { own, platformFallback } = addressable;
   if (own.length === 0) return null;
   if (!own.every((r) => (r.organizationId ?? null) !== null)) return null;
+  // THE POST-ROLLBACK SIGNATURE (cinatra#2856 round 2). A supersession leaves an
+  // organization row `archived` (archived in place) or `locked` (the one state
+  // it refuses to touch), and nothing can put an organization row back to
+  // `active` while the workspace install lives. So one `active` own-scope row
+  // proves this session was never under that install — no rollback took the
+  // app-wide row away from it, and the arm must not deny an op on a row that is
+  // serving right now.
+  if (own.some((r) => r.status === "active")) return null;
   // At least TWO rows, not merely "a narrowing result": a single-row fallback
   // narrows to ITSELF, which is not the state a rollback leaves. Above two the
   // arm does not count — the narrowing below admits any number of live bundled
@@ -884,18 +956,45 @@ function strandedOrgSiblingWayBackRow(addressable: {
  * it — the capability layer only forwards it — and because it is the one
  * ambiguity message that must stay glued to the arm that can emit it.
  *
- * Scope-shaped like the rest of the copy: no row id, no organization id. It
- * deliberately DOES name "no active organization", the clause cinatra#2698
- * removed from the standing copy — there it sent an administrator to clear
- * their active organization for no reason, because a platform admin addresses
- * an org-NULL row from any session; HERE it is the literal recovery, since a
- * platform-scoped session is the session in which arm (b) resolves the archived
- * install and Activate is the way back through the door.
+ * THE NAMED RECOVERY MUST BE PERFORMABLE (cinatra#2856 round 2). This first
+ * said "Clear your active organization", and the product cannot do it:
+ *
+ *   - the lifecycle actor's `orgId` IS `session.activeOrganizationId`
+ *     (`lifecycle-actor.ts` `buildActorEnvelope`), so "clear it" means "hold a
+ *     session with none";
+ *   - a session with none is self-erasing. `getAuthSession` calls
+ *     `ensureDefaultOrganizationMembership` whenever `activeOrganizationId` is
+ *     null (`src/lib/auth-session.ts` → `src/lib/auth.ts`), which writes the
+ *     Default organization straight back on the very next request;
+ *   - and no surface offers the action anyway: both mounts of the organization
+ *     switcher pass `hidePersonal`, which is precisely the flag that removes
+ *     the "Personal Account" item whose handler is the only `setActive(null)`
+ *     in the product.
+ * A single-organization administrator therefore had no way out at all, and the
+ * refusal was the same one-way door with a better label — which is the half
+ * cinatra#2856 exists to fix. (cinatra#2698 removed this clause from the
+ * STANDING copy for a different reason: there it was pointless. Here it was
+ * impossible.)
+ *
+ * WHAT IS PERFORMABLE is the switch the organization switcher does offer. The
+ * strand is "arm 1 is non-empty", so any session whose active organization holds
+ * NO row for this package has an empty arm 1, runs arm 2, and lands on arm (b)
+ * with Activate enabled on the archived install. That is a real click on a real
+ * screen, it needs no new UI, and the copy states the precondition inline rather
+ * than implying every organization will do — a supersession archived a tombstone
+ * into every organization that HAD installed the package, and those sessions
+ * strand identically.
+ *
+ * It stays scope-shaped like the rest of the copy: no row id, no organization
+ * id, and no count of the administrator's organizations (this module is pure and
+ * DB-free — the actor carries an active organization, never a membership list),
+ * so ONE sentence has to be true for a single-organization administrator and a
+ * many-organization one alike. It is: it names the condition, not a guarantee.
  */
 const REASON_ORG_SIBLING_WAYBACK =
   "Two installs match your scope: this organization's own install, and the " +
-  "archived app-wide install. Clear your active organization to restore the " +
-  "app-wide install.";
+  "archived app-wide install. Switch to an organization that has no install " +
+  "of this extension, then restore the app-wide install from there.";
 
 export function resolveLifecycleScope(
   rows: readonly InstalledExtension[],

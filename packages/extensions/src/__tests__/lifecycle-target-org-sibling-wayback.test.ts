@@ -29,14 +29,25 @@ import {
 //     inside it. The page silently retargets to the organization's own row and
 //     the app-wide install has no affordance at all in that session.
 //
-// THE FIX IS A REFUSAL, NOT A REOPEN. The two candidates are both real and mean
-// different rows (a live own-scope organization install; an archived app-wide
-// install that is still restorable), so resolving one would silently retarget
+// THE FIX IS A REFUSAL, NOT A REOPEN. The two candidates are both real, both
+// restorable, and mean different rows, so resolving one would silently retarget
 // an administrator's destructive ops across tiers — which is the guess this
-// resolver exists not to make, and would break arm 2's invariant that it only
-// ever converts a REFUSAL into a resolution. The arm therefore stops HIDING the
-// second candidate: the shape now refuses `ambiguous_target` with a reason that
-// NAMES the recovery, which is the half a bare `ambiguous_target` never had.
+// resolver exists not to make. The arm therefore stops HIDING the second
+// candidate: the shape refuses `ambiguous_target` with a reason that NAMES the
+// recovery, which is the half a bare `ambiguous_target` never had.
+//
+// ROUND 2 shaped both halves of that sentence:
+//   - the NAMED RECOVERY must be performable. "Clear your active organization"
+//     was not: the actor's org IS the session's active organization, a null one
+//     is written back by the session enrichment on the next request, and both
+//     organization switchers pass `hidePersonal`. The copy now names the SWITCH
+//     the product does offer, and the tests perform it.
+//   - the ARM must key on a ROLLBACK. {live bundled, archived install} alone is
+//     also what a plain Archive, a soft Uninstall and a boot reconciliation
+//     leave, so the arm additionally requires that NO own-scope row is `active`
+//     — the only two states a workspace supersession can leave an organization
+//     row in are `archived` and `locked`. An organization install that is
+//     serving right now can no longer be denied an op by this arm.
 //
 // The negative half of this file is the load-bearing half — exactly ONE shape
 // changes verdict and every other case keeps its old outcome.
@@ -90,6 +101,16 @@ const orgSibling = (extra: Partial<InstalledExtension> = {}) =>
     ...extra,
   });
 
+/**
+ * The same sibling in the state a WORKSPACE SUPERSESSION leaves it:
+ * `supersedeOrganizationRowsForWorkspaceInstall` archives every ACTIVE
+ * organization row IN PLACE when the app-wide install finalizes. That tombstone
+ * is the post-rollback signature — an `active` organization row cannot coexist
+ * with a live workspace install at all, so it proves the opposite (round 2).
+ */
+const supersededSibling = (extra: Partial<InstalledExtension> = {}) =>
+  orgSibling({ status: "archived", ...extra });
+
 /** A platform admin WITH an active organization — the only principal arm 2
  *  exists for, and the only one this arm can reach. */
 const platformAdminInOrg: Actor = {
@@ -116,8 +137,28 @@ const orgAdmin: Actor = {
   orgRole: "org_admin",
 };
 
+/**
+ * The SAME administrator acting from a second organization that never installed
+ * the package — the recovery the copy names, and the only one the product can
+ * actually perform (round 2). The resolver reads an ACTIVE organization, never a
+ * membership list, so a single-organization and a many-organization
+ * administrator are the same input here; what differs is whether a session like
+ * this one exists to switch to.
+ */
+const platformAdminInOtherOrg: Actor = {
+  actorType: "human",
+  userId: "u-admin",
+  source: "ui",
+  orgId: "org-b",
+  platformRole: "platform_admin",
+};
+
 /** The state a completed rollback leaves, WITH an organization sibling. */
-const stranded = () => [bundled(), marketplace({ status: "archived" }), orgSibling()];
+const stranded = () => [
+  bundled(),
+  marketplace({ status: "archived" }),
+  supersededSibling(),
+];
 
 describe("the org-sibling strand is attributable, not silent", () => {
   it("REFUSES instead of silently resolving the organization sibling", () => {
@@ -139,7 +180,7 @@ describe("the org-sibling strand is attributable, not silent", () => {
     const reason = !res.ok && res.code === "ambiguous_target" ? res.reason : undefined;
     expect(reason).toBeTruthy();
     expect(reason).toContain("app-wide install");
-    expect(reason).toContain("active organization");
+    expect(reason).toContain("Switch to an organization");
   });
 
   it("is scope-shaped copy — never a row id, never an organization id", () => {
@@ -151,9 +192,9 @@ describe("the org-sibling strand is attributable, not silent", () => {
 
   it("is order independent — rows arrive in whatever order the store returns", () => {
     const orders = [
-      [orgSibling(), marketplace({ status: "archived" }), bundled()],
-      [marketplace({ status: "archived" }), bundled(), orgSibling()],
-      [bundled(), orgSibling(), marketplace({ status: "archived" })],
+      [supersededSibling(), marketplace({ status: "archived" }), bundled()],
+      [marketplace({ status: "archived" }), bundled(), supersededSibling()],
+      [bundled(), supersededSibling(), marketplace({ status: "archived" })],
     ];
     for (const rows of orders) {
       const res = resolveLifecycleScope(rows, platformAdminInOrg);
@@ -187,6 +228,32 @@ describe("the org-sibling strand is attributable, not silent", () => {
       expect(e.reason).toContain("app-wide install");
       expect(e.message).toContain("app-wide install");
       expect(e.count).toBe(2);
+      // Round 2, non-blocking: the attributable refusal counts CANDIDATES and
+      // is not a data-integrity fault, so it may not borrow the generic
+      // sentence that claims both.
+      expect(e.message).toContain("2 candidates match");
+      expect(e.message).not.toContain("data-integrity fault");
+      expect(e.message).not.toContain("rows match");
+    }
+  });
+
+  it("the GENERIC ambiguity message is unchanged byte-for-byte", () => {
+    // The reason is additive; the sentence every pre-#2856 ambiguity throws must
+    // still be the sentence it always threw.
+    const rows = [
+      marketplace({ ownerLevel: "platform", ownerId: null }),
+      marketplace({ id: "iext_other" }),
+    ];
+    try {
+      pickLifecycleTargetRow(rows, platformAdminNullOrg);
+      throw new Error("unreachable");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AmbiguousLifecycleTargetError);
+      expect((err as AmbiguousLifecycleTargetError).message).toBe(
+        `Ambiguous lifecycle target for "${PKG}" in scope platform (NULL-org): 2 rows ` +
+          `match a scope the org-anchor invariant guarantees is unique — refusing ` +
+          `(data-integrity fault).`,
+      );
     }
   });
 
@@ -201,11 +268,66 @@ describe("the org-sibling strand is attributable, not silent", () => {
   });
 });
 
-describe("the recovery the refusal names actually works", () => {
+describe("the recovery the refusal names is PERFORMABLE (round 2)", () => {
+  // The copy first said "Clear your active organization", and the product cannot
+  // do it: the actor's `orgId` IS `session.activeOrganizationId`, a null one is
+  // written back to the Default organization by the session enrichment on the
+  // very next request, and both organization switchers pass `hidePersonal` —
+  // the flag that removes the only `setActive(null)` affordance there is. So a
+  // single-organization administrator had no way out and the refusal was the
+  // one-way door with a better label. The performable escape is the SWITCH the
+  // product does offer: any session whose active organization holds no row has
+  // an empty arm 1, runs arm 2, and lands on arm (b).
+
+  it("the copy names the SWITCH, never a session the product cannot produce", () => {
+    const res = resolveLifecycleScope(stranded(), platformAdminInOrg);
+    const reason = (!res.ok && res.code === "ambiguous_target" && res.reason) || "";
+    expect(reason).toContain("Switch to an organization");
+    expect(reason).toContain("has no install of this extension");
+    expect(reason.toLowerCase()).not.toContain("clear your active organization");
+    expect(reason).not.toContain("no active organization");
+  });
+
+  it("ANOTHER organization with no row resolves the archived install", () => {
+    // The named action, performed: the same administrator, one switch later.
+    const res = resolveLifecycleScope(stranded(), platformAdminInOtherOrg);
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.row.id).toBe("iext_installed");
+    expect(res.ok && res.row.status).toBe("archived");
+  });
+
+  it("ACTIVATE is enabled there — the door really reopens from that session", () => {
+    const caps = evaluateLifecycleCapabilities(stranded(), platformAdminInOtherOrg);
+    expect(caps.activate.allowed).toBe(true);
+    expect(caps.activate.code).toBe("ok");
+  });
+
+  it("the copy states a CONDITION, not a promise — a second tombstoned org strands too", () => {
+    // Why the copy says "that has no install of this extension" rather than
+    // "another organization": the supersession archived a tombstone into EVERY
+    // organization that had installed the package, and each of those sessions is
+    // the same strand. One sentence has to be true for a single-organization
+    // administrator and a many-organization one alike, and this is what makes it
+    // true — the resolver reads an active organization, never a membership list.
+    const res = resolveLifecycleScope(
+      [
+        bundled(),
+        marketplace({ status: "archived" }),
+        supersededSibling(),
+        supersededSibling({ id: "iext_org_b", ownerId: "org-b", organizationId: "org-b" }),
+      ],
+      platformAdminInOtherOrg,
+    );
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+    expect(!res.ok && res.code === "ambiguous_target" && res.reason).toContain(
+      "Switch to an organization",
+    );
+  });
+
   it("a PLATFORM-SCOPED session resolves the archived install — arm (b), unchanged", () => {
-    // The literal recovery in the copy: with no active organization the actor's
-    // own scope IS the org-NULL rows, so #2774's archived-install precedence arm
-    // runs and the way back is a click.
+    // NOT the named recovery any more (the product cannot produce this session);
+    // it stays pinned because it is the MECHANISM the switch reaches — an empty
+    // arm 1 runs arm 2 — and because #2774's arm must not move.
     const res = resolveLifecycleScope(stranded(), platformAdminNullOrg);
     expect(res.ok).toBe(true);
     expect(res.ok && res.row.id).toBe("iext_installed");
@@ -242,8 +364,10 @@ describe("the recovery the refusal names actually works", () => {
     // With the workspace install live, supersession removes the sibling, arm 1
     // is empty and arm 2 resolves the install for this very actor. That is what
     // makes the post-rollback silence a one-way door rather than a scope rule.
+    // The sibling is the TOMBSTONE the workspace install left, because that is
+    // the only state an organization row can be in while that install lives.
     const res = resolveLifecycleScope(
-      [bundled(), marketplace(), orgSibling()],
+      [bundled(), marketplace(), supersededSibling()],
       platformAdminInOrg,
     );
     expect(res.ok && res.row.id).toBe("iext_installed");
@@ -267,7 +391,7 @@ describe("the strand is the NARROWING, not a row count (round 2)", () => {
     bundled(),
     secondBundle(),
     marketplace({ status: "archived" }),
-    orgSibling(),
+    supersededSibling(),
   ];
 
   it("a THREE-row fallback still refuses, and still names the recovery", () => {
@@ -322,7 +446,7 @@ describe("the strand is the NARROWING, not a row count (round 2)", () => {
         secondBundle(),
         marketplace({ status: "archived" }),
         marketplace({ id: "iext_other", status: "archived" }),
-        orgSibling(),
+        supersededSibling(),
       ],
       platformAdminInOrg,
     );
@@ -331,7 +455,7 @@ describe("the strand is the NARROWING, not a row count (round 2)", () => {
 
   it("a wide fallback of only LIVE bundles strands nothing", () => {
     const res = resolveLifecycleScope(
-      [bundled(), secondBundle(), orgSibling()],
+      [bundled(), secondBundle(), supersededSibling()],
       platformAdminInOrg,
     );
     expect(res.ok && res.row.id).toBe("iext_org");
@@ -346,10 +470,129 @@ describe("the strand is the NARROWING, not a row count (round 2)", () => {
   });
 });
 
+describe("the arm keys on a ROLLBACK, not on a row combination (round 2)", () => {
+  // {live bundled, archived default workspace install} is NOT a rollback
+  // signature on its own: nothing persists which op archived a row, and a plain
+  // Archive, a soft Uninstall and a boot reconciliation all leave that same
+  // shape. Keyed on it alone, the arm denied archive / activate / uninstall on
+  // every organization's own LIVE install for a platform admin with an active
+  // organization — an app-wide install archived long ago was enough — while an
+  // organization admin kept working on that very row.
+  //
+  // What the rows CAN prove is which of them a supersession touched:
+  // `supersedeOrganizationRowsForWorkspaceInstall` archives every ACTIVE
+  // organization row in place, skipping only `locked` ones;
+  // `assertNoWorkspaceSupersession` then refuses to create or re-activate one
+  // while the workspace install lives, and `effectiveInstallRows` keeps a
+  // superseded row out of both arms. So `archived` and `locked` are the only two
+  // states an organization row can hold under a live workspace install, and an
+  // `active` one proves this session was never under it.
+
+  /** The reviewer's counterexample: an app-wide install archived long ago, and
+   *  an organization running its own install, installed since. */
+  const ancientArchive = () => [
+    bundled(),
+    marketplace({ status: "archived" }),
+    orgSibling(),
+  ];
+
+  it("an ACTIVE organization install is never denied — the counterexample", () => {
+    const res = resolveLifecycleScope(ancientArchive(), platformAdminInOrg);
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.row.id).toBe("iext_org");
+    expect(res.ok && res.row.status).toBe("active");
+  });
+
+  it("…and every op on it stays allowed, for the platform admin AND the org admin", () => {
+    for (const actor of [platformAdminInOrg, orgAdmin]) {
+      const caps = evaluateLifecycleCapabilities(ancientArchive(), actor);
+      for (const op of ["archive", "activate", "uninstall"] as const) {
+        expect(caps[op].allowed, `${op} must stay allowed`).toBe(true);
+      }
+    }
+  });
+
+  it("…and the throwing path resolves it too, rather than refusing", () => {
+    expect(pickLifecycleTargetRow(ancientArchive(), platformAdminInOrg).id).toBe(
+      "iext_org",
+    );
+  });
+
+  it("an ACTIVE own-scope row at ANY tier stands the arm down", () => {
+    // The same clause as the tier test below, in the other direction: the arm
+    // reads the STATE of arm 1, not the anchor of its rows.
+    const res = resolveLifecycleScope(
+      [
+        bundled(),
+        marketplace({ status: "archived" }),
+        row("iext_user", { ownerLevel: "user", ownerId: "u-someone", organizationId: "org-a" }),
+      ],
+      platformAdminInOrg,
+    );
+    expect(res.ok && res.row.id).toBe("iext_user");
+  });
+
+  it("ONE active own-scope row stands it down even beside a tombstone", () => {
+    // Arm 1 holds a tombstone AND a live row here, and the live row is what
+    // decides: the organization is serving the package right now, so nothing was
+    // taken from this session and no refusal may be introduced. Which of arm 1's
+    // rows then wins is the ORDINARY rule (arm (b) inside arm 1, unchanged) —
+    // the point is that arm 2 does not turn the resolution into a refusal.
+    const res = resolveLifecycleScope(
+      [
+        bundled(),
+        marketplace({ status: "archived" }),
+        supersededSibling(),
+        bundled({
+          id: "iext_org_live",
+          ownerLevel: "organization",
+          ownerId: "org-a",
+          organizationId: "org-a",
+        }),
+      ],
+      platformAdminInOrg,
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it("an ARCHIVED own-scope row DOES strand — the tombstone supersession leaves", () => {
+    const res = resolveLifecycleScope(stranded(), platformAdminInOrg);
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+    expect(!res.ok && res.code === "ambiguous_target" && res.reason).toContain(
+      "app-wide install",
+    );
+  });
+
+  it("a LOCKED own-scope row DOES strand — the one row supersession will not touch", () => {
+    // A `locked` organization row is left exactly as it is by the supersession,
+    // so it is the second state the post-rollback arm 1 can hold. Refusing over
+    // it costs no affordance either: the package-wide lock already refuses
+    // archive / uninstall, and `activate` on a locked row preserves the lock.
+    const rows = [bundled(), marketplace({ status: "archived" }), orgSibling({ status: "locked" })];
+    const res = resolveLifecycleScope(rows, platformAdminInOrg);
+    expect(!res.ok && res.code).toBe("ambiguous_target");
+    expect(!res.ok && res.code === "ambiguous_target" && res.reason).toContain(
+      "Switch to an organization",
+    );
+    expect(evaluateLifecycleCapabilities(rows, platformAdminInOrg).activate.allowed).toBe(
+      false,
+    );
+  });
+
+  it("the recovery still works from the other organization for a LOCKED sibling", () => {
+    const rows = [bundled(), marketplace({ status: "archived" }), orgSibling({ status: "locked" })];
+    const res = resolveLifecycleScope(rows, platformAdminInOtherOrg);
+    expect(res.ok && res.row.id).toBe("iext_installed");
+    expect(
+      evaluateLifecycleCapabilities(rows, platformAdminInOtherOrg).activate.allowed,
+    ).toBe(true);
+  });
+});
+
 describe("the org-sibling arm refuses to widen anything else", () => {
   it("supersession still runs FIRST — a LIVE workspace install hides the sibling", () => {
     const res = resolveLifecycleScope(
-      [bundled(), marketplace(), orgSibling({ status: "archived" })],
+      [bundled(), marketplace(), supersededSibling()],
       platformAdminInOrg,
     );
     expect(res.ok && res.row.id).toBe("iext_installed");
@@ -364,6 +607,10 @@ describe("the org-sibling arm refuses to widen anything else", () => {
       ownerLevel: "user",
       ownerId: "u-someone",
       organizationId: "org-a",
+      // A supersession tombstone at the USER tier: `supersedeOrganizationRows…`
+      // archives every row with a non-null `organization_id`, whatever anchor it
+      // carries, so this is the same post-rollback state one tier down.
+      status: "archived",
     });
     const res = resolveLifecycleScope(
       [bundled(), marketplace({ status: "archived" }), userRow],
@@ -385,19 +632,19 @@ describe("the org-sibling arm refuses to widen anything else", () => {
 
   it("an organization row with NO org-NULL rows is completely unaffected", () => {
     for (const actor of [platformAdminInOrg, orgAdmin]) {
-      const res = resolveLifecycleScope([orgSibling()], actor);
+      const res = resolveLifecycleScope([supersededSibling()], actor);
       expect(res.ok && res.row.id).toBe("iext_org");
     }
   });
 
   it("a live bundled fallback with NO archived install strands nothing", () => {
-    const res = resolveLifecycleScope([bundled(), orgSibling()], platformAdminInOrg);
+    const res = resolveLifecycleScope([bundled(), supersededSibling()], platformAdminInOrg);
     expect(res.ok && res.row.id).toBe("iext_org");
   });
 
   it("a live app-wide install beside the sibling is not this shape either", () => {
     // Supersession already removed the sibling here; arm 2 resolves the install.
-    const res = resolveLifecycleScope([marketplace(), orgSibling()], platformAdminInOrg);
+    const res = resolveLifecycleScope([marketplace(), supersededSibling()], platformAdminInOrg);
     expect(res.ok && res.row.id).toBe("iext_installed");
   });
 
@@ -405,7 +652,7 @@ describe("the org-sibling arm refuses to widen anything else", () => {
     // A single-row fallback narrows to itself, which is not the state a
     // rollback leaves — the arm keys on the pair #2774 named.
     const res = resolveLifecycleScope(
-      [marketplace({ status: "archived" }), orgSibling()],
+      [marketplace({ status: "archived" }), supersededSibling()],
       platformAdminInOrg,
     );
     expect(res.ok && res.row.id).toBe("iext_org");
@@ -417,7 +664,7 @@ describe("the org-sibling arm refuses to widen anything else", () => {
         bundled(),
         marketplace({ status: "archived" }),
         marketplace({ id: "iext_other", status: "archived" }),
-        orgSibling(),
+        supersededSibling(),
       ],
       platformAdminInOrg,
     );
@@ -426,7 +673,7 @@ describe("the org-sibling arm refuses to widen anything else", () => {
 
   it("an archived install beside an ARCHIVED bundle is not the rollback state", () => {
     const res = resolveLifecycleScope(
-      [bundled({ status: "archived" }), marketplace({ status: "archived" }), orgSibling()],
+      [bundled({ status: "archived" }), marketplace({ status: "archived" }), supersededSibling()],
       platformAdminInOrg,
     );
     expect(res.ok && res.row.id).toBe("iext_org");
@@ -434,7 +681,7 @@ describe("the org-sibling arm refuses to widen anything else", () => {
 
   it("a NON-DEFAULT archived install is not the target", () => {
     const res = resolveLifecycleScope(
-      [bundled(), marketplace({ status: "archived", isDefault: false }), orgSibling()],
+      [bundled(), marketplace({ status: "archived", isDefault: false }), supersededSibling()],
       platformAdminInOrg,
     );
     expect(res.ok && res.row.id).toBe("iext_org");
@@ -453,7 +700,7 @@ describe("the org-sibling arm refuses to widen anything else", () => {
             resolvedSha: "0".repeat(40),
           } as InstalledExtension["source"],
         }),
-        orgSibling(),
+        supersededSibling(),
       ],
       platformAdminInOrg,
     );
@@ -467,7 +714,7 @@ describe("the org-sibling arm refuses to widen anything else", () => {
       [
         bundled(),
         marketplace({ status: "archived", ownerLevel: "platform", ownerId: null }),
-        orgSibling(),
+        supersededSibling(),
       ],
       platformAdminInOrg,
     );
@@ -481,8 +728,8 @@ describe("the org-sibling arm refuses to widen anything else", () => {
       [
         bundled(),
         marketplace({ status: "archived" }),
-        orgSibling(),
-        orgSibling({ id: "iext_org2" }),
+        supersededSibling(),
+        supersededSibling({ id: "iext_org2" }),
       ],
       platformAdminInOrg,
     );
