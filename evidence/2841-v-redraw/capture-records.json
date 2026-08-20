@@ -3,42 +3,59 @@
   "CAPTURE RECORDS for cinatra#2841 (PR #2866), in the shape",
   "scripts/ci/lib/capture-record-contract.mjs validates.",
   "",
-  "NONE OF THESE RECORDS IS REGISTERED IN scripts/ci/chat-hitl-capture-index.json, and the reason is",
-  "a FINDING about the contract rather than about the pictures: the contract requires a",
-  "recommendation_hold record to have observed [data-lifecycle-card=\"recommendation_hold\"] and",
-  "[data-lifecycle-card-host=\"run_card\"] in the captured frame, and the shipped card emits NEITHER",
-  "attribute anywhere - RunRecommendationChipRow / RecommendationHoldCard declare only",
-  "data-conformance-id=\"run-chip-row\", data-run-recommendation-chip-row and the per-chip markers.",
-  "(ReviewGateCard does emit data-lifecycle-card-host; the recommendation card does not.) Every record",
-  "below therefore carries the count 0 it actually observed for those two anchors and the contract's",
-  "own verdict, rather than being edited to pass. Registering them would turn the gate red on a true",
-  "record, which is the opposite of what the gate is for."
+  "THESE RECORDS ARE REGISTERED in scripts/ci/chat-hitl-capture-index.json, which the previous",
+  "round could not do. That round's records carried the count 0 they truthfully observed for",
+  "[data-lifecycle-card=\"recommendation_hold\"] and [data-lifecycle-card-host=\"run_card\"], because",
+  "the shipped row emitted neither attribute -- so no honest recommendation_hold record could",
+  "satisfy its own contract. Finding 3 of commit 1d95dd06a closed that: the row IS the card, so the",
+  "row's outermost element now declares kind, host and held/decided exactly as ReviewGateCard does.",
+  "Every record below observed all three on the screen it was taken on, and the counts here are the",
+  "ones the recorder actually measured -- an anchor it did not look for is absent, not zero-filled.",
+  "",
+  "COUNTING SCOPES (from the recorder, restated so every number is re-derivable):",
+  "  frame -- document.querySelectorAll(sel).length on the document the picture was taken in;",
+  "  root  -- the card root's own subtree INCLUDING the root element."
  ],
  "recorder": "cinatra-lifecycle-capture-recorder@1",
  "records": [
   {
-   "cell": "A1__recommendation-card__run_card__held",
+   "cell": "V1__recommendation-card__run_card__held",
    "declaredHost": "run_card",
    "declaredKind": "recommendation_hold",
    "declaredState": "pending",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "screenshot": "evidence/2841-v-redraw/captures/A1__recommendation-card__run_card__held.png",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "screenshot": "evidence/2841-v-redraw/captures/V1__recommendation-card__run_card__held.png",
    "sha256": "cd6648b0e73645fe6e7c4d146a6813fe046332ba946e3b52a4fa731c24ca3226",
    "assertions": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
      "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
     },
     {
      "selector": "[data-recommendation-chip]",
@@ -91,9 +108,19 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
     },
     {
      "selector": "[data-action=\"confirm-run-recommendation\"]",
@@ -106,54 +133,69 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
-     "count": 2
+     "count": 0
     },
     {
      "selector": "button",
      "scope": "root",
      "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-19T21:53:55.431Z",
-   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
-   "note": "HELD. One chip per offered skill, each carrying its own Confirm / Adjust / Skip. No heading plate above the row and no card-level submit beneath it.",
-   "contractVerdict": [
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
-    },
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
-    }
-   ]
+   "recordedAt": "2026-08-20T17:33:39.482Z",
+   "runtime": "dev-runtime",
+   "note": "\u00a7V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
   },
   {
-   "cell": "A2__recommendation-card__run_card__held-mid-decision",
+   "cell": "V2__recommendation-card__run_card__held__dark",
    "declaredHost": "run_card",
    "declaredKind": "recommendation_hold",
    "declaredState": "pending",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "screenshot": "evidence/2841-v-redraw/captures/A2__recommendation-card__run_card__held-mid-decision.png",
-   "sha256": "ad4f56ac58a85ad8ca7582948fe10da131201d0fc6e4d66c33fa69ab8346acaf",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "screenshot": "evidence/2841-v-redraw/captures/V2__recommendation-card__run_card__held__dark.png",
+   "sha256": "a36c8e7cff3479033283ece6cbdeea9dfbac56f6caf61b8a3893498645d2a04a",
    "assertions": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
      "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
     },
     {
      "selector": "[data-recommendation-chip]",
@@ -178,17 +220,17 @@
     {
      "selector": "[data-chip-mark=\"undecided\"]",
      "scope": "root",
-     "count": 2
+     "count": 4
     },
     {
      "selector": "[data-chip-mark=\"confirmed\"]",
      "scope": "root",
-     "count": 1
+     "count": 0
     },
     {
      "selector": "[data-chip-mark=\"adjusted\"]",
      "scope": "root",
-     "count": 1
+     "count": 0
     },
     {
      "selector": "[data-chip-mark=\"skipped\"]",
@@ -206,9 +248,19 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
     },
     {
      "selector": "[data-action=\"confirm-run-recommendation\"]",
@@ -221,54 +273,209 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
-     "count": 2
+     "count": 0
     },
     {
      "selector": "button",
      "scope": "root",
      "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-19T21:54:12.887Z",
-   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
-   "note": "MID-DECISION. Chip 1 pressed Confirm, chip 2 went through Adjust and was kept, the remaining chips are undecided; the row is still live and every chip is still pressable.",
-   "contractVerdict": [
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
-    },
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
-    }
-   ]
+   "recordedAt": "2026-08-20T17:33:49.650Z",
+   "runtime": "dev-runtime",
+   "note": "The same held row after pressing the shipped Toggle theme control. Same run, same frame selector as V1."
   },
   {
-   "cell": "A2b__recommendation-card__run_card__held-adjust-panel",
+   "cell": "V3__recommendation-card__run_card__held__mid-decision",
    "declaredHost": "run_card",
    "declaredKind": "recommendation_hold",
    "declaredState": "pending",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "screenshot": "evidence/2841-v-redraw/captures/A2b__recommendation-card__run_card__held-adjust-panel.png",
-   "sha256": "fc4ebe7dd92d1b9c23a3ba566df7a915678fb908caa5977ed1962935abeafef8",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/df5efd82-bd28-4805-8816-934085f3982b",
+   "screenshot": "evidence/2841-v-redraw/captures/V3__recommendation-card__run_card__held__mid-decision.png",
+   "sha256": "ca5b6ae4e243f65dd2045d31af7b9cc28b64186b1df928f07f006f48679cc20f",
    "assertions": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
      "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "h1,h2,h3,h4,h5,h6",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-20T17:34:01.997Z",
+   "runtime": "dev-runtime",
+   "note": "\u00a7V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
+  },
+  {
+   "cell": "V4__recommendation-card__run_card__held__adjust-panel",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "pending",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "screenshot": "evidence/2841-v-redraw/captures/V4__recommendation-card__run_card__held__adjust-panel.png",
+   "sha256": "98ce0c1f93b3c78d407b03d87722af32c5b3068349bb60a1283db0f15e420ac9",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
     },
     {
      "selector": "[data-recommendation-chip]",
@@ -321,9 +528,19 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
     },
     {
      "selector": "[data-action=\"confirm-run-recommendation\"]",
@@ -336,53 +553,68 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
-     "count": 2
+     "count": 0
     },
     {
      "selector": "button",
      "scope": "root",
      "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 1
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-19T21:54:28.312Z",
-   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
-   "note": "What ADJUST opens. Full page, because the panel is a right-side Sheet in a portal OUTSIDE the card root - it does NOT draw in place, so it cannot be framed on the card.",
-   "contractVerdict": [
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
-    },
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
-    }
-   ]
+   "recordedAt": "2026-08-20T17:34:12.506Z",
+   "runtime": "dev-runtime",
+   "note": "What ADJUST opens. It is a portalled Sheet OUTSIDE the card root, so this cell is full page; the row itself is untouched underneath."
   },
   {
-   "cell": "A3__recommendation-card__run_card__settled",
+   "cell": "V5__recommendation-card__run_card__settled",
    "declaredHost": "run_card",
    "declaredKind": "recommendation_hold",
    "declaredState": "decided",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/4a6c484c-60cf-445d-a53a-aad7b6911fc8",
-   "screenshot": "evidence/2841-v-redraw/captures/A3__recommendation-card__run_card__settled.png",
-   "sha256": "b7d9d138fbec846d59300c7f73d38f91e5ce43f5b9ce4f4b1540e40f74a47a09",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+   "screenshot": "evidence/2841-v-redraw/captures/V5__recommendation-card__run_card__settled.png",
+   "sha256": "7a9b711bf364591358df47bbd3d90b0b5e241616beb5cfed52ea21d367d2a50f",
    "assertions": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
      "count": 1
     },
     {
@@ -413,12 +645,12 @@
     {
      "selector": "[data-chip-mark=\"confirmed\"]",
      "scope": "root",
-     "count": 2
+     "count": 1
     },
     {
      "selector": "[data-chip-mark=\"adjusted\"]",
      "scope": "root",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-chip-mark=\"skipped\"]",
@@ -436,7 +668,17 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
      "scope": "root",
      "count": 0
     },
@@ -451,7 +693,7 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
      "count": 0
     },
@@ -459,50 +701,201 @@
      "selector": "button",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-19T22:11:39.068Z",
-   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
-   "note": "SETTLED, on a fresh load so the row is the server's own re-resolve. The hold was released by pressing, on the live row: Confirm on chip 1, Skip on chip 2, Adjust then 'Keep it in this run' on chip 3, Skip on chip 4. Each chip now states in place what the run's durable evidence records, and there is nothing left to press.",
-   "contractVerdict": [
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
-    },
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
-    },
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card-state]\" (root-scoped) was observed 0 times on this screen"
-    }
-   ]
+   "recordedAt": "2026-08-20T17:40:16.564Z",
+   "runtime": "dev-runtime",
+   "note": "\u00a7V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
   },
   {
-   "cell": "A4__recommendation-card__run_card__held-read-only",
+   "cell": "V6__recommendation-card__run_card__settled__dark",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "decided",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+   "screenshot": "evidence/2841-v-redraw/captures/V6__recommendation-card__run_card__settled__dark.png",
+   "sha256": "b284bf5e484a5d2061f0614ed5cf4e7c0d08759103cacc56dd42607b0cde297b",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "h1,h2,h3,h4,h5,h6",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-20T17:40:26.909Z",
+   "runtime": "dev-runtime",
+   "note": "The same settled row after pressing the shipped Toggle theme control. Same run, same frame selector as V5."
+  },
+  {
+   "cell": "V7__recommendation-card__run_card__held__read-only",
    "declaredHost": "run_card",
    "declaredKind": "recommendation_hold",
    "declaredState": "pending",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b47813ce-15cf-4319-9b7f-4745a4d9f75b",
-   "screenshot": "evidence/2841-v-redraw/captures/A4__recommendation-card__run_card__held-read-only.png",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/ba58dfad-52f4-4b6c-9080-3c95ba514558",
+   "screenshot": "evidence/2841-v-redraw/captures/V7__recommendation-card__run_card__held__read-only.png",
    "sha256": "c8679f5936fae644c7093b31d987d6f7d9da1cc1d88b54ba35e4bc33403cf408",
    "assertions": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
      "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
     },
     {
      "selector": "[data-recommendation-chip]",
@@ -555,9 +948,19 @@
      "count": 1
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
     },
     {
      "selector": "[data-action=\"confirm-run-recommendation\"]",
@@ -570,49 +973,189 @@
      "count": 0
     },
     {
+     "selector": "h1,h2,h3,h4,h5,h6",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-20T17:40:35.118Z",
+   "runtime": "dev-runtime",
+   "note": "\u00a7V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
+  },
+  {
+   "cell": "V8__recommendation-card__run_card__held__trigger-position",
+   "declaredHost": "run_card",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "pending",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "screenshot": "evidence/2841-v-redraw/captures/V8__recommendation-card__run_card__held__trigger-position.png",
+   "sha256": "0c27dc3649316432608f50ddd550915ed330c6b7c3c2af1396e52567f5f9243c",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
      "selector": "[data-forced=\"true\"]",
      "scope": "root",
-     "count": 2
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "h1,h2,h3,h4,h5,h6",
+     "scope": "root",
+     "count": 0
     },
     {
      "selector": "button",
      "scope": "root",
      "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-19T22:16:22.080Z",
-   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
-   "note": "READ-ONLY. A SECOND signed-in actor who is not the run owner, reading a run whose shipped per-run auth-policy override (agent_runs.auth_policy, the same shape the agent Permissions tab writes) grants run DATA to the organization and run EXECUTE to the owner alone. The reader therefore clears the run-read door and fails the execute tier, which is exactly the canDecide=false reading.",
-   "contractVerdict": [
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
-    },
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
-    }
-   ]
+   "recordedAt": "2026-08-20T17:37:13.065Z",
+   "runtime": "dev-runtime",
+   "note": "\u00a76.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
   },
   {
-   "cell": "A5__recommendation-card__run_card__decided-page",
+   "cell": "V9__recommendation-card__run_card__decided__page",
    "declaredHost": "run_card",
    "declaredKind": "recommendation_hold",
    "declaredState": "decided",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "screenshot": "evidence/2841-v-redraw/captures/A5__recommendation-card__run_card__decided-page.png",
-   "sha256": "6122b77fad16f5907d0f86395f516f938c1ba7118de97451af5772eea7f97c90",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+   "screenshot": "evidence/2841-v-redraw/captures/V9__recommendation-card__run_card__decided__page.png",
+   "sha256": "051c9fbfedd4743e16c5dfb769924e0a4f9e469aba3b442f3c9226bf2c23ee06",
    "assertions": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
@@ -620,9 +1163,24 @@
      "count": 1
     },
     {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
      "selector": "[data-recommendation-chip]",
      "scope": "root",
-     "count": 4
+     "count": 3
     },
     {
      "selector": "[data-skill-action=\"confirm\"]",
@@ -647,12 +1205,12 @@
     {
      "selector": "[data-chip-mark=\"confirmed\"]",
      "scope": "root",
-     "count": 3
+     "count": 1
     },
     {
      "selector": "[data-chip-mark=\"adjusted\"]",
      "scope": "root",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-chip-mark=\"skipped\"]",
@@ -670,7 +1228,17 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
      "scope": "root",
      "count": 0
     },
@@ -685,7 +1253,7 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
      "count": 0
     },
@@ -693,26 +1261,22 @@
      "selector": "button",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-19T21:55:46.395Z",
-   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. HEAD UNDER PROOF 97b596c6e PLUS ONE NAMED LOCAL REPAIR that is NOT committed: `export function decidedSkillsFromEvidence` in the \"use server\" module packages/agents/src/run-recommendation-actions.ts made module-private, because a non-async export of a \"use server\" module is a hard Next compile error and the branch as pushed does not boot at all. The repair removes an export keyword and changes no rendering.",
-   "note": "The DECIDED run-page reading, whole page: where the settled row sits in the run panel and what surrounds it.",
-   "contractVerdict": [
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card-host=\"run_card\"]\" (frame-scoped) was observed 0 times on this screen"
-    },
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card=\"recommendation_hold\"]\" (frame-scoped) was observed 0 times on this screen"
-    },
-    {
-     "code": "record/anchor-count-zero",
-     "detail": "\"[data-lifecycle-card-state]\" (root-scoped) was observed 0 times on this screen"
-    }
-   ]
+   "recordedAt": "2026-08-20T17:40:42.509Z",
+   "runtime": "dev-runtime",
+   "note": "The settled row in its page: nothing is summarised above it and there is nothing left to press."
   }
  ]
 }

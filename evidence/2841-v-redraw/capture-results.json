@@ -1,19 +1,21 @@
 {
  "$comment": [
-  "The machine record beside the pixels: what was requested, what URL answered,",
-  "the HTTP status, the frame the picture was taken on, the pixel size, every anchor count, the",
-  "per-chip DOM read-out (skill id, mark, forced flag, per-button disabled state) and the card's",
-  "own innerText. Nothing here is derived from the record file; both are written by the same run."
+  "The machine record beside the pixels: what was requested, what URL answered, the HTTP status,",
+  "the frame the picture was taken on, the colour scheme asked for and the theme class the document",
+  "answered with, the card ROOT's own data-* attributes read off the live DOM, the pixel size, every",
+  "anchor count, the per-chip read-out (skill id, mark, forced flag, per-button disabled state) and",
+  "the card's own innerText. Nothing here is derived from the record file; both are written by the",
+  "same run of evidence/2841-v-redraw/drivers/capture.mjs."
  ],
  "results": [
   {
-   "cell": "A1__recommendation-card__run_card__held",
-   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "cell": "V1__recommendation-card__run_card__held",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
    "httpStatus": 200,
    "rootPresent": true,
    "rootCount": 1,
-   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
    "pixels": {
     "width": 1536,
     "height": 138
@@ -23,17 +25,32 @@
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
      "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
     },
     {
      "selector": "[data-recommendation-chip]",
@@ -86,9 +103,19 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
     },
     {
      "selector": "[data-action=\"confirm-run-recommendation\"]",
@@ -101,155 +128,189 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
-     "count": 2
+     "count": 0
     },
     {
      "selector": "button",
      "scope": "root",
      "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
+    }
+   ],
+   "colorScheme": "light",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"held\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-variant=\"inline\"",
+    "data-can-decide=\"true\""
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/web-research-skill:web-research",
+     "mark": "undecided",
+     "forced": "true",
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
     }
    ],
    "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
    "pageErrors": []
   },
   {
-   "cell": "A2__recommendation-card__run_card__held-mid-decision",
-   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "cell": "V2__recommendation-card__run_card__held__dark",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
    "httpStatus": 200,
    "rootPresent": true,
    "rootCount": 1,
-   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
    "pixels": {
     "width": 1536,
     "height": 138
    },
-   "sha256": "ad4f56ac58a85ad8ca7582948fe10da131201d0fc6e4d66c33fa69ab8346acaf",
+   "sha256": "a36c8e7cff3479033283ece6cbdeea9dfbac56f6caf61b8a3893498645d2a04a",
    "observed": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
      "count": 1
-    },
-    {
-     "selector": "[data-recommendation-chip]",
-     "scope": "root",
-     "count": 4
-    },
-    {
-     "selector": "[data-skill-action=\"confirm\"]",
-     "scope": "root",
-     "count": 4
-    },
-    {
-     "selector": "[data-skill-action=\"adjust\"]",
-     "scope": "root",
-     "count": 4
-    },
-    {
-     "selector": "[data-skill-action=\"skip\"]",
-     "scope": "root",
-     "count": 4
-    },
-    {
-     "selector": "[data-chip-mark=\"undecided\"]",
-     "scope": "root",
-     "count": 2
-    },
-    {
-     "selector": "[data-chip-mark=\"confirmed\"]",
-     "scope": "root",
-     "count": 1
-    },
-    {
-     "selector": "[data-chip-mark=\"adjusted\"]",
-     "scope": "root",
-     "count": 1
-    },
-    {
-     "selector": "[data-chip-mark=\"skipped\"]",
-     "scope": "root",
-     "count": 0
-    },
-    {
-     "selector": "[data-run-recommendation-settled=\"true\"]",
-     "scope": "root",
-     "count": 0
-    },
-    {
-     "selector": "[data-run-recommendation-restricted]",
-     "scope": "root",
-     "count": 0
     },
     {
      "selector": "[data-lifecycle-card-state]",
      "scope": "root",
-     "count": 0
-    },
-    {
-     "selector": "[data-action=\"confirm-run-recommendation\"]",
-     "scope": "root",
-     "count": 0
-    },
-    {
-     "selector": "[data-action=\"skip-run-recommendation\"]",
-     "scope": "root",
-     "count": 0
-    },
-    {
-     "selector": "[data-forced=\"true\"]",
-     "scope": "root",
-     "count": 2
-    },
-    {
-     "selector": "button",
-     "scope": "root",
-     "count": 12
-    }
-   ],
-   "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
-   "pageErrors": []
-  },
-  {
-   "cell": "A2b__recommendation-card__run_card__held-adjust-panel",
-   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "httpStatus": 200,
-   "rootPresent": true,
-   "rootCount": 1,
-   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
-   "pixels": {
-    "width": 2456,
-    "height": 2160
-   },
-   "sha256": "fc4ebe7dd92d1b9c23a3ba566df7a915678fb908caa5977ed1962935abeafef8",
-   "observed": [
-    {
-     "selector": "[data-lifecycle-card-host=\"run_card\"]",
-     "scope": "frame",
-     "count": 0
-    },
-    {
-     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-     "scope": "frame",
-     "count": 0
-    },
-    {
-     "selector": "[data-conformance-id=\"run-chip-row\"]",
-     "scope": "frame",
      "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
     },
     {
      "selector": "[data-recommendation-chip]",
@@ -302,9 +363,19 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
     },
     {
      "selector": "[data-action=\"confirm-run-recommendation\"]",
@@ -317,46 +388,708 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
-     "count": 2
+     "count": 0
     },
     {
      "selector": "button",
      "scope": "root",
      "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
+    }
+   ],
+   "colorScheme": "dark",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"held\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-variant=\"inline\"",
+    "data-can-decide=\"true\""
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/web-research-skill:web-research",
+     "mark": "undecided",
+     "forced": "true",
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
     }
    ],
    "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
    "pageErrors": []
   },
   {
-   "cell": "A3__recommendation-card__run_card__settled",
-   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/4a6c484c-60cf-445d-a53a-aad7b6911fc8",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/4a6c484c-60cf-445d-a53a-aad7b6911fc8",
+   "cell": "V3__recommendation-card__run_card__held__mid-decision",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/df5efd82-bd28-4805-8816-934085f3982b",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/df5efd82-bd28-4805-8816-934085f3982b",
    "httpStatus": 200,
    "rootPresent": true,
    "rootCount": 1,
-   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
    "pixels": {
     "width": 1536,
-    "height": 190
+    "height": 138
    },
-   "sha256": "b7d9d138fbec846d59300c7f73d38f91e5ce43f5b9ce4f4b1540e40f74a47a09",
+   "sha256": "ca5b6ae4e243f65dd2045d31af7b9cc28b64186b1df928f07f006f48679cc20f",
    "observed": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "h1,h2,h3,h4,h5,h6",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
+    }
+   ],
+   "colorScheme": "light",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"held\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-variant=\"inline\"",
+    "data-can-decide=\"true\""
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "confirmed",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "true",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "adjusted",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "true",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/web-research-skill:web-research",
+     "mark": "undecided",
+     "forced": "true",
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    }
+   ],
+   "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
+   "pageErrors": []
+  },
+  {
+   "cell": "V4__recommendation-card__run_card__held__adjust-panel",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
+   "pixels": {
+    "width": 2456,
+    "height": 2320
+   },
+   "sha256": "98ce0c1f93b3c78d407b03d87722af32c5b3068349bb60a1283db0f15e420ac9",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "h1,h2,h3,h4,h5,h6",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 1
+    }
+   ],
+   "colorScheme": "light",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"held\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-variant=\"inline\"",
+    "data-can-decide=\"true\""
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/web-research-skill:web-research",
+     "mark": "undecided",
+     "forced": "true",
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    }
+   ],
+   "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
+   "pageErrors": []
+  },
+  {
+   "cell": "V5__recommendation-card__run_card__settled",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
+   "pixels": {
+    "width": 1436,
+    "height": 54
+   },
+   "sha256": "7a9b711bf364591358df47bbd3d90b0b5e241616beb5cfed52ea21d367d2a50f",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
      "count": 1
     },
     {
@@ -387,12 +1120,12 @@
     {
      "selector": "[data-chip-mark=\"confirmed\"]",
      "scope": "root",
-     "count": 2
+     "count": 1
     },
     {
      "selector": "[data-chip-mark=\"adjusted\"]",
      "scope": "root",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-chip-mark=\"skipped\"]",
@@ -410,7 +1143,17 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
      "scope": "root",
      "count": 0
     },
@@ -425,7 +1168,7 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
      "count": 0
     },
@@ -433,7 +1176,29 @@
      "selector": "button",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
     }
+   ],
+   "colorScheme": "light",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"decided\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-run-recommendation-decision=\"confirmed\"",
+    "data-run-recommendation-settled=\"true\"",
+    "data-variant=\"inline\""
    ],
    "chips": [
     {
@@ -452,23 +1217,201 @@
     },
     {
      "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
-     "mark": "confirmed",
+     "mark": "adjusted",
      "forced": null,
      "ariaDisabled": null,
      "buttons": []
     }
    ],
-   "cardText": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher\nCONFIRMED\n@cinatra-ai/blog-writing-skill:blog-writing\nSKIPPED\n@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher\nCONFIRMED",
+   "cardText": "blog-post-matcher\nCONFIRMED\nblog-writing\nSKIPPED\nbrand-voice-matcher\nADJUSTED",
    "pageErrors": []
   },
   {
-   "cell": "A4__recommendation-card__run_card__held-read-only",
-   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/b47813ce-15cf-4319-9b7f-4745a4d9f75b",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b47813ce-15cf-4319-9b7f-4745a4d9f75b",
+   "cell": "V6__recommendation-card__run_card__settled__dark",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
    "httpStatus": 200,
    "rootPresent": true,
    "rootCount": 1,
-   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
+   "pixels": {
+    "width": 1436,
+    "height": 54
+   },
+   "sha256": "b284bf5e484a5d2061f0614ed5cf4e7c0d08759103cacc56dd42607b0cde297b",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "h1,h2,h3,h4,h5,h6",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
+    }
+   ],
+   "colorScheme": "dark",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"decided\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-run-recommendation-decision=\"confirmed\"",
+    "data-run-recommendation-settled=\"true\"",
+    "data-variant=\"inline\""
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "confirmed",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "skipped",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "adjusted",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    }
+   ],
+   "cardText": "blog-post-matcher\nCONFIRMED\nblog-writing\nSKIPPED\nbrand-voice-matcher\nADJUSTED",
+   "pageErrors": []
+  },
+  {
+   "cell": "V7__recommendation-card__run_card__held__read-only",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/ba58dfad-52f4-4b6c-9080-3c95ba514558",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/ba58dfad-52f4-4b6c-9080-3c95ba514558",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
    "pixels": {
     "width": 1536,
     "height": 186
@@ -478,17 +1421,32 @@
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
      "scope": "frame",
      "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
     },
     {
      "selector": "[data-recommendation-chip]",
@@ -541,9 +1499,19 @@
      "count": 1
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
     },
     {
      "selector": "[data-action=\"confirm-run-recommendation\"]",
@@ -556,15 +1524,36 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
-     "count": 2
+     "count": 0
     },
     {
      "selector": "button",
      "scope": "root",
      "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
     }
+   ],
+   "colorScheme": "light",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"held\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-variant=\"inline\"",
+    "data-can-decide=\"false\""
    ],
    "chips": [
     {
@@ -622,7 +1611,7 @@
     {
      "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
      "mark": "undecided",
-     "forced": "true",
+     "forced": null,
      "ariaDisabled": "true",
      "buttons": [
       {
@@ -676,28 +1665,28 @@
    "pageErrors": []
   },
   {
-   "cell": "A5__recommendation-card__run_card__decided-page",
-   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/12ff2abf-27ae-4117-a564-5d123c991703",
+   "cell": "V8__recommendation-card__run_card__held__trigger-position",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
    "httpStatus": 200,
    "rootPresent": true,
    "rootCount": 1,
-   "frameSelector": "[data-conformance-id=\"run-chip-row\"]",
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
    "pixels": {
     "width": 2456,
-    "height": 2560
+    "height": 2320
    },
-   "sha256": "6122b77fad16f5907d0f86395f516f938c1ba7118de97451af5772eea7f97c90",
+   "sha256": "0c27dc3649316432608f50ddd550915ed330c6b7c3c2af1396e52567f5f9243c",
    "observed": [
     {
      "selector": "[data-lifecycle-card-host=\"run_card\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
      "scope": "frame",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-conformance-id=\"run-chip-row\"]",
@@ -705,9 +1694,284 @@
      "count": 1
     },
     {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
      "selector": "[data-recommendation-chip]",
      "scope": "root",
      "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"undecided\"]",
+     "scope": "root",
+     "count": 4
+    },
+    {
+     "selector": "[data-chip-mark=\"confirmed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"adjusted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-chip-mark=\"skipped\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-settled=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-run-recommendation-restricted]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"confirm-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"skip-run-recommendation\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "h1,h2,h3,h4,h5,h6",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "button",
+     "scope": "root",
+     "count": 12
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
+    }
+   ],
+   "colorScheme": "light",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"held\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-variant=\"inline\"",
+    "data-can-decide=\"true\""
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "undecided",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    },
+    {
+     "skillId": "@cinatra-ai/web-research-skill:web-research",
+     "mark": "undecided",
+     "forced": "true",
+     "ariaDisabled": null,
+     "buttons": [
+      {
+       "action": "confirm",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Confirm"
+      },
+      {
+       "action": "adjust",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Adjust"
+      },
+      {
+       "action": "skip",
+       "disabled": false,
+       "pressed": "false",
+       "label": "Skip"
+      }
+     ]
+    }
+   ],
+   "cardText": "blog-post-matcher\nConfirm\nAdjust\nSkip\nblog-writing\nConfirm\nAdjust\nSkip\nbrand-voice-matcher\nConfirm\nAdjust\nSkip\nweb-research\nConfirm\nAdjust\nSkip",
+   "pageErrors": []
+  },
+  {
+   "cell": "V9__recommendation-card__run_card__decided__page",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/752fabe7-1e11-4fca-8bae-f7203920298e",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "frameSelector": "[data-lifecycle-card=\"recommendation_hold\"]",
+   "pixels": {
+    "width": 2456,
+    "height": 2320
+   },
+   "sha256": "051c9fbfedd4743e16c5dfb769924e0a4f9e469aba3b442f3c9226bf2c23ee06",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"run-chip-row\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"held\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card-state=\"decided\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-recommendation-chip]",
+     "scope": "root",
+     "count": 3
     },
     {
      "selector": "[data-skill-action=\"confirm\"]",
@@ -732,12 +1996,12 @@
     {
      "selector": "[data-chip-mark=\"confirmed\"]",
      "scope": "root",
-     "count": 3
+     "count": 1
     },
     {
      "selector": "[data-chip-mark=\"adjusted\"]",
      "scope": "root",
-     "count": 0
+     "count": 1
     },
     {
      "selector": "[data-chip-mark=\"skipped\"]",
@@ -755,7 +2019,17 @@
      "count": 0
     },
     {
-     "selector": "[data-lifecycle-card-state]",
+     "selector": "[data-can-decide=\"true\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-can-decide=\"false\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-forced=\"true\"]",
      "scope": "root",
      "count": 0
     },
@@ -770,7 +2044,7 @@
      "count": 0
     },
     {
-     "selector": "[data-forced=\"true\"]",
+     "selector": "h1,h2,h3,h4,h5,h6",
      "scope": "root",
      "count": 0
     },
@@ -778,9 +2052,54 @@
      "selector": "button",
      "scope": "root",
      "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-keep\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-skill-action=\"adjust-drop\"]",
+     "scope": "frame",
+     "count": 0
     }
    ],
-   "cardText": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher\nCONFIRMED\n@cinatra-ai/blog-writing-skill:blog-writing\nSKIPPED\n@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher\nCONFIRMED\n@cinatra-ai/web-research-skill:web-research\nCONFIRMED",
+   "colorScheme": "light",
+   "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+   "rootAttributes": [
+    "data-run-recommendation-chip-row",
+    "data-conformance-id=\"run-chip-row\"",
+    "data-lifecycle-card=\"recommendation_hold\"",
+    "data-lifecycle-card-state=\"decided\"",
+    "data-lifecycle-card-host=\"run_card\"",
+    "data-run-recommendation-decision=\"confirmed\"",
+    "data-run-recommendation-settled=\"true\"",
+    "data-variant=\"inline\""
+   ],
+   "chips": [
+    {
+     "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+     "mark": "confirmed",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    },
+    {
+     "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+     "mark": "skipped",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    },
+    {
+     "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+     "mark": "adjusted",
+     "forced": null,
+     "ariaDisabled": null,
+     "buttons": []
+    }
+   ],
+   "cardText": "blog-post-matcher\nCONFIRMED\nblog-writing\nSKIPPED\nbrand-voice-matcher\nADJUSTED",
    "pageErrors": []
   }
  ]

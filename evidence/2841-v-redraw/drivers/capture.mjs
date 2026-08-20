@@ -147,6 +147,21 @@ for (const cell of PLAN.cells) {
     cardRoot,
   );
   const text = rootCount > 0 ? (await page.locator(cardRoot).first().innerText()).replace(/\n{2,}/g, "\n") : "";
+  // THE ROOT'S OWN DECLARATION, read off the live DOM. cinatra#2841 gave the
+  // chip-row root the kind/host/state marks the capture contract identifies the
+  // card by, so the record states which `data-*` attributes the root ACTUALLY
+  // carries rather than asserting they are there.
+  const rootAttributes = await page.evaluate((rootSel) => {
+    const root = document.querySelector(rootSel);
+    if (!root) return [];
+    return [...root.attributes]
+      .filter((a) => a.name.startsWith("data-"))
+      .map((a) => (a.value ? `${a.name}="${a.value}"` : a.name));
+  }, cardRoot);
+  // The theme the picture was taken in, as the document reports it -- the cell
+  // ASKS for a colour scheme, the document ANSWERS with the class it resolved.
+  const themeClass = await page.evaluate(() => document.documentElement.className);
+
 
   const record = {
     cell: cell.cell,
@@ -174,6 +189,9 @@ for (const cell of PLAN.cells) {
     pixels: dims,
     sha256,
     observed,
+    colorScheme: cell.colorScheme ?? "light",
+    themeClass,
+    rootAttributes,
     chips,
     cardText: text.slice(0, 2000),
     pageErrors: [...pageErrors],
