@@ -5,14 +5,22 @@ import { chromium } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 
 const BASE = process.argv[2] || "http://localhost:3838";
-const OUT = process.argv[3] || "/Users/marcushorndt/cinatra-worktrees/x2838f-artifacts/session";
+// Session artifacts land in the repo's git-ignored `out/` by default; pass argv[3]
+// or set $CINATRA_PROOF_SESSION_DIR to put them elsewhere. No machine-specific
+// path is committed here.
+const OUT =
+  process.argv[3] ||
+  process.env.CINATRA_PROOF_SESSION_DIR ||
+  "out/2833-2835-notification-proofs/session";
 mkdirSync(OUT, { recursive: true });
 
 const ACTOR = {
   name: "Notification Proof Owner",
   username: "notifproof",
   email: "notif-proof@example.com",
-  password: "notif-proof-dev-12345",
+  // Fixture-only credential for a throwaway sign-up on a local dev stack — never a
+  // real secret, and never reused. Override with $CINATRA_PROOF_PASSWORD.
+  password: process.env.CINATRA_PROOF_PASSWORD || "fixture-only-not-a-secret",
 };
 
 const log = [];
