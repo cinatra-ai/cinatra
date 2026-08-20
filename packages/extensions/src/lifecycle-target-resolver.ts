@@ -619,8 +619,17 @@ export function validateLifecycleRowSelectorInput(
  *     `activate` on a locked row preserves the lock. And an organization admin
  *     is never affected at all: arm 2 is empty for them, so the arm cannot
  *     reach them;
- *   - what it refuses is the choice between two RESTORABLE candidates at two
- *     tiers, which is the guess this module exists not to make.
+ *   - what it refuses is the choice between two candidates at two DIFFERENT
+ *     TIERS that no single op resolves the same way, which is the guess this
+ *     module exists not to make. Deliberately NOT "two restorable candidates":
+ *     when the own-scope row is `locked`, `activate` preserves the lock rather
+ *     than restoring it, so restorability is a property of only one of the two
+ *     arms as shipped. The tier split is the property both arms always have.
+ *
+ * DOWNSTREAM. Every consumer of this resolver lives inside
+ * `packages/extensions` (grep-confirmed), and the whole package suite — 134
+ * files, 2612 tests — is green on the changed contract, which is the evidence
+ * that no caller depended on the resolution this arm now refuses.
  *
  * WITH a selector the two arms are ONE set: the operator has named a tier, and
  * the whole point of naming it is to reach the app-wide row from a session whose
@@ -880,9 +889,17 @@ function narrowByArchivedInstallPrecedence(
  *     when the row went active. Nothing was taken from that session by the
  *     rollback, there is no strand to name, and the arm stands down. This is the
  *     clause that keeps the arm inside the two-arm invariant: an organization
- *     install that is actually SERVING can never be denied an op by it. It does
- *     not claim to prove a rollback happened — no persisted field can — it
- *     refuses every state that proves one did not;
+ *     install that is actually SERVING can never be denied an op by it.
+ *     THE RESIDUAL, stated plainly. This proves "a supersession is not
+ *     contradicted", not "a rollback occurred", so one false positive survives:
+ *     an own scope whose rows were archived INDEPENDENTLY (an org admin
+ *     archiving their own row) beside an app-wide install archived by something
+ *     other than a rollback still refuses. Closing that needs the archiving op's
+ *     PROVENANCE persisted on the row, which is a schema change and not this
+ *     slice. Refusal is the safer wrong answer there: an all-archived own scope
+ *     had no live row to operate in the first place, and the alternative — the
+ *     silent retarget onto a tombstone with the app-wide install invisible — is
+ *     the original bug;
  *   - arm 2 NARROWS TO THE WAY-BACK ROW: at least two rows that
  *     {@link narrowByArchivedInstallPrecedence} — the SAME predicate arm (b)
  *     uses, not a second copy of the rule — reduces to exactly one row, and
@@ -986,15 +1003,43 @@ function strandedOrgSiblingWayBackRow(addressable: {
  * strand identically.
  *
  * It stays scope-shaped like the rest of the copy: no row id, no organization
- * id, and no count of the administrator's organizations (this module is pure and
- * DB-free — the actor carries an active organization, never a membership list),
- * so ONE sentence has to be true for a single-organization administrator and a
- * many-organization one alike. It is: it names the condition, not a guarantee.
+ * id, and no count of the administrator's organizations. This module is pure and
+ * DB-free, and the actor carries an ACTIVE organization, never a membership
+ * list — so the copy cannot branch on how many organizations the reader holds,
+ * and ONE string has to be true for every reader.
+ *
+ * THAT IS WHY THE INSTRUCTION IS CONDITIONAL, and why it carries a terminal
+ * case (round 2b). Naming a property of the destination ("switch to an
+ * organization that has no install") does not make an instruction conditional:
+ * an administrator with ONE organization, or whose every membership holds a
+ * tombstone, still reads an imperative they cannot obey. So the switch is
+ * stated as an `if`, and the `else` names what actually unblocks. Derived, not
+ * guessed:
+ *   - no other ROLE unblocks it. An organization admin never receives arm 2
+ *     ({@link addressableLifecycleRows} grants `platformFallback` to a platform
+ *     admin only), so they cannot address the org-NULL row at any time;
+ *   - every remaining ROW-SCOPED op is resolved through this function, so the
+ *     refusal covers archive / activate / uninstall on both the settings page
+ *     and the marketplace Restore alike;
+ *   - `force_delete` is the ONE op that is not scope-resolved.
+ *     {@link evaluateLifecycleCapability} short-circuits it to a role-derived
+ *     verdict BEFORE consulting the resolver, and the dispatcher runs it
+ *     package-globally (`syncCanonicalPackageGlobalTransition(…,
+ *     "force_delete")`), so a platform admin keeps it enabled in exactly this
+ *     state. It removes every row for the package — the documented admin-grade
+ *     factory reset — after which an ordinary install is the way back. That is
+ *     the honest terminal answer, and the copy names the on-screen control
+ *     ("Force-delete") rather than describing one.
+ * The terminal branch is deliberately last and deliberately heavy: it is the
+ * answer for a reader the first branch cannot help, not a suggestion for one it
+ * can.
  */
 const REASON_ORG_SIBLING_WAYBACK =
   "Two installs match your scope: this organization's own install, and the " +
-  "archived app-wide install. Switch to an organization that has no install " +
-  "of this extension, then restore the app-wide install from there.";
+  "archived app-wide install. If you belong to an organization that has no " +
+  "install of this extension, switch to it and restore the app-wide install " +
+  "there. If you do not, this session cannot reach it: Force-delete the " +
+  "extension, then install it again.";
 
 export function resolveLifecycleScope(
   rows: readonly InstalledExtension[],

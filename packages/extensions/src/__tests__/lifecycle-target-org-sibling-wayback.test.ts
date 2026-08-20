@@ -41,7 +41,11 @@ import {
 //     was not: the actor's org IS the session's active organization, a null one
 //     is written back by the session enrichment on the next request, and both
 //     organization switchers pass `hidePersonal`. The copy now names the SWITCH
-//     the product does offer, and the tests perform it.
+//     the product does offer, and the tests perform it. Round 2b made that
+//     instruction explicitly CONDITIONAL and gave it a terminal branch, because
+//     a single-organization administrator can obey neither an imperative nor a
+//     destination property: the `else` names `force_delete`, the one op that is
+//     role-gated ahead of the resolver and dispatched package-globally.
 //   - the ARM must key on a ROLLBACK. {live bundled, archived install} alone is
 //     also what a plain Archive, a soft Uninstall and a boot reconciliation
 //     leave, so the arm additionally requires that NO own-scope row is `active`
@@ -180,7 +184,7 @@ describe("the org-sibling strand is attributable, not silent", () => {
     const reason = !res.ok && res.code === "ambiguous_target" ? res.reason : undefined;
     expect(reason).toBeTruthy();
     expect(reason).toContain("app-wide install");
-    expect(reason).toContain("Switch to an organization");
+    expect(reason).toContain("switch to it");
   });
 
   it("is scope-shaped copy — never a row id, never an organization id", () => {
@@ -282,10 +286,39 @@ describe("the recovery the refusal names is PERFORMABLE (round 2)", () => {
   it("the copy names the SWITCH, never a session the product cannot produce", () => {
     const res = resolveLifecycleScope(stranded(), platformAdminInOrg);
     const reason = (!res.ok && res.code === "ambiguous_target" && res.reason) || "";
-    expect(reason).toContain("Switch to an organization");
+    expect(reason).toContain("switch to it");
     expect(reason).toContain("has no install of this extension");
     expect(reason.toLowerCase()).not.toContain("clear your active organization");
     expect(reason).not.toContain("no active organization");
+  });
+
+  it("the switch is CONDITIONAL, not an imperative a single-org admin cannot obey", () => {
+    // Round 2b: naming a property of the destination ("an organization that has
+    // no install") does not make the instruction conditional — an administrator
+    // with one organization still reads an order they cannot follow. The `if`
+    // has to be in the sentence.
+    const res = resolveLifecycleScope(stranded(), platformAdminInOrg);
+    const reason = (!res.ok && res.code === "ambiguous_target" && res.reason) || "";
+    expect(reason).toContain("If you belong to an organization");
+    expect(reason).toMatch(/If you belong to an organization[^.]*, switch to it/);
+  });
+
+  it("the copy carries a TERMINAL branch for the reader the switch cannot help", () => {
+    // The `else`, derived from the code rather than guessed: no other role can
+    // act (arm 2 is platform-admin-only), every row-scoped op resolves through
+    // this refusal, and `force_delete` is the one op that does not — it is
+    // role-gated ahead of the resolver and dispatched package-globally, so it
+    // stays enabled here and a fresh install follows it.
+    const rows = stranded();
+    const res = resolveLifecycleScope(rows, platformAdminInOrg);
+    const reason = (!res.ok && res.code === "ambiguous_target" && res.reason) || "";
+    expect(reason).toContain("If you do not");
+    expect(reason).toContain("Force-delete");
+    expect(reason).toContain("install it again");
+    // The terminal branch names an affordance that is genuinely still offered.
+    expect(evaluateLifecycleCapabilities(rows, platformAdminInOrg).force_delete.allowed).toBe(
+      true,
+    );
   });
 
   it("ANOTHER organization with no row resolves the archived install", () => {
@@ -320,7 +353,7 @@ describe("the recovery the refusal names is PERFORMABLE (round 2)", () => {
     );
     expect(!res.ok && res.code).toBe("ambiguous_target");
     expect(!res.ok && res.code === "ambiguous_target" && res.reason).toContain(
-      "Switch to an organization",
+      "switch to it",
     );
   });
 
@@ -533,26 +566,33 @@ describe("the arm keys on a ROLLBACK, not on a row combination (round 2)", () =>
   });
 
   it("ONE active own-scope row stands it down even beside a tombstone", () => {
-    // Arm 1 holds a tombstone AND a live row here, and the live row is what
-    // decides: the organization is serving the package right now, so nothing was
-    // taken from this session and no refusal may be introduced. Which of arm 1's
-    // rows then wins is the ORDINARY rule (arm (b) inside arm 1, unchanged) —
-    // the point is that arm 2 does not turn the resolution into a refusal.
-    const res = resolveLifecycleScope(
-      [
-        bundled(),
-        marketplace({ status: "archived" }),
-        supersededSibling(),
-        bundled({
-          id: "iext_org_live",
-          ownerLevel: "organization",
-          ownerId: "org-a",
-          organizationId: "org-a",
-        }),
-      ],
-      platformAdminInOrg,
-    );
+    // Arm 1 holds a tombstone AND a live row. The live row is what stands the
+    // ARM down — the organization is serving the package right now, so no
+    // refusal may be introduced. Which of arm 1's own rows then WINS is the
+    // ordinary rule, unchanged: arm (b) runs inside arm 1 and narrows the
+    // {live bundled, archived install} pair to the archived install.
+    const rows = [
+      bundled(),
+      marketplace({ status: "archived" }),
+      supersededSibling(),
+      bundled({
+        id: "iext_org_live",
+        ownerLevel: "organization",
+        ownerId: "org-a",
+        organizationId: "org-a",
+      }),
+    ];
+    const res = resolveLifecycleScope(rows, platformAdminInOrg);
     expect(res.ok).toBe(true);
+    // The wrong-TIER regression this guards: the winner must be an OWN-SCOPE
+    // row, never the org-NULL workspace install arm 2 holds. Asserting only
+    // `res.ok` would pass if the arm leaked a cross-tier target.
+    expect(res.ok && res.row.id).toBe("iext_org");
+    expect(res.ok && res.row.ownerLevel).toBe("organization");
+    expect(res.ok && res.row.organizationId).toBe("org-a");
+    expect(res.ok && res.row.id).not.toBe("iext_installed");
+    // …and the enforcement path lands on the same row.
+    expect(pickLifecycleTargetRow(rows, platformAdminInOrg).id).toBe("iext_org");
   });
 
   it("an ARCHIVED own-scope row DOES strand — the tombstone supersession leaves", () => {
@@ -572,7 +612,7 @@ describe("the arm keys on a ROLLBACK, not on a row combination (round 2)", () =>
     const res = resolveLifecycleScope(rows, platformAdminInOrg);
     expect(!res.ok && res.code).toBe("ambiguous_target");
     expect(!res.ok && res.code === "ambiguous_target" && res.reason).toContain(
-      "Switch to an organization",
+      "switch to it",
     );
     expect(evaluateLifecycleCapabilities(rows, platformAdminInOrg).activate.allowed).toBe(
       false,
