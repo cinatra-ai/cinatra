@@ -62,7 +62,7 @@
 // comment gets. A card with no comments says so rather than inventing one.
 // ---------------------------------------------------------------------------
 
-import { useMemo, type ReactElement } from "react";
+import { type ReactElement } from "react";
 import { ArrowRight, ScanSearch } from "lucide-react";
 
 import {
@@ -190,14 +190,6 @@ export function VerificationSummaryCard({
   const state = resolved?.state ?? null;
   const body: VerificationSummaryBody | null = resolved?.body ?? null;
 
-  // The authorized scope as a SET, for the per-row membership test below. Built
-  // from the same body the rows come from, so the mark can never disagree with
-  // the list the card printed above it.
-  const scope = useMemo(
-    () => new Set(body?.scopePaths ?? []),
-    [body?.scopePaths],
-  );
-
   // Nothing before an authorized resolve (S1's contract) — not even a skeleton.
   if (!present || state === null) return null;
   // The SECOND absence: `absent` is the collapse of every denial, and it draws
@@ -248,59 +240,19 @@ export function VerificationSummaryCard({
         <span title="repaired revision">{body.repairedRevisionId}</span>
       </div>
 
-      <AuthorizedScope paths={body.scopePaths} />
-      <FieldDiffTable rows={body.fieldDiff} scope={scope} />
+      <FieldDiffTable rows={body.fieldDiff} />
       <AdvisoryComments comments={body.advisoryComments} />
     </div>
   );
 }
 
 /**
- * The AUTHORIZED SCOPE (plan course correction, 2026-08-19).
- *
- * The review's scope manifest, drawn as itself: the closed set of paths the
- * accepted findings authorized the repair to change. It is printed BEFORE the
- * table because it is what the table is measured against — a reader who sees an
- * "out of scope" mark two rows down needs the authorization in view to know
- * what the mark is relative to.
- *
- * An EMPTY manifest is a real reading, not a missing one: a review that
- * accepted no field-scoped finding authorized no path, so every changed field
- * is drift. Saying that in a sentence is the honest rendering; drawing an empty
- * list would read as "no data".
- */
-function AuthorizedScope({ paths }: { paths: readonly string[] }): ReactElement {
-  return (
-    <div className="flex min-w-0 flex-col gap-1.5" data-verification-authorized-scope="">
-      <span className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
-        Authorized scope
-      </span>
-      {paths.length === 0 ? (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          The review authorized no field paths, so every change below is outside its scope.
-        </p>
-      ) : (
-        <ul className="flex flex-wrap gap-1.5">
-          {paths.map((path, index) => (
-            <li
-              // Positional, like the diff rows: the manifest is a bounded LIST,
-              // not a set, and nothing upstream de-duplicates it — a repeated
-              // path would otherwise collide on its React key.
-              key={`${index}:${path}`}
-              className="rounded-chip border border-line bg-surface-muted px-1.5 py-0.5 font-mono text-badge-2xs text-foreground"
-              data-authorized-path={path}
-            >
-              {path}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-/**
  * §VII's field-by-field BEFORE / AFTER — the columns of the authorized scope.
+ *
+ * THIS TABLE IS WHERE THE AUTHORIZATION IS DRAWN. The plan's binding correction
+ * asks the card's COPY and these BEFORE/AFTER COLUMNS to carry what the review
+ * authorized — and §VII draws no region listing the manifest — so the scope is
+ * read off the rows, not off a list above them.
  *
  * DISCLOSED AND OUT OF SCOPE ARE SEPARATE MARKS (§VII, verbatim): "a field may
  * be disclosed to the analysis and still lie outside what the review covered,
@@ -309,6 +261,13 @@ function AuthorizedScope({ paths }: { paths: readonly string[] }): ReactElement 
  * the AUTHORIZATION covered it. `data-diff-in-scope` records the same fact for
  * a machine, so a capture and a test read one answer.
  *
+ * THE MARK IS THE SERVER'S, NOT THIS COMPONENT'S (cinatra#2861). `row.inScope`
+ * arrives decided, against the review's WHOLE scope manifest. This card must
+ * not re-derive it: everything it receives has been through a bounded, clamped
+ * projection, and membership tested against a truncated manifest would mark an
+ * authorized field as drift — the card accusing a repair of going outside what
+ * a human authorized, on nothing but a ceiling.
+ *
  * `null` is the honest "this side had no value" and draws an em dash. A struck
  * BEFORE beside an identical AFTER is exactly how §VII draws an unmet finding —
  * the field was inspected and did not move — so the strike is not conditional
@@ -316,10 +275,8 @@ function AuthorizedScope({ paths }: { paths: readonly string[] }): ReactElement 
  */
 function FieldDiffTable({
   rows,
-  scope,
 }: {
   rows: readonly VerificationSummaryFieldDiff[];
-  scope: ReadonlySet<string>;
 }): ReactElement {
   return (
     <div
@@ -341,7 +298,7 @@ function FieldDiffTable({
           </thead>
           <tbody>
             {rows.map((row, index) => {
-              const inScope = scope.has(row.field);
+              const inScope = row.inScope;
               return (
                 <tr
                   // The body carries no row ids (they name nothing on screen),
@@ -383,18 +340,32 @@ function FieldDiffTable({
  * draws comment bodies verbatim (as React text nodes — never HTML) and adds no
  * provenance row of its own. An analysis with no comments says so; a card that
  * quietly omitted the section would drop the provenance without saying it had.
+ *
+ * THREE ANSWERS, NOT TWO (cinatra#2861). `null` is not `[]`. An empty list is a
+ * fact the server established — this analysis carries no comments — and the
+ * card states it. `null` means the comment store could not be read, and the
+ * card must NOT then state that fact: "no advisory comments on this audit"
+ * would assert an absence nobody checked, and it would do so about the one
+ * region §VII makes load-bearing (the provenance). So the failure gets its own
+ * line, and `data-advisory-unavailable` records it for a machine. The rest of
+ * the reading is untouched — the verdict and the diff were authorized, and one
+ * unread panel does not un-authorize them.
  */
 function AdvisoryComments({
   comments,
 }: {
-  comments: readonly VerificationSummaryAdvisoryComment[];
+  comments: readonly VerificationSummaryAdvisoryComment[] | null;
 }): ReactElement {
   return (
     <div className="flex min-w-0 flex-col gap-1.5" data-verification-advisory="">
       <span className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
         Advisory comments
       </span>
-      {comments.length === 0 ? (
+      {comments === null ? (
+        <p className="text-xs text-muted-foreground" data-advisory-unavailable="">
+          Advisory comments unavailable — they could not be read for this audit.
+        </p>
+      ) : comments.length === 0 ? (
         <p className="text-xs text-muted-foreground">No advisory comments on this audit.</p>
       ) : (
         <ul className="flex flex-col gap-1.5">

@@ -13,7 +13,6 @@ import {
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_INTERRUPT_KINDS,
   VERIFICATION_SUMMARY_MAX_FIELD_DIFF,
-  VERIFICATION_SUMMARY_MAX_SCOPE_PATHS,
   VERIFICATION_SUMMARY_PATH_MAX_LENGTH,
   VERIFICATION_SUMMARY_VALUE_MAX_LENGTH,
   VERIFICATION_SUMMARY_VIEW_VERSION,
@@ -34,10 +33,12 @@ const VERIFICATION_BODY: VerificationSummaryBody = {
   outcome: "drifted",
   reviewedRevisionId: "rev-base",
   repairedRevisionId: "rev-fixed",
-  scopePaths: ["content.title", "content.body"],
+  // The AUTHORIZATION rides on the ROW (cinatra#2861): the review authorized
+  // `content.title`, so `content.slug` is the out-of-scope drift. The manifest
+  // itself no longer travels — §VII draws no region for it.
   fieldDiff: [
-    { field: "content.title", before: "old", after: "new" },
-    { field: "content.slug", before: null, after: "new-slug" },
+    { field: "content.title", before: "old", after: "new", inScope: true },
+    { field: "content.slug", before: null, after: "new-slug", inScope: false },
   ],
   // §VII's advisory comments (epic S9, slice S9e) — the panel per comment the
   // card closes with, and the only place the reading's PROVENANCE travels.
@@ -108,6 +109,30 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         JSON.parse(JSON.stringify(wire)),
       ),
     ).toEqual({ ...wire, islandSrc: null });
+  });
+
+  it("verification_summary tells `null` advisory comments apart from none", () => {
+    // THREE ANSWERS, NOT TWO (cinatra#2861). `[]` is "this analysis carries no
+    // comments"; `null` is "the comment store could not be read". Both parse —
+    // it is the CARD's job to say which — and they must not collapse into each
+    // other on the wire. ABSENT stays illegal: a producer that forgot the
+    // provenance must not be indistinguishable from one that had none.
+    for (const advisoryComments of [[], null]) {
+      const wire = {
+        kind: "verification_summary",
+        state: { state: "advisory" },
+        body: { ...VERIFICATION_BODY, advisoryComments },
+      };
+      const parsed = parseLifecycleResolveEnvelope(
+        "verification_summary",
+        JSON.parse(JSON.stringify(wire)),
+      );
+      expect(parsed, JSON.stringify(advisoryComments)).not.toBeNull();
+      expect(parsed!.body!.advisoryComments).toEqual(advisoryComments);
+    }
+    const withoutTheField: Record<string, unknown> = { ...VERIFICATION_BODY };
+    delete withoutTheField.advisoryComments;
+    expect(verificationSummaryBodySchema.safeParse(withoutTheField).success).toBe(false);
   });
 
   it("trigger_schedule_proposal round-trips both §VI phases", () => {
@@ -221,9 +246,9 @@ describe("an unknown or undeclared kind fails closed", () => {
   it("refuses a body OVER the contract's ceilings", () => {
     const over = {
       ...VERIFICATION_BODY,
-      scopePaths: Array.from(
-        { length: VERIFICATION_SUMMARY_MAX_SCOPE_PATHS + 1 },
-        () => "p",
+      fieldDiff: Array.from(
+        { length: VERIFICATION_SUMMARY_MAX_FIELD_DIFF + 1 },
+        () => ({ field: "f", before: null, after: null, inScope: true }),
       ),
     };
     expect(verificationSummaryBodySchema.safeParse(over).success).toBe(false);
@@ -238,14 +263,14 @@ describe("an unknown or undeclared kind fails closed", () => {
     for (const body of [
       {
         ...VERIFICATION_BODY,
-        fieldDiff: Array.from(
-          { length: VERIFICATION_SUMMARY_MAX_FIELD_DIFF + 1 },
-          () => ({ field: "f", before: null, after: null }),
-        ),
-      },
-      {
-        ...VERIFICATION_BODY,
-        scopePaths: ["p".repeat(VERIFICATION_SUMMARY_PATH_MAX_LENGTH + 1)],
+        fieldDiff: [
+          {
+            field: "p".repeat(VERIFICATION_SUMMARY_PATH_MAX_LENGTH + 1),
+            before: null,
+            after: null,
+            inScope: true,
+          },
+        ],
       },
       {
         ...VERIFICATION_BODY,
@@ -254,6 +279,7 @@ describe("an unknown or undeclared kind fails closed", () => {
             field: "f",
             before: "b".repeat(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH + 1),
             after: null,
+            inScope: true,
           },
         ],
       },

@@ -38,10 +38,14 @@ const BODY: VerificationSummaryBody = {
   outcome: "drifted",
   reviewedRevisionId: "rev-base",
   repairedRevisionId: "rev-repaired",
-  scopePaths: ["subject", "body"],
   fieldDiff: [
-    { field: "bcc", before: null, after: "legal@evil.test" },
-    { field: "subject", before: "Reengage Q3 churned cohort", after: "Win back your Q3 favourites" },
+    { field: "bcc", before: null, after: "legal@evil.test", inScope: false },
+    {
+      field: "subject",
+      before: "Reengage Q3 churned cohort",
+      after: "Win back your Q3 favourites",
+      inScope: true,
+    },
   ],
   advisoryComments: [
     { authorKind: "service", body: "Core analysis of 3 disclosed field(s)." },
@@ -80,18 +84,13 @@ describe("the review page reuses the ONE §VII core", () => {
     // Every §VII anchor, drawn by the card rather than by the page.
     // Kept in step with `VERIFICATION_CORE_ANCHORS` in the one-card gate —
     // mirrored rather than imported because that module is a Node audit script.
-    for (const anchor of [
-      "chrome",
-      "outcome",
-      "revisions",
-      "authorized-scope",
-      "field-diff",
-      "advisory",
-    ]) {
+    for (const anchor of ["chrome", "outcome", "revisions", "field-diff", "advisory"]) {
       expect(card.querySelector(`[data-verification-${anchor}]`), anchor).not.toBeNull();
     }
-    // …and the reading itself is the card's, not the page's: the authorized
-    // scope, the pinned revisions and the out-of-scope mark all come through.
+    // …and no region §VII does not draw (cinatra#2861).
+    expect(card.querySelector("[data-verification-authorized-scope]")).toBeNull();
+    // …and the reading itself is the card's, not the page's: the pinned
+    // revisions and the out-of-scope mark both come through.
     expect(card.textContent).toContain("rev-base");
     expect(card.textContent).toContain("rev-repaired");
     expect(card.textContent).toContain("out of scope");

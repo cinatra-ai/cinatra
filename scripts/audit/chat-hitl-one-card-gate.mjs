@@ -157,8 +157,12 @@ export function cardDefinitionPattern(component) {
  * the ban can never go vacuous by the anchors quietly disappearing).
  *
  * They are the sections §VII names: the Core-analysis chrome, the outcome pill,
- * the REVISION PINS, the authorized-scope region, the field-by-field
- * before/after, and the advisory comments.
+ * the REVISION PINS, the field-by-field before/after, and the advisory
+ * comments. §VII draws no authorized-scope region — the plan's own binding
+ * correction puts the authorization in the card's copy and in the before/after
+ * columns — so there is no anchor for one, and an "authorized-scope" anchor
+ * appearing anywhere would be a region outside the closed set rather than a
+ * parallel drawing of one inside it (cinatra#2861).
  *
  * `revisions` is in this list and must stay: the two revision pins are §VII
  * CORE, not a page adjunct. The page's own ruling names exactly two adjuncts —
@@ -174,7 +178,6 @@ export const VERIFICATION_CORE_ANCHORS = Object.freeze([
   "chrome",
   "outcome",
   "revisions",
-  "authorized-scope",
   "field-diff",
   "advisory",
 ]);
@@ -237,10 +240,10 @@ export const RETIRED_PARALLELS = Object.freeze([
     // composition — so banning its name would ban the right answer. What may
     // not come back is the DRAWING, and the drawing is identified by the
     // structural anchors §VII's core carries: the Core-analysis chrome, the
-    // outcome pill, the REVISION PINS, the authorized-scope region, the
-    // before/after table and the advisory-comment list — every section the
-    // history above says the page used to draw, because the ban and that
-    // history have to name the same drawing or the ban has a hole in it.
+    // outcome pill, the REVISION PINS, the before/after table and the
+    // advisory-comment list — every section the history above says the page
+    // used to draw, because the ban and that history have to name the same
+    // drawing or the ban has a hole in it.
     // Emitting any of those outside the owner module is a second §VII renderer
     // whatever it is called — which also catches the look-alike that R1's name
     // patterns structurally cannot see.

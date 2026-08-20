@@ -183,15 +183,32 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
   // an entry would silently shrink what they check rather than fail anything —
   // which is how `revisions` sat outside the ban until cinatra#2861 restored
   // it. This is the one assertion a deletion cannot pass through.
-  it("pins §VII's core to SIX anchors — dropping one is a hole, not a smaller list", () => {
+  //
+  // `authorized-scope` is NOT among them, and that is the other direction of
+  // the same discipline (cinatra#2861): §VII draws five regions, and the plan's
+  // binding correction puts the authorization in the card's copy and its
+  // before/after columns rather than in a region of its own. An anchor for a
+  // region the spec does not draw would make the ban certify a drawing outside
+  // the closed set.
+  it("pins §VII's core to FIVE anchors — dropping one is a hole, adding one is a region", () => {
     expect([...VERIFICATION_CORE_ANCHORS].sort()).toEqual([
       "advisory",
-      "authorized-scope",
       "chrome",
       "field-diff",
       "outcome",
       "revisions",
     ]);
+    expect(VERIFICATION_CORE_ANCHORS).not.toContain("authorized-scope");
+  });
+
+  it("NO module in the tree draws an authorized-scope region — §VII has none", () => {
+    // The region the round asked to be removed, pinned as absent from the whole
+    // first-party tree rather than just from the card: it is not a parallel
+    // drawing to be banned, it is a region the spec does not have.
+    const emitters = collectFiles().filter((rel) =>
+      read(rel).includes("data-verification-authorized-scope"),
+    );
+    expect(emitters).toEqual([]);
   });
 
   it("the owner module emits EVERY §VII anchor — the ban is not vacuous", () => {

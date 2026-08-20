@@ -64,13 +64,23 @@ const BODY: VerificationSummaryBody = {
   outcome: "drifted",
   reviewedRevisionId: "rev-base",
   repairedRevisionId: "rev-repaired",
-  // The AUTHORIZED SCOPE — the review's scope manifest. `bcc` is deliberately
-  // NOT in it, so the diff row below is out-of-scope drift.
-  scopePaths: ["subject", "body"],
+  // The AUTHORIZATION arrives ON THE ROW (cinatra#2861) — the server decided it
+  // against the review's whole scope manifest. `bcc` was not authorized, so
+  // that row is out-of-scope drift.
   fieldDiff: [
-    { field: "bcc", before: null, after: "legal@evil.test" },
-    { field: "body", before: "Old body copy.", after: "Fresh re-engagement copy." },
-    { field: "subject", before: "Reengage Q3 churned cohort", after: "Win back your Q3 favourites" },
+    { field: "bcc", before: null, after: "legal@evil.test", inScope: false },
+    {
+      field: "body",
+      before: "Old body copy.",
+      after: "Fresh re-engagement copy.",
+      inScope: true,
+    },
+    {
+      field: "subject",
+      before: "Reengage Q3 churned cohort",
+      after: "Win back your Q3 favourites",
+      inScope: true,
+    },
   ],
   advisoryComments: [
     {
@@ -131,9 +141,13 @@ describe("one renderer, every host (§IX)", () => {
       expect(root.querySelector('[data-verification-chrome="Core analysis"]')).not.toBeNull();
       expect(root.querySelector("[data-verification-outcome]")).not.toBeNull();
       expect(root.querySelector("[data-verification-revisions]")).not.toBeNull();
-      expect(root.querySelector("[data-verification-authorized-scope]")).not.toBeNull();
       expect(root.querySelector("[data-verification-field-diff]")).not.toBeNull();
       expect(root.querySelector("[data-verification-advisory]")).not.toBeNull();
+      // …and NO region §VII does not draw. The plan's binding correction puts
+      // the authorization in the copy and the before/after columns, so an
+      // "Authorized scope" region is a region outside §VII's closed set.
+      expect(root.querySelector("[data-verification-authorized-scope]")).toBeNull();
+      expect(root.textContent).not.toContain("Authorized scope");
     });
 
     it(`draws NO card DOM at all on ${host} when the resolve answers absent`, async () => {
@@ -242,40 +256,52 @@ describe("§VII — the reading", () => {
     );
   });
 
-  it("lists the AUTHORIZED SCOPE — the review's manifest, not a skills list", async () => {
+  it("carries the AUTHORIZATION in the copy and the columns — never as a region of its own", async () => {
+    // Plan §8 binding correction, as a property of the DRAWING. §VII names five
+    // regions and an authorized-scope list is not one of them, so the manifest
+    // is NOT drawn as itself: the card's COPY says what the reading is measured
+    // against, and the before/after COLUMNS say it row by row.
     mockResolve({ state: "advisory" });
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
-      expect(container.querySelector("[data-verification-authorized-scope]")).not.toBeNull(),
+      expect(container.querySelector('[data-conformance-id="verification-card"]')).not.toBeNull(),
     );
-    const region = container.querySelector<HTMLElement>(
-      "[data-verification-authorized-scope]",
-    )!;
-    expect(region.textContent).toContain("Authorized scope");
-    const paths = [...region.querySelectorAll("[data-authorized-path]")].map(
-      (el) => (el as HTMLElement).dataset.authorizedPath,
-    );
-    expect(paths).toEqual(["subject", "body"]);
+    expect(container.querySelector("[data-verification-authorized-scope]")).toBeNull();
+    expect(container.querySelector("[data-authorized-path]")).toBeNull();
+    // The COPY names the authorization…
+    expect(container.textContent).toContain("the review never authorized");
+    // …and the COLUMNS carry it, per row.
+    expect(container.querySelector<HTMLElement>('[data-diff-field="bcc"]')!.dataset.diffInScope)
+      .toBe("false");
     // The course correction (2026-08-19), as a property of the DRAWING: nothing
     // on this card presents the agent's skills as the thing verified.
     expect(container.textContent!.toLowerCase()).not.toContain("skill");
   });
 
-  it("says so plainly when the review authorized no paths at all", async () => {
-    mockResolve({ state: "advisory" }, { ...BODY, scopePaths: [] });
+  it("takes the in-scope mark from the ROW and never re-derives it", async () => {
+    // cinatra#2861: the mark is decided on the server against the WHOLE scope
+    // manifest. If this card recomputed it from anything it received, a body
+    // whose rows disagree with a naive re-derivation would draw the card's
+    // answer instead of the server's — and a false "out of scope" accuses a
+    // repair of drift a human had authorized. So the row wins, both ways.
+    mockResolve(
+      { state: "advisory" },
+      {
+        ...BODY,
+        fieldDiff: [
+          { field: "bcc", before: null, after: "legal@evil.test", inScope: true },
+          { field: "body", before: "Old.", after: "New.", inScope: false },
+        ],
+      },
+    );
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
-      expect(container.querySelector("[data-verification-authorized-scope]")).not.toBeNull(),
+      expect(container.querySelector("[data-verification-field-diff]")).not.toBeNull(),
     );
-    const region = container.querySelector<HTMLElement>(
-      "[data-verification-authorized-scope]",
-    )!;
-    expect(region.textContent).toContain("authorized no field paths");
-    expect(region.querySelector("[data-authorized-path]")).toBeNull();
-    // With nothing authorized, EVERY row is drift.
-    for (const row of container.querySelectorAll("[data-diff-field]")) {
-      expect((row as HTMLElement).dataset.diffInScope).toBe("false");
-    }
+    const rows = [...container.querySelectorAll<HTMLElement>("[data-diff-field]")];
+    expect(rows.map((r) => r.dataset.diffInScope)).toEqual(["true", "false"]);
+    expect(rows[0]!.textContent).not.toContain("out of scope");
+    expect(rows[1]!.textContent).toContain("out of scope");
   });
 
   it("draws the field-by-field before/after and marks drift IN PLACE", async () => {
@@ -332,6 +358,28 @@ describe("§VII — the reading", () => {
     );
     expect(container.querySelector("[data-advisory-comment]")).toBeNull();
     expect(container.textContent).toContain("No advisory comments");
+  });
+
+  it("says the panel is UNAVAILABLE when the store failed — not that there are none", async () => {
+    // The loop's own honesty doctrine (cinatra#2861). `null` is the resolver
+    // saying it could not read the comment store; "No advisory comments on this
+    // audit" asserts an absence nobody established — and about the one region
+    // §VII makes load-bearing, since the reading's provenance lives there. The
+    // failure gets its own line, and the rest of the reading is untouched.
+    mockResolve({ state: "advisory" }, { ...BODY, advisoryComments: null });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector("[data-verification-advisory]")).not.toBeNull(),
+    );
+    expect(container.querySelector("[data-advisory-unavailable]")).not.toBeNull();
+    expect(container.textContent).toContain("Advisory comments unavailable");
+    expect(container.textContent).not.toContain("No advisory comments");
+    expect(container.querySelector("[data-advisory-comment]")).toBeNull();
+    // The card still draws: a store that lost one panel did not un-authorize
+    // the verdict or the diff.
+    expect(container.querySelector('[data-conformance-id="verification-card"]')).not.toBeNull();
+    expect(container.querySelector("[data-verification-outcome]")).not.toBeNull();
+    expect(container.querySelectorAll("[data-diff-field]")).toHaveLength(3);
   });
 
   it("renders a comment body as TEXT, never as markup", async () => {
