@@ -33,7 +33,14 @@
     "ONLY chat_thread RECORDS ARE HERE, on purpose. #2863 also photographed the review page's gate",
     "region; those records live at evidence/2852-before-after/capture-records.json, because the",
     "contract's `review_page` URL class (/^\\/agents\\/reviews/) does not describe the shipped",
-    "gate-region route. That is a defect in the class, not in the picture."
+    "gate-region route. That is a defect in the class, not in the picture.",
+    "IT IS EMPTY ON PURPOSE. Adopting the earlier S7 captures would be exactly the fabrication",
+    "this index exists to refuse: that run never looked for [data-conversation-list], so writing a",
+    "count for it would be inventing an observation nobody made. The records arrive from one run",
+    "of the recorder against a live app, which belongs to the canonical re-capture slice",
+    "(#2791, S9g). Until then the two chat cells are grandfathered findings in the rollout policy.",
+    "POPULATED 2026-08-20 by cinatra#2754 (PR #2870): three site_widget records from ONE run of the recorder against the live app on a genuinely cross-site host page. Each was validated by scripts/ci/lib/capture-record-contract.mjs before it was written here and each came back record/ok; the round-specific observations (the island document's own anchors and the described frame address) stay in evidence/2754-island-wire/capture-records.json rather than being smuggled into the contract shape.",
+    "A CONCURRENT BRANCH ALSO POPULATES THIS FILE: cinatra#2852 (PR #2863) adds two chat_thread records. The two sets are disjoint and both are real; whichever merges second must KEEP BOTH arrays rather than take one side."
   ],
   "recorder": "chat-hitl-capture-recorder@1",
   "records": [
@@ -436,6 +443,204 @@
       "recordedAt": "2026-08-19T23:54:48.498Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
       "note": "RE-SHOT. The chat-hosted row with one chip dismissed - the same two drawn states on the second host, from the one renderer, with the count line in the decision floor on this host too."
+    },
+    {
+      "cell": "C1__review-card__site_widget__pending",
+      "declaredHost": "site_widget",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2754-island-wire/captures/C1__review-card__site_widget__pending.png",
+      "sha256": "8c129c24a727cd03e1706ade60e1960c456a7de5006ca6572f8affdb00397094",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-island\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-island-load-state=\"loaded\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"] iframe",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T05:58:18.428Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
+      "note": "The review card in the embedded conversation column on a THIRD-PARTY page, with the target island PAINTED inside the frame. The island document is authenticated by the server-minted `?ic=` credential alone: the island document request carried no cookie (see `wire`)."
+    },
+    {
+      "cell": "C2__review-card__site_widget__pending",
+      "declaredHost": "site_widget",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2754-island-wire/captures/C2__review-card__site_widget__pending.png",
+      "sha256": "69e4d235d786dd0f129b32caa601d3356a29fee9c31fa85e8e7098baf9a678fa",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-island\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-island-load-state=\"loaded\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"] iframe",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T05:58:21.024Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
+      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out \u2014 they are sealed bearer strings \u2014 so each is reported by length, url-safe shape and a truncated digest."
+    },
+    {
+      "cell": "C3__review-card__site_widget__pending",
+      "declaredHost": "site_widget",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2754-island-wire/captures/C3__review-card__site_widget__pending.png",
+      "sha256": "524da8a0245f241988da20d1cafae2920594c27669a5e793ff07e66db52e2b68",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-target-island\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-island-load-state=\"loaded\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"] iframe",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T05:58:29.104Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
+      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL \u2014 the single empty-island element every denial draws, which is why the framed region is blank \u2014 and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
     }
   ]
 }
