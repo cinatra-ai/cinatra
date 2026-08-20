@@ -57,10 +57,29 @@ Run `b6a72fe7-2dbf-4ad9-b911-1314c7ae12d2`, park
 |---|---|---|
 | 1. the hold parks and writes | (staging output) | `hold: {"held":true,"parkId":"52040b57-…","reason":"core default fires recommendation"}`, park `{"status":"parked","holdNotification":"live"}` — and the row it names: title `A run needs your input`, `holdParkId = 52040b57-…` |
 | 2. the bell carries a badge | `cells/2835-bell.png`, `cells/2835-bell-page.png` | `bell anchors: {"present":true,"ariaLabel":"Notifications, 3 need your attention","badgeText":"3"}` |
-| 3. the list carries the entry | `cells/2835-list.png` | `feed anchors: … {"title":"A run needs your input","href":"/agents/cinatra-ai/blog-draft-writer-agent/b6a72fe7-…","stamp":"8/19/2026, 5:04:40 PM"}` — the copy the #2729 ruling gives an unanswered input field |
-| 4. the entry opens the held card | `cells/2835-click-through.png`, `cells/2835-hold-card.png` | `landed on: …/b6a72fe7-…` → `landing conformance ids: [… "run-chip-row"]`; `chip-row anchors before the decision: {"chipRowPresent":true,"chips":[{"skillId":"@cinatra-ai/chat:blog-content","selected":"false"}],"buttons":[… "Confirm","Skip"]}` |
+| 3. the list carries the entry | `cells/2835-list.png` | `feed anchors: … {"title":"A run needs your input","href":"/agents/cinatra-ai/blog-draft-writer-agent/b6a72fe7-…","stamp":"8/19/2026, 5:04:40 PM"}` — the title the #2729 ruling gives an unanswered input wait (see the body-line note below) |
+| 4. the entry opens the held card | `cells/2835-click-through.png` (one frame; see note) | `landed on: …/b6a72fe7-…` → `landing conformance ids: [… "run-chip-row"]`; `chip-row anchors before the decision: {"chipRowPresent":true,"chips":[{"skillId":"@cinatra-ai/chat:blog-content","selected":"false"}],"buttons":[… "Confirm","Skip"]}` |
 | 5. Confirm settles the card | `cells/2835-hold-confirmed.png` | `chip-row anchors after the decision: {"chipRowPresent":false, …}`; the park reads `released \| cleared` |
 | 6. the row is gone | `cells/2835-row-gone.png` | `rows still pointing at 2835: 0` — the `5:04:40 PM` "A run needs your input" row is absent |
+
+**Step 4 is ONE frame, not two.** The click-through lands on the run page and the
+held card is rendered in that same viewport, so a single capture carries both the
+landing and the card. `cells/2835-hold-card.png` is a byte-identical copy of
+`cells/2835-click-through.png` (same md5), kept only because the cell was named
+before the shot was taken. It is one picture; an earlier revision of this table
+listed it as two, which overstated the count.
+
+**The body line in `cells/2835-list.png` is PRE-correction copy.** These cells were
+shot at `36c76ad7`, where the hold's row read *"Open the run to fill in the
+requested fields."* — a line that named fields the destination has not got. That
+body was corrected later in this branch (cinatra#2838 review round) to describe
+the confirm-or-skip decision the card actually offers, so the row at branch head
+reads a different second line than the one visible in this screenshot. Nothing
+else moved: the title, the `href`, the per-run dedupe key, the park stamp, and the
+appears/click-through/goes-away mechanism these proofs exist to demonstrate are
+all unchanged, and the log lines beside every cell record title + href + stamp
+(never the body), so the anchors quoted in this table still hold verbatim at head.
+The current wording is INTERIM — the final copy is the epic's reserved decision.
 
 ### The clear removed its OWN row, and only that one
 
