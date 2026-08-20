@@ -19,12 +19,27 @@
  *      durable `agent_run` dispatch result for the recommendation case, which is
  *      deliberately NOT an envelope. Both the AG-UI events and `durableContent()`
  *      are captured from that one drive.
- *   2. THE REAL STORE. The user's turn lands through the real legacy-mirror
- *      writer (`upsertChatThreadInDatabase`) — `/chat` persists the user message
- *      before it routes, so that save is the one that has already landed when the
- *      assistant turn begins. The assistant turn lands the way the STREAM ROUTE
- *      lands it: `appendAssistantTurn` + `updateAssistantTurn(…, { content:
- *      durableContent() })`. Nothing else writes.
+ *   2. THE REAL STORE. The user's turn lands through the shipped legacy-mirror
+ *      PROJECTION — `buildAssistantThreadMirrorQueries`, run in one transaction
+ *      with the org anchor and schema `upsertChatThreadInDatabase` passes it.
+ *      Named precisely, because the seam matters: this tier drives the mirror
+ *      the writer runs, NOT the writer wrapper. The wrapper is not importable
+ *      here — `src/lib/__tests__/chat-capture-enqueue-hook.test.ts` records the
+ *      same limit for the same reason ("importing database.ts pulls the full
+ *      sync-pg module graph, which unit tests cannot boot"), and its lazy
+ *      `require("@/lib/...")` of the builders is resolved by the BUNDLER, which
+ *      no vitest alias governs. So the gap between "the mirror" and "the writer"
+ *      is closed the way that suite closes its own: by the source-level tripwire
+ *      `the shipped writer still runs the mirror this tier drives`, below, which
+ *      reds the moment `upsertChatThreadInDatabase` stops composing this builder.
+ *      What the wrapper adds on top is the artifact-ref pin sync (nothing to sync
+ *      for an attachment-less transcript) and a post-commit chat-capture enqueue
+ *      (a detection job) — neither on the path from a card to the screen.
+ *      `/chat` persists the user message before it routes, so that save is the
+ *      one that has already landed when the assistant turn begins. The assistant
+ *      turn lands the way the STREAM ROUTE lands it: `appendAssistantTurn` +
+ *      `updateAssistantTurn(…, { content: durableContent() })`. Nothing else
+ *      writes.
  *   3. NO REDIS, NO CLIENT MEMORY. The reload is `reconstructThreadPayload` and
  *      nothing else. The AG-UI log is never read (it is Redis, and a reload does
  *      not have it); the client's own whole-transcript save is never made for the
@@ -61,6 +76,8 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import React from "react";
 import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
@@ -347,18 +364,16 @@ function persistThroughTheRealStore(args: {
   userText: string;
   runId: string;
   durable: AgUiTurnDurableContent;
-}): void {
+}): { userMessage: { id: string; role: "user"; content: string } } {
   const now = new Date().toISOString();
   // A user message: no `parts`, no `dataParts`, nothing this file could use to
   // smuggle render state past the reload.
   const userMessage = { id: `u-${randomUUID()}`, role: "user" as const, content: args.userText };
-  // The SHIPPED mirror projection, driven exactly as `upsertChatThreadInDatabase`
-  // drives it (same builder, same schema, same one transaction). The wrapper
-  // itself is not called because its other half is the ARTIFACT-REF pin sync — a
-  // different subsystem, with nothing to sync for an attachment-less transcript,
-  // reached through a `require()` of a server-graph module this DOM-hosted tier
-  // has no business loading. What is under test is the mirror, and this is the
-  // mirror.
+  // THE MIRROR PROJECTION `upsertChatThreadInDatabase` RUNS, driven directly:
+  // the same builder, the same schema, the same one transaction, with the org
+  // anchor the wrapper would pass. It is NOT the wrapper itself — the describe
+  // "the shipped writer still runs the mirror this tier drives" is what keeps
+  // that sentence true rather than merely asserted.
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
@@ -387,6 +402,48 @@ function persistThroughTheRealStore(args: {
     status: "running",
   });
   updateAssistantTurn(turn.id, { status: "completed", content: args.durable });
+  return { userMessage };
+}
+
+/**
+ * A LATER whole-transcript save that does not carry the assistant turn — the
+ * stale/divergent tab of cinatra#2823 codex round 2, F2.
+ *
+ * The save is best-effort, silent and LAST-WRITER-WINS, and it posts the WHOLE
+ * transcript. So a tab whose transcript never received the assistant turn can
+ * still save a LATER user message on top of it, and the mirror reconcile will
+ * happily write a spine that is no longer a prefix of the conversation: the turn
+ * that is missing from it is one from the MIDDLE, not the end.
+ *
+ * Written through the same shipped mirror projection as the first save, so the
+ * spine's own `created_at` stamps are the ones production would have — which is
+ * the whole point of running this arm against a real database rather than
+ * against a hand-timestamped fixture.
+ */
+function saveAStaleTranscriptCarryingALaterTurn(args: {
+  threadId: string;
+  keptMessages: Array<{ id: string; role: "user"; content: string }>;
+  laterText: string;
+}): { laterMessageId: string } {
+  const now = new Date().toISOString();
+  const laterMessage = { id: `u-${randomUUID()}`, role: "user" as const, content: args.laterText };
+  runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: buildAssistantThreadMirrorQueries({
+      schemaName: postgresSchema,
+      thread: {
+        id: args.threadId,
+        title: args.laterText,
+        messages: [...args.keptMessages, laterMessage],
+        createdAt: now,
+        updatedAt: now,
+        ownerUserId: OWNER_ID,
+      },
+      explicitMirrorOrgId: ORG_ID,
+    }),
+  });
+  return { laterMessageId: laterMessage.id };
 }
 
 // ---------------------------------------------------------------------------
@@ -706,6 +763,74 @@ afterEach(() => {
 
 afterAll(() => {
   carried.clear();
+});
+
+describe("a stale save cannot push a turn out of its place in time", () => {
+  // cinatra#2823 codex round 2, F2. The fold-in used to APPEND, on the claim
+  // that the spine is always a PREFIX of the conversation. Nothing enforces that
+  // claim: the whole-transcript save is last-writer-wins, so this arm builds the
+  // spine production would actually have after a divergent tab saves — one that
+  // carries a LATER user message but not the assistant turn between — and
+  // requires the reload to put the turn back where the SERVER's clock says it
+  // happened, not at the end.
+  //
+  // It runs on the real database ON PURPOSE: the placement is made against the
+  // spine's own `assistant_turns.created_at`, which is written by the mirror
+  // reconcile's SQL and deliberately preserved by its `ON CONFLICT DO UPDATE`.
+  // A fixture with hand-written timestamps would prove the comparison and not
+  // the thing being compared.
+  it("folds the turn back into the MIDDLE of a spine that is no longer a prefix", async () => {
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-stale-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: `Please handle the ${carriage.kind} case.`,
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    const { laterMessageId } = saveAStaleTranscriptCarryingALaterTurn({
+      threadId,
+      keptMessages: [userMessage],
+      laterText: "and now something else entirely",
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    refuseHandBuiltRenderState(reloaded, threadId);
+    const assistant = reloadedAssistantTurn(reloaded);
+    expect(assistant, "the reload brought back no assistant turn at all").not.toBeNull();
+    expect(reloaded.map((m) => m.id)).toEqual([userMessage.id, assistant!.id, laterMessageId]);
+    // ...and the card it came back in the middle WITH is still the sink's own.
+    expect(assistant!.dataParts ?? []).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+    ]);
+  });
+});
+
+describe("the shipped writer still runs the mirror this tier drives", () => {
+  // The one claim in this file that its own drive cannot make (see §2 of the
+  // header): the tier persists the user's turn through
+  // `buildAssistantThreadMirrorQueries`, and the sentence "that is what
+  // production writes" is only true while `upsertChatThreadInDatabase` composes
+  // that same builder. SOURCE-LEVEL, exactly as
+  // `src/lib/__tests__/chat-capture-enqueue-hook.test.ts` pins its own
+  // chokepoint property and for the identical stated reason — importing
+  // database.ts pulls the full sync-pg graph, and its builder reach is a lazy
+  // `require()` the bundler resolves and no vitest alias does. The point is not
+  // to re-test the builder; it is that this file can no longer describe a seam
+  // it has quietly stopped sharing with production.
+  it("upsertChatThreadInDatabase still composes buildAssistantThreadMirrorQueries", () => {
+    const source = readFileSync(path.join(process.cwd(), "src/lib/database.ts"), "utf8");
+    const fnStart = source.indexOf("export function upsertChatThreadInDatabase(");
+    expect(fnStart).toBeGreaterThan(-1);
+    // Bounded to this function, so an unrelated call site cannot satisfy it.
+    const nextExport = source.indexOf("\nexport function", fnStart + 1);
+    const body = source.slice(fnStart, nextExport === -1 ? undefined : nextExport);
+    expect(body).toContain("buildAssistantThreadMirrorQueries({");
+    // ...and still runs it in ONE transaction, which is the other half of what
+    // `persistThroughTheRealStore` reproduces.
+    expect(body).toContain("transaction: true");
+  });
 });
 
 describe("the ruled carriage table is the one this contract drives", () => {
