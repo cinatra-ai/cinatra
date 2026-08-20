@@ -1089,6 +1089,7 @@ describe("finding 3 — the card root declares its kind, its host and its state"
         initialRecommendations={[]}
         decision={{
           kind: "confirmed",
+          skillNames: ["Draft email"],
           decided: [{ skillId: "skill-draft", name: "Draft email", mark: "confirmed" }],
         }}
       />,
