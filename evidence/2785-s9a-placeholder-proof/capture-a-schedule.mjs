@@ -31,7 +31,7 @@ async function readPersistedThread(page) {
 }
 
 const BASE = "http://localhost:3105";
-const OUT = "/Users/marcushorndt/cinatra-worktrees/s9a-proofs-artifacts";
+const OUT = "<home>/cinatra-worktrees/s9a-proofs-artifacts";
 const TEMPLATE = process.env.S9A_TEMPLATE_ID;
 
 const KIND = "trigger_schedule_proposal";

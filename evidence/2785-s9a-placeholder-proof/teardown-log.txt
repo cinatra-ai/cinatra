@@ -4,7 +4,7 @@ before:
   volumes:    2 -> s9aproofcap_s9aproofcap-postgres s9aproofcap_s9aproofcap-redis 
   networks:   1 -> s9aproofcap-net 
   dev server on port 3105:
-    [dev:stop] SIGTERM -> 94915 (node /Users/marcushorndt/cinatra-worktrees/s9a-proofs/node_m)
+    [dev:stop] SIGTERM -> 94915 (node <home>/cinatra-worktrees/s9a-proofs/node_m)
     [dev:stop] SIGTERM -> 94914 (node scripts/dev-server.mjs)
     [dev:stop] SIGTERM -> 94921 (next-server (v<redacted: framework version token, removed for the source-leak gate>))
     [dev:stop] port 3105 released. clean stop.
@@ -29,4 +29,4 @@ after:
   port 3105 listening: 0
 the operator's project, untouched throughout:
   NAME                STATUS              CONFIG FILES
-  cinatra_cinatra     running(7)          /Users/marcushorndt/cinatra/docker-compose.yml,/Users/marcushorndt/cinatra/docker-compose.dev.yml
+  cinatra_cinatra     running(7)          <home>/cinatra/docker-compose.yml,<home>/cinatra/docker-compose.dev.yml

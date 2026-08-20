@@ -15,7 +15,7 @@ import { chromium } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const BASE = "http://localhost:3105";
-const OUT = "/Users/marcushorndt/cinatra-worktrees/s9a-proofs-artifacts";
+const OUT = "<home>/cinatra-worktrees/s9a-proofs-artifacts";
 const SEED_TOKEN = readFileSync(`${OUT}/.seed-token`, "utf8").trim();
 const ORG = "7bddfe3f-4d00-4f8c-858a-42931e662627";
 const ACTOR = "a0e562f7-fae5-4a5f-ae2a-669835336c4f";
