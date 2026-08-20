@@ -12,8 +12,9 @@
  *
  * So the assertions here are about the repository:
  *
- *   1. The chip's spec anchors (`suggestion-chip-rest|accepted|dismissed`) are
- *      emitted by exactly ONE production module — the one card.
+ *   1. The suggestion's spec anchors (`suggestion-accepted|dismissed`, plus the
+ *      history-only `suggestion-unrecorded`) are emitted by exactly ONE
+ *      production module — the one card.
  *   2. That module is the one the review PAGE, the run CARD and the chat thread
  *      all mount, so "both hosts" is a property of the import graph rather than a
  *      convention.
@@ -88,7 +89,7 @@ const CARD = "packages/agents/src/review-gate-card.tsx";
 
 describe("ONE component draws the suggestion chip", () => {
   it("only the card emits the spec's chip anchors", () => {
-    expect(filesMatching(/suggestion-chip-(rest|accepted|dismissed)/)).toEqual([CARD]);
+    expect(filesMatching(/"suggestion-(accepted|dismissed|unrecorded)"/)).toEqual([CARD]);
   });
 
   it("only the card defines a chip-row component", () => {

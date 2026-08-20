@@ -112,22 +112,35 @@ const HOST_STANDARD_IDS = new Set([
   "review-target-island",
   "review-target-island-body",
   "review-target-island-empty",
-  // cinatra#2572 (epic #2564 S6c) — the SUGGESTION CHIPS, fixed by the same
-  // newer spec's §VIII ("Marks, not a decision"), whose three drawn states are
-  // annotated there as `suggestion-chip-rest` / `-accepted` / `-dismissed`.
-  // Listed here for the identical reason the S2 anchors are: this suite's
-  // closed set is design@5e5c53aff's, and §VIII is not in it. The chips' own
-  // bidirectional conformance is pinned in the S2 card suite.
+  // cinatra#2572 (epic #2564 S6c), REDRAWN by cinatra#2852 — the SUGGESTIONS,
+  // fixed by the newer spec's §VIII ("Marks, not a decision") at
+  // design@60b27dfbb8a2a1594e6e88333cc5c048c244e640, whose two drawn states are
+  // annotated there as `suggestion-accepted` / `suggestion-dismissed` and whose
+  // per-suggestion before/after panel sits beneath the pill. Listed here for the
+  // identical reason the S2 anchors are: this suite's closed set is
+  // design@5e5c53aff's, and §VIII is not in it. Their own bidirectional
+  // conformance is pinned in the S2 card suite.
   "suggestion-chips",
-  "suggestion-chip-rest",
-  "suggestion-chip-accepted",
-  "suggestion-chip-dismissed",
-  // Two host-standard lines the chip row owns rather than the drawing: the
-  // truth owed to a reader whose marks were dropped when the surfaced set
-  // changed, and the note that a reject cannot carry accepted suggestions
-  // (the decision core's own rule, said before the press instead of after).
+  "suggestion-accepted",
+  "suggestion-dismissed",
+  "suggestion-before-after",
+  // A HISTORY-only reading, unreachable on a pending gate: a gate decided under
+  // the old three-state marking recorded a row only for the items the reviewer
+  // touched, and drawing the rest as accepted or dismissed would report a choice
+  // nobody made.
+  "suggestion-unrecorded",
+  // cinatra#2855 — the SETTLED panel that names the recorded outcome and its
+  // decider (the plan's settled-state target; the drawing addition rides the
+  // design page's next §IV revision). Listed here for the same reason as the
+  // S2 anchors: this suite's closed set is the older spec's. The panel's own
+  // conformance (outcome named, decider named, no Refresh) is pinned in the
+  // card suite.
+  "review-gate-settled",
+  // Two host-standard lines the row owns rather than the drawing: the truth owed
+  // to a reader whose marks were dropped when the surfaced set changed, and the
+  // count of what the decision below is about to carry.
   "suggestion-marks-cleared",
-  "suggestion-chips-reject-note",
+  "suggestion-accepted-count",
   // cinatra#2566's COMPOSER-FOCUS deliverable — the row that says which review
   // a typed chat message reaches, and the refusal when the reader has not said.
   //
@@ -350,8 +363,15 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
     expect(stripComments(DECISION_BAR)).not.toMatch(/request changes|request-changes/i);
     // The disposition set the bar offers stays approve/reject/comment (no
     // changes_requested affordance on the surface — it rides the Comment path).
+    // The SETTLED-OUTCOME vocabulary may name the recorded outcome; only that
+    // type union and its copy switch may carry the literal.
     expect(MODEL).toMatch(/REVIEW_DISPOSITIONS[\s\S]*?"approve",\s*"reject",\s*"comment",?\s*\]/);
-    expect(stripComments(MODEL)).not.toMatch(/"changes_requested"/);
+    const literalLines = stripComments(MODEL)
+      .split("\n")
+      .filter((l) => l.includes('"changes_requested"'));
+    for (const l of literalLines) {
+      expect(l).toMatch(/ReviewSettledOutcome|case "changes_requested":/);
+    }
   });
 
   it("the action routes the Comment path to changes_requested ONLY when fenced + a single-target lifecycle gate", () => {
