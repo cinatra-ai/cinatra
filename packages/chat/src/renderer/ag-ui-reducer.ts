@@ -43,6 +43,11 @@
 //    TOOL_CALL_END → the next text segment gets the paragraph separator.
 //  • AG-UI has no dedicated `citations` frame — citations arrive as a
 //    `DATA_PART` (`{ kind: "citations", citations }`), merged/deduped by url.
+//  • A `DATA_PART` renderable view may carry the SLOT IDENTITY of the tool call
+//    that produced it (`toolCallId`, cinatra#2827). One that does is folded onto
+//    that `tool_call` PART, so the card renders at the step that produced it;
+//    one that does not — or whose id names no call in this trace — stays in the
+//    turn-level `dataParts` list exactly as before.
 //
 // ── Determinism / idempotence (durable-log resume) ──────────────────────────
 //  • STATE_SNAPSHOT REPLACES the reduced state wholesale (the resume seam);
@@ -68,6 +73,7 @@ import {
   applyTextDelta,
   applyToolCallEvent,
   applyToolResultEvent,
+  attachViewToToolCall,
   formatToolCallLabel,
   formatToolProgressStatus,
   hasVisibleStreamingText,
@@ -506,6 +512,41 @@ function reduceDataPart(
     // mergeCitations dedupes by url; a replay adds nothing → no-op.
     if (merged.length === state.message.citations.length) return state;
     return withMessage(state, { citations: merged });
+  }
+
+  // SLOT IDENTITY (cinatra#2827, epic #2784 S9i). A renderable view minted at a
+  // tool RESULT names the call that produced it, and a card belongs at that step
+  // of the turn rather than after it. Folding it onto the tool_call part is what
+  // makes the position a property of the ordered trace — the renderer draws a
+  // part's views inside that part's own container, so "the card is at its part's
+  // position" is checkable rather than asserted.
+  //
+  // NARROW ON PURPOSE, in three ways, and each one is load-bearing:
+  //   · only a RENDERABLE VIEW folds. The structural `kind` payloads above
+  //     (`agent_run`, `citations`) already have their own transitions and are
+  //     handled before this point.
+  //   · only a KNOWN call folds. An id matching no tool_call in this turn's
+  //     trace — a forged one, or a part that arrived before its call — falls
+  //     through to the turn-level list, so a view is never dropped for having a
+  //     slot the trace cannot place.
+  //   · no `toolCallId` at all keeps EXACTLY the previous behaviour. Every
+  //     producer that does not stamp one (the A2A bridge, an external client)
+  //     folds byte-identically to before.
+  //
+  // IDEMPOTENT: `attachViewToToolCall` returns the same array reference for a
+  // replayed identical payload, so a durable-log replay reduces to the same
+  // trace it reduced to live.
+  const slot = event.toolCallId;
+  if (isRenderableView && typeof slot === "string" && slot.length > 0) {
+    const parts = attachViewToToolCall(state.message.parts, slot, data);
+    if (parts !== state.message.parts) return withMessage(state, { parts });
+    // The view is already on its part (a replay), or the call is not in this
+    // trace. Tell the two apart, because only the first is a no-op: a view that
+    // found no call still owes the reader a render, so it falls through.
+    const known = state.message.parts.some(
+      (p) => p.kind === "tool_call" && p.id === slot,
+    );
+    if (known) return state;
   }
 
   // Renderable view or unknown structured payload — carry it through for the

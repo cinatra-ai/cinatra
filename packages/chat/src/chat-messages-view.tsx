@@ -195,6 +195,7 @@ function OrderedPartsSection({
   detectWidgets,
   onMarkdownClick,
   onActiveGateChange,
+  onApplyIntent,
 }: {
   parts: AssistantMessagePart[];
   trimContent?: (content: string) => string;
@@ -214,6 +215,10 @@ function OrderedPartsSection({
     gate: ChatGateDescriptor | null,
     instanceId: string,
   ) => void;
+  /** §6e apply-intent gesture seam (cinatra#2683), threaded to the views a part
+   *  produced so a SLOTTED card keeps the one gesture the widget owns. Absent
+   *  (`/chat`) ⇒ display-only, exactly as for the turn-level list. */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) {
   if (parts.length === 0) return null;
   return (
@@ -233,11 +238,28 @@ function OrderedPartsSection({
             <div
               key={`text-${idx}`}
               data-embed-content
+              data-transcript-slot={idx}
               className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(raw, theme, detectWidgets) }}
             />
           );
         }
+        // The views this step PRODUCED (cinatra#2827, epic #2784 S9i). A
+        // lifecycle card is minted at a tool RESULT, and the wire names the call
+        // it was minted at, so the card is drawn HERE — inside the producing
+        // part's own container — rather than appended after the whole trace.
+        // Same `RenderableViewCard` the turn-level list dispatches: ONE registry,
+        // one validation path, one fallback. A card sits BESIDE the inline run
+        // card, never inside it: the run card is a `run_card` host of its own,
+        // and a chat card rendered in that subtree would be another host's mount.
+        const producedViews = part.kind === "tool_call" ? (part.views ?? []) : [];
+        const slottedViews = producedViews.map((view, i) => (
+          <RenderableViewCard
+            key={`slot-${idx}-view-${i}`}
+            data={view}
+            {...(onApplyIntent ? { onApplyIntent } : {})}
+          />
+        ));
         // `agent_run` tool_results carry a runId pinned by the tool_result
         // handler. Mount AgenticRunPanel inline so the user can drive HITL
         // gates (URL pickers, list pickers, reviewer approvals) from within
@@ -245,7 +267,7 @@ function OrderedPartsSection({
         // The card resolves to its own panel chrome — no extra Card wrapper here.
         if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
           return (
-            <div key={`agent-run-${part.runId}`}>
+            <div key={`agent-run-${part.runId}`} data-transcript-slot={idx}>
               <InlineAgentRunCard
                 runId={part.runId}
                 onActiveGateChange={onActiveGateChange}
@@ -253,6 +275,15 @@ function OrderedPartsSection({
               {/* Inline undo for a recent restorable change-set produced by
                   this run. */}
               <UndoActionChip runId={part.runId} />
+              {slottedViews}
+            </div>
+          );
+        }
+        // A step that produced a view gets its own container at its own slot.
+        if (slottedViews.length > 0) {
+          return (
+            <div key={`slot-${idx}`} data-transcript-slot={idx}>
+              {slottedViews}
             </div>
           );
         }
@@ -829,6 +860,14 @@ function MessageChartEmbeds({
  * fallback. An unknown or invalid payload renders the neutral fallback rather
  * than crashing the transcript; a lifecycle card renders nothing until its
  * authoritative refetch succeeds.
+ *
+ * WHAT THIS LIST NO LONGER CARRIES (cinatra#2827, epic #2784 S9i). A view whose
+ * `DATA_PART` named the tool call that produced it is folded onto that
+ * `tool_call` part by the reducer and drawn by `OrderedPartsSection` at that
+ * step's own container. So the two mounts PARTITION the turn's views by whether
+ * the wire gave them a position — a view is drawn once, never twice — and this
+ * list keeps exactly the ones with no producing step (an A2A artifact part, a
+ * bridge part, an external producer that stamps no slot).
  */
 function MessageRenderableViews({
   message,
@@ -1214,6 +1253,7 @@ export function ChatMessagesView({
                         detectWidgets={widgetRuntime.detectWidgets}
                         onMarkdownClick={handleAssistantMarkdownClick}
                         onActiveGateChange={onActiveGateChange}
+                        onApplyIntent={onApplyIntent}
                       />
                     ) : (
                       <>
@@ -1357,6 +1397,7 @@ export function ChatMessagesView({
                     detectWidgets={widgetRuntime.detectWidgets}
                     onMarkdownClick={handleAssistantMarkdownClick}
                     onActiveGateChange={onActiveGateChange}
+                    onApplyIntent={onApplyIntent}
                   />
                 ) : (
                   <>

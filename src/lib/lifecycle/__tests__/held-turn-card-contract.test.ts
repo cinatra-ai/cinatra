@@ -33,6 +33,14 @@ import {
   ROOT_DECLARATION_OBLIGATIONS,
   RULED_KINDS,
   HELD_TURN_MOUNT_OBLIGATIONS,
+  CHAT_OWNER_MOUNT_OBLIGATIONS,
+  LIFECYCLE_CARD_STATE_ANCHOR,
+  SHELL_OWNED_CHAT_KINDS,
+  carriageRowFor,
+  carriesChatOwner,
+  chatCarriageRootAnchorsFor,
+  chatOwnerMountIsOwed,
+  evaluateChatCarriage,
   evaluateHeldTurnProjection,
   findDecisionPathPointers,
   findUnmountedSurfacePointers,
@@ -40,6 +48,7 @@ import {
   isHeldDispatch,
   projectsOwnerCard,
   runIdOf,
+  type ChatCarriageObservation,
   type ProjectedNode,
   type TurnProjection,
 } from "../held-turn-card-contract";
@@ -352,6 +361,162 @@ describe("the per-kind table", () => {
         expect(row.foreignHostSubtrees).not.toContain(anchor);
       }
     }
+  });
+});
+
+describe("the four-kind carriage matrix (cinatra#2827)", () => {
+  /** One element carrying every root anchor, at the producing slot, with the
+   *  row's controls inside it — the shape a real owner produces. */
+  function drawnAt(
+    kind: (typeof RULED_KINDS)[number],
+    slot: number,
+    producingSlot = slot,
+  ): ChatCarriageObservation {
+    const row = carriageRowFor(kind);
+    return {
+      rootCandidates: [
+        {
+          anchors: [...chatCarriageRootAnchorsFor(row)],
+          slot,
+          controls: [...row.decisionControls],
+        },
+      ],
+      producingSlot,
+    };
+  }
+
+  it("names the kind, the chat host and a state as the ONE root declaration", () => {
+    for (const kind of RULED_KINDS) {
+      const anchors = chatCarriageRootAnchorsFor(carriageRowFor(kind));
+      expect(anchors).toContain(`[data-lifecycle-card="${kind}"]`);
+      expect(anchors).toContain('[data-lifecycle-card-host="chat_thread"]');
+      expect(anchors).toContain(LIFECYCLE_CARD_STATE_ANCHOR);
+    }
+  });
+
+  it("gives every kind a decision-control set, and only §VII the empty one", () => {
+    // §VII "asks nothing, so it draws nothing to press". Every other kind has a
+    // floor, and an empty list anywhere else would be a row a shell could pass.
+    for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
+      if (row.kind === "verification_summary") {
+        expect(row.decisionControls).toEqual([]);
+      } else {
+        expect(row.decisionControls.length, row.kind).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("names the SHIPPED controls of every kind whose owner is already drawn", () => {
+    // Read straight off the components. A contract that named a control the
+    // component never emitted would reject the real mount — the same discipline
+    // the held row's owner anchors are held to above.
+    const sources: Record<string, string> = {
+      artifact_review_gate: readFileSync(
+        join(process.cwd(), "packages/agents/src/review-decision-bar.tsx"),
+        "utf8",
+      ),
+      recommendation_hold: readFileSync(
+        join(process.cwd(), "packages/agents/src/run-recommendation-chip-row.tsx"),
+        "utf8",
+      ),
+    };
+    for (const [kind, source] of Object.entries(sources)) {
+      for (const control of carriageRowFor(kind as never).decisionControls) {
+        expect(source, `${control} is not emitted by the shipped ${kind} owner`).toContain(
+          control.slice(1, -1),
+        );
+      }
+    }
+  });
+
+  it("carries the hold's obligation by READING S9h's list, never by repeating it", () => {
+    // Two lists naming the same kind is how a struck ratchet goes stale
+    // elsewhere. `SHELL_OWNED_CHAT_KINDS` may not name it; the union must.
+    expect(SHELL_OWNED_CHAT_KINDS).not.toContain("recommendation_hold");
+    for (const kind of HELD_TURN_MOUNT_OBLIGATIONS) {
+      expect(CHAT_OWNER_MOUNT_OBLIGATIONS).toContain(kind);
+      expect(chatOwnerMountIsOwed(kind)).toBe(true);
+    }
+    expect([...CHAT_OWNER_MOUNT_OBLIGATIONS].sort()).toEqual(
+      [...HELD_TURN_MOUNT_OBLIGATIONS, ...SHELL_OWNED_CHAT_KINDS].sort(),
+    );
+    // Every owed kind is a ruled kind — an obligation for a kind that does not
+    // exist is a row nothing can ever strike.
+    for (const kind of CHAT_OWNER_MOUNT_OBLIGATIONS) {
+      expect(RULED_KINDS).toContain(kind);
+    }
+  });
+
+  it("accepts a real owner: root, controls and position together", () => {
+    for (const kind of RULED_KINDS) {
+      const row = carriageRowFor(kind);
+      expect(evaluateChatCarriage(drawnAt(kind, 2), row), kind).toEqual([]);
+      expect(carriesChatOwner(drawnAt(kind, 2), row)).toBe(true);
+    }
+  });
+
+  it("refuses the SHELL's shape — the kind and a state, with no host declared", () => {
+    const row = carriageRowFor("verification_summary");
+    const shell: ChatCarriageObservation = {
+      rootCandidates: [
+        {
+          anchors: ['[data-lifecycle-card="verification_summary"]', LIFECYCLE_CARD_STATE_ANCHOR],
+          slot: 1,
+          controls: [],
+        },
+      ],
+      producingSlot: 1,
+    };
+    expect(evaluateChatCarriage(shell, row).map((v) => v.code)).toEqual([
+      "root_declaration_incomplete",
+    ]);
+  });
+
+  it("refuses a declaration SPLIT across two elements", () => {
+    const row = carriageRowFor("artifact_review_gate");
+    const split: ChatCarriageObservation = {
+      rootCandidates: [
+        { anchors: ['[data-lifecycle-card="artifact_review_gate"]'], slot: 1, controls: [] },
+        {
+          anchors: ['[data-lifecycle-card-host="chat_thread"]', LIFECYCLE_CARD_STATE_ANCHOR],
+          slot: 1,
+          controls: [...row.decisionControls],
+        },
+      ],
+      producingSlot: 1,
+    };
+    expect(evaluateChatCarriage(split, row).map((v) => v.code)).toEqual([
+      "root_declaration_incomplete",
+    ]);
+  });
+
+  it("refuses a declared root with no operable floor", () => {
+    const row = carriageRowFor("artifact_review_gate");
+    const floorless = drawnAt("artifact_review_gate", 1);
+    floorless.rootCandidates[0].controls = [];
+    expect(evaluateChatCarriage(floorless, row).map((v) => v.code)).toEqual(["controls_absent"]);
+  });
+
+  it("refuses a card drawn away from the step that produced it", () => {
+    const row = carriageRowFor("artifact_review_gate");
+    expect(
+      evaluateChatCarriage(drawnAt("artifact_review_gate", 3, 1), row).map((v) => v.code),
+    ).toEqual(["root_off_producing_slot"]);
+  });
+
+  it("refuses a turn with no producing step at all — that IS the defect", () => {
+    const row = carriageRowFor("artifact_review_gate");
+    const noSlot = drawnAt("artifact_review_gate", 1);
+    expect(
+      evaluateChatCarriage({ ...noSlot, producingSlot: null }, row).map((v) => v.code),
+    ).toEqual(["no_producing_slot"]);
+  });
+
+  it("reports an empty transcript as ABSENT, never as incomplete", () => {
+    const row = carriageRowFor("artifact_review_gate");
+    expect(
+      evaluateChatCarriage({ rootCandidates: [], producingSlot: 1 }, row).map((v) => v.code),
+    ).toEqual(["owner_root_absent"]);
   });
 });
 
