@@ -66,6 +66,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  CAPTURE_INDEX_PATH,
+  validateCaptureIndex as validateCanonicalIndex,
+} from "../ci/lib/capture-record-contract.mjs";
+import {
   chatThreadRequirementsFor,
   hashFile,
   hostTokenInCell,
@@ -80,7 +84,13 @@ const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
 const LABEL = "chat-hitl-acceptance";
 
 export const MANIFEST_PATH = join(__dirname, "chat-hitl-acceptance-manifest.json");
-export const CAPTURE_INDEX_PATH = join(__dirname, "chat-hitl-capture-index.json");
+// THE ONE CANONICAL INDEX, re-exported rather than recomputed from THIS
+// directory. There used to be a `scripts/audit/chat-hitl-capture-index.json`
+// beside this file that also called itself canonical, held no records, and was
+// the capture driver's default output; this gate read it while the CI gate read
+// the populated one. Both halves now resolve the same constant, which
+// `scripts/ci/__tests__/capture-index-path.test.mjs` pins.
+export { CAPTURE_INDEX_PATH };
 
 /** The valid dispositions. See the header for what each one claims. */
 export const DISPOSITIONS = ["MAPPED", "BUILT", "MISSING"];
@@ -250,8 +260,17 @@ export function auditCaptureIndex({
   index = loadCaptureIndex(),
   repoRoot = DEFAULT_REPO_ROOT,
   hashOf = (rel) => hashFile(resolve(repoRoot, rel)),
+  tier = "graded",
 } = {}) {
-  return validateCaptureIndex({ index, hashOf });
+  // THE CANONICAL FLOOR, FIRST, for EVERY record. The ratified contract owns
+  // what a record is; this tier's extras are graded on top of it (see
+  // `RECORD_TIERS` in the recorder). Running the floor here rather than relying
+  // on the CI gate to run it means this entrypoint refuses a mislabeled capture
+  // on its own, which is what "both must be clean" is supposed to mean.
+  const canonical = validateCanonicalIndex(index, { repoRoot }).violations.map(
+    (v) => `[canonical] ${v.cell ? `record "${v.cell}": ` : ""}${v.code} — ${v.detail}`,
+  );
+  return [...canonical, ...validateCaptureIndex({ index, hashOf, tier })];
 }
 
 /** A cell name without its image extension. */
@@ -393,21 +412,42 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       (record.assertions ?? []).find(
         (a) => a?.selector === selector && (a?.scope ?? "frame") === scope,
       );
-    // PRESENT means painted. The binding asks the same question the record's own
-    // validator does, so a screenshot whose card is attached-but-unrendered
-    // cannot satisfy a manifest row here after failing there.
+    // PRESENT means painted, WHEN THE RECORD CLAIMS A PAINTED COUNT. The binding
+    // asks the same question the record's own validator does, at the same
+    // grading: a screenshot whose card is attached-but-unrendered cannot satisfy
+    // a manifest row here after failing there, and a record written by the
+    // canonical driver — which records attachment only, and labels no
+    // observation — is read the way that half reads it rather than refused for
+    // fields it never claimed.
     const satisfies = (selector, scope, wanted) => {
       const found = observationFor(selector, scope);
-      if (!found || (found.expect ?? "present") !== wanted) return false;
-      return wanted === "present"
-        ? found.count >= 1 && found.visible >= 1
-        : found.count === 0;
+      if (!found || (found.expect ?? wanted) !== wanted) return false;
+      if (wanted !== "present") return found.count === 0;
+      if (found.count < 1) return false;
+      return found.visible === undefined || found.visible >= 1;
     };
+    // The SAME tier predicate the record validator uses: a record that pins a
+    // card root speaks this tier and owes its whole set; one that does not is
+    // read the way the canonical half reads it.
+    const strict = record.instance !== undefined;
     for (const req of chatThreadRequirementsFor(
       record.declaredKind,
       record.declaredState ?? "pending",
     )) {
+      // This tier's root-scoped ADDITION is asked of records that pin a card
+      // root; the rest is the canonical requirement set either way.
+      if (req.tier === "audit" && !strict) continue;
       const wanted = req.expect ?? "present";
+      // The canonical `any` group (Confirm OR Skip) is honoured for a record
+      // that claims no more than the canonical half; this tier requires every
+      // member of the group from a record written at its own tier.
+      if (
+        !strict &&
+        req.any &&
+        req.any.some((sel) => (observationFor(sel, req.scope)?.count ?? 0) >= 1)
+      ) {
+        continue;
+      }
       if (!satisfies(req.selector, req.scope, wanted)) {
         violations.push(
           `manifest row ${claim.row}: the record for "${claim.cell}" does not observe ` +

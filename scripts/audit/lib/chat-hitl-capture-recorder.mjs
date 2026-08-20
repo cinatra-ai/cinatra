@@ -92,13 +92,20 @@ import { join } from "node:path";
 // installable-free.
 import {
   CAPTURE_HOSTS as CANONICAL_CAPTURE_HOSTS,
+  CAPTURE_INDEX_PATH,
   CARD_KINDS,
   DECIDED_SUMMARY_SELECTOR,
+  RECORDER_ID,
   requiredAssertionsFor,
 } from "../../ci/lib/capture-record-contract.mjs";
 
-/** The recorder's identity, stamped on every record it writes. */
-export const RECORDER_ID = "scripts/audit/lib/chat-hitl-capture-recorder.mjs@1";
+/**
+ * The recorder's identity, stamped on every record it writes and named by the
+ * index header -- ONE string, re-exported from the canonical contract rather
+ * than spelled again here. There were three spellings of it in the tree; a
+ * second literal is how there came to be three.
+ */
+export { RECORDER_ID, CAPTURE_INDEX_PATH };
 
 /** The current index schema. Bumping it is a deliberate, reviewed act. */
 export const CAPTURE_INDEX_SCHEMA_VERSION = 1;
@@ -117,21 +124,43 @@ export const CAPTURE_BUILDS = Object.freeze(["production", "development"]);
  * order is part of the meaning.
  */
 const URL_CLASS_ORDER = Object.freeze([
-  ["embed_assistant", /^https?:\/\/[^/]+\/embed\/assistant(?:[/?#]|$)/],
-  [
-    "review_page",
-    /^https?:\/\/[^/]+\/agents\/[^/]+\/[^/]+\/[^/?#]+\/review\/[^/?#]+(?:[/?#]|$)/,
-  ],
-  ["run_detail", /^https?:\/\/[^/]+\/agents\/[^/]+\/[^/]+\/[^/?#]+(?:[/?#]|$)/],
-  ["agents_index", /^https?:\/\/[^/]+\/agents(?:[/?#]|$)/],
-  ["chat", /^https?:\/\/[^/]+\/chat(?:[/?#]|$)/],
+  ["embed_assistant", /^\/embed\/assistant(?:[/?#]|$)/],
+  ["review_page", /^\/agents\/[^/]+\/[^/]+\/[^/?#]+\/review\/[^/?#]+(?:[/?#]|$)/],
+  ["run_detail", /^\/agents\/[^/]+\/[^/]+\/[^/?#]+(?:[/?#]|$)/],
+  ["agents_index", /^\/agents(?:[/?#]|$)/],
+  ["chat", /^\/chat(?:[/?#]|$)/],
 ]);
+
+/**
+ * THE PATH a URL classifies on, in EITHER canonical spelling.
+ *
+ * This tier used to require an absolute `http(s)://` URL and classify the whole
+ * string. The ratified contract's own `pathOf` accepts a bare repo-style path
+ * too, and every one of the eight committed records is written that way -- so
+ * the stricter spelling was refusing the canonical records over a notation, not
+ * over anything observed. The CLASS is what carries meaning; the origin does
+ * not. An absolute URL still has its origin stripped before matching, so
+ * `http://localhost:3000/chat/x` and `/chat/x` classify identically.
+ */
+export function urlPathOf(finalUrl) {
+  if (typeof finalUrl !== "string" || finalUrl === "") return null;
+  if (/^https?:\/\//.test(finalUrl)) {
+    try {
+      const u = new URL(finalUrl);
+      return `${u.pathname}${u.search}${u.hash}`;
+    } catch {
+      return null;
+    }
+  }
+  return finalUrl.startsWith("/") ? finalUrl : null;
+}
 
 /** The URL class of a final URL. `other` means no app class matched. */
 export function classifyUrl(finalUrl) {
-  if (typeof finalUrl !== "string") return "other";
+  const path = urlPathOf(finalUrl);
+  if (path === null) return "other";
   for (const [name, re] of URL_CLASS_ORDER) {
-    if (re.test(finalUrl)) return name;
+    if (re.test(path)) return name;
   }
   return "other";
 }
@@ -239,6 +268,11 @@ export function captureRequirementsFor(host, kind = null, state = null) {
   const spec = (r, expect) => {
     const out = { frame: frameOf(r.scope), scope: r.scope, selector: r.selector, expect };
     if (r.scope === "root" && root) out.within = root;
+    // The canonical `any` group, CARRIED rather than dropped. This tier requires
+    // every member (see above); the GRADED tier honours the group, so a record
+    // written by the canonical driver -- which satisfies Confirm OR Skip, as its
+    // own contract rules -- is not refused here for a rule only this tier has.
+    if (r.any) out.any = r.any;
     return out;
   };
   const specs = required.map((r) => spec(r, "present"));
@@ -249,6 +283,12 @@ export function captureRequirementsFor(host, kind = null, state = null) {
       within: root,
       selector: `[data-lifecycle-card-host="${host}"]`,
       expect: "present",
+      // AN ADDITION OF THIS TIER, marked as one. The canonical set counts the
+      // host declaration frame-wide; counting it inside the pinned card root as
+      // well says the CARD declared the host rather than merely the page. A
+      // record that pins no card root cannot answer it, so the graded tier asks
+      // it only of records that carry an `instance` -- see `validateCaptureRecord`.
+      tier: "audit",
     });
   }
   specs.push(...forbidden.map((r) => spec(r, "absent")));
@@ -727,13 +767,46 @@ function isNonEmptyString(v) {
 }
 
 /**
+ * THE TWO TIERS a record can be judged at.
+ *
+ *   `graded` (default) — the CANONICAL contract is the floor for every record,
+ *       and this tier's EXTRAS are checked WHEN THE RECORD CARRIES THEM. The
+ *       eight committed records were written by the canonical driver, which
+ *       emits no `build`, no painted `visible`, no `expect` label and no pinned
+ *       `instance`; judging them against extras they never claimed produced 166
+ *       violations that said nothing about the pictures, and refused the
+ *       canonical index wholesale.
+ *   `audit` — every extra REQUIRED. This is what `observeCapture` produces and
+ *       what `chat-hitl-capture-driver.mjs` validates its own output against
+ *       before writing, so the strictness lands on the records this tier makes
+ *       rather than on records made honestly by the other half.
+ *
+ * THE HONEST LIMIT of that split, stated because a graded gate that reads as a
+ * strict one is worse than none: a record can decline an extra by omitting it,
+ * and then it is judged without that extra. What it CANNOT do is claim one
+ * falsely — an `expect` that disagrees with the requirement, a `visible` above
+ * its own `count`, an `instance` naming a card the recorder never found are all
+ * still refused, and the canonical floor still applies to every record either
+ * way. Omission is visible in the record; a false claim is not.
+ */
+export const RECORD_TIERS = Object.freeze(["graded", "audit"]);
+
+/**
  * Validate ONE record. Returns a list of human-readable violations.
  *
  * `hashOf(relPath)` returns the file's sha256, or throws when the file is
  * missing — injected so the pinned tests drive the same validator CI runs.
+ * `tier` selects the grading above; it defaults to `graded`.
  */
-export function validateCaptureRecord(record, { hashOf } = {}) {
+export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) {
   const v = [];
+  // A record is judged at the AUDIT tier when it is asked for (the driver, on
+  // its own output) or when it SPEAKS that tier: a pinned `instance` is this
+  // tier's own vocabulary, and a record that pins a card root owes the rest of
+  // the set that root exists to support. One predicate rather than a per-field
+  // guess, so a record cannot claim half the tier and be graded on the other
+  // half. The eight canonical records pin no instance and are graded.
+  const strict = tier === "audit" || record?.instance !== undefined;
   const where = isNonEmptyString(record?.cell) ? `record "${record.cell}"` : "an unnamed record";
 
   if (!isNonEmptyString(record?.cell)) {
@@ -745,7 +818,10 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   }
   const host = record.declaredHost;
 
-  if (!CAPTURE_BUILDS.includes(record?.build)) {
+  // GRADED. `build` is this tier's own field; the canonical driver records the
+  // runtime in prose (`runtime`) instead. A record that names a build must name
+  // a real one; a record that names none is judged without it.
+  if ((strict || record?.build !== undefined) && !CAPTURE_BUILDS.includes(record?.build)) {
     v.push(`${where}: build "${record?.build}" is not one of ${CAPTURE_BUILDS.join("/")}`);
   }
   if (record?.recordedBy !== RECORDER_ID) {
@@ -764,8 +840,11 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   }
 
   // --- the URL class ---
-  if (!isNonEmptyString(record?.finalUrl) || !/^https?:\/\//.test(record.finalUrl)) {
-    v.push(`${where}: finalUrl must be the absolute URL the page ended on`);
+  if (urlPathOf(record?.finalUrl) === null) {
+    v.push(
+      `${where}: finalUrl must be the URL the page ended on — an absolute http(s) URL or the ` +
+        "repo-style path the canonical contract reads",
+    );
   } else {
     const allowed = HOST_URL_CLASSES[host];
     const actual = classifyUrl(record.finalUrl);
@@ -805,7 +884,27 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   for (const req of HOST_FRAME_REQUIREMENTS[host]) {
     const declared = frames[req.name];
     if (!declared) {
-      v.push(`${where}: host "${host}" must declare the "${req.name}" frame reached by ${req.selector}`);
+      // GRADED. The `frames` block is this tier's own; the canonical contract
+      // records the SAME fact for the capture frame under `frameUrl`, and
+      // `observeCapture` writes both for exactly that reason. A record carrying
+      // only the canonical spelling has its frame URL classified here — the
+      // check that carries the meaning — while the selector that reached the
+      // frame is answered by the page-scoped `.cw-frame` assertion the host
+      // requires anyway. A record carrying NEITHER declares no frame at all.
+      const canonicalFrameUrl = strict ? undefined : record?.frameUrl;
+      if (canonicalFrameUrl === undefined) {
+        v.push(
+          `${where}: host "${host}" must declare the "${req.name}" frame reached by ${req.selector}`,
+        );
+        continue;
+      }
+      const canonicalClass = classifyUrl(canonicalFrameUrl);
+      if (canonicalClass !== req.urlClass) {
+        v.push(
+          `${where}: the capture frame ended on ${canonicalFrameUrl} (class: ${canonicalClass}); ` +
+            `host "${host}" requires ${req.urlClass}`,
+        );
+      }
       continue;
     }
     if (declared.selector !== req.selector) {
@@ -847,17 +946,31 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
       v.push(`${label}: count must be the observed non-negative integer`);
       continue;
     }
-    // A record written before the painted count existed cannot be read as
-    // having observed one. Missing is a violation, not a zero and not a pass.
-    if (!Number.isInteger(a?.visible) || a.visible < 0 || a.visible > a.count) {
-      v.push(
-        `${label}: visible must be the observed count of PAINTED matches, ` +
-          `between 0 and ${a.count}; it is ${JSON.stringify(a?.visible)}`,
-      );
+    // GRADED. The painted count is this tier's own; the canonical driver records
+    // attachment only. An observation that CLAIMS a painted count must be able to
+    // stand behind it — a `visible` above its own `count` is a false claim, not an
+    // omission — but one that claims none is judged on attachment, as that half
+    // judges it.
+    const hasVisible = a?.visible !== undefined;
+    if (strict || hasVisible) {
+      if (!Number.isInteger(a?.visible) || a.visible < 0 || a.visible > a.count) {
+        v.push(
+          `${label}: visible must be the observed count of PAINTED matches, ` +
+            `between 0 and ${a.count}; it is ${JSON.stringify(a?.visible)}`,
+        );
+        continue;
+      }
+    }
+    // GRADED. `expect` is this tier's LABEL on an observation. Unlabeled, the
+    // observation carries no claim of its own and the requirement loop below
+    // judges it against what the host actually owes — which is exactly how the
+    // canonical validator reads the same record.
+    const expected = a.expect;
+    if (strict && expected === undefined) {
+      v.push(`${label}: every observation must be labeled expect "present" or "absent"`);
       continue;
     }
-    const expected = a.expect ?? "present";
-    if (expected !== "present" && expected !== "absent") {
+    if (expected !== undefined && expected !== "present" && expected !== "absent") {
       v.push(`${label}: expect must be "present" or "absent"`);
       continue;
     }
@@ -868,7 +981,7 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
     // or sized to nothing counts as present to a selector and appears nowhere in
     // the screenshot — which is a capture whose record describes a screen the
     // image does not show, the exact defect this index exists to catch.
-    if (expected === "present" && a.count >= 1 && a.visible < 1) {
+    if (expected === "present" && a.count >= 1 && hasVisible && a.visible < 1) {
       v.push(
         `${label}: recorded as present with ${a.count} match(es), and NONE of them was ` +
           "painted — attached DOM is not a photograph",
@@ -907,7 +1020,10 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
     host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.declaredKind)
       ? cardRootFor(record.declaredKind)
       : null;
-  if (cardRoot !== null) {
+  // GRADED. The pin is this tier's own. A record that carries one must be able
+  // to stand behind it, in every particular below; a record that carries none
+  // simply does not pin a card, and is judged on what it does assert.
+  if (cardRoot !== null && (strict || record?.instance !== undefined)) {
     const inst = record?.instance;
     if (inst === null || typeof inst !== "object") {
       v.push(
@@ -960,7 +1076,20 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
       : captureRequirementsFor(host);
   const observationFor = (selector, scope) =>
     assertions.find((a) => a?.selector === selector && (a?.scope ?? "frame") === scope);
+  const satisfiedAtLeastOnce = (selector, scope) => {
+    const found = observationFor(selector, scope);
+    return Boolean(found) && found.count >= 1;
+  };
   for (const req of hostRequirements) {
+    // A record that pins no card root cannot answer a requirement counted INSIDE
+    // one, so this tier's root-scoped addition rides the same tier predicate.
+    if (req.tier === "audit" && !strict) continue;
+    // The canonical `any` group: Confirm OR Skip answers the requirement. This
+    // tier requires every member (see `captureRequirementsFor`), so the group is
+    // honoured only in the graded tier.
+    if (!strict && req.any && req.any.some((sel) => satisfiedAtLeastOnce(sel, req.scope))) {
+      continue;
+    }
     const wanted = req.expect ?? "present";
     const found = observationFor(req.selector, req.scope);
     if (!found) {
@@ -970,7 +1099,10 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
       );
       continue;
     }
-    const got = found.expect ?? "present";
+    // An UNLABELED observation carries no claim of its own, so it is read
+    // against what the host owes -- the canonical reading. A LABELED one that
+    // disagrees with the requirement is a contradiction and is refused.
+    const got = found.expect ?? wanted;
     if (got !== wanted) {
       v.push(
         `${where}: host "${host}" requires ${req.selector} ${wanted.toUpperCase()} ` +
@@ -983,7 +1115,7 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
         `${where}: host "${host}" requires ${req.selector} PRESENT (${req.scope}-scoped); ` +
           `the record observed ${found.count}`,
       );
-    } else if (wanted === "present" && !(found.visible >= 1)) {
+    } else if (wanted === "present" && found.visible !== undefined && !(found.visible >= 1)) {
       v.push(
         `${where}: host "${host}" requires ${req.selector} PRESENT (${req.scope}-scoped); ` +
           `the record observed ${found.count} attached and ${found.visible} painted — a required ` +
@@ -1001,8 +1133,15 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
   return v;
 }
 
-/** Validate the whole index: shape, then every record. */
-export function validateCaptureIndex({ index, hashOf } = {}) {
+/**
+ * Validate the whole index: shape, then every record.
+ *
+ * `tier` is passed through to each record (see `RECORD_TIERS`). The CANONICAL
+ * FLOOR is not re-implemented here — `chat-hitl-acceptance-gate.mjs` runs the
+ * ratified contract's own `validateCaptureIndex` beside this one, so every
+ * record is judged by that half whatever this half grades.
+ */
+export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
   const v = [];
   if (index === null || typeof index !== "object") {
     return ["the capture index is not an object"];
@@ -1050,7 +1189,7 @@ export function validateCaptureIndex({ index, hashOf } = {}) {
         );
       } else byHash.set(record.sha256, cell);
     }
-    v.push(...validateCaptureRecord(record, { hashOf }));
+    v.push(...validateCaptureRecord(record, { hashOf, tier }));
   }
   return v;
 }

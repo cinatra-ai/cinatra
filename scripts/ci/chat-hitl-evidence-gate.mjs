@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 
 import { classifyDecisionPointer } from "./lib/decision-pointer-contract.mjs";
 import {
+  CAPTURE_INDEX_PATH,
   bindEvidenceCells,
   parseCellName,
   validateCaptureIndex,
@@ -53,7 +54,10 @@ import { decideOutcome } from "./lib/evidence-gate-rollout.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
 export const POLICY_PATH = join(__dirname, "chat-hitl-evidence-gate.rollout.json");
-export const CAPTURE_INDEX_PATH = join(__dirname, "chat-hitl-capture-index.json");
+// RE-EXPORTED, never recomputed. This gate and the acceptance gate resolve the
+// SAME file because they read the same constant; deriving it from `__dirname`
+// here is how the two halves ended up with an index each.
+export { CAPTURE_INDEX_PATH };
 export const ACCEPTANCE_MANIFEST_PATH = join(
   "scripts",
   "audit",

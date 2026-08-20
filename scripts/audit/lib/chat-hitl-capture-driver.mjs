@@ -22,7 +22,7 @@
  *
  *   node scripts/audit/lib/chat-hitl-capture-driver.mjs \
  *     --plan evidence/<slice>/capture-plan.json \
- *     --out  scripts/audit/chat-hitl-capture-index.json
+ *     --out  scripts/ci/chat-hitl-capture-index.json   # the default
  *
  * The plan is a JSON array of cells:
  *   { cell, declaredHost, kind, state, url, screenshot, waitFor?, build?,
@@ -38,8 +38,9 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
+import { CAPTURE_INDEX_RELATIVE_PATH } from "../../ci/lib/capture-record-contract.mjs";
 import {
   CAPTURE_INDEX_SCHEMA_VERSION,
   RECORDER_ID,
@@ -203,8 +204,13 @@ export async function driveCapture({ plan, repoRoot = process.cwd(), log = conso
         // Hash the file from disk RATHER than echoing the record: comparing a
         // value to itself proves nothing, and the promise this driver makes is
         // that it never writes an index it has not checked.
+        // THE AUDIT TIER, on this driver's OWN output. The validator grades its
+        // extras when it reads a committed index, because the canonical driver
+        // writes honest records that claim none of them; what THIS driver
+        // produces owes every one, and owes it here, before anything is written.
         const violations = validateCaptureRecord(record, {
           hashOf: (rel) => hashFile(resolve(repoRoot, rel)),
+          tier: "audit",
         });
         if (violations.length > 0) {
           log(`FAILED ${cell.cell}:`);
@@ -232,15 +238,24 @@ async function main(argv) {
     return i === -1 ? undefined : argv[i + 1];
   };
   const planPath = arg("--plan");
-  const outPath = arg("--out") ?? join("scripts", "audit", "chat-hitl-capture-index.json");
+  // THE ONE CANONICAL INDEX by default, from the shared constant. The default
+  // used to be `scripts/audit/chat-hitl-capture-index.json` — a second file that
+  // no gate binds against, so an honest capture run wrote its records where
+  // nothing would ever read them.
+  const outPath = arg("--out") ?? CAPTURE_INDEX_RELATIVE_PATH;
   if (!planPath) {
     console.error("usage: chat-hitl-capture-driver.mjs --plan <plan.json> [--out <index.json>]");
     return 1;
   }
   const plan = JSON.parse(readFileSync(planPath, "utf8"));
   const records = await driveCapture({ plan: Array.isArray(plan) ? plan : plan.cells });
+  // The index's PROSE survives a run: it is what the file says about itself, and
+  // a capture run has nothing to say about that. `$comment` is the canonical
+  // index's own spelling; `note` was the retired audit copy's.
+  const existing = JSON.parse(readFileSync(resolve(outPath), "utf8"));
   const index = {
-    note: JSON.parse(readFileSync(resolve(outPath), "utf8")).note,
+    ...(existing.$comment !== undefined ? { $comment: existing.$comment } : {}),
+    ...(existing.note !== undefined ? { note: existing.note } : {}),
     schemaVersion: CAPTURE_INDEX_SCHEMA_VERSION,
     recorder: RECORDER_ID,
     records,

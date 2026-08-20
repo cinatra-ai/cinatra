@@ -5,9 +5,24 @@
     "A cell name is a CLAIM. This file is where a claim is answered by a RECORD: the host the",
     "picture declares, the URL it was taken on, the screenshot with its SHA-256, and the anchors",
     "that were counted on that screen, in the frame they were counted in. The rules live in",
-    "scripts/ci/lib/capture-record-contract.mjs; scripts/ci/chat-hitl-evidence-gate.mjs binds every",
-    "acceptance-manifest cell that names a host to a record here. An unindexed screenshot counts",
-    "as zero.",
+    "scripts/ci/lib/capture-record-contract.mjs, and that module also exports the ONE path every",
+    "reader resolves. scripts/ci/chat-hitl-evidence-gate.mjs binds every acceptance-manifest cell",
+    "that names a host to a record here. An unindexed screenshot counts as zero.",
+    "",
+    "THERE IS ONE OF THIS FILE, and it is read by BOTH gates. scripts/audit/chat-hitl-acceptance-gate.mjs",
+    "used to read a second index of its own beside it that also called itself canonical and held no",
+    "records -- and that empty one was the capture driver's default output, so an honest capture run",
+    "wrote where nothing would ever bind it. That file is retired; its load-bearing prose is the",
+    "C1 / C2 paragraph below. The audit half is the STRICTER reader: it adds painted counts, measured",
+    "absences, a pinned card instance and frame URLs on top of the contract above. Those extras are",
+    "GRADED WHEN PRESENT on a committed record and REQUIRED of what its own driver",
+    "(scripts/audit/lib/chat-hitl-capture-driver.mjs) writes, so the strictness lands on the records",
+    "that tier makes rather than refusing eight records another honest driver made. The contract above",
+    "is the floor for every record either way.",
+    "",
+    "FILE NAMES CARRY NO AUTHORITY. A cell called `__chat_thread__` whose record ended on a run-detail",
+    "URL, or whose chat anchors were never asserted, is a mislabeled capture and fails. A PENDING",
+    "capture owes its decision controls; a DECIDED one owes their ABSENCE and its own decided summary.",
     "",
     "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: EIGHT records,",
     "from three lanes, on two of the four hosts. Each group is ONE run of the recorder against a",
@@ -19,7 +34,8 @@
     "",
     "  B3 / B4 - chat_thread - cinatra#2852 (PR #2863), evidence/2852-before-after. The re-shot",
     "  chip row in a real transcript: all suggestions accepted, then one chip dismissed, with the",
-    "  count line in the decision floor on both hosts.",
+    "  count line in the decision floor in both. Their page_gate_region twins (B1 / B2) stay in",
+    "  that lane's own capture-records.json, for the URL-class reason set out below.",
     "",
     "  C1 / C2 / C3 - site_widget - cinatra#2754 (PR #2870), evidence/2754-island-wire. The card",
     "  in the embedded conversation column on a genuinely cross-site host page, the same card",
@@ -33,11 +49,14 @@
     "",
     "MIND THE C1 / C2 NAMES. The site_widget C1 and C2 here are NOT the chat_thread C1 and C2 the",
     "acceptance manifest cites from evidence/2573-s7-visuals-lane. Those two cells are still",
-    "UNBOUND and the gate is still honestly red for them: the S7 run never looked for",
-    "[data-conversation-list], so writing a count for it would be inventing an observation nobody",
-    "made. Adopting the pictures above under their names, on the strength of a shared C1, would be",
-    "exactly the mislabel this index exists to refuse. They stay grandfathered findings in the",
-    "rollout policy until that re-capture happens.",
+    "UNBOUND and the gate is still honestly red for them. The S7 run observed THREE of the four",
+    "anchors a chat_thread record owes -- the /chat URL class, data-lifecycle-card-host=chat_thread,",
+    "and the card root, pending and decided respectively -- and never looked for",
+    "[data-conversation-list]. A record asserting a count for an anchor nobody measured is the",
+    "fabrication this index exists to refuse, so writing one would be inventing an observation",
+    "nobody made. Adopting the pictures above under their names, on the strength of a shared C1,",
+    "would be exactly the mislabel this index exists to refuse. They stay grandfathered findings",
+    "in the rollout policy until that re-capture happens.",
     "",
     "THE page_gate_region RECORDS ARE DELIBERATELY ELSEWHERE, not missing. #2862 photographed the",
     "review page's gate region once (A1) and #2863 twice (B1, B2); all three stay in their own",
@@ -51,7 +70,8 @@
     "invented counts. What the contract does catch is the accidental mislabel, the anchor nobody",
     "measured, the drifted hash, the re-used picture, and the cell that cites nothing at all."
   ],
-  "recorder": "chat-hitl-capture-recorder@1",
+  "schemaVersion": 1,
+  "recorder": "cinatra-lifecycle-capture-recorder@1",
   "records": [
     {
       "cell": "A3__review-card__chat_thread__pending",
@@ -583,7 +603,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:21.024Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out \u2014 they are sealed bearer strings \u2014 so each is reported by length, url-safe shape and a truncated digest."
+      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out — they are sealed bearer strings — so each is reported by length, url-safe shape and a truncated digest."
     },
     {
       "cell": "C3__review-card__site_widget__pending",
@@ -649,7 +669,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:29.104Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL \u2014 the single empty-island element every denial draws, which is why the framed region is blank \u2014 and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
+      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL — the single empty-island element every denial draws, which is why the framed region is blank — and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
     }
   ]
 }

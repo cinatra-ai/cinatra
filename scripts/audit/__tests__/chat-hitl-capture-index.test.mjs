@@ -1237,12 +1237,37 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     expect(violations).toMatch(/requires \[data-lifecycle-card="recommendation_hold"\] PRESENT/);
   });
 
-  it("REFUSES a chat_thread record that names no instance at all", () => {
+  it("REFUSES a chat_thread record that names no instance at all, at its own tier", () => {
     const record = chatRecord();
     delete record.instance;
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    expect(validateCaptureRecord(record, { hashOf, tier: "audit" }).join("\n")).toMatch(
       /must carry the `instance` its card-scoped counts were read from/,
     );
+  });
+
+  it("GRADED: a record that pins no instance is judged without this tier's extras", () => {
+    // The 166-violation refusal, stated as the case it was. The eight committed
+    // records were written by the canonical driver, which pins no card root,
+    // records no painted count and labels no observation. Demanding those of
+    // them said nothing about the pictures and refused the canonical index
+    // wholesale. What the graded tier still refuses is a FALSE claim, not an
+    // omission — the cases either side of this one.
+    const record = chatRecord();
+    delete record.instance;
+    delete record.build;
+    const canonicalShaped = {
+      ...record,
+      assertions: record.assertions.map((a) => ({
+        selector: a.selector,
+        scope: a.scope,
+        count: a.count,
+      })),
+    };
+    expect(validateCaptureRecord(canonicalShaped, { hashOf })).toEqual([]);
+    // ...and the SAME record is refused the moment it is asked for at this tier.
+    expect(
+      validateCaptureRecord(canonicalShaped, { hashOf, tier: "audit" }).length,
+    ).toBeGreaterThan(0);
   });
 
   it("REFUSES a record that measured one of several cards without saying which", () => {
@@ -1276,9 +1301,26 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
       delete withoutPainted.visible;
       return withoutPainted;
     });
+    // The record still PINS AN INSTANCE, so it speaks this tier and owes the
+    // painted count. Dropping the pin as well is the graded case above.
     expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
       /visible must be the observed count of PAINTED matches/,
     );
+  });
+
+  it("REFUSES a painted count above its own attached count, at EITHER tier", () => {
+    // The line between an omission and a false claim. A record may decline to
+    // report a painted count; it may not report one it could not have observed.
+    const assertions = chatAssertions().map((a) =>
+      a.selector === CONFIRM ? { ...a, count: 1, visible: 4 } : a,
+    );
+    const record = chatRecord({ assertions });
+    delete record.instance;
+    for (const opts of [{ hashOf }, { hashOf, tier: "audit" }]) {
+      expect(validateCaptureRecord(record, opts).join("\n")).toMatch(
+        /visible must be the observed count of PAINTED matches, between 0 and 1; it is 4/,
+      );
+    }
   });
 
   it("keeps ABSENT answered by ATTACHMENT, so a merely hidden control is not gone", () => {

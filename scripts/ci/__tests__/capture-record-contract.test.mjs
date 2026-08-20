@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  RECORDER_ID,
   bindEvidenceCells,
   parseCellName,
   requiredAssertionsFor,
@@ -45,7 +46,7 @@ afterAll(() => {
 function honestChatPending(overrides = {}) {
   return {
     cell: "C1__review-card__chat_thread__pending",
-    recorder: "chat-hitl-capture-recorder@1",
+    recorder: RECORDER_ID,
     declaredHost: "chat_thread",
     declaredKind: "artifact_review_gate",
     declaredState: "pending",
