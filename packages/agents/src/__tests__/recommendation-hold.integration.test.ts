@@ -1132,12 +1132,18 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
   // test is "this call returns", not "this code calls setTimeout".
   //
   // The bound is `HOLD_NOTIFY_DISPATCH_TIMEOUT_MS` = 500ms at concurrency
-  // `HOLD_NOTIFY_DISPATCH_CONCURRENCY` = 4; both are module-private, so the
-  // numbers below name them rather than import them.
+  // `HOLD_NOTIFY_DISPATCH_CONCURRENCY` = 4, with the pass giving up after
+  // `HOLD_NOTIFY_EXPIRY_BREAKER` = 4 expiries; all three are module-private, so
+  // the numbers below name them rather than import them.
+  //
+  // The breaker is the second half of the fix and has its own case below: the
+  // bound abandons a wedged operation rather than cancelling it, so capping the
+  // WAIT is not the same as capping how much a wedged page leaves running.
   // -------------------------------------------------------------------------
 
   const BOUND_MS = 500; // == HOLD_NOTIFY_DISPATCH_TIMEOUT_MS
   const WAVE = 4; // == HOLD_NOTIFY_DISPATCH_CONCURRENCY
+  const BREAKER = 4; // == HOLD_NOTIFY_EXPIRY_BREAKER
 
   /**
    * The production host writer with the clear WEDGED for a named set of parks: it
@@ -1222,7 +1228,7 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
 
   it("a HEALTHY page pays NOTHING for the bound — it is a ceiling, never a floor", async () => {
     await clearOutstandingObligations();
-    const runs = [];
+    const runs: Array<Awaited<ReturnType<typeof heldRun>>> = [];
     for (let i = 0; i < WAVE * 2; i++) runs.push(await heldRun());
 
     const startedAt = Date.now();
@@ -1262,6 +1268,74 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
     expect(await notificationRows(healthy.runId)).toHaveLength(0);
     expect(await parkState(wedged.parkId)).toMatchObject({ hold_notification: "live" });
     expect(await notificationRows(wedged.runId)).toHaveLength(1);
+  });
+
+  it("A WEDGED PAGE STOPS LAUNCHING: the breaker caps how many operations one pass abandons", async () => {
+    // THE FINDING THIS PINS. The per-dispatch bound bounds the WAIT, not the
+    // OPERATION: on expiry the drain walks away and the dispatch it started keeps
+    // running. Without a breaker the wave simply refills, so a page of N wedged
+    // rows leaves N live in-flight operations behind it — not `WAVE` of them —
+    // and each one can hold a connection of the agents pool (pg default max 10)
+    // for as long as it stays wedged. The cap has to be on how many the pass ever
+    // LAUNCHES, because nothing here can reclaim one it already has.
+    await clearOutstandingObligations();
+
+    // A page comfortably larger than E + WAVE, so "stopped early" and "ran the
+    // whole page" are different numbers and the assertion can tell them apart.
+    const PAGE = 12;
+    const runs: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < PAGE; i++) runs.push(await heldRun());
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set(runs.map((r) => r.parkId)), seen);
+
+    const startedAt = Date.now();
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: runs.map((r) => r.parkId),
+      limit: PAGE,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    expect(swept.released).toBe(PAGE);
+    expect(swept.holdNotificationsCleared).toBe(0);
+
+    // THE PIN — and `seen` is the honest instrument for it, because it counts what
+    // the port was actually ASKED to do, which is exactly the set of operations
+    // left running. The ceiling is E + WAVE - 1 = 7, and a fully wedged page
+    // really does reach it: the wave expires in unison, so the first WAVE - 1
+    // workers each read a count still under budget and pull one more row before
+    // the last one trips the breaker.
+    expect(seen.length).toBeLessThanOrEqual(BREAKER + WAVE - 1);
+    expect(seen.length).toBeLessThan(PAGE); // the mutation-discriminating half
+    // Every park the breaker skipped is untouched and still owed — stopping a pass
+    // strands nothing, because claim-time stamping already rotated the whole page.
+    for (const r of runs) {
+      expect(await parkState(r.parkId)).toMatchObject({
+        status: "released",
+        hold_notification: "live",
+      });
+      expect(await notificationRows(r.runId)).toHaveLength(1);
+      expect(await attemptedAt(r.parkId)).not.toBeNull();
+    }
+
+    // The wall clock follows from the same property: the timeout contribution no
+    // longer scales with the page. This page pays ceil((E + WAVE - 1) / WAVE) = 2
+    // waves and would pay ceil(12 / 4) = 3 without the breaker — and the gap only
+    // widens with the page, which is the point: at the 500-row cap the breaker
+    // still pays 2 waves and the unbroken drain pays 125.
+    expect(elapsed).toBeLessThan(BOUND_MS * 3);
+
+    // AND THE SKIPPED ROWS ARE NOT LOST. With the notifier healthy again the very
+    // next sweep discharges the entire page — including every obligation this pass
+    // deliberately declined to dispatch.
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier(hostNotifier.runWaitNotifier satisfies RunWaitNotifier);
+    const second = await parkStore.sweepParks({ limit: PAGE });
+    expect(second.holdNotificationsCleared).toBe(PAGE);
+    for (const r of runs) {
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "cleared" });
+      expect(await notificationRows(r.runId)).toHaveLength(0);
+    }
   });
 
   it("the ABANDONED dispatch settling LATE is consumed: no unhandled rejection", async () => {

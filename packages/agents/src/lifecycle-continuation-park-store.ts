@@ -294,7 +294,8 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
 }
 
 /**
- * cinatra#2868 — the PER-DISPATCH BOUND, and the arithmetic that picks it.
+ * cinatra#2868 — the PER-DISPATCH BOUND, the EXPIRY BREAKER, and what neither of
+ * them fixes.
  *
  * `dispatchRecommendationHoldCleared` swallows a THROWN port, so a notifier that
  * fails loudly already reports `false` and the obligation simply stands. A
@@ -309,35 +310,105 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  *     SYNCHRONOUSLY on a human's confirm/skip — so a wedged notifier blocks a
  *     user-facing request, indefinitely.
  *
- * THE BUDGET. The page is the sweep's `limit`: 100 for BOTH production drivers
- * (gate maintenance passes its own default 100; the confirm/skip release takes
- * `sweepParks`' default 100), hard-capped at 500. The worst case — every
- * dispatch in the page running to expiry — is `ceil(page / C) x BOUND`:
+ * THE BOUND ABANDONS; IT DOES NOT CANCEL. This is the whole shape of what is and
+ * is not fixed here, and it was originally overclaimed. `dispatchHoldClearedBounded`
+ * bounds the WAIT, not the OPERATION: on expiry this loop walks away and the
+ * dispatch it launched keeps running. Bounding the wait alone therefore converts
+ * "one wedged notifier hangs the sweeper" into "one wedged notifier leaves an
+ * unbounded pile of live in-flight operations" — a page of 100 wedged rows would
+ * abandon up to 100 of them, not 4, because the wave refills the moment each
+ * expiry is read. Each abandoned host clear can hold one connection of the agents
+ * pool (pg default `max: 10`) for as long as it stays wedged, so the pile is the
+ * exact resource the concurrency cap was supposed to protect.
  *
- *   page 100, C = 4, BOUND = 500ms  ->  25 waves x 0.5s = 12.5s
- *   page 500 (the cap no production caller passes)  ->  125 x 0.5s = 62.5s
+ * Hence the EXPIRY BREAKER. Expiries are counted across the whole pass, and once
+ * `HOLD_NOTIFY_EXPIRY_BREAKER` of them have accrued the drain STOPS DISPATCHING:
+ * every obligation still on the page is left `live`, undispatched, for a later
+ * sweep. Claim-time stamping already rotated those rows, so nothing is starved by
+ * being skipped — they go to the back of a queue every row leaves eventually.
  *
- * 12.5s is about a fifth of the 60s job period: the other four maintenance steps
- * keep their room and the loop keeps its cadence. It is also the new ceiling on a
- * confirm/skip click, which had none. The cap page lands just past one period —
- * still a bound, and still the only shape in which this drain can ever end.
+ * WHY E = 4, WHICH IS EXACTLY C. A fully wedged page expires its ENTIRE FIRST
+ * WAVE together, so E = C trips the breaker at the earliest moment "the notifier
+ * is wedged" is distinguishable from "one row is slow": the end of wave one.
  *
- * WHY C = 4 AND NOT SERIAL. The drain dispatched strictly serially on the stated
- * ground that serialising keeps a slow notifier from fanning out connections
- * behind a sweep that is already on a schedule (cinatra#2838). That ground is
- * sound, which is why the fan-out is BOUNDED rather than removed: the agents pool
- * is pg's default `max: 10` and the host clear reads the run through that same
- * pool before it deletes, so 4 in flight is under half of it — a wedged page
- * cannot starve the connections the rest of the process shares. Serial alone
- * cannot carry a bound generous enough to be safe: at 100 rows it would force
- * BOUND under 600ms merely to fit the period, and under 150ms to fit a fifth.
+ * That is E + C - 1 = 7 abandoned operations, not E of them, and the arithmetic is
+ * worth being exact about because the wave expires IN UNISON. The C expiries land
+ * in the same tick and are read one at a time, so the first C - 1 workers each see
+ * a count still under the budget and pull one more row before the C-th worker
+ * trips it. A wedged page therefore launches 4 + 3 = 7 dispatches over two waves —
+ * measured, not derived — and a MIXED page reaches the same ceiling by the other
+ * route, the E-th expiry landing while C - 1 dispatches are still in flight and go
+ * on to expire too. Either way E + C - 1 = 7 is the ceiling, and it is under the
+ * pool's `max: 10`, which is the property that matters: ONE wedged pass cannot
+ * exhaust the connections the rest of the process shares.
+ *
+ * TOTAL EXPIRIES, NOT CONSECUTIVE. A consecutive counter resets on every healthy
+ * row, so a notifier that wedges half its calls would never trip it and would
+ * still abandon ~50 operations on a 100-row page. The failure being bounded is
+ * cumulative, so the counter has to be too.
+ *
+ * WHAT STILL LEAKS — SAY IT PLAINLY. An abandoned operation is abandoned, not
+ * freed. The breaker bounds how many one PASS can strand; it cannot reclaim any of
+ * them, and it does not stop them accumulating ACROSS passes: a notifier that is
+ * persistently wedged strands up to E + C - 1 = 7 more operations every sweep
+ * interval, and those never settle by assumption. Enough intervals will still
+ * exhaust the pool. What the breaker buys is a rate (7 per ~60s instead of 100 per
+ * ~60s) and a bounded blast radius per pass — time for the aggregated warning
+ * below to be acted on. The real fix is CANCELLATION, and it is not reachable
+ * through this seam today:
+ *
+ *   - The seam is a host-supplied OPTIONAL port (`onClearRecommendationHold`).
+ *     Threading an `AbortSignal` through it is easy; making a host HONOUR one is
+ *     not something the port can enforce, and a signal every shipped host ignores
+ *     would be a false affordance — it would let this docblock claim a
+ *     cancellation that never happens.
+ *   - The production host's clear is two halves and neither is abortable as
+ *     written. The first is `readAgentRunById`, a drizzle-orm/node-postgres
+ *     `select` — drizzle exposes no signal on execute, so aborting it means
+ *     bypassing drizzle for that read, holding the raw pool client, and cancelling
+ *     its backend from a SECOND connection. The second is
+ *     `deleteHoldNotificationForUser`, which is SYNCHRONOUS: it runs its query in
+ *     a worker thread and blocks the main thread on `Atomics.wait`. No signal can
+ *     interrupt that — while it blocks, no timer, no abort listener and no
+ *     microtask runs at all, including the bound's own. It is un-abortable by
+ *     construction rather than by omission, and it carries its own 30s ceiling
+ *     (`POSTGRES_SYNC_TIMEOUT_MS`), which is the only thing bounding that window.
+ *
+ * THE BUDGET, CORRECTED. The page is the sweep's `limit`: 100 for BOTH production
+ * drivers (gate maintenance passes its own default 100; the confirm/skip release
+ * takes `sweepParks`' default 100), hard-capped at 500. With the breaker, the time
+ * this drain can spend WAITING ON TIMEOUTS no longer scales with the page at all:
+ * at most E + C - 1 dispatches ever expire, so the timeout contribution is at most
+ * `ceil((E + C - 1) / C) x BOUND` = 2 x 500ms = 1s, for a 100-row page and for the
+ * 500-row cap alike. The superseded `ceil(page / C) x BOUND` arithmetic (25 waves
+ * = 12.5s at 100 rows, 62.5s at the cap) described a drain with no breaker.
+ *
+ * THAT IS A TIMEOUT CEILING, NOT A SWEEP CEILING, and the distinction was the
+ * second thing overclaimed here. A committed dispatch is followed by an ACK UPDATE
+ * on the pool, and that write is not bounded by anything in this module. Nor are
+ * the claim UPDATE, the TTL fail-close, or any other statement in the pass. What
+ * cinatra#2868 removes is the WEDGED-NOTIFIER HANG — an unbounded wait on a port
+ * that may never answer. The ack is an ordinary keyed UPDATE on the agents pool,
+ * carrying exactly the same trust as every other query this sweep runs, and the
+ * sweep is no more and no less bounded than those queries are. There is no total
+ * wall-clock ceiling on `sweepParks` and this change does not create one.
  *
  * WHY 500ms IS GENEROUS. A healthy clear is two indexed round-trips on a warm
  * pool — the run's PK read, then the keyed delete. 500ms is an order of magnitude
  * over that. And one asymmetry is what makes a tight bound safe at all: an expiry
  * is not a LOSS, it is a RETRY. The obligation stays `live` with its cursor
  * already moved, so the next sweep serves it, and the cost of a false expiry is
- * one more sweep interval of a stale bell — never a dropped notification.
+ * one more sweep interval of a stale bell — never a dropped notification. The same
+ * asymmetry is what makes the breaker cheap: stopping a pass early costs a sweep
+ * interval on rows that were already going to be retried.
+ *
+ * WHY C = 4 AND NOT SERIAL. The drain dispatched strictly serially on the stated
+ * ground that serialising keeps a slow notifier from fanning out connections
+ * behind a sweep that is already on a schedule (cinatra#2838). That ground is
+ * sound, which is why the fan-out is BOUNDED rather than removed: 4 in flight is
+ * under half the agents pool. Serial alone cannot carry a bound generous enough to
+ * be safe: at 100 rows it would force BOUND under 600ms merely to fit the ~60s job
+ * period, and under 150ms to fit a fifth of it.
  *
  * DELIBERATELY NOT `strandPark`, whose clear is also an unbounded await. That one
  * is a single ops teardown of a single park, not a bounded page inside a job on a
@@ -348,12 +419,21 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  */
 const HOLD_NOTIFY_DISPATCH_TIMEOUT_MS = 500;
 const HOLD_NOTIFY_DISPATCH_CONCURRENCY = 4;
+/** Expiries in ONE pass after which the drain stops dispatching. == C, so a fully
+ * wedged page trips it at the end of its first wave. See the docblock above. */
+const HOLD_NOTIFY_EXPIRY_BREAKER = 4;
 
 type HoldClearOutcome = "committed" | "declined" | "expired";
 
 /**
  * ONE bounded dispatch. Resolves `"expired"` the moment the bound elapses, and
  * never rejects — the caller reads an expiry as exactly a declined clear.
+ *
+ * WHAT "EXPIRED" DOES NOT MEAN: it does not mean the dispatch stopped. This bounds
+ * the WAIT only; the operation it launched is still running, still holding
+ * whatever it holds, and nothing here can reclaim it. Counting expiries is
+ * therefore counting ABANDONED OPERATIONS, which is why the caller trips a breaker
+ * on that count rather than treating an expiry as a free retry.
  *
  * Two details are load-bearing and easy to lose:
  *
@@ -437,10 +517,14 @@ function dispatchHoldClearedBounded(park: {
  * A failed dispatch leaves the row `live` and it is re-drained on a later pass,
  * exactly as before — the only change is WHERE in the queue it comes back.
  *
- * BOUNDED PER DISPATCH (cinatra#2838's successor, cinatra#2868). Every dispatch
- * below runs under `dispatchHoldClearedBounded` and an EXPIRY is read as exactly
- * a declined clear, so no notifier — however wedged — can park this loop. See
- * that helper for the budget the bound is derived from.
+ * BOUNDED PER DISPATCH, AND BOUNDED PER PASS (cinatra#2838's successor,
+ * cinatra#2868). Every dispatch below runs under `dispatchHoldClearedBounded` and
+ * an EXPIRY is read as exactly a declined clear, so no notifier — however wedged —
+ * can park this loop. Because that bound ABANDONS the operation rather than
+ * cancelling it, the pass also stops dispatching once
+ * `HOLD_NOTIFY_EXPIRY_BREAKER` expiries have accrued, leaving the rest of the page
+ * `live` and undispatched. See the bound's docblock for both budgets and for what
+ * neither of them reclaims.
  *
  * FOR UPDATE SKIP LOCKED because sweeps genuinely overlap: the ~60s
  * gate-maintenance loop (`releaseResolvedAutoGateParks`) is not the only driver —
@@ -496,14 +580,24 @@ async function drainHoldNotifications(limit: number): Promise<number> {
   // A BOUNDED WAVE, not an unbounded queue (cinatra#2868). Each worker pulls the
   // next obligation off the page and dispatches it under the per-dispatch bound,
   // so at most `HOLD_NOTIFY_DISPATCH_CONCURRENCY` notifier calls are ever in
-  // flight and the whole page costs at most ceil(page / C) x BOUND. `shift()` is
-  // the entire synchronisation: the event loop is single-threaded, so two workers
-  // can never take the same row.
+  // flight. `shift()` is the entire synchronisation: the event loop is
+  // single-threaded, so two workers can never take the same row.
   const queue = [...owing];
   const workers = Array.from(
     { length: Math.min(HOLD_NOTIFY_DISPATCH_CONCURRENCY, queue.length) },
     async () => {
-      for (let park = queue.shift(); park; park = queue.shift()) {
+      // THE EXPIRY BREAKER, checked BEFORE each pull rather than after each
+      // dispatch. An expiry means the drain ABANDONED a live operation, not that
+      // it ended one, so the pile only shrinks by not launching more: once the
+      // pass has stranded `HOLD_NOTIFY_EXPIRY_BREAKER` of them, every row still in
+      // `queue` is left untouched and `live` for a later sweep. `expired` is
+      // shared across the workers on purpose — the budget is per PASS, not per
+      // worker — and a worker already inside a dispatch when the breaker trips
+      // still finishes and acks it, which is why the true ceiling on abandoned
+      // operations is E + C - 1 rather than E.
+      while (expired < HOLD_NOTIFY_EXPIRY_BREAKER) {
+        const park = queue.shift();
+        if (!park) break;
         const outcome = await dispatchHoldClearedBounded(park);
         if (outcome === "expired") expired += 1;
         // An EXPIRY is treated as EXACTLY a `false`, deliberately: both say the
@@ -527,11 +621,25 @@ async function drainHoldNotifications(limit: number): Promise<number> {
     },
   );
   await Promise.all(workers);
+  // Whatever no worker ever pulled: the breaker tripped and these were never
+  // dispatched at all. They are still `live` and still stamped, so they simply
+  // rejoin the queue.
+  const undispatched = queue.length;
   if (expired > 0) {
     // Aggregated, not per row: under a wedged notifier EVERY dispatch in the page
     // expires, and one line per obligation per pass would bury the signal it is.
     console.warn(
       `[lifecycle-continuation-park] ${expired}/${owing.length} hold-notification clear(s) did not settle within ${HOLD_NOTIFY_DISPATCH_TIMEOUT_MS}ms — left live for a later sweep`,
+    );
+  }
+  if (undispatched > 0) {
+    // A DISTINCT line from the one above, because it reports a distinct decision:
+    // not "these did not answer" but "this pass stopped asking". Each expiry above
+    // left a live operation running that nothing can reclaim, so the breaker is
+    // the only thing standing between a persistently wedged notifier and the
+    // agents pool — if this line is recurring, the notifier is the incident.
+    console.warn(
+      `[lifecycle-continuation-park] hold-notification dispatch STOPPED after ${expired} expiries in one pass — ${undispatched} claimed obligation(s) left live and UNDISPATCHED for a later sweep; the notifier appears wedged and each expiry above abandoned an operation that is still running`,
     );
   }
   return cleared;
