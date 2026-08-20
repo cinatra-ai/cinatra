@@ -325,21 +325,236 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
     expect(assembleThreadPayloadFromParts(baseThread, [], [], null)).toBeNull();
   });
 
-  it("SCOPES to legacy-mirror turns: runtime-native turns (bare id, run_id set) are excluded", () => {
+  it("SCOPES to legacy-mirror turns: a run-bound turn in another representation is excluded", () => {
     const legacyMsg = { id: "m1", role: "user", content: "hi" };
     const runtimeMsg = { id: "r1", role: "assistant", content: "runtime" };
     const payload = assembleThreadPayloadFromParts(
       baseThread,
       [
-        // a runtime-native turn: bare UUID id + run_id present + content — MUST be ignored
+        // A run-bound turn whose content is NOT the sink's `assistant-turn-v1`
+        // durable object. The S9j fold-in (cinatra#2823) reads exactly that one
+        // format and nothing else, so a foreign representation is still ignored.
         turn({ id: "9f1e-uuid", runId: "run-1", role: "assistant", content: runtimeMsg }),
-        // the legacy-mirror /chat turn — the only faithful source
+        // the legacy-mirror /chat turn — the spine
         turn({ id: "legacy:3:th1:m1", role: "user", content: legacyMsg }),
       ],
       [],
       null,
     );
     expect(payload!.messages).toEqual([legacyMsg]); // runtime turn NOT mixed in
+  });
+
+  // ── the S9j lifecycle fold-in (cinatra#2823) ──────────────────────────────
+  // The rule and every narrowing in it are stated on `assembleThreadPayloadFromParts`.
+  // These are the pure arms; the end-to-end proof is the Postgres contract tier
+  // (`durable-lifecycle-reload-contract.integration.test.ts`), which drives the
+  // real sink into the real store and mounts the real view on what comes back.
+
+  /** A durable `assistant-turn-v1` content object, as the sink writes it. */
+  function durableTurnContent(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      format: "assistant-turn-v1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        { type: "text", text: "here it is" },
+        { type: "tool_call", id: "call-1", name: "artifact_review_gate_render", serverLabel: "cinatra" },
+        { type: "tool_result", id: "call-1", name: "artifact_review_gate_render", resultLabel: "ok" },
+      ],
+      ...over,
+    };
+  }
+
+  const REVIEW_VIEW = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "gate-ref-1" };
+
+  it("INERT for a run-bound turn carrying no lifecycle render state", () => {
+    const legacyMsg = { id: "m1", role: "user", content: "hi" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent() }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: legacyMsg }),
+      ],
+      [],
+      null,
+    );
+    // No view, no pinned run — nothing for the fold-in to repair, so the
+    // transcript is byte-identical to what it was before the fold-in existed.
+    expect(payload!.messages).toEqual([legacyMsg]);
+  });
+
+  it("APPENDS a run-bound lifecycle turn the spine never received", () => {
+    const legacyMsg = { id: "m1", role: "user", content: "hi" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW] }),
+        }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: legacyMsg }),
+      ],
+      [],
+      null,
+    );
+    expect(payload!.messages).toHaveLength(2);
+    const assistant = (payload!.messages as Record<string, unknown>[])[1];
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.id).toBe("9f1e-uuid");
+    expect(assistant.dataParts).toEqual([REVIEW_VIEW]);
+    expect(assistant.parts).toEqual([
+      { kind: "text", content: "here it is" },
+      {
+        kind: "tool_call",
+        id: "call-1",
+        name: "artifact_review_gate_render",
+        status: "completed",
+        serverLabel: "cinatra",
+        resultLabel: "ok",
+      },
+    ]);
+  });
+
+  it("APPENDS run-bound turns in created_at order, not query order", () => {
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "turn-late",
+          runId: "run-2",
+          createdAt: "2026-07-10T10:05:00.000Z",
+          content: durableTurnContent({
+            parts: [{ type: "tool_call", id: "call-late", name: "verification_record_render" }],
+            dataParts: [{ viewType: "verification_summary", schemaVersion: 1, ref: "late" }],
+          }),
+        }),
+        turn({
+          id: "turn-early",
+          runId: "run-1",
+          createdAt: "2026-07-10T10:01:00.000Z",
+          content: durableTurnContent({
+            parts: [{ type: "tool_call", id: "call-early", name: "artifact_review_gate_render" }],
+            dataParts: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref: "early" }],
+          }),
+        }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: { id: "m1", role: "user", content: "hi" } }),
+      ],
+      [],
+      null,
+    );
+    const refs = (payload!.messages as Record<string, unknown>[])
+      .filter((m) => m.role === "assistant")
+      .map((m) => ((m.dataParts as Record<string, unknown>[])[0]).ref);
+    expect(refs).toEqual(["early", "late"]);
+  });
+
+  it("REPAIRS rather than duplicates a spine turn that shares a tool-call id", () => {
+    const legacyMsg = { id: "m1", role: "user", content: "hi" };
+    // The client's save DID land for this turn — but without the view it dropped.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW] }),
+        }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: legacyMsg }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    expect(payload!.messages).toHaveLength(2); // NOT three — the turn is not doubled
+    const assistant = (payload!.messages as Record<string, unknown>[])[1];
+    expect(assistant.id).toBe("a1"); // the reader's own message identity survives
+    expect(assistant.dataParts).toEqual([REVIEW_VIEW]);
+  });
+
+  it("leaves the CALLER's own message objects untouched (copy-on-write)", () => {
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+    };
+    const before = JSON.parse(JSON.stringify(spineAssistant));
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    // The repair is visible in the payload...
+    expect((payload!.messages as Record<string, unknown>[])[0].dataParts).toEqual([REVIEW_VIEW]);
+    // ...and NOT written back onto the object the caller still holds.
+    expect(spineAssistant).toEqual(before);
+  });
+
+  it("NEVER overwrites a view the spine already carries", () => {
+    const spineView = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "the-one-on-screen" };
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+      dataParts: [spineView],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    expect((payload!.messages as Record<string, unknown>[])[0].dataParts).toEqual([spineView]);
+  });
+
+  it("PINS a run on a spine tool call that lost it, and leaves a pinned one alone", () => {
+    const durable = durableTurnContent({
+      parts: [
+        { type: "tool_call", id: "call-1", name: "agent_run" },
+        { type: "tool_result", id: "call-1", name: "agent_run", result: "{}" },
+        { type: "tool_call", id: "call-2", name: "agent_run" },
+      ],
+      dataParts: [
+        { kind: "agent_run", toolCallId: "call-1", runId: "run-A" },
+        { kind: "agent_run", toolCallId: "call-2", runId: "run-B" },
+      ],
+    });
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        { kind: "tool_call", id: "call-1", name: "agent_run", status: "completed" },
+        { kind: "tool_call", id: "call-2", name: "agent_run", status: "completed", runId: "already-pinned" },
+      ],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durable }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const parts = (payload!.messages as Record<string, unknown>[])[0].parts as Record<string, unknown>[];
+    expect(parts[0].runId).toBe("run-A"); // filled in
+    expect(parts[1].runId).toBe("already-pinned"); // the reader's own state wins
   });
 
   it("reconstructs messages losslessly from turn.content in the given (ordinal) order", () => {

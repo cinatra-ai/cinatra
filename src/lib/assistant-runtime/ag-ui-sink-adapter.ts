@@ -30,7 +30,11 @@
 //                     envelope from the allowlisted cinatra self-MCP (server,
 //                     tool) tuple additionally emits a `DATA_PART { viewType,
 //                     schemaVersion, ref }` — an opaque ref, never content
-//                     (cinatra#2565; see ./lifecycle-view-envelope).
+//                     (cinatra#2565; see ./lifecycle-view-envelope). Every
+//                     DATA_PART but `citations` is ALSO kept in the durable
+//                     content (cinatra#2823 S9j), because a card the wire
+//                     carries and the durable row drops is a card that renders
+//                     live and is gone after a reload.
 //   citations       → DATA_PART { kind: "citations", citations }
 //   error           → seal open text, RUN_ERROR (terminal)
 //   done            → seal open text, RUN_FINISHED (terminal)
@@ -72,12 +76,36 @@ export type AgUiPublish = (event: AgUiEvent) => Promise<void>;
  *  assistant turn survives in Postgres, not only in the bounded/lossy Redis log.
  *  `content` is the concatenated assistant text; `parts` is the ordered render
  *  trace (text / tool-call / tool-result / citations) — more than terminal text,
- *  as the design requires. */
+ *  as the design requires; `dataParts` is the turn's minted renderable views
+ *  (cinatra#2823 S9j), without which a lifecycle card has nothing to be redrawn
+ *  from after a reload. */
 export type AgUiTurnDurableContent = {
   format: "assistant-turn-v1";
   role: "assistant";
   content: string;
   parts: Array<Record<string, unknown>>;
+  /**
+   * The structured `DATA_PART` payloads this turn minted, in emission order
+   * (cinatra#2823, epic #2784 S9j) — the persistence half of the lifecycle-card
+   * bridge.
+   *
+   * WHY IT HAS TO BE HERE. The sink mints a lifecycle card's DATA_PART from the
+   * SAME tool result it captures durably two lines above, but the durable row
+   * used to keep only `content` + `parts`. So the card existed on the wire and
+   * nowhere else: live it rendered, and after a reload — no Redis, no client
+   * memory — there was nothing left to render it FROM. The payload is a bounded
+   * opaque REF, never content, so persisting it stores a pointer whose state is
+   * re-resolved server-side against the reader on every mount.
+   *
+   * CITATIONS ARE DELIBERATELY ABSENT. They are the one DATA_PART that already
+   * has a durable home — an ordered `citations` entry in `parts`, written so the
+   * text/citations/text boundary survives. Capturing them twice would project
+   * one turn's sources into two renders.
+   *
+   * OMITTED WHEN EMPTY, so a turn that minted none serializes byte-identically
+   * to what it serialized before this field existed.
+   */
+  dataParts?: Array<Record<string, unknown>>;
 };
 
 export type AgUiSinkAdapter = {
@@ -105,7 +133,8 @@ export type AgUiSinkAdapter = {
    * The durable content accumulated from the sink (PR1 EXPAND), or null when the
    * turn produced nothing (no text, no tool calls) — the route persists this to
    * `assistant_turns.content` at completion. Independent of the AG-UI segment
-   * mapping: it captures the full assistant text + the ordered part trace.
+   * mapping: it captures the full assistant text, the ordered part trace, and
+   * (cinatra#2823 S9j) the DATA_PART payloads the turn minted.
    */
   durableContent(): AgUiTurnDurableContent | null;
 };
@@ -147,6 +176,10 @@ export function createAgUiSinkAdapter(params: {
   // (a new one starts after each seal, mirroring the AG-UI segment sealing).
   let contentText = "";
   const contentParts: Array<Record<string, unknown>> = [];
+  // The structured DATA_PART payloads this turn minted (cinatra#2823 S9j). See
+  // `AgUiTurnDurableContent.dataParts` for why the durable row needs them and
+  // why `citations` is not one of them.
+  const contentDataParts: Array<Record<string, unknown>> = [];
   let openContentTextPart: { type: "text"; text: string } | null = null;
   // Separate broken flag: a thrown `null`/`undefined` must still trip the
   // sentinel (never keyed on the error VALUE).
@@ -168,6 +201,21 @@ export function createAgUiSinkAdapter(params: {
         }
       }
     });
+  }
+
+  /**
+   * Emit a DATA_PART and keep it durably, in ONE call.
+   *
+   * The two must not drift: a DATA_PART the wire carries and the durable row
+   * does not is precisely a card that renders live and vanishes on reload
+   * (cinatra#2823). Routing both through one function is what makes "the sink
+   * emitted it" and "the sink kept it" the same statement rather than two
+   * statements a later edit can separate. `citations` deliberately does NOT come
+   * through here — it has its own ordered durable part.
+   */
+  function emitDurableDataPart(data: Record<string, unknown>): void {
+    contentDataParts.push(data);
+    emit({ type: "DATA_PART", data, timestamp: Date.now() } as AgUiEvent);
   }
 
   function sealOpenText(): void {
@@ -276,11 +324,7 @@ export function createAgUiSinkAdapter(params: {
         if (d.name === "agent_run") {
           const agentRunId = extractAgentRunIdFromResult(d.result);
           if (agentRunId) {
-            emit({
-              type: "DATA_PART",
-              data: { kind: "agent_run", toolCallId: id, runId: agentRunId },
-              timestamp: Date.now(),
-            });
+            emitDurableDataPart({ kind: "agent_run", toolCallId: id, runId: agentRunId });
           }
         }
         // LIFECYCLE TYPED-VIEW PRODUCER (cinatra#2565): a reserved, versioned
@@ -295,11 +339,7 @@ export function createAgUiSinkAdapter(params: {
             result: d.result,
           });
         if (lifecycleView) {
-          emit({
-            type: "DATA_PART",
-            data: { ...lifecycleView },
-            timestamp: Date.now(),
-          });
+          emitDurableDataPart({ ...lifecycleView });
         }
         return;
       }
@@ -373,6 +413,10 @@ export function createAgUiSinkAdapter(params: {
         role: "assistant",
         content: contentText,
         parts: contentParts,
+        // Field-presence discipline: absent until populated, so a turn that
+        // minted no DATA_PART persists exactly the object it persisted before
+        // this field existed.
+        ...(contentDataParts.length > 0 ? { dataParts: contentDataParts } : {}),
       };
     },
   };

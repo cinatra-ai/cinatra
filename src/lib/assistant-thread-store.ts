@@ -1589,21 +1589,385 @@ export function listAssistantThreadSummariesForOwnerInOrg(
   });
 }
 
+// ---------------------------------------------------------------------------
+// THE DURABLE ASSISTANT TURN → TRANSCRIPT MESSAGE PROJECTION
+// (cinatra-ai/cinatra#2823, epic #2784 S9j — the persistence bridge).
+// ---------------------------------------------------------------------------
+//
+// WHAT THIS IS FOR. A `/chat` turn is written down TWICE, by two different
+// writers, and until this projection only one of them could be read back:
+//
+//   * THE CLIENT'S whole-transcript save — the `legacy:`-namespaced mirror rows.
+//     It carries the projected `UiMessage`s, `dataParts` and all, and it is what
+//     `reconstructThreadPayload` reads. It is also BEST-EFFORT AND SILENT
+//     (`packages/chat/src/conversation-services.ts`): a save that fails is a turn
+//     that will not come back, and the reader is told nothing at the time.
+//   * THE STREAM ROUTE'S own record — one run-bound `assistant_turns` row whose
+//     `content` is the sink's `assistant-turn-v1` durable content. It is written
+//     by the server, inside the turn, and it cannot be lost by a client. It was
+//     also never read by anything: the reconstruction selected mirror rows only.
+//
+// So the plan's §2.3 row 5 — *a card present live can be absent after a reload
+// when the whole-message save fails silently* — was structural. The server had
+// the turn and the reconstruction would not look at it.
+//
+// WHAT IT DOES. It projects ONE durable turn into the `UiMessage` shape the
+// transcript renders, applying the SAME triage the AG-UI reducer applies to a
+// live turn (`packages/chat/src/renderer/ag-ui-reducer.ts`): a `tool_result`
+// completes its `tool_call` in place, an `agent_run` DATA_PART PINS its runId on
+// that call rather than becoming a view, `citations` become the message's
+// citations, and every remaining DATA_PART is CARRIED THROUGH as a renderable
+// view. One triage, two implementations, and they are pinned to each other by the
+// S9j contract suite, which drives the real sink and mounts the real view.
+//
+// WHY IT LIVES IN THIS FILE rather than in a module of its own. It is pure, it
+// has one caller — the fold-in below — and the five LOCKED dev-perf routes all
+// reach this store, so a separate module raised every one of their reachable-
+// module ceilings by one (measured: /sign-in 218→219, /chat 1793→1794, /api/mcp
+// 1714→1715, /api/a2a 1719→1720, /api/llm-bridge 1729→1730). The route-graph
+// ratchet says a ceiling "should only ever be LOWERED"; buying five raises for a
+// file boundary this store does not need was the wrong trade. Nothing is lost in
+// testability: these functions are EXPORTED and their unit suite
+// (`__tests__/assistant-turn-durable-projection.test.ts`) drives them directly,
+// exactly as it would have driven a separate module.
+// ---------------------------------------------------------------------------
+
+/** The durable content format this projection understands. */
+export const DURABLE_ASSISTANT_TURN_FORMAT = "assistant-turn-v1";
+
+/** A `UiMessage`-shaped assistant turn (structurally; the shape lives in
+ *  `@cinatra-ai/chat`'s `types.ts` and is deliberately not imported — this is a
+ *  sync store leaf and that module reaches the client render graph). */
+export type ProjectedAssistantTurn = {
+  id: string;
+  role: "assistant";
+  content: string;
+  parts?: Array<Record<string, unknown>>;
+  citations?: Array<Record<string, unknown>>;
+  dataParts?: Array<Record<string, unknown>>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** Is this turn content the sink's durable `assistant-turn-v1` object? */
+export function isDurableAssistantTurnContent(content: unknown): boolean {
+  return isRecord(content) && content.format === DURABLE_ASSISTANT_TURN_FORMAT;
+}
+
+/**
+ * Project one durable `assistant-turn-v1` content object onto the transcript's
+ * message shape. Returns `null` for anything else — a mirror row's message
+ * object, a legacy shape, a malformed payload — so a caller can hand it every
+ * turn it has and let the format decide.
+ *
+ * DEFENSIVE THROUGHOUT. The input is persisted JSON from a writer that may be
+ * older or newer than this reader, so every field is checked rather than
+ * asserted: an unknown part type is skipped, a `tool_result` with no matching
+ * `tool_call` is dropped exactly as the reducer drops it, and a `dataParts` entry
+ * that is not an object is ignored. The failure mode is a THINNER turn, never a
+ * thrown reconstruction — a reload that 500s is strictly worse than a reload
+ * missing one part.
+ */
+export function projectDurableAssistantTurn(
+  turnId: string,
+  content: unknown,
+): ProjectedAssistantTurn | null {
+  if (!isDurableAssistantTurnContent(content)) return null;
+  const durable = content as Record<string, unknown>;
+
+  const parts: Array<Record<string, unknown>> = [];
+  const citations: Array<Record<string, unknown>> = [];
+  const rawParts = Array.isArray(durable.parts) ? durable.parts : [];
+
+  for (const raw of rawParts) {
+    if (!isRecord(raw)) continue;
+    switch (raw.type) {
+      case "text": {
+        const text = stringOrNull(raw.text);
+        if (text === null || text.length === 0) break;
+        parts.push({ kind: "text", content: text });
+        break;
+      }
+      case "tool_call": {
+        const id = stringOrNull(raw.id);
+        const name = stringOrNull(raw.name);
+        if (id === null || name === null) break;
+        // Deduped by id, as the live applier dedupes: a retried call is one call.
+        if (parts.some((p) => p.kind === "tool_call" && p.id === id)) break;
+        parts.push({
+          kind: "tool_call",
+          id,
+          name,
+          // A turn is only persisted at terminal, so a call with no result is a
+          // call that never returned — `failed` is the honest reading, and it is
+          // what the live view would be showing when the stream ended.
+          status: "failed",
+          ...(typeof raw.serverLabel === "string" ? { serverLabel: raw.serverLabel } : {}),
+        });
+        break;
+      }
+      case "tool_result": {
+        const id = stringOrNull(raw.id);
+        if (id === null) break;
+        const target = parts.find((p) => p.kind === "tool_call" && p.id === id);
+        if (!target) break; // no matching call — the reducer drops it too
+        target.status = "completed";
+        if (typeof raw.resultLabel === "string") target.resultLabel = raw.resultLabel;
+        if (typeof raw.serverLabel === "string") target.serverLabel = raw.serverLabel;
+        break;
+      }
+      case "citations": {
+        if (!Array.isArray(raw.citations)) break;
+        for (const citation of raw.citations) {
+          if (isRecord(citation)) citations.push(citation);
+        }
+        break;
+      }
+      default:
+        // Vocabulary drift — a part type this reader does not know is skipped
+        // rather than rendered as an unknown blob.
+        break;
+    }
+  }
+
+  // The DATA_PART triage, mirroring the reducer's precedence exactly.
+  const views: Array<Record<string, unknown>> = [];
+  const rawDataParts = Array.isArray(durable.dataParts) ? durable.dataParts : [];
+  for (const raw of rawDataParts) {
+    if (!isRecord(raw)) continue;
+    // A renderable view is classified by `viewType` and that classification WINS
+    // over any structural `kind` beside it — the reducer's rule, restated here so
+    // a payload cannot be consumed structurally on reload and carried through
+    // live (or the other way round), which would be a card that changes identity
+    // when the page is refreshed.
+    const isView = typeof raw.viewType === "string" && raw.viewType.length > 0;
+    if (!isView && raw.kind === "agent_run") {
+      const toolCallId = stringOrNull(raw.toolCallId);
+      const runId = stringOrNull(raw.runId);
+      if (toolCallId === null || runId === null) continue;
+      const target = parts.find((p) => p.kind === "tool_call" && p.id === toolCallId);
+      if (!target) continue; // unknown toolCallId — the reducer no-ops too
+      target.runId = runId;
+      continue;
+    }
+    if (!isView && raw.kind === "citations") {
+      // Belt and braces: the sink keeps citations as an ordered PART and never
+      // mints them here, but a payload written by an older/other producer must
+      // not turn into a renderable view the registry cannot draw.
+      continue;
+    }
+    views.push(raw);
+  }
+
+  const text = typeof durable.content === "string" ? durable.content : "";
+  if (parts.length === 0 && views.length === 0 && text.length === 0) return null;
+
+  return {
+    id: turnId,
+    role: "assistant",
+    content: text,
+    // Field-presence discipline, matching the live projection: a key appears
+    // only once populated, so a projected turn serializes like a client-saved
+    // one and a re-save cannot introduce spurious empty arrays.
+    ...(parts.length > 0 ? { parts } : {}),
+    ...(citations.length > 0 ? { citations } : {}),
+    ...(views.length > 0 ? { dataParts: views } : {}),
+  };
+}
+
+/**
+ * Does this projected turn carry LIFECYCLE render state — a renderable view, or
+ * a run pinned on a tool call?
+ *
+ * This is the predicate that keeps the reconstruction's fold-in narrow. See
+ * `assembleThreadPayloadFromParts` for why narrow is the point.
+ */
+export function carriesLifecycleRenderState(turn: ProjectedAssistantTurn): boolean {
+  if ((turn.dataParts?.length ?? 0) > 0) return true;
+  return (turn.parts ?? []).some(
+    (p) => p.kind === "tool_call" && typeof p.runId === "string" && p.runId.length > 0,
+  );
+}
+
+/** The tool-call ids a message's render trace carries. */
+export function toolCallIdsOf(message: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!isRecord(message)) return ids;
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  for (const part of parts) {
+    if (!isRecord(part)) continue;
+    if (part.kind !== "tool_call") continue;
+    const id = stringOrNull(part.id);
+    if (id !== null) ids.add(id);
+  }
+  return ids;
+}
+
+/**
+ * Fold the run-bound durable turns that carry lifecycle render state into the
+ * legacy-mirror spine. See `assembleThreadPayloadFromParts` for the rule and why
+ * every clause of it is narrow.
+ *
+ * COPY-ON-WRITE, never in place. The spine messages are the caller's own turn
+ * `content` objects, and this function is reachable from an EXPORTED pure
+ * assembler that other suites call with literals; a repaired message is a fresh
+ * object so nothing a caller still holds is edited behind its back. A thread with
+ * nothing to fold in returns the SAME array it was given, so the common path
+ * allocates nothing.
+ *
+ * Ordered by `createdAt` then `id` so the append order is the order the SERVER
+ * recorded the turns in, and so two rows created in the same millisecond still
+ * have one deterministic order rather than the query's incidental one.
+ */
+function foldDurableLifecycleTurnsInto(
+  messages: Array<Record<string, unknown>>,
+  turns: AssistantTurn[],
+): Array<Record<string, unknown>> {
+  const durableTurns = turns
+    .filter((t) => t.content !== null && t.runId !== null)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  if (durableTurns.length === 0) return messages;
+
+  let folded = messages;
+  for (const turn of durableTurns) {
+    const projected = projectDurableAssistantTurn(turn.id, turn.content);
+    if (projected === null) continue;
+    if (!carriesLifecycleRenderState(projected)) continue;
+    const index = findCoveringSpineIndex(folded, projected);
+    if (index === -1) {
+      folded = folded === messages ? [...messages] : folded;
+      folded.push(projected as unknown as Record<string, unknown>);
+      continue;
+    }
+    const repaired = repairedSpineMessage(folded[index], projected);
+    if (repaired === folded[index]) continue; // nothing was owed
+    folded = folded === messages ? [...messages] : folded;
+    folded[index] = repaired;
+  }
+  return folded;
+}
+
+/** The index of the spine message that is THIS turn, identified by a shared
+ *  server-minted tool-call id, or -1 when the spine does not carry the turn. */
+function findCoveringSpineIndex(
+  messages: Array<Record<string, unknown>>,
+  projected: ProjectedAssistantTurn,
+): number {
+  const durableIds = toolCallIdsOf(projected);
+  // A lifecycle view is always minted from a tool RESULT, so a turn that carries
+  // one always carries the call it came from. A durable turn with no call at all
+  // therefore has no shared key, and is treated as one the spine does not have.
+  if (durableIds.size === 0) return -1;
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i].role !== "assistant") continue;
+    for (const id of toolCallIdsOf(messages[i])) {
+      if (durableIds.has(id)) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * ADD what the client's save dropped; overwrite nothing it kept.
+ *
+ * The spine message is what the reader last saw, so it wins wherever it has an
+ * answer: a save that DID carry the views is left exactly as it is. Only an
+ * absent view list and an unpinned run are filled in — the two things a dropped
+ * save costs, and the two things the server's own record can restore.
+ *
+ * Returns the SAME object when nothing was owed, which is what lets the caller
+ * leave the transcript untouched instead of rebuilding an identical one.
+ */
+function repairedSpineMessage(
+  spine: Record<string, unknown>,
+  projected: ProjectedAssistantTurn,
+): Record<string, unknown> {
+  const spineViews = Array.isArray(spine.dataParts) ? spine.dataParts : [];
+  const owesViews = spineViews.length === 0 && (projected.dataParts?.length ?? 0) > 0;
+
+  const runIdByCall = new Map<string, string>();
+  for (const durablePart of projected.parts ?? []) {
+    if (durablePart.kind !== "tool_call") continue;
+    const id = durablePart.id;
+    const runId = durablePart.runId;
+    if (typeof id !== "string" || typeof runId !== "string" || runId.length === 0) continue;
+    runIdByCall.set(id, runId);
+  }
+  const spineParts = Array.isArray(spine.parts) ? spine.parts : [];
+  let owesRun = false;
+  const repairedParts = spineParts.map((raw) => {
+    if (typeof raw !== "object" || raw === null) return raw;
+    const part = raw as Record<string, unknown>;
+    if (part.kind !== "tool_call") return raw;
+    if (typeof part.runId === "string" && part.runId.length > 0) return raw;
+    const id = typeof part.id === "string" ? part.id : null;
+    const runId = id === null ? undefined : runIdByCall.get(id);
+    if (runId === undefined) return raw;
+    owesRun = true;
+    return { ...part, runId };
+  });
+
+  if (!owesViews && !owesRun) return spine;
+  return {
+    ...spine,
+    ...(owesViews ? { dataParts: projected.dataParts } : {}),
+    ...(owesRun ? { parts: repairedParts } : {}),
+  };
+}
+
 /**
  * PURE reconstruction of the /chat thread payload from the structured parts —
  * unit-testable without a database (the DB reads live in
  * `reconstructThreadPayload`). Returns null when the thread is PRE-CUTOVER.
  *
- * EXCLUSION + FAITHFUL CONTENT (codex-converged): the /chat message content
- * lives EXCLUSIVELY in the LEGACY-MIRROR projection turns (deterministic
- * `legacy:` ids, run_id NULL, non-NULL `content`). Runtime-native turns (bare
- * UUID, run_id set) are a DIFFERENT representation and are NEVER mixed into the
- * reconstruction. A thread is readable iff it has >=1 such turn; a content-less
- * shadow or an empty thread reconstructs to null (404 / absent-from-list). Each
- * surviving turn's `content` IS the full persisted message object (PR1 EXPAND:
- * `parse(content)` deep-equals `payload.messages[i]`); `turns` MUST already be in
- * `ordinal` order (the caller's query orders by it), so `messages` is a faithful,
- * lossless, correctly-ordered reconstruction.
+ * THE SPINE: the LEGACY-MIRROR projection turns (deterministic `legacy:` ids,
+ * run_id NULL, non-NULL `content`). A thread is readable iff it has >=1 such
+ * turn; a content-less shadow or an empty thread reconstructs to null (404 /
+ * absent-from-list) — unchanged, so the read and the list agree exactly as
+ * before. Each surviving turn's `content` IS the full persisted message object
+ * (PR1 EXPAND: `parse(content)` deep-equals `payload.messages[i]`); `turns` MUST
+ * already be in `ordinal` order (the caller's query orders by it), so `messages`
+ * is a faithful, lossless, correctly-ordered reconstruction.
+ *
+ * ─── THE LIFECYCLE FOLD-IN (cinatra#2823, epic #2784 S9j) ────────────────────
+ *
+ * The spine is written by the client's whole-transcript save, which is
+ * BEST-EFFORT AND SILENT. So the spine can be missing the newest assistant turn,
+ * and until this fold-in the server's OWN record of that turn — the run-bound
+ * `assistant-turn-v1` row the stream route writes from the sink — was read by
+ * nothing. That is why a lifecycle card could be present in the live render and
+ * absent after a reload: not a renderer defect, a reconstruction that would not
+ * look at the one writer that cannot lose the turn.
+ *
+ * The fold-in is deliberately NARROW, and each narrowing is load-bearing:
+ *
+ *   * ONLY run-bound turns whose projection carries LIFECYCLE RENDER STATE — a
+ *     renderable view, or a run pinned on a tool call — participate. A thread
+ *     with no lifecycle card reconstructs BYTE-IDENTICALLY to before, so this
+ *     cannot change the shape of an existing transcript.
+ *   * A turn the spine ALREADY CARRIES is repaired, never duplicated. The two
+ *     writers share no key — the mirror row's id is built from the CLIENT's
+ *     message id and the run-bound row's is the turn's — but they do share the
+ *     SERVER-minted tool-call ids, which reach the client on the wire. A spine
+ *     message sharing a tool-call id with a durable turn IS that turn, and the
+ *     fold-in then adds only what the save dropped (the views, the pinned run)
+ *     and touches nothing else.
+ *   * A turn the spine does NOT carry is APPENDED, in `created_at` order. That
+ *     is the correct position and not merely a convenient one: every save posts
+ *     the WHOLE transcript, so the spine is always a PREFIX of the conversation
+ *     — the only turns it can be missing are the ones after the last save that
+ *     landed. Appending them in the order the server recorded them restores the
+ *     conversation's real order.
+ *
+ * THE BOUND, stated: this repairs what the SERVER wrote down. A turn whose
+ * run-bound row was never written (a run that died before its terminal) is not
+ * recoverable here and is not claimed to be.
  *
  * The durable thread-level render-state scalars (`activeAssistantHandle`,
  * `taggedAssistantUserIds`, `slackMode`) are read back DIRECTLY from the persisted
@@ -1624,7 +1988,10 @@ export function assembleThreadPayloadFromParts(
   );
   if (contentTurns.length === 0) return null; // pre-cutover: no durable /chat content
 
-  const messages = contentTurns.map((t) => t.content as Record<string, unknown>);
+  const messages = foldDurableLifecycleTurnsInto(
+    contentTurns.map((t) => t.content as Record<string, unknown>),
+    turns,
+  );
 
   const payload: Record<string, unknown> = {
     // Durable render-state scalars, reconstructed directly; modeled fields below
@@ -1651,12 +2018,15 @@ export function assembleThreadPayloadFromParts(
  * Reconstruct the full /chat thread payload for a thread from the STRUCTURED
  * store (cinatra#1037 P5.6 PR2 CUTOVER) — the authoritative read source
  * replacing the legacy `chat_threads.payload`. Reads the thread row (incl. the
- * durable `scalars`), the legacy-mirror content turns ORDERED BY `ordinal` (then
- * created_at/id for pre-PR2 rows without an ordinal), and the structured pause
- * set — ALL in ONE `REPEATABLE READ` transaction so the assembled payload is a
- * single consistent snapshot (never metadata/turns/pause from different
- * concurrent revisions; codex convergence). Returns null when the thread is
- * absent OR pre-cutover (content-less) — callers 404 / exclude.
+ * durable `scalars`), the content turns of BOTH representations — the
+ * legacy-mirror spine ORDERED BY `ordinal` (then created_at/id for pre-PR2 rows
+ * without an ordinal) and the run-bound durable turns the stream route writes
+ * (cinatra#2823 S9j) — and the structured pause set, ALL in ONE `REPEATABLE READ`
+ * transaction so the assembled payload is a single consistent snapshot (never
+ * metadata/turns/pause from different concurrent revisions; codex convergence).
+ * Returns null when the thread is absent OR pre-cutover (content-less) — callers
+ * 404 / exclude. Which run-bound turns reach the transcript, and where, is
+ * `assembleThreadPayloadFromParts`'s narrow fold-in rule.
  */
 export function reconstructThreadPayload(threadId: string): Record<string, unknown> | null {
   ensurePostgresSchema();
@@ -1675,12 +2045,25 @@ export function reconstructThreadPayload(threadId: string): Record<string, unkno
         values: [threadId],
       },
       {
+        // BOTH representations, in ONE snapshot (cinatra#2823 S9j): the
+        // legacy-mirror spine AND the run-bound durable turns the stream route
+        // wrote. The assembler is what keeps them apart and decides which of the
+        // run-bound rows is folded in — reading them in a second query would put
+        // the two halves in different revisions, which is the exact thing this
+        // REPEATABLE READ transaction exists to prevent.
+        //
+        // ORDERING serves the spine, which is what it always did: mirror rows
+        // carry an `ordinal` and MUST come back in it. Run-bound rows have none,
+        // so `NULLS LAST` puts them after the spine and the assembler re-sorts
+        // them by `created_at` itself; the spine's own order is untouched.
         text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at
                FROM "${schema}"."assistant_turns"
                WHERE thread_id = $1
                  AND content IS NOT NULL
-                 AND run_id IS NULL
-                 AND id LIKE '${prefix}%'
+                 AND (
+                   (run_id IS NULL AND id LIKE '${prefix}%')
+                   OR run_id IS NOT NULL
+                 )
                ORDER BY ordinal NULLS LAST, created_at, id`,
         values: [threadId],
       },
