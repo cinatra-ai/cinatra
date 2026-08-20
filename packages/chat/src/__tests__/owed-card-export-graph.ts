@@ -37,7 +37,8 @@
  *
  *   · a specifier that is not a literal — `import(someVariable)`;
  *   · a re-export laundered through a value — `const X = Card; export { X }`,
- *     which no `export … from` statement records;
+ *     which no `export … from` statement records. `export default X` is NO
+ *     LONGER in this class: the default route is walked, both hops of it;
  *   · a module reached from outside this repo's two packages.
  *
  * The first two still have to write the owed symbol somewhere in the agents
@@ -107,6 +108,27 @@ function reExportsOf(source: string): ReExport[] {
 const IMPORT_RE = /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
 const BARE_EXPORT_RE = /export\s*\{([^}]*)\}\s*(?!from)/g;
 
+/**
+ * THE DEFAULT-EXPORT ROUTE, which the named-binding walk above cannot see.
+ *
+ * `default` is a name like any other in a module graph, but it is never spelled
+ * in a `{ … }` clause on the way in, so an owed card can be laundered through it
+ * without any statement this file used to read:
+ *
+ *     import HoldPanel from "./run-recommendation-chip-row";  // no braces
+ *     export default HoldPanel;                               // no `from`
+ *
+ * Both hops are now edges, carrying the reserved name `default`, so the SAME
+ * fixed point walks them. `export { default as X } from "…"` and
+ * `export { X as default }` already parsed — `default` matches `\w+` — and now
+ * they resolve against a target that can actually owe `default`.
+ */
+const DEFAULT_IMPORT_RE = /import\s+(\w+)\s*(?:,\s*\{[^}]*\})?\s*from\s*["']([^"']+)["']/g;
+const DEFAULT_EXPORT_RE = /export\s+default\s+(\w+)\s*;/g;
+
+/** Words that follow `export default` without naming a local binding. */
+const NOT_A_BINDING = new Set(["function", "class", "async", "new", "await", "typeof"]);
+
 function localReExportsOf(source: string): ReExport[] {
   const locals = new Map<string, { imported: string; spec: string }>();
   for (const m of source.matchAll(IMPORT_RE)) {
@@ -115,12 +137,25 @@ function localReExportsOf(source: string): ReExport[] {
       locals.set(exported, { imported, spec: m[2]! });
     }
   }
+  // `import X from "spec"` and `import X, { Y } from "spec"` — the default
+  // binding arrives under a local name of the importer's choosing.
+  for (const m of source.matchAll(DEFAULT_IMPORT_RE)) {
+    if (/import\s+type\s/.test(m[0])) continue;
+    locals.set(m[1]!, { imported: "default", spec: m[2]! });
+  }
   const out: ReExport[] = [];
   for (const m of source.matchAll(BARE_EXPORT_RE)) {
     for (const { imported, exported } of parseSpecifiers(m[1]!)) {
       const via = locals.get(imported);
       if (via) out.push({ names: [{ imported: via.imported, exported }], spec: via.spec });
     }
+  }
+  // `export default Local;` — the outbound half of the same route.
+  for (const m of source.matchAll(DEFAULT_EXPORT_RE)) {
+    const local = m[1]!;
+    if (NOT_A_BINDING.has(local)) continue;
+    const via = locals.get(local);
+    if (via) out.push({ names: [{ imported: via.imported, exported: "default" }], spec: via.spec });
   }
   return out;
 }

@@ -1185,6 +1185,53 @@ describe("the re-export route, closed by REACHABILITY rather than by spelling", 
     ]);
   });
 
+  it("FOLLOWS the card laundered through `export default`, both hops", () => {
+    // The route no braces-and-`from` regex records: the card leaves one module as
+    // its DEFAULT export, arrives in the next under a local name of the
+    // importer's choosing, and is re-exported from there under a third name.
+    // Every hop renames, and none of them spells the card.
+    const virtual: Record<string, string> = {
+      "/agents/run-recommendation-chip-row.tsx": "export function RecommendationHoldCard() {}",
+      "/agents/default-hop.ts":
+        'import { RecommendationHoldCard } from "./run-recommendation-chip-row";\n' +
+        "export default RecommendationHoldCard;",
+      "/agents/rename.ts": 'import Panel from "./default-hop";\nexport { Panel as HoldPanel };',
+      // The other spelling of the same hop, straight through a barrel.
+      "/agents/barrel.ts": 'export { default as BarrelPanel } from "./default-hop";',
+      "/chat/view.tsx": 'import { HoldPanel } from "@cinatra-ai/agents/rename";',
+    };
+    const graph: SourceGraph = {
+      files: [
+        "/agents/run-recommendation-chip-row.tsx",
+        "/agents/default-hop.ts",
+        "/agents/rename.ts",
+        "/agents/barrel.ts",
+      ],
+      read: (file) => virtual[file] ?? "",
+      resolve: (_from, spec) =>
+        ({
+          "./run-recommendation-chip-row": "/agents/run-recommendation-chip-row.tsx",
+          "./default-hop": "/agents/default-hop.ts",
+          "@cinatra-ai/agents/rename": "/agents/rename.ts",
+        })[spec] ?? null,
+    };
+
+    const owed = owedExportsByModule(graph, new Map([
+      ["/agents/run-recommendation-chip-row.tsx", ["RecommendationHoldCard"]],
+    ]));
+    // The card is owed as `default` where it was laundered, and under the two
+    // names the hops gave it.
+    expect(owed.get("/agents/default-hop.ts")).toEqual(new Set(["default"]));
+    expect(owed.get("/agents/rename.ts")).toEqual(new Set(["HoldPanel"]));
+    expect(owed.get("/agents/barrel.ts")).toEqual(new Set(["BarrelPanel"]));
+    // And chat importing the far end is reachable, though nothing on that path
+    // spells the card or its module.
+    expect(virtual["/chat/view.tsx"]!.includes("RecommendationHoldCard")).toBe(false);
+    expect(owedReachesFrom(graph, ["/chat/view.tsx"], owed)).toEqual([
+      "/chat/view.tsx → @cinatra-ai/agents/rename as HoldPanel",
+    ]);
+  });
+
   it("does NOT flag a module that merely SITS BESIDE the card in the same package", () => {
     // The false positive worth avoiding, stated as a case. `client-entry`
     // re-exports the run panel, and the run panel draws the hold card INSIDE the
