@@ -978,6 +978,40 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
   }
 
   /**
+   * The retry cursor as POSTGRES stores it, full microsecond precision. A JS
+   * `Date` truncates to milliseconds, so `attemptedAt` above cannot tell a stamp
+   * from a copy of it that round-tripped through JS — and telling those two apart
+   * is exactly what the restore's CAS has to do.
+   */
+  async function attemptedAtText(parkId: string): Promise<string | null> {
+    return withClient(async (c) => {
+      const { rows } = await c.query(
+        `SELECT hold_notify_attempted_at::text AS t
+           FROM "${q(TEST_SCHEMA)}"."lifecycle_continuation_park" WHERE id = $1`,
+        [parkId],
+      );
+      return (rows[0]?.t ?? null) as string | null;
+    });
+  }
+
+  /**
+   * Stand in for a CONCURRENT sweep's claim: stamp the row with a cursor of its
+   * own, exactly as sweep B's claim would, and hand back the stamp as Postgres
+   * stored it.
+   */
+  async function restampAsConcurrentSweep(parkId: string): Promise<string> {
+    return withClient(async (c) => {
+      const { rows } = await c.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+            SET hold_notify_attempted_at = now() WHERE id = $1
+          RETURNING hold_notify_attempted_at::text AS t`,
+        [parkId],
+      );
+      return rows[0].t as string;
+    });
+  }
+
+  /**
    * The production host writer, with the clear POISONED for a named set of parks
    * and RECORDING every park it was asked to clear, in order. A poisoned park
    * throws — the same shape as a notifier that is up but can never satisfy this
@@ -1446,6 +1480,104 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
     }
     // And the breaker still did its job on pass 2: it did not launch the whole page.
     expect(seen.length).toBeLessThanOrEqual(HEALTHY + BREAKER + WAVE - 1);
+  });
+
+  it("THE RESTORE IS A CAS: a row a CONCURRENT sweep re-stamped keeps ITS stamp", async () => {
+    // THE FINDING THIS PINS. Sweeps overlap by design — the ~60s gate-maintenance
+    // loop is not the only driver, `releaseRecommendationParkForRun` sweeps
+    // synchronously on a human's confirm/skip, and a deployment runs more than one
+    // host. Sweep A's claim COMMITS (its locks are released and its rows carry A's
+    // `now()`) and only then does A dispatch, for up to ~2s, before restoring the
+    // rows its breaker skipped. That window is wide open: sweep B can claim one of
+    // A's skipped rows — they sort last, but once the outstanding set fits inside
+    // `limit` B reaches them — dispatch it, and have it fail or expire. The row is
+    // then `live` carrying B's NEWER stamp, honestly recording B's attempt.
+    //
+    // A restore guarded only on `hold_notification = 'live'` cannot see any of
+    // that. It overwrites B's stamp with the cursor the row carried before A
+    // claimed it — here NULL — so a row that WAS dispatched and DID fail acquires
+    // never-attempted priority and B's real attempt is erased from the record.
+    // The restore is therefore a CAS: it puts the cursor back only where the row
+    // still carries THIS pass's claim stamp.
+    await clearOutstandingObligations();
+
+    // The same arrangement as the starvation case above: exactly what one pass can
+    // launch (E + C - 1 = 7) wedged and aged to the front, so the breaker spends
+    // its whole budget there and leaves the healthy rows behind it CLAIMED but
+    // undispatched — which is the set the restore acts on.
+    const WEDGED = BREAKER + WAVE - 1;
+    const HEALTHY = 3;
+    const wedgedRuns: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < WEDGED; i++) wedgedRuns.push(await heldRun());
+    const healthyRuns: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < HEALTHY; i++) healthyRuns.push(await heldRun());
+    for (const r of wedgedRuns) await ageParkBy(r.parkId, 30);
+    for (const r of healthyRuns) await ageParkBy(r.parkId, 10);
+    const PAGE = WEDGED + HEALTHY;
+
+    // ONE of the skipped rows is the victim: B claims and attempts it while A is
+    // still dispatching. Its two page-mates are the control — nobody touches them,
+    // so A must still restore those.
+    const victim = healthyRuns[0];
+    const untouched = healthyRuns.slice(1);
+    // Every one of them arrives never-attempted, so a NULL cursor afterwards is
+    // unambiguously A's restore having fired and not a leftover.
+    for (const r of healthyRuns) expect(await attemptedAt(r.parkId)).toBeNull();
+
+    // B's re-stamp is fired from inside A's dispatch window, which is the interleave
+    // stated as code: the notifier is only ever reached AFTER A's claim committed,
+    // and A restores only after every worker has finished, so a stamp written from
+    // the first dispatch lands squarely between A's claim and A's restore.
+    const seen: string[] = [];
+    let restamped = false;
+    let bStamp = "";
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    const real = hostNotifier.runWaitNotifier;
+    const wedgedIds = new Set(wedgedRuns.map((r) => r.parkId));
+    setRunWaitNotifier({
+      ...real,
+      onClearRecommendationHold: async (input: { runId: string; parkId: string }) => {
+        seen.push(input.parkId);
+        // The flag is set SYNCHRONOUSLY, before the await: four workers reach this
+        // in the same tick and exactly one of them may re-stamp.
+        if (!restamped) {
+          restamped = true;
+          bStamp = await restampAsConcurrentSweep(victim.parkId);
+        }
+        if (wedgedIds.has(input.parkId)) return new Promise<boolean>(() => {});
+        return (await real.onClearRecommendationHold?.(input)) ?? false;
+      },
+    } as RunWaitNotifier);
+
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: [...wedgedRuns, ...healthyRuns].map((r) => r.parkId),
+      limit: PAGE,
+    });
+    expect(swept.released).toBe(PAGE);
+    // The breaker did trip on the wedge, so the healthy rows really were skipped —
+    // without that this case would be pinning nothing.
+    expect(swept.holdNotificationsCleared).toBe(0);
+    expect([...seen].sort()).toEqual(wedgedRuns.map((r) => r.parkId).sort());
+    expect(bStamp).not.toBe("");
+
+    // THE PIN. B's stamp survives A's restore, to the microsecond. Guarded only on
+    // `live`, A overwrites it with NULL and B's attempt is gone.
+    expect(await attemptedAtText(victim.parkId)).toBe(bStamp);
+    expect(await attemptedAt(victim.parkId)).not.toBeNull();
+    // And the row still owes what it owed — leaving the stamp alone is the ONLY
+    // difference; the obligation is untouched and a later sweep still retries it.
+    expect(await parkState(victim.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(victim.runId)).toHaveLength(1);
+
+    // The CAS is SURGICAL, not a blanket refusal to restore: the two rows nobody
+    // else touched still carry A's claim stamp, so A still puts their cursor back
+    // and they still lead the next sweep. A CAS that never matches — one comparing
+    // a JS-truncated MILLISECOND copy against the microseconds Postgres stored —
+    // fails exactly here, and reddens the starvation pin above with it.
+    for (const r of untouched) {
+      expect(await attemptedAt(r.parkId)).toBeNull();
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "live" });
+    }
   });
 
   it("the ABANDONED dispatch settling LATE is consumed: no unhandled rejection", async () => {

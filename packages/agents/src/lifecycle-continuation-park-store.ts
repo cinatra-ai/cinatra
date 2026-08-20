@@ -379,25 +379,35 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  *     construction rather than by omission, and it carries its own 30s ceiling
  *     (`POSTGRES_SYNC_TIMEOUT_MS`), which is the only thing bounding that window.
  *
- * THE BUDGET, CORRECTED TWICE. The page is the sweep's `limit`: 100 for BOTH
- * production drivers (gate maintenance passes its own default 100; the
- * confirm/skip release takes `sweepParks`' default 100), hard-capped at 500. With
- * the breaker the time this drain can spend WAITING ON TIMEOUTS stops scaling with
- * the page at all — but that is TWO different ceilings, and the previous round
- * quoted the smaller one as if it were both:
+ * THE BUDGET, AND THE TWO DIFFERENT CEILINGS IT CARRIES. The page is the sweep's
+ * `limit`: 100 for BOTH production drivers (gate maintenance passes its own
+ * default 100; the confirm/skip release takes `sweepParks`' default 100),
+ * hard-capped at 500. With the breaker the time this drain can spend WAITING ON
+ * TIMEOUTS stops scaling with the page at all — but that is TWO different
+ * ceilings, and an earlier round quoted the smaller one as if it were both:
  *
  *   - ABANDONED OPERATIONS per pass: E + C - 1 = 7. A count, it is the number the
  *     pool cares about, and it stands unchanged.
- *   - TIMEOUT CONTRIBUTION per pass: E x BOUND = 4 x 500ms = 2s. A worker's loop
- *     stops only when the SHARED expiry count reaches E, so one worker can
- *     serially absorb up to E expiries — and on a MIXED page it does: its
- *     page-mates chew through healthy rows in milliseconds while it draws wedged
- *     row after wedged row and pays a full BOUND for each. That serial chain is
- *     the pass's critical path, and E x BOUND is its length.
+ *   - TIMEOUT CONTRIBUTION per pass: (E + 1) x BOUND = 5 x 500ms = 2.5s, and the
+ *     `+ 1` is not slack — it is a second expiry that can only land AFTER the one
+ *     that trips the breaker. E x BOUND = 2s is the SINGLE-CHAIN figure: a
+ *     worker's loop stops only when the SHARED expiry count reaches E, so one
+ *     worker can serially absorb all E expiries — and on a MIXED page it does, its
+ *     page-mates chewing through healthy rows in milliseconds while it draws
+ *     wedged row after wedged row and pays a full BOUND for each. But that chain
+ *     is not the last thing the pass waits on. The breaker is checked before a
+ *     PULL, never during a dispatch, so a page-mate that entered its own bounded
+ *     call just BEFORE the count tripped is legitimately still inside it when the
+ *     E-th expiry lands at E x BOUND — and if its row is wedged too, it goes on to
+ *     expire up to one full BOUND later. The pass ends when the LAST worker
+ *     returns, so STAGGERED mixed work reaches (E + 1) x BOUND. That is the
+ *     general timeout-only ceiling; E x BOUND is the special case where the one
+ *     serial chain is also the last thing running.
  *   - `ceil((E + C - 1) / C) x BOUND` = 2 x 500ms = 1s is the FULLY WEDGED case
- *     ONLY. There every dispatch expires, so the expiries land in synchronised
- *     waves of C instead of in one worker's chain; ~1010ms is the measured figure
- *     for exactly that page, and it is not the general bound.
+ *     ONLY, and it is the FLOOR of the three rather than the general bound. There
+ *     every dispatch expires, so the expiries land in synchronised waves of C —
+ *     nothing is staggered and nothing straggles — instead of in one worker's
+ *     chain; ~1010ms is the measured figure for exactly that page.
  *
  * Both ceilings are PAGE-SIZE-INDEPENDENT, which is the property the breaker buys:
  * identical for a 100-row page and for the 500-row cap. The superseded
@@ -580,12 +590,19 @@ function dispatchHoldClearedBounded(park: {
  * Together those put the skipped rows FIRST IN LINE on the next sweep whatever the
  * page, whatever the tie-break and whatever order the storage engine felt like
  * returning: a wedge can cost an obligation ONE pass, never every pass. Rotation
- * is now a property of the code rather than of the heap. Two details of the restore, stated rather than hidden. It is
- * millisecond-truncated, because the cursor round-trips through a JS `Date` — that
- * moves a restored row a fraction of a millisecond EARLIER in the queue, the safe
- * direction, and far under the resolution anything here orders on. And it is
- * guarded on the row still being `live`, so an obligation a concurrent sweeper
- * retired in the meantime is left alone.
+ * is now a property of the code rather than of the heap. Two details of the
+ * restore, stated rather than hidden. The RESTORED value is millisecond-truncated,
+ * because the pre-claim cursor round-trips through a JS `Date` — that moves a
+ * restored row a fraction of a millisecond EARLIER in the queue, the safe
+ * direction, and far under the resolution anything here orders on. And the restore
+ * is a COMPARE-AND-SWAP, not a blind write: it fires only where the row is still
+ * `live` AND still carries THIS pass's claim stamp. `live` alone would not do,
+ * because sweeps overlap — another sweep can claim, attempt and fail one of these
+ * rows inside the window this pass spends dispatching, and restoring over ITS
+ * stamp would erase a true record of an attempt and hand a dispatched-and-failed
+ * row never-attempted priority. That comparison is made against the stamp as
+ * POSTGRES stores it; see the restore itself for why a JS `Date` cannot carry
+ * it.
  *
  * FOR UPDATE SKIP LOCKED because sweeps genuinely overlap: the ~60s
  * gate-maintenance loop (`releaseResolvedAutoGateParks`) is not the only driver —
@@ -644,6 +661,16 @@ async function drainHoldNotifications(limit: number): Promise<number> {
       // below, and the value the restore puts back.
       priorAttemptedAt: claim.priorAttemptedAt,
       priorCreatedAt: claim.priorCreatedAt,
+      // THIS PASS'S CLAIM STAMP, which is what makes the restore a CAS. In
+      // `RETURNING` a column of the UPDATE's target table reads the NEW row, so
+      // this is exactly the `now()` the statement above just wrote — one
+      // transaction timestamp shared by the whole page. It is carried as TEXT on
+      // purpose: `now()` is stored to the MICROSECOND and a JS `Date` truncates to
+      // the millisecond, so a stamp round-tripped through JS would be a near-miss
+      // that equals nothing in the table. The text goes out and comes back through
+      // SQL untouched, and the comparison happens in Postgres against the value as
+      // Postgres stores it.
+      claimedAt: sql<string>`${lifecycleContinuationPark.holdNotifyAttemptedAt}::text`,
     });
 
   let cleared = 0;
@@ -717,20 +744,42 @@ async function drainHoldNotifications(limit: number): Promise<number> {
     // arrived with, and restoring it is what sorts them AHEAD of the rows this pass
     // did dispatch (all of which now carry a fresh `now()`) on the next sweep.
     // One statement, `unnest`-joined so the whole page restores in a single round
-    // trip, and CONDITIONED on the obligation still being `live`: a row a racing
-    // sweeper discharged in the meantime is left exactly as it left it. The
-    // `sql.param` wrappers are load-bearing — a bare array in a `sql` template is
-    // expanded into a parenthesised list of placeholders (a record), not bound as
-    // one array parameter, and `unnest` needs the array.
+    // trip, and a COMPARE-AND-SWAP on this pass's own claim stamp rather than a
+    // blind write. "Still `live`" is not enough to own the cursor, because sweeps
+    // OVERLAP: this pass's claim committed before the first dispatch went out, and
+    // for the up-to-(E + 1) x BOUND it spends dispatching another sweep can claim
+    // one of these very rows (they sort last, but once the outstanding set fits
+    // inside `limit` the other sweep reaches them), attempt it, and have it fail —
+    // leaving it `live` carrying ITS newer stamp, which honestly records ITS
+    // attempt. Restoring on
+    // `live` alone would overwrite that with the pre-claim cursor, so a row that
+    // WAS dispatched and DID fail would acquire never-attempted priority and the
+    // other sweep's attempt would be erased from the record. Matching on
+    // `hold_notify_attempted_at = v.claimed` restores only the rows still carrying
+    // OUR stamp: a row someone else re-stamped is left alone and their attempt
+    // record stands. The `live` guard is kept alongside it — a row a racing
+    // sweeper discharged is left exactly as it left it.
+    //
+    // Both timestamps travel as TEXT and are cast back inside the statement, so
+    // the comparison is against the value as POSTGRES stores it. `claimed` must
+    // never round-trip through a JS `Date`: that truncates `now()`'s microseconds
+    // to milliseconds and the CAS would then match no row at all, silently
+    // restoring nothing and reinstating the starvation this restore exists to fix.
+    //
+    // The `sql.param` wrappers are load-bearing — a bare array in a `sql` template
+    // is expanded into a parenthesised list of placeholders (a record), not bound
+    // as one array parameter, and `unnest` needs the array.
     await db.execute(sql`
       update ${lifecycleContinuationPark} as p
          set hold_notify_attempted_at = v.prior::timestamptz
         from unnest(
                ${sql.param(skipped.map((p) => p.id))}::text[],
-               ${sql.param(skipped.map((p) => p.priorAttemptedAt?.toISOString() ?? null))}::text[]
-             ) as v(id, prior)
+               ${sql.param(skipped.map((p) => p.priorAttemptedAt?.toISOString() ?? null))}::text[],
+               ${sql.param(skipped.map((p) => p.claimedAt))}::text[]
+             ) as v(id, prior, claimed)
        where p.id = v.id
          and p.hold_notification = ${HOLD_NOTIFICATION_LIVE}
+         and p.hold_notify_attempted_at = v.claimed::timestamptz
     `);
   }
   if (expired > 0) {
