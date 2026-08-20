@@ -157,12 +157,23 @@ export function cardDefinitionPattern(component) {
  * the ban can never go vacuous by the anchors quietly disappearing).
  *
  * They are the sections §VII names: the Core-analysis chrome, the outcome pill,
- * the authorized-scope region, the field-by-field before/after, and the advisory
- * comments.
+ * the REVISION PINS, the authorized-scope region, the field-by-field
+ * before/after, and the advisory comments.
+ *
+ * `revisions` is in this list and must stay: the two revision pins are §VII
+ * CORE, not a page adjunct. The page's own ruling names exactly two adjuncts —
+ * the pinned VISUAL pair (#2044 L-D) and the back-to-gate route affordance —
+ * and the revision pins are neither. The name collision between "the revision
+ * pins" and "the pinned visual pair" is precisely how this anchor was left out
+ * of the first cut of this list (restored in cinatra#2861): without it, a
+ * production module could emit `data-verification-revisions` and redraw that
+ * portion of the reading without tripping R2 or the emitter test — which is
+ * exactly the parallel renderer this gate exists to forbid.
  */
 export const VERIFICATION_CORE_ANCHORS = Object.freeze([
   "chrome",
   "outcome",
+  "revisions",
   "authorized-scope",
   "field-diff",
   "advisory",
@@ -224,10 +235,13 @@ export const RETIRED_PARALLELS = Object.freeze([
     // composition — so banning its name would ban the right answer. What may
     // not come back is the DRAWING, and the drawing is identified by the
     // structural anchors §VII's core carries: the Core-analysis chrome, the
-    // outcome pill, the authorized-scope region, the before/after table and the
-    // advisory-comment list. Emitting any of those outside the owner module is
-    // a second §VII renderer whatever it is called — which also catches the
-    // look-alike that R1's name patterns structurally cannot see.
+    // outcome pill, the REVISION PINS, the authorized-scope region, the
+    // before/after table and the advisory-comment list — every section the
+    // history above says the page used to draw, because the ban and that
+    // history have to name the same drawing or the ban has a hole in it.
+    // Emitting any of those outside the owner module is a second §VII renderer
+    // whatever it is called — which also catches the look-alike that R1's name
+    // patterns structurally cannot see.
     re: new RegExp(
       String.raw`data-verification-(?:${VERIFICATION_CORE_ANCHORS.join("|")})\b`,
       "g",

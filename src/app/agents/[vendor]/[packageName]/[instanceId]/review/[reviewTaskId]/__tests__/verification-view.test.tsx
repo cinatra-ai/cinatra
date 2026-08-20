@@ -78,9 +78,12 @@ describe("the review page reuses the ONE §VII core", () => {
     expect(card.dataset.lifecycleCardHost).toBe("page_gate_region");
     expect(card.dataset.lifecycleCardState).toBe("advisory");
     // Every §VII anchor, drawn by the card rather than by the page.
+    // Kept in step with `VERIFICATION_CORE_ANCHORS` in the one-card gate —
+    // mirrored rather than imported because that module is a Node audit script.
     for (const anchor of [
       "chrome",
       "outcome",
+      "revisions",
       "authorized-scope",
       "field-diff",
       "advisory",

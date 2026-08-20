@@ -178,6 +178,22 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
     "[reviewTaskId]/verification-view.tsx",
   ].join("/");
 
+  // The anchor list is PINNED as a set, not just iterated. Every other
+  // assertion in this block loops over `VERIFICATION_CORE_ANCHORS`, so dropping
+  // an entry would silently shrink what they check rather than fail anything —
+  // which is how `revisions` sat outside the ban until cinatra#2861 restored
+  // it. This is the one assertion a deletion cannot pass through.
+  it("pins §VII's core to SIX anchors — dropping one is a hole, not a smaller list", () => {
+    expect([...VERIFICATION_CORE_ANCHORS].sort()).toEqual([
+      "advisory",
+      "authorized-scope",
+      "chrome",
+      "field-diff",
+      "outcome",
+      "revisions",
+    ]);
+  });
+
   it("the owner module emits EVERY §VII anchor — the ban is not vacuous", () => {
     const src = read(OWNER);
     for (const anchor of VERIFICATION_CORE_ANCHORS) {
@@ -219,6 +235,19 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
       );
       expect(hits.map((h) => h.rule), anchor).toContain("R2");
     }
+  });
+
+  // Named explicitly, NOT via the loop above, so this mutation check survives
+  // the anchor being dropped from the list again: the revision pins are §VII
+  // core (the page's own ruling names only the pinned VISUAL pair and the
+  // back-link as adjuncts), so a second module drawing them must fail R2.
+  it("a second emitter of the REVISION PINS fails R2 — they are core, not an adjunct", () => {
+    const hits = scanModule(
+      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/revision-pins.tsx",
+      'return <div data-verification-revisions="">{a} → {b}</div>;',
+    );
+    expect(hits.map((h) => h.rule)).toContain("R2");
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/page-direct-verification-composition/);
   });
 
   it("the back-to-gate adjunct is NOT an anchor — the page may keep it", () => {
