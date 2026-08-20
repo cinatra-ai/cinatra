@@ -324,8 +324,13 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  * Hence the EXPIRY BREAKER. Expiries are counted across the whole pass, and once
  * `HOLD_NOTIFY_EXPIRY_BREAKER` of them have accrued the drain STOPS DISPATCHING:
  * every obligation still on the page is left `live`, undispatched, for a later
- * sweep. Claim-time stamping already rotated those rows, so nothing is starved by
- * being skipped — they go to the back of a queue every row leaves eventually.
+ * sweep — and, crucially, with its RETRY CURSOR PUT BACK. Claim-time stamping
+ * alone does NOT make skipping safe, which was the third thing overclaimed here:
+ * the claim stamps the ENTIRE page, so once the outstanding set fits inside
+ * `limit` every pass produced the same queue in the same order, the breaker served
+ * the same prefix of it forever, and a healthy row sorted behind a few
+ * persistently wedged ones was never attempted again. `drainHoldNotifications`
+ * carries the two-part rotation that makes stopping safe.
  *
  * WHY E = 4, WHICH IS EXACTLY C. A fully wedged page expires its ENTIRE FIRST
  * WAVE together, so E = C trips the breaker at the earliest moment "the notifier
@@ -374,14 +379,30 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  *     construction rather than by omission, and it carries its own 30s ceiling
  *     (`POSTGRES_SYNC_TIMEOUT_MS`), which is the only thing bounding that window.
  *
- * THE BUDGET, CORRECTED. The page is the sweep's `limit`: 100 for BOTH production
- * drivers (gate maintenance passes its own default 100; the confirm/skip release
- * takes `sweepParks`' default 100), hard-capped at 500. With the breaker, the time
- * this drain can spend WAITING ON TIMEOUTS no longer scales with the page at all:
- * at most E + C - 1 dispatches ever expire, so the timeout contribution is at most
- * `ceil((E + C - 1) / C) x BOUND` = 2 x 500ms = 1s, for a 100-row page and for the
- * 500-row cap alike. The superseded `ceil(page / C) x BOUND` arithmetic (25 waves
- * = 12.5s at 100 rows, 62.5s at the cap) described a drain with no breaker.
+ * THE BUDGET, CORRECTED TWICE. The page is the sweep's `limit`: 100 for BOTH
+ * production drivers (gate maintenance passes its own default 100; the
+ * confirm/skip release takes `sweepParks`' default 100), hard-capped at 500. With
+ * the breaker the time this drain can spend WAITING ON TIMEOUTS stops scaling with
+ * the page at all — but that is TWO different ceilings, and the previous round
+ * quoted the smaller one as if it were both:
+ *
+ *   - ABANDONED OPERATIONS per pass: E + C - 1 = 7. A count, it is the number the
+ *     pool cares about, and it stands unchanged.
+ *   - TIMEOUT CONTRIBUTION per pass: E x BOUND = 4 x 500ms = 2s. A worker's loop
+ *     stops only when the SHARED expiry count reaches E, so one worker can
+ *     serially absorb up to E expiries — and on a MIXED page it does: its
+ *     page-mates chew through healthy rows in milliseconds while it draws wedged
+ *     row after wedged row and pays a full BOUND for each. That serial chain is
+ *     the pass's critical path, and E x BOUND is its length.
+ *   - `ceil((E + C - 1) / C) x BOUND` = 2 x 500ms = 1s is the FULLY WEDGED case
+ *     ONLY. There every dispatch expires, so the expiries land in synchronised
+ *     waves of C instead of in one worker's chain; ~1010ms is the measured figure
+ *     for exactly that page, and it is not the general bound.
+ *
+ * Both ceilings are PAGE-SIZE-INDEPENDENT, which is the property the breaker buys:
+ * identical for a 100-row page and for the 500-row cap. The superseded
+ * `ceil(page / C) x BOUND` arithmetic (25 waves = 12.5s at 100 rows, 62.5s at the
+ * cap) described a drain with no breaker.
  *
  * THAT IS A TIMEOUT CEILING, NOT A SWEEP CEILING, and the distinction was the
  * second thing overclaimed here. A committed dispatch is followed by an ACK UPDATE
@@ -526,6 +547,46 @@ function dispatchHoldClearedBounded(park: {
  * `live` and undispatched. See the bound's docblock for both budgets and for what
  * neither of them reclaims.
  *
+ * WHAT GUARANTEES ROTATION NOW THAT A PASS CAN STOP MID-PAGE. Stamping at claim
+ * stamps the WHOLE page, which was sound only while the whole page was also
+ * dispatched. With a breaker it is not, and the rotation cinatra#2838 argued for
+ * simply is not there for a skipped row: the claim writes dispatched and skipped
+ * rows the SAME `now()` (one statement, one transaction timestamp), so the two are
+ * cursor-identical afterwards and the stamp cannot order one ahead of the other.
+ * Once the outstanding set FITS inside `limit` — the ordinary steady state, not a
+ * corner — every sweep then claims the same rows with the same key, and WHICH of
+ * them the breaker serves comes down to the order `RETURNING` happens to produce.
+ * That order is undefined and this module neither controls nor observes it — and
+ * measured, under the claim as cinatra#2838 wrote it, it was HEAP order: unrelated
+ * to the claim's `ORDER BY` and identical pass after pass. A page of 7 wedged rows
+ * in front of 9 healthy ones left between 1 and 4 of the healthy obligations
+ * unattempted on every one of ten consecutive sweeps, in every run. Starved, not
+ * delayed, for as long as the wedge lasts. Two things fix that:
+ *
+ *   1. THE QUEUE IS ORDERED BY THE CURSOR, not by `RETURNING`. The claim carries
+ *      every row's PRE-CLAIM cursor out with it and the queue is sorted on exactly
+ *      the key the claim ranks the page by. Stated honestly: this half is
+ *      BELT-AND-BRACES. The joined claim below is measured to hand its rows back in
+ *      claim order already, so removing the sort changes nothing observable today —
+ *      it would just put a fairness property back at the mercy of a plan.
+ *   2. A SKIPPED ROW GETS ITS CURSOR BACK. This half is the one that carries the
+ *      fix, and reverting it alone reddens the pins. One UPDATE before returning restores
+ *      `hold_notify_attempted_at` to its pre-claim value on every row the breaker
+ *      left undispatched. A row that was claimed but never dispatched is then
+ *      cursor-INDISTINGUISHABLE from one that was never claimed, so cinatra#2838's
+ *      fairness argument covers it unchanged — while every row that WAS dispatched,
+ *      the wedged ones included, keeps its fresh `now()` and sorts last.
+ *
+ * Together those put the skipped rows FIRST IN LINE on the next sweep whatever the
+ * page, whatever the tie-break and whatever order the storage engine felt like
+ * returning: a wedge can cost an obligation ONE pass, never every pass. Rotation
+ * is now a property of the code rather than of the heap. Two details of the restore, stated rather than hidden. It is
+ * millisecond-truncated, because the cursor round-trips through a JS `Date` — that
+ * moves a restored row a fraction of a millisecond EARLIER in the queue, the safe
+ * direction, and far under the resolution anything here orders on. And it is
+ * guarded on the row still being `live`, so an obligation a concurrent sweeper
+ * retired in the meantime is left alone.
+ *
  * FOR UPDATE SKIP LOCKED because sweeps genuinely overlap: the ~60s
  * gate-maintenance loop (`releaseResolvedAutoGateParks`) is not the only driver —
  * `releaseRecommendationParkForRun` sweeps synchronously on a human's confirm/skip,
@@ -544,9 +605,17 @@ function dispatchHoldClearedBounded(park: {
 async function drainHoldNotifications(limit: number): Promise<number> {
   // The claim page: the `limit` least-recently-attempted live obligations, locked
   // against a concurrent sweeper. A bare UPDATE has no ORDER BY/LIMIT, so the page
-  // is chosen by the subquery and the UPDATE stamps exactly what it returns.
-  const claimIds = db
-    .select({ id: lifecycleContinuationPark.id })
+  // is chosen by this subquery and the UPDATE stamps exactly what it returns. It is
+  // JOINED rather than `IN`-ed for one reason: the join carries every row's
+  // PRE-CLAIM cursor out of the claim, and the pass needs that value twice — to
+  // dispatch in the claim's own order, and to PUT IT BACK on any row the breaker
+  // declines to dispatch. Both halves of the rotation above depend on having it.
+  const claim = db
+    .select({
+      id: lifecycleContinuationPark.id,
+      priorAttemptedAt: lifecycleContinuationPark.holdNotifyAttemptedAt,
+      priorCreatedAt: lifecycleContinuationPark.createdAt,
+    })
     .from(lifecycleContinuationPark)
     .where(
       and(
@@ -560,19 +629,21 @@ async function drainHoldNotifications(limit: number): Promise<number> {
       lifecycleContinuationPark.id,
     )
     .limit(limit)
-    .for("update", { skipLocked: true });
+    .for("update", { skipLocked: true })
+    .as("claim");
 
-  // RETURNING has no defined order, and none is needed: WHICH obligations make up
-  // the page is the fairness property, and every row in the page is dispatched in
-  // this same pass. The order WITHIN a page changes nothing about which
-  // obligations get a turn.
   const owing = await db
     .update(lifecycleContinuationPark)
     .set({ holdNotifyAttemptedAt: sql`now()` })
-    .where(inArray(lifecycleContinuationPark.id, claimIds))
+    .from(claim)
+    .where(eq(lifecycleContinuationPark.id, claim.id))
     .returning({
       id: lifecycleContinuationPark.id,
       runId: lifecycleContinuationPark.runId,
+      // The cursor as it stood BEFORE this claim overwrote it — the sort key
+      // below, and the value the restore puts back.
+      priorAttemptedAt: claim.priorAttemptedAt,
+      priorCreatedAt: claim.priorCreatedAt,
     });
 
   let cleared = 0;
@@ -582,7 +653,21 @@ async function drainHoldNotifications(limit: number): Promise<number> {
   // so at most `HOLD_NOTIFY_DISPATCH_CONCURRENCY` notifier calls are ever in
   // flight. `shift()` is the entire synchronisation: the event loop is
   // single-threaded, so two workers can never take the same row.
-  const queue = [...owing];
+  // ORDERED BY THE CURSOR, NOT BY ARRIVAL. `RETURNING` has no defined order, and
+  // with a breaker that order decides WHO gets served at all — so it is not
+  // something to leave to the planner. Measured both ways: under the previous
+  // `WHERE id IN (subquery)` claim it came back in HEAP order, unrelated to the
+  // claim's `ORDER BY` and identical pass after pass; under the joined claim above
+  // it happens to come back in the claim's own order. The second is a planner
+  // choice, not a contract (the same statement shape plans as a hash join whose
+  // row order comes from a seq scan of the target), so this sort is what makes the
+  // dispatch order a property of the CODE. It is deliberately belt-and-braces: no
+  // test can discriminate it while the plan keeps agreeing with it.
+  const cursorOf = (p: { priorAttemptedAt: Date | null; priorCreatedAt: Date }) =>
+    (p.priorAttemptedAt ?? p.priorCreatedAt).getTime();
+  const queue = [...owing].sort(
+    (a, b) => cursorOf(a) - cursorOf(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
   const workers = Array.from(
     { length: Math.min(HOLD_NOTIFY_DISPATCH_CONCURRENCY, queue.length) },
     async () => {
@@ -622,9 +707,32 @@ async function drainHoldNotifications(limit: number): Promise<number> {
   );
   await Promise.all(workers);
   // Whatever no worker ever pulled: the breaker tripped and these were never
-  // dispatched at all. They are still `live` and still stamped, so they simply
-  // rejoin the queue.
-  const undispatched = queue.length;
+  // dispatched at all.
+  const skipped = queue.splice(0);
+  const undispatched = skipped.length;
+  if (undispatched > 0) {
+    // PUT THE CURSOR BACK — the second half of the rotation, and without it the
+    // breaker starves exactly the rows it skips. The claim stamped these on the way
+    // in; nothing was attempted on them, so the truthful cursor is the one they
+    // arrived with, and restoring it is what sorts them AHEAD of the rows this pass
+    // did dispatch (all of which now carry a fresh `now()`) on the next sweep.
+    // One statement, `unnest`-joined so the whole page restores in a single round
+    // trip, and CONDITIONED on the obligation still being `live`: a row a racing
+    // sweeper discharged in the meantime is left exactly as it left it. The
+    // `sql.param` wrappers are load-bearing — a bare array in a `sql` template is
+    // expanded into a parenthesised list of placeholders (a record), not bound as
+    // one array parameter, and `unnest` needs the array.
+    await db.execute(sql`
+      update ${lifecycleContinuationPark} as p
+         set hold_notify_attempted_at = v.prior::timestamptz
+        from unnest(
+               ${sql.param(skipped.map((p) => p.id))}::text[],
+               ${sql.param(skipped.map((p) => p.priorAttemptedAt?.toISOString() ?? null))}::text[]
+             ) as v(id, prior)
+       where p.id = v.id
+         and p.hold_notification = ${HOLD_NOTIFICATION_LIVE}
+    `);
+  }
   if (expired > 0) {
     // Aggregated, not per row: under a wedged notifier EVERY dispatch in the page
     // expires, and one line per obligation per pass would bury the signal it is.
@@ -639,7 +747,7 @@ async function drainHoldNotifications(limit: number): Promise<number> {
     // the only thing standing between a persistently wedged notifier and the
     // agents pool — if this line is recurring, the notifier is the incident.
     console.warn(
-      `[lifecycle-continuation-park] hold-notification dispatch STOPPED after ${expired} expiries in one pass — ${undispatched} claimed obligation(s) left live and UNDISPATCHED for a later sweep; the notifier appears wedged and each expiry above abandoned an operation that is still running`,
+      `[lifecycle-continuation-park] hold-notification dispatch STOPPED after ${expired} expiries in one pass — ${undispatched} claimed obligation(s) left live and UNDISPATCHED, retry cursor restored so they lead the next sweep; the notifier appears wedged and each expiry above abandoned an operation that is still running`,
     );
   }
   return cleared;

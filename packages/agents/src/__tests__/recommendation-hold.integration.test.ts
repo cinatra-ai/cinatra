@@ -1285,6 +1285,13 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
     const PAGE = 12;
     const runs: Array<Awaited<ReturnType<typeof heldRun>>> = [];
     for (let i = 0; i < PAGE; i++) runs.push(await heldRun());
+    // DISTINCT, DESCENDING cursors: the oldest obligation is the one written LAST,
+    // so the claim's order is the exact REVERSE of the order these rows were
+    // written in. That is what makes the "which seven" assertion below mean
+    // something — a drain that dispatches in arrival order rather than in the
+    // claim's order picks the seven NEWEST here, a disjoint set.
+    for (let i = 0; i < PAGE; i++) await ageParkBy(runs[i].parkId, i + 1);
+    const byCursor = [...runs].reverse();
 
     const seen: string[] = [];
     await wedgedNotifier(new Set(runs.map((r) => r.parkId)), seen);
@@ -1307,15 +1314,31 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
     // the last one trips the breaker.
     expect(seen.length).toBeLessThanOrEqual(BREAKER + WAVE - 1);
     expect(seen.length).toBeLessThan(PAGE); // the mutation-discriminating half
-    // Every park the breaker skipped is untouched and still owed — stopping a pass
-    // strands nothing, because claim-time stamping already rotated the whole page.
+    // ...and the budget goes on the RIGHT rows: the ones that have been waiting
+    // longest. These twelve are aged so the claim's order is the exact REVERSE of
+    // the order they were written in, so "the oldest seven" and "the first seven
+    // that happened to arrive" are disjoint sets here. What this guards is that a
+    // pass which stops early still stops at the FAIR place — today both the claim's
+    // sort and the drain's own sort deliver that, and it stays true if either one
+    // is ever the only one left. (The SET is the assertion, not the sequence — the
+    // four workers of a wave all pull in the same tick.)
+    expect([...seen].sort()).toEqual(
+      byCursor.slice(0, seen.length).map((r) => r.parkId).sort(),
+    );
+    // Every park the breaker skipped is untouched and still owed. The CURSOR is
+    // where that shows: a row this pass dispatched carries the claim's stamp, and a
+    // row it declined to dispatch has had its pre-claim cursor PUT BACK — never
+    // attempted, so still null. That restore is what stops the breaker starving
+    // what it skips; the case below pins the consequence.
+    const dispatched = new Set(seen);
     for (const r of runs) {
       expect(await parkState(r.parkId)).toMatchObject({
         status: "released",
         hold_notification: "live",
       });
       expect(await notificationRows(r.runId)).toHaveLength(1);
-      expect(await attemptedAt(r.parkId)).not.toBeNull();
+      if (dispatched.has(r.parkId)) expect(await attemptedAt(r.parkId)).not.toBeNull();
+      else expect(await attemptedAt(r.parkId)).toBeNull();
     }
 
     // The wall clock follows from the same property: the timeout contribution no
@@ -1336,6 +1359,93 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
       expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "cleared" });
       expect(await notificationRows(r.runId)).toHaveLength(0);
     }
+  });
+
+  it("THE BREAKER DOES NOT STARVE WHAT IT SKIPS: its leftovers lead the NEXT pass", async () => {
+    // THE FINDING THIS PINS. The claim stamps the ENTIRE page, undispatched rows
+    // included, so a row the breaker skipped and a row it dispatched come out
+    // cursor-IDENTICAL and the stamp cannot order one ahead of the other. Once the
+    // outstanding set FITS inside `limit` — the ordinary steady state, not a corner
+    // — every sweep claims the same rows on the same key, and which of them the
+    // breaker serves falls to whatever order `RETURNING` produces: undefined,
+    // unobserved by this module, and in practice STABLE. Measured on this store
+    // with the rotation reverted, a page of 7 wedged rows in front of 9 healthy
+    // ones left between 1 and 4 healthy obligations unattempted on every one of ten
+    // consecutive sweeps — starved, not delayed. With the rotation in place the
+    // same page clears all 9 on the very next sweep, every run.
+    //
+    // The fix is two-part and this case needs both: the queue is ordered by the
+    // retry cursor rather than by `RETURNING`, and a row the breaker skips gets its
+    // pre-claim cursor RESTORED, so it sorts ahead of everything this pass actually
+    // dispatched.
+    await clearOutstandingObligations();
+
+    // Exactly what one pass can launch (E + C - 1 = 7) wedged, so pass 1 spends its
+    // whole budget on the wedge and reaches none of the healthy rows behind it...
+    const WEDGED = BREAKER + WAVE - 1;
+    const HEALTHY = 3;
+    const wedgedRuns: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < WEDGED; i++) wedgedRuns.push(await heldRun());
+    const healthyRuns: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < HEALTHY; i++) healthyRuns.push(await heldRun());
+    // ...and the wedge is FORCED to the front of the claim's order, which is the
+    // arrangement the starvation needs: age it older than the rows behind it.
+    for (const r of wedgedRuns) await ageParkBy(r.parkId, 30);
+    for (const r of healthyRuns) await ageParkBy(r.parkId, 10);
+    // The whole outstanding set fits in one page, so every sweep claims all of it.
+    const PAGE = WEDGED + HEALTHY;
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set(wedgedRuns.map((r) => r.parkId)), seen);
+
+    // PASS 1 — the budget goes entirely on the wedge.
+    const first = await parkStore.sweepParks({
+      releasedParkIds: [...wedgedRuns, ...healthyRuns].map((r) => r.parkId),
+      limit: PAGE,
+    });
+    expect(first.released).toBe(PAGE);
+    expect(first.holdNotificationsCleared).toBe(0);
+    expect([...seen].sort()).toEqual(wedgedRuns.map((r) => r.parkId).sort());
+
+    // The healthy rows were claimed and then declined — and their cursor says so.
+    // Restored to "never attempted", which is the truth and also the front of the
+    // queue. Without the restore they carry the claim's stamp like everything else
+    // and the next pass cannot tell them apart from the wedge.
+    for (const r of healthyRuns) {
+      expect(await attemptedAt(r.parkId)).toBeNull();
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "live" });
+    }
+    for (const r of wedgedRuns) expect(await attemptedAt(r.parkId)).not.toBeNull();
+
+    // PASS 2 — THE PIN, and the notifier is STILL WEDGED. Nothing has recovered;
+    // the only thing that changed is where the skipped rows sit in the queue.
+    seen.length = 0;
+    const second = await parkStore.sweepParks({ limit: PAGE });
+
+    // They lead: every healthy row is dispatched in the pass's FIRST WAVE, before
+    // the wedge gets a single worker back. (Within one wave the four workers all
+    // pull in the same tick, so the SET is the property, not the sequence.)
+    expect(seen.slice(0, WAVE)).toEqual(
+      expect.arrayContaining(healthyRuns.map((r) => r.parkId)),
+    );
+    // ...and they CLEAR. This is the number the starvation makes 0, pass after pass.
+    expect(second.holdNotificationsCleared).toBe(HEALTHY);
+    for (const r of healthyRuns) {
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "cleared" });
+      expect(await notificationRows(r.runId)).toHaveLength(0);
+    }
+
+    // The wedge is still a wedge — nothing was bought by abandoning it. Every wedged
+    // obligation still stands, still `live`, bell intact, and still being retried.
+    for (const r of wedgedRuns) {
+      expect(await parkState(r.parkId)).toMatchObject({
+        status: "released",
+        hold_notification: "live",
+      });
+      expect(await notificationRows(r.runId)).toHaveLength(1);
+    }
+    // And the breaker still did its job on pass 2: it did not launch the whole page.
+    expect(seen.length).toBeLessThanOrEqual(HEALTHY + BREAKER + WAVE - 1);
   });
 
   it("the ABANDONED dispatch settling LATE is consumed: no unhandled rejection", async () => {
