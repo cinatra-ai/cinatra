@@ -235,7 +235,30 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     // emits count as the card's, because the card is what mounts it.
     composes: ["packages/agents/src/review-decision-bar.tsx"],
     body: {
-      validator: "useLifecycleCardState",
+      // THE VALIDATED SEAM, NAMED BY WHAT THE OWNER CALLS. This row said
+      // `useLifecycleCardState` until #2870 split that hook into
+      // `useLifecycleCardAuth` / `useLifecycleCardFrame` / `useLifecycleCardHost`
+      // / `useLifecycleCardResolve`. The card did not stop validating its body;
+      // the READER was renamed, and the old name now survives in this tree only
+      // inside a comment (`review-gate-card.tsx:1324`), which R6 strips — so the
+      // rule correctly reported an owner that reads nothing.
+      //
+      // WHY `useLifecycleCardResolve` IS THE VALIDATED SEAM, and not merely the
+      // fetch. Its own header states the property this row is asserting
+      // (`lifecycle-card-runtime.tsx:614`): "THE ENVELOPE IS PARSED, NOT TRUSTED
+      // (epic S9, slice S9c). The answer is `{ kind, state, body }`, and it goes
+      // through the protocol's one parse seam with the kind THIS card asked for.
+      // An answer to another kind, an unknown kind, a body beside `absent`, or a
+      // missing body on a kind that must carry one are all refused — and a
+      // refused parse leaves the card exactly where it was before the first
+      // resolve landed, drawing nothing."
+      //
+      // So the next rename is checked the same way: name the hook the owner
+      // CALLS, and only if that hook's own header carries the parse-seam
+      // property. A reader that fetches without parsing is not a validator, and
+      // renaming this field to match such a reader would be weakening R6 rather
+      // than tracking it.
+      validator: "useLifecycleCardResolve",
       params: ["view"],
       fields: ["state", "canDecide", "canComment", "suggestions"],
     },
@@ -338,6 +361,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     body: {
       // A typed INTERRUPT, so its authorized state comes from the hold's own
       // cookie-bound read rather than the data-part resolve seam.
+      //
+      // UNCHANGED BY #2870, and checked rather than assumed: the owner still
+      // calls this reader (`run-recommendation-chip-row.tsx:633`), and this row
+      // never named the split hook. The reader carries the same posture the
+      // resolve seam does — a failed read stays with the last authorized answer
+      // or with none, and is never turned into a state — so an unresolvable card
+      // is silent here too, rather than optimistic.
       validator: "useRecommendationHoldState",
       params: ["runId", "wireRef"],
       fields: [
@@ -436,7 +466,12 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     owner: null,
     composes: [],
     body: {
-      validator: "useLifecycleCardState",
+      // The obligation the drawing slice inherits, named for the reader that
+      // exists. #2870 split `useLifecycleCardState` apart; the validated seam is
+      // `useLifecycleCardResolve` (see the review row's note above for the
+      // parse-seam property this name asserts). An obligation may not point at a
+      // hook nobody can call.
+      validator: "useLifecycleCardResolve",
       params: ["view"],
       fields: ["state", "proposal", "options", "estimatedDuration"],
     },
@@ -471,7 +506,12 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     owner: null,
     composes: [],
     body: {
-      validator: "useLifecycleCardState",
+      // The obligation the drawing slice inherits, named for the reader that
+      // exists. #2870 split `useLifecycleCardState` apart; the validated seam is
+      // `useLifecycleCardResolve` (see the review row's note above for the
+      // parse-seam property this name asserts). An obligation may not point at a
+      // hook nobody can call.
+      validator: "useLifecycleCardResolve",
       params: ["view"],
       fields: ["state", "outcome", "revisions", "fields", "comments"],
     },
