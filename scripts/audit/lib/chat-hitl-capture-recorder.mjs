@@ -637,7 +637,15 @@ export async function observeCapture({
   // THE CANONICAL FIELD NAMES. This tier wrote `kind` / `state`; the ratified
   // contract reads `declaredKind` / `declaredState`, and it wins.
   if (kind) record.declaredKind = kind;
-  if (declaredHost === "chat_thread") record.declaredState = state;
+  // EVERY HOST DECLARES ITS STATE, not only chat_thread. The state-derived
+  // requirements are chat_thread's alone (see the honest limit in the header),
+  // but the DECLARATION is not: the canonical half reads
+  // `record.declaredState ?? claim.state`, so a run_card or site_widget record
+  // that omits it hands the question back to the file name — the one thing this
+  // index exists to refuse to take anyone's word for. Omitted, a cell called
+  // `__decided` silently answers for a capture photographed pending, and the
+  // two halves disagree about what the record even claims.
+  if (state) record.declaredState = state;
   // WHICH card the root-scoped counts came from, so the record names an instance
   // rather than leaving a reader to assume the screenshot holds only one.
   if (instance) record.instance = instance;

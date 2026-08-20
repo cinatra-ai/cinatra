@@ -1407,6 +1407,38 @@ function reviewArgs(state) {
   };
 }
 
+const RUN_CARD_HOST_ANCHOR = '[data-lifecycle-card-host="run_card"]';
+// A run-detail URL of BOTH halves' `run_detail` class: this tier's regex takes
+// any third segment, the canonical one requires a 36-character run id.
+const RUN_DETAIL_URL = "http://localhost:3000/agents/proof/pkg/8b1f0c4e-0f2a-4a7c-9c1e-2f6d3b5a7e10";
+
+/**
+ * A run-detail screen carrying the one anchor its host owes and nothing a card
+ * KIND would add — which is the whole of what a kindless `run_card` capture
+ * claims, on both halves' reading.
+ */
+function runCardScreen() {
+  return fakeBrowserPage({
+    url: RUN_DETAIL_URL,
+    tree: {
+      [RUN_CARD_HOST_ANCHOR]: [fakeElement({ "data-lifecycle-card-host": "run_card" })],
+    },
+  });
+}
+
+function runCardArgs(cell, state) {
+  return {
+    cell,
+    declaredHost: "run_card",
+    state,
+    screenshot: PNG,
+    build: "development",
+    repoRoot: "/anywhere",
+    readImpl: OBSERVER_READ,
+    now: () => "2026-08-20T09:00:00.000Z",
+  };
+}
+
 /** Judge one record with the ratified CI half, on its own terms. */
 function canonicalViolations(record) {
   return validateCanonicalRecord(record, {
@@ -1481,6 +1513,37 @@ describe("the single-root card: `:scope`-inclusive root counting", () => {
       expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
       expect(canonicalViolations(record)).toEqual([]);
     }
+  });
+
+  it("BOTH HALVES accept a NON-CHAT record too — the state declaration is not chat_thread's", async () => {
+    // The state-DERIVED requirements are chat_thread's alone, and the header
+    // says so. The state DECLARATION is not: the canonical half resolves a
+    // record's state as `declaredState ?? claim.state`, so a run_card record
+    // that omits the field is answered from its own file name — and a file name
+    // is the one thing this index refuses to take anyone's word for.
+    const record = await observeCapture({
+      ...runCardArgs("S9h-2__run_card__decided", "decided"),
+      page: drivenPage(runCardScreen()),
+    });
+    expect(record.declaredHost).toBe("run_card");
+    expect(record.declaredState).toBe("decided");
+    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+    expect(canonicalViolations(record)).toEqual([]);
+  });
+
+  it("a NON-CHAT cell name that contradicts the photographed state is CAUGHT, not inherited", async () => {
+    // The capture photographed a DECIDED screen; the cell is named `pending`.
+    // With the record declaring the state it observed, the canonical half has
+    // two claims to compare and refuses the pair. With the field omitted it had
+    // only the name, agreed with itself, and passed the mislabel through.
+    const record = await observeCapture({
+      ...runCardArgs("S9h-2__run_card__pending", "decided"),
+      page: drivenPage(runCardScreen()),
+    });
+    expect(record.declaredState).toBe("decided");
+    expect(canonicalViolations(record).map((x) => x.code)).toContain(
+      "record/state-claim-mismatch",
+    );
   });
 
   it("the DECIDED marker is the canonical one, and the old adapter loses it too", async () => {
