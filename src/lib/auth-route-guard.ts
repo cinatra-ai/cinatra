@@ -149,6 +149,16 @@ const PUBLIC_EXACT_PATHS = [
 // a dev server; adding it here is what lets the §V surface — and the Skills
 // section's in-flight / refusal / degraded states — be driven on the
 // production-standalone harness the rest of the family already uses.
+// "/design-fixtures/run-step-rail" (cinatra#2840): the run detail's STEP RAIL
+// row-geometry fixture — the REAL RunStepRailPanel mounted against a
+// deterministic entry set so a wrapped lifecycle policy reason's row box is
+// measurable in a browser. Same static, dataless, seeded-render contract as its
+// siblings (no DB, no session, no user data). It is listed here for the SAME
+// reason the header-rule entry above is: without it guardAppRoute 307s the
+// unauthenticated harness to /sign-in under the production-standalone build,
+// and the suite's assertions then fail on a fixture that never rendered — which
+// is exactly what design-visual-verify reported at 7ba5e7fc (all 8 cases:
+// "element(s) not found" waiting for the rail's rows).
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -158,6 +168,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/agents-card",
   "/design-fixtures/header-rule",
   "/design-fixtures/extension-settings",
+  "/design-fixtures/run-step-rail",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;
