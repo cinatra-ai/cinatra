@@ -50,6 +50,7 @@ import {
   collectViolations,
   emitsAnchor,
   extractComponentBody,
+  assertsAbout,
   assertsExactlyOneInstance,
   extractTestBlock,
   openRequirements,
@@ -65,7 +66,11 @@ import {
 } from "../chat-hitl-one-card-gate.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const GATE = join(REPO_ROOT, "scripts", "audit", "chat-hitl-one-card-gate.mjs");
+const GATE_REL = "scripts/audit/chat-hitl-one-card-gate.mjs";
+const GATE = join(REPO_ROOT, GATE_REL);
+// The committed verbatim transcript of the required run, quoted in the S9a
+// evidence record and in the pull request description.
+const TRANSCRIPT_REL = "evidence/2785-s9a-placeholder-proof/required-gate-run.txt";
 const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8");
 
 describe("R1 — a second card implementation is a violation", () => {
@@ -417,16 +422,25 @@ describe("R7 — the owner emits its ratified anchors, from code that runs", () 
     expect(proofAssertsAnchor("it('renders')", '[data-action="skip-x"]')).toBe(false);
   });
 
-  it("THE LIMIT: inside the block the anchor rule is lexical — a COMMENT counts", () => {
-    // Recorded as a known reading, not as a strength. `extractTestBlock` fences
-    // the search to the named test's own body, which is what stops one card
-    // borrowing another case's assertions; it does not make the search semantic.
-    // An anchor mentioned only in a comment inside that body still reads as
-    // named here — so this rule is never the proof on its own. The same named
-    // test is EXECUTED by vitest, and there the anchor must come back off real
-    // DOM; that run is what a comment cannot satisfy.
+  it("THE LIMIT: the anchor rule is lexical, and the GATE hands it only live text", () => {
+    // Two readings, both recorded rather than assumed. On its own the rule is a
+    // substring match, so raw text with the anchor in a comment satisfies it…
     const commentOnly = "it('renders', () => { /* [data-action=\"skip-x\"] is drawn elsewhere */ });";
     expect(proofAssertsAnchor(commentOnly, '[data-action="skip-x"]')).toBe(true);
+    // …but the gate never hands it raw text. The window comes from
+    // `extractTestBlock`, which searches and slices a comment-stripped copy, so
+    // the commented anchor is gone before the rule ever sees it.
+    expect(
+      proofAssertsAnchor(extractTestBlock(commentOnly, "renders"), '[data-action="skip-x"]'),
+    ).toBe(false);
+    // What the strip cannot reach is an anchor named in a live string nothing
+    // renders. That is why this rule is never the proof on its own: the same
+    // named test is EXECUTED by vitest, and there the anchor must come back off
+    // real DOM.
+    const deadString = "it('renders', () => { const unused = '[data-action=\"skip-x\"]'; });";
+    expect(
+      proofAssertsAnchor(extractTestBlock(deadString, "renders"), '[data-action="skip-x"]'),
+    ).toBe(true);
     // …and the fence that IS load-bearing still holds: a body that does not name
     // the anchor at all fails, however much the rest of the file names it.
     expect(proofAssertsAnchor("it('renders', () => { expect(1).toBe(1); });", '[data-action="skip-x"]')).toBe(false);
@@ -484,7 +498,7 @@ describe("R8 — one declared mount set per host", () => {
       registry,
       (rel) => sources[rel] ?? null,
     );
-    expect(hits.map((h) => h.detail).join(" ")).toMatch(/asserts nothing/);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/no live expectation that reads/);
   });
 
   it("REJECTS an exclusion proof whose only assertion is COMMENTED OUT", () => {
@@ -502,7 +516,7 @@ describe("R8 — one declared mount set per host", () => {
       registry,
       (rel) => sources[rel] ?? null,
     );
-    expect(hits.map((h) => h.detail).join(" ")).toMatch(/asserts nothing/);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/no live expectation that reads/);
   });
 
   it("REJECTS an exclusion proof that borrows a NEIGHBOURING test's assertions", () => {
@@ -522,7 +536,61 @@ describe("R8 — one declared mount set per host", () => {
       registry,
       (rel) => sources[rel] ?? null,
     );
-    expect(hits.map((h) => h.detail).join(" ")).toMatch(/asserts nothing/);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/no live expectation that reads/);
+  });
+
+  it("REJECTS an exclusion proof whose only assertion is VACUOUS", () => {
+    // `expect(true).toBe(true)` runs, passes and reads nothing. It satisfied the
+    // old "asserts anything" rule, so two production adapters could be declared
+    // exclusive by a test that touches no picker at all.
+    const sources = {
+      "packages/fixture/screen.tsx": "export function pickPanel(x) { return 'leaf'; }",
+      "packages/fixture/__tests__/pick.test.ts":
+        "it('covers every branch', () => { expect(true).toBe(true); });",
+    };
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => sources[rel] ?? null,
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/no live expectation that reads/);
+  });
+
+  it("REJECTS an exclusion proof that asserts about ANOTHER function", () => {
+    // The live shape this round found: the row named one picker and cited the
+    // totality proof of a different one. Every assertion in the block runs and
+    // passes; none of them reads the picker the row is claiming.
+    const sources = {
+      "packages/fixture/screen.tsx": "export function pickPanel(x) { return 'leaf'; }",
+      "packages/fixture/__tests__/pick.test.ts":
+        "it('covers every branch', () => { expect(screenHostsCard('leaf')).toBe(true); });",
+    };
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => sources[rel] ?? null,
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/no live expectation that reads/);
+  });
+
+  it("REJECTS an exclusion proof whose assertion can never RUN", () => {
+    const sources = {
+      "packages/fixture/screen.tsx": "export function pickPanel(x) { return 'leaf'; }",
+      "packages/fixture/__tests__/pick.test.ts":
+        "it('covers every branch', () => { if (false) { expect(pickPanel('leaf')).toBe('leaf'); } });",
+    };
+    const hits = scanHostMounts(
+      "fixture",
+      TWO_ADAPTER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/screen.tsx"],
+      registry,
+      (rel) => sources[rel] ?? null,
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/no live expectation that reads/);
   });
 
   it("REJECTS two adapters on one host with NO named picker — two instances waiting to happen", () => {
@@ -799,6 +867,36 @@ describe("a proof is tied to its NAMED test, and counts what it rendered", () =>
     expect(assertsExactlyOneInstance(FILE, '[data-lifecycle-card="k"]')).toBe(true);
   });
 
+  it("the window is a test DECLARATION, not any quoted mention of the name", () => {
+    // The old reader took the FIRST quoted occurrence of the name and then
+    // guessed the enclosing block from the nearest preceding `(`. A comment, a
+    // `describe` title or a plain string repeating the name therefore selected
+    // the wrong window — and a wrong window is a proof read off the wrong test.
+    const decoys = [
+      '// see it("the picked one") below for why this is the picker',
+      'describe("the picked one", () => {',
+      '  const note = "the picked one";',
+      '  it("the picked one", () => {',
+      '    expect(pick("a")).toBe(true);',
+      "  });",
+      "});",
+    ].join("\n");
+    const block = extractTestBlock(decoys, "the picked one");
+    expect(block).toContain("expect(pick");
+    // The `describe` window would have swallowed the note line as well.
+    expect(block).not.toContain("const note");
+  });
+
+  it("two tests sharing one name read as the EARLIEST, whichever quote wrote it", () => {
+    // Quote-type priority used to decide this: a later double-quoted test beat
+    // an earlier single-quoted one. Position decides now.
+    const file = [
+      "it('same name', () => { expect(first).toBe(1); });",
+      'it("same name", () => { expect(second).toBe(2); });',
+    ].join("\n");
+    expect(extractTestBlock(file, "same name")).toContain("first");
+  });
+
   it("a PRESENCE check is not an instance proof — only a count is", () => {
     const presence = 'querySelector(\'[data-lifecycle-card="k"]\')).not.toBeNull()';
     expect(assertsExactlyOneInstance(presence, '[data-lifecycle-card="k"]')).toBe(false);
@@ -831,6 +929,60 @@ describe("a proof is tied to its NAMED test, and counts what it rendered", () =>
       );
       for (const host of jsxHosts) {
         expect(c.instanceProof.hosts, `${kind}: ${host}`).toContain(host);
+      }
+    }
+  });
+});
+
+describe("an exclusion proof must assert something ABOUT the picker", () => {
+  // The hole this closes. "The named test asserts SOMETHING" was satisfied by any
+  // live `expect(` — `expect(true).toBe(true)`, an expectation parked in a branch
+  // that never runs, or an assertion about a neighbouring function. Two
+  // production adapters on one host could therefore be declared mutually
+  // exclusive by a test that never read the picker at all. It is not a
+  // hypothetical: the review-gate row cited the OTHER picker's totality proof.
+  const named = 'it("proves it", () => { expect(pickPanel("a")).toBe(false); });';
+
+  it("PASSES a live expectation that reads the selector", () => {
+    expect(assertsAbout(extractTestBlock(named, "proves it"), "pickPanel")).toBe(true);
+  });
+
+  it("REJECTS a vacuous expect(true).toBe(true) — the shape a proof name hid", () => {
+    const vacuous = 'it("proves it", () => { expect(true).toBe(true); });';
+    expect(assertsAbout(extractTestBlock(vacuous, "proves it"), "pickPanel")).toBe(false);
+    // …and the same for the other constant shapes.
+    expect(assertsAbout("{ expect(1).toBe(1); }", "pickPanel")).toBe(false);
+    expect(assertsAbout('{ expect("x").toBe("x"); }', "pickPanel")).toBe(false);
+  });
+
+  it("REJECTS an expectation that can never run", () => {
+    expect(assertsAbout("{ if (false) { expect(pickPanel('a')).toBe(false); } }", "pickPanel")).toBe(
+      false,
+    );
+  });
+
+  it("REJECTS an assertion about something else entirely", () => {
+    expect(assertsAbout("{ expect(otherThing('a')).toBe(false); }", "pickPanel")).toBe(false);
+  });
+
+  it("REJECTS an assertion that is only commented out, and an empty body", () => {
+    expect(assertsAbout("{ /* expect(pickPanel('a')).toBe(false); */ }", "pickPanel")).toBe(false);
+    expect(assertsAbout("{}", "pickPanel")).toBe(false);
+  });
+
+  it("counts the selector named in the MATCHER as well as in the subject", () => {
+    expect(assertsAbout("{ expect(answer).toBe(pickPanel('a')); }", "pickPanel")).toBe(true);
+  });
+
+  it("every declared exclusion's proof really reads its own picker", () => {
+    for (const [kind, c] of Object.entries(LIFECYCLE_CARD_CONTRACTS)) {
+      for (const [host, ex] of Object.entries(c.exclusions ?? {})) {
+        const block = extractTestBlock(read(ex.proof.file), ex.proof.testName);
+        expect(block, `${kind}/${host}: the exclusion proof is gone`).not.toBeNull();
+        expect(
+          assertsAbout(block, ex.selector),
+          `${kind}/${host}: the exclusion proof never reads ${ex.selector}`,
+        ).toBe(true);
       }
     }
   });
@@ -912,6 +1064,27 @@ describe("the two modes on the real tree", () => {
       encoding: "utf8",
     });
     expect(res.status).toBe(2);
+  });
+
+  it("a REPEATED flag is refused, the same way an unknown one is", () => {
+    // `--audti` exited 2 while `--complete --complete` was swallowed. One
+    // argument reader, one answer: a mode word is passed once.
+    for (const argv of [["--complete", "--complete"], ["--audit", "--audit"]]) {
+      const res = spawnSync(process.execPath, [GATE, ...argv], { cwd: REPO_ROOT, encoding: "utf8" });
+      expect(res.status, argv.join(" ")).toBe(2);
+      expect(res.stdout + res.stderr).toMatch(/repeated flag/);
+    }
+  });
+
+  it("the COMMITTED gate transcript is a fresh run of this gate, byte for byte", () => {
+    // The evidence record quotes the required run verbatim. Without this test
+    // nothing compares the quote to the gate: a finding could be reworded,
+    // added or silenced and the committed transcript would still read as the
+    // gate's own output. The comparison is the whole file, not a substring, so
+    // a dropped line fails as loudly as a changed one.
+    const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
+    const fresh = `$ node ${GATE_REL}\n${res.stdout}${res.stderr}exit ${res.status}\n`;
+    expect(fresh).toBe(read(TRANSCRIPT_REL));
   });
 
   it("package.json ships the ruled scripts for BOTH modes", () => {

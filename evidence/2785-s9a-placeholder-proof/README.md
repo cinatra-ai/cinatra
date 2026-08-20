@@ -118,6 +118,21 @@ programs committed beside them — `capture-a-schedule.mjs` and
 printed by one of them, so the assertions can be audited rather than believed,
 and re-run rather than trusted.
 
+**One substitution before a re-run.** Both programs carry `OUT = "<home>/…"`.
+`<home>` is a placeholder, not a path: the operator's real home directory was
+scrubbed out of these files on review, and no real path is restored here.
+Replace `<home>` with your own home directory before you run either program. The
+`OUT` directory is where the program reads `storage-state.json` and writes its
+log and its screenshot; nothing else in either file depends on the location.
+
+**One guard the logs predate.** Each program now stops with a non-zero exit if
+the card it is about to photograph is missing, is not unique, or does not carry
+the identity the log prints — a missing card used to yield zero anchor counts,
+"ALL ABSENT: true" and exit 0, which is a passing proof of a page that drew
+nothing. The guard prints nothing on the passing path, so both committed logs
+are still byte-for-byte what the committed programs print on the runs they
+record. The captures were not re-run to add it.
+
 **One redaction, marked in place.** `teardown-log.txt` line 9 had the framework
 version token the process table printed. The source-leak gate flags that shape,
 so the token is replaced by a marker naming exactly what was removed and why.

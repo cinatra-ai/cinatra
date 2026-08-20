@@ -178,6 +178,34 @@ say(`  data-lifecycle-card-host  = ${JSON.stringify(card.hostAttr)}   (the S1 sh
 say(`  card is INSIDE the conversation list: ${card.insideConversationList}`);
 say(`  card text: ${JSON.stringify(card.text)}`);
 
+// ── the proof is only a proof if the card is THERE ───────────────────────────
+// WHY THIS GUARD EXISTS. Every anchor count below is taken off `root`, and
+// `root` is `null` when no card rendered. A broken surface therefore produced
+// zero counts, `allAbsent === true` and exit 0 — a PASSING "all absent" proof of
+// a page that drew nothing. Absence is only evidence when the card whose anchors
+// are absent was actually photographed. So the identity above is asserted here,
+// before the absence is computed, and a failure stops the run instead of
+// printing a conclusion the readings do not support.
+//
+// The guard prints NOTHING on the passing path, so the committed log is still
+// byte-for-byte what this program prints on the run it records.
+const identityFailures = [];
+if (!appeared) identityFailures.push("the card never appeared within the bounded wait");
+if (card.count !== 1) identityFailures.push(`instances of ${cardSel} = ${card.count}, expected exactly 1`);
+if (card.kindAttr !== KIND) identityFailures.push(`data-lifecycle-card = ${JSON.stringify(card.kindAttr)}, expected ${JSON.stringify(KIND)}`);
+if (card.stateAttr === null) identityFailures.push("data-lifecycle-card-state is absent — the card cannot say which state it drew in");
+// The line above claims the S1 shell emits no host. If that stops being true the
+// record's reading is stale, and a stale reading may not be printed as a fact.
+if (card.hostAttr !== null) identityFailures.push(`data-lifecycle-card-host = ${JSON.stringify(card.hostAttr)}, and this record states the S1 shell emits none`);
+if (identityFailures.length > 0) {
+  say("");
+  say("CARD IDENTITY FAILED — nothing was photographed and no absence is claimed:");
+  for (const f of identityFailures) say(`  ${f}`);
+  flush();
+  await browser.close();
+  process.exit(1);
+}
+
 say("");
 say("RATIFIED §VI ANCHORS — every one must be ABSENT (the absence is the evidence).");
 say("Read verbatim off LIFECYCLE_CARD_CONTRACTS.trigger_schedule_proposal.anchors:");
@@ -190,6 +218,16 @@ for (const a of RATIFIED_ANCHORS) {
 }
 say(`ALL FIVE RATIFIED SCHEDULE ANCHORS ABSENT: ${allAbsent}`);
 say(`page errors: ${pageErrors.length} ${JSON.stringify(pageErrors)}`);
+
+// A PRESENT anchor means the card is drawn, which is the opposite of what this
+// cell records. The program stops rather than photographing a placeholder claim
+// its own readings contradict. Silent on the passing path.
+if (!allAbsent) {
+  say("AT LEAST ONE RATIFIED ANCHOR IS PRESENT — this is not a placeholder; nothing was photographed.");
+  flush();
+  await browser.close();
+  process.exit(1);
+}
 
 // ── the pixels ───────────────────────────────────────────────────────────────
 await page.locator(cardSel).first().scrollIntoViewIfNeeded().catch(() => {});

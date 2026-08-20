@@ -299,7 +299,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         module: "packages/agents/src/instance-screens.tsx",
         proof: {
           file: "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
-          testName: "covers every branch — no shape is left without an answer",
+          // The row used to cite "covers every branch — no shape is left without
+          // an answer", which is the totality proof of the OTHER picker
+          // (`screenHostsRecommendationCard`). It named no reading of
+          // `runDetailPanelKind` at all, and the old "asserts anything" check
+          // could not see that. The cited test now proves THIS picker.
+          testName:
+            "answers exactly one panel for every run shape — the two run_card adapters are never both chosen",
         },
       },
     },
@@ -889,13 +895,16 @@ export const REQUIRED_ROOT_ATTRIBUTES = Object.freeze([
  * same assertion about the same pixels, so both count. What does NOT count is a
  * test that never names the anchor at all.
  *
- * THE LIMIT, stated rather than left to be discovered: this is LEXICAL inside
- * the extracted block. The block is the named test's own body — that is what
- * `extractTestBlock` buys — but within it, an anchor named only in a comment or
- * only in dead code reads as named. So this rule cannot be the proof on its
- * own, and it is not asked to be: the same named test is EXECUTED by vitest,
- * where the anchor has to come back off real DOM. A negative fixture pins this
- * limit so it stays a known reading rather than an assumed strength.
+ * THE LIMIT, stated rather than left to be discovered: this function is LEXICAL
+ * over whatever text it is handed, so on its own it counts an anchor named in a
+ * comment. The GATE does not hand it that text: the window comes from
+ * `extractTestBlock`, which searches and slices a comment-stripped copy, and the
+ * caller strips statically-dead branches on top. What survives the strip is an
+ * anchor named in a live STRING that nothing renders — a fixture list, an
+ * unused constant. So this rule still cannot be the proof on its own, and it is
+ * not asked to be: the same named test is EXECUTED by vitest, where the anchor
+ * has to come back off real DOM. Negative fixtures pin both readings so they
+ * stay known rather than assumed.
  */
 export function proofAssertsAnchor(proofSource, anchor) {
   const selector = /^\[([a-zA-Z0-9-]+)(?:=["']([^"']+)["'])?\]$/.exec(anchor);
@@ -915,26 +924,48 @@ export function proofAssertsAnchor(proofSource, anchor) {
  * card cannot borrow the assertions of some unrelated case that happens to live
  * in the same file — which is exactly how an empty proof test passed before.
  *
- * THE LIMIT, stated here as it is on the anchor rule: this is LEXICAL, not a
- * parse. The block starts at the FIRST quoted occurrence of the name and ends by
- * brace matching, so a `describe` title or a quoted mention that repeats the name
- * earlier in the file selects that occurrence instead, and two tests sharing one
- * name read as the first of them. What the rule buys is a narrower window than
- * the file, not a guarantee that the window is the right test. It cannot be the
- * proof on its own, and it is not asked to be: the same named test is EXECUTED by
- * vitest, where a wrong or absent body fails on its own.
+ * HOW THE WINDOW IS CHOSEN, and what that rules out. The search runs over a
+ * COMMENT-STRIPPED copy of the file, and it matches a test DECLARATION — an
+ * `it(`/`test(` (with any `.only`/`.skip`/`.concurrent` modifiers) whose first
+ * argument is the quoted name — not a bare quoted occurrence of the name. Three
+ * shapes that used to select the wrong window therefore cannot any more:
+ *   - the name repeated inside a COMMENT, which is not in the searched text;
+ *   - the name as a `describe` title or as a plain string somewhere else, which
+ *     is not a test declaration;
+ *   - the enclosing `(` guessed by scanning backwards, which could open at any
+ *     arbitrary paren before the name; the block now opens at the declaration's
+ *     own paren.
+ * When several declarations share one name the EARLIEST is taken, and that is
+ * chosen across all three quote characters at once rather than by quote-type
+ * priority — so the window is the first test with that name, whichever quote it
+ * was written with.
+ *
+ * THE LIMIT that remains, stated rather than left to be discovered: this is
+ * still LEXICAL, not a parse. Two tests really sharing one name read as the
+ * first of them, and the end of the block is found by brace matching, which
+ * skips quoted spans but not a regex literal carrying an unbalanced brace
+ * (`/\{/`) — such a literal inside the named test can end the window early.
+ * A table-driven declaration (`it.each([…])("name")`) is not recognised as a
+ * declaration at all, so a contract may not name one. What the rule buys is a
+ * narrower window than the file, not a guarantee that the window is the right
+ * test. It cannot be the proof on its own, and it is not asked to be: the same
+ * named test is EXECUTED by vitest, where a wrong or absent body fails on its
+ * own.
  */
 export function extractTestBlock(source, testName) {
-  for (const quote of ['"', "'", "`"]) {
-    const at = source.indexOf(`${quote}${testName}${quote}`);
-    if (at < 0) continue;
-    const open = source.lastIndexOf("(", at);
-    if (open < 0) continue;
-    const end = matchBlock(source, open);
-    if (end < 0) continue;
-    return source.slice(open, end);
-  }
-  return null;
+  const code = stripComments(source);
+  const name = testName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const decl = new RegExp(
+    String.raw`\b(?:it|test)(?:\s*\.\s*\w+)*\s*\(\s*(["'\`])${name}\1`,
+    "g",
+  );
+  const m = decl.exec(code);
+  if (m === null) return null;
+  const open = code.indexOf("(", m.index);
+  if (open < 0) return null;
+  const end = matchBlock(code, open);
+  if (end < 0) return null;
+  return code.slice(open, end);
 }
 
 /**
@@ -951,26 +982,60 @@ export function assertsExactlyOneInstance(block, rootSelector) {
   ).test(block);
 }
 
+/** An `expect(…)` argument that carries no reading — a bare literal constant. */
+const LITERAL_SUBJECT = /^(?:true|false|null|undefined|-?\d+(?:\.\d+)?|["'`][^"'`]*["'`])$/;
+
 /**
- * Does `block` assert ANYTHING at all?
+ * Does `block` assert something ABOUT `subject` — the thing it is named as the
+ * proof of?
  *
- * The weakest possible reading of "this test proves something": it runs at
- * least one expectation. Comments are stripped first, so an assertion that has
- * been commented out does not count. This does not judge WHAT is asserted —
- * only that the named test is not empty, which is the shape that let a proof
- * name stand in for a proof.
+ * "The test is not empty" was too weak to be a proof. ANY live `expect(` used to
+ * satisfy it, so `expect(true).toBe(true)`, an expectation parked in a branch
+ * that never runs, or an assertion about something else entirely all read as a
+ * proof of the picker. Two production adapters could then be declared exclusive
+ * by a test that never touched the selector.
  *
- * THE LIMIT, stated here as it is on the anchor rule: this is LEXICAL inside the
- * extracted block. It matches the TEXT `expect(`, so an expectation in a branch
- * that never runs, or one that runs and passes vacuously, still reads as an
- * assertion. It cannot be the proof on its own, and it is not asked to be: the
- * same named test is EXECUTED by vitest, where the expectation has to hold.
- * Negative fixtures pin the shapes it DOES reject — an empty proof, one whose
- * only assertion is commented out, and one that borrows a neighbour's — so the
- * reading stays known rather than assumed.
+ * So an expectation counts here only when BOTH hold:
+ *   LIVE AND NOT VACUOUS  it survives comment stripping and dead-branch
+ *                         stripping, and its `expect(…)` argument is not a bare
+ *                         literal constant — `expect(true).toBe(true)` and
+ *                         `expect(1).toBe(1)` carry no reading of anything;
+ *   ABOUT THE SUBJECT     the subject's identifier appears in that same
+ *                         expectation statement, in the argument or in the
+ *                         matcher, so the assertion reads the thing under proof
+ *                         rather than a neighbour of it.
+ *
+ * THE LIMIT that remains: this is LEXICAL inside the extracted block. A live
+ * expectation that names the subject and asserts something trivial about it
+ * still reads as an assertion, and the subject may be named through a wrapper
+ * rather than called directly. It cannot be the proof on its own, and it is not
+ * asked to be: the same named test is EXECUTED by vitest, where the expectation
+ * has to hold. Negative fixtures pin the shapes it DOES reject — an empty proof,
+ * one whose only assertion is commented out, one that borrows a neighbour's, a
+ * vacuous `expect(true).toBe(true)`, an expectation inside `if (false)`, and one
+ * that never names the subject — so the reading stays known rather than assumed.
  */
-export function assertsSomething(block) {
-  return /\bexpect\s*\(/.test(stripComments(block));
+export function assertsAbout(block, subject) {
+  const live = stripUnreachable(stripComments(block));
+  const named =
+    subject === undefined || subject === null
+      ? null
+      : new RegExp(String.raw`\b${subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\b`);
+  const re = /\bexpect\s*\(/g;
+  for (let m = re.exec(live); m !== null; m = re.exec(live)) {
+    const open = live.indexOf("(", m.index);
+    const end = matchBlock(live, open);
+    if (end < 0) continue;
+    const arg = live.slice(open + 1, end - 1).trim();
+    if (LITERAL_SUBJECT.test(arg)) continue;
+    if (named === null) return true;
+    // The statement is the expectation plus its matcher chain, up to the `;`
+    // that ends it — `expect(x).toBe(pick(y))` names the subject in the matcher.
+    const semi = live.indexOf(";", end);
+    const statement = live.slice(m.index, semi < 0 ? live.length : semi);
+    if (named.test(statement)) return true;
+  }
+  return false;
 }
 
 /** Every requirement a kind has recorded as open, flattened to plain strings. */
@@ -1149,15 +1214,17 @@ export function scanHostMounts(kind, contract, mountedIn, registrySource, readMo
           push(`'${kind}': ${exclusion.module} does not export the exclusion selector '${exclusion.selector}' — the picker must be readable, not implied`, exclusion.module);
         }
         // The proof is read the way the instance proof is read: the named test
-        // is EXTRACTED and must assert something inside its own body. A
-        // file-wide match on the test name passes for a test that is empty, and
-        // an empty test named after a claim is not a proof of the claim.
+        // is EXTRACTED and must assert something ABOUT THE PICKER inside its own
+        // body. A file-wide match on the test name passes for a test that is
+        // empty; "asserts anything" passes for `expect(true).toBe(true)` and for
+        // an assertion about an unrelated subject. Neither is a proof of the
+        // claim the row makes.
         const proof = readModule(exclusion.proof.file);
         const proofBlock = proof === null ? null : extractTestBlock(proof, exclusion.proof.testName);
         if (proofBlock === null) {
           push(`'${kind}': the exclusion proof "${exclusion.proof.testName}" is not in ${exclusion.proof.file} — an unproven picker is an assumption`, exclusion.proof.file);
-        } else if (!assertsSomething(proofBlock)) {
-          push(`'${kind}': the exclusion proof "${exclusion.proof.testName}" in ${exclusion.proof.file} asserts nothing — an empty test named after a picker proves no branch of it`, exclusion.proof.file);
+        } else if (!assertsAbout(proofBlock, exclusion.selector)) {
+          push(`'${kind}': the exclusion proof "${exclusion.proof.testName}" in ${exclusion.proof.file} runs no live expectation that reads '${exclusion.selector}' — an empty, vacuous or unrelated assertion under a picker's name proves no branch of it`, exclusion.proof.file);
         }
       }
     }
@@ -1368,9 +1435,12 @@ export function collectContractViolations({
           violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the rendered owner test "${c.renderedProof.testName}" is not in this file` });
         } else {
           const openHere = openRequirements(c);
+          // Read off text that RUNS. The window is already comment-stripped, and
+          // the dead-branch strip removes an anchor parked in `if (false)`.
+          const liveProof = stripUnreachable(block);
           for (const anchor of [...c.anchors, ...(c.anchorsOneOf?.of ?? [])]) {
             if (openHere.has(anchor)) continue;
-            if (!proofAssertsAnchor(block, anchor)) {
+            if (!proofAssertsAnchor(liveProof, anchor)) {
               violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the named rendered test never reads the anchor '${anchor}' off the card it mounted` });
             }
           }
@@ -1400,8 +1470,16 @@ export function collectContractViolations({
           if (!assertsExactlyOneInstance(block, c.instanceRootSelector)) {
             violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': the instance proof never COUNTS the rendered roots (${c.instanceRootSelector}) and requires exactly one — a presence check cannot see a second instance` });
           }
+          // The claimed host must be named in text that RUNS. `extractTestBlock`
+          // already hands back a comment-stripped window, and the dead-branch
+          // strip removes a host parked in `if (false)`. THE LIMIT, stated: a
+          // host named in a live array the test iterates cannot be told apart
+          // lexically from one named in a live array nothing reads — the shape
+          // these proofs use drives every member, and vitest is what proves it,
+          // because an undriven member would render nothing to assert on.
+          const liveBlock = stripUnreachable(block);
           for (const host of c.instanceProof.hosts) {
-            if (!block.includes(host)) {
+            if (!liveBlock.includes(host)) {
               violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': the instance proof claims host '${host}' and never drives it` });
             }
           }
@@ -1530,6 +1608,15 @@ function main(argv = []) {
       `[${LABEL}] unknown flag(s): ${unknown.join(", ")} — this gate takes ` +
         `no flag (the done-check), --complete (the same done-check, named) or --audit (the lenient read).`,
     );
+    return 2;
+  }
+  // A flag passed twice is refused the way an unknown flag is. Accepting
+  // `--complete --complete` silently while `--audti` exits 2 makes the argument
+  // reading inconsistent, and an inconsistent reading is one a caller has to
+  // guess at. One mode word, once.
+  const repeated = [...new Set(argv.filter((a, i) => argv.indexOf(a) !== i))];
+  if (repeated.length > 0) {
+    console.error(`[${LABEL}] repeated flag(s): ${repeated.join(", ")} — pass each mode flag once.`);
     return 2;
   }
   if (argv.includes("--audit") && argv.includes("--complete")) {
