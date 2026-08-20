@@ -221,3 +221,77 @@ describe("the config no longer sets a second, contradicting wall", () => {
     expect(islandHeaders).toMatch(/Cache-Control/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2754 — a request that PRESENTS a credential reaches the page
+// ---------------------------------------------------------------------------
+//
+// The empty-200 arm above is right for a widget frame that has nothing to prove
+// with, and wrong for the one that does: it would swallow a valid credential
+// before the page could read it, and the island would stay blank on exactly the
+// surface the credential was built for. The guard decides WHO ANSWERS, never
+// whether the answer is authorized — the page holds the key and re-runs the
+// reader's whole access, so a forged or expired credential still draws the
+// empty island, one layer further in.
+
+describe("an island request carrying its own credential is answered by the page", () => {
+  function islandRequest(params: Record<string, string>) {
+    const url = new URL("https://app.example/lifecycle/review-island");
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+    return {
+      nextUrl: url,
+      url: url.toString(),
+      headers: new Headers(),
+      cookies: { get: () => undefined },
+    } as unknown as Parameters<
+      typeof import("@/lib/auth-route-guard").guardAppRoute
+    >[0];
+  }
+
+  it("does NOT swallow a credentialed, cookieless widget frame", async () => {
+    const { guardAppRoute } = await import("@/lib/auth-route-guard");
+    getSessionCookie.mockReturnValue(null);
+    const res = await guardAppRoute(
+      islandRequest({
+        ref: "a-ref",
+        assistant: "wordpress",
+        instanceId: "inst-1",
+        ic: "AAAA-sealed_value-BBBB",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    // The widened wall still rides the response — the credential decides the
+    // authority, never the framing.
+    expect(res.headers.get("content-security-policy")).toBe(
+      `frame-ancestors 'self' ${REGISTERED}`,
+    );
+    expect(res.headers.get("x-frame-options")).toBeNull();
+    // A PASSTHROUGH, not the terminal empty document the no-credential arm
+    // produces: the request continues to the island page, which is the only
+    // thing that can open the credential.
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("does not send a credentialed request to an interactive sign-in either", async () => {
+    const { guardAppRoute } = await import("@/lib/auth-route-guard");
+    getSessionCookie.mockReturnValue(null);
+    const res = await guardAppRoute(
+      islandRequest({ ref: "a-ref", ic: "AAAA-sealed_value-BBBB" }),
+    );
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("a MALFORMED credential is not a credential — the empty arm still answers", async () => {
+    const { guardAppRoute } = await import("@/lib/auth-route-guard");
+    getSessionCookie.mockReturnValue(null);
+    for (const ic of ["", "not base64url!", "a".repeat(2000)]) {
+      const res = await guardAppRoute(
+        islandRequest({ ref: "a-ref", assistant: "wordpress", instanceId: "inst-1", ic }),
+      );
+      expect(await res.text()).toBe("");
+      expect(res.headers.get("x-middleware-next")).toBeNull();
+    }
+  });
+});

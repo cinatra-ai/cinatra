@@ -225,7 +225,7 @@ describe.skipIf(!HAS_DB)("C1 — the chip row is the gate's own pinned snapshot"
     expect(surface!.snapshotId).toBe(forDecision!.snapshotId);
   });
 
-  it("the projected chips satisfy the wire schema and carry NO proposed value", async () => {
+  it("the projected chips satisfy the wire schema and carry the before/after pair on replace", async () => {
     const g = await gateWithSuggestions();
     const surface = await decisionStore.readGateSuggestionSurface(g.runId, g.reviewTaskId);
     const chips = projectLifecycleSuggestions(surface!.suggestions, surface!.marks);
@@ -233,11 +233,21 @@ describe.skipIf(!HAS_DB)("C1 — the chip row is the gate's own pinned snapshot"
     for (const chip of chips) {
       expect(lifecycleSuggestionSchema.safeParse(chip).success).toBe(true);
     }
-    // The producer's replaces carry canonicalized VALUES; a chip never does.
+    // A replace carries its panel pair: the disclosed current value beside the
+    // canonicalized proposal. Non-replace ops draw label + class only.
     const values = surface!.suggestions.map((s) => s.value).filter(Boolean) as string[];
     expect(values.length).toBeGreaterThan(0);
-    const drawn = JSON.stringify(chips);
-    for (const v of values) expect(drawn).not.toContain(v);
+    const replaceChips = chips.filter((c) => c.op === "replace");
+    expect(replaceChips.length).toBeGreaterThan(0);
+    for (const chip of replaceChips) {
+      expect(chip.after).toBeTruthy();
+      expect(chip.before).toBeTruthy();
+      expect(chip.after).not.toBe(chip.before);
+    }
+    for (const chip of chips.filter((c) => c.op !== "replace")) {
+      expect(chip.before).toBeUndefined();
+      expect(chip.after).toBeUndefined();
+    }
   });
 
   it("a gate with no snapshot surfaces nothing (and draws no chips)", async () => {
