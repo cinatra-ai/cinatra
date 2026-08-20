@@ -222,9 +222,9 @@
       "declaredHost": "chat_thread",
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-capture-a",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
       "screenshot": "evidence/2852-before-after/captures/B3__review-card__chat_thread__pending.png",
-      "sha256": "20fbf79179f5369caa9c1d55646dd7d88bc4d318a305632d02db603f38e619b5",
+      "sha256": "e37f4c9cd4716dffc99dcbb19f8dfff848b4c6a0eba7ceae894a8da1c7aa1d47",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -300,21 +300,41 @@
           "selector": "[data-action=\"accept-suggestion -> accepted\"]",
           "scope": "root",
           "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"approve-review -> resolved\"]",
+          "scope": "root",
+          "count": 1
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-19T18:34:38.827Z",
-      "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; no model credential on this host",
-      "note": "The same card and the same suggestions in a real chat transcript, all accepted."
+      "recordedAt": "2026-08-19T23:47:56.420Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
+      "note": "RE-SHOT. The same card and the same three suggestions in a real chat transcript, all accepted, with the count line in the decision floor."
     },
     {
       "cell": "B4__review-card__chat_thread__pending",
       "declaredHost": "chat_thread",
       "declaredKind": "artifact_review_gate",
       "declaredState": "pending",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-capture-a",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
       "screenshot": "evidence/2852-before-after/captures/B4__review-card__chat_thread__pending.png",
-      "sha256": "0afe7066f4b3bc8c827c0415d11d8f3c95dc2ec0913128b46f67cd8f9100050f",
+      "sha256": "054622e2d885a66c5dbb84d080c9fcb832928315d242223b8647cf58ab3b09d2",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -390,12 +410,32 @@
           "selector": "[data-action=\"accept-suggestion -> accepted\"]",
           "scope": "root",
           "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"approve-review -> resolved\"]",
+          "scope": "root",
+          "count": 1
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-19T18:34:55.867Z",
-      "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; no model credential on this host",
-      "note": "The chat-hosted row with one chip dismissed - the same two drawn states on the second host."
+      "recordedAt": "2026-08-19T23:54:48.498Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
+      "note": "RE-SHOT. The chat-hosted row with one chip dismissed - the same two drawn states on the second host, from the one renderer, with the count line in the decision floor on this host too."
     }
   ]
 }

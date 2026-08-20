@@ -1,12 +1,28 @@
 # cinatra#2852 — the suggestion chips and their before/after panels, on the live app
 
-Head under proof: `daca498d2` (PR #2863), plus this evidence commit.
+Head under proof: `f5ae7b401` (PR #2863), plus this evidence commit.
 
-The pictures were taken at `9d0a91107`. The one commit between that and the head
-this evidence sits on (`daca498d2`, "the chip-surface integration case follows the
-ratified pair contract") touches a single test file and no product code, so the
-rendered surface in `captures/` is the surface this head draws. Said here rather
-than quietly re-pinned.
+## RE-SHOT — why every picture in `captures/` is new
+
+The four cells this file described before were taken at `9d0a91107`, **before**
+`8d410ab07` moved §VIII's count line — *"N of M suggestions accepted — they ride
+this decision. A reject records them as not taken."* — out of the foot of the
+suggestion block and **into the decision floor, above the terminal row**. Every
+one of those pictures therefore showed the line somewhere the branch no longer
+draws it. The PNGs and their records are **replaced, not appended**: no
+stale-placement picture survives on this branch, and the two `chat_thread`
+entries in `scripts/ci/chat-hitl-capture-index.json` were **deleted and
+re-registered** against the new bytes.
+
+**The placement is measured, not described.** Every record carries two
+composed-selector counts, observed on the same screen as its picture:
+
+| composed selector | count |
+|---|---|
+| `[data-conformance-id="review-decision-bar"] [data-conformance-id="suggestion-accepted-count"]` | **1** |
+| `[data-conformance-id="suggestion-chips"] [data-conformance-id="suggestion-accepted-count"]` | **0** |
+
+on both hosts and in both states — which is exactly the move under proof.
 
 ## The runtime, said first
 
@@ -77,12 +93,23 @@ by the shipped `ReviewGateCard`. Every dismissal was made by pressing the chip.
 
 ## Cells DELIVERED
 
-| Cell | What the DOM asserted |
-|---|---|
-| `B1__review-card__page_gate_region__pending` | The row in its arrival state on the review page's gate region: `suggestion-chips` = 1, **3** `suggestion-accepted`, **0** `suggestion-dismissed`, and **3** `suggestion-before-after` panels — each with its own `[data-suggestion-panel="before"]` and `[data-suggestion-panel="after"]` (3 and 3). Every chip carries `[data-action="dismiss-suggestion -> dismissed"]`, i.e. one control whose next press dismisses. Zero page errors. |
-| `B2__review-card__page_gate_region__pending` | The SAME row after the middle chip was pressed once: **2** accepted, **1** dismissed, and still **3** before/after panels — the dismissed suggestion keeps its panel. The dismissed block is drawn muted with a dashed edge and **no strike-through**; its control flips to `[data-action="accept-suggestion -> accepted"]` (1), and the two others keep the dismiss action (2). The footer reads "2 of 3 suggestions accepted — they ride this decision. A reject records them as not taken." |
-| `B3__review-card__chat_thread__pending` | The same card and the same three suggestions in a real chat transcript: `[data-conversation-list]` = 1, `data-lifecycle-card-host="chat_thread"`, 3 accepted, 0 dismissed, 3 panels. Zero page errors. |
-| `B4__review-card__chat_thread__pending` | The chat-hosted row with one chip dismissed: 2 accepted, 1 dismissed, 3 panels — the same two drawn states on the second host, from the one renderer. |
+Framed on the card root (`[data-conformance-id="review-gate-card"]`), viewport
+width 1228 at `deviceScaleFactor: 2`.
+
+| Cell | Pixels | What is VISIBLY on screen |
+|---|---|---|
+| `B1__review-card__page_gate_region__pending` | 1672×2282 | The arrival state on the review page's gate region: the target island, then `CORE ANALYSIS · SUGGESTIONS` with **three** accepted blocks, each carrying its own `NOW → SUGGESTED` pair; the block closes with "Press a suggestion to dismiss it, press it again to accept it…" and **no count line**. The count line sits **below, in the decision floor**: "3 of 3 suggestions accepted — they ride this decision. A reject records them as not taken.", directly above `DECISION RATIONALE` and the `Comment / Reject / Approve` row. |
+| `B2__review-card__page_gate_region__pending` | 1672×2282 | The SAME row after the middle chip was pressed once: chip 2 is drawn muted with a **dashed edge** and a revert glyph, **no strike-through**, and it **keeps its before/after panel**. 2 accepted, 1 dismissed, 3 panels. The floor line now reads **"2 of 3 suggestions accepted…"** — still composed in the decision floor above the terminal row, still absent from the chips block. |
+| `B3__review-card__chat_thread__pending` | 1472×2454 | The same card and the same three suggestions in a real chat transcript (`[data-conversation-list]` = 1, `data-lifecycle-card-host="chat_thread"`): 3 accepted, 0 dismissed, 3 panels, count line in the decision floor. |
+| `B4__review-card__chat_thread__pending` | 1472×2454 | The chat-hosted row with one chip dismissed: 2 accepted, 1 dismissed, 3 panels, "2 of 3" in the decision floor — the same two drawn states on the second host, from the one renderer. |
+
+Zero page errors on all four.
+
+A note on the harness worth keeping: `data-action="dismiss-suggestion -> dismissed"`
+is on the block WRAPPER, and the pressable control is the `button` inside it —
+clicking the wrapper does nothing. The first attempt of this round did exactly
+that and produced two "dismissed" cells with three accepted chips; the driver
+call is `[data-action="dismiss-suggestion -> dismissed"] button`.
 
 `capture-results.json` is the machine record beside the pixels; `capture-records.json`
 carries the same cells in the shape `scripts/ci/lib/capture-record-contract.mjs`
