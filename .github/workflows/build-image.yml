@@ -600,6 +600,16 @@ jobs:
       - name: Gate classifier tests (labelled fixture corpus + unit edges)
         run: node --test scripts/audit/__tests__/schema-migration-gate.test.mjs
 
+  # REQUIRED STRUCTURALLY as of cinatra#2823, not via branch protection: the
+  # `build` job `needs` this job and its "Guard prerequisite gates" step
+  # hard-fails the (branch-protection-required) `build` if it did not succeed —
+  # the exact mechanism behind `test` / `skills-unit` / `a2a-unit` /
+  # `execution-plane-unit` / `package-unit-suites` / `hosted-mcp-wire-gate`, so NO
+  # branch-protection contexts change is needed and this job's own context stays
+  # non-required. The step that needed it is the S9j durable stream/store/reload
+  # contract at the end of this job; every DB step above it becomes a merge gate
+  # too, which is a strict improvement — those suites already ran here and a
+  # failure in one merely coloured a non-required check.
   extension-lifecycle-db-tests:
     name: Extension-anchor lifecycle DB tests
     needs: detect
@@ -770,6 +780,44 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
           SUPABASE_SCHEMA: cinatra_exec_run_seam
         run: pnpm exec vitest run src/lib/execution/__tests__/run-seam-declared-environment.integration.test.ts
+
+      # cinatra#2823 (epic #2784 S9j) — THE DURABLE STREAM -> STORE -> RELOAD
+      # CONTRACT, and the reason this job becomes a `build` prerequisite below.
+      #
+      # WHAT IT NEEDS THAT NO REQUIRED JOB HAD. The contract drives the REAL
+      # AG-UI sink, persists through the REAL assistant thread store, reloads
+      # with no Redis and no client memory, and MOUNTS the real `/chat` column on
+      # what came back. So it needs a live Postgres AND a DOM at once. Every
+      # existing `build` prerequisite (`test`, `skills-unit`, `a2a-unit`,
+      # `execution-plane-unit`, `package-unit-suites`, `hosted-mcp-wire-gate`)
+      # has the DOM and no database; this job has the database. Wiring the tier
+      # here and making the job a prerequisite is the SHORTER change: one job
+      # joins the required set, against adding a Postgres service + provisioning
+      # to a job that has never had one.
+      #
+      # `agents-integration-db` was the other candidate and is deliberately not
+      # used: its own header records that it is "a NEW PARALLEL job and
+      # deliberately NOT a `build` prerequisite", and #2823's acceptance says in
+      # so many words that adding the test there is not enough.
+      #
+      # ITS OWN SCHEMA, like the run-seam step above, so its writes never touch
+      # the suites sharing this job's database. No provisioning step is needed
+      # beyond the `public` Better-Auth tables this job already applies: the
+      # store bootstraps its own DDL on first use, verified against a bare
+      # schema.
+      #
+      # SELF-SKIP IS IMPOSSIBLE HERE BY DESIGN: `vitest.integration-2823.config.ts`
+      # hard-throws without `CINATRA_TEST_DB_URL`, so a wiring change that broke
+      # the database URL reddens this step instead of quietly proving nothing —
+      # the same posture `agents-integration-db` takes for its own tier.
+      #
+      # Own vitest invocation (own process), same as every step above, so its
+      # pool lifecycle never touches theirs. Measured: ~7s of vitest (17 tests).
+      - name: Durable lifecycle stream/store/reload contract (cinatra#2823)
+        env:
+          CINATRA_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          SUPABASE_SCHEMA: cinatra_durable_reload
+        run: pnpm test:durable-reload
 
   # packages/agents INTEGRATION tier (cinatra#2226). Replaces the dead step that
   # used to live at the end of the `test` job:
@@ -2955,8 +3003,16 @@ jobs:
     # packages — packages/llm, packages/chat, packages/objects,
     # packages/registries and the rest — which until this change executed in no
     # workflow at all.
-    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate]
-    # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`/`package-unit-suites`) FAILED, so the guard step
+    # `extension-lifecycle-db-tests` (cinatra#2823) joins for a reason the others
+    # did not have: it is the only job in this workflow with a PostgreSQL service
+    # whose steps a required gate can reach, and the S9j durable
+    # stream/store/reload contract has to run in a REQUIRED job with a database
+    # (that is the issue's acceptance, not a preference). Making it a prerequisite
+    # is what turns "the card comes back after a reload" into a merge gate, and it
+    # costs the critical path NOTHING: the job is budgeted at 10 minutes and has
+    # measured ~1.8 min, against the 15-minute `test` job it now runs beside.
+    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, extension-lifecycle-db-tests]
+    # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`/`package-unit-suites`/`hosted-mcp-wire-gate`/`extension-lifecycle-db-tests`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
     # `build` would NOT block a merge gated on the build status. The guard closes
@@ -2987,10 +3043,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites + hosted-mcp-wire-gate)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' || needs['hosted-mcp-wire-gate'].result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites + hosted-mcp-wire-gate + extension-lifecycle-db-tests)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' || needs['hosted-mcp-wire-gate'].result != 'success' || needs['extension-lifecycle-db-tests'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }} hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }} hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }} extension-lifecycle-db-tests=${{ needs['extension-lifecycle-db-tests'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
