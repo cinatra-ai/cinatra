@@ -193,6 +193,12 @@ export const triggerScheduleProposalSettledViewSchema = z
     runId: z.string().min(1).max(128),
     triggerType: z.enum(["immediate", "scheduled", "recurring"]),
     scheduleCopy: z.string().min(1).max(200),
+    /** The card was ADJUSTED away from before Confirm landed, so the family
+     *  settled on other rows (cinatra#2859). `scheduleCopy` already says so
+     *  instead of restating times this card cannot vouch for; the flag lets a
+     *  renderer mark it in its own chrome. Absent on every ordinary settled
+     *  card, which is why it is optional rather than a required `false`. */
+    superseded: z.boolean().optional(),
     timezone: z.string().min(1).max(64),
     gatedSteps: z.array(gatedStepViewSchema).max(50),
     /** True once the gate has been opened (the trigger fired or was released).

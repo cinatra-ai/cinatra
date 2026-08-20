@@ -663,3 +663,250 @@ describe("adjust refuses anything that is not this reader's live proposal", () =
     expect(readAgentTemplateById).toHaveBeenCalledWith(TEMPLATE);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The card the family left behind — RESOLUTION, not Confirm
+// ---------------------------------------------------------------------------
+//
+// Confirm's `supersededBySchedule` refusal only fires when somebody PRESSES
+// Confirm. Reopening a stale tab presses nothing: it resolves the card, and
+// resolution is a read. Before this arm existed, that read found the family's
+// one consume row, called it settled, and drew `describeProposalSchedule` over
+// the READER'S OWN token — so the card the reader had corrected away from
+// rendered as "settled" at the very times they corrected away from, next to the
+// winner's run id. Sharing the consume identity is what makes that reachable,
+// so it is this PR's to close, not a pre-existing one.
+
+/** A one-off in another zone — an adjust that moves the DURABLE fields too. */
+const ONCE_NEW_YORK: ProposalSchedule = {
+  kind: "scheduled",
+  runAt: "2026-09-01T08:00",
+  timezone: "America/New_York",
+};
+
+describe("a superseded card resolves to the truth, not to its own rows", () => {
+  it("the stale member never renders the schedule it was adjusted AWAY from", async () => {
+    const original = mintLive(WEEKDAYS_9AM);
+    const adjusted = await service.adjustTriggerSchedule({
+      priorToken: original.token,
+      userId: USER,
+      orgId: ORG,
+      schedule: WEEKDAYS_8AM,
+    });
+    expect(adjusted.ok).toBe(true);
+    if (!adjusted.ok) return;
+
+    // 8am wins Confirm...
+    await service.confirmTriggerScheduleProposal(READER, adjusted.token);
+    expect(intents.get("run_1")?.cronExpression).toBe("0 8 * * 1,2,3,4,5");
+
+    // ...and the 9am tab is REOPENED. Nothing is pressed.
+    const resolved = await service.resolveProposalForReader(
+      original.token,
+      READER,
+    );
+
+    expect(resolved.phase).toBe("settled");
+    if (resolved.phase !== "settled") return;
+    expect(resolved.superseded).toBe(true);
+    expect(resolved.scheduleCopy).toBe(service.SUPERSEDED_SCHEDULE_COPY);
+    // THE REGRESSION ITSELF: the adjusted-away line must not be on the card.
+    expect(resolved.scheduleCopy).not.toBe(
+      service.describeProposalSchedule(WEEKDAYS_9AM),
+    );
+    expect(resolved.scheduleCopy).not.toContain("9:00");
+    // The run it points at is still the family's one run.
+    expect(resolved.runId).toBe("run_1");
+  });
+
+  it("and symmetrically, when the STALE card is the one that won", async () => {
+    const original = mintLive(WEEKDAYS_9AM);
+    const adjusted = await service.adjustTriggerSchedule({
+      priorToken: original.token,
+      userId: USER,
+      orgId: ORG,
+      schedule: WEEKDAYS_8AM,
+    });
+    expect(adjusted.ok).toBe(true);
+    if (!adjusted.ok) return;
+
+    // The stale tab got there first, so the family is armed at 9am.
+    await service.confirmTriggerScheduleProposal(READER, original.token);
+    expect(intents.get("run_1")?.cronExpression).toBe("0 9 * * 1,2,3,4,5");
+
+    // The reader's OWN, adjusted card is now the one showing rows nothing was
+    // armed with — the same lie, pointing the other way.
+    const resolved = await service.resolveProposalForReader(
+      adjusted.token,
+      READER,
+    );
+    expect(resolved.phase).toBe("settled");
+    if (resolved.phase !== "settled") return;
+    expect(resolved.superseded).toBe(true);
+    expect(resolved.scheduleCopy).toBe(service.SUPERSEDED_SCHEDULE_COPY);
+    expect(resolved.scheduleCopy).not.toBe(
+      service.describeProposalSchedule(WEEKDAYS_8AM),
+    );
+    expect(resolved.scheduleCopy).not.toContain("8:00");
+  });
+
+  it("surfaces the INSTALLED trigger type and zone, never the stale card's", async () => {
+    const original = mintLive(WEEKDAYS_9AM);
+    const adjusted = await service.adjustTriggerSchedule({
+      priorToken: original.token,
+      userId: USER,
+      orgId: ORG,
+      schedule: ONCE_NEW_YORK,
+    });
+    expect(adjusted.ok).toBe(true);
+    if (!adjusted.ok) return;
+
+    await service.confirmTriggerScheduleProposal(READER, adjusted.token);
+
+    const resolved = await service.resolveProposalForReader(
+      original.token,
+      READER,
+    );
+    expect(resolved.phase).toBe("settled");
+    if (resolved.phase !== "settled") return;
+    expect(resolved.superseded).toBe(true);
+    // The stale card is a RECURRING Europe/Berlin card. What was installed is a
+    // one-off in New York, and those two fields already came from the durable
+    // rows rather than from the token — so the card names the real schedule's
+    // shape while `scheduleCopy` sends the reader to the run for its times.
+    expect(resolved.triggerType).toBe("scheduled");
+    expect(resolved.timezone).toBe("America/New_York");
+  });
+
+  it("the WINNING member resolves exactly as it did before", async () => {
+    const original = mintLive(WEEKDAYS_9AM);
+    const adjusted = await service.adjustTriggerSchedule({
+      priorToken: original.token,
+      userId: USER,
+      orgId: ORG,
+      schedule: WEEKDAYS_8AM,
+    });
+    expect(adjusted.ok).toBe(true);
+    if (!adjusted.ok) return;
+
+    await service.confirmTriggerScheduleProposal(READER, adjusted.token);
+
+    const resolved = await service.resolveProposalForReader(
+      adjusted.token,
+      READER,
+    );
+    // Whole-object, so a stray field change on the settled card fails here too.
+    expect(resolved).toEqual({
+      phase: "settled",
+      runId: "run_1",
+      agentName: "Weekly digest",
+      triggerType: "recurring",
+      scheduleCopy: service.describeProposalSchedule(WEEKDAYS_8AM),
+      timezone: "Europe/Berlin",
+      released: false,
+      arming: true,
+      superseded: false,
+    });
+  });
+});
+
+describe("resolution never manufactures a supersession", () => {
+  it("the ordinary double-press settles on its own rows", async () => {
+    const proposal = mintLive(WEEKDAYS_9AM);
+    await service.confirmTriggerScheduleProposal(READER, proposal.token);
+    await service.confirmTriggerScheduleProposal(READER, proposal.token);
+
+    const resolved = await service.resolveProposalForReader(
+      proposal.token,
+      READER,
+    );
+    expect(resolved.phase).toBe("settled");
+    if (resolved.phase !== "settled") return;
+    expect(resolved.superseded).toBe(false);
+    expect(resolved.scheduleCopy).toBe(
+      service.describeProposalSchedule(WEEKDAYS_9AM),
+    );
+  });
+
+  it("#2837's equal-schedule lineage draws the SAME card from either member", async () => {
+    // The re-proposed expired card re-asks the same question with the same
+    // rows, so both members compare EQUAL and neither is superseded.
+    const original = mintLive(WEEKDAYS_9AM);
+    const inLineage = mintTriggerScheduleProposalToken(
+      { templateId: TEMPLATE, userId: USER, orgId: ORG, schedule: WEEKDAYS_9AM },
+      {
+        nonce: verifyTriggerScheduleProposalToken({
+          token: original.token,
+          expectedUserId: USER,
+          expectedOrgId: ORG,
+        })!.nonce,
+      },
+    );
+    expect(inLineage).not.toBeNull();
+
+    await service.confirmTriggerScheduleProposal(READER, inLineage!.token);
+
+    const fromReplacement = await service.resolveProposalForReader(
+      inLineage!.token,
+      READER,
+    );
+    const fromOriginal = await service.resolveProposalForReader(
+      original.token,
+      READER,
+    );
+    expect(fromReplacement).toEqual(fromOriginal);
+    expect(fromOriginal.phase).toBe("settled");
+    if (fromOriginal.phase !== "settled") return;
+    expect(fromOriginal.superseded).toBe(false);
+    expect(fromOriginal.scheduleCopy).toBe(
+      service.describeProposalSchedule(WEEKDAYS_9AM),
+    );
+  });
+
+  it("a MISSING install intent resolves exactly as it did before this change", async () => {
+    // Nothing to compare against is not evidence of disagreement. The card goes
+    // back to reading its own rows — the pre-existing behaviour, unchanged.
+    const original = mintLive(WEEKDAYS_9AM);
+    const adjusted = await service.adjustTriggerSchedule({
+      priorToken: original.token,
+      userId: USER,
+      orgId: ORG,
+      schedule: WEEKDAYS_8AM,
+    });
+    expect(adjusted.ok).toBe(true);
+    if (!adjusted.ok) return;
+    await service.confirmTriggerScheduleProposal(READER, adjusted.token);
+
+    intents.clear();
+
+    const resolved = await service.resolveProposalForReader(
+      original.token,
+      READER,
+    );
+    expect(resolved.phase).toBe("settled");
+    if (resolved.phase !== "settled") return;
+    expect(resolved.superseded).toBe(false);
+    expect(resolved.scheduleCopy).toBe(
+      service.describeProposalSchedule(WEEKDAYS_9AM),
+    );
+  });
+
+  it("an UNSPENT family is still a live proposal from either member", async () => {
+    const original = mintLive(WEEKDAYS_9AM);
+    const adjusted = await service.adjustTriggerSchedule({
+      priorToken: original.token,
+      userId: USER,
+      orgId: ORG,
+      schedule: WEEKDAYS_8AM,
+    });
+    expect(adjusted.ok).toBe(true);
+    if (!adjusted.ok) return;
+
+    // No Confirm anywhere, so there is no consume row and nothing to diverge
+    // from: both cards still ask their own question.
+    for (const token of [original.token, adjusted.token]) {
+      const resolved = await service.resolveProposalForReader(token, READER);
+      expect(resolved.phase).toBe("proposal");
+    }
+  });
+});

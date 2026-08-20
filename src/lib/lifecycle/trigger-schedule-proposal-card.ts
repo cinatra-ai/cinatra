@@ -114,6 +114,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
       runId: resolved.runId,
       triggerType: resolved.triggerType,
       scheduleCopy: resolved.scheduleCopy,
+      superseded: resolved.superseded,
       timezone: resolved.timezone,
       // The held-step tree is a compile-time property of the template, read on
       // the run's own Trigger tab. It is deliberately empty here rather than
