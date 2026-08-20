@@ -42,7 +42,45 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * THE ONE CANONICAL CAPTURE INDEX, named ONCE.
+ *
+ * Both halves read the same file, so both halves must compute the same path,
+ * and the only way to guarantee that is to compute it in ONE place. Each reader
+ * used to `join(__dirname, "chat-hitl-capture-index.json")` from its OWN
+ * directory, which produced two different files that each called itself
+ * canonical: the CI half's (populated) and the audit half's (empty). The empty
+ * one was also the capture driver's default output, so an honest capture run
+ * wrote its records where nothing would ever bind them.
+ *
+ * `CAPTURE_INDEX_PATH` is the absolute path every reader resolves;
+ * `CAPTURE_INDEX_RELATIVE_PATH` is the same file as a repo-relative string, for
+ * usage lines and messages. `scripts/ci/__tests__/capture-index-path.test.mjs`
+ * pins that the CI gate, the audit gate and the driver all land on the one file.
+ */
+export const CAPTURE_INDEX_RELATIVE_PATH = "scripts/ci/chat-hitl-capture-index.json";
+export const CAPTURE_INDEX_PATH = join(__dirname, "..", "chat-hitl-capture-index.json");
+
+/**
+ * THE ONE RECORDER IDENTITY, named ONCE, for the index header AND the per-record
+ * `recordedBy` field.
+ *
+ * There were three: the CI index header said `chat-hitl-capture-recorder@1`, the
+ * audit index header said `scripts/audit/lib/chat-hitl-capture-recorder.mjs@1`,
+ * and every one of the eight committed records said this. This value wins
+ * because it is the one already stamped on real records, and the same string is
+ * mirrored in each lane's own `evidence/<slice>/capture-records.json` twin --
+ * changing the index copies would silently desynchronize them from evidence
+ * this branch does not own. Identity here is PROSE: neither validator hashes it
+ * or derives anything from it, so the choice is about which committed text stays
+ * true, not about what a check can verify.
+ */
+export const RECORDER_ID = "cinatra-lifecycle-capture-recorder@1";
 
 /** The four hosts, mirroring `LIFECYCLE_CARD_HOSTS` in agent-ui-protocol. */
 export const CAPTURE_HOSTS = [

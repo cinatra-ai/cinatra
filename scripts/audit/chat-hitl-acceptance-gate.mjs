@@ -49,6 +49,11 @@
  * here; what THIS gate catches is the silent rename, the quiet deletion, and the
  * green claim with nothing behind it.
  *
+ * THE CAPTURE INDEX rides the same entrypoint. A criterion row names a proof;
+ * a capture record names a SCREEN. The manifest half catches the proof that was
+ * renamed away; the capture half catches the screenshot filed under a host it
+ * does not show. Both run on every invocation, and both must be clean.
+ *
  * Usage:
  *   node scripts/audit/chat-hitl-acceptance-gate.mjs            # audit
  *   node scripts/audit/chat-hitl-acceptance-gate.mjs --strict   # done-check
@@ -60,12 +65,32 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  CAPTURE_INDEX_PATH,
+  validateCaptureIndex as validateCanonicalIndex,
+} from "../ci/lib/capture-record-contract.mjs";
+import {
+  chatThreadRequirementsFor,
+  hashFile,
+  hostTokenInCell,
+  kindTokenInCell,
+  stateTokenInCell,
+  validateCaptureIndex,
+} from "./lib/chat-hitl-capture-recorder.mjs";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
 const LABEL = "chat-hitl-acceptance";
 
 export const MANIFEST_PATH = join(__dirname, "chat-hitl-acceptance-manifest.json");
+// THE ONE CANONICAL INDEX, re-exported rather than recomputed from THIS
+// directory. There used to be a `scripts/audit/chat-hitl-capture-index.json`
+// beside this file that also called itself canonical, held no records, and was
+// the capture driver's default output; this gate read it while the CI gate read
+// the populated one. Both halves now resolve the same constant, which
+// `scripts/ci/__tests__/capture-index-path.test.mjs` pins.
+export { CAPTURE_INDEX_PATH };
 
 /** The valid dispositions. See the header for what each one claims. */
 export const DISPOSITIONS = ["MAPPED", "BUILT", "MISSING"];
@@ -221,6 +246,225 @@ export function strictReport({ manifest = loadManifest(), ...rest } = {}) {
   return { violations, unproven, partial, total: rows.length };
 }
 
+/** The committed capture index. */
+export function loadCaptureIndex(indexPath = CAPTURE_INDEX_PATH) {
+  return JSON.parse(readFileSync(indexPath, "utf8"));
+}
+
+/**
+ * Audit the capture index: schema, hashes, URL class, required host assertions
+ * and their observed counts. Pure over injected IO, like `auditManifest`, so the
+ * pinned fixtures drive the same validator CI runs.
+ */
+export function auditCaptureIndex({
+  index = loadCaptureIndex(),
+  repoRoot = DEFAULT_REPO_ROOT,
+  hashOf = (rel) => hashFile(resolve(repoRoot, rel)),
+  tier = "graded",
+} = {}) {
+  // THE CANONICAL FLOOR, FIRST, for EVERY record. The ratified contract owns
+  // what a record is; this tier's extras are graded on top of it (see
+  // `RECORD_TIERS` in the recorder). Running the floor here rather than relying
+  // on the CI gate to run it means this entrypoint refuses a mislabeled capture
+  // on its own, which is what "both must be clean" is supposed to mean.
+  const canonical = validateCanonicalIndex(index, { repoRoot }).violations.map(
+    (v) => `[canonical] ${v.cell ? `record "${v.cell}": ` : ""}${v.code} — ${v.detail}`,
+  );
+  return [...canonical, ...validateCaptureIndex({ index, hashOf, tier })];
+}
+
+/** A cell name without its image extension. */
+function cellKey(name) {
+  return String(name ?? "").replace(/\.(png|jpe?g|webp)$/i, "");
+}
+
+/**
+ * Every manifest proof that NAMES a chat_thread cell.
+ *
+ * A manifest row points at proofs; a proof that names a chat-thread capture cell
+ * is a claim that a card was photographed inside the chat. This finds those
+ * claims so the next function can demand the evidence behind them.
+ */
+export function chatThreadCellClaims(manifest) {
+  const claims = [];
+  for (const [i, row] of (manifest.rows ?? []).entries()) {
+    for (const proof of proofsOf(row)) {
+      if (hostTokenInCell(proof.testName) !== "chat_thread") continue;
+      // Tokens are read off the cell KEY, not the raw proof name: a trailing
+      // `.png` puts a `.` where the token boundary is expected and silently
+      // turns "decided" into no claim at all.
+      const key = cellKey(proof.testName);
+      claims.push({
+        row: i + 1,
+        cell: key,
+        file: proof.file,
+        // The PROOF TIER (unitProofs / e2eProofs / …), not a lifecycle kind.
+        // Named plainly because the earlier spelling read like the latter and
+        // invited a reader to think it was being checked against the record.
+        proofTier: proof.kind,
+        // The lifecycle kind the CELL NAME claims, when it names one. This is
+        // what the record must agree with — otherwise a record's self-declared
+        // kind would be authoritative over the row that cites it.
+        claimedKind: kindTokenInCell(key),
+        // The state the cell name claims. A `decided` cell answered with pending
+        // evidence would be judged against the easier requirement set.
+        claimedState: stateTokenInCell(key),
+      });
+    }
+  }
+  return claims;
+}
+
+/**
+ * EVERY screenshot-like proof in the manifest, with the host its name declares.
+ *
+ * The binding below is keyed off a host token in the cell name, which makes it
+ * opt-in: renaming `__chat_thread__` to `__chat__` would drop the claim and the
+ * evidence requirement with it. This inventory is the answer — the pinned suite
+ * asserts the exact list, so a rename changes it and fails there, whatever the
+ * binding then computes. A capture cannot be un-claimed by relabelling it.
+ */
+export function screenshotProofInventory(manifest = loadManifest()) {
+  const out = [];
+  for (const [i, row] of (manifest.rows ?? []).entries()) {
+    for (const proof of proofsOf(row)) {
+      if (!/\.(png|jpe?g|webp)$/i.test(String(proof.testName ?? ""))) continue;
+      out.push({
+        row: i + 1,
+        cell: cellKey(proof.testName),
+        host: hostTokenInCell(proof.testName),
+      });
+    }
+  }
+  return out.sort((a, b) => a.cell.localeCompare(b.cell) || a.row - b.row);
+}
+
+/**
+ * THE BINDING. An unindexed screenshot counts as ZERO.
+ *
+ * Every manifest cell that names `chat_thread` must resolve to a record in the
+ * canonical index, and that record must be a chat capture with the card really
+ * in it: the chat URL class, and same-frame counts of at least one for the
+ * conversation list, the kind's own card root, the `chat_thread` host
+ * declaration, and the kind's decision controls. A file name on a README is not
+ * evidence; this is what makes the index non-vacuous.
+ *
+ * Returns violations. `--strict` and `audit` both refuse them, and the pinned
+ * suite asserts the exact set that is unbound today, so a later round cannot add
+ * an unindexed chat screenshot and stay green.
+ */
+export function auditManifestIndexBinding({ manifest = loadManifest(), index = loadCaptureIndex() } = {}) {
+  const violations = [];
+  const byCell = new Map((index.records ?? []).map((r) => [cellKey(r.cell), r]));
+
+  for (const claim of chatThreadCellClaims(manifest)) {
+    const record = byCell.get(claim.cell);
+    if (!record) {
+      violations.push(
+        `manifest row ${claim.row} claims the chat_thread cell "${claim.cell}" (${claim.file}), ` +
+          "and no record in the capture index carries that cell — an unindexed screenshot counts as zero",
+      );
+      continue;
+    }
+    if (record.declaredHost !== "chat_thread") {
+      violations.push(
+        `manifest row ${claim.row} claims "${claim.cell}" as chat_thread; its record declares "${record.declaredHost}"`,
+      );
+      continue;
+    }
+    // The row's own claim wins over the record's self-declaration. Without
+    // this, a proof cited for one kind binds happily to a record photographing
+    // another, and the record decides what the row proved.
+    if (claim.claimedKind !== null && claim.claimedKind !== record.declaredKind) {
+      violations.push(
+        `manifest row ${claim.row} cites "${claim.cell}" for ${claim.claimedKind}; ` +
+          `its record photographs ${record.declaredKind}`,
+      );
+      continue;
+    }
+    // The image must live where the citing proof lives. Without this the row
+    // cites `evidence/A/README.md` while its record points at a screenshot in
+    // `evidence/B`, and the two halves of the claim never meet.
+    const claimDir = claim.file.slice(0, claim.file.lastIndexOf("/"));
+    if (claimDir && !record.screenshot.startsWith(`${claimDir}/`)) {
+      violations.push(
+        `manifest row ${claim.row} cites "${claim.cell}" from ${claim.file}, but its record's ` +
+          `screenshot is ${record.screenshot} — the image must sit with the proof that cites it`,
+      );
+      continue;
+    }
+    if (
+      claim.claimedState !== null &&
+      claim.claimedState !== (record.declaredState ?? "pending")
+    ) {
+      violations.push(
+        `manifest row ${claim.row} cites "${claim.cell}" as ${claim.claimedState}; ` +
+          `its record photographs ${record.declaredState ?? "pending"}`,
+      );
+      continue;
+    }
+    // Observations are keyed by SCOPE, selector AND `within` — the canonical
+    // contract's own key plus the root a root-scoped count names. An earlier arm
+    // matched on frame alone, so a frame-wide count satisfied a requirement meant
+    // to be taken INSIDE the card root; the scope key closed that, and `within`
+    // closes the rest of it: an observation taken inside a DIFFERENT root
+    // answers a different question and can no longer stand in for this one. An
+    // observation that names no root is the canonical spelling, read as
+    // answering the requirement exactly as that half reads it.
+    const observationFor = (selector, scope, within) =>
+      (record.assertions ?? []).find(
+        (a) =>
+          a?.selector === selector &&
+          (a?.scope ?? "frame") === scope &&
+          (a?.within === undefined || within === undefined || a.within === within),
+      );
+    // PRESENT means painted, WHEN THE RECORD CLAIMS A PAINTED COUNT. The binding
+    // asks the same question the record's own validator does, at the same
+    // grading: a screenshot whose card is attached-but-unrendered cannot satisfy
+    // a manifest row here after failing there, and a record written by the
+    // canonical driver — which records attachment only, and labels no
+    // observation — is read the way that half reads it rather than refused for
+    // fields it never claimed.
+    const satisfies = (selector, scope, within, wanted) => {
+      const found = observationFor(selector, scope, within);
+      if (!found || (found.expect ?? wanted) !== wanted) return false;
+      if (wanted !== "present") return found.count === 0;
+      if (found.count < 1) return false;
+      return found.visible === undefined || found.visible >= 1;
+    };
+    // The SAME tier predicate the record validator uses: a record that pins a
+    // card root speaks this tier and owes its whole set; one that does not is
+    // read the way the canonical half reads it.
+    const strict = record.instance !== undefined;
+    for (const req of chatThreadRequirementsFor(
+      record.declaredKind,
+      record.declaredState ?? "pending",
+    )) {
+      // This tier's root-scoped ADDITION is asked of records that pin a card
+      // root; the rest is the canonical requirement set either way.
+      if (req.tier === "audit" && !strict) continue;
+      const wanted = req.expect ?? "present";
+      // The canonical `any` group (Confirm OR Skip) is honoured for a record
+      // that claims no more than the canonical half; this tier requires every
+      // member of the group from a record written at its own tier.
+      if (
+        !strict &&
+        req.any &&
+        req.any.some((sel) => (observationFor(sel, req.scope, req.within)?.count ?? 0) >= 1)
+      ) {
+        continue;
+      }
+      if (!satisfies(req.selector, req.scope, req.within, wanted)) {
+        violations.push(
+          `manifest row ${claim.row}: the record for "${claim.cell}" does not observe ` +
+            `${req.selector} ${wanted} (${req.scope}-scoped)`,
+        );
+      }
+    }
+  }
+  return violations;
+}
+
 function summarise(rows) {
   const counts = { MAPPED: 0, BUILT: 0, MISSING: 0 };
   for (const r of rows) counts[r.disposition] = (counts[r.disposition] ?? 0) + 1;
@@ -237,13 +481,35 @@ function main(argv) {
   const rows = manifest.rows ?? [];
   const counts = summarise(rows);
 
+  // The capture half runs on EVERY invocation. A mislabeled capture is a false
+  // green whether or not the manifest is being asked whether it is done.
+  if (!existsSync(CAPTURE_INDEX_PATH)) {
+    console.error(`[${LABEL}] capture index not found at ${CAPTURE_INDEX_PATH}`);
+    return 2;
+  }
+  const captureIndex = loadCaptureIndex();
+  const captureViolations = [
+    ...auditCaptureIndex({ index: captureIndex }),
+    ...auditManifestIndexBinding({ manifest, index: captureIndex }),
+  ];
+  if (captureViolations.length > 0) {
+    console.error(
+      `[${LABEL}] ${captureViolations.length} capture-index violation(s) — a capture's ` +
+        "declared host must match its recorded anchors; file names carry no authority:\n",
+    );
+    for (const v of captureViolations) console.error(`  ${v}`);
+    return 1;
+  }
+  const captureCount = (captureIndex.records ?? []).length;
+
   if (!strict) {
     const violations = auditManifest({ manifest });
     if (violations.length === 0) {
       console.log(
         `[${LABEL}] manifest honest — ${rows.length} rows ` +
           `(${counts.MAPPED} MAPPED, ${counts.BUILT} BUILT, ${counts.MISSING} MISSING); ` +
-          "every named proof exists in the tree.",
+          "every named proof exists in the tree. " +
+          `Capture index host-anchored — ${captureCount} record(s).`,
       );
       return 0;
     }
@@ -267,7 +533,10 @@ function main(argv) {
     for (const r of partial) console.error(`  PARTIAL  ${r.criterion}\n           gap: ${r.gap}`);
     return 1;
   }
-  console.log(`[${LABEL}] READY — ${total}/${total} criteria proven, none partial.`);
+  console.log(
+    `[${LABEL}] READY — ${total}/${total} criteria proven, none partial; ` +
+      `capture index host-anchored (${captureCount} record(s)).`,
+  );
   return 0;
 }
 
