@@ -24,7 +24,16 @@
     "",
     "A record is TEXT, and text is forgeable: a person can hand-write one with a real image and",
     "invented counts. What the contract does catch is the accidental mislabel, the anchor nobody",
-    "measured, the drifted hash, the re-used picture, and the cell that cites nothing at all."
+    "measured, the drifted hash, the re-used picture, and the cell that cites nothing at all.",
+    "IT IS NO LONGER EMPTY. These records arrive from cinatra#2852 (PR #2863): one run of the",
+    "recorder (evidence/2852-before-after/drivers/capture.mjs) against a LIVE app on a lane database,",
+    "photographing a gate this lane produced through the shipped producer and the app's own",
+    "review-orchestration drain, whose suggestion snapshot was written by the shipped",
+    "runSuggestionProducerLane. They do NOT clear the grandfathered C1/C2 findings: those name",
+    "ONLY chat_thread RECORDS ARE HERE, on purpose. #2863 also photographed the review page's gate",
+    "region; those records live at evidence/2852-before-after/capture-records.json, because the",
+    "contract's `review_page` URL class (/^\\/agents\\/reviews/) does not describe the shipped",
+    "gate-region route. That is a defect in the class, not in the picture."
   ],
   "recorder": "chat-hitl-capture-recorder@1",
   "records": [
@@ -207,6 +216,226 @@
       "recordedAt": "2026-08-19T17:25:55.308Z",
       "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; no model credential on this host",
       "note": "A gate that LAPSED rather than being decided: the shipped gate-maintenance sweep auto-resolved an expired OPTIONAL review (disposition approve, resolved_by NULL, fingerprint expiry:<gateId>). The card names the outcome with NO decider beside it."
+    },
+    {
+      "cell": "B3__review-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
+      "screenshot": "evidence/2852-before-after/captures/B3__review-card__chat_thread__pending.png",
+      "sha256": "e37f4c9cd4716dffc99dcbb19f8dfff848b4c6a0eba7ceae894a8da1c7aa1d47",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-before-after\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"before\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"after\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-state=\"accepted\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-state=\"dismissed\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"approve-review -> resolved\"]",
+          "scope": "root",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-19T23:47:56.420Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
+      "note": "RE-SHOT. The same card and the same three suggestions in a real chat transcript, all accepted, with the count line in the decision floor."
+    },
+    {
+      "cell": "B4__review-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
+      "screenshot": "evidence/2852-before-after/captures/B4__review-card__chat_thread__pending.png",
+      "sha256": "054622e2d885a66c5dbb84d080c9fcb832928315d242223b8647cf58ab3b09d2",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-before-after\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"before\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"after\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-state=\"accepted\"]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-suggestion-state=\"dismissed\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"approve-review -> resolved\"]",
+          "scope": "root",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-19T23:54:48.498Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
+      "note": "RE-SHOT. The chat-hosted row with one chip dismissed - the same two drawn states on the second host, from the one renderer, with the count line in the decision floor on this host too."
     }
   ]
 }

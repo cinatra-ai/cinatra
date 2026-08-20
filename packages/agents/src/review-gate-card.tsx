@@ -133,14 +133,14 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import {
+  ArrowRight,
   Check,
   CircleX,
   ClipboardCheck,
   Maximize2,
   MessageSquare,
   Minimize2,
-  Sparkles,
-  X,
+  RotateCcw,
 } from "lucide-react";
 
 import {
@@ -148,7 +148,6 @@ import {
   type LifecycleCardHost,
   type LifecycleCardState,
   type LifecycleSuggestion,
-  type LifecycleSuggestionMark,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
 import type {
@@ -404,9 +403,11 @@ export function ReviewGateCard({
   const auth = useLifecycleCardAuth();
   const [reloadToken, setReloadToken] = useState(0);
   const [expanded, setExpanded] = useState(false);
-  // §VIII — the reviewer's LOCAL marks, keyed by suggestion id, and BOUND to the
-  // surface that offered them. Never sent on their own; read at submit time into
-  // the one decision's partition. See `MarkState` for why the binding exists.
+  // §VIII — the reviewer's LOCAL dismissals, keyed by suggestion id, and BOUND
+  // to the surface that offered them. A surfaced suggestion is ACCEPTED unless it
+  // is named here (§VIII: "a suggestion arrives accepted"), so this is the whole
+  // marking state. Never sent on its own; read at submit time into the one
+  // decision's partition. See `MarkState` for why the binding exists.
   const [markState, setMarkState] = useState<MarkState>(EMPTY_MARKS);
 
   // The review kind's envelope carries STATE and no body: §III's target arrives
@@ -558,7 +559,7 @@ export function ReviewGateCard({
     .map((s) => s.id)
     .sort()
     .join("")}`;
-  let marks = markState.marks;
+  let dismissed = markState.dismissed;
   let marksCleared = markState.cleared;
   if (markState.identity !== surfacedIdentity) {
     // React's documented "adjust state when a prop changes" shape, for the same
@@ -578,12 +579,18 @@ export function ReviewGateCard({
     // nothing.
     const sameGate = markState.ref === view.ref;
     marksCleared = sameGate
-      ? markState.cleared || Object.keys(markState.marks).length > 0
+      ? markState.cleared || Object.keys(markState.dismissed).length > 0
       : false;
-    marks = {};
-    setMarkState({ ref: view.ref, identity: surfacedIdentity, marks, cleared: marksCleared });
+    dismissed = {};
+    setMarkState({ ref: view.ref, identity: surfacedIdentity, dismissed, cleared: marksCleared });
   }
-  const partition = buildPartition(surfaced, marks);
+  // The partition THIS surface would submit, per disposition (§VIII, cinatra#2852).
+  const suggestionDecisionsFor = (disposition: ReviewDisposition) =>
+    disposition === "reject"
+      ? rejectPartition(surfaced)
+      : disposition === "approve"
+        ? buildPartition(surfaced, dismissed)
+        : null;
 
   const frame = HOST_FRAME[host];
   const body = renderState({
@@ -593,22 +600,22 @@ export function ReviewGateCard({
     onToggleExpanded: () => setExpanded((v) => !v),
     submit: submitAndRefresh,
     onRefresh: refresh,
-    marks,
+    dismissed,
     marksCleared,
     onToggleMark: (id) =>
       setMarkState((current) => {
-        const next = { ...current.marks };
-        // rest → accepted → dismissed → rest. ONE control, the three states §VIII
-        // draws, and every mark reversible without a second affordance the spec
-        // does not draw.
-        if (next[id] === "accepted") next[id] = "dismissed";
-        else if (next[id] === "dismissed") delete next[id];
-        else next[id] = "accepted";
+        const next = { ...current.dismissed };
+        // accepted ⇄ dismissed. TWO states and no third (§VIII, redrawn): a
+        // suggestion arrives accepted, one press dismisses it, one press accepts
+        // it again. There is no unmarked state to return to and nothing to
+        // clear, so the toggle is its own inverse.
+        if (next[id]) delete next[id];
+        else next[id] = true;
         // The reviewer has looked since the surface changed; the notice has done
         // its job and stops competing with the marks they are making now.
-        return { ...current, marks: next, cleared: false };
+        return { ...current, dismissed: next, cleared: false };
       }),
-    partition,
+    suggestionDecisionsFor,
     focusBinding,
   });
   // The SECOND absence: the reader may not read the target (or there is nothing
@@ -639,10 +646,10 @@ function renderState(args: {
   onToggleExpanded: () => void;
   submit: SubmitReviewDecisionAction;
   onRefresh: () => void;
-  marks: Readonly<Record<string, LifecycleSuggestionMark>>;
+  dismissed: Readonly<Record<string, true>>;
   marksCleared: boolean;
   onToggleMark: (id: string) => void;
-  partition: SuggestionDecisionPartition | null;
+  suggestionDecisionsFor: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
   focusBinding: ComposerFocusBinding;
 }): ReactElement | null {
   const {
@@ -652,10 +659,10 @@ function renderState(args: {
     onToggleExpanded,
     submit,
     onRefresh,
-    marks,
+    dismissed,
     marksCleared,
     onToggleMark,
-    partition,
+    suggestionDecisionsFor,
     focusBinding,
   } = args;
 
@@ -731,7 +738,7 @@ function renderState(args: {
               submitted is a control that fails on press. */}
           <SuggestionChips
             suggestions={suggestions}
-            marks={marks}
+            dismissed={dismissed}
             marksCleared={marksCleared}
             onToggleMark={state.canDecide ? onToggleMark : undefined}
           />
@@ -743,7 +750,15 @@ function renderState(args: {
           <ReviewDecisionBar
             permissions={permissions}
             submitAction={submit}
-            suggestionDecisions={partition}
+            suggestionDecisionsFor={suggestionDecisionsFor}
+            suggestionSummary={
+              state.canDecide && suggestions.length > 0
+                ? {
+                    accepted: suggestions.filter((s) => !dismissed?.[s.id]).length,
+                    total: suggestions.length,
+                  }
+                : undefined
+            }
           />
         </>
       );
@@ -844,7 +859,12 @@ function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding }): React
 // ---------------------------------------------------------------------------
 
 /**
- * The reviewer's marks, and the surface they were made against.
+ * The reviewer's DISMISSALS, and the surface they were made against.
+ *
+ * §VIII's marking is a two-state toggle that starts ACCEPTED, so the only thing
+ * worth holding is which surfaced suggestions the reviewer has pressed away:
+ * everything surfaced and not named here is accepted, and there is no third
+ * state to represent.
  *
  * `identity` is the ref plus the sorted surfaced id set. It is what makes a mark
  * meaningful: a mark belongs to the exact set that offered it, so a set that
@@ -852,101 +872,217 @@ function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding }): React
  * narrowing the decision they would ride on, and a card reused for another gate
  * cannot apply the previous gate's marks to identically-named suggestions.
  *
- * `cleared` is one bit of TRUTH OWED TO THE READER: their marks were dropped and
- * they have not looked since. It is never used to alter a decision — only to say
- * so on screen before they take one.
+ * `cleared` is one bit of TRUTH OWED TO THE READER: their dismissals were
+ * dropped — the row is back to all-accepted — and they have not looked since. It
+ * is never used to alter a decision, only to say so on screen before they take
+ * one.
  */
 type MarkState = {
   /** The gate the marks belong to, held apart from `identity` so the notice can
    * be sticky WITHIN a gate and absent on a different one. */
   ref: string;
   identity: string;
-  marks: Readonly<Record<string, LifecycleSuggestionMark>>;
+  /** The ids pressed to DISMISSED. Absence from this map is acceptance. */
+  dismissed: Readonly<Record<string, true>>;
   cleared: boolean;
 };
 
-const EMPTY_MARKS: MarkState = { ref: "", identity: "", marks: {}, cleared: false };
+const EMPTY_MARKS: MarkState = { ref: "", identity: "", dismissed: {}, cleared: false };
 
 /**
- * Derive the decision partition from the reader's marks.
+ * Derive the decision partition from what is on screen (§VIII, cinatra#2852).
+ *
+ * ACCEPTED BY DEFAULT. Every surfaced suggestion lands in exactly one side: the
+ * ones the reviewer pressed away are dismissed, all the rest are accepted. That
+ * is the drawn state read back out — a reviewer who touches nothing accepts what
+ * they were shown, which is what the redraw says the row means.
  *
  * Iterated over the SURFACED list, so what rides the decision is exactly what is
- * on screen — the marks have already been re-bound to that list, so this cannot
- * quietly drop anything; it is what keeps the two in step.
+ * on screen; the dismissals have already been re-bound to that list, so this
+ * cannot quietly carry an id the reader can no longer see.
  *
- * Returns `null` when nothing is marked, and `null` matters: S6b keeps identity
- * version 1 with the key ABSENT for a decision with no partition, so a reviewer
- * who marks nothing submits the byte-identical fingerprint the surface produced
- * before this slice — an in-flight retry across a deploy boundary stays
- * idempotent instead of conflicting.
+ * Returns `null` only when NOTHING is surfaced. A gate with no chips submits the
+ * decision it submitted before any of this existed — no partition key, hence the
+ * identity-version-1 fingerprint, byte for byte.
  */
 function buildPartition(
   surfaced: ReadonlyArray<LifecycleSuggestion>,
-  marks: Readonly<Record<string, LifecycleSuggestionMark>>,
+  dismissed: Readonly<Record<string, true>>,
 ): SuggestionDecisionPartition | null {
+  if (surfaced.length === 0) return null;
   const accepted: string[] = [];
-  const dismissed: string[] = [];
+  const notTaken: string[] = [];
   for (const s of surfaced) {
-    const mark = marks[s.id];
-    if (mark === "accepted") accepted.push(s.id);
-    else if (mark === "dismissed") dismissed.push(s.id);
+    if (dismissed[s.id]) notTaken.push(s.id);
+    else accepted.push(s.id);
   }
-  if (accepted.length === 0 && dismissed.length === 0) return null;
-  return { accepted, dismissed };
+  return { accepted, dismissed: notTaken };
 }
 
-/** The chip's presentation for each of §VIII's three drawn states. */
+/**
+ * The partition a REJECT carries: every surfaced suggestion recorded as NOT
+ * TAKEN (§VIII, cinatra#2852).
+ *
+ * The shipped guard refused an immediate Reject while anything was accepted, and
+ * with the old unmarked default that was survivable — nothing was accepted until
+ * a reviewer pressed. Accepted-by-default makes the same guard refuse the very
+ * first press of Reject, on a row the reviewer never touched, which is a control
+ * that fails on press.
+ *
+ * So the rework is here, at the surface that knows what a reject MEANS for these
+ * items: a reject tombstones every reviewed revision, so nothing can be applied
+ * into them, and the truthful record of that is a dismissal for each surfaced
+ * id — the reviewer looked at them and took none. The decision core's rule ("a
+ * reject decision cannot accept suggestions") is untouched and still enforced
+ * server-side; this simply never asks it for the impossible.
+ */
+function rejectPartition(
+  surfaced: ReadonlyArray<LifecycleSuggestion>,
+): SuggestionDecisionPartition | null {
+  if (surfaced.length === 0) return null;
+  return { accepted: [], dismissed: surfaced.map((s) => s.id) };
+}
+
+/**
+ * §VIII's TWO drawn readings, plus the one HISTORY reading a settled gate can
+ * still need.
+ *
+ * `accepted` and `dismissed` are the whole live vocabulary: the redrawn section
+ * states "two states, and no third … there is no unmarked state to return to and
+ * nothing to clear". Dismissed is carried by the muted ground and the dashed
+ * edge ALONE — never a strike, which would pile a second marker on a pill that
+ * is already marked.
+ *
+ * `unrecorded` is NOT a third live state and is unreachable on a pending gate.
+ * It exists because a gate decided BEFORE this slice legitimately recorded a
+ * mark for only the items the reviewer touched, and drawing those untouched ids
+ * as either accepted or dismissed would report a choice nobody made.
+ */
 const CHIP_STATE = {
-  rest: {
-    conformanceId: "suggestion-chip-rest",
-    // The RATIFIED pill, verbatim from the shipped Artifacts chip
-    // (`src/components/artifacts/library-upload.tsx` § SuggestedMeaningChips) —
-    // dashed mustard edge, mustard wash, mustard ink. §VIII takes that drawing
-    // as its base and states so ("the dashed mustard pill drawn on Artifacts").
-    className: "border-dashed border-warning/60 bg-warning/10 text-warning",
-    action: "accept-suggestion -> accepted",
-  },
   accepted: {
-    conformanceId: "suggestion-chip-accepted",
-    // §VIII's new accepted mark: "goes solid and checked" — the SAME pill with
-    // its edge closed and its wash deepened, so an accepted chip is still
-    // recognisably the chip that was offered.
-    className: "border-solid border-warning/60 bg-warning/25 text-warning",
+    conformanceId: "suggestion-accepted",
+    // The pill WITH its fill — accepted is where a suggestion starts, so the
+    // resting Artifacts pill deepened is the accepted reading (§VIII, "Borrowed,
+    // then extended").
+    block: "border-solid border-warning/40 bg-warning/[0.07]",
+    pill: "border-solid border-warning/60 bg-warning/25 text-warning",
+    after: "border-warning/40 bg-surface-strong",
+    body: "text-foreground",
     action: "dismiss-suggestion -> dismissed",
   },
   dismissed: {
-    conformanceId: "suggestion-chip-dismissed",
-    // §VIII's new dismissed mark: "goes struck and muted" — the edge stays
-    // dashed, the wash drops out, the ink goes muted and the label is struck.
-    className:
-      "border-dashed border-line-strong bg-transparent text-muted-foreground line-through opacity-70",
-    action: "clear-suggestion-mark -> rest",
+    conformanceId: "suggestion-dismissed",
+    // The resting pill's dashed edge over a muted ground, with the fill removed.
+    // NO STRIKE-THROUGH.
+    block: "border-dashed border-line-strong bg-transparent",
+    pill: "border-dashed border-line-strong bg-transparent text-muted-foreground",
+    after: "border-line bg-surface",
+    body: "text-muted-foreground",
+    action: "accept-suggestion -> accepted",
+  },
+  unrecorded: {
+    conformanceId: "suggestion-unrecorded",
+    block: "border-dashed border-line bg-transparent",
+    pill: "border-dashed border-line bg-transparent text-muted-foreground",
+    after: "border-line bg-surface",
+    body: "text-muted-foreground",
+    action: "none",
   },
 } as const;
 
 type ChipState = keyof typeof CHIP_STATE;
 
-const CHIP_ICON: Record<ChipState, typeof Sparkles> = {
-  rest: Sparkles,
+const CHIP_ICON: Record<ChipState, typeof Check> = {
   accepted: Check,
-  dismissed: X,
+  dismissed: RotateCcw,
+  unrecorded: MessageSquare,
+};
+
+/** What the pill's accessible name says the next press will do. */
+const CHIP_PRESS_LABEL: Record<ChipState, string> = {
+  accepted: "press to dismiss",
+  dismissed: "press to accept",
+  unrecorded: "no choice recorded",
 };
 
 /**
- * THE suggestion-chip row (spec §VIII), drawn once for every host this card
- * appears on.
+ * ONE suggestion, drawn as §VIII draws it: the pill and the change class on top,
+ * the before/after panel beneath.
  *
- * ONE CONTROL PER SUGGESTION, THREE DRAWN STATES. §VIII draws a single pill in
- * three states and no second affordance, and says both marks stay reversible. So
- * the pill is a cycle — rest → accepted → dismissed → rest — rather than a pill
- * plus an invented dismiss button. Every press moves one step, every mark can be
- * walked back, and no pixel exists that the ratified drawing does not.
+ * THE PANEL IS THE POINT. A label plus a change class cannot tell a reader what
+ * accepting does, so the row shows the change itself — the current content beside
+ * the suggested content, text-valued, on the shared surface and line tokens.
  *
- * WHAT A CHIP SAYS. The readable pointer into the reviewed document as the
- * label, and the transform class in the mono slot the drawing gives to a
- * secondary datum. It never carries the proposed VALUE: a chip annotates the
- * target beside it, and printing the replacement text into the chip row would
- * make the row a second, unauthorized projection of the document.
+ * ABSENCE DRAWS NOTHING. A snapshot from before the pair existed, a `remove`
+ * (there is no one value to show) and an `add` of the empty string all carry no
+ * values, and the row is then the pill and the class alone — never an empty
+ * panel, which would read as "this change is blank".
+ */
+function SuggestionPanel({
+  suggestion,
+  spec,
+}: {
+  suggestion: LifecycleSuggestion;
+  spec: (typeof CHIP_STATE)[ChipState];
+}): ReactElement | null {
+  const { before, after } = suggestion;
+  if (before === undefined && after === undefined) return null;
+  return (
+    <div
+      data-conformance-id="suggestion-before-after"
+      className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_20px_minmax(0,1fr)] sm:items-stretch"
+    >
+      {before !== undefined ? (
+        <div
+          data-suggestion-panel="before"
+          className="min-w-0 rounded-control border border-line bg-surface px-2.5 py-2"
+        >
+          <div className="mb-1 font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
+            Now
+          </div>
+          <p className={`m-0 whitespace-pre-wrap break-words text-xs leading-relaxed ${spec.body}`}>
+            {before}
+          </p>
+        </div>
+      ) : null}
+      {before !== undefined && after !== undefined ? (
+        <div aria-hidden="true" className="hidden place-items-center text-muted-foreground sm:grid">
+          <ArrowRight className="size-3.5" />
+        </div>
+      ) : null}
+      {after !== undefined ? (
+        <div
+          data-suggestion-panel="after"
+          className={`min-w-0 rounded-control border px-2.5 py-2 ${spec.after}`}
+        >
+          <div className="mb-1 font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
+            Suggested
+          </div>
+          <p className={`m-0 whitespace-pre-wrap break-words text-xs leading-relaxed ${spec.body}`}>
+            {after}
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * THE suggestion-chip row (spec §VIII, redrawn at
+ * design@60b27dfbb8a2a1594e6e88333cc5c048c244e640), drawn once for every host
+ * this card appears on.
+ *
+ * ONE CONTROL PER SUGGESTION, TWO DRAWN STATES. A suggestion arrives ACCEPTED;
+ * one press dismisses it, one press accepts it again. The toggle is its own
+ * inverse — there is no unmarked state to return to and nothing to clear — and
+ * no second affordance exists that the drawing does not show.
+ *
+ * WHAT A SUGGESTION SAYS. The readable pointer into the reviewed document as the
+ * label, the transform class in the mono slot the drawing gives a secondary
+ * datum, and beneath them the change itself: the current content beside the
+ * suggested content. The values come from the SAME disclosed projection the
+ * target panel above already renders to this reader, so the row discloses
+ * nothing the card did not already show — it only puts the two side by side.
  *
  * READ-ONLY IS A DIFFERENT ELEMENT, NOT A DISABLED BUTTON. A reader who may not
  * decide, and a gate that has already been decided, both get plain elements with
@@ -955,18 +1091,19 @@ const CHIP_ICON: Record<ChipState, typeof Sparkles> = {
  */
 export function SuggestionChips({
   suggestions,
-  marks,
+  dismissed,
   marksCleared = false,
   onToggleMark,
   recorded = false,
 }: {
   suggestions: ReadonlyArray<LifecycleSuggestion>;
-  /** The reader's LOCAL marks (pending gate). Ignored when `recorded`. */
-  marks?: Readonly<Record<string, LifecycleSuggestionMark>>;
+  /** The reader's LOCAL dismissals (pending gate). Ignored when `recorded`. */
+  dismissed?: Readonly<Record<string, true>>;
   /**
-   * The surfaced set changed and the reader's marks were dropped. Drawn even
-   * when there is nothing left to draw a chip for — a reviewer who marked
-   * something and then finds the row empty is owed the reason, not a silence.
+   * The surfaced set changed and the reader's dismissals were dropped. Drawn
+   * even when there is nothing left to draw a suggestion for — a reviewer who
+   * pressed something and then finds the row empty is owed the reason, not a
+   * silence.
    */
   marksCleared?: boolean;
   /** Omitted ⇒ read-only: the reader may see the suggestions and mark none. */
@@ -976,77 +1113,72 @@ export function SuggestionChips({
 }): ReactElement | null {
   if (suggestions.length === 0 && !marksCleared) return null;
   const interactive = !recorded && onToggleMark !== undefined;
-  const acceptedCount = recorded
-    ? 0
-    : suggestions.filter((s) => marks?.[s.id] === "accepted").length;
-
+  const stateOf = (s: LifecycleSuggestion): ChipState =>
+    recorded
+      ? (s.mark ?? "unrecorded")
+      : dismissed?.[s.id]
+        ? "dismissed"
+        : "accepted";
   return (
     <div
       data-conformance-id="suggestion-chips"
       data-suggestion-chips-mode={recorded ? "recorded" : interactive ? "live" : "read-only"}
-      className="flex flex-col gap-2 rounded-control border border-line bg-surface-strong px-4 py-3"
+      className="flex flex-col gap-2.5 rounded-control border border-line bg-surface-strong px-4 py-3"
     >
       {/* #2042's labelling rule: a CORE lane is chrome, never an agent. The
           producer deliberately left this string to the surface that draws it. */}
       <div className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
         Core analysis · Suggestions
       </div>
-      <div className="flex flex-wrap gap-2">
-        {suggestions.map((s) => {
-          const chipState: ChipState = recorded
-            ? (s.mark ?? "rest")
-            : (marks?.[s.id] ?? "rest");
-          const spec = CHIP_STATE[chipState];
-          const Icon = CHIP_ICON[chipState];
-          const inner = (
-            <>
-              <Icon aria-hidden="true" className="size-3" />
-              {s.label}{" "}
-              <span className="font-mono text-badge-2xs opacity-75">{s.op}</span>
-            </>
-          );
-          const shared = `inline-flex h-auto items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${spec.className}`;
-          return interactive ? (
-            <Button
-              key={s.id}
-              type="button"
-              variant="outline"
-              size="sm"
-              data-conformance-id={spec.conformanceId}
-              data-suggestion-state={chipState}
-              data-action={spec.action}
-              className={shared}
-              title={s.message}
-              aria-label={`${s.label} — ${s.message} (${chipState}; press to ${
-                chipState === "rest"
-                  ? "accept"
-                  : chipState === "accepted"
-                    ? "dismiss"
-                    : "clear the mark"
-              })`}
-              onClick={() => onToggleMark(s.id)}
-            >
-              {inner}
-            </Button>
-          ) : (
-            <span
-              key={s.id}
-              data-conformance-id={spec.conformanceId}
-              data-suggestion-state={chipState}
-              className={shared}
-              title={s.message}
-              aria-label={`${s.label} — ${s.message} (${chipState})`}
-            >
-              {inner}
-            </span>
-          );
-        })}
-      </div>
+      {suggestions.map((s) => {
+        const chipState = stateOf(s);
+        const spec = CHIP_STATE[chipState];
+        const Icon = CHIP_ICON[chipState];
+        const pill = `inline-flex h-auto items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${spec.pill}`;
+        const name = `${s.label} — ${s.message} (${chipState}${
+          interactive ? `; ${CHIP_PRESS_LABEL[chipState]}` : ""
+        })`;
+        return (
+          <div
+            key={s.id}
+            data-conformance-id={spec.conformanceId}
+            data-suggestion-state={chipState}
+            data-action={spec.action}
+            className={`grid gap-2 rounded-control border px-3 py-2.5 ${spec.block}`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              {interactive ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={pill}
+                  title={s.message}
+                  aria-pressed={chipState === "accepted"}
+                  aria-label={name}
+                  onClick={() => onToggleMark(s.id)}
+                >
+                  <Icon aria-hidden="true" className="size-3" />
+                  {s.label}
+                </Button>
+              ) : (
+                <span className={pill} title={s.message} aria-label={name}>
+                  <Icon aria-hidden="true" className="size-3" />
+                  {s.label}
+                </span>
+              )}
+              <span className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
+                {s.op}
+              </span>
+            </div>
+            <SuggestionPanel suggestion={s} spec={spec} />
+          </div>
+        );
+      })}
       {marksCleared ? (
         // The surface moved under the reviewer. Said BEFORE the decision, and
-        // said out loud: the alternative — submitting whatever survived the
-        // change — lands an approve that records nothing while the reviewer
-        // believes it recorded their accepts.
+        // said out loud: the alternative — deciding against a row that quietly
+        // went back to all-accepted — lands a decision the reviewer did not make.
         <p
           role="status"
           data-conformance-id="suggestion-marks-cleared"
@@ -1061,21 +1193,8 @@ export function SuggestionChips({
           {recorded
             ? "These are the per-item choices this review recorded."
             : interactive
-              ? "Press a suggestion to accept it, again to dismiss it, again to clear the mark. Nothing is recorded until you approve or reject below."
+              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below."
               : "Deciding these needs approve access on this run."}
-        </p>
-      ) : null}
-      {acceptedCount > 0 ? (
-        // The one combination the decision core refuses outright: a reject
-        // tombstones every reviewed revision, so it cannot also accept a patch
-        // into them. Said here, before the press, rather than only as the error
-        // the floor would return — and the accepted marks are still SENT, never
-        // silently dropped, because no entry may swallow a per-item choice.
-        <p
-          data-conformance-id="suggestion-chips-reject-note"
-          className="text-xs leading-relaxed text-muted-foreground"
-        >
-          A reject cannot carry accepted suggestions — clear them first to reject.
         </p>
       ) : null}
     </div>

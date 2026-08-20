@@ -19,6 +19,7 @@ import {
   LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
   LIFECYCLE_VIEW_SCHEMA_VERSION,
+  LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH,
   MAX_LIFECYCLE_SUGGESTIONS,
   isLifecycleDataPartViewType,
   lifecycleCardStateSchema,
@@ -316,14 +317,59 @@ describe("§VIII the projection", () => {
     { id: "s2", fieldPath: "/items/0/bcc", op: "remove", message: "Every disclosed field is empty." },
   ];
 
-  it("projects a producer row into a chip, and NEVER carries its value", () => {
+  it("projects a producer row into a chip, CARRYING §VIII's before/after pair", () => {
     const chips = projectLifecycleSuggestions([
-      { ...produced[0], value: "Q3 re-engagement" } as never,
+      { ...produced[0], before: "Re-connecting on Q3 priorities  ", value: "Re-connecting on Q3 priorities" },
     ]);
     expect(chips).toEqual([
-      { id: "s1", label: "subject", op: "replace", message: "Not canonical." },
+      {
+        id: "s1",
+        label: "subject",
+        op: "replace",
+        message: "Not canonical.",
+        before: "Re-connecting on Q3 priorities  ",
+        after: "Re-connecting on Q3 priorities",
+      },
     ]);
-    expect(JSON.stringify(chips)).not.toContain("Q3 re-engagement");
+  });
+
+  it("a row with NO values projects the label + class chip and nothing else", () => {
+    // The negative control. A snapshot written before the pair existed, a
+    // `remove` (no one value), and an `add` of the empty string all land here —
+    // absence is not a signal, and an empty panel would claim a blank change.
+    expect(projectLifecycleSuggestions([produced[1]])).toEqual([
+      {
+        id: "s2",
+        label: "items · 0 · bcc",
+        op: "remove",
+        message: "Every disclosed field is empty.",
+      },
+    ]);
+    expect(
+      projectLifecycleSuggestions([{ ...produced[0], before: "   ", value: "" }])[0],
+    ).toEqual({ id: "s1", label: "subject", op: "replace", message: "Not canonical." });
+  });
+
+  it("CLAMPS an over-long side rather than dropping the panel", () => {
+    const long = "x".repeat(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH + 200);
+    const [chip] = projectLifecycleSuggestions([{ ...produced[0], before: long, value: long }]);
+    expect(chip.before).toHaveLength(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH);
+    expect(chip.after?.endsWith("…")).toBe(true);
+    expect(lifecycleSuggestionSchema.safeParse(chip).success).toBe(true);
+  });
+
+  it("the schema REFUSES a side past the bound, and an empty one", () => {
+    const base = { id: "s", label: "l", op: "replace" as const, message: "m" };
+    expect(
+      lifecycleSuggestionSchema.safeParse({
+        ...base,
+        before: "x".repeat(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(lifecycleSuggestionSchema.safeParse({ ...base, after: "" }).success).toBe(false);
+    // …and ROUND-TRIPS a legal pair unchanged.
+    const pair = { ...base, before: "now", after: "next" };
+    expect(lifecycleSuggestionSchema.parse(pair)).toEqual(pair);
   });
 
   it("attaches ONLY the marks it was given — an unmarked id keeps none", () => {
