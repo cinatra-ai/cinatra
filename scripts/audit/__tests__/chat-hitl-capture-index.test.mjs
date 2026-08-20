@@ -200,12 +200,19 @@ describe("the mislabeled capture — the defect this index was built after", () 
   it("REFUSES a chat capture whose card has no decision controls", () => {
     // The placeholder case: the transcript, the card root and the host are all
     // there, and the card cannot be acted on.
+    //
+    // The controls are the ratified §V per-chip set (cinatra#2841) — Confirm /
+    // Adjust / Skip beside every skill — not the row-level Confirm/Skip pair
+    // this filter used to strip, which `run-recommendation-chip-row.tsx` emits
+    // nowhere. All THREE are named, so the case now catches a card missing any
+    // one of three controls where the retired pair could only name two.
     const assertions = chatAssertions().filter(
-      (a) => !a.selector.startsWith('[data-action="'),
+      (a) => !a.selector.startsWith('[data-skill-action="'),
     );
     const violations = validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n");
-    expect(violations).toMatch(/confirm-run-recommendation/);
-    expect(violations).toMatch(/skip-run-recommendation/);
+    expect(violations).toMatch(/\[data-skill-action="confirm"\]/);
+    expect(violations).toMatch(/\[data-skill-action="adjust"\]/);
+    expect(violations).toMatch(/\[data-skill-action="skip"\]/);
   });
 
   it("REFUSES a site_widget record asserted in the main frame instead of the embed frame", () => {
@@ -684,7 +691,7 @@ describe("a SETTLED capture owes the absence of its controls", () => {
 
   it("REFUSES a settled record that still shows its decision controls", () => {
     const assertions = settledRecord().assertions.map((a) =>
-      a.selector === '[data-action="confirm-run-recommendation"]' ? { ...a, count: 1 } : a,
+      a.selector === '[data-skill-action="confirm"]' ? { ...a, count: 1 } : a,
     );
     expect(validateCaptureRecord(settledRecord({ assertions }), { hashOf }).join("\n")).toMatch(
       /recorded as absent but observed 1 times/,
@@ -752,7 +759,7 @@ describe("the three bypasses an adversarial round found", () => {
     page.screenshot = async (abs) => {
       // The decision lands while the shutter is open.
       for (const key of Object.keys(counts)) {
-        if (key.includes("confirm-run-recommendation")) counts[key] = 0;
+        if (key.includes('[data-skill-action="confirm"]')) counts[key] = 0;
       }
       return realScreenshot(abs);
     };
@@ -1048,8 +1055,17 @@ function drivenPage(page) {
 
 const CARD_ROOT = '[data-lifecycle-card="recommendation_hold"]';
 const HOST_ANCHOR = '[data-lifecycle-card-host="chat_thread"]';
-const CONFIRM = '[data-action="confirm-run-recommendation"]';
-const SKIP = '[data-action="skip-run-recommendation"]';
+// The ratified §V decision set (cinatra#2841): PER CHIP, three controls, the
+// same three `recommendation_hold.decisionControls` names in
+// `scripts/ci/lib/capture-record-contract.mjs` and the same three the held-turn
+// contract carries as its `ownerAnchors`. The row-level Confirm/Skip pair these
+// constants used to spell was retired with the redraw and is emitted nowhere in
+// `run-recommendation-chip-row.tsx`, so fixtures built on it measured selectors
+// the shipped card never draws.
+const CONFIRM = '[data-skill-action="confirm"]';
+const ADJUST = '[data-skill-action="adjust"]';
+const SKIP = '[data-skill-action="skip"]';
+const DECISION_CONTROLS = [CONFIRM, ADJUST, SKIP];
 
 /** One `recommendation_hold` card, painted or not, with its own controls. */
 function heldCard(runId, { visible = true } = {}) {
@@ -1058,7 +1074,10 @@ function heldCard(runId, { visible = true } = {}) {
     { "data-lifecycle-card": "recommendation_hold", "data-run-id": runId },
     {
       visible,
-      children: { [HOST_ANCHOR]: [inner], [CONFIRM]: [inner], [SKIP]: [inner] },
+      children: {
+        [HOST_ANCHOR]: [inner],
+        ...Object.fromEntries(DECISION_CONTROLS.map((sel) => [sel, [inner]])),
+      },
     },
   );
 }
@@ -1131,7 +1150,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
 
     // BEFORE. Every card-scoped anchor is answered from run-A, the collapsed
     // card, and attachment stands in for presence. The record validates CLEAN:
-    // conversation list, card root, host declaration and BOTH decision controls
+    // conversation list, card root, host declaration and EVERY decision control
     // all "observed present" — a fully-anchored pending capture, filed with a
     // screenshot in which none of it appears, and carrying nothing that says
     // which card the numbers came from.
@@ -1140,7 +1159,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
       page: firstMatchAttachedOnlyPage(page),
     });
     expect(validateCaptureRecord(before, { hashOf })).toEqual([]);
-    for (const selector of [HOST_ANCHOR, CONFIRM, SKIP]) {
+    for (const selector of [HOST_ANCHOR, ...DECISION_CONTROLS]) {
       const a = before.assertions.find((x) => x.selector === selector && x.scope === "root");
       expect(a.count).toBe(1);
     }
@@ -1161,7 +1180,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     // It measured the card it was told to measure, and wrote down that nothing
     // in it was painted.
     expect(record.instance).toMatchObject({ selector: CARD_ROOT, matched: 2, index: 0, id: "run-A" });
-    for (const selector of [HOST_ANCHOR, CONFIRM, SKIP]) {
+    for (const selector of [HOST_ANCHOR, ...DECISION_CONTROLS]) {
       const a = record.assertions.find((x) => x.selector === selector && x.scope === "root");
       expect({ selector, count: a.count, visible: a.visible }).toEqual({
         selector,
@@ -1320,7 +1339,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         : a,
     );
     expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
-      /requires \[data-action="confirm-run-recommendation"\] root-scoped inside/,
+      /requires \[data-skill-action="confirm"\] root-scoped inside/,
     );
   });
 
@@ -1335,7 +1354,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         manifest: manifestClaiming("X9__chat_thread__recommendation-hold-held"),
         index: indexOf([chatRecord({ cell: "X9__chat_thread__recommendation-hold-held", assertions })]),
       }).join("\n"),
-    ).toMatch(/does not observe \[data-action="confirm-run-recommendation"\] present/);
+    ).toMatch(/does not observe \[data-skill-action="confirm"\] present/);
   });
 
   it("REFUSES a painted count above its own attached count, at EITHER tier", () => {
@@ -1377,23 +1396,34 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         manifest: manifestClaiming("X9__chat_thread__recommendation-hold-held"),
         index: indexOf([chatRecord({ cell: "X9__chat_thread__recommendation-hold-held", assertions })]),
       }).join("\n"),
-    ).toMatch(/does not observe \[data-action="confirm-run-recommendation"\] present/);
+    ).toMatch(/does not observe \[data-skill-action="confirm"\] present/);
   });
 
 
   it("requires EVERY control of a group, where the canonical contract takes any one", () => {
     // The one place this tier is deliberately STRICTER than the ratified
     // contract, stated as a case so the divergence is a decision rather than a
-    // drift. `run-recommendation-chip-row.tsx` renders Confirm and Skip
-    // unconditionally in one row, so a capture that lost Skip photographed a
-    // card that is not the shipped one. Stricter in this direction is safe: a
-    // record this tier accepts is still a record that half accepts.
-    const assertions = chatAssertions().map((a) =>
-      a.selector === SKIP ? { ...a, count: 0, visible: 0 } : a,
-    );
-    expect(
-      validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n"),
-    ).toMatch(/\[data-action="skip-run-recommendation"\] PRESENT \(root-scoped\)/);
+    // drift. `run-recommendation-chip-row.tsx` renders Confirm, Adjust and Skip
+    // unconditionally beside EVERY chip, so a capture that lost any one of them
+    // photographed a card that is not the shipped one. Stricter in this
+    // direction is safe: a record this tier accepts is still a record that half
+    // accepts.
+    //
+    // The §V redraw (cinatra#2841) grew this group from two members to three,
+    // so the case is walked over the whole group rather than over Skip alone —
+    // a group member that stopped being required would otherwise go unmeasured.
+    for (const dropped of DECISION_CONTROLS) {
+      const assertions = chatAssertions().map((a) =>
+        a.selector === dropped ? { ...a, count: 0, visible: 0 } : a,
+      );
+      expect(
+        validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n"),
+      ).toMatch(
+        new RegExp(
+          `${dropped.replace(/[[\]]/g, "\\$&")} PRESENT \\(root-scoped\\)`,
+        ),
+      );
+    }
   });
 });
 
