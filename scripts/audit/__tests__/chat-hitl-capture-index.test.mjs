@@ -1089,10 +1089,6 @@ function twoCardTranscript() {
  * and the SAME validator judge both records.
  */
 function firstMatchAttachedOnlyPage(page) {
-  const countWithin = async (root, selector) => {
-    if ((await page.locator(root).count()) === 0) return 0;
-    return page.locator(root).first().locator(selector).count();
-  };
   return {
     url: async () => page.url(),
     count: async (selector) => page.locator(selector).count(),
@@ -1109,8 +1105,6 @@ function firstMatchAttachedOnlyPage(page) {
         page.locator(root).first().locator(selector).count();
       return { count: descendantsOnly, countVisible: descendantsOnly };
     },
-    countWithin,
-    countWithinVisible: countWithin,
     frame: async () => null,
     screenshot: async () => {},
   };
