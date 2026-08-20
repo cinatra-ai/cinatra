@@ -126,12 +126,26 @@ async function listRefs(input: unknown = {}): Promise<string[]> {
   return (res.structuredContent as { refs?: string[] }).refs ?? [];
 }
 
+/** A readable verification record — the resolver projects §VII's body from it,
+ *  and a row it cannot read resolves `absent`, so the fixture must be whole. */
+const VERIFICATION_RECORD = {
+  id: "vr-1",
+  gateId: "gate-row-1",
+  reviewedTarget: { artifactId: "art-1", representationRevisionId: "rev-base" },
+  repairedTarget: { artifactId: "art-1", representationRevisionId: "rev-fixed" },
+  scopeManifest: { paths: ["content.title"] },
+  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+  outcome: "verified",
+  createdAt: new Date(0),
+};
+
+
 beforeEach(() => {
   vi.clearAllMocks();
   listOpenReviewGateCandidates.mockResolvedValue([gateRow("run-1", "task-1")]);
   readReviewGateState.mockResolvedValue({ status: "pending", pinnedTargets: [] });
   readReviewGate.mockResolvedValue({ id: "gate-run-1" });
-  readVerificationRecordForGate.mockResolvedValue({ id: "vr-1" });
+  readVerificationRecordForGate.mockResolvedValue(VERIFICATION_RECORD);
   accessFor(["read", "approveHitl", "respondToHitl"]);
 });
 

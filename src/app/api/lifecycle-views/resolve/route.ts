@@ -5,12 +5,18 @@ import { z } from "zod";
 import {
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
+  type LifecycleCardState,
   type LifecycleDataPartViewType,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
+import { attachLifecycleSettledOutcome } from "@/lib/lifecycle/lifecycle-settled-outcome";
 import { resolveTriggerScheduleProposalCard } from "@/lib/lifecycle/trigger-schedule-proposal-card";
-import { resolveWidgetLifecycleActorContext } from "@/lib/lifecycle/widget-lifecycle-actor";
+import {
+  mintWidgetReviewIslandUrl,
+  resolveWidgetLifecycleActorContext,
+} from "@/lib/lifecycle/widget-lifecycle-actor";
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
@@ -52,13 +58,18 @@ import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports"
 // which rows exist. Only a malformed request (400) and no session (401) are
 // distinguishable, and neither depends on the ref.
 //
-// THE OPTIONAL `view` (cinatra#2569). Three of the four interaction kinds draw
-// their content from a row the card can address; the SCHEDULE PROPOSAL cannot,
-// because §VI's "nothing exists until the reader confirms" means there is no
-// row until Confirm. Its body therefore travels with the state, in an ADDITIVE
-// `view` field that is absent for every other kind — S1's response shape for
-// the three existing kinds is byte-unchanged, and a client that ignores `view`
-// behaves exactly as it did.
+// THE ANSWER IS A PER-KIND ENVELOPE (epic S9, slice S9c): `{ kind, state, body }`.
+// The state ladder is shared by every kind and unchanged; the BODY is per-kind,
+// and the kind selects the one body type that kind may carry. Two of the three
+// DATA_PART kinds cannot be drawn without one — the schedule proposal needs its
+// option rows, the verification card its reading — and the review card carries
+// no body at all, because its target arrives through its own island.
+//
+// The kind travels back with the answer so a card can check it got an answer to
+// ITS question. A client parse that refuses (unknown kind, wrong kind, a body
+// beside `absent`, a missing body on a kind that must carry one) leaves the card
+// with no state, so it draws nothing — the same posture it holds before the
+// first resolve lands.
 // ---------------------------------------------------------------------------
 
 const requestSchema = z
@@ -81,6 +92,17 @@ const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
 const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
 
 /**
+ * The widget branch's answer: the reviewing actor AND the claims the presented
+ * `cwu_` was consumed with. The claims are KEPT rather than dropped because the
+ * island credential is derived from them and from nothing else — see
+ * `mintIslandSrcForWidget` below.
+ */
+type WidgetBranch = {
+  actorCtx: ReviewActorContext;
+  claims: Parameters<typeof mintWidgetReviewIslandUrl>[0]["claims"];
+};
+
+/**
  * Resolve the widget branch's reviewing actor from the presented `cwu_`.
  * Returns `null` for every failure — a bad handle, a rejected token, a revoked
  * membership — because the caller turns all of them into the same 401 that a
@@ -89,7 +111,7 @@ const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
 async function resolveWidgetBranchActor(
   request: Request,
   userToken: string,
-): Promise<ReviewActorContext | null> {
+): Promise<WidgetBranch | null> {
   // An empty/whitespace bearer is refused HERE rather than left to the door.
   // The door would refuse it too, but a branch that hands an empty string to a
   // token verifier is one rename away from being a branch that hands it to
@@ -103,7 +125,51 @@ async function resolveWidgetBranchActor(
     agentSlug: binding.agentSlug,
     requestOrigin: request.headers.get(WIDGET_ORIGIN_HEADER),
   });
-  return resolved.ok ? resolved.actorCtx : null;
+  return resolved.ok ? { actorCtx: resolved.actorCtx, claims: resolved.claims } : null;
+}
+
+/**
+ * Mint the island URL for a WIDGET reader whose card is about to draw one.
+ *
+ * WHY THE URL CARRIES IT. The review card frames a same-origin, server-rendered
+ * island. On a genuinely third-party page that frame load sends no header and
+ * no cookie, so the only place a credential can travel is the URL the card puts
+ * in `<iframe src>` — sealed, short-lived and bound to this reader, this gate
+ * and this surface. It authenticates and nothing more: the island re-runs the
+ * reader's real access from scratch, so a credential that arrives without the
+ * standing behind it still paints nothing.
+ *
+ * ONLY FOR A STATE THAT DRAWS AN ISLAND. `pending` and `restricted` are the two
+ * states whose card frames one. A settled or absent answer gets no credential,
+ * because a reader whose card draws no island has no use for one and a minted
+ * bearer that nothing consumes is a bearer for free.
+ *
+ * TTL AND RELOAD, THE POLICY IN ONE PLACE. Every resolve mints a FRESH
+ * credential; nothing is cached and nothing is stored. Within one resolve the
+ * card reuses the URL it was handed — a re-render, an expand/collapse or a
+ * repaint keeps the same `src`, and re-minting there would remount the frame
+ * under the reader for no reason. Across a RELOAD it is always a re-mint: the
+ * card's retry re-resolves before it remounts, and the mount/focus resolves do
+ * the same, so a frame never re-fetches with a credential older than the
+ * resolve that produced it. That is also why the credentialed frame drops
+ * `loading="lazy"` — a URL that expires cannot wait for a scroll.
+ */
+function mintIslandSrcForWidget(
+  branch: WidgetBranch,
+  viewType: LifecycleDataPartViewType,
+  ref: string,
+  state: LifecycleCardState,
+): string | null {
+  if (viewType !== "artifact_review_gate") return null;
+  if (state.state !== "pending" && state.state !== "restricted") return null;
+  const gate = decodeLifecycleGateRef(ref);
+  if (!gate) return null;
+  return mintWidgetReviewIslandUrl({
+    claims: branch.claims,
+    ref,
+    runId: gate.runId,
+    reviewTaskId: gate.reviewTaskId,
+  });
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -121,8 +187,11 @@ export async function POST(request: Request): Promise<Response> {
   // widget, and a widget whose token is unusable is refused.
   const presentedUserToken = request.headers.get(WIDGET_USER_TOKEN_HEADER);
   const isWidgetBranch = presentedUserToken !== null;
-  const actorCtx = isWidgetBranch
+  const widgetBranch = isWidgetBranch
     ? await resolveWidgetBranchActor(request, presentedUserToken.trim())
+    : null;
+  const actorCtx = isWidgetBranch
+    ? (widgetBranch?.actorCtx ?? null)
     : await resolveReviewActorContext();
   if (!actorCtx) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -155,12 +224,16 @@ export async function POST(request: Request): Promise<Response> {
       isAdmin: actorCtx.roleHints?.platformRole === "platform_admin",
     });
     return Response.json(
-      { state: card.state, view: card.view },
+      {
+        kind: "trigger_schedule_proposal",
+        state: card.state,
+        body: card.view,
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   }
 
-  const state = await resolveLifecycleCardState({
+  const envelope = await resolveLifecycleCardState({
     viewType: parsed.data.viewType,
     ref: parsed.data.ref,
     actorCtx,
@@ -178,10 +251,42 @@ export async function POST(request: Request): Promise<Response> {
   // answer rather than the wire payload, so the DATA_PART in the persisted,
   // LLM-visible transcript still carries a ref and nothing else.
   const withChips = await attachLifecycleSuggestions(
-    state,
+    envelope.state,
     parsed.data.viewType,
     parsed.data.ref,
   );
 
-  return Response.json({ state: withChips }, { headers: { "Cache-Control": "no-store" } });
+  // §IV's SETTLED READING (cinatra#2855; plan §4.2). Composed HERE for the same
+  // reason the chips are, and the reason is the same sentence: the resolver is
+  // on all five route-locked module budgets through the MCP pull, which uses it
+  // as the authorization ladder and never names a decider.
+  //
+  // The state is again the authorization — the ladder's own answer for this
+  // reader and this ref, with every denial already collapsed into `absent`,
+  // which carries no outcome. And the composition ORDER carries nothing: the
+  // chips read the gate's suggestion snapshot, the outcome reads the gate row's
+  // recorded disposition, and neither reads the other's answer.
+  const withOutcome = await attachLifecycleSettledOutcome(
+    withChips,
+    parsed.data.viewType,
+    parsed.data.ref,
+  );
+
+  // The island's credential (cinatra#2754) — minted HERE or not at all, and
+  // only on the widget arm. A first-party answer omits the key entirely, so the
+  // three cookie hosts receive the byte-identical response they received
+  // before this slice and keep composing their own island URL.
+  const islandSrc = widgetBranch
+    ? mintIslandSrcForWidget(widgetBranch, parsed.data.viewType, parsed.data.ref, withOutcome)
+    : null;
+
+  return Response.json(
+    {
+      kind: envelope.kind,
+      state: withOutcome,
+      body: envelope.body,
+      ...(islandSrc ? { islandSrc } : {}),
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

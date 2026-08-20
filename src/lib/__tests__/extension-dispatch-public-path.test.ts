@@ -73,7 +73,12 @@ vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
     rows.push({ ...row, source: row.source ? { ...row.source } : null });
     return row;
   },
-  transitionExtensionLifecycle: async () => null,
+  transitionExtensionLifecycle: async (id: string, op: string) => {
+    events.push(`transition:${op}:${id}`);
+    const row = rows.find((r) => r.id === id);
+    if (row && op === "archive") row.status = "archived";
+    return null;
+  },
   // The rollback-only canonical delete the dispatcher calls on a non-finalized
   // install. The real primitive wraps canonical-store's _internalDeleteInstalledExtension
   // BUT self-enforces a "non-finalized only" contract decided SOLELY by the
@@ -222,10 +227,23 @@ beforeEach(() => {
   rows = [];
   events.length = 0;
   installManifestImpl = null;
+  // These tests exercise DISPATCH behaviour, so the host must admit the fixture
+  // registry: the install pipeline now refuses an untrusted package before it
+  // commits, and without this every case would stop at that gate instead of
+  // reaching the behaviour under test. Unsigned bootstrap trust is the fixture
+  // equivalent of a configured signing key.
+  process.env.CINATRA_DEPLOYMENT_REGISTRY_PUBLIC_URL = "https://registry.cinatra.ai";
+  process.env.CINATRA_DEPLOYMENT_REGISTRY_PUBLIC_READ_TOKEN = "read-token";
+  process.env.CINATRA_DEPLOYMENT_REGISTRY_ROUTING_MODE = "scope-based";
+  process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
 });
 
 afterEach(() => {
   setExtensionActivateHook(null);
+  delete process.env.CINATRA_DEPLOYMENT_REGISTRY_PUBLIC_URL;
+  delete process.env.CINATRA_DEPLOYMENT_REGISTRY_PUBLIC_READ_TOKEN;
+  delete process.env.CINATRA_DEPLOYMENT_REGISTRY_ROUTING_MODE;
+  delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
 });
 
 // ===========================================================================
@@ -588,7 +606,7 @@ describe("public dispatch — UPDATE re-runs the pipeline; a failing new digest 
     let finalizeReached = false;
     wireRealActivateHook(() => ({
       // A fresh install: no superseding digest → the gate is a no-op (supersedes:false).
-      verifyActivatableBeforeFinalize: async () => ({ supersedes: false }),
+      verifyActivatableBeforeFinalize: async () => ({ supersedes: false, ok: true }),
       advanceInstallOpPhase: async ({ phase }: { phase: string }) => {
         events.push(`journal:${phase}:@v/fresh-prefinalize-connector`);
       },
@@ -614,26 +632,51 @@ describe("public dispatch — UPDATE re-runs the pipeline; a failing new digest 
 //    through the REAL dispatch on a fresh install rolls back the placeholder; on
 //    an UPDATE of a healthy row it throws but preserves the old install.
 // ===========================================================================
-describe("public dispatch — anchor-refused (finalized:false) new install rolls back; update preserves the old", () => {
-  it("a fresh connector install that FINALIZES but whose in-process activation is REFUSED THROWS (no placeholder-as-success) and leaves the committed install intact", async () => {
+describe("public dispatch: a post-commit activation failure is COMPENSATED, never left live", () => {
+  it("a committed install that cannot hot-activate is ARCHIVED so it never shadows the bundled version", async () => {
     extensionRegistry.register(createConnectorExtensionHandler({ resolveUiSurface: async () => "schema-config" }));
-    // The pipeline finalizes (installed:true) but in-process activation is refused
-    // (activated:false). The owner-locked invariant is "install MUST hot-activate
-    // in-process with NO restart" — so a finalized-but-not-activated connector is
-    // NOT a success: the dispatch THROWS a truthful "did NOT hot-activate" error.
+    // The pipeline finalized but in-process activation was refused. There is no
+    // acceptable committed-but-unactivated state: a live row that serves nothing
+    // takes the package identity away from the version bundled in the image, so
+    // every UI action 404s and the working implementation becomes unreachable.
+    //
+    // The pre-finalize probe now proves activation for fresh installs too, so
+    // reaching here means it failed AFTER the commit. That is compensated.
     wireRealActivateHook(() => ({ activateInProcess: async () => ({ activated: false, reason: "anchor-refused" }) }));
 
     await expect(
       extensionRegistry.install("connector", ref("@v/refused-connector"), orgActor),
-    ).rejects.toThrow(/did NOT\s+hot-activate in-process/);
+    ).rejects.toThrow(/committed but could not activate in this process/);
 
-    // The COMMITTED + finalized install is NOT rolled back (it is real + anchorable;
-    // the boot loader is the durable path) — only the in-process load missed.
+    // The row this install created is archived (restorable, never deleted: the
+    // payload and provenance are real and may be wanted for diagnosis).
+    expect(events).toContain("journal:finalized:@v/refused-connector");
     const final = rows.filter((r) => r.packageName === "@v/refused-connector");
     expect(final).toHaveLength(1);
-    expect(final[0].source?.integrity).toBe("sha512-real");
-    expect(events).toContain("journal:finalized:@v/refused-connector");
-    expect(events.some((e) => e.startsWith("deleteRow:")), "finalized row NOT rolled back").toBe(false);
+    expect(final[0].status).toBe("archived");
+    expect(events.some((e) => e.startsWith("transition:archive:")), "the committed row is archived").toBe(true);
+    expect(events.some((e) => e.startsWith("deleteRow:")), "archived, never hand-deleted").toBe(false);
+  });
+
+  it("the failure names the activation reason AND what compensation achieved", async () => {
+    extensionRegistry.register(createConnectorExtensionHandler({ resolveUiSurface: async () => "schema-config" }));
+    wireRealActivateHook(() => ({ activateInProcess: async () => ({ activated: false, reason: "signature required" }) }));
+
+    const err = await extensionRegistry
+      .install("connector", ref("@v/refused-connector-2"), orgActor)
+      .catch((e: unknown) => e);
+
+    const message = (err as Error).message;
+    // The exact reason, not a generic summary.
+    expect(message).toContain("signature required");
+    // And the state the operator is now in.
+    expect(message).toMatch(/no longer shadows the bundled version/i);
+  });
+
+  it("no ExtensionActivationDeferredError exists to be thrown any more", async () => {
+    const mod = (await import("@cinatra-ai/extensions")) as Record<string, unknown>;
+    expect(mod.ExtensionActivationDeferredError).toBeUndefined();
+    expect(mod.INSTALL_ACTIVATION_DEFERRED).toBeUndefined();
   });
 });
 

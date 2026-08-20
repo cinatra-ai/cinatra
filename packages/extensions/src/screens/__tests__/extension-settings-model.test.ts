@@ -9,6 +9,7 @@ import {
   VALID_SETTINGS_KINDS,
   canPublishToMarketplace,
   isRegisteredMarketplaceVendor,
+  resolveServingState,
   resolveSettingsAffordances,
   resolveUpdateRow,
   settingsHrefFor,
@@ -416,5 +417,242 @@ describe("kind sets", () => {
       "artifact",
     ]);
     expect(VALID_SETTINGS_KINDS).not.toContain("workflow");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2762 — THE INSTALLED-BUT-NOT-ACTIVE STATE, NAMED.
+//
+// The state the issue is named for: a live marketplace install whose bytes are
+// in place and whose canonical row says `active`, serving NOTHING, while the
+// version bundled in the image answers every request. The page reported the
+// unserved version as current ("Currently on version 0.1.5 — up to date") with
+// Activate greyed "Already active" — three statements about a version no request
+// had reached.
+// ---------------------------------------------------------------------------
+describe("resolveServingState — naming the installed-but-not-active state", () => {
+  const live = {
+    installedVersion: "0.1.5",
+    isProductInstall: true,
+    isArchived: false,
+  };
+
+  it("NAMES the state when the image's copy is serving instead", () => {
+    const state = resolveServingState({
+      ...live,
+      serving: { origin: "bundled", version: "0.1.0" },
+    });
+    expect(state.named).toBe(true);
+    if (!state.named) throw new Error("unreachable");
+    expect(state.title).toBe("Installed but not in service");
+    // BOTH versions, and the installed one is never called current.
+    expect(state.description).toContain("0.1.5");
+    expect(state.description).toContain("0.1.0");
+    expect(state.description).toContain("bundled with the app");
+    expect(state.description).not.toContain("Currently on version");
+    expect(state.servingVersion).toBe("0.1.0");
+  });
+
+  it("gives Activate an HONEST reason instead of 'Already active'", () => {
+    const state = resolveServingState({
+      ...live,
+      serving: { origin: "bundled", version: "0.1.0" },
+    });
+    if (!state.named) throw new Error("unreachable");
+    expect(state.activateReason).not.toContain("Already active");
+    expect(state.activateReason).toContain("not in service");
+    // …and it points at the affordance that CAN help.
+    expect(state.activateReason).toContain("Retry activation");
+  });
+
+  it("names it when the bundled record could not name a version", () => {
+    const state = resolveServingState({
+      ...live,
+      serving: { origin: "bundled", version: null },
+    });
+    expect(state.named).toBe(true);
+    if (!state.named) throw new Error("unreachable");
+    expect(state.servingVersion).toBeNull();
+    expect(state.description).toContain("bundled with the app");
+  });
+
+  it("names it when a DIFFERENT version of the install is serving", () => {
+    const state = resolveServingState({
+      ...live,
+      serving: { origin: "install", version: "0.1.1" },
+    });
+    expect(state.named).toBe(true);
+    if (!state.named) throw new Error("unreachable");
+    expect(state.description).toContain("0.1.1");
+    expect(state.description).not.toContain("bundled with the app");
+  });
+
+  it("stays SILENT when this install at this version is serving", () => {
+    expect(
+      resolveServingState({ ...live, serving: { origin: "install", version: "0.1.5" } }).named,
+    ).toBe(false);
+  });
+
+  it("stays SILENT when nothing recorded what is serving — absence is unknown", () => {
+    // The load-bearing negative. A metadata-only package registers no server
+    // module at all, and a process that never ran a loader has nothing to
+    // report; accusing every one of them would be a false alarm per package.
+    expect(resolveServingState({ ...live, serving: null }).named).toBe(false);
+  });
+
+  it("stays SILENT for a BUNDLED row — it IS the image's copy", () => {
+    expect(
+      resolveServingState({
+        ...live,
+        isProductInstall: false,
+        serving: { origin: "bundled", version: "0.1.0" },
+      }).named,
+    ).toBe(false);
+  });
+
+  it("stays SILENT for an ARCHIVED row — 'Already archived' already says it", () => {
+    expect(
+      resolveServingState({
+        ...live,
+        isArchived: true,
+        serving: { origin: "bundled", version: "0.1.0" },
+      }).named,
+    ).toBe(false);
+  });
+
+  it("cannot contradict a version it does not know", () => {
+    // A record with no version, or a row with no version, is not evidence of a
+    // disagreement — only the ORIGIN can name one.
+    expect(
+      resolveServingState({ ...live, serving: { origin: "install", version: null } }).named,
+    ).toBe(false);
+    expect(
+      resolveServingState({
+        ...live,
+        installedVersion: null,
+        serving: { origin: "install", version: "0.1.5" },
+      }).named,
+    ).toBe(false);
+  });
+});
+
+describe("resolveUpdateRow stops reporting the UNSERVED version as current", () => {
+  it("the reviewer's exact line: 'Currently on version 0.1.5 — up to date'", () => {
+    const before = resolveUpdateRow({
+      state: "up-to-date",
+      installedVersion: "0.1.5",
+      latestVersion: "0.1.5",
+    });
+    // Unchanged when the install IS serving.
+    expect(before.description).toBe("Currently on version 0.1.5 — up to date.");
+
+    const after = resolveUpdateRow({
+      state: "up-to-date",
+      installedVersion: "0.1.5",
+      latestVersion: "0.1.5",
+      servingVersion: "0.1.0",
+    });
+    expect(after.description).not.toContain("Currently on version");
+    expect(after.description).toContain("0.1.5");
+    expect(after.description).toContain("0.1.0");
+    expect(after.description).toContain("not in service");
+    expect(after.enabled).toBe(false);
+    expect(after.enabled === false && after.disabledReason).toBe(
+      "Installed version isn't in service",
+    );
+  });
+
+  it("an update-available row says both versions AND the available one", () => {
+    const row = resolveUpdateRow({
+      state: "update-available",
+      installedVersion: "0.1.5",
+      latestVersion: "0.2.0",
+      servingVersion: "0.1.0",
+    });
+    expect(row.enabled).toBe(true);
+    expect(row.description).toContain("0.1.5");
+    expect(row.description).toContain("0.1.0");
+    expect(row.description).toContain("0.2.0");
+    expect(row.description).not.toContain("Currently on version");
+  });
+
+  it("the states that never name a current version are untouched", () => {
+    for (const state of ["incompatible", "non-comparable"] as const) {
+      const withServing = resolveUpdateRow({
+        state,
+        installedVersion: "0.1.5",
+        latestVersion: "0.2.0",
+        servingVersion: "0.1.0",
+      });
+      const without = resolveUpdateRow({
+        state,
+        installedVersion: "0.1.5",
+        latestVersion: "0.2.0",
+      });
+      expect(withServing).toEqual(without);
+    }
+  });
+});
+
+describe("resolveSettingsAffordances — Activate stops claiming 'Already active'", () => {
+  const allowed = (op: string) => ({ op, allowed: true, code: "ok", reason: null });
+  const caps = {
+    archive: allowed("archive"),
+    activate: allowed("activate"),
+    uninstall: allowed("uninstall"),
+    force_delete: allowed("force_delete"),
+  } as unknown as Parameters<typeof resolveSettingsAffordances>[0]["capabilities"];
+
+  const base = {
+    canonical: null,
+    lockedRow: null,
+    isArchived: false,
+    versionKnown: true,
+    capabilities: caps,
+  };
+
+  it("renders the not-in-service reason instead", () => {
+    const out = resolveSettingsAffordances({
+      ...base,
+      activateNotInServiceReason: "Installed but not in service — use Retry activation",
+    });
+    expect(out.activateDisabled).toBe("Installed but not in service — use Retry activation");
+  });
+
+  it("keeps 'Already active' when the install IS serving", () => {
+    expect(resolveSettingsAffordances(base).activateDisabled).toBe("Already active");
+    expect(
+      resolveSettingsAffordances({ ...base, activateNotInServiceReason: null })
+        .activateDisabled,
+    ).toBe("Already active");
+  });
+
+  it("an ARCHIVED row still offers Activate — the reason is a tier-3 fallback", () => {
+    expect(
+      resolveSettingsAffordances({
+        ...base,
+        isArchived: true,
+        activateNotInServiceReason: "Installed but not in service — use Retry activation",
+      }).activateDisabled,
+    ).toBeNull();
+  });
+
+  it("the CAPABILITY still outranks it — an unaddressable row is not described by runtime state", () => {
+    const denied = {
+      ...caps,
+      activate: {
+        op: "activate",
+        allowed: false,
+        code: "ambiguous_target",
+        reason: "More than one install matches your scope — contact an administrator.",
+      },
+    } as unknown as typeof caps;
+    const out = resolveSettingsAffordances({
+      ...base,
+      capabilities: denied,
+      activateNotInServiceReason: "Installed but not in service — use Retry activation",
+    });
+    expect(out.activateDisabled).toContain("More than one install");
+    expect(out.capabilityReasons.activate).toContain("More than one install");
   });
 });

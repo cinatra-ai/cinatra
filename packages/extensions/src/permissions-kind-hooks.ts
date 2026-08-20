@@ -68,6 +68,50 @@ export function isExtensionKind(value: unknown): value is ExtensionKind {
   );
 }
 
+/**
+ * The kinds whose polymorphic `resource_id` IS the canonical
+ * `installed_extension.id` — the prose fact recorded on {@link ExtensionKind}
+ * above, NAMED so a caller can consume it instead of restating the list.
+ *
+ * The distinction is load-bearing for anything that holds an install ROW and
+ * wants its access policy: `skill_package` / `agent_run` / `connection` ids come
+ * from their OWN identity tables (the skills catalog, `agent_runs`,
+ * `nango_connection`), so keying a policy read on an install row id under those
+ * kinds would authorize against a different resource entirely — a lookup in the
+ * wrong identity space, not a stricter one.
+ *
+ * Deliberately the same three kinds as `INSTALL_ACCESS_TARGET_KINDS`
+ * (./install-access-target.ts): a kind's install offers an access target exactly
+ * when the row it writes IS the resource that carries the audience. The two are
+ * stated independently — install-access-target is a PURE module and must not
+ * import this server-only one — and a conformance test pins them equal.
+ */
+export const INSTALL_ROW_RESOURCE_KINDS = [
+  "connector",
+  "artifact",
+  "workflow",
+] as const;
+
+export type InstallRowResourceKind = (typeof INSTALL_ROW_RESOURCE_KINDS)[number];
+
+/**
+ * Narrow a CANONICAL install row's `kind` to the permissions resource kind that
+ * addresses that row, or null when the row is not itself the access resource.
+ *
+ * Takes a plain string because the canonical row's kind vocabulary
+ * (`agent | connector | artifact | skill | workflow`) is NOT this module's
+ * resource-kind vocabulary — that mismatch is the whole reason this narrowing
+ * exists, and returning null is the honest answer for a row whose access
+ * resource lives elsewhere.
+ */
+export function installRowResourceKind(
+  rowKind: string,
+): InstallRowResourceKind | null {
+  return (INSTALL_ROW_RESOURCE_KINDS as readonly string[]).includes(rowKind)
+    ? (rowKind as InstallRowResourceKind)
+    : null;
+}
+
 export type ExtensionKindHooks = {
   /**
    * Confirm the resource exists. Returning false short-circuits all

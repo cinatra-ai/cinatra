@@ -1,0 +1,36 @@
+# Lane-private Verdaccio config for the two-version install proof.
+#
+# This registry is a THROWAWAY on a lane-private port. It holds exactly one
+# package: the newer, locally signed version of a connector that the tree
+# already bundles at an older version. It never proxies to a public registry
+# and it holds no credential of any kind.
+#
+# Anonymous publish and read are ON deliberately: the proof needs a registry a
+# driver script can PUT a packument into without any credential file, so that
+# nothing in this lane reads or writes an operator secret. Do not copy this
+# config into any environment that is reachable off the loopback interface.
+
+storage: /verdaccio/storage
+# No `uplinks:` block at all — this registry resolves nothing upstream, so a
+# typo in a package name fails loudly instead of silently fetching a public
+# package and passing it off as the lane's own artifact.
+
+packages:
+  "@*/*":
+    access: $all
+    publish: $all
+    unpublish: $all
+  "**":
+    access: $all
+    publish: $all
+    unpublish: $all
+
+log: { type: stdout, format: pretty, level: http }
+
+# Verdaccio 6 requires an auth backend to be present. htpasswd with an
+# unreachable file plus `$all` package rules means every request is treated as
+# anonymous and every anonymous request is allowed.
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    max_users: -1

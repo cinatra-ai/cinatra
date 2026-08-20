@@ -641,7 +641,9 @@ function StatusProbeRow({ field, installId }: { field: Extract<SchemaConfigField
     setDetail(null);
     const r = await invokeAction(installId, field.actionId, {});
     setState(r.ok ? "ok" : "error");
-    setDetail(r.ok ? null : r.error ?? "Probe failed.");
+    // Bounded, non-technical (see the record-list note): never the raw
+    // action-dispatch text.
+    setDetail(r.ok ? null : "This check couldn't run right now.");
   }, [installId, field.actionId]);
   return (
     <Field orientation="horizontal">
@@ -1042,7 +1044,11 @@ function RecordListRow({
       setRows(rowsFromListResult(r.result));
     } else {
       setRows([]);
-      setError(r.error ?? "Could not load.");
+      // Bounded, non-technical. The raw action-dispatch text names package ids
+      // and action ids: operator jargon that must not land in a setup field.
+      // The declared empty state below still renders, so the field keeps its
+      // own guidance while the list is unavailable.
+      setError("This list couldn't be loaded right now.");
     }
   }, []);
 
@@ -1086,7 +1092,11 @@ function RecordListRow({
       </div>
       {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
       <FieldContent className="gap-2">
-        {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        {error ? (
+          <Alert variant="destructive" data-testid="record-list-error">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
         {rows === null && loading ? (
           <FieldDescription>Loading…</FieldDescription>
         ) : rows && rows.length === 0 ? (
@@ -1300,7 +1310,9 @@ function DynamicSelectRow({
       setLoading(false);
       if (!r.ok) {
         setOptions([]);
-        setError(r.error ?? "Could not load options.");
+        // Bounded, non-technical: never the raw action-dispatch text (see the
+      // render branch below for why).
+      setError("options-unavailable");
         // Keep the saved value: an unloadable picker must not rewrite it. Set
         // it (rather than only relying on the seed) so a re-run after the
         // hydrated value changed still carries the CURRENT saved value.
@@ -1329,10 +1341,27 @@ function DynamicSelectRow({
       <FieldLabel htmlFor={field.key}>{field.label}</FieldLabel>
       {/* Hidden input carries the selected value into collectFormInputs(). */}
       <Input type="hidden" name={field.key} value={value ?? ""} readOnly />
-      {error ? (
-        <Alert variant="destructive" data-testid="dynamic-select-error">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+      {options === null && loading ? (
+        <FieldDescription data-testid="dynamic-select-loading">Loading options…</FieldDescription>
+      ) : error ? (
+        // The options action FAILED. The declared placeholder is the field's own
+        // guidance, and it is exactly what the operator needs while the list is
+        // unavailable, so it STAYS. Replacing it with the failure was the defect:
+        // the setup page then read as broken and lost its next step.
+        //
+        // The failure itself is reported as a short, bounded note. The raw
+        // server text is deliberately NOT rendered: an action-dispatch message
+        // is operator jargon (it names package ids and action ids), and a field
+        // in a setup form is the wrong place for it. The server log is the
+        // operator signal, exactly as it is for a classified install failure.
+        <>
+          <FieldDescription data-testid="dynamic-select-empty">
+            {field.placeholder ?? "No options available."}
+          </FieldDescription>
+          <FieldDescription data-testid="dynamic-select-error">
+            This list couldn&rsquo;t be loaded right now.
+          </FieldDescription>
+        </>
       ) : options === null || loading ? (
         <FieldDescription data-testid="dynamic-select-loading">Loading options…</FieldDescription>
       ) : options.length === 0 ? (

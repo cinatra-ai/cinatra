@@ -338,11 +338,18 @@ describe("installExtensionFromRegistry — capability split (signed auto-grants;
     ]);
   });
 
-  it("leaves a package from a NON-trusted-activation-host registry PENDING (untrusted — not even bootstrap)", async () => {
-    const { deps, calls } = fakeDeps({ resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: "https://evil.example" }) });
-    const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps);
-    expect(r.grantStatus).toBe("pending");
+  it("REFUSES a package from a NON-trusted-activation-host registry before any commit", async () => {
+    // This used to install and merely leave the grant pending, which is how a
+    // package that could never activate ended up live. A host that does not
+    // admit the registry is a refusal, not a degraded install.
+    const { deps, calls } = fakeDeps({
+      resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: "https://evil.example" }),
+    });
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps),
+    ).rejects.toThrow(/refused before anything was committed/i);
     expect(calls.approved).toEqual([]);
+    expect(calls.provenance).toEqual([]);
   });
 
   it("propagates the materialized provenance into the result", async () => {

@@ -115,10 +115,15 @@ const ABI_VERSION = "2.4.0";
 function makeLogger(packageName: string): HostLoggerPort {
   const tag = `[ext:${packageName}]`;
   return {
-    debug: (msg, fields) => console.debug(tag, msg, fields ?? ""),
-    info: (msg, fields) => console.info(tag, msg, fields ?? ""),
-    warn: (msg, fields) => console.warn(tag, msg, fields ?? ""),
-    error: (msg, fields) => console.error(tag, msg, fields ?? ""),
+    // `tag` embeds the extension-supplied packageName, so it is passed as an
+    // ARGUMENT to a constant "%s" format, never as the format string itself
+    // (js/tainted-format-string, CWE-134): a packageName containing "%s"/"%d"
+    // would otherwise consume the caller's msg/fields and forge log lines.
+    // Rendered output is unchanged for every non-format-specifier packageName.
+    debug: (msg, fields) => console.debug("%s", tag, msg, fields ?? ""),
+    info: (msg, fields) => console.info("%s", tag, msg, fields ?? ""),
+    warn: (msg, fields) => console.warn("%s", tag, msg, fields ?? ""),
+    error: (msg, fields) => console.error("%s", tag, msg, fields ?? ""),
     // Host-owned capture (cinatra#981): storage/rotation only — the
     // extension gates enabled/opt-in + any redaction itself before calling.
     capture: (channel, entry) => captureExtensionLogEntry(packageName, channel, entry),

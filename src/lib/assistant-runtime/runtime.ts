@@ -28,6 +28,18 @@ import "@/lib/register-host-connector-services";
 import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import {
+  buildCapabilityKeyResolver,
+  buildConnectorInventory,
+  DEFAULT_CONNECTOR_INVENTORY_DEPS,
+} from "@/lib/connector-inventory.server";
+import { connectionSubjectUserId } from "@/lib/connection-use-gate";
+import {
+  delegatedChatAllowedToolNames,
+  resolveDelegatedChatClass,
+  isDelegatedChatMcpToolAllowed,
+} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
+import {
   detectExplicitDispatchDirective,
   detectExplicitDispatchPackage,
 } from "@/app/api/chat/explicit-dispatch";
@@ -96,6 +108,11 @@ import {
 } from "@/lib/execution/surface-execution-session";
 import { evaluateExecutionProvenance } from "@cinatra-ai/llm/execution-plane";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
+// cinatra#2771 lever 2 — the stable-head-first system-string composer.
+import {
+  composeChatSystemPrompt,
+  type ChatSystemPromptFragments,
+} from "./chat-system-prefix";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 // The scripted widget turn's REAL self-MCP dispatcher (cinatra#2683). Imported
 // unconditionally (a module, not a side effect); CONSTRUCTED only inside the
@@ -448,7 +465,32 @@ async function buildUserContext(userId?: string): Promise<string> {
 // the namespace here lets the LLM emit the correct `@<vendor>/<slug>` package
 // name from the first scaffold, instead of pattern-matching off the shipped
 // Cinatra examples.
-function buildInstanceContext(): string {
+// SPLIT INTO IDENTITY + FREEZE STATE (cinatra#2771, codex round-2 finding 2).
+//
+// These two things have DIFFERENT LIFETIMES and used to share one sentence:
+//
+//   · the namespace and its substitution rule are fixed for the deployment —
+//     `instanceNamespace` is assigned once and the rest of the text is a
+//     constant template around it, so it belongs in the cacheable head;
+//   · the FREEZE NOTE is `firstPublishedAt !== null`, and the tool that sets
+//     `firstPublishedAt` is `agent_source_publish` — a chat tool. A user can
+//     publish their first package IN THE MIDDLE OF A CONVERSATION, and the next
+//     turn of that same conversation then renders a longer instance sentence.
+//
+// While they were one string, "the stable head is byte-identical across turns"
+// was false on exactly that transition, and nothing caught it: the composer
+// test only mutated already-volatile keys and the runtime test stubs
+// `readInstanceIdentity` to null so neither half was ever exercised. Splitting
+// them makes the classification honest — the identity half really is stable,
+// and the freeze half is declared volatile and composed in the tail.
+//
+// ONE READ, TWO FRAGMENTS: the identity store is read once and both strings are
+// derived from that single observation, so the two fragments can never disagree
+// about the namespace they describe.
+function buildInstanceContext(): {
+  identity: string;
+  freezeState: string;
+} {
   let identity: ReturnType<typeof readInstanceIdentity> | null = null;
   try {
     identity = readInstanceIdentity();
@@ -456,22 +498,26 @@ function buildInstanceContext(): string {
     /* identity store may be uninitialised in early boot — silently skip */
   }
   if (!identity || !identity.instanceNamespace) {
-    return "";
+    return { identity: "", freezeState: "" };
   }
   const ns = identity.instanceNamespace;
   const frozen = identity.firstPublishedAt !== null;
-  const frozenNote = frozen
-    ? ` This namespace is FROZEN (first package already published) and cannot be renamed; never propose changing it.`
-    : "";
-  return (
-    `\n\nInstance vendor namespace: "${ns}".${frozenNote} ` +
-    `When SKILL.md templates reference \`<vendor>\` in a package name (e.g. \`@<vendor>/<slug>\`), always substitute ` +
-    `\`<vendor>\` with "${ns}". Every package name MUST be \`@${ns}/<slug>\` — never \`@cinatra/<slug>\` unless the ` +
-    `operator's namespace literally happens to be "cinatra". The disk layout is currently fixed to ` +
-    `\`extensions/cinatra-ai/<packageSlug>/...\` regardless of vendor. The server-side write ` +
-    `handler normalizes \`package.json#name\` to "@${ns}/<packageSlug>" defensively, but you should still emit the right ` +
-    `value the first time.`
-  );
+  return {
+    identity:
+      `\n\nInstance vendor namespace: "${ns}". ` +
+      `When SKILL.md templates reference \`<vendor>\` in a package name (e.g. \`@<vendor>/<slug>\`), always substitute ` +
+      `\`<vendor>\` with "${ns}". Every package name MUST be \`@${ns}/<slug>\` — never \`@cinatra/<slug>\` unless the ` +
+      `operator's namespace literally happens to be "cinatra". The disk layout is currently fixed to ` +
+      `\`extensions/cinatra-ai/<packageSlug>/...\` regardless of vendor. The server-side write ` +
+      `handler normalizes \`package.json#name\` to "@${ns}/<packageSlug>" defensively, but you should still emit the right ` +
+      `value the first time.`,
+    // Its own sentence, and self-contained: it names the namespace again so it
+    // still reads correctly at its new position in the volatile tail, far from
+    // the identity fragment it used to be spliced into.
+    freezeState: frozen
+      ? `\n\nThe vendor namespace "${ns}" is FROZEN (first package already published) and cannot be renamed; never propose changing it.`
+      : "",
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -549,6 +595,85 @@ function warnOnUnclassifiedVehicles(
       `— recorded as delivered/vehicle=unknown: ` +
       unclassified.map((r) => `${r.skillId} (mode=${r.deliveryMode})`).join(", "),
   );
+}
+
+// ---------------------------------------------------------------------------
+// The chat surface's self-MCP catalog state (cinatra#2771).
+//
+// The catalog the model is offered is DERIVED, never listed. Three inputs, all
+// already available to this turn:
+//
+//   SERVABLE      every primitive the delegated-chat perimeter can serve.
+//   ADMISSION     the authoritative policy predicate, the only thing that may
+//                 admit a name.
+//   AVAILABILITY  the connector keys this VERIFIED actor holds an authorized
+//                 connection for, read through the same per-row `use` gate the
+//                 connector inventory uses.
+//
+// The capability key for a primitive is derived from the LIVE connector
+// catalog rather than from a table: a primitive whose name matches a catalog
+// connector's declared `mcpPrimitivePrefixes` is gated on that connector,
+// longest prefix winning. A connector installed tomorrow gates its own
+// primitives with no code change here, and a primitive whose name matches no
+// catalog prefix is never gated. See `connector-inventory.server.ts`.
+//
+// Failure posture is fail-OPEN to the authoritative gate, never fail-closed
+// onto the user. If state cannot be resolved the turn runs unrestricted and
+// the transport still decides what is callable. A narrowing hint must never be
+// the reason a turn loses its tools.
+// ---------------------------------------------------------------------------
+async function resolveChatMcpCatalogState(input: {
+  actorContext: ActorContext;
+  userId: string;
+  sessionOrgId: string | null;
+}): Promise<ChatMcpCatalogState | undefined> {
+  try {
+    const inventory = await buildConnectorInventory({
+      ...DEFAULT_CONNECTOR_INVENTORY_DEPS,
+      // The turn already holds a verified actor. The default resolver reads an
+      // MCP request frame, which does not exist on a chat turn, so the turn's
+      // own actor is supplied instead.
+      resolveActor: async () => ({
+        actor: input.actorContext,
+        subjectUserId: connectionSubjectUserId(input.actorContext) ?? input.userId,
+        organizationId: input.sessionOrgId,
+      }),
+    });
+
+    const authorizedKeys = new Set(
+      inventory.connectors
+        .filter((row) => row.hasAuthorizedConnection)
+        .map((row) => row.connectorKey),
+    );
+    // The capability key comes from each row's catalog-declared
+    // `mcpPrimitivePrefixes` (`gmail-connector` -> `gmail_`), LONGEST PREFIX
+    // WINS. It cannot come from `connectorKey`: that is a slug
+    // (`gmail-connector`) and primitives are underscore-named
+    // (`gmail_aliases_list`), so a key-based match admits no name at all and
+    // the filter silently gates nothing.
+    const capabilityKeyFor = buildCapabilityKeyResolver(inventory.connectors);
+
+    // The INTERIM seeding site (cinatra#2817 replaces it wholesale). Admission
+    // still comes from the legacy allowlist, and since the owner's ruling a
+    // primitive with no class in force is unexposed, each seeded name carries
+    // the class `resolveDelegatedChatClass` puts in force for it — the interim
+    // one here, because nothing in the tree declares yet. Seeding no class
+    // would empty the catalog, which is exactly the failure the shim prevents.
+    const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map((name) => ({
+      name,
+      declaredClass: resolveDelegatedChatClass(name, undefined),
+      capabilityKey: capabilityKeyFor(name),
+    }));
+
+    return {
+      servable,
+      isHostApproved: isDelegatedChatMcpToolAllowed,
+      isCapabilityAvailable: (key) => authorizedKeys.has(key),
+    };
+  } catch {
+    // Unresolvable state means no hint, not a smaller turn.
+    return undefined;
+  }
 }
 
 /**
@@ -1128,6 +1253,13 @@ export async function runAssistantTurn(
         adapter.provider,
         { delegation: "chat", userId, orgId: sessionOrgId, platformRole },
         issueChatMcpActorToken,
+        {
+          catalogState: await resolveChatMcpCatalogState({
+            actorContext,
+            userId,
+            sessionOrgId,
+          }),
+        },
       );
   if (!chatCinatraMcpTool) {
     send("error", {
@@ -1190,7 +1322,10 @@ export async function runAssistantTurn(
   // it stops emitting hardcoded `@cinatra/<slug>` package names on non-cinatra
   // deployments. The SKILL.md uses `@<vendor>/<slug>` as a placeholder;
   // this context substitutes the real vendor.
-  const instanceContext = buildInstanceContext();
+  // Two fragments from one read: stable identity for the cacheable head, and
+  // the MUTABLE freeze state for the volatile tail (codex round-2, finding 2).
+  const { identity: instanceContext, freezeState: instanceFreezeState } =
+    buildInstanceContext();
 
   const extensionConfirmationPolicy = buildExtensionImplementationConfirmationPolicy();
 
@@ -1509,6 +1644,32 @@ export async function runAssistantTurn(
     noProgressAbort.abort(noProgressAbortReason);
   };
 
+  // cinatra#2771 lever 2 — the turn's system fragments, named. Collecting them
+  // into one typed record is what lets the composer own the ORDER (stable head
+  // first, volatile tail last) and lets a unit test assert byte-stability on
+  // the exact same structure the turn builds.
+  const chatSystemFragments: ChatSystemPromptFragments = {
+    systemPrompt,
+    // The provider's skill contribution: an availability cue (Anthropic
+    // container listing; empty for OpenAI shell delivery, which must not be
+    // told about a read_skill tool) or, on an inline provider, the expanded
+    // skill bodies.
+    skillSystemContext,
+    instanceContext,
+    extensionConfirmationPolicy,
+    userContext,
+    // Volatile: `agent_source_publish` can flip this mid-conversation, so it
+    // must not sit in the head (codex round-2, finding 2). It follows
+    // `userContext` because it is policy-bearing text and policy is read after
+    // user-controlled content, never before it (finding 1).
+    instanceFreezeState,
+    pendingConfirmationContext,
+    explicitDispatchDirective,
+    // AC#5: the conversation-only degrade notice (empty for tool-capable
+    // providers).
+    conversationOnlyNotice,
+  };
+
   try {
     await stream({
       provider: adapter.provider,
@@ -1517,23 +1678,12 @@ export async function runAssistantTurn(
       // An explicit `model` pref overrides the connection default; absent, the
       // field is omitted so the call is byte-identical to the legacy chat.
       ...(modelPrefs.model ? { model: modelPrefs.model } : {}),
-      system:
-        explicitDispatchDirective +
-        systemPrompt +
-        // The provider's skill contribution: an availability cue (Anthropic
-        // container listing; empty for OpenAI shell delivery, which must not be
-        // told about a read_skill tool) or, on an inline provider, the expanded
-        // skill bodies. Separated explicitly — the fragment carries no leading
-        // blank line of its own, and a trimmed/fallback persona would otherwise
-        // run straight into its first heading.
-        (skillSystemContext ? `\n\n${skillSystemContext}` : "") +
-        userContext +
-        instanceContext +
-        extensionConfirmationPolicy +
-        pendingConfirmationContext +
-        // AC#5: the conversation-only degrade notice (empty for tool-capable
-        // providers, so their system string is byte-identical to before).
-        conversationOnlyNotice,
+      // cinatra#2771 lever 2 — composed STABLE HEAD FIRST. The same eight
+      // fragments as before, re-ordered so every one that can differ between
+      // two turns of a conversation lands after every one that cannot. The
+      // composer is pure, so the byte-stability property is unit-asserted
+      // rather than inferred (see `chat-system-prefix.ts`).
+      system: composeChatSystemPrompt(chatSystemFragments),
       messages: messages.map((m) => ({
         role: m.role,
         content: m.content,

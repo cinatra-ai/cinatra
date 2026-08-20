@@ -251,6 +251,18 @@ export default defineConfig({
           "packages/llm/src/usage-metering.ts",
         ),
       },
+      // The chat self-MCP catalog resolver. Its module graph is `@/`-resolvable
+      // from the ROOT sandbox (unlike the packages/llm sandbox, where the
+      // package's own test mocks it), so it maps straight to source. Listed
+      // BEFORE the bare `@cinatra-ai/llm` entry below, which is aliased to a
+      // single light leaf and would otherwise swallow this subpath.
+      {
+        find: "@cinatra-ai/llm/mcp-access",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/mcp-access.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/llm",
         replacement: path.join(

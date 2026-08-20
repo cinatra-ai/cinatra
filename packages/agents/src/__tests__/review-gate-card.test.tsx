@@ -55,10 +55,19 @@ const VIEW = {
   ref: "ref-abc-123",
 };
 
+/**
+ * The resolve answer, in the per-kind envelope the card parses (epic S9, S9c).
+ * The review kind carries no body — §III's target arrives through the island —
+ * and the card REFUSES an answer that carries one.
+ */
+function reviewEnvelope(state: LifecycleCardState): unknown {
+  return { kind: "artifact_review_gate", state, body: null };
+}
+
 function mockResolve(state: LifecycleCardState) {
   const fetchMock = vi.fn(
     async () =>
-      new Response(JSON.stringify({ state }), {
+      new Response(JSON.stringify(reviewEnvelope(state)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -534,7 +543,7 @@ describe("the decision seam", () => {
         );
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -584,11 +593,11 @@ describe("the decision seam", () => {
         );
       }
       resolves += 1;
-      const state =
+      const state: LifecycleCardState =
         resolves === 1
           ? { state: "pending", canDecide: true, canComment: true }
           : { state: "settled" };
-      return new Response(JSON.stringify({ state }), {
+      return new Response(JSON.stringify(reviewEnvelope(state)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -607,11 +616,11 @@ describe("the decision seam", () => {
     let resolves = 0;
     globalThis.fetch = vi.fn(async () => {
       resolves += 1;
-      const state =
+      const state: LifecycleCardState =
         resolves === 1
           ? { state: "pending", canDecide: true, canComment: true }
           : { state: "settled" };
-      return new Response(JSON.stringify({ state }), {
+      return new Response(JSON.stringify(reviewEnvelope(state)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -643,7 +652,7 @@ describe("the decision seam", () => {
         });
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -661,7 +670,7 @@ describe("the decision seam", () => {
       const url = String(input);
       if (url === LIFECYCLE_VIEW_DECIDE_PATH) return new Response("nope", { status: 500 });
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -722,18 +731,34 @@ describe("a marked review gate never feeds the field-assist LLM path", () => {
 });
 
 // ---------------------------------------------------------------------------
-// §VIII — the suggestion chips (cinatra#2572, epic #2564 S6c)
+// §VIII — the suggestions (cinatra#2572, epic #2564 S6c; redrawn by cinatra#2852)
 // ---------------------------------------------------------------------------
 //
-// The properties a later slice must not be able to weaken: the chips are drawn
-// by THIS component (so page and card cannot diverge), a mark is LOCAL until the
-// one decision carries it, both marks are reversible, a reader who may not
-// decide gets no press target at all, and a decided gate shows what was
-// recorded.
+// Redrawn by cinatra#2852 (design@60b27dfbb8a2a1594e6e88333cc5c048c244e640).
+//
+// The properties a later slice must not be able to weaken: the suggestions are
+// drawn by THIS component (so page and card cannot diverge), each one shows its
+// own before/after, the marking is a TWO-state toggle that starts accepted, a
+// dismissal is never a strike-through, a mark is LOCAL until the one decision
+// carries it, an immediate Reject records them as not taken rather than being
+// refused, a reader who may not decide gets no press target at all, and a
+// decided gate shows what was recorded.
 
 const CHIPS = [
-  { id: "sug-1", label: "subject", op: "replace" as const, message: "Not canonical." },
-  { id: "sug-2", label: "items · 0 · bcc", op: "remove" as const, message: "Every disclosed field is empty." },
+  {
+    id: "sug-1",
+    label: "subject",
+    op: "replace" as const,
+    message: "Not canonical.",
+    before: "Re-connecting on Q3 priorities  ",
+    after: "Re-connecting on Q3 priorities",
+  },
+  {
+    id: "sug-2",
+    label: "items · 0 · bcc",
+    op: "remove" as const,
+    message: "Every disclosed field is empty.",
+  },
 ];
 
 /** The decide POST bodies this render produced, in order. */
@@ -752,7 +777,7 @@ function mockResolveAndDecide(state: LifecycleCardState) {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
-    return new Response(JSON.stringify({ state }), {
+    return new Response(JSON.stringify(reviewEnvelope(state)), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -761,29 +786,93 @@ function mockResolveAndDecide(state: LifecycleCardState) {
   return fetchMock;
 }
 
+/** The whole drawn suggestion — the pill, the class and the before/after panel. */
 function chipFor(container: HTMLElement, label: string): HTMLElement {
   const el = [...container.querySelectorAll("[data-suggestion-state]")].find((n) =>
     (n.textContent ?? "").includes(label),
   );
-  if (!el) throw new Error(`no chip for ${label}`);
+  if (!el) throw new Error(`no suggestion for ${label}`);
   return el as HTMLElement;
 }
 
-describe("§VIII the chips are drawn by the ONE renderer", () => {
-  it("pending: a chip per surfaced suggestion, at rest, with the spec's anchors", async () => {
+/** Press a suggestion's ONE control — the pill inside its block. */
+function pressChip(container: HTMLElement, label: string): void {
+  const pill = chipFor(container, label).querySelector("button");
+  if (!pill) throw new Error(`suggestion ${label} has no press target`);
+  fireEvent.click(pill);
+}
+
+function stateOf(container: HTMLElement, label: string): string | null {
+  return chipFor(container, label).getAttribute("data-suggestion-state");
+}
+
+describe("§VIII the suggestions are drawn by the ONE renderer", () => {
+  it("pending: one drawn suggestion per surfaced item, ACCEPTED, with the spec's anchors", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    expect(container.querySelectorAll('[data-conformance-id="suggestion-chip-rest"]')).toHaveLength(2);
+    // §VIII: "a suggestion arrives accepted". Both of them, with no press.
+    expect(container.querySelectorAll('[data-conformance-id="suggestion-accepted"]')).toHaveLength(2);
+    expect(container.querySelector('[data-conformance-id="suggestion-dismissed"]')).toBeNull();
     // The label is the pointer; the mono slot is the transform class.
     expect(chipFor(container, "subject").textContent).toContain("replace");
     // The producer's reason is available without printing it into the row.
-    expect(chipFor(container, "subject").getAttribute("title")).toBe("Not canonical.");
+    expect(
+      chipFor(container, "subject").querySelector("button")?.getAttribute("title"),
+    ).toBe("Not canonical.");
   });
 
-  it("draws the SAME chips on all three first-party hosts (one component, one drawing)", async () => {
+  it("draws each suggestion's BEFORE/AFTER — the current content beside the suggested one", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    const panel = chipFor(container, "subject").querySelector(
+      '[data-conformance-id="suggestion-before-after"]',
+    );
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelector('[data-suggestion-panel="before"]')!.textContent).toContain(
+      "Re-connecting on Q3 priorities",
+    );
+    expect(panel!.querySelector('[data-suggestion-panel="after"]')!.textContent).toContain(
+      "Re-connecting on Q3 priorities",
+    );
+    // The panel keys are the drawing's words.
+    expect(panel!.textContent).toContain("Now");
+    expect(panel!.textContent).toContain("Suggested");
+  });
+
+  it("NEGATIVE CONTROL: a suggestion with no values draws the label + class and NO panel", async () => {
+    // A snapshot from before the pair existed, a `remove`, an `add` of the empty
+    // string. An empty panel would read as "this change is blank".
+    mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    const bare = chipFor(container, "items · 0 · bcc");
+    expect(bare.querySelector('[data-conformance-id="suggestion-before-after"]')).toBeNull();
+    expect(bare.textContent).toContain("items · 0 · bcc");
+    expect(bare.textContent).toContain("remove");
+  });
+
+  it("NEVER strikes a dismissed suggestion through — the muted ground and dashed edge alone", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
+    const row = container.querySelector('[data-conformance-id="suggestion-chips"]')!;
+    expect(row.innerHTML).not.toContain("line-through");
+    expect(chipFor(container, "subject").className).toContain("border-dashed");
+  });
+
+  it("draws the SAME suggestions on all three first-party hosts (one component, one drawing)", async () => {
     for (const host of ["chat_thread", "run_card", "page_gate_region"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
       const { container, unmount } = renderOn(host);
@@ -791,11 +880,14 @@ describe("§VIII the chips are drawn by the ONE renderer", () => {
         expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
       );
       expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(2);
+      expect(
+        container.querySelectorAll('[data-conformance-id="suggestion-before-after"]'),
+      ).toHaveLength(1);
       unmount();
     }
   });
 
-  it("a gate with NO suggestions draws no chip row at all", async () => {
+  it("a gate with NO suggestions draws no row at all", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
@@ -805,8 +897,8 @@ describe("§VIII the chips are drawn by the ONE renderer", () => {
   });
 });
 
-describe("§VIII a mark is LOCAL, and both marks are reversible", () => {
-  it("cycles rest → accepted → dismissed → rest on the ONE drawn control", async () => {
+describe("§VIII the marking is a TWO-STATE toggle, accepted by default", () => {
+  it("accepted → press → dismissed → press → accepted, on the ONE drawn control", async () => {
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -817,25 +909,43 @@ describe("§VIII a mark is LOCAL, and both marks are reversible", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    const chip = () => chipFor(container, "subject");
-    expect(chip().getAttribute("data-suggestion-state")).toBe("rest");
-    fireEvent.click(chip());
-    await waitFor(() => expect(chip().getAttribute("data-suggestion-state")).toBe("accepted"));
-    expect(chip().getAttribute("data-conformance-id")).toBe("suggestion-chip-accepted");
-    fireEvent.click(chip());
-    await waitFor(() => expect(chip().getAttribute("data-suggestion-state")).toBe("dismissed"));
-    expect(chip().getAttribute("data-conformance-id")).toBe("suggestion-chip-dismissed");
-    fireEvent.click(chip());
-    await waitFor(() => expect(chip().getAttribute("data-suggestion-state")).toBe("rest"));
+    expect(stateOf(container, "subject")).toBe("accepted");
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
+    expect(chipFor(container, "subject").getAttribute("data-conformance-id")).toBe(
+      "suggestion-dismissed",
+    );
+    // RE-ACCEPT: the toggle is its own inverse, and there is no third state to
+    // pass through on the way back.
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("accepted"));
+    expect(chipFor(container, "subject").getAttribute("data-conformance-id")).toBe(
+      "suggestion-accepted",
+    );
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
 
-    // §VIII "the chips carry no submit of their own": four presses, ZERO
+    // §VIII "the suggestions carry no submit of their own": three presses, ZERO
     // requests. Nothing about a mark has left the browser.
     expect(decideBodies(fetchMock)).toHaveLength(0);
+  });
+
+  it("says how many of them the decision is about to carry", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    const line = () =>
+      container.querySelector('[data-conformance-id="suggestion-accepted-count"]')!.textContent;
+    expect(line()).toContain("2 of 2 suggestions accepted");
+    pressChip(container, "subject");
+    await waitFor(() => expect(line()).toContain("1 of 2 suggestions accepted"));
   });
 });
 
 describe("§VIII the marks ride the ONE decision submit", () => {
-  it("approve carries the partition on the single decide request", async () => {
+  it("approve carries what is on screen: untouched means ACCEPTED", async () => {
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -846,14 +956,27 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(chipFor(container, "subject")); // accepted
-    fireEvent.click(chipFor(container, "items · 0 · bcc")); // accepted
-    fireEvent.click(chipFor(container, "items · 0 · bcc")); // dismissed
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
+      accepted: ["sug-1", "sug-2"],
+      dismissed: [],
+    });
+  });
+
+  it("approve carries the partition the reviewer pressed into being", async () => {
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    });
+    const { container } = renderOn("chat_thread");
     await waitFor(() =>
-      expect(chipFor(container, "items · 0 · bcc").getAttribute("data-suggestion-state")).toBe(
-        "dismissed",
-      ),
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
+    pressChip(container, "items · 0 · bcc"); // dismissed
+    await waitFor(() => expect(stateOf(container, "items · 0 · bcc")).toBe("dismissed"));
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     const body = decideBodies(fetchMock)[0];
@@ -861,7 +984,12 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     expect(body.suggestionDecisions).toEqual({ accepted: ["sug-1"], dismissed: ["sug-2"] });
   });
 
-  it("a gate with no marks posts NO partition key — the pre-#2571 fingerprint", async () => {
+  it("an IMMEDIATE Reject is not refused — it records every suggestion as NOT TAKEN", async () => {
+    // The reworked guard (cinatra#2852). With accepted-by-default, the shipped
+    // rule ("clear them first to reject") would refuse the very first press of
+    // Reject on a row the reviewer never touched. A reject tombstones the
+    // revisions, so nothing can be applied into them; the truthful record is a
+    // dismissal for every surfaced id.
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -872,6 +1000,46 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
+    // Nothing pressed: every suggestion is accepted on screen.
+    expect(stateOf(container, "subject")).toBe("accepted");
+    fireEvent.click(screen.getByRole("button", { name: /reject/i }));
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    const body = decideBodies(fetchMock)[0];
+    expect(body.disposition).toBe("reject");
+    expect(body.suggestionDecisions).toEqual({ accepted: [], dismissed: ["sug-1", "sug-2"] });
+    // …and the surface no longer warns about a combination that cannot happen.
+    expect(container.querySelector('[data-conformance-id="suggestion-chips-reject-note"]')).toBeNull();
+  });
+
+  it("a reject records them as not taken however the reviewer marked them", async () => {
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    pressChip(container, "subject"); // dismissed
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
+    fireEvent.click(screen.getByRole("button", { name: /reject/i }));
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
+      accepted: [],
+      dismissed: ["sug-1", "sug-2"],
+    });
+  });
+
+  it("a gate with NO suggestions posts no partition key — the pre-#2571 fingerprint", async () => {
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+    });
+    renderOn("chat_thread");
+    await waitFor(() => expect(screen.getByRole("button", { name: /approve/i })).not.toBeNull());
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     expect("suggestionDecisions" in decideBodies(fetchMock)[0]).toBe(false);
@@ -892,16 +1060,14 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(chipFor(container, "subject"));
-    await waitFor(() =>
-      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
-    );
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
     await waitFor(() => expect(hostAction).toHaveBeenCalledTimes(1));
     expect(hostAction).toHaveBeenCalledWith(
       expect.objectContaining({
         disposition: "approve",
-        suggestionDecisions: { accepted: ["sug-1"], dismissed: [] },
+        suggestionDecisions: { accepted: ["sug-2"], dismissed: ["sug-1"] },
       }),
     );
   });
@@ -910,8 +1076,9 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     // S6b refuses a partition on a non-terminal decision — a stream of comments
     // each "accepting" items on a gate that never resolves is the parallel
     // approval pathway #2047 row 8 bans. So Comment must not send one, or it
-    // would fail for every reviewer who had marked a chip. The marks are not
-    // lost: a comment leaves the gate open, and they ride the terminal decision.
+    // would fail for every reviewer looking at a row of suggestions. Nothing is
+    // lost: a comment leaves the gate open, and the marks ride the terminal
+    // decision when the reviewer takes one.
     const fetchMock = mockResolveAndDecide({
       state: "pending",
       canDecide: true,
@@ -922,24 +1089,21 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(chipFor(container, "subject"));
-    await waitFor(() =>
-      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
-    );
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
     fireEvent.click(screen.getByRole("button", { name: /comment/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
     const body = decideBodies(fetchMock)[0];
     expect(body.disposition).toBe("comment");
     expect("suggestionDecisions" in body).toBe(false);
     // Still marked, still reversible.
-    expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted");
+    expect(stateOf(container, "subject")).toBe("dismissed");
   });
 
   it("a surface that CHANGES clears the marks and says so, rather than quietly weakening the decision", async () => {
     // The snapshot is immutable, so the surfaced set can only change by a row
-    // that stopped verifying or a read that failed. Submitting whatever survived
-    // would land an approve recording NOTHING while the reviewer believes it
-    // recorded their accepts.
+    // that stopped verifying or a read that failed. Carrying a dismissal into a
+    // set the reviewer never saw would decide for them.
     let surfaced: LifecycleCardState = {
       state: "pending",
       canDecide: true,
@@ -954,7 +1118,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      return new Response(JSON.stringify({ state: surfaced }), {
+      return new Response(JSON.stringify(reviewEnvelope(surfaced)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -964,12 +1128,8 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(chipFor(container, "items · 0 · bcc"));
-    await waitFor(() =>
-      expect(chipFor(container, "items · 0 · bcc").getAttribute("data-suggestion-state")).toBe(
-        "accepted",
-      ),
-    );
+    pressChip(container, "items · 0 · bcc");
+    await waitFor(() => expect(stateOf(container, "items · 0 · bcc")).toBe("dismissed"));
     // The surface narrows underneath the reader (a re-resolve on window focus).
     surfaced = { state: "pending", canDecide: true, canComment: true, suggestions: [CHIPS[0]] };
     fireEvent.focus(window);
@@ -978,17 +1138,20 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     expect(
       container.querySelector('[data-conformance-id="suggestion-marks-cleared"]'),
     ).not.toBeNull();
-    expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("rest");
-    // …and the decision carries nothing, which is now the truth on screen.
+    expect(stateOf(container, "subject")).toBe("accepted");
+    // …and the decision carries exactly what is now on screen.
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
     await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
-    expect("suggestionDecisions" in decideBodies(fetchMock)[0]).toBe(false);
+    expect(decideBodies(fetchMock)[0].suggestionDecisions).toEqual({
+      accepted: ["sug-1"],
+      dismissed: [],
+    });
   });
 
   it("a surface that VANISHES still tells the reviewer their marks went with it", async () => {
-    // A snapshot that stopped verifying, or a read that failed, draws no chips
-    // at all. The reviewer who had marked something must not simply find an
-    // empty space where the row was.
+    // A snapshot that stopped verifying, or a read that failed, draws no
+    // suggestions at all. The reviewer who had pressed something must not simply
+    // find an empty space where the row was.
     let surfaced: LifecycleCardState = {
       state: "pending",
       canDecide: true,
@@ -996,7 +1159,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
       suggestions: CHIPS,
     };
     globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ state: surfaced }), {
+      new Response(JSON.stringify(reviewEnvelope(surfaced)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -1005,10 +1168,8 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(chipFor(container, "subject"));
-    await waitFor(() =>
-      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
-    );
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
     surfaced = { state: "pending", canDecide: true, canComment: true };
     fireEvent.focus(window);
     await waitFor(() =>
@@ -1022,11 +1183,10 @@ describe("§VIII the marks ride the ONE decision submit", () => {
   });
 
   it("the notice SURVIVES a second surface change — a flap must not wipe the warning", async () => {
-    // A transient store failure that drops the chips and then restores them is
-    // two surface changes in a row. Recomputing the notice from "were there
-    // marks a moment ago" would answer no on the second one, and the reviewer
-    // would be left looking at chips at rest with nothing to say theirs are
-    // gone.
+    // A transient store failure that drops the row and then restores it is two
+    // surface changes in a row. Recomputing the notice from "were there marks a
+    // moment ago" would answer no on the second one, and the reviewer would be
+    // left looking at an all-accepted row with nothing to say theirs are gone.
     let surfaced: LifecycleCardState = {
       state: "pending",
       canDecide: true,
@@ -1034,7 +1194,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
       suggestions: CHIPS,
     };
     globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ state: surfaced }), {
+      new Response(JSON.stringify(reviewEnvelope(surfaced)), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -1043,11 +1203,9 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(chipFor(container, "subject"));
-    await waitFor(() =>
-      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
-    );
-    // 1st change — the chips vanish.
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
+    // 1st change — the suggestions vanish.
     surfaced = { state: "pending", canDecide: true, canComment: true };
     fireEvent.focus(window);
     await waitFor(() =>
@@ -1055,7 +1213,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
         container.querySelector('[data-conformance-id="suggestion-marks-cleared"]'),
       ).not.toBeNull(),
     );
-    // 2nd change — they come back, at rest.
+    // 2nd change — they come back, accepted.
     surfaced = { state: "pending", canDecide: true, canComment: true, suggestions: CHIPS };
     fireEvent.focus(window);
     await waitFor(() => expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(2));
@@ -1063,7 +1221,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
       container.querySelector('[data-conformance-id="suggestion-marks-cleared"]'),
     ).not.toBeNull();
     // The reviewer acting is what retires the notice.
-    fireEvent.click(chipFor(container, "subject"));
+    pressChip(container, "subject");
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-marks-cleared"]')).toBeNull(),
     );
@@ -1082,10 +1240,8 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    fireEvent.click(chipFor(container, "subject"));
-    await waitFor(() =>
-      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
-    );
+    pressChip(container, "subject");
+    await waitFor(() => expect(stateOf(container, "subject")).toBe("dismissed"));
     // The SAME component instance is pointed at another gate whose snapshot
     // happens to carry identical suggestion ids.
     rerender(
@@ -1096,12 +1252,12 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("rest");
+    expect(stateOf(container, "subject")).toBe("accepted");
   });
 });
 
 describe("§VIII read-only presentations", () => {
-  it("restricted (respond access, no approve): the chips RENDER with no press target", async () => {
+  it("restricted (respond access, no approve): the suggestions RENDER with no press target", async () => {
     mockResolve({
       state: "restricted",
       canDecide: false,
@@ -1113,19 +1269,23 @@ describe("§VIII read-only presentations", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
-    // Two chips, drawn — a withheld affordance is never a withheld chip.
+    // Two suggestions, drawn — a withheld affordance is never a withheld chip,
+    // and the before/after they annotate is drawn with them.
     expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(2);
+    expect(
+      container.querySelectorAll('[data-conformance-id="suggestion-before-after"]'),
+    ).toHaveLength(1);
     // …and none of them is a control at all: not a live one, and not a disabled
     // one either (a disabled button reads as "later"; this is "not yours").
     expect(
       [...container.querySelectorAll("[data-suggestion-state]")].every(
-        (n) => n.tagName.toLowerCase() === "span",
+        (n) => n.querySelector("button") === null,
       ),
     ).toBe(true);
     expect(container.querySelector('[data-suggestion-chips-mode="read-only"]')).not.toBeNull();
   });
 
-  it("settled: the RECORDED partition, drawn in the same chips, with no affordance", async () => {
+  it("settled: the RECORDED partition, drawn in the same readings, with no affordance", async () => {
     mockResolve({
       state: "settled",
       suggestions: [
@@ -1138,14 +1298,27 @@ describe("§VIII read-only presentations", () => {
       expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
     );
     expect(chipFor(container, "subject").getAttribute("data-conformance-id")).toBe(
-      "suggestion-chip-accepted",
+      "suggestion-accepted",
     );
     expect(chipFor(container, "items · 0 · bcc").getAttribute("data-conformance-id")).toBe(
-      "suggestion-chip-dismissed",
+      "suggestion-dismissed",
     );
     expect(container.querySelector('[data-suggestion-chips-mode="recorded"]')).not.toBeNull();
     // §IV still holds: the gate is no longer open.
     expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull();
+  });
+
+  it("settled BEFORE this slice: an id with no recorded mark reports no choice, not a guess", async () => {
+    // A gate decided under the old three-state marking recorded a row only for
+    // the items the reviewer touched. Drawing the rest as accepted or dismissed
+    // would report a choice nobody made. This reading exists for history only —
+    // a pending gate can never produce it.
+    mockResolve({ state: "settled", suggestions: [CHIPS[0]] });
+    const { container } = renderOn("page_gate_region");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("unrecorded");
   });
 
   it("a settled gate that surfaced nothing draws only §IV's blocked notice", async () => {
@@ -1355,7 +1528,7 @@ describe("#2566 composer focus", () => {
         );
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -1407,7 +1580,7 @@ describe("#2566 composer focus", () => {
         );
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -1461,7 +1634,7 @@ describe("#2566 composer focus", () => {
         return new Response("{}", { status: 403 });
       }
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(reviewEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -1482,5 +1655,152 @@ describe("#2566 composer focus", () => {
     unmount();
     expect(store.getSnapshot().eligible).toEqual([]);
     expect(store.getCommentAction(VIEW.ref)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §IV — the SETTLED card names its outcome, and Refresh goes with the ambiguity
+// (cinatra#2855; plan §4.2)
+// ---------------------------------------------------------------------------
+
+describe("a settled card that knows its outcome", () => {
+  const HOSTS = ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const;
+
+  async function settledWith(
+    outcome: "approved" | "rejected" | "changes_requested",
+    decidedByName?: string,
+    host: (typeof HOSTS)[number] = "chat_thread",
+  ) {
+    mockResolve(
+      decidedByName
+        ? { state: "settled", outcome, decidedByName }
+        : { state: "settled", outcome },
+    );
+    const { container } = renderOn(host);
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-gate-settled"]'),
+      ).not.toBeNull(),
+    );
+    return container;
+  }
+
+  it("names the outcome AND the decider", async () => {
+    const container = await settledWith("approved", "Dana Okonkwo");
+    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+    expect(container.textContent).toContain(
+      "The gate is resolved and the run has been released to continue.",
+    );
+    expect(
+      container
+        .querySelector('[data-conformance-id="review-gate-settled"]')
+        ?.getAttribute("data-review-outcome"),
+    ).toBe("approved");
+  });
+
+  it("names each of the three recorded outcomes", async () => {
+    const cases: Array<[Parameters<typeof settledWith>[0], string]> = [
+      ["approved", "Approved by Dana Okonkwo"],
+      ["rejected", "Rejected by Dana Okonkwo"],
+      ["changes_requested", "Changes requested by Dana Okonkwo"],
+    ];
+    for (const [outcome, title] of cases) {
+      const container = await settledWith(outcome, "Dana Okonkwo");
+      expect(container.textContent).toContain(title);
+      cleanup();
+    }
+  });
+
+  it("DROPS the Refresh affordance — and the generic reading with it", async () => {
+    // The button existed to resolve "decided, or did the run move on?". A named
+    // outcome has already answered that, so a Refresh beside it would offer to
+    // resolve an ambiguity that is not there.
+    const container = await settledWith("rejected", "Dana Okonkwo");
+    expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
+    expect(
+      container.querySelector('[data-conformance-id="review-gate-blocked"]'),
+    ).toBeNull();
+    expect(container.textContent).not.toContain("This review is no longer open");
+    // Still a settled card: no floor to press, no target to draw.
+    expect(
+      container.querySelector('[data-conformance-id="review-decision-bar"]'),
+    ).toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(
+      container.querySelector('[data-lifecycle-card-state="settled"]'),
+    ).not.toBeNull();
+  });
+
+  it("states the outcome ALONE when no decider can be named", async () => {
+    // The resolver drops a decider it cannot name safely rather than reaching
+    // for an identifier, so the card must read as a finished sentence without
+    // one — never "Approved by" and a dangling nothing.
+    const container = await settledWith("approved");
+    expect(container.textContent).toContain("Approved");
+    expect(container.textContent).not.toContain("Approved by");
+    expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
+  });
+
+  it("draws the SAME reading on all four hosts", async () => {
+    // §IX parity: the renderer decides, never the surface it is read on.
+    const drawn: string[] = [];
+    for (const host of HOSTS) {
+      const container = await settledWith("approved", "Dana Okonkwo", host);
+      drawn.push(
+        container.querySelector('[data-conformance-id="review-gate-settled"]')!.outerHTML,
+      );
+      cleanup();
+    }
+    for (const html of drawn) {
+      expect(html).toBe(drawn[0]);
+      expect(html).toContain("Approved by Dana Okonkwo");
+    }
+  });
+
+  it("keeps the recorded suggestion partition above the named outcome", async () => {
+    mockResolve({
+      state: "settled",
+      outcome: "approved",
+      decidedByName: "Dana Okonkwo",
+      suggestions: [
+        {
+          id: "sug-1",
+          label: "content.body",
+          op: "replace",
+          message: "Tighten the opening sentence.",
+          mark: "accepted",
+        },
+      ],
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-gate-settled"]'),
+      ).not.toBeNull(),
+    );
+    expect(container.textContent).toContain("content.body");
+    expect(container.textContent).toContain("Approved by Dana Okonkwo");
+  });
+});
+
+describe("a settled card that does NOT know its outcome", () => {
+  it("reads exactly as it always has, Refresh and all", async () => {
+    // The record that predates the outcome, and the disposition this build
+    // cannot read, both land here. Neither is a card that may guess.
+    mockResolve({ state: "settled" });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="review-gate-blocked"]'),
+      ).not.toBeNull(),
+    );
+    expect(
+      container.querySelector('[data-conformance-id="review-gate-settled"]'),
+    ).toBeNull();
+    expect(container.textContent).toContain("This review is no longer open");
+    expect(container.textContent).toContain(
+      "The gate was already decided or the run moved on.",
+    );
+    expect(screen.getByRole("button", { name: /refresh/i })).not.toBeNull();
   });
 });

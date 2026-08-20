@@ -21,7 +21,7 @@ privileged host capability through the injected `ctx` ports — never via a
 
 ## ABI version
 
-The SDK ABI is **`2.4.0`** (`SDK_EXTENSIONS_ABI_VERSION` in
+The SDK ABI is **`2.5.0`** (`SDK_EXTENSIONS_ABI_VERSION` in
 [`src/register.ts`](src/register.ts) — the authoritative source of truth, also
 mirrored as `cinatra.sdkAbiVersion` in this package's `package.json`). A CI gate
 asserts this README, the `register.ts` constant, and the `package.json` field
@@ -59,6 +59,14 @@ The ABI is semantic-versioned independently of the npm package version (see
   side of `objects.registerType` (an extension edge-bound to a non-default
   side-by-side version of an object-type-registering package resolves THAT
   version's descriptor, fail-closed; cinatra#1392).
+- **`2.5.0`** — added optional `delegatedChat` on BOTH MCP registration
+  shapes — `HostMcpToolRegistration` (the `mcp.registerTool` argument) and the
+  manifest-discovered `ExtensionMcpToolConfig`. A registration may declare how
+  it means its primitive to be used on the delegated chat surface:
+  `"read" | "discovery" | "dispatch" | "none"`. The declaration can only
+  **narrow** — it is never authorization on its own, an unreadable value
+  normalizes to `"none"`, and the host's family denies, destructive-verb
+  backstop and admission decision remain authoritative (cinatra#2771).
 
 ### ABI-evolution policy
 

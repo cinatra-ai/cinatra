@@ -7,7 +7,7 @@
 import "server-only";
 
 import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
-import type { LlmProvider, LlmMcpServerTool } from "./types";
+import type { LlmProvider, LlmMcpServerTool, LlmTool } from "./types";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
   loadExternalMcpToolboxBySlug,
@@ -148,6 +148,144 @@ export type AgentRunMcpActor = {
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;
 
 export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
+
+// ---------------------------------------------------------------------------
+// State-derived self-MCP catalog for the chat surface.
+//
+// WHY DERIVED AND NOT LISTED. Cinatra is extensible: a user installs
+// connectors and each connector brings its own MCP primitives. Any fixed table
+// of primitive names is wrong the moment a connector ships one the table does
+// not know, because an unlisted primitive is simply invisible. So the catalog
+// is COMPUTED per turn from what this instance can actually serve, filtered by
+// what this actor is actually authorized to use.
+//
+// WHAT NARROWS THE CATALOG, in order:
+//   1. HOST ADMISSION. The authoritative delegated-chat policy decides whether
+//      a name is reachable at all. It stays the only thing that can ADMIT.
+//   2. DECLARED CLASS. A registration may declare how it means to be used on
+//      the chat surface. A declaration can only ever NARROW: a connector
+//      self-classifying is not authorization, so a declaration the host has
+//      not admitted grants nothing, and an absent declaration changes nothing.
+//   3. CAPABILITY AVAILABILITY. A primitive behind a capability that this
+//      actor has no authorized connection for is not offered, because offering
+//      it only buys a failed call and the tokens to describe it.
+//
+// WHY THIS IS STILL CACHE-FRIENDLY. The result changes with package,
+// connection and verified-actor authorization state. It does not change with
+// the question being asked, so for one actor in one state the bytes are
+// stable. That is the property the prefix needs; it is not a claim that the
+// provider reuses the prefix today, which the per-turn bearer token in the
+// tool block still prevents.
+//
+// AUTHORITY IS UNCHANGED. This is an advisory narrowing hint on the provider
+// request. The authoritative gate stays server-side at MCP runtime server
+// construction: registration-time filtering plus a call-time guard keyed off
+// the verified actor. A provider that ignores the hint changes nothing about
+// what is callable, and nothing here can widen the perimeter.
+// ---------------------------------------------------------------------------
+
+/**
+ * How a registration means its primitive to be used on the delegated chat
+ * surface. Structural only. Never sufficient authorization on its own.
+ *
+ * RE-EXPORTED, not redeclared: this is the SDK's author-facing enum, the same
+ * one both registration paths carry (`HostMcpToolRegistration.delegatedChat`
+ * and the manifest-discovered config's `delegatedChat`). A second copy here
+ * could drift from the enum the host actually validates, and a resolver that
+ * disagreed with the registration boundary about what "dispatch" means would
+ * be a security bug, not a typo.
+ */
+export type { DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
+
+/**
+ * The chat-eligible classes. A class outside this set narrows to nothing, which
+ * covers an explicit `"none"`, any value that is not a valid class at all, and
+ * — since the owner's ruling — the ABSENCE of a class — the same fail-closed-toward-narrowing reading the host's
+ * `normalizeDelegatedChatToolClass` applies, since an unreadable declaration
+ * must never be re-read as the NEUTRAL "undeclared".
+ *
+ * DELIBERATELY A LOCAL MIRROR, not an import of the policy's runtime helper.
+ * This module sits on a hot import path (`@cinatra-ai/llm/registry` reaches it,
+ * and three workspace packages stub the `@cinatra-ai/mcp-server` barrel in
+ * their test resolution), so a new runtime cross-package edge here is a
+ * resolution liability for a rule that is four strings long. The authority
+ * remains `delegated-chat-tool-policy.ts`; `__tests__/delegated-chat-class-drift.test.ts`
+ * pins this set against it at both type and value level, so the mirror cannot
+ * drift silently.
+ */
+const CHAT_ELIGIBLE_CLASSES: ReadonlySet<string> = new Set(["read", "discovery", "dispatch"]);
+
+/** One primitive this instance can currently serve. */
+export type ServableChatPrimitive = {
+  name: string;
+  /**
+   * The class in force for this primitive — what its registration declared, or
+   * the interim class the legacy allowlist implies for it.
+   *
+   * ABSENT MEANS UNEXPOSED, not neutral (owner ruling, cinatra#2771): a
+   * primitive with no class in force is dropped from the catalog. The host
+   * resolves this with the policy's `resolveDelegatedChatClass` before seeding,
+   * so an undeclared-but-legacy-admitted name arrives here already carrying its
+   * interim class. A caller that seeds nothing here gets an EMPTY catalog, by
+   * design.
+   */
+  declaredClass?: string | null;
+  /**
+   * The capability whose availability gates this primitive, when one does.
+   * Absent means the primitive is not connection-gated.
+   */
+  capabilityKey?: string | null;
+};
+
+/**
+ * Everything the resolver needs, injected. This module is `@/`-free by rule,
+ * so the host resolves state and passes it in, exactly as it already injects
+ * the actor-token issuer.
+ */
+export type ChatMcpCatalogState = {
+  /** Primitives currently registered and servable on this instance. */
+  servable: readonly ServableChatPrimitive[];
+  /** Host admission. The only predicate that may admit a name. */
+  isHostApproved: (name: string) => boolean;
+  /**
+   * Whether the VERIFIED actor holds an authorized connection for a
+   * capability. Called only for primitives that declare a capability key.
+   */
+  isCapabilityAvailable: (capabilityKey: string) => boolean;
+};
+
+/**
+ * Derive the advisory allowlist for one turn.
+ *
+ * Deduplicated and lexicographically sorted, so the same instance state and
+ * the same actor authorization always produce a byte-identical array whatever
+ * order the registry enumerated in.
+ */
+export function resolveChatMcpAllowedTools(state: ChatMcpCatalogState): string[] {
+  const admitted = new Set<string>();
+  for (const primitive of state.servable) {
+    const name = primitive.name;
+    if (typeof name !== "string" || name.length === 0) continue;
+    // 1. Host admission is the only thing that admits.
+    if (!state.isHostApproved(name)) continue;
+    // 2. A declaration may narrow, never widen. Note this runs strictly AFTER
+    //    host admission above, which is what makes it structurally impossible
+    //    for a declaration to widen: an unadmitted name never reaches here.
+    //    MISSING NARROWS TOO: no class in force means unexposed, so `null` /
+    //    `undefined` is dropped exactly like `"none"` or an unreadable value.
+    //    The host is responsible for seeding the class in force (its own
+    //    declaration, else the interim legacy one) — see `declaredClass`.
+    const declared = primitive.declaredClass;
+    if (declared == null || !CHAT_ELIGIBLE_CLASSES.has(declared)) continue;
+    // 3. A connection-gated primitive needs an authorized connection.
+    const capability = primitive.capabilityKey;
+    if (capability != null && capability !== "" && !state.isCapabilityAvailable(capability)) {
+      continue;
+    }
+    admitted.add(name);
+  }
+  return [...admitted].sort();
+}
 
 /**
  * Server-built inputs for the public-site widget → MCP delegated OBO token
@@ -309,14 +447,28 @@ export async function buildLlmMcpServerToolForChat(
   provider: Extract<LlmProvider, "openai" | "anthropic">,
   actor: ChatMcpActor,
   issueActorToken: ChatMcpActorTokenIssuer,
+  // The instance and actor state the catalog is derived from. Omitting it
+  // leaves the reference unrestricted, which is the pre-existing behavior and
+  // stays safe because the authoritative transport gate still decides what is
+  // callable. The host passes state whenever it can resolve it.
+  options: { catalogState?: ChatMcpCatalogState } = {},
 ): Promise<LlmMcpServerTool | null> {
   const serverUrl = getPublicMcpServerUrl();
   if (!serverUrl) return null;
 
   try {
+    const derived = options.catalogState
+      ? resolveChatMcpAllowedTools(options.catalogState)
+      : null;
     return buildCinatraMcpServerTool(
       serverUrl,
       `Bearer ${issueActorToken(actor)}`,
+      // An EMPTY derivation must never be sent: both adapters read an empty
+      // allowlist as unrestricted, so it would widen rather than narrow. An
+      // empty result also means the resolver found nothing admissible, which
+      // is a host state bug. Fall back to unrestricted and let the
+      // authoritative gate hold rather than encode a bug as a hint.
+      derived && derived.length > 0 ? derived : null,
     );
   } catch (err) {
     console.warn(
@@ -696,4 +848,103 @@ export async function buildExternalMcpServerTools(
     );
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical cacheable-prefix projection (cinatra#2771).
+//
+// WHY A PROJECTION AND NOT AN ASSERTION. Prompt caching is a PREFIX MATCH: a
+// provider reuses the longest byte-identical head of a request, so a single
+// byte that moves per turn stops every cache read after that point. "Is our
+// prefix stable?" is therefore a question about BYTES, and the honest way to
+// ask it is to reduce a turn to exactly the bytes that are supposed to be
+// stable and compare two turns' reductions. That is this function.
+//
+// WHAT IT DELIBERATELY DROPS, and why each is not a defect being hidden:
+//   • CREDENTIAL MATERIAL: `headers` / `authorization` on any MCP tool. These
+//     carry a freshly minted, wall-clock-stamped bearer token. They must never
+//     be written to a log, a snapshot or a test fixture, so the projection
+//     zeroes them by construction rather than trusting a caller to redact.
+//   • CONVERSATION INPUT: `messages`. It varies by definition and sits after
+//     the prefix, so it is not part of the question.
+//
+// WHAT IT KEEPS AND NORMALIZES: the system text and the tool block, which are
+// the two things a provider actually renders ahead of the conversation. Tools
+// are projected to a stable identity per kind and SORTED, so a tool set that
+// differs only in registration order (extension capability providers iterate a
+// Map in insertion order, which is boot-dependent) projects identically.
+//
+// READING THE RESULT, the important caveat. A stable projection proves the
+// content WE control is stable. It does NOT prove the wire prefix is stable,
+// because the projection excludes exactly the credential material that today
+// changes on every turn. Treat a stable projection as a necessary condition,
+// never as evidence of a cache hit; the sufficient evidence is
+// `cached_input_tokens` on the usage row.
+// ---------------------------------------------------------------------------
+
+/** The reduced, comparable form of one turn's intended cacheable prefix. */
+export type CacheablePrefixProjection = {
+  /** The system text exactly as it would be rendered, or `""` when absent. */
+  system: string;
+  /**
+   * One stable identity line per tool, sorted. Credential material is never
+   * present. The shape is `<kind>:<identity>` plus, for an MCP reference, the
+   * sorted allowlist that narrows it.
+   */
+  tools: string[];
+};
+
+function projectToolIdentity(tool: LlmTool): string {
+  switch (tool.type) {
+    case "mcp": {
+      // `serverUrl` is an origin+path the operator configured, never a secret,
+      // and it is load-bearing for identity: the same label pointed at a
+      // different host is a different tool block.
+      const allowed = tool.allowedTools ? [...tool.allowedTools].sort() : null;
+      const narrowing = allowed ? `allowed=${allowed.join(",")}` : "allowed=*";
+      return `mcp:${tool.serverLabel}:${tool.serverUrl}:${narrowing}`;
+    }
+    case "web_search":
+      return "web_search:";
+    case "container_skills": {
+      const t = tool as { skills?: Array<{ skillId?: string; version?: string }> };
+      const skills = (t.skills ?? [])
+        .map((s) => `${s.skillId ?? ""}@${s.version ?? ""}`)
+        .sort();
+      return `container_skills:${skills.join(",")}`;
+    }
+    default: {
+      // Function, shell and sandbox tools are identified by their model-facing
+      // name. Anything without one still projects deterministically by kind.
+      const named = tool as { type: string; name?: string };
+      return `${named.type}:${named.name ?? ""}`;
+    }
+  }
+}
+
+/**
+ * Reduce a turn's system text and tool block to the canonical projection.
+ *
+ * Pure and total: it never throws, never reads a clock, and never returns
+ * credential material, so it is safe to call from a test, a gate or a
+ * measurement script.
+ */
+export function projectCacheablePrefix(input: {
+  system?: string;
+  tools?: LlmTool[];
+}): CacheablePrefixProjection {
+  return {
+    system: input.system ?? "",
+    tools: (input.tools ?? []).map(projectToolIdentity).sort(),
+  };
+}
+
+/**
+ * A stable string form of the projection, for byte-equality comparison across
+ * turns and for recording in evidence.
+ */
+export function serializeCacheablePrefixProjection(
+  projection: CacheablePrefixProjection,
+): string {
+  return JSON.stringify(projection, null, 2);
 }

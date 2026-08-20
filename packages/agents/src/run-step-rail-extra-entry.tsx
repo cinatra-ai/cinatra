@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ClipboardCheck, ScanSearch, SkipForward } from "lucide-react";
 
 import { StepperIndicator, StepperTitle, StepperTrigger } from "@/components/reui/stepper";
+import { cn } from "@/lib/utils";
 
 import type { RunStepRailEntry } from "./run-step-rail";
 
@@ -144,7 +145,27 @@ export function RailExtraEntry({
           {titleNode}
         </Link>
       ) : (
-        <StepperTrigger className="gap-2 px-0 py-0.5" tabIndex={-1}>
+        // The row must be sized by its CONTENT. `StepperTrigger` renders the
+        // shared Button, whose default size pins a fixed `h-8` — and a
+        // lifecycle reason wraps to several lines inside the narrow rail. A
+        // pinned row height cannot contain that: the row CENTRED its
+        // overflowing content, so the wrapped text escaped the row box in both
+        // directions and printed over the rows around it, while the
+        // StepperItem (and so every following row's offset) went on being
+        // measured from the fixed 2rem (cinatra#2840). `h-auto` hands the
+        // height back to the content so a taller row PUSHES the rail down;
+        // `min-h-8` keeps every single-line row at exactly the height it had.
+        <StepperTrigger
+          className={cn(
+            "h-auto min-h-8 gap-2 px-0 py-0.5",
+            // Once the row is allowed to grow, the Button's own `items-center`
+            // would centre the indicator against the whole wrapped block. A
+            // lifecycle indicator belongs on the FIRST line — the same
+            // alignment the wrapper above states.
+            isLifecycle && "items-start"
+          )}
+          tabIndex={-1}
+        >
           {indicatorNode}
           {titleNode}
         </StepperTrigger>

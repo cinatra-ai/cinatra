@@ -19,6 +19,12 @@ vi.mock("@/lib/extension-install-pipeline", () => ({
 }));
 vi.mock("@/lib/extension-package-store-core", () => ({
   isExtensionStoreKind: vi.fn(() => true),
+  // The metadata-only partition moved here (cinatra#2762) so boot reconciliation
+  // and the install pipeline read the SAME set; this mock must carry it or the
+  // module under test imports `undefined`.
+  METADATA_ONLY_STORE_KINDS: new Set(["agent", "skill", "artifact"]),
+  isMetadataOnlyStoreKind: (k: unknown) =>
+    typeof k === "string" && ["agent", "skill", "artifact"].includes(k),
 }));
 vi.mock("@/lib/extension-artifact-bridge-rescan", () => ({
   rescanArtifactBridgeFromStore: vi.fn(),

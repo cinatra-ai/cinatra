@@ -1,5 +1,6 @@
-// The chips' attachment contract (cinatra#2572, epic #2564 S6c).
-// Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
+// The chips' attachment contract (cinatra#2572, epic #2564 S6c; the before/after
+// pair is cinatra#2852).
+// Design: design@60b27dfbb8a2a1594e6e88333cc5c048c244e640
 // `specs/app-lifecycle-cards.html` §VIII.
 //
 // Every assertion here is about what a reader may LEARN and what a failure may
@@ -29,6 +30,7 @@ const PRODUCED = [
     id: "sug-1",
     fieldPath: "/subject",
     op: "replace",
+    before: "Q3 re-engagement  ",
     value: "Q3 re-engagement",
     message: "Not canonical.",
   },
@@ -98,7 +100,14 @@ describe("a PENDING gate has no recorded partition", () => {
     expect(out).toEqual({
       ...PENDING,
       suggestions: [
-        { id: "sug-1", label: "subject", op: "replace", message: "Not canonical." },
+        {
+          id: "sug-1",
+          label: "subject",
+          op: "replace",
+          message: "Not canonical.",
+          before: "Q3 re-engagement  ",
+          after: "Q3 re-engagement",
+        },
         {
           id: "sug-2",
           label: "items · 0 · bcc",
@@ -109,10 +118,39 @@ describe("a PENDING gate has no recorded partition", () => {
     });
   });
 
-  it("NEVER carries the proposed value onto the wire", async () => {
+  it("CARRIES the before/after pair the redrawn §VIII marks against", async () => {
+    // The pair is the whole point of the redraw: a label plus a change class
+    // cannot tell a reader what accepting does. Both sides come from the same
+    // disclosed projection the target panel already renders to this reader.
     readGateSuggestionSurface.mockResolvedValue(surface());
+    const out = (await attachLifecycleSuggestions(PENDING, "artifact_review_gate", REF)) as {
+      suggestions: { before?: string; after?: string }[];
+    };
+    expect(out.suggestions[0]).toMatchObject({
+      before: "Q3 re-engagement  ",
+      after: "Q3 re-engagement",
+    });
+    // A `remove` has no one value to show — absent, never blank.
+    expect(out.suggestions[1].before).toBeUndefined();
+    expect(out.suggestions[1].after).toBeUndefined();
+  });
+
+  it("a snapshot written BEFORE the pair existed still attaches its chips", async () => {
+    // Absence is not a signal (§VIII): a pre-#2852 row carries no values and
+    // surfaces exactly the label + class chip it always did.
+    readGateSuggestionSurface.mockResolvedValue({
+      ...surface(),
+      suggestions: [
+        { id: "sug-1", fieldPath: "/subject", op: "replace", value: "x", message: "Not canonical." },
+      ],
+    });
     const out = await attachLifecycleSuggestions(PENDING, "artifact_review_gate", REF);
-    expect(JSON.stringify(out)).not.toContain("Q3 re-engagement");
+    expect(out).toEqual({
+      ...PENDING,
+      suggestions: [
+        { id: "sug-1", label: "subject", op: "replace", message: "Not canonical.", after: "x" },
+      ],
+    });
   });
 
   it("a RESTRICTED reader gets the same chips (they may read the target these annotate)", async () => {
@@ -139,7 +177,15 @@ describe("a SETTLED gate shows what was recorded", () => {
     expect(out).toEqual({
       state: "settled",
       suggestions: [
-        { id: "sug-1", label: "subject", op: "replace", message: "Not canonical.", mark: "accepted" },
+        {
+          id: "sug-1",
+          label: "subject",
+          op: "replace",
+          message: "Not canonical.",
+          before: "Q3 re-engagement  ",
+          after: "Q3 re-engagement",
+          mark: "accepted",
+        },
         {
           id: "sug-2",
           label: "items · 0 · bcc",

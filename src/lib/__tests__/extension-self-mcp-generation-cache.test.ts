@@ -14,9 +14,13 @@ const buildSpy = vi.fn();
 vi.mock("@/lib/mcp-server", () => ({
   buildHostSelfPrimitiveHandlers: () => {
     buildSpy();
-    // A map with one always-allowed primitive that echoes its input.
-    return new Map<string, (...args: unknown[]) => unknown>([
-      ["echo_primitive", (input: unknown) => ({ structuredContent: input })],
+    // A map with one always-allowed primitive that echoes its input. The map
+    // now holds `{ handler, delegatedChat }` per name (cinatra#2771): the
+    // typed delegated-chat declaration travels WITH the handler so a
+    // delegated-restricted self-invocation can apply the same narrow-only rule
+    // the live transport applies at registration. Undeclared here — neutral.
+    return new Map<string, { handler: (...args: unknown[]) => unknown }>([
+      ["echo_primitive", { handler: (input: unknown) => ({ structuredContent: input }) }],
     ]);
   },
 }));

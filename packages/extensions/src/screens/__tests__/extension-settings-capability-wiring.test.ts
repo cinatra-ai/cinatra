@@ -27,8 +27,10 @@ const ACTOR = read("../../lifecycle-actor.ts");
 
 describe("AC1 — the enabled state comes from the ENFORCING module", () => {
   it("the loader asks the resolver (not a local copy) for the capability", () => {
-    expect(SCREEN).toContain(
-      'import { describeLifecycleCapabilities } from "../lifecycle-target-resolver"',
+    // The import is a named-list form (it grew a second name in cinatra#2762
+    // round 5), so pin the SPECIFIER and the name, not the exact statement text.
+    expect(SCREEN).toMatch(
+      /import \{[^}]*\bdescribeLifecycleCapabilities\b[^}]*\} from "\.\.\/lifecycle-target-resolver"/,
     );
     expect(SCREEN).toContain("await describeLifecycleCapabilities(");
   });
@@ -189,5 +191,127 @@ describe("AC3 — the enforcement is untouched and its refusals carry stable cod
     expect(ACTIONS).toContain("function stableErrorCode(");
     expect(ACTIONS).toContain("errorCode: stableErrorCode(err),");
     expect(ACTIONS).toContain("result.errorCode,");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2762 round 5 — the recovery actions are BOUND to the row this page
+// described, and the selector that binds them is minted SERVER-SIDE.
+//
+// Structural, because the defect is "the action re-resolves from the package
+// name" — an omission no unit test of the action can see, since the action is
+// correct for every row set where the two resolutions happen to agree.
+// ---------------------------------------------------------------------------
+describe("AC5 — the recovery pair acts on the row the page resolved", () => {
+  it("the loader mints the selector from the RESOLVED row, not from a client hint", () => {
+    expect(SCREEN).toMatch(
+      /import \{[^}]*\blifecycleRowSelectorFor\b[^}]*\} from "\.\.\/lifecycle-target-resolver"/,
+    );
+    // From `resolution.row` — the row `describeLifecycleCapabilities` returned.
+    expect(SCREEN).toMatch(
+      /const lifecycleRowSelector\s*=\s*resolution\.ok\s*\?\s*lifecycleRowSelectorFor\(resolution\.row\)/,
+    );
+  });
+
+  it("both recovery actions carry it", () => {
+    expect(SCREEN).toMatch(
+      /retryExtensionActivationFormAction\(\{[^}]*rowSelector:\s*lifecycleRowSelector/,
+    );
+    expect(SCREEN).toMatch(
+      /rollBackExtensionToBundledFormAction\(\{[^}]*rowSelector:\s*lifecycleRowSelector/,
+    );
+  });
+
+  it("both actions feed the VALIDATED selector to the ENFORCING resolver", () => {
+    // Not a local re-implementation, and not the raw wire value: the selector
+    // handed to `resolveLifecycleTargetRow` is the one
+    // `validateLifecycleRowSelectorInput` returned, and that resolver
+    // recomputes the addressable set from the ACTOR and only then filters it by
+    // the named tier.
+    const calls = [
+      ...ACTIONS.matchAll(
+        /resolveLifecycleTargetRow\(\s*input\.packageName,\s*actor,\s*selector\.selector,\s*\)/g,
+      ),
+    ];
+    expect(calls.length).toBe(2);
+    // The raw parameter never reaches the resolver.
+    expect(ACTIONS).not.toMatch(/resolveLifecycleTargetRow\([^)]*input\.rowSelector/);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE REAL BOUNDARY (round-5 convergence).
+  //
+  // This block used to assert that no selector is read off `formData` — the
+  // WRONG boundary. Both recovery actions are EXPORTED from a `"use server"`
+  // module, so `rowSelector` is already a client-invokable RPC payload whether
+  // or not any form carries it: a direct invocation supplies it straight. The
+  // structural claim worth pinning is therefore not "the client cannot name a
+  // row" (false) but "every path into these actions passes the enforcement
+  // chain": admin session → shape validation → actor-bounded resolution.
+  //
+  // The BEHAVIOURAL half of this — a forged selector cannot reach a row outside
+  // the actor's addressable set, and a malformed one is refused — is pinned in
+  // `recovery-actions.test.ts`, which drives the exported actions directly with
+  // the resolver unmocked. These are the structural companions: an omission a
+  // behavioural test cannot see, because the action is correct for every input
+  // that happens to be well-formed.
+  // -------------------------------------------------------------------------
+  it("both actions gate on an ADMIN SESSION first — the outermost bound", () => {
+    // The selector can only ever narrow among the rows the ACTOR addresses, so
+    // "who is the actor" has to be settled before anything else runs.
+    for (const name of [
+      "retryExtensionActivationFormAction",
+      "rollBackExtensionToBundledFormAction",
+    ]) {
+      const body = ACTIONS.slice(ACTIONS.indexOf(`export async function ${name}`));
+      const session = body.indexOf("await requireAdminSession()");
+      expect(session).toBeGreaterThan(-1);
+      expect(session).toBeLessThan(body.indexOf("validateLifecycleRowSelectorInput("));
+      expect(session).toBeLessThan(body.indexOf("buildLifecycleActorFromSession("));
+    }
+  });
+
+  it("both actions VALIDATE the selector before it reaches the resolver", () => {
+    // A type annotation declares the shape of an RPC parameter; it does not
+    // check it. Each action must call the validator and refuse on a bad shape.
+    const calls = [...ACTIONS.matchAll(/validateLifecycleRowSelectorInput\(input\.rowSelector\)/g)];
+    expect(calls.length).toBe(2);
+    const refusals = [...ACTIONS.matchAll(/if \(!selector\.ok\) \{/g)];
+    expect(refusals.length).toBe(2);
+    // …and the validation precedes the resolution in both bodies.
+    for (const name of [
+      "retryExtensionActivationFormAction",
+      "rollBackExtensionToBundledFormAction",
+    ]) {
+      const body = ACTIONS.slice(ACTIONS.indexOf(`export async function ${name}`));
+      expect(body.indexOf("validateLifecycleRowSelectorInput(")).toBeLessThan(
+        body.indexOf("resolveLifecycleTargetRow("),
+      );
+    }
+  });
+
+  it("the refusal is ATTRIBUTABLE, not a bare throw", () => {
+    // A thrown error on a Next server action reaches the client masked, so a
+    // bad payload would be indistinguishable from a server fault. Both actions
+    // log the validator's reason and RETURN the classified failure.
+    const calls = [
+      ...ACTIONS.matchAll(
+        /logMarketplaceFailureForOperator\(\s*"(?:retry-activation|roll-back-to-bundled)",\s*input\.packageName,\s*"unrecoverable",\s*selector\.reason,\s*\)/g,
+      ),
+    ];
+    expect(calls.length).toBe(2);
+  });
+
+  it("the SCREEN still mints server-side — it is the only legitimate producer", () => {
+    // Not a security boundary (see above), but it is what makes the ordinary
+    // product path address the row the page described: the screen never builds
+    // a selector from a client value, and never reads one off form data.
+    expect(SCREEN).not.toMatch(/formData\.get\(\s*["'][^"']*[Ss]elector/);
+    expect(SCREEN).not.toMatch(/ownerLevel:\s*(?!\w)/);
+  });
+
+  it("the view never sees the selector — it is not presentational data", () => {
+    expect(VIEW).not.toContain("rowSelector");
+    expect(VIEW).not.toContain("ownerLevel");
   });
 });

@@ -30,6 +30,7 @@ import {
   VALID_SETTINGS_KINDS,
   canPublishToMarketplace,
   isRegisteredMarketplaceVendor,
+  resolveServingState,
   resolveSettingsAffordances,
   resolveUpdateRow,
 } from "./extension-settings-model";
@@ -44,6 +45,8 @@ import {
   forceDeleteExtensionPackageFormAction,
   promoteExtensionToPublicAction,
   reinstallLatestFormAction,
+  retryExtensionActivationFormAction,
+  rollBackExtensionToBundledFormAction,
   restoreExtensionPackageFormAction,
 } from "../actions";
 // cinatra#2416 — the per-affordance capability comes from the module that
@@ -51,7 +54,10 @@ import {
 // actions use. Nothing about the addressing rule is re-derived here or shipped
 // to the client.
 import { buildLifecycleActorFromSession } from "../lifecycle-actor";
-import { describeLifecycleCapabilities } from "../lifecycle-target-resolver";
+import {
+  describeLifecycleCapabilities,
+  lifecycleRowSelectorFor,
+} from "../lifecycle-target-resolver";
 import { ExtensionAccessControl } from "./extension-access-control";
 import { ExtensionSettingsView } from "./extension-settings-view";
 
@@ -94,7 +100,7 @@ export async function ExtensionSettingsScreen({
       })
     ).find((r) => r.packageName === packageName) ?? null;
   const latestVersion = updateReadout?.entry?.latestVersion ?? null;
-  const updateRow = resolveUpdateRow({
+  const updateRowInput = {
     state: deriveInstalledUpdateChipState({
       installedVersion: rawVersion,
       latestVersion,
@@ -103,7 +109,7 @@ export async function ExtensionSettingsScreen({
     }),
     installedVersion: rawVersion,
     latestVersion,
-  });
+  };
 
   const isArchived = row.status === "archived";
   const isPublic = row.visibility === "public";
@@ -145,6 +151,43 @@ export async function ExtensionSettingsScreen({
     ? resolution.row.status === "archived"
     : isArchived;
 
+  // cinatra#2762: which implementation this package is ACTUALLY serving from,
+  // and at which version. `installed_extension.status` is the LIFECYCLE fact —
+  // it says an operator has not archived the row, never that the row's code
+  // registered — so a live install that activation refused reads "active" here
+  // while the image's copy serves every request. The activation seams record the
+  // runtime fact; this reads it.
+  //
+  // Whether the addressed row is a PRODUCT INSTALL at all is the first gate: a
+  // bundled anchor IS the image's copy and can never disagree with it. Both
+  // facts are derived server-side, never from a client hint.
+  const effectiveSource = (lifecycleRow ?? canonical)?.source as
+    | { type?: string }
+    | null
+    | undefined;
+  const isProductInstall = effectiveSource?.type === "verdaccio";
+  // Best-effort by design: a read failure or a process that never ran a loader
+  // leaves this null, and `resolveServingState` then names nothing rather than
+  // accusing a healthy install. Never blanks the page.
+  const servingProvenance = isProductInstall
+    ? await (async () => {
+        try {
+          const { readServingRecord } = await import(
+            "@/lib/extension-capabilities-registry"
+          );
+          return readServingRecord(packageName);
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+  const servingState = resolveServingState({
+    installedVersion: lifecycleRow?.version ?? rawVersion,
+    serving: servingProvenance,
+    isProductInstall,
+    isArchived: lifecycleIsArchived,
+  });
+
   // The PACKAGE-WIDE locked/system invariant, which is a different row from the
   // target: `assertNoLockedCanonicalRow` refuses when ANY canonical row for the
   // package is locked, in any scope. `lockedRow` is that row (scope-blind, from
@@ -153,6 +196,13 @@ export async function ExtensionSettingsScreen({
   // locked-first among the identities visible to this session.
   const lifecycleLockedRow =
     lockedRow ?? (canonical?.status === "locked" ? canonical : null);
+
+  // cinatra#2762: the Update row stops calling the installed version "current"
+  // when it is not the version in service, and says both instead.
+  const updateRow = resolveUpdateRow({
+    ...updateRowInput,
+    servingVersion: servingState.named ? servingState.servingVersion : null,
+  });
 
   // Locked / system disabled-action reasons (#1036 mechanism) → the capability
   // verdict → status/version fallbacks (complementary Archive/Activate;
@@ -169,6 +219,9 @@ export async function ExtensionSettingsScreen({
     isArchived: lifecycleIsArchived,
     versionKnown,
     capabilities,
+    // cinatra#2762: "Already active" is a statement about the lifecycle row. When
+    // that row is live but is NOT what is serving, it is the wrong statement.
+    activateNotInServiceReason: servingState.named ? servingState.activateReason : null,
   });
 
   // Server actions — identity baked into the closure, each returning void so
@@ -177,6 +230,27 @@ export async function ExtensionSettingsScreen({
   // NOTE (cinatra#1041): no update action — the §V Maintenance · Update row's
   // live button is a LINK opening the §II detail-modal update flow on the
   // Installed page; the update runs only there (dry-run plan → admin confirm).
+  // cinatra#2762: which recovery affordances this package can offer.
+  //
+  // Retry activation only means something for a PRODUCT install: the copy that
+  // ships in the image has no install row to re-activate. Roll back additionally
+  // needs the image to actually carry a version to fall back to, which is what
+  // the generated static manifest records. Both are derived server-side from
+  // facts, never from a client hint.
+  const bundledFallbackAvailable = await (async () => {
+    if (!isProductInstall) return false;
+    try {
+      const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+      return Boolean(STATIC_EXTENSION_MANIFEST[packageName]);
+    } catch {
+      return false;
+    }
+  })();
+  const recovery = {
+    showRetryActivation: isProductInstall && !lifecycleIsArchived,
+    showRollBackToBundled: isProductInstall && !lifecycleIsArchived && bundledFallbackAvailable,
+  };
+
   async function archiveAction() {
     "use server";
     // cinatra#1061: RETURN (not await-and-drop) so the classified removal
@@ -191,6 +265,41 @@ export async function ExtensionSettingsScreen({
   async function reinstallAction() {
     "use server";
     await reinstallLatestFormAction({ packageName });
+  }
+  // cinatra#2762 recovery pair. Both RETURN on failure (like archive) so the
+  // client renders what actually happened instead of a masked thrown error.
+  //
+  // ROW-BOUND (round 5). Both carry the anchor TIER of the row this page just
+  // described, so the action addresses the row the operator was LOOKING AT.
+  // Without it the actions re-resolved from the package name alone, and a
+  // package holding a bundled anchor beside an install — which is every package
+  // that ships in the image and was then installed from the marketplace, and is
+  // exactly what a completed rollback leaves behind — could resolve differently
+  // than the page did.
+  //
+  // The selector is MINTED HERE, server-side, from `resolution.row` and closed
+  // over: it never crosses to the client, and no client can name a row. It names
+  // a TIER, not an id, and it cannot widen reach — the resolver recomputes the
+  // addressable set from the actor and only then filters by the tier. When the
+  // page could not resolve a row at all (`resolution.ok === false`) there is no
+  // row to name, so the actions fall back to the unselected addressing and
+  // report the resolver's own refusal, exactly as before.
+  const lifecycleRowSelector = resolution.ok
+    ? lifecycleRowSelectorFor(resolution.row)
+    : null;
+  async function retryActivationAction() {
+    "use server";
+    return retryExtensionActivationFormAction({
+      packageName,
+      rowSelector: lifecycleRowSelector,
+    });
+  }
+  async function rollBackToBundledAction() {
+    "use server";
+    return rollBackExtensionToBundledFormAction({
+      packageName,
+      rowSelector: lifecycleRowSelector,
+    });
   }
   async function publishAction() {
     "use server";
@@ -352,11 +461,13 @@ export async function ExtensionSettingsScreen({
       displayName={row.displayName}
       vendor={row.vendor}
       updateRow={updateRow}
+      servingState={servingState}
       archiveDisabled={archiveDisabled}
       activateDisabled={activateDisabled}
       reinstallDisabled={reinstallDisabled}
       forceDeleteDisabled={forceDeleteDisabled}
       lifecycleCapabilityReasons={capabilityReasons}
+      recovery={recovery}
       archiveDependents={archiveDependents}
       isPublic={isPublic}
       isRegisteredVendor={isRegisteredVendor}
@@ -367,6 +478,8 @@ export async function ExtensionSettingsScreen({
       actions={{
         archive: archiveAction,
         activate: activateAction,
+        retryActivation: retryActivationAction,
+        rollBackToBundled: rollBackToBundledAction,
         reinstall: reinstallAction,
         publish: publishAction,
         forceDelete: forceDeleteAction,
