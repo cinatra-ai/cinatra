@@ -14,7 +14,7 @@ persisted thread id: 51b03cb6-1b2a-40f8-a068-cc35fc885777
 slackMode===false: true (persisted slackMode=false)
 taggedAssistantUserIds: [] (empty — the driving message names nobody)
 parts.length>0: true (parts=2)
-assistant dataParts: [{"ref":"fhARuSE_TQRPZybx___0v_Y7QwzSXTuhLoKe5S2NUVKSun7YLx4M27AKdcm5Qi3dKCkFZ_Z5ufhvEQTpIRY4b7gDyiKrduKETS-N7W1W2ysJwNfOCiRIMjQQL3-S9Rkx08NE4ax2T42CAxWXtarf1sYafCfahOjNY_R8GBwBZ_GXrCNsyJJ9H4ftwSP_5XqHDPxpJAiZEs9L7f_oec_SMkLTF7046_AnShrSBh8Xa2Q2bqRKjrgr6zvQ2NZZG-QbJX6M8G_rQ4tRMM3KFS4F6x-9uXvywtV3fKr3Hw8eo4vDJmJv","viewType":"trigger_schedule_proposal","schemaVersion":1}]
+assistant dataParts: [{"ref":"fhARuSE_TQRPZybx___0v_Y7… (304 chars)","viewType":"trigger_schedule_proposal","schemaVersion":1}]
 conversationList present: true
 composer visible (in frame): true
 

@@ -126,7 +126,13 @@ say(`persisted thread id: ${thread?.id ?? "<none>"}`);
 say(`slackMode===false: ${slackMode === false} (persisted slackMode=${JSON.stringify(slackMode)})`);
 say(`taggedAssistantUserIds: ${JSON.stringify(taggedAssistants)} (empty — the driving message names nobody)`);
 say(`parts.length>0: ${partsLength > 0} (parts=${partsLength})`);
-say(`assistant dataParts: ${JSON.stringify(dataParts)}`);
+// The proposal `ref` is an opaque handle, not a reading. Echo it the way proof
+// (b) echoes its verification ref — a short prefix and the length — so the log
+// still shows one was issued without printing the whole handle.
+const loggedDataParts = dataParts.map((p) =>
+  typeof p?.ref === "string" ? { ...p, ref: `${p.ref.slice(0, 24)}… (${p.ref.length} chars)` } : p,
+);
+say(`assistant dataParts: ${JSON.stringify(loggedDataParts)}`);
 const layout = await page.evaluate(() => ({
   conversationList: Boolean(document.querySelector("[data-conversation-list]")),
   composerVisible: Boolean(document.querySelector('textarea, [contenteditable="true"]')),
