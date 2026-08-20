@@ -1810,51 +1810,104 @@ export function toolCallIdsOf(message: unknown): Set<string> {
 }
 
 /**
- * Fold the run-bound durable turns that carry lifecycle render state into the
- * legacy-mirror spine. See `assembleThreadPayloadFromParts` for the rule and why
- * every clause of it is narrow.
- *
- * COPY-ON-WRITE, never in place. The spine messages are the caller's own turn
- * `content` objects, and this function is reachable from an EXPORTED pure
- * assembler that other suites call with literals; a repaired message is a fresh
- * object so nothing a caller still holds is edited behind its back. A thread with
- * nothing to fold in returns the SAME array it was given, so the common path
- * allocates nothing.
- *
- * Ordered by `createdAt` then `id` so the append order is the order the SERVER
- * recorded the turns in, and so two rows created in the same millisecond still
- * have one deterministic order rather than the query's incidental one.
+ * The lifecycle VIEW REFS a message's `dataParts` carry, as `viewType|ref` pairs
+ * — a renderable card's identity. Structural data parts (`agent_run`,
+ * `citations`) carry no `viewType` and are not view refs.
  */
-function foldDurableLifecycleTurnsInto(
-  messages: Array<Record<string, unknown>>,
-  turns: AssistantTurn[],
-): Array<Record<string, unknown>> {
-  const durableTurns = turns
-    .filter((t) => t.content !== null && t.runId !== null)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  if (durableTurns.length === 0) return messages;
-
-  let folded = messages;
-  for (const turn of durableTurns) {
-    const projected = projectDurableAssistantTurn(turn.id, turn.content);
-    if (projected === null) continue;
-    if (!carriesLifecycleRenderState(projected)) continue;
-    const index = findCoveringSpineIndex(folded, projected);
-    if (index === -1) {
-      folded = folded === messages ? [...messages] : folded;
-      folded.push(projected as unknown as Record<string, unknown>);
-      continue;
-    }
-    const repaired = repairedSpineMessage(folded[index], projected);
-    if (repaired === folded[index]) continue; // nothing was owed
-    folded = folded === messages ? [...messages] : folded;
-    folded[index] = repaired;
+function lifecycleViewRefsOf(dataParts: unknown): Set<string> {
+  const refs = new Set<string>();
+  if (!Array.isArray(dataParts)) return refs;
+  for (const raw of dataParts) {
+    if (!isRecord(raw)) continue;
+    const viewType = stringOrNull(raw.viewType);
+    const ref = stringOrNull(raw.ref);
+    if (viewType === null || viewType.length === 0 || ref === null) continue;
+    refs.add(`${viewType}|${ref}`);
   }
-  return folded;
+  return refs;
 }
 
-/** The index of the spine message that is THIS turn, identified by a shared
- *  server-minted tool-call id, or -1 when the spine does not carry the turn. */
+/** The runs a message's render trace has PINNED, keyed by tool-call id. */
+function pinnedRunsOf(message: unknown): Map<string, string> {
+  const runs = new Map<string, string>();
+  if (!isRecord(message)) return runs;
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  for (const part of parts) {
+    if (!isRecord(part)) continue;
+    if (part.kind !== "tool_call") continue;
+    const id = stringOrNull(part.id);
+    const runId = stringOrNull(part.runId);
+    if (id === null || runId === null || runId.length === 0) continue;
+    runs.set(id, runId);
+  }
+  return runs;
+}
+
+/**
+ * Does this spine message CONTRADICT the durable turn — does it share a
+ * tool-call id and yet carry state that says it cannot be the same turn?
+ *
+ * Both contradictions are over SERVER-MINTED state that reaches the client
+ * verbatim on the wire, so for one tool call it cannot legitimately differ:
+ *
+ *   * the SAME tool call is pinned to a DIFFERENT run;
+ *   * both sides carry lifecycle view refs and they share NONE — the reader's
+ *     message is showing a different card entirely.
+ *
+ * A side that is merely SILENT (no pin, no views) contradicts nothing: silence
+ * is exactly the dropped save this fold-in exists to repair.
+ */
+function contradictsDurableTurn(
+  spine: Record<string, unknown>,
+  projected: ProjectedAssistantTurn,
+): boolean {
+  const durableRuns = pinnedRunsOf(projected);
+  for (const [callId, runId] of pinnedRunsOf(spine)) {
+    const durableRunId = durableRuns.get(callId);
+    if (durableRunId !== undefined && durableRunId !== runId) return true;
+  }
+  const spineRefs = lifecycleViewRefsOf(spine.dataParts);
+  if (spineRefs.size === 0) return false;
+  const durableRefs = lifecycleViewRefsOf(projected.dataParts);
+  if (durableRefs.size === 0) return false;
+  for (const ref of durableRefs) {
+    if (spineRefs.has(ref)) return false;
+  }
+  return true;
+}
+
+/**
+ * The index of the spine message that is THIS turn, identified by a shared
+ * server-minted tool-call id, or -1 when the spine does not carry the turn.
+ *
+ * A CORROBORATED match, not a bare id hit (cinatra#2823 codex round 2). The ids
+ * on the SPINE side are read off content the CLIENT wrote — the whole-transcript
+ * save is the client's own transcript — so a shared id is a claim, not a proof,
+ * and being wrong about it means one turn's card or run pin landing on another
+ * message. Two guards make the claim carry its own corroboration:
+ *
+ *   (a) AMBIGUITY IS NOT A LICENSE. If MORE THAN ONE spine message claims a
+ *       matching id, no repair is made — the turn is treated as one the spine
+ *       does not carry and folded in on its own. Picking the first of two
+ *       claimants would be picking by iteration order.
+ *   (b) CONTRADICTION VOIDS THE MATCH. If the one claimant already carries a
+ *       DIFFERENT run pin for a shared call, or a disjoint set of lifecycle view
+ *       refs, it is not this turn (`contradictsDurableTurn`) and the match is
+ *       refused.
+ *
+ * In both refusals the durable turn is still folded in POSITIONALLY rather than
+ * dropped: the server's own record of the turn is the one thing here that cannot
+ * be re-derived, so a spine message that fails to corroborate must never be able
+ * to SUPPRESS it — refusing a match costs a duplicate-looking turn, dropping one
+ * costs the card this whole leg exists to bring back.
+ *
+ * THE REMAINING TRUST BOUNDARY, stated plainly. This does not authenticate the
+ * spine; it cannot. The reconstruction query is THREAD-SCOPED and a repair only
+ * ever fills state that is ABSENT, so the reach of a lie is one reader's own
+ * thread, and the worst a lie buys is a DECLINED repair of that reader's own
+ * turn: a client that lies about its own transcript loses its own card. That is
+ * self-harm, and the server does not chase it.
+ */
 function findCoveringSpineIndex(
   messages: Array<Record<string, unknown>>,
   projected: ProjectedAssistantTurn,
@@ -1864,13 +1917,156 @@ function findCoveringSpineIndex(
   // one always carries the call it came from. A durable turn with no call at all
   // therefore has no shared key, and is treated as one the spine does not have.
   if (durableIds.size === 0) return -1;
+  let claimant = -1;
   for (let i = 0; i < messages.length; i += 1) {
     if (messages[i].role !== "assistant") continue;
+    let shares = false;
     for (const id of toolCallIdsOf(messages[i])) {
-      if (durableIds.has(id)) return i;
+      if (durableIds.has(id)) {
+        shares = true;
+        break;
+      }
     }
+    if (!shares) continue;
+    if (claimant !== -1) return -1; // (a) two claimants — ambiguous, no repair
+    claimant = i;
   }
-  return -1;
+  if (claimant === -1) return -1;
+  if (contradictsDurableTurn(messages[claimant], projected)) return -1; // (b)
+  return claimant;
+}
+
+/** One run-bound durable turn that is a candidate for the fold-in, with the
+ *  spine message it matched (-1 == the spine does not carry the turn). */
+type DurableFoldCandidate = {
+  turn: AssistantTurn;
+  projected: ProjectedAssistantTurn;
+  covering: number;
+};
+
+/**
+ * The key that groups candidates which are THE SAME TURN: the covering spine
+ * message when one was corroborated, and otherwise the turn's lowest tool-call
+ * id — the server-minted key two rows for one turn would share. A turn carrying
+ * no tool call at all groups alone, under its own row id.
+ */
+function durableFoldGroupKey(candidate: DurableFoldCandidate): string {
+  if (candidate.covering >= 0) return `spine#${candidate.covering}`;
+  const ids = [...toolCallIdsOf(candidate.projected)].sort();
+  return ids.length > 0 ? `call#${ids[0]}` : `turn#${candidate.turn.id}`;
+}
+
+/**
+ * Where a durable turn the spine does NOT carry belongs, by SERVER TIME.
+ *
+ * `stamps` is the spine's own per-message server timestamps in spine (ordinal)
+ * order — the `assistant_turns.created_at` of each mirror row, which the mirror
+ * reconcile's `ON CONFLICT ... DO UPDATE` deliberately does not touch, so it
+ * stays the moment that message FIRST became durable. The turn is placed after
+ * the LAST spine message whose stamp does not follow it.
+ *
+ * WHY POSITIONALLY AND NOT AT THE TAIL. The tail is only right if the spine is a
+ * PREFIX of the conversation, and nothing enforces that: the whole-transcript
+ * save is last-writer-wins, so a stale tab can post a transcript that OMITS a
+ * middle turn while carrying later ones, and the mirror reconcile will delete
+ * the omitted row. Appending then puts a turn from the middle of the
+ * conversation after messages that followed it.
+ *
+ * NOT A RE-SORT. The spine's own order is `ordinal` and is never disturbed; this
+ * only chooses an insertion point among it. When no spine message carries a
+ * usable timestamp at all there is nothing to place against and the turn goes to
+ * the TAIL — the prior behaviour, kept as the floor.
+ */
+function insertionIndexByServerTime(stamps: Array<string | null>, createdAt: string): number {
+  let index = -1;
+  let placeable = false;
+  for (let i = 0; i < stamps.length; i += 1) {
+    const at = stamps[i];
+    if (at === null || at.length === 0) continue;
+    placeable = true;
+    if (at.localeCompare(createdAt) <= 0) index = i;
+  }
+  if (!placeable) return stamps.length;
+  return index + 1;
+}
+
+/**
+ * Fold the run-bound durable turns that carry lifecycle render state into the
+ * legacy-mirror spine. See `assembleThreadPayloadFromParts` for the rule and why
+ * every clause of it is narrow.
+ *
+ * COPY-ON-WRITE, never in place. The spine messages are the caller's own turn
+ * `content` objects, and this function is reachable from an EXPORTED pure
+ * assembler that other suites call with literals; a repaired message is a fresh
+ * object so nothing a caller still holds is edited behind its back.
+ *
+ * THREE PASSES, in this order, because each needs the one before it settled:
+ *
+ *   1. MATCH. Every candidate is matched against the ORIGINAL spine. Matching
+ *      after a fold-in would let one folded turn become the covering target of
+ *      the next — a claim the spine itself never made.
+ *   2. ELECT. Candidates are grouped by what they cover (`durableFoldGroupKey`)
+ *      and exactly ONE is elected per group: the LATEST, by (`created_at`,
+ *      `id`). Two rows carrying one turn's state are two server records of the
+ *      same thing and the NEWEST is the honest one to repair from. What stood
+ *      here before elected whichever row the loop reached first, which is
+ *      earliest-wins by accident rather than by decision.
+ *   3. APPLY. Repairs first — a repair replaces a message and cannot move one,
+ *      so every matched index stays valid — then the positional fold-ins, in
+ *      (`created_at`, `id`) order so each is placed against the ones already in.
+ *
+ * Ordered by `createdAt` then `id`: `created_at` is the order the SERVER recorded
+ * the turns in, and `id` is a TIE-BREAK ONLY — a run-bound turn's id is a random
+ * UUID (`appendAssistantTurn`), so for two rows written in the same millisecond
+ * it buys DETERMINISM, not insertion order. Nothing in the run-bound
+ * representation records insertion order at all (`ordinal` belongs to the mirror
+ * and is NULL on these rows), so determinism is the whole of what is on offer.
+ */
+function foldDurableLifecycleTurnsInto(
+  spine: AssistantTurn[],
+  turns: AssistantTurn[],
+): Array<Record<string, unknown>> {
+  const messages = spine.map((t) => t.content as Record<string, unknown>);
+  const durableTurns = turns
+    .filter((t) => t.content !== null && t.runId !== null)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  if (durableTurns.length === 0) return messages;
+
+  // 1. MATCH — against the original spine, before anything is folded in.
+  const candidates: DurableFoldCandidate[] = [];
+  for (const turn of durableTurns) {
+    const projected = projectDurableAssistantTurn(turn.id, turn.content);
+    if (projected === null) continue;
+    if (!carriesLifecycleRenderState(projected)) continue;
+    candidates.push({ turn, projected, covering: findCoveringSpineIndex(messages, projected) });
+  }
+  if (candidates.length === 0) return messages;
+
+  // 2. ELECT — one per covering target, latest-wins. The candidates are already
+  //    in ascending (created_at, id) order, so the last write to a key is it.
+  const elected = new Map<string, DurableFoldCandidate>();
+  for (const candidate of candidates) elected.set(durableFoldGroupKey(candidate), candidate);
+  const winners = candidates.filter((c) => elected.get(durableFoldGroupKey(c)) === c);
+
+  // 3. APPLY — repairs (index-preserving), then the positional fold-ins.
+  let folded = messages;
+  for (const winner of winners) {
+    if (winner.covering < 0) continue;
+    const repaired = repairedSpineMessage(folded[winner.covering], winner.projected);
+    if (repaired === folded[winner.covering]) continue; // nothing was owed
+    folded = folded === messages ? [...messages] : folded;
+    folded[winner.covering] = repaired;
+  }
+  const uncovered = winners.filter((w) => w.covering < 0);
+  if (uncovered.length === 0) return folded;
+  folded = folded === messages ? [...messages] : folded;
+  const stamps: Array<string | null> = spine.map((t) => t.createdAt || null);
+  for (const winner of uncovered) {
+    const at = insertionIndexByServerTime(stamps, winner.turn.createdAt);
+    folded.splice(at, 0, winner.projected as unknown as Record<string, unknown>);
+    stamps.splice(at, 0, winner.turn.createdAt || null);
+  }
+  return folded;
 }
 
 /**
@@ -1878,8 +2074,15 @@ function findCoveringSpineIndex(
  *
  * The spine message is what the reader last saw, so it wins wherever it has an
  * answer: a save that DID carry the views is left exactly as it is. Only an
- * absent view list and an unpinned run are filled in — the two things a dropped
+ * ABSENT view list and an unpinned run are filled in — the two things a dropped
  * save costs, and the two things the server's own record can restore.
+ *
+ * ABSENT, NOT EMPTY. `dataParts: []` is a reader that persisted "this turn has
+ * no views", and it is left alone; only a message with no `dataParts` KEY has an
+ * unanswered question for the server to answer. Own-property presence is the
+ * test — the same presence-gating discipline `extractPausedParticipantsFromThread`
+ * uses for the pause set, and for the same reason: a partial write must never be
+ * read as a positive assertion, nor an explicit one as a gap.
  *
  * Returns the SAME object when nothing was owed, which is what lets the caller
  * leave the transcript untouched instead of rebuilding an identical one.
@@ -1888,8 +2091,9 @@ function repairedSpineMessage(
   spine: Record<string, unknown>,
   projected: ProjectedAssistantTurn,
 ): Record<string, unknown> {
-  const spineViews = Array.isArray(spine.dataParts) ? spine.dataParts : [];
-  const owesViews = spineViews.length === 0 && (projected.dataParts?.length ?? 0) > 0;
+  const carriesOwnViews =
+    Object.prototype.hasOwnProperty.call(spine, "dataParts") && spine.dataParts !== undefined;
+  const owesViews = !carriesOwnViews && (projected.dataParts?.length ?? 0) > 0;
 
   const runIdByCall = new Map<string, string>();
   for (const durablePart of projected.parts ?? []) {
@@ -1955,15 +2159,24 @@ function repairedSpineMessage(
  *     writers share no key — the mirror row's id is built from the CLIENT's
  *     message id and the run-bound row's is the turn's — but they do share the
  *     SERVER-minted tool-call ids, which reach the client on the wire. A spine
- *     message sharing a tool-call id with a durable turn IS that turn, and the
- *     fold-in then adds only what the save dropped (the views, the pinned run)
- *     and touches nothing else.
- *   * A turn the spine does NOT carry is APPENDED, in `created_at` order. That
- *     is the correct position and not merely a convenient one: every save posts
- *     the WHOLE transcript, so the spine is always a PREFIX of the conversation
- *     — the only turns it can be missing are the ones after the last save that
- *     landed. Appending them in the order the server recorded them restores the
- *     conversation's real order.
+ *     message sharing a tool-call id with a durable turn is that turn PROVIDED
+ *     it corroborates the claim: the spine side of that id is content the client
+ *     wrote, so an AMBIGUOUS match (two claimants) or a CONTRADICTORY one (a
+ *     different run pinned on the shared call, disjoint view refs) is refused
+ *     rather than repaired — see `findCoveringSpineIndex`, which also states the
+ *     trust boundary that remains. A corroborated match adds only what the save
+ *     dropped (the views, the pinned run) and touches nothing else.
+ *   * A turn the spine does NOT carry is folded in POSITIONALLY, by the server's
+ *     `created_at` measured against the spine's own row timestamps. The tail
+ *     would be right only if the spine were always a PREFIX of the conversation,
+ *     and nothing enforces that: the whole-transcript save is last-writer-wins,
+ *     so a stale tab can post a transcript that omits a middle turn while
+ *     carrying later ones — and the mirror reconcile deletes the omitted row.
+ *     Placing by server time is the real position in that case and the same
+ *     position as the tail in the ordinary one (`insertionIndexByServerTime`).
+ *   * When two run-bound rows carry ONE turn's state, exactly one is elected —
+ *     the LATEST, as the newest server record — never whichever the loop reached
+ *     first (`foldDurableLifecycleTurnsInto`, pass 2).
  *
  * THE BOUND, stated: this repairs what the SERVER wrote down. A turn whose
  * run-bound row was never written (a run that died before its terminal) is not
@@ -1988,10 +2201,10 @@ export function assembleThreadPayloadFromParts(
   );
   if (contentTurns.length === 0) return null; // pre-cutover: no durable /chat content
 
-  const messages = foldDurableLifecycleTurnsInto(
-    contentTurns.map((t) => t.content as Record<string, unknown>),
-    turns,
-  );
+  // The spine ROWS, not just their content: the fold-in places a turn the spine
+  // does not carry against the spine's own `created_at` stamps, which live on
+  // the rows (`UiMessage` carries no timestamp of its own).
+  const messages = foldDurableLifecycleTurnsInto(contentTurns, turns);
 
   const payload: Record<string, unknown> = {
     // Durable render-state scalars, reconstructed directly; modeled fields below

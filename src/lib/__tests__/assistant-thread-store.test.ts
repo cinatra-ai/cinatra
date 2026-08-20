@@ -502,13 +502,14 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
   });
 
   it("NEVER overwrites a view the spine already carries", () => {
-    const spineView = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "the-one-on-screen" };
+    // The reader's save DID land with the view on it — the SAME view the server
+    // recorded, because both sides read it off the same wire.
     const spineAssistant = {
       id: "a1",
       role: "assistant",
       content: "here it is",
       parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
-      dataParts: [spineView],
+      dataParts: [{ ...REVIEW_VIEW }],
     };
     const payload = assembleThreadPayloadFromParts(
       baseThread,
@@ -519,10 +520,89 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
       [],
       null,
     );
-    expect((payload!.messages as Record<string, unknown>[])[0].dataParts).toEqual([spineView]);
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1); // repaired-or-left-alone, never doubled
+    // Nothing was owed, so the reader's own message object comes back untouched.
+    expect(messages[0]).toBe(spineAssistant);
   });
 
-  it("PINS a run on a spine tool call that lost it, and leaves a pinned one alone", () => {
+  it("PINS a run on a spine tool call that lost it, and leaves an already-pinned one alone", () => {
+    const durable = durableTurnContent({
+      parts: [
+        { type: "tool_call", id: "call-1", name: "agent_run" },
+        { type: "tool_result", id: "call-1", name: "agent_run", result: "{}" },
+        { type: "tool_call", id: "call-2", name: "agent_run" },
+      ],
+      dataParts: [
+        { kind: "agent_run", toolCallId: "call-1", runId: "run-A" },
+        { kind: "agent_run", toolCallId: "call-2", runId: "run-B" },
+      ],
+    });
+    // call-2 kept its pin through the save; call-1's was dropped. The pin the
+    // reader kept AGREES with the server's — both came off the same wire, and a
+    // pin that disagreed would mean this is not the same turn at all (below).
+    const alreadyPinned = {
+      kind: "tool_call",
+      id: "call-2",
+      name: "agent_run",
+      status: "completed",
+      runId: "run-B",
+    };
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "agent_run", status: "completed" }, alreadyPinned],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durable }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const parts = (payload!.messages as Record<string, unknown>[])[0].parts as Record<string, unknown>[];
+    expect(parts[0].runId).toBe("run-A"); // filled in
+    // The reader's own state wins: the pinned part is not even rewritten.
+    expect(parts[1]).toBe(alreadyPinned);
+  });
+
+  // ── F1: the tool-call match must corroborate before it repairs ────────────
+  // The spine side of a shared tool-call id is content the CLIENT wrote. A bare
+  // id hit is a claim; these three arms are the corroboration it has to pass.
+
+  it("REFUSES the repair when TWO spine messages claim the same tool-call id", () => {
+    const claimant = (id: string) => ({
+      id,
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+    });
+    const first = claimant("a1");
+    const second = claimant("a2");
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: first }),
+        turn({ id: "legacy:3:th1:a2", content: second }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // NEITHER claimant is repaired — picking one would be picking by iteration
+    // order — and the server's own record is folded in rather than dropped.
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toBe(first);
+    expect(messages[1]).toBe(second);
+    expect(messages[2].id).toBe("9f1e-uuid");
+    expect(messages[2].dataParts).toEqual([REVIEW_VIEW]);
+  });
+
+  it("REFUSES the repair when the covering spine message pins a DIFFERENT run on the shared call", () => {
     const durable = durableTurnContent({
       parts: [
         { type: "tool_call", id: "call-1", name: "agent_run" },
@@ -540,7 +620,9 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
       content: "here it is",
       parts: [
         { kind: "tool_call", id: "call-1", name: "agent_run", status: "completed" },
-        { kind: "tool_call", id: "call-2", name: "agent_run", status: "completed", runId: "already-pinned" },
+        // The same server-minted call, pinned to a run the server never recorded
+        // for it: whatever this message is, it is not this turn.
+        { kind: "tool_call", id: "call-2", name: "agent_run", status: "completed", runId: "some-other-run" },
       ],
     };
     const payload = assembleThreadPayloadFromParts(
@@ -552,9 +634,188 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
       [],
       null,
     );
-    const parts = (payload!.messages as Record<string, unknown>[])[0].parts as Record<string, unknown>[];
-    expect(parts[0].runId).toBe("run-A"); // filled in
-    expect(parts[1].runId).toBe("already-pinned"); // the reader's own state wins
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toBe(spineAssistant); // call-1 NOT pinned from this turn
+    const folded = messages[1].parts as Record<string, unknown>[];
+    expect(messages[1].id).toBe("9f1e-uuid"); // the server's record survives
+    expect(folded.find((p) => p.id === "call-1")!.runId).toBe("run-A");
+  });
+
+  it("REFUSES the repair when the covering spine message carries a DISJOINT view ref", () => {
+    const spineView = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "a-different-card" };
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        { kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" },
+        { kind: "tool_call", id: "call-9", name: "agent_run", status: "completed" },
+      ],
+      dataParts: [spineView],
+    };
+    const durable = durableTurnContent({
+      parts: [
+        { type: "tool_call", id: "call-1", name: "artifact_review_gate_render" },
+        { type: "tool_result", id: "call-1", name: "artifact_review_gate_render" },
+        { type: "tool_call", id: "call-9", name: "agent_run" },
+      ],
+      dataParts: [REVIEW_VIEW, { kind: "agent_run", toolCallId: "call-9", runId: "run-A" }],
+    });
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durable }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(2);
+    // The reader's message is untouched — not repaired, and NOT run-pinned
+    // either: a refused match refuses the whole repair, not just the views.
+    expect(messages[0]).toBe(spineAssistant);
+    expect(messages[1].dataParts).toEqual([REVIEW_VIEW]);
+  });
+
+  // ── F2: position by SERVER TIME, because the spine is not always a prefix ──
+
+  it("places an uncovered turn by SERVER TIME when the spine is NOT a prefix (stale save)", () => {
+    // A stale tab posted a whole transcript that omitted the assistant turn but
+    // carried a LATER user message; the mirror reconcile deleted the omitted
+    // row. The spine is now [10:00, 10:10] with a 10:05 turn missing from it.
+    const m1 = { id: "m1", role: "user", content: "make me a gate" };
+    const m3 = { id: "m3", role: "user", content: "and now something else" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          createdAt: "2026-07-10T10:05:00.000Z",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW] }),
+        }),
+        turn({ id: "legacy:3:th1:m1", role: "user", createdAt: "2026-07-10T10:00:00.000Z", content: m1 }),
+        turn({ id: "legacy:3:th1:m3", role: "user", createdAt: "2026-07-10T10:10:00.000Z", content: m3 }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // Its real position, NOT the tail: the turn happened before m3 and the
+    // server's own clock is the only record that still says so.
+    expect(messages.map((m) => m.id)).toEqual(["m1", "9f1e-uuid", "m3"]);
+  });
+
+  it("places an uncovered turn that PRECEDES the whole spine at the head", () => {
+    const m9 = { id: "m9", role: "user", content: "later" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          createdAt: "2026-07-10T09:00:00.000Z",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW] }),
+        }),
+        turn({ id: "legacy:3:th1:m9", role: "user", createdAt: "2026-07-10T10:00:00.000Z", content: m9 }),
+      ],
+      [],
+      null,
+    );
+    expect((payload!.messages as Record<string, unknown>[]).map((m) => m.id)).toEqual(["9f1e-uuid", "m9"]);
+  });
+
+  // ── F3: an explicitly EMPTY dataParts is an answer, not a gap ─────────────
+
+  it("leaves an explicitly EMPTY dataParts alone (absent is repairable; empty is the reader's answer)", () => {
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+      dataParts: [] as Record<string, unknown>[],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].dataParts).toEqual([]); // reader wins — nothing was owed
+    expect(messages[0]).toBe(spineAssistant);
+  });
+
+  // ── F5: two rows for one turn elect the LATEST, deliberately ─────────────
+
+  it("ELECTS the LATEST of two durable rows covering the same spine message", () => {
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+    };
+    const row = (id: string, createdAt: string, ref: string) =>
+      turn({
+        id,
+        runId: "run-1",
+        createdAt,
+        content: durableTurnContent({
+          dataParts: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref }],
+        }),
+      });
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        // Query order deliberately puts the EARLIER row second, so a fold-in
+        // that elected by iteration order would still pick "earlier" here.
+        row("turn-late", "2026-07-10T10:09:00.000Z", "the-newest-server-record"),
+        row("turn-early", "2026-07-10T10:01:00.000Z", "an-older-server-record"),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1); // one turn, one repair — not two
+    expect(messages[0].dataParts).toEqual([
+      { viewType: "artifact_review_gate", schemaVersion: 1, ref: "the-newest-server-record" },
+    ]);
+  });
+
+  it("ELECTS the LATEST of two durable rows the spine does not carry, folding in ONE", () => {
+    const m1 = { id: "m1", role: "user", content: "hi" };
+    const row = (id: string, createdAt: string, ref: string) =>
+      turn({
+        id,
+        runId: "run-1",
+        createdAt,
+        content: durableTurnContent({
+          dataParts: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref }],
+        }),
+      });
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        row("turn-late", "2026-07-10T10:09:00.000Z", "the-newest-server-record"),
+        row("turn-early", "2026-07-10T10:01:00.000Z", "an-older-server-record"),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: m1 }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(2); // the turn appears ONCE, not twice
+    expect(messages[1].id).toBe("turn-late");
+    expect(messages[1].dataParts).toEqual([
+      { viewType: "artifact_review_gate", schemaVersion: 1, ref: "the-newest-server-record" },
+    ]);
   });
 
   it("reconstructs messages losslessly from turn.content in the given (ordinal) order", () => {
