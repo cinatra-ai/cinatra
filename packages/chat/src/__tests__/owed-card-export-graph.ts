@@ -36,9 +36,12 @@
  * it, and each is named rather than implied:
  *
  *   · a specifier that is not a literal — `import(someVariable)`;
- *   · a re-export laundered through a value — `const X = Card; export { X }`,
- *     which no `export … from` statement records. `export default X` is NO
- *     LONGER in this class: the default route is walked, both hops of it;
+ *   · a re-export laundered through a value the analysis cannot follow to a
+ *     module — `const X = Card; export { X }`, where `Card` is a local binding
+ *     rather than a read off something imported. Two shapes have LEFT this
+ *     class: `export default X` (the default route is walked, both hops), and
+ *     `const X = ns.default` (a member read off a namespace import is walked
+ *     too, whatever property it names);
  *   · a module reached from outside this repo's two packages.
  *
  * The first two still have to write the owed symbol somewhere in the agents
@@ -129,6 +132,37 @@ const DEFAULT_EXPORT_RE = /export\s+default\s+(\w+)\s*;/g;
 /** Words that follow `export default` without naming a local binding. */
 const NOT_A_BINDING = new Set(["function", "class", "async", "new", "await", "typeof"]);
 
+/**
+ * THE NAMESPACE ROUTE — the same escape one level up, and the `default` slot is
+ * where it bites.
+ *
+ * `export * as NS from "…"` is already an edge: the namespace carries every
+ * owed name inside it, so the whole object is treated as owed. The INBOUND
+ * spelling of that statement was not:
+ *
+ *     import * as ns from "./default-hop";   // no braces, no `export … from`
+ *     export const Hold = ns.default;        // the owed card, under a third name
+ *
+ * `ns` binds a module rather than a name, so nothing in the named-binding walk
+ * or the default walk above records the hop, and `ns.default` reads an export
+ * that no clause ever spells. Three shapes are edges now, mirroring what the
+ * outbound star already does:
+ *
+ *   · `import * as ns` then `export { ns }` / `export default ns` — the WHOLE
+ *     namespace leaves, so it carries `*`, exactly as `export * as NS` does;
+ *   · `[export] const X = ns.NAME` — a property read off the namespace is the
+ *     same hop a named import would have been, `default` included;
+ *   · `export default ns.NAME` — the outbound half of that read.
+ *
+ * The member read is deliberately conservative: it fires only when the object
+ * is a namespace this file imported from a specifier that resolves INSIDE the
+ * analysed package, so `const x = React.useMemo` and every other member read in
+ * the tree is untouched.
+ */
+const NS_IMPORT_LOCAL_RE = /import\s*\*\s*as\s+(\w+)\s*from\s*["']([^"']+)["']/g;
+const NS_MEMBER_RE = /(export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(\w+)\s*\.\s*(\w+)/g;
+const DEFAULT_EXPORT_MEMBER_RE = /export\s+default\s+(\w+)\s*\.\s*(\w+)\s*;/g;
+
 function localReExportsOf(source: string): ReExport[] {
   const locals = new Map<string, { imported: string; spec: string }>();
   for (const m of source.matchAll(IMPORT_RE)) {
@@ -144,6 +178,30 @@ function localReExportsOf(source: string): ReExport[] {
     locals.set(m[1]!, { imported: "default", spec: m[2]! });
   }
   const out: ReExport[] = [];
+  // `import * as ns from "spec"` — the whole module under one local name. Sent
+  // on as a binding it carries everything the module owes, so it takes `*`.
+  const namespaces = new Map<string, string>();
+  for (const m of source.matchAll(NS_IMPORT_LOCAL_RE)) {
+    if (/import\s+type\s/.test(m[0])) continue;
+    namespaces.set(m[1]!, m[2]!);
+    locals.set(m[1]!, { imported: "*", spec: m[2]! });
+  }
+  // `const Hold = ns.default` — a property read off one of those namespaces is
+  // the hop a named import would have been. Exported in the same statement it
+  // is an edge outright; bound to a local it joins the same alias table the
+  // named and default routes are resolved through.
+  for (const m of source.matchAll(NS_MEMBER_RE)) {
+    const spec = namespaces.get(m[3]!);
+    if (spec === undefined) continue;
+    locals.set(m[2]!, { imported: m[4]!, spec });
+    if (m[1] !== undefined) out.push({ names: [{ imported: m[4]!, exported: m[2]! }], spec });
+  }
+  // `export default ns.default;` — the read and the outbound hop in one line.
+  for (const m of source.matchAll(DEFAULT_EXPORT_MEMBER_RE)) {
+    const spec = namespaces.get(m[1]!);
+    if (spec === undefined) continue;
+    out.push({ names: [{ imported: m[2]!, exported: "default" }], spec });
+  }
   for (const m of source.matchAll(BARE_EXPORT_RE)) {
     for (const { imported, exported } of parseSpecifiers(m[1]!)) {
       const via = locals.get(imported);

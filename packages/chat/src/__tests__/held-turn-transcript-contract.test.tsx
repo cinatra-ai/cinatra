@@ -1232,6 +1232,94 @@ describe("the re-export route, closed by REACHABILITY rather than by spelling", 
     ]);
   });
 
+  it("FOLLOWS the card laundered through `import * as` and a `ns.default` read", () => {
+    // The escape one level up from the default route: `ns` binds a MODULE, not
+    // a name, so `ns.default` reads an owed export that no `{ … }` clause and no
+    // `export … from` statement ever spells. Three ways out of the namespace,
+    // all of them laundering the same card.
+    const virtual: Record<string, string> = {
+      "/agents/run-recommendation-chip-row.tsx": "export function RecommendationHoldCard() {}",
+      "/agents/default-hop.ts":
+        'import { RecommendationHoldCard } from "./run-recommendation-chip-row";\n' +
+        "export default RecommendationHoldCard;",
+      // The member read, exported in the same statement.
+      "/agents/ns-member.ts":
+        'import * as ns from "./default-hop";\nexport const HoldPanel = ns.default;',
+      // The member read, bound to a local first and re-exported under a fourth
+      // name — every hop renames, and none of them spells the card.
+      "/agents/ns-local.ts":
+        'import * as ns from "./default-hop";\n' +
+        "const Panel = ns.default;\nexport { Panel as LocalPanel };",
+      // The whole namespace sent on: any owed name inside it is reachable.
+      "/agents/ns-whole.ts": 'import * as ns from "./default-hop";\nexport { ns as Bundle };',
+      "/chat/view.tsx": 'import { HoldPanel } from "@cinatra-ai/agents/ns-member";',
+      "/chat/local.tsx": 'import { LocalPanel } from "@cinatra-ai/agents/ns-local";',
+    };
+    const graph: SourceGraph = {
+      files: [
+        "/agents/run-recommendation-chip-row.tsx",
+        "/agents/default-hop.ts",
+        "/agents/ns-member.ts",
+        "/agents/ns-local.ts",
+        "/agents/ns-whole.ts",
+      ],
+      read: (file) => virtual[file] ?? "",
+      resolve: (_from, spec) =>
+        ({
+          "./run-recommendation-chip-row": "/agents/run-recommendation-chip-row.tsx",
+          "./default-hop": "/agents/default-hop.ts",
+          "@cinatra-ai/agents/ns-member": "/agents/ns-member.ts",
+          "@cinatra-ai/agents/ns-local": "/agents/ns-local.ts",
+        })[spec] ?? null,
+    };
+
+    const owed = owedExportsByModule(graph, new Map([
+      ["/agents/run-recommendation-chip-row.tsx", ["RecommendationHoldCard"]],
+    ]));
+    expect(owed.get("/agents/default-hop.ts")).toEqual(new Set(["default"]));
+    expect(owed.get("/agents/ns-member.ts")).toEqual(new Set(["HoldPanel"]));
+    expect(owed.get("/agents/ns-local.ts")).toEqual(new Set(["LocalPanel"]));
+    expect(owed.get("/agents/ns-whole.ts")).toEqual(new Set(["Bundle"]));
+    // Nothing on either chat path spells the card, its module, or `default`.
+    expect(virtual["/chat/view.tsx"]!.includes("RecommendationHoldCard")).toBe(false);
+    expect(virtual["/chat/local.tsx"]!.includes("default")).toBe(false);
+    expect(owedReachesFrom(graph, ["/chat/view.tsx", "/chat/local.tsx"], owed)).toEqual([
+      "/chat/local.tsx → @cinatra-ai/agents/ns-local as LocalPanel",
+      "/chat/view.tsx → @cinatra-ai/agents/ns-member as HoldPanel",
+    ]);
+  });
+
+  it("does NOT taint a member read off a namespace the analysis cannot resolve", () => {
+    // The false positive the member-read arm has to avoid. `const x = React.y`
+    // is every other line in this tree; the arm fires only for a namespace
+    // imported from a specifier that resolves INSIDE the analysed package, and
+    // only for the property actually read.
+    const virtual: Record<string, string> = {
+      "/agents/run-recommendation-chip-row.tsx":
+        "export function RecommendationHoldCard() {}\nexport function Unrelated() {}",
+      "/agents/vendor.ts":
+        'import * as React from "react";\n' +
+        'import * as ns from "./run-recommendation-chip-row";\n' +
+        "export const Memo = React.useMemo;\nexport const Other = ns.Unrelated;",
+      "/chat/vendor.tsx":
+        'import { Memo, Other } from "@cinatra-ai/agents/vendor";',
+    };
+    const graph: SourceGraph = {
+      files: ["/agents/run-recommendation-chip-row.tsx", "/agents/vendor.ts"],
+      read: (file) => virtual[file] ?? "",
+      resolve: (_from, spec) =>
+        ({
+          "./run-recommendation-chip-row": "/agents/run-recommendation-chip-row.tsx",
+          "@cinatra-ai/agents/vendor": "/agents/vendor.ts",
+        })[spec] ?? null,
+    };
+    const owed = owedExportsByModule(graph, new Map([
+      ["/agents/run-recommendation-chip-row.tsx", ["RecommendationHoldCard"]],
+    ]));
+    expect(owed.get("/agents/vendor.ts") ?? new Set()).toEqual(new Set());
+    expect(owedReachesFrom(graph, ["/chat/vendor.tsx"], owed)).toEqual([]);
+  });
+
   it("does NOT flag a module that merely SITS BESIDE the card in the same package", () => {
     // The false positive worth avoiding, stated as a case. `client-entry`
     // re-exports the run panel, and the run panel draws the hold card INSIDE the
