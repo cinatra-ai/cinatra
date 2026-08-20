@@ -294,6 +294,107 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
 }
 
 /**
+ * cinatra#2868 — the PER-DISPATCH BOUND, and the arithmetic that picks it.
+ *
+ * `dispatchRecommendationHoldCleared` swallows a THROWN port, so a notifier that
+ * fails loudly already reports `false` and the obligation simply stands. A
+ * notifier that never SETTLES is not a throw, and an unbounded `await` on one
+ * parks the drain forever. Nothing is LOST when that happens — the page was
+ * stamped at claim, so its rows rotate and a later sweep recovers them — but the
+ * SWEEPER hangs, and it has two callers that cannot afford that:
+ *
+ *   - the ~60s gate-maintenance BullMQ job (`sweepLifecycleGateMaintenance`
+ *     step 3), whose slot stalls for as long as the notifier does; and
+ *   - `releaseRecommendationParkForRun`, which awaits `sweepParks`
+ *     SYNCHRONOUSLY on a human's confirm/skip — so a wedged notifier blocks a
+ *     user-facing request, indefinitely.
+ *
+ * THE BUDGET. The page is the sweep's `limit`: 100 for BOTH production drivers
+ * (gate maintenance passes its own default 100; the confirm/skip release takes
+ * `sweepParks`' default 100), hard-capped at 500. The worst case — every
+ * dispatch in the page running to expiry — is `ceil(page / C) x BOUND`:
+ *
+ *   page 100, C = 4, BOUND = 500ms  ->  25 waves x 0.5s = 12.5s
+ *   page 500 (the cap no production caller passes)  ->  125 x 0.5s = 62.5s
+ *
+ * 12.5s is about a fifth of the 60s job period: the other four maintenance steps
+ * keep their room and the loop keeps its cadence. It is also the new ceiling on a
+ * confirm/skip click, which had none. The cap page lands just past one period —
+ * still a bound, and still the only shape in which this drain can ever end.
+ *
+ * WHY C = 4 AND NOT SERIAL. The drain dispatched strictly serially on the stated
+ * ground that serialising keeps a slow notifier from fanning out connections
+ * behind a sweep that is already on a schedule (cinatra#2838). That ground is
+ * sound, which is why the fan-out is BOUNDED rather than removed: the agents pool
+ * is pg's default `max: 10` and the host clear reads the run through that same
+ * pool before it deletes, so 4 in flight is under half of it — a wedged page
+ * cannot starve the connections the rest of the process shares. Serial alone
+ * cannot carry a bound generous enough to be safe: at 100 rows it would force
+ * BOUND under 600ms merely to fit the period, and under 150ms to fit a fifth.
+ *
+ * WHY 500ms IS GENEROUS. A healthy clear is two indexed round-trips on a warm
+ * pool — the run's PK read, then the keyed delete. 500ms is an order of magnitude
+ * over that. And one asymmetry is what makes a tight bound safe at all: an expiry
+ * is not a LOSS, it is a RETRY. The obligation stays `live` with its cursor
+ * already moved, so the next sweep serves it, and the cost of a false expiry is
+ * one more sweep interval of a stale bell — never a dropped notification.
+ *
+ * DELIBERATELY NOT `strandPark`, whose clear is also an unbounded await. That one
+ * is a single ops teardown of a single park, not a bounded page inside a job on a
+ * schedule, and its contract is the opposite of this one's: it REFUSES the
+ * teardown until the obligation discharges. A bound there would convert a slow
+ * notifier into a spurious `conflict` throw at the caller rather than into a free
+ * retry, so it wants its own decision, not this one's.
+ */
+const HOLD_NOTIFY_DISPATCH_TIMEOUT_MS = 500;
+const HOLD_NOTIFY_DISPATCH_CONCURRENCY = 4;
+
+type HoldClearOutcome = "committed" | "declined" | "expired";
+
+/**
+ * ONE bounded dispatch. Resolves `"expired"` the moment the bound elapses, and
+ * never rejects — the caller reads an expiry as exactly a declined clear.
+ *
+ * Two details are load-bearing and easy to lose:
+ *
+ *   - NO LEAKED TIMER. The timer is cleared the instant the dispatch settles, so
+ *     a healthy page leaves nothing pending behind it; once it has fired there is
+ *     nothing left to clear either way.
+ *   - NO UNHANDLED REJECTION FROM THE LOSER. The handler pair below is attached
+ *     ONCE, to the dispatch itself, and is both the settle path and the no-op
+ *     catch: after an expiry `resolve` is inert and `clearTimeout` is a no-op,
+ *     but a late rejection is still CONSUMED. An abandoned dispatch that rejects
+ *     a minute later can therefore never surface as an unhandled rejection —
+ *     which Node terminates the process on by default, turning a bounded miss
+ *     into an outage.
+ */
+function dispatchHoldClearedBounded(park: {
+  id: string;
+  runId: string;
+}): Promise<HoldClearOutcome> {
+  return new Promise<HoldClearOutcome>((resolve) => {
+    const timer = setTimeout(() => resolve("expired"), HOLD_NOTIFY_DISPATCH_TIMEOUT_MS);
+    void dispatchRecommendationHoldCleared({ runId: park.runId, parkId: park.id }).then(
+      (committed) => {
+        clearTimeout(timer);
+        resolve(committed ? "committed" : "declined");
+      },
+      (err) => {
+        // Unreachable through the shipped dispatcher (it swallows its own port's
+        // throws), but the seam is a wired PORT: a host that hands back a
+        // rejecting thenable must not be able to fail a sweep either.
+        clearTimeout(timer);
+        console.warn(
+          "[lifecycle-continuation-park] hold-notification clear threw past the dispatcher:",
+          err instanceof Error ? err.message : err,
+        );
+        resolve("declined");
+      },
+    );
+  });
+}
+
+/**
  * cinatra#2835 — discharge every OUTSTANDING hold-notification clear.
  *
  * The predicate IS the invariant: a park that is no longer `parked` must not have
@@ -335,6 +436,11 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  * NOTHING IS DROPPED. The stamp moves a cursor; it does not retire an obligation.
  * A failed dispatch leaves the row `live` and it is re-drained on a later pass,
  * exactly as before — the only change is WHERE in the queue it comes back.
+ *
+ * BOUNDED PER DISPATCH (cinatra#2838's successor, cinatra#2868). Every dispatch
+ * below runs under `dispatchHoldClearedBounded` and an EXPIRY is read as exactly
+ * a declined clear, so no notifier — however wedged — can park this loop. See
+ * that helper for the budget the bound is derived from.
  *
  * FOR UPDATE SKIP LOCKED because sweeps genuinely overlap: the ~60s
  * gate-maintenance loop (`releaseResolvedAutoGateParks`) is not the only driver —
@@ -386,26 +492,47 @@ async function drainHoldNotifications(limit: number): Promise<number> {
     });
 
   let cleared = 0;
-  // Sequential: the set is bounded by `limit`, each dispatch is a swallowed
-  // best-effort call, and serialising keeps a slow notifier from fanning out
-  // connections behind a sweep that is itself already on a schedule.
-  for (const park of owing) {
-    const committed = await dispatchRecommendationHoldCleared({
-      runId: park.runId,
-      parkId: park.id,
-    });
-    if (!committed) continue; // obligation stands, cursor moved; a later sweep retries it.
-    const acked = await db
-      .update(lifecycleContinuationPark)
-      .set({ holdNotification: HOLD_NOTIFICATION_CLEARED })
-      .where(
-        and(
-          eq(lifecycleContinuationPark.id, park.id),
-          eq(lifecycleContinuationPark.holdNotification, HOLD_NOTIFICATION_LIVE),
-        ),
-      )
-      .returning({ id: lifecycleContinuationPark.id });
-    cleared += acked.length; // the ACTUAL number retired (a racing sweep wins once)
+  let expired = 0;
+  // A BOUNDED WAVE, not an unbounded queue (cinatra#2868). Each worker pulls the
+  // next obligation off the page and dispatches it under the per-dispatch bound,
+  // so at most `HOLD_NOTIFY_DISPATCH_CONCURRENCY` notifier calls are ever in
+  // flight and the whole page costs at most ceil(page / C) x BOUND. `shift()` is
+  // the entire synchronisation: the event loop is single-threaded, so two workers
+  // can never take the same row.
+  const queue = [...owing];
+  const workers = Array.from(
+    { length: Math.min(HOLD_NOTIFY_DISPATCH_CONCURRENCY, queue.length) },
+    async () => {
+      for (let park = queue.shift(); park; park = queue.shift()) {
+        const outcome = await dispatchHoldClearedBounded(park);
+        if (outcome === "expired") expired += 1;
+        // An EXPIRY is treated as EXACTLY a `false`, deliberately: both say the
+        // same thing — we do not know the row was deleted — and retiring an
+        // obligation nothing has discharged is the one failure that loses a bell.
+        // The obligation stands, the cursor has already moved, a later sweep
+        // retries it.
+        if (outcome !== "committed") continue;
+        const acked = await db
+          .update(lifecycleContinuationPark)
+          .set({ holdNotification: HOLD_NOTIFICATION_CLEARED })
+          .where(
+            and(
+              eq(lifecycleContinuationPark.id, park.id),
+              eq(lifecycleContinuationPark.holdNotification, HOLD_NOTIFICATION_LIVE),
+            ),
+          )
+          .returning({ id: lifecycleContinuationPark.id });
+        cleared += acked.length; // the ACTUAL number retired (a racing sweep wins once)
+      }
+    },
+  );
+  await Promise.all(workers);
+  if (expired > 0) {
+    // Aggregated, not per row: under a wedged notifier EVERY dispatch in the page
+    // expires, and one line per obligation per pass would bury the signal it is.
+    console.warn(
+      `[lifecycle-continuation-park] ${expired}/${owing.length} hold-notification clear(s) did not settle within ${HOLD_NOTIFY_DISPATCH_TIMEOUT_MS}ms — left live for a later sweep`,
+    );
   }
   return cleared;
 }

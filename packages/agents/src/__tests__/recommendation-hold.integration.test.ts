@@ -1115,4 +1115,193 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
     expect(await parkState(parkId)).toBeUndefined();
     expect(await notificationRows(runId)).toHaveLength(0);
   });
+
+  // -------------------------------------------------------------------------
+  // THE BOUNDED DISPATCH (cinatra#2868). The drain's `await` on the notifier used
+  // to be unbounded. `dispatchRecommendationHoldCleared` swallows a THROWN port —
+  // that is the failure the cases above exercise — but a promise that never
+  // SETTLES is not a throw, and nothing in the loop could ever come back from
+  // one. No obligation was lost (the page is stamped at claim, so its rows rotate
+  // and a later sweep recovers them); the SWEEPER was what hung, and it has two
+  // callers that cannot afford it: the ~60s gate-maintenance job, whose slot
+  // stalls, and `releaseRecommendationParkForRun`, which awaits `sweepParks`
+  // synchronously on a human's confirm/skip.
+  //
+  // These cases run against the real store with a real wedged port and real wall
+  // clock — a fake-timer double could not fail them, because the property under
+  // test is "this call returns", not "this code calls setTimeout".
+  //
+  // The bound is `HOLD_NOTIFY_DISPATCH_TIMEOUT_MS` = 500ms at concurrency
+  // `HOLD_NOTIFY_DISPATCH_CONCURRENCY` = 4; both are module-private, so the
+  // numbers below name them rather than import them.
+  // -------------------------------------------------------------------------
+
+  const BOUND_MS = 500; // == HOLD_NOTIFY_DISPATCH_TIMEOUT_MS
+  const WAVE = 4; // == HOLD_NOTIFY_DISPATCH_CONCURRENCY
+
+  /**
+   * The production host writer with the clear WEDGED for a named set of parks: it
+   * hands back a promise nothing will ever settle, which is exactly the shape the
+   * dispatcher cannot report. Every other park clears for real, through the real
+   * service, so a wedged row and a healthy one can share one page.
+   */
+  async function wedgedNotifier(wedged: ReadonlySet<string>, seen: string[]) {
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    const real = hostNotifier.runWaitNotifier;
+    setRunWaitNotifier({
+      ...real,
+      onClearRecommendationHold: async (input: { runId: string; parkId: string }) => {
+        seen.push(input.parkId);
+        if (wedged.has(input.parkId)) return new Promise<boolean>(() => {});
+        return (await real.onClearRecommendationHold?.(input)) ?? false;
+      },
+    } as RunWaitNotifier);
+  }
+
+  it("A NEVER-SETTLING NOTIFIER DOES NOT PARK THE DRAIN: the sweep comes back", async () => {
+    await clearOutstandingObligations();
+    const wedgedA = await heldRun();
+    const wedgedB = await heldRun();
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set([wedgedA.parkId, wedgedB.parkId]), seen);
+
+    const startedAt = Date.now();
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: [wedgedA.parkId, wedgedB.parkId],
+      limit: 2,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    // THE PIN, and it is the plainest one in this file: the call RETURNED.
+    // Unbounded, this `await` never resolves and the case dies on the timeout.
+    expect(swept.released).toBe(2);
+    expect(swept.holdNotificationsCleared).toBe(0);
+    expect([...seen].sort()).toEqual([wedgedA.parkId, wedgedB.parkId].sort());
+
+    // Bounded by the budget rather than by luck: both dispatches fit inside one
+    // concurrency wave, so the page costs about ONE bound, not two.
+    expect(elapsed).toBeGreaterThanOrEqual(BOUND_MS - 100);
+    expect(elapsed).toBeLessThan(BOUND_MS * 6);
+
+    // ...and an EXPIRY is exactly a `false`. The obligation stands, its bell is
+    // untouched, and the claim's cursor moved, so the page rotates as always.
+    for (const w of [wedgedA, wedgedB]) {
+      expect(await parkState(w.parkId)).toMatchObject({
+        status: "released",
+        hold_notification: "live",
+      });
+      expect(await notificationRows(w.runId)).toHaveLength(1);
+      expect(await attemptedAt(w.parkId)).not.toBeNull();
+    }
+  });
+
+  it("an EXPIRED obligation is RETRIED: a later sweep discharges it for real", async () => {
+    await clearOutstandingObligations();
+    const wedged = await heldRun();
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set([wedged.parkId]), seen);
+
+    const first = await parkStore.sweepParks({ releasedParkIds: [wedged.parkId], limit: 1 });
+    expect(first.holdNotificationsCleared).toBe(0);
+    expect(await parkState(wedged.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(wedged.runId)).toHaveLength(1);
+
+    // Nothing on the row says "timed out", and that is the design: an expiry is
+    // not a state, it is the ABSENCE of an ack — so the ordinary retry path, the
+    // one a throwing port already used, applies unchanged.
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier(hostNotifier.runWaitNotifier satisfies RunWaitNotifier);
+
+    const second = await parkStore.sweepParks({ limit: 1 });
+    expect(second.holdNotificationsCleared).toBe(1);
+    expect(await parkState(wedged.parkId)).toMatchObject({ hold_notification: "cleared" });
+    expect(await notificationRows(wedged.runId)).toHaveLength(0);
+  });
+
+  it("a HEALTHY page pays NOTHING for the bound — it is a ceiling, never a floor", async () => {
+    await clearOutstandingObligations();
+    const runs = [];
+    for (let i = 0; i < WAVE * 2; i++) runs.push(await heldRun());
+
+    const startedAt = Date.now();
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: runs.map((r) => r.parkId),
+      limit: runs.length,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    expect(swept.holdNotificationsCleared).toBe(runs.length);
+    for (const r of runs) {
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "cleared" });
+      expect(await notificationRows(r.runId)).toHaveLength(0);
+    }
+    // TWO full waves of settled dispatches. Each one clears its timer the instant
+    // it settles, so the page never waits for the bound — a floor would have cost
+    // 2 x 500ms here and this assertion is what would catch it.
+    expect(elapsed).toBeLessThan(BOUND_MS * 2);
+  });
+
+  it("the bound does not LEAK ACROSS dispatches: a healthy row on a wedged page clears", async () => {
+    await clearOutstandingObligations();
+    const wedged = await heldRun();
+    const healthy = await heldRun();
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set([wedged.parkId]), seen);
+
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: [wedged.parkId, healthy.parkId],
+      limit: 2,
+    });
+
+    // The wedged row costs itself one bound and costs its page-mate nothing.
+    expect(swept.holdNotificationsCleared).toBe(1);
+    expect(await parkState(healthy.parkId)).toMatchObject({ hold_notification: "cleared" });
+    expect(await notificationRows(healthy.runId)).toHaveLength(0);
+    expect(await parkState(wedged.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(wedged.runId)).toHaveLength(1);
+  });
+
+  it("the ABANDONED dispatch settling LATE is consumed: no unhandled rejection", async () => {
+    await clearOutstandingObligations();
+    const late = await heldRun();
+
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier({
+      ...hostNotifier.runWaitNotifier,
+      // Settles long after the drain has walked away, and settles by REJECTING —
+      // the shape that leaks when a losing promise is left with no handler on it.
+      // (The shipped dispatcher turns this into a late `false`; what is pinned is
+      // that the promise the drain abandoned is CONSUMED however it ends, and that
+      // its late settle changes nothing it no longer owns.)
+      onClearRecommendationHold: () =>
+        new Promise<boolean>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("late port failure")), BOUND_MS * 3);
+        }),
+    } as RunWaitNotifier);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const swept = await parkStore.sweepParks({ releasedParkIds: [late.parkId], limit: 1 });
+      expect(swept.holdNotificationsCleared).toBe(0);
+      // Outlive the loser, then give the loop a full turn — Node reports an
+      // unhandled rejection a tick AFTER the rejection nobody handled.
+      await new Promise((r) => setTimeout(r, BOUND_MS * 5));
+      await new Promise((r) => setTimeout(r, 0));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    expect(unhandled).toEqual([]);
+    // The late settle retires nothing: it lost, so it cannot ack an obligation the
+    // drain already declined to ack, and the next sweep still owns the retry.
+    expect(await parkState(late.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(late.runId)).toHaveLength(1);
+  });
 });
