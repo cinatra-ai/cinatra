@@ -36,6 +36,15 @@ export const SELECTION_SOURCES = {
   recommendedAutoApplied: "recommended_auto_applied",
   /** A human forced a NON-recommended skill on (elevation-style adjust). */
   userForced: "user_forced",
+  /**
+   * A human opened ADJUST on a skill the scorer DID recommend and settled it
+   * there (cinatra#2841). It is neither `recommended_confirmed` — the reader did
+   * not take the scored offer as it stood, they inspected and shaped it — nor
+   * `user_forced`, which asserts the scorer never recommended the skill at all
+   * and would misreport the acceptance signal the efficacy surface reads. §V's
+   * settled row draws exactly this distinction as its `Adjusted` mark.
+   */
+  userAdjusted: "user_adjusted",
 } as const;
 
 export type SelectionSource =
@@ -130,14 +139,26 @@ export function decideRecommendationContinuation(input: {
  * the human added that was NOT recommended is `user_forced` (its pinned
  * revision must be supplied via `forcedRevisions`). Unknown ids are dropped
  * (never guessed). Order is stable (confirmed order preserved).
+ *
+ * IN-SET ADJUSTMENT (cinatra#2841). `adjustedSkillIds` names the kept skills the
+ * reader settled through the chip's ADJUST panel rather than by taking the
+ * scored offer. For a skill that IS in the recommendation set that is stamped
+ * `user_adjusted`, so §V's third settled mark is reachable for the set the row
+ * actually offers. It changes nothing about WHICH revision is pinned — an
+ * adjusted in-set skill still rides the exact revision it was recommended at —
+ * and a skill that was never recommended stays `user_forced`, because forcing it
+ * on IS its adjustment and re-labelling it would lose that fact.
  */
 export function deriveConfirmedSelection(input: {
   recommendations: RankedRecommendation[];
   confirmedSkillIds: string[];
   /** Pinned revision id for a forced (non-recommended) skill: skillId → revId. */
   forcedRevisions?: Record<string, string>;
+  /** Kept skills the reader settled through ADJUST — see the note above. */
+  adjustedSkillIds?: string[];
 }): RunSkillSelectionEntry[] {
   const recById = new Map(input.recommendations.map((r) => [r.skillId, r]));
+  const adjusted = new Set(input.adjustedSkillIds ?? []);
   const seen = new Set<string>();
   const out: RunSkillSelectionEntry[] = [];
   for (const skillId of input.confirmedSkillIds) {
@@ -148,7 +169,9 @@ export function deriveConfirmedSelection(input: {
       out.push({
         skillId,
         skillRevisionId: rec.skillRevisionId,
-        selectionSource: SELECTION_SOURCES.recommendedConfirmed,
+        selectionSource: adjusted.has(skillId)
+          ? SELECTION_SOURCES.userAdjusted
+          : SELECTION_SOURCES.recommendedConfirmed,
       });
       continue;
     }

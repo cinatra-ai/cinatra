@@ -72,6 +72,23 @@ import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-rev
 //             opens is the SHIPPED per-skill detail panel, and the selection is
 //             the ONE thing the run's store records per skill — nothing wider is
 //             invented here.
+//
+//             THE ADJUSTED MARK IS NOW DURABLE FOR "KEEP" (cinatra#2841 fix).
+//             An in-set Adjust → "Keep it in this run" is written as a
+//             `user_adjusted` selection row, so the settled row reads back
+//             `Adjusted` instead of `Confirmed`. Before this it was written
+//             `recommended_confirmed` — indistinguishable from a plain Confirm —
+//             and `adjusted` was UNREACHABLE on a settled chip, because the only
+//             source that mapped to it (`user_forced`) is stamped exclusively
+//             for an id OUTSIDE the scored set, and the row only offers the
+//             scored set.
+//
+//             RESIDUAL, NAMED: Adjust → "Leave it out" is durably a REJECTED
+//             row, and the rejected half records only that the skill was not
+//             kept — so it reads back `Skipped`, which is what it is (the skill
+//             is not in the run). Distinguishing "skipped outright" from
+//             "inspected, then dropped" would need the rejected row to carry a
+//             third source, and this slice does not widen the store.
 //   SKIP    — leave this skill out of the run.
 //
 // DEVIATION — THE RELEASE IS STILL WHOLE-ROW (named, cinatra#2841). The shipped
@@ -181,7 +198,7 @@ function MarkIcon({ mark }: { mark: RunRecommendationChipMark }): ReactElement {
  * §V: "The settled row is still the whole card: each chip states its own outcome
  * in place. Nothing is summarised above it, and there is nothing left to press."
  */
-function SettledChip({ skillId, mark }: RunRecommendationDecidedSkill): ReactElement {
+function SettledChip({ skillId, name, mark }: RunRecommendationDecidedSkill): ReactElement {
   return (
     <span
       data-recommendation-chip=""
@@ -189,7 +206,12 @@ function SettledChip({ skillId, mark }: RunRecommendationDecidedSkill): ReactEle
       data-chip-mark={mark}
       className={`inline-flex items-center gap-2 rounded-chip border px-3 py-1 text-xs ${MARK_CHIP_CLASS[mark]}`}
     >
-      <span className="font-medium">{skillId}</span>
+      {/* THE NAME, not the id (cinatra#2841). §V draws "Enrich contacts",
+          "Draft email", "Schedule send" on its settled chips — the same labels
+          its held chips carry — and draws NO second, package-qualified line
+          beside them, so none is rendered. The id stays machine-readable on
+          `data-skill-id` where the conformance walk reads it. */}
+      <span className="font-medium">{name}</span>
       <span className="inline-flex items-center gap-1 font-mono text-badge-2xs uppercase tracking-kicker text-muted-foreground">
         <MarkIcon mark={mark} />
         {MARK_LABEL[mark]}
@@ -210,6 +232,10 @@ export function RunRecommendationChipRow({
   onDecided,
 }: Props) {
   const router = useRouter();
+  // The host that declared this surface, read for the card-root declaration
+  // above. `null` outside a `LifecycleCardSurfaceProvider`, which on a shipped
+  // host cannot happen — `RecommendationHoldCard` refuses to draw without one.
+  const lifecycleHost = useLifecycleCardHost();
   const [recs, setRecs] = useState<RecommendedSkillForChip[]>(
     initialRecommendations ?? [],
   );
@@ -245,7 +271,14 @@ export function RunRecommendationChipRow({
     const settled: RunRecommendationDecidedSkill[] =
       decision.decided ??
       (decision.kind === "confirmed"
-        ? decision.skillNames.map((skillId) => ({ skillId, mark: "confirmed" as const }))
+        ? decision.skillNames.map((name) => ({
+            // The pre-#2841 fallback shape: `skillNames` is a bare list with no
+            // per-skill evidence behind it, so the one label it carries is both
+            // the chip's name and its only handle.
+            skillId: name,
+            name,
+            mark: "confirmed" as const,
+          }))
         : []);
     // A settled hold whose durable evidence names no skill at all has nothing
     // per-skill to state, and §V draws no chip-less settled reading — so the
@@ -256,13 +289,25 @@ export function RunRecommendationChipRow({
       <div
         data-run-recommendation-chip-row=""
         data-conformance-id="run-chip-row"
+        // THE CARD-ROOT DECLARATION (cinatra#2841). The capture contract
+        // (`scripts/ci/lib/capture-record-contract.mjs`) identifies a
+        // `recommendation_hold` capture by the card root's OWN three
+        // attributes, exactly as it does for the review gate — the kind, the
+        // host that declared the surface, and the state. The row IS the card
+        // (§V), so the row's outermost element carries them; without them no
+        // truthful capture of this card could ever satisfy its own contract.
+        data-lifecycle-card="recommendation_hold"
+        data-lifecycle-card-state="decided"
+        // Omitted rather than guessed when no surface declared a host: the
+        // component renders outside a provider only in tests.
+        data-lifecycle-card-host={lifecycleHost ?? undefined}
         data-run-recommendation-decision={decision.kind}
         data-run-recommendation-settled="true"
         data-variant={variant}
         className="flex flex-wrap gap-2"
       >
         {settled.map((s) => (
-          <SettledChip key={s.skillId} skillId={s.skillId} mark={s.mark} />
+          <SettledChip key={s.skillId} skillId={s.skillId} name={s.name} mark={s.mark} />
         ))}
       </div>
     );
@@ -301,6 +346,15 @@ export function RunRecommendationChipRow({
     for (const r of kept) {
       if (!r.recommended) forcedRevisions[r.skillId] = r.skillRevisionId;
     }
+    // THE ADJUSTED SET (cinatra#2841). A kept skill whose chip was settled
+    // through ADJUST — the reader opened its panel and chose "Keep it in this
+    // run" — is written `user_adjusted` rather than `recommended_confirmed`, so
+    // the settled row reads back `Adjusted`. Without this the mark was
+    // UNREACHABLE for the scored set, which is the only set the row offers: an
+    // in-set adjust landed as `recommended_confirmed` and read back `Confirmed`.
+    const adjustedSkillIds = kept
+      .filter((r) => next[r.skillId]?.mark === "adjusted")
+      .map((r) => r.skillId);
     startTransition(async () => {
       const res = await confirmRunRecommendationAction({
         runId,
@@ -308,6 +362,7 @@ export function RunRecommendationChipRow({
         confirmedSkillIds: kept.map((r) => r.skillId),
         promptText,
         forcedRevisions: Object.keys(forcedRevisions).length ? forcedRevisions : undefined,
+        adjustedSkillIds: adjustedSkillIds.length ? adjustedSkillIds : undefined,
         ...(holdRef ? { holdRef } : {}),
       });
       if (!res.ok) {
@@ -340,6 +395,11 @@ export function RunRecommendationChipRow({
     <div
       data-run-recommendation-chip-row=""
       data-conformance-id="run-chip-row"
+      // The same card-root declaration the settled branch carries — see there.
+      // A live hold is `held`; the settled row above is `decided`.
+      data-lifecycle-card="recommendation_hold"
+      data-lifecycle-card-state="held"
+      data-lifecycle-card-host={lifecycleHost ?? undefined}
       data-variant={variant}
       data-can-decide={canDecide ? "true" : "false"}
       className="flex flex-col gap-2"

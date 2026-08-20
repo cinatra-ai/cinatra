@@ -289,6 +289,12 @@ export async function confirmRunSkillSelectionAction(input: {
   declaredProducedTypes?: string[];
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
+  /**
+   * The kept skills the reader settled through ADJUST (cinatra#2841). Bounded by
+   * the SAME assigned-set filter as `forcedRevisions` below — it only ever
+   * relabels a row this caller could already write, never admits one.
+   */
+  adjustedSkillIds?: string[];
   restrictToSkillIds?: string[];
 }): Promise<ConfirmRunSkillSelectionActionResult> {
   const empty: ConfirmRunSkillSelectionActionResult = {
@@ -365,6 +371,9 @@ export async function confirmRunSkillSelectionAction(input: {
           Object.entries(input.forcedRevisions).filter(([skillId]) => allowed.has(skillId)),
         )
       : undefined;
+    // Same bound, same reason: an id outside the agent's assigned deliverable
+    // set cannot influence what the run records, not even its label.
+    const adjustedSkillIds = input.adjustedSkillIds?.filter((skillId) => allowed.has(skillId));
 
     const result = await confirmRunSkillSelection({
       runId: input.runId,
@@ -376,6 +385,7 @@ export async function confirmRunSkillSelectionAction(input: {
       },
       confirmedSkillIds: input.confirmedSkillIds,
       forcedRevisions,
+      adjustedSkillIds,
       // A true restriction (candidates ⊆ the assigned deliverable set).
       restrictToSkillIds: assignedIds,
     });

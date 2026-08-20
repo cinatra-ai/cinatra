@@ -334,8 +334,10 @@ describe("the settled reading — one mark per skill, derived from the run's own
     expect(state).toEqual({
       state: "skipped",
       decided: [
-        { skillId: "s-a", mark: "skipped" },
-        { skillId: "s-b", mark: "skipped" },
+        // No name resolves for either id here, so each keeps its id as its
+        // label — the truest one available (cinatra#2841).
+        { skillId: "s-a", name: "s-a", mark: "skipped" },
+        { skillId: "s-b", name: "s-b", mark: "skipped" },
       ],
     });
   });
@@ -366,7 +368,120 @@ describe("the settled reading — one mark per skill, derived from the run's own
     expect(state).toMatchObject({
       state: "confirmed",
       skillNames: ["s-kept"],
-      decided: [{ skillId: "s-kept", mark: "confirmed" }],
+      decided: [{ skillId: "s-kept", name: "s-kept", mark: "confirmed" }],
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE GRADED §V FINDINGS (cinatra#2841 / PR #2866), server side
+  // -------------------------------------------------------------------------
+
+  it("finding 1 — a `user_adjusted` selection row reads back as ADJUSTED", async () => {
+    // The mark the redraw could not reach. `user_forced` is stamped only for an
+    // id OUTSIDE the scored set, and the chip row offers exactly the scored set,
+    // so an in-set Adjust used to be written `recommended_confirmed` and read
+    // back `Confirmed`. `user_adjusted` is the in-set edit's own source.
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-adjusted", selectionSource: "user_adjusted" },
+      { skillId: "s-plain", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      decided: [
+        { skillId: "s-adjusted", mark: "adjusted" },
+        { skillId: "s-plain", mark: "confirmed" },
+      ],
+    });
+  });
+
+  it("finding 1 — a headless AUTO-APPLIED row is confirmed, not adjusted (negative control)", async () => {
+    // Only the two HUMAN-edit sources read as `adjusted`. A run nobody shaped
+    // must never claim a reader shaped it.
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-auto", selectionSource: "recommended_auto_applied" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({ decided: [{ skillId: "s-auto", mark: "confirmed" }] });
+  });
+
+  it("finding 2 — the settled rows carry the DISPLAY NAME, resolved the way the held branch resolves it", async () => {
+    // §V names skills on BOTH readings. The evidence rows are ids, so the names
+    // are joined in from the same candidate seam + scorer the held branch uses.
+    getRunRecommendations.mockResolvedValue([
+      {
+        skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+        skillRevisionId: "rev-b",
+        name: "Blog writing",
+        score: 0.9,
+        rank: 1,
+        recommended: true,
+        scoredFeatures: [],
+      },
+      {
+        skillId: "@cinatra-ai/outreach-skill:schedule-send",
+        skillRevisionId: "rev-s",
+        name: "Schedule send",
+        score: 0.2,
+        rank: 2,
+        recommended: true,
+        scoredFeatures: [],
+      },
+    ]);
+    readRunSelectedSkillRevisions.mockReturnValue([
+      {
+        skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+        selectionSource: "recommended_confirmed",
+      },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([
+      {
+        skillId: "@cinatra-ai/outreach-skill:schedule-send",
+        recommendationSource: "recommended_not_kept",
+      },
+    ]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "confirmed",
+      // The field is called `skillNames`; it now truthfully holds names.
+      skillNames: ["Blog writing"],
+      decided: [
+        {
+          skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+          name: "Blog writing",
+          mark: "confirmed",
+        },
+        {
+          skillId: "@cinatra-ai/outreach-skill:schedule-send",
+          name: "Schedule send",
+          mark: "skipped",
+        },
+      ],
+    });
+    // The name join is NOT viewer-intersected — the decided summary is the set
+    // THIS run resolved, exactly as the branch's own comment states.
+    expect(resolveRecommendationCandidateSkillIds).toHaveBeenCalledWith({
+      run: expect.objectContaining({ id: "run-1" }),
+      packageName: "@vendor/agent",
+    });
+  });
+
+  it("finding 2 — an unresolvable name costs the label, never the settled card", async () => {
+    getRunRecommendations.mockRejectedValue(new Error("scorer down"));
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-kept", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "confirmed",
+      skillNames: ["s-kept"],
+      decided: [{ skillId: "s-kept", name: "s-kept", mark: "confirmed" }],
     });
   });
 });

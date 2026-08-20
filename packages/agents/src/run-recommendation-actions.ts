@@ -137,6 +137,56 @@ async function readerMayDecide(
 }
 
 /**
+ * DISPLAY NAMES FOR THE SETTLED READING (cinatra#2841).
+ *
+ * §V's chips print a skill's NAME — held and settled alike ("Enrich contacts",
+ * never `@vendor/pkg:enrich`). The run's durable evidence carries ids only, so
+ * the settled row joins the names in HERE, the same way the held branch below
+ * gets them: through the shared run-actor candidate seam and the scorer, which
+ * is the one place in this action that knows a skill's name at all.
+ *
+ * NOT VIEWER-INTERSECTED, deliberately and consistently with the branch that
+ * calls it: the decided summary is the set THIS run resolved, which the run's
+ * own Skills tab already lists to every reader who clears the same run-read
+ * door. Only the LIVE candidate row is intersected.
+ *
+ * BEST-EFFORT BY CONTRACT. A failure costs labels, never the card: every id with
+ * no resolved name keeps the id as its label, which is exactly what the settled
+ * row printed before this join existed.
+ */
+async function resolveDecidedSkillNames(
+  run: NonNullable<Awaited<ReturnType<typeof readAgentRunById>>>,
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  try {
+    const template = await readAgentTemplateById(run.templateId).catch(() => null);
+    const packageName = template?.packageName;
+    if (!packageName) return names;
+    const candidateSkillIds = await resolveRecommendationCandidateSkillIds({
+      run,
+      packageName,
+    });
+    let promptText = "";
+    try {
+      promptText = JSON.stringify(run.inputParams ?? {});
+    } catch {
+      promptText = "";
+    }
+    const recs = await getRunRecommendations({
+      agentId: packageName,
+      intent: { promptText },
+      restrictToSkillIds: candidateSkillIds,
+    });
+    for (const r of recs) {
+      if (r.skillId && r.name) names.set(r.skillId, r.name);
+    }
+  } catch {
+    /* labels only — an unresolvable name never costs the settled card */
+  }
+  return names;
+}
+
+/**
  * The run-start recommendation hold state for the chat-mounted run panel
  * (cinatra#2067 item 5 — the SAME shared chip-row serves chat). Returns:
  *   held      → the interactive chip-row (prefetched candidates);
@@ -203,9 +253,18 @@ export async function getRunRecommendationHoldStateAction(input: {
     } catch {
       rejected = [];
     }
-    const decided = decidedSkillsFromEvidence(selected, rejected);
+    // §V's settled chips print the SAME display name the held chips print, so
+    // the ids the evidence carries are joined to names before the row is built.
+    const nameBySkillId = await resolveDecidedSkillNames(run);
+    const decided = decidedSkillsFromEvidence(selected, rejected, nameBySkillId);
     if (selected.length > 0) {
-      return { state: "confirmed", skillNames: selected.map((s) => s.skillId), decided };
+      return {
+        state: "confirmed",
+        // The field is `skillNames`, and now it truthfully holds names — the id
+        // survives only as the fallback for a skill nothing could name.
+        skillNames: selected.map((s) => nameBySkillId.get(s.skillId) ?? s.skillId),
+        decided,
+      };
     }
     if (hasRunRecommendationSkip(input.runId)) return { state: "skipped", decided };
     return { state: "none" };
@@ -327,6 +386,13 @@ export async function confirmRunRecommendationAction(input: {
   declaredProducedTypes?: string[];
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
+  /**
+   * The kept skills the reader settled through the chip's ADJUST panel
+   * (cinatra#2841). Written as `user_adjusted` selection rows, so §V's third
+   * settled mark is reachable for a skill that IS in the scored set — which is
+   * every skill the row offers.
+   */
+  adjustedSkillIds?: string[];
   /** The hold this decision was taken against (cinatra#2568) — see the CAS below. */
   holdRef?: string;
 }): Promise<RunRecommendationDecisionResult> {
@@ -350,6 +416,7 @@ export async function confirmRunRecommendationAction(input: {
     declaredProducedTypes: input.declaredProducedTypes,
     targetArtifactKind: input.targetArtifactKind,
     forcedRevisions: input.forcedRevisions,
+    adjustedSkillIds: input.adjustedSkillIds,
   });
   if (!written.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 

@@ -127,6 +127,11 @@ export const CARD_KINDS = {
   },
   recommendation_hold: {
     cellTokens: ["recommendation-hold", "recommendation-card", "recommendation"],
+    // The row IS the card (§V), so this root is the chip-row's own outermost
+    // element, which carries the kind/host/state declaration from cinatra#2841
+    // exactly as `ReviewGateCard` does. Before that fix no truthful capture of
+    // this card could satisfy this contract, because the shipped row emitted
+    // none of the three.
     root: '[data-lifecycle-card="recommendation_hold"]',
     // REDRAWN by cinatra#2841 to the ratified §V drawing: the card's decision
     // controls are PER CHIP (Confirm / Adjust / Skip on each skill), and the
