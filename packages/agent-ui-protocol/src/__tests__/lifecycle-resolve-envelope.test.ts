@@ -471,7 +471,7 @@ describe("the settled reading survives the parse seam (cinatra#2855)", () => {
         state,
         body: null,
       }),
-    ).toEqual({ kind: "artifact_review_gate", state, body: null });
+    ).toEqual({ kind: "artifact_review_gate", state, body: null, islandSrc: null });
   });
 
   it("REFUSES an outcome this build cannot read, rather than dropping it", () => {
