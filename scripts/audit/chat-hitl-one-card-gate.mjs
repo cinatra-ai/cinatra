@@ -914,6 +914,15 @@ export function proofAssertsAnchor(proofSource, anchor) {
  * assertion counts only when it sits INSIDE the test the contract names, so a
  * card cannot borrow the assertions of some unrelated case that happens to live
  * in the same file — which is exactly how an empty proof test passed before.
+ *
+ * THE LIMIT, stated here as it is on the anchor rule: this is LEXICAL, not a
+ * parse. The block starts at the FIRST quoted occurrence of the name and ends by
+ * brace matching, so a `describe` title or a quoted mention that repeats the name
+ * earlier in the file selects that occurrence instead, and two tests sharing one
+ * name read as the first of them. What the rule buys is a narrower window than
+ * the file, not a guarantee that the window is the right test. It cannot be the
+ * proof on its own, and it is not asked to be: the same named test is EXECUTED by
+ * vitest, where a wrong or absent body fails on its own.
  */
 export function extractTestBlock(source, testName) {
   for (const quote of ['"', "'", "`"]) {
@@ -950,6 +959,15 @@ export function assertsExactlyOneInstance(block, rootSelector) {
  * been commented out does not count. This does not judge WHAT is asserted —
  * only that the named test is not empty, which is the shape that let a proof
  * name stand in for a proof.
+ *
+ * THE LIMIT, stated here as it is on the anchor rule: this is LEXICAL inside the
+ * extracted block. It matches the TEXT `expect(`, so an expectation in a branch
+ * that never runs, or one that runs and passes vacuously, still reads as an
+ * assertion. It cannot be the proof on its own, and it is not asked to be: the
+ * same named test is EXECUTED by vitest, where the expectation has to hold.
+ * Negative fixtures pin the shapes it DOES reject — an empty proof, one whose
+ * only assertion is commented out, and one that borrows a neighbour's — so the
+ * reading stays known rather than assumed.
  */
 export function assertsSomething(block) {
   return /\bexpect\s*\(/.test(stripComments(block));
