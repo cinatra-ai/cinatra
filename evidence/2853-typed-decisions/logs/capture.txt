@@ -1,0 +1,118 @@
+
+=== D1__review-card__chat_thread__decided — the run owner types "approve it" ===
+BEFORE card-state=pending gate-row=pending composer-bound=true
+typed and sent: "approve it"  (no control was pressed)
+answer landed after ~1s
+AFTER  card-state=settled gate-row=resolved recorded={"gateStatus":"resolved","gateDisposition":"approve","resolvedByUserId":"<a user id, present>","resumeEnvelopeKind":"approve","resumeEnvelopeDecision":"approved","resumeEnvelopeComment":null}
+TRANSCRIPT TAIL:
+2853 Typed-Decision Owner
+2T
+Show me the review that is waiting on me.
+Cinatra
+Here is the review.
+Approved by 2853 Typed-Decision Owner
+The gate is resolved and the run has been released to continue.
+2853 Typed-Decision Owner
+2T
+approve it
+Cinatra
+Approved. The gate is resolved and the run has been released to continue.
+CAP D1__review-card__chat_thread__decided 1536x1202 pageErrors=0
+
+=== D2__review-card__chat_thread__decided — the run owner types "reject: the numbers are stale" ===
+BEFORE card-state=pending gate-row=pending composer-bound=true
+typed and sent: "reject: the numbers are stale"  (no control was pressed)
+answer landed after ~1s
+AFTER  card-state=settled gate-row=resolved recorded={"gateStatus":"resolved","gateDisposition":"reject","resolvedByUserId":"<a user id, present>","resumeEnvelopeKind":"reject","resumeEnvelopeDecision":"rejected","resumeEnvelopeComment":"the numbers are stale"}
+TRANSCRIPT TAIL:
+2853 Typed-Decision Owner
+2T
+Show me the review that is waiting on me.
+Cinatra
+Here is the review.
+Rejected by 2853 Typed-Decision Owner
+The gate is resolved and the reviewed work has been turned back.
+2853 Typed-Decision Owner
+2T
+reject: the numbers are stale
+Cinatra
+Rejected. The gate is resolved and the reviewed work has been turned back.
+CAP D2__review-card__chat_thread__decided 1536x1202 pageErrors=0
+
+=== D3__review-card__chat_thread__restricted — a restricted reader - a plain org member whose run has execute-tier visibility `admin` types "approve it" ===
+BEFORE card-state=restricted gate-row=pending composer-bound=null
+typed and sent: "approve it"  (no control was pressed)
+answer landed after ~1s
+AFTER  card-state=restricted gate-row=pending recorded={"gateStatus":"pending","gateDisposition":null,"resolvedByUserId":null,"resumeEnvelopeKind":null,"resumeEnvelopeDecision":null,"resumeEnvelopeComment":null}
+TRANSCRIPT TAIL:
+2853 Restricted Reader
+2R
+Show me the review that is waiting on me.
+Cinatra
+Here is the review.
+Review requested
+Awaiting your decision
+Expand
+DECISION RATIONALE (optional on approve, expected on reject)
+Comment
+Reject
+Approve
+You do not have approve access on the run, so a terminal decision is disabled.
+2853 Restricted Reader
+2R
+approve it
+Cinatra
+Something went wrong
+The configured default LLM provider "openai" is not available (its connector is not installed/active, or its credentials are missing or invalid). Fix that provider's configuration, choose a different default provider, or enable ordered failover in LLM settings.
+Copy error details
+CAP D3__review-card__chat_thread__restricted 1536x2342 pageErrors=0
+
+=== D4__review-card__chat_thread__pending — the run owner, with the composer binding GIVEN BACK types "looks good to me" ===
+BEFORE card-state=pending gate-row=pending composer-bound=true
+pressed the card's own composer control; composer-bound is now false
+typed and sent: "looks good to me"  (no control was pressed)
+answer landed after ~9s
+AFTER  card-state=pending gate-row=pending recorded={"gateStatus":"pending","gateDisposition":null,"resolvedByUserId":null,"resumeEnvelopeKind":null,"resumeEnvelopeDecision":null,"resumeEnvelopeComment":null}
+TRANSCRIPT TAIL:
+2853 Typed-Decision Owner
+2T
+Show me the review that is waiting on me.
+Cinatra
+Here is the review.
+Review requested
+Awaiting your decision
+Expand
+Reply from the chat box
+Chat messages are not going to this review.
+DECISION RATIONALE (optional on approve, expected on reject)
+Comment
+Reject
+Approve
+2853 Typed-Decision Owner
+2T
+looks good to me
+Cinatra
+Something went wrong
+The configured default LLM provider "openai" is not available (its connector is not installed/active, or its credentials are missing or invalid). Fix that provider's configuration, choose a different default provider, or enable ordered failover in LLM settings.
+Copy error details
+CAP D4__review-card__chat_thread__pending 1536x2392 pageErrors=0
+
+=== D5__review-card__chat_thread__decided — the run owner, composer still bound types "looks good to me" ===
+BEFORE card-state=pending gate-row=pending composer-bound=true
+typed and sent: "looks good to me"  (no control was pressed)
+answer landed after ~1s
+AFTER  card-state=settled gate-row=resolved recorded={"gateStatus":"resolved","gateDisposition":"changes_requested","resolvedByUserId":"<a user id, present>","resumeEnvelopeKind":null,"resumeEnvelopeDecision":null,"resumeEnvelopeComment":null}
+TRANSCRIPT TAIL:
+2853 Typed-Decision Owner
+2T
+Show me the review that is waiting on me.
+Cinatra
+Here is the review.
+Changes requested by 2853 Typed-Decision Owner
+The gate is resolved and the reviewed work has been turned back for repair.
+2853 Typed-Decision Owner
+2T
+looks good to me
+Cinatra
+Changes requested. The agent is working on a revision.
+CAP D5__review-card__chat_thread__decided 1536x1202 pageErrors=0

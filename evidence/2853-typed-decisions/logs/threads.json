@@ -1,0 +1,37 @@
+[
+ {
+  "cell": "e",
+  "slot": "e",
+  "threadId": "bf26a33d-e8ff-4622-9d42-36e26b546e05",
+  "path": "/chat/cinatra-ai/cinatra-assistant/q3-launch-note-review-v2",
+  "owner": "owner"
+ },
+ {
+  "cell": "f",
+  "slot": "f",
+  "threadId": "8ca1d57a-7ad2-4e70-b39a-349bff706699",
+  "path": "/chat/cinatra-ai/cinatra-assistant/pricing-update-review-v2",
+  "owner": "owner"
+ },
+ {
+  "cell": "g",
+  "slot": "g",
+  "threadId": "466baa0c-77dc-4fe1-82d4-9af287a5ab41",
+  "path": "/chat/cinatra-ai/cinatra-assistant/partner-brief-review-v2",
+  "owner": "reader"
+ },
+ {
+  "cell": "h",
+  "slot": "h",
+  "threadId": "06701086-5471-4f39-b10c-c71c8e3e1a4c",
+  "path": "/chat/cinatra-ai/cinatra-assistant/roadmap-summary-review-v2",
+  "owner": "owner"
+ },
+ {
+  "cell": "i",
+  "slot": "i",
+  "threadId": "cff9ea59-f477-42e2-9b71-015ad106460c",
+  "path": "/chat/cinatra-ai/cinatra-assistant/support-digest-review-v2",
+  "owner": "owner"
+ }
+]

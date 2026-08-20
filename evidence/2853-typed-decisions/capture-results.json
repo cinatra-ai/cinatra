@@ -1,0 +1,239 @@
+{
+ "results": [
+  {
+   "cell": "D1__review-card__chat_thread__decided",
+   "pixels": {
+    "width": 1536,
+    "height": 1202
+   },
+   "sha256": "8d23f45582fb54836305d0afe0122614aade33408a9a43d61324caf0d039de86",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "columnText": "2853 Typed-Decision Owner\n2T\nShow me the review that is waiting on me.\nCinatra\nHere is the review.\nApproved by 2853 Typed-Decision Owner\nThe gate is resolved and the run has been released to continue.\n2853 Typed-Decision Owner\n2T\napprove it\nCinatra\nApproved. The gate is resolved and the run has been released to continue.",
+   "pageErrors": []
+  },
+  {
+   "cell": "D2__review-card__chat_thread__decided",
+   "pixels": {
+    "width": 1536,
+    "height": 1202
+   },
+   "sha256": "4fdd3d2f29ea08e9ce35e74bd39a3ad7354d37ac9aa6c06951340ffa59661e4c",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "columnText": "2853 Typed-Decision Owner\n2T\nShow me the review that is waiting on me.\nCinatra\nHere is the review.\nRejected by 2853 Typed-Decision Owner\nThe gate is resolved and the reviewed work has been turned back.\n2853 Typed-Decision Owner\n2T\nreject: the numbers are stale\nCinatra\nRejected. The gate is resolved and the reviewed work has been turned back.",
+   "pageErrors": []
+  },
+  {
+   "cell": "D3__review-card__chat_thread__restricted",
+   "pixels": {
+    "width": 1536,
+    "height": 2342
+   },
+   "sha256": "d6e4a607ad9b3ad550dad205d0156a58445886dc6b5bd0c555855a8495514411",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "columnText": "2853 Restricted Reader\n2R\nShow me the review that is waiting on me.\nCinatra\nHere is the review.\nReview requested\nAwaiting your decision\nExpand\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nYou do not have approve access on the run, so a terminal decision is disabled.\n2853 Restricted Reader\n2R\napprove it\nCinatra\nSomething went wrong\nThe configured default LLM provider \"openai\" is not available (its connector is not installed/active, or its credentials are missing or invalid). Fix that provider's configuration, choose a different default provider, or enable ordered failover in LLM settings.\nCopy error details",
+   "pageErrors": []
+  },
+  {
+   "cell": "D4__review-card__chat_thread__pending",
+   "pixels": {
+    "width": 1536,
+    "height": 2392
+   },
+   "sha256": "f83ccfe22d92ab57b7d381b5aa2a96c5cc2364556efef43b6e91493d1e7b7dd2",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "columnText": "2853 Typed-Decision Owner\n2T\nShow me the review that is waiting on me.\nCinatra\nHere is the review.\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\n2853 Typed-Decision Owner\n2T\nlooks good to me\nCinatra\nSomething went wrong\nThe configured default LLM provider \"openai\" is not available (its connector is not installed/active, or its credentials are missing or invalid). Fix that provider's configuration, choose a different default provider, or enable ordered failover in LLM settings.\nCopy error details",
+   "pageErrors": []
+  },
+  {
+   "cell": "D5__review-card__chat_thread__decided",
+   "pixels": {
+    "width": 1536,
+    "height": 1202
+   },
+   "sha256": "a794b1e14a0734fd399ffc7653e9cea321e56fca5fb947886773959a021bf47b",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "columnText": "2853 Typed-Decision Owner\n2T\nShow me the review that is waiting on me.\nCinatra\nHere is the review.\nChanges requested by 2853 Typed-Decision Owner\nThe gate is resolved and the reviewed work has been turned back for repair.\n2853 Typed-Decision Owner\n2T\nlooks good to me\nCinatra\nChanges requested. The agent is working on a revision.",
+   "pageErrors": []
+  }
+ ]
+}

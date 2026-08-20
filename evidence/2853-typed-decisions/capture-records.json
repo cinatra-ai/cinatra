@@ -1,0 +1,413 @@
+{
+ "$comment": [
+  "CAPTURE RECORDS for cinatra#2853 (PR #2869), in the shape",
+  "scripts/ci/lib/capture-record-contract.mjs validates.",
+  "",
+  "NO CONTROL WAS PRESSED TO DECIDE ANYTHING. Every outcome below was produced",
+  "by typing a sentence into the chat composer and pressing Enter. The only",
+  "control pressed anywhere in this round is the card's OWN 'Reply from the",
+  "chat box' toggle in D4, and it is pressed to GIVE THE BINDING BACK before",
+  "typing - which is the point of that cell.",
+  "",
+  "THE PICTURES ARE NOT THE ONLY WITNESS. Each record carries",
+  "`observedTransition`: the card's state attribute before and after the",
+  "message, the gate ROW's status before and after, and what the server",
+  "recorded - `artifact_review_gates.disposition` + `resolved_by` (the merged",
+  "#2862 reading: outcome and decider), and the rationale as it appears in the",
+  "shipped resume envelope. A card that says 'approved' next to a row that does",
+  "not is a defect this file would show.",
+  "",
+  "WHERE THE REJECT RATIONALE LIVES, measured rather than assumed: NOT on the",
+  "gate row and NOT on the settled card, which says only 'Rejected by <name>'.",
+  "It travels in `artifact_review_resume_outbox.response_text` as the shipped",
+  "review envelope's own `comment`. D2's record quotes exactly that field."
+ ],
+ "recorder": "cinatra-lifecycle-capture-recorder@1",
+ "records": [
+  {
+   "cell": "D1__review-card__chat_thread__decided",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "decided",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/q3-launch-note-review-v2",
+   "screenshot": "evidence/2853-typed-decisions/captures/D1__review-card__chat_thread__decided.png",
+   "sha256": "8d23f45582fb54836305d0afe0122614aade33408a9a43d61324caf0d039de86",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-20T07:06:09.855Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Viewport 1228 at deviceScaleFactor 2, framed on the conversation column. Head under proof 4db1fef7f, unmodified.",
+   "note": "A typed `approve it`. The WHOLE message is the card`s own verb, so interpretComposerMessage reads it as a decision and calls the CARD`s decide closure - the same closure the Approve button calls. The transcript carries the typed line and the assistant`s answer; the card settled to the named outcome and names its decider.",
+   "typed": {
+    "reader": "the run owner",
+    "message": "approve it",
+    "controlPressed": "none — the message was typed into the chat composer and sent with Enter",
+    "composerBoundBefore": "true",
+    "composerBoundWhenSent": "true"
+   },
+   "observedTransition": {
+    "cardStateBefore": "pending",
+    "cardStateAfter": "settled",
+    "gateRowBefore": "pending",
+    "gateRowAfter": "resolved",
+    "recorded": {
+     "gateStatus": "resolved",
+     "gateDisposition": "approve",
+     "resolvedByUserId": "<a user id, present>",
+     "resumeEnvelopeKind": "approve",
+     "resumeEnvelopeDecision": "approved",
+     "resumeEnvelopeComment": null
+    }
+   },
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  },
+  {
+   "cell": "D2__review-card__chat_thread__decided",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "decided",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/pricing-update-review-v2",
+   "screenshot": "evidence/2853-typed-decisions/captures/D2__review-card__chat_thread__decided.png",
+   "sha256": "4fdd3d2f29ea08e9ce35e74bd39a3ad7354d37ac9aa6c06951340ffa59661e4c",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-20T07:06:26.970Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Viewport 1228 at deviceScaleFactor 2, framed on the conversation column. Head under proof 4db1fef7f, unmodified.",
+   "note": "A typed `reject: <rationale>` on a SECOND gate. The verb before the colon is the decision; the text after it is the rationale the card`s own note field would have carried, and it rides the decision rather than being a separate act.",
+   "typed": {
+    "reader": "the run owner",
+    "message": "reject: the numbers are stale",
+    "controlPressed": "none — the message was typed into the chat composer and sent with Enter",
+    "composerBoundBefore": "true",
+    "composerBoundWhenSent": "true"
+   },
+   "observedTransition": {
+    "cardStateBefore": "pending",
+    "cardStateAfter": "settled",
+    "gateRowBefore": "pending",
+    "gateRowAfter": "resolved",
+    "recorded": {
+     "gateStatus": "resolved",
+     "gateDisposition": "reject",
+     "resolvedByUserId": "<a user id, present>",
+     "resumeEnvelopeKind": "reject",
+     "resumeEnvelopeDecision": "rejected",
+     "resumeEnvelopeComment": "the numbers are stale"
+    }
+   },
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  },
+  {
+   "cell": "D3__review-card__chat_thread__restricted",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "restricted",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/partner-brief-review-v2",
+   "screenshot": "evidence/2853-typed-decisions/captures/D3__review-card__chat_thread__restricted.png",
+   "sha256": "d6e4a607ad9b3ad550dad205d0156a58445886dc6b5bd0c555855a8495514411",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-20T07:07:14.794Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Viewport 1228 at deviceScaleFactor 2, framed on the conversation column. Head under proof 4db1fef7f, unmodified.",
+   "note": "The SAME words, from a reader the RUN does not let decide. The card`s own disabled line comes back in the transcript and the card does not move.",
+   "typed": {
+    "reader": "a restricted reader - a plain org member whose run has execute-tier visibility `admin`",
+    "message": "approve it",
+    "controlPressed": "none — the message was typed into the chat composer and sent with Enter",
+    "composerBoundBefore": null,
+    "composerBoundWhenSent": null
+   },
+   "observedTransition": {
+    "cardStateBefore": "restricted",
+    "cardStateAfter": "restricted",
+    "gateRowBefore": "pending",
+    "gateRowAfter": "pending",
+    "recorded": {
+     "gateStatus": "pending",
+     "gateDisposition": null,
+     "resolvedByUserId": null,
+     "resumeEnvelopeKind": null,
+     "resumeEnvelopeDecision": null,
+     "resumeEnvelopeComment": null
+    }
+   },
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  },
+  {
+   "cell": "D4__review-card__chat_thread__pending",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "pending",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/roadmap-summary-review-v2",
+   "screenshot": "evidence/2853-typed-decisions/captures/D4__review-card__chat_thread__pending.png",
+   "sha256": "f83ccfe22d92ab57b7d381b5aa2a96c5cc2364556efef43b6e91493d1e7b7dd2",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-20T07:07:41.064Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Viewport 1228 at deviceScaleFactor 2, framed on the conversation column. Head under proof 4db1fef7f, unmodified.",
+   "note": "THE NEGATIVE CONTROL as an ordinary chat message. The reader first pressed the card`s own control to give the implicit binding back, so the composer is a plain chat box; the words then go to the model layer like any other turn and the gate is untouched.",
+   "typed": {
+    "reader": "the run owner, with the composer binding GIVEN BACK",
+    "message": "looks good to me",
+    "controlPressed": "only the card's own \"Reply from the chat box\" control, to GIVE BACK the implicit binding before typing; no decision control was pressed",
+    "composerBoundBefore": "true",
+    "composerBoundWhenSent": "false"
+   },
+   "observedTransition": {
+    "cardStateBefore": "pending",
+    "cardStateAfter": "pending",
+    "gateRowBefore": "pending",
+    "gateRowAfter": "pending",
+    "recorded": {
+     "gateStatus": "pending",
+     "gateDisposition": null,
+     "resolvedByUserId": null,
+     "resumeEnvelopeKind": null,
+     "resumeEnvelopeDecision": null,
+     "resumeEnvelopeComment": null
+    }
+   },
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  },
+  {
+   "cell": "D5__review-card__chat_thread__decided",
+   "declaredHost": "chat_thread",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "decided",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/support-digest-review-v2",
+   "screenshot": "evidence/2853-typed-decisions/captures/D5__review-card__chat_thread__decided.png",
+   "sha256": "a794b1e14a0734fd399ffc7653e9cea321e56fca5fb947886773959a021bf47b",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"review-gate-settled\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-composer-bound\"]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-20T07:07:57.681Z",
+   "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Viewport 1228 at deviceScaleFactor 2, framed on the conversation column. Head under proof 4db1fef7f, unmodified.",
+   "note": "THE SAME WORDS while the composer is still BOUND - and the outcome that matters for this branch: they are NOT read as a decision (no approve is recorded), they take the card`s COMMENT path, and on a single-target automatic gate that path is itself terminal as `changes_requested`. Pre-existing #2566 behaviour, photographed here because the negative control is only meaningful if a reader can see what the other arm does.",
+   "typed": {
+    "reader": "the run owner, composer still bound",
+    "message": "looks good to me",
+    "controlPressed": "none — the message was typed into the chat composer and sent with Enter",
+    "composerBoundBefore": "true",
+    "composerBoundWhenSent": "true"
+   },
+   "observedTransition": {
+    "cardStateBefore": "pending",
+    "cardStateAfter": "settled",
+    "gateRowBefore": "pending",
+    "gateRowAfter": "resolved",
+    "recorded": {
+     "gateStatus": "resolved",
+     "gateDisposition": "changes_requested",
+     "resolvedByUserId": "<a user id, present>",
+     "resumeEnvelopeKind": null,
+     "resumeEnvelopeDecision": null,
+     "resumeEnvelopeComment": null
+    }
+   },
+   "contractVerdict": [
+    {
+     "code": "record/ok",
+     "detail": "the contract accepts this record as written"
+    }
+   ]
+  }
+ ]
+}
