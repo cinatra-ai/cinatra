@@ -194,7 +194,23 @@ export function buildRunAwaitingHumanNotificationInput(input: {
   let body: string;
   if (awaitingInput) {
     title = `${subject} needs your input`;
-    body = "Open the run to fill in the requested fields.";
+    // Two different destinations share this title, so they must not share a body.
+    // A derived input wait (`interrupt` classified `"input"`) really does land on a
+    // form with fields. The run-start recommendation HOLD (`waitKind: "input"`, whose
+    // one caller is `onEnterRecommendationHold`) does NOT: it lands on the skills
+    // chip row, whose own copy reads "Confirm the skills for this run … Adjust the
+    // selection, then confirm — or skip". Telling that reader to "fill in the
+    // requested fields" names fields the card does not have.
+    //
+    // INTERIM WORDING (cinatra#2838). The hold's final bell copy is the epic's ONE
+    // reserved decision and is NOT settled here; this line only stops the shipped
+    // row from describing a destination that does not exist. Whoever settles the
+    // reserved decision replaces this string — the branch, not the words, is the
+    // durable part.
+    body =
+      input.waitKind === "input"
+        ? "Open the run to confirm or skip the recommended skills."
+        : "Open the run to fill in the requested fields.";
   } else if (input.reason === "pending_approval") {
     title = `${subject} is awaiting your approval`;
     body = "Open the run to review and approve the pending step.";

@@ -138,7 +138,12 @@ describe("buildRunAwaitingHumanNotificationInput — pure shape", () => {
       waitKind: "input",
     });
     expect(held.title).toBe('"Blog draft" needs your input');
-    expect(held.body).toBe("Open the run to fill in the requested fields.");
+    // The hold lands on the skills chip row (Confirm/Skip), not on a form with
+    // fields, so it does NOT share the derived input wait's body. Interim wording —
+    // the final copy is cinatra#2838's reserved decision; what this pins is that the
+    // hold's body does not promise fields its destination has not got.
+    expect(held.body).toBe("Open the run to confirm or skip the recommended skills.");
+    expect(held.body).not.toContain("fields");
     // Same per-run key + payload as any other human wait on this run.
     expect(held.dedupeKey).toBe(runAwaitingHumanDedupeKey("R1"));
     expect(held.metadata).toMatchObject({
