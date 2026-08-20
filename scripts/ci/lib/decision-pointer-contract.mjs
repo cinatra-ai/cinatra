@@ -71,6 +71,12 @@ export const SURFACE_NOUNS = [
   "modal",
   "sidebar",
   "window",
+  // Whole-surface names. "Approve it in the dashboard." named a place the
+  // closed set did not cover, so every arm read it as legal copy -- the exact
+  // escape #2794's sentence made, one vocabulary generation later.
+  "dashboard",
+  "console",
+  "portal",
 ];
 
 /** A place named only by position -- "decide it there / above / below". */

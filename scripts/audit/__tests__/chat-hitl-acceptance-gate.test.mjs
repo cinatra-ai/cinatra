@@ -13,19 +13,32 @@
 //   2. STRICTNESS MEANS DONE. `--strict` reports NOT READY for a manifest with
 //      MISSING or partial rows — it is not satisfied by "no false claim found".
 //      An all-red manifest is the case that must never read as clean.
-//   3. THE REAL MANIFEST is honest right now: audit passes, every referenced
-//      test really exists, and strict reports the program NOT READY — two
-//      criteria MISSING and one partial, each naming what is absent.
+//   3. THE REAL MANIFEST is honest right now: every referenced test really
+//      exists. The CLI is RED, for two INDEPENDENT reasons that are held apart
+//      below, because conflating them is how one of them would get fixed and
+//      the other forgotten:
 //
-//      That last expectation has now been inverted twice, and each inversion is
-//      recorded where it happened. It asserted NOT READY by design so that no
-//      lane could flip a row green in passing; the finisher round (2026-08-13)
-//      flipped it to READY once the two defects it found had landed on main and
-//      the owner had ruled. A code-grounded audit then showed the flip was
-//      wrong on two rows: the schedule criterion was mapped onto tests that
-//      never draw a card, and the conformance matrix was recorded ready with no
-//      cells at all on two of its four cards. It reads NOT READY again, and it
-//      goes green when those cards are DRAWN — never when they are re-read.
+//      THE CRITERIA HALF. Strict reports the program NOT READY: two criteria
+//      MISSING and one partial, each naming what is absent. That expectation
+//      has now been inverted twice, and each inversion is recorded where it
+//      happened. It asserted NOT READY by design so that no lane could flip a
+//      row green in passing; the finisher round (2026-08-13) flipped it to
+//      READY once the two S7-found defects had LANDED ON MAIN — D-1
+//      cinatra#2710 (`7123d2bf1`) and D-2 cinatra#2711 (`6b4c3e887`) — and the
+//      owner had ruled on the three open questions (coordination-tracker entry
+//      334). A code-grounded audit then showed that flip was wrong on two rows:
+//      the schedule criterion was mapped onto tests that never draw a card, and
+//      the conformance matrix was recorded ready with no cells at all on two of
+//      its four cards. It reads NOT READY again, and it goes green when those
+//      cards are DRAWN — never when they are re-read.
+//
+//      THE EVIDENCE HALF. The manifest's chat_thread cells point at screenshots
+//      the canonical capture index never validated, and an unindexed screenshot
+//      counts as zero. The CLI refuses that in BOTH modes, and it refuses it
+//      before it reports on the criteria at all — so the criteria half is
+//      asserted against the library below rather than against CLI output.
+//
+//      Both halves must be true before READY prints again.
 
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -188,13 +201,35 @@ describe("the REAL manifest", () => {
     }
   });
 
-  it("the CLI's manifest-audit mode exits 0", () => {
-    const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
-    expect(res.stdout + res.stderr).toMatch(/manifest honest/);
-    expect(res.status).toBe(0);
+  it("the MANIFEST half of the CLI is clean — every named proof exists", () => {
+    // The manifest's own honesty is unchanged and still passes; what the CLI
+    // now also refuses is the EVIDENCE binding, asserted in the test below and
+    // owned by chat-hitl-capture-index.test.mjs. "Honest" is not "done": the
+    // readiness question is a separate assertion again below.
+    expect(auditManifest()).toEqual([]);
   });
 
-  it("the CLI's --strict mode reports the program NOT READY — the two proof gaps, named", () => {
+  it("the CLI REFUSES both modes while a chat_thread cell is unbound", () => {
+    // THE FLIP, and it is deliberate. Until the capture binding existed, the
+    // gate printed READY over a manifest whose chat_thread cells pointed at
+    // screenshots nothing had ever validated — the exact false green the
+    // program's own review round caught by hand. An unindexed screenshot now
+    // counts as zero, so the honest answer on this tree is RED in both modes.
+    //
+    // This expectation was READY before, and flipping it is the conscious act
+    // the previous comment demanded. It goes back to green when the capture
+    // round indexes those cells against the shared recorder, and not before.
+    for (const args of [[], ["--strict"]]) {
+      const res = spawnSync(process.execPath, [GATE, ...args], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      });
+      expect(res.stdout + res.stderr).toMatch(/an unindexed screenshot counts as zero/);
+      expect(res.status, `mode ${args.join(" ") || "audit"}`).toBe(1);
+    }
+  });
+
+  it("the criteria half reports the program NOT READY — the two proof gaps, named", () => {
     // The honest state of the program at this commit, and the SECOND time this
     // expectation has been inverted. It read NOT READY until the finisher round
     // flipped it, and it is flipped back now because a code-grounded audit found
@@ -205,15 +240,24 @@ describe("the REAL manifest", () => {
     // Flipping this expectation is a deliberate act in either direction, which
     // is why it carries its reason inline. Going green again needs the two cards
     // DRAWN and their cells captured — not a re-reading of the same evidence.
-    const res = spawnSync(process.execPath, [GATE, "--strict"], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    });
-    const out = res.stdout + res.stderr;
-    expect(out).toMatch(/NOT READY — 14\/16 criteria proven, 2 MISSING, 1 partial/);
-    expect(out).toMatch(/UI PROOF MISSING/);
-    expect(out).toMatch(/CARD AXIS MISSING/);
-    expect(res.status).toBe(1);
+    //
+    // Asked of the LIBRARY, not of CLI output, because the evidence half above
+    // refuses both modes before the CLI reaches its readiness report. Holding
+    // the two halves apart is what keeps either from hiding the other: binding
+    // the captures does not make the program ready, and drawing the two cards
+    // does not bind them.
+    const { violations, unproven, partial, total } = strictReport();
+    expect(violations).toEqual([]);
+    expect(total).toBe(CANONICAL_CRITERIA.length);
+    expect(unproven).toHaveLength(2);
+    expect(partial).toHaveLength(1);
+    expect(unproven.map((r) => r.gap).join("\n")).toMatch(/UI PROOF MISSING/);
+    expect(unproven.map((r) => r.gap).join("\n")).toMatch(/CARD AXIS MISSING/);
+    // The line the CLI would print, spelled out here so a regression in either
+    // count is still legible as the sentence a reader sees.
+    expect(`${total - unproven.length}/${total} criteria proven, ${unproven.length} MISSING, ${partial.length} partial`).toBe(
+      "14/16 criteria proven, 2 MISSING, 1 partial",
+    );
   });
 
   it("the design pin is the ratified drawing, and the drift is recorded rather than overwritten", () => {
