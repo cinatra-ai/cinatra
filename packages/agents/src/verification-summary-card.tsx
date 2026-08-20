@@ -410,7 +410,16 @@ function AdvisoryComments({
               <span className="font-mono text-badge-2xs uppercase tracking-wide text-muted-foreground">
                 {comment.authorKind}
               </span>
-              <p className="mt-1 whitespace-pre-wrap text-foreground">{comment.body}</p>
+              {/* `whitespace-pre-wrap` keeps the author's own line breaks;
+                  `break-words` is what contains a body that has none. A comment
+                  body is arbitrary text — a stack frame, a base64 blob, a URL —
+                  and one unbroken token would otherwise widen the panel past
+                  the card on every host. Prose idiom (`break-words`), not the
+                  machine-string one (`break-all`), so ordinary sentences still
+                  wrap at their spaces. */}
+              <p className="mt-1 whitespace-pre-wrap break-words text-foreground">
+                {comment.body}
+              </p>
             </li>
           ))}
         </ul>

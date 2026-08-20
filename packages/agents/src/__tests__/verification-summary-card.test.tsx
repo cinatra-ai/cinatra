@@ -352,6 +352,38 @@ describe("§VII — the reading", () => {
     expect(container.textContent).toContain("<img src=x onerror=alert(1)>done");
   });
 
+  it("CONTAINS a comment body with no breakable whitespace in it", async () => {
+    // A body is arbitrary text and nothing upstream caps its token length: a
+    // stack frame, a base64 blob or a signed URL arrives as one unbroken run.
+    // `whitespace-pre-wrap` alone would lay that out as a single line and widen
+    // the panel past the card, so the body must also carry the wrap rule.
+    // jsdom does no layout, so the containment is asserted where it is decided
+    // — on the body node's own classes, plus the min-width-0 chain that lets
+    // the wrap take effect instead of the flex column growing to fit.
+    const unbroken = "x".repeat(4000);
+    mockResolve(
+      { state: "advisory" },
+      { ...BODY, advisoryComments: [{ authorKind: "agent", body: unbroken }] },
+    );
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector("[data-advisory-comment]")).not.toBeNull(),
+    );
+    const body = container.querySelector<HTMLElement>("[data-advisory-comment] p")!;
+    expect(body.textContent).toBe(unbroken);
+    expect(body.className).toContain("whitespace-pre-wrap");
+    expect(body.className).toContain("break-words");
+    // The card frame and the advisory section both allow their content to
+    // shrink; without this the wrap rule would have nothing to wrap against.
+    const card = container.querySelector<HTMLElement>(
+      '[data-conformance-id="verification-card"]',
+    )!;
+    expect(card.className).toContain("min-w-0");
+    expect(
+      container.querySelector<HTMLElement>("[data-verification-advisory]")!.className,
+    ).toContain("min-w-0");
+  });
+
   it("carries NO FLOOR at all — it asks nothing, so it draws nothing to press", async () => {
     for (const host of HOSTS) {
       mockResolve({ state: "advisory" });
