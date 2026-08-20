@@ -1,0 +1,815 @@
+/**
+ * THE DURABLE STREAM → STORE → RELOAD CONTRACT (cinatra#2823, epic #2784 S9j).
+ *
+ * WHAT THIS PROVES, and why it needs a real database and a real DOM.
+ *
+ * A lifecycle card in the conversation is not drawn from the model's words. It is
+ * minted by the SINK from a first-party tool result, carried on the AG-UI wire as
+ * a DATA_PART, and re-drawn after a reload from whatever the server kept. The
+ * failure this contract exists to make impossible is the one the plan records as
+ * §2.3 row 5: *a card present live can be absent after a reload*. That is a
+ * PERSISTENCE defect, not a renderer defect — so a test that stops at the wire,
+ * or one that hands the renderer a transcript it wrote itself, cannot see it.
+ *
+ * So this drives the whole path, end to end, for every ruled carriage:
+ *
+ *   1. THE REAL SINK. `createAgUiSinkAdapter` — the shipped adapter — is driven
+ *      with a real producing tool result: the reserved envelope built by the real
+ *      `buildLifecycleViewEnvelope` for the three DATA_PART kinds, and the
+ *      durable `agent_run` dispatch result for the recommendation case, which is
+ *      deliberately NOT an envelope. Both the AG-UI events and `durableContent()`
+ *      are captured from that one drive.
+ *   2. THE REAL STORE. The user's turn lands through the real legacy-mirror
+ *      writer (`upsertChatThreadInDatabase`) — `/chat` persists the user message
+ *      before it routes, so that save is the one that has already landed when the
+ *      assistant turn begins. The assistant turn lands the way the STREAM ROUTE
+ *      lands it: `appendAssistantTurn` + `updateAssistantTurn(…, { content:
+ *      durableContent() })`. Nothing else writes.
+ *   3. NO REDIS, NO CLIENT MEMORY. The reload is `reconstructThreadPayload` and
+ *      nothing else. The AG-UI log is never read (it is Redis, and a reload does
+ *      not have it); the client's own whole-transcript save is never made for the
+ *      assistant turn, because that save is best-effort and silent
+ *      (`packages/chat/src/conversation-services.ts`) and a contract that
+ *      depended on it would be asserting the very thing that can be lost.
+ *   4. THE REAL VIEW. What comes back is mounted through the shared surface
+ *      harness — the same `ConversationColumn` `/chat` mounts — and the card is
+ *      measured off the production DOM with the SAME per-kind carriage table the
+ *      S9h anti-pattern gates use (`CHAT_THREAD_CARRIAGE_CONTRACT`).
+ *
+ * THE TEST NEVER CONSTRUCTS `UiMessage.parts` OR `UiMessage.dataParts`.
+ * That is the whole methodological point and it is enforced below by
+ * `refuseHandBuiltRenderState`, which fails the suite if any message reaching the
+ * mount carries render state this file authored rather than the store returned.
+ * The only message this file writes by hand is the USER's, which has neither
+ * field — a hand-built assistant transcript would make the mount a fixture test
+ * and would pass whether or not persistence works, which is exactly the shape
+ * that let the gap survive.
+ *
+ * WHAT IS STUBBED, AND WHY THAT IS NOT THE THING UNDER TEST. The lifecycle card
+ * re-resolves its AUTHORITATIVE state server-side from the persisted ref
+ * (`/api/lifecycle-views/resolve`) — that is the S1 contract and a separate
+ * seam. It is answered here by a stub that RECORDS which ref it was asked about,
+ * which turns the stub into an assertion: the card must ask about exactly the ref
+ * the sink minted, recovered from Postgres alone. The four modules the mounted
+ * column reaches that belong to the server runtime are replaced exactly as the
+ * chat package's own DOM suites replace them, for their stated reason: their
+ * graphs reach server-only code, so without them the column does not mount at
+ * all. Everything this contract measures stays real.
+ *
+ * LOCAL NOTE: this suite runs under `vitest.integration-2823.config.ts` (jsdom +
+ * the chat package's alias set + a live Postgres). It is NOT in the root include.
+ */
+
+import { randomUUID } from "node:crypto";
+import React from "react";
+import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup } from "@testing-library/react";
+
+// ---------------------------------------------------------------------------
+// The mounted column's server-runtime leaves, replaced exactly as the chat
+// package's own DOM suites replace them (see `held-turn-transcript-contract`).
+// The specifiers are spelled from THIS file; vitest resolves them to the same
+// module ids the column imports relatively, so the replacement takes.
+// ---------------------------------------------------------------------------
+vi.mock("lucide-react", () => {
+  const StubIcon: React.FC = () => null;
+  return new Proxy({} as Record<string, React.FC>, {
+    get: (_t, prop) => {
+      if (prop === "__esModule") return true;
+      if (prop === "then") return undefined;
+      if (typeof prop === "symbol") return undefined;
+      return StubIcon;
+    },
+    has: () => true,
+    ownKeys: () => ["Check", "ChevronDown", "default"],
+    getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true, value: StubIcon }),
+  });
+});
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  usePathname: () => "/chat",
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock("../../../../packages/chat/src/pending-call-actions", () => ({
+  listPendingToolConfirmations: async () => ({ rows: [] }),
+  decidePendingToolCall: async () => ({ ok: true }),
+}));
+vi.mock("../../../../packages/chat/src/undo-actions", () => ({
+  recentUndoableChangeSetForRunAction: async () => ({ changeSetId: null }),
+}));
+vi.mock("@/components/data-safety/undo-toast", () => ({
+  undoDeepLink: (id: string) => `/objects?undo=${id}`,
+}));
+// The inline run card is the AG-UI run panel, whose graph reaches the server
+// runtime. Replaced by a stand-in that declares the SAME `run_card` host the
+// shipped panel declares and pins the runId it was mounted with, so the
+// recommendation carriage's identity assertion is made against the production
+// vocabulary rather than a marker invented here.
+vi.mock("../../../../packages/chat/src/inline-agent-run-card", () => ({
+  InlineAgentRunCard: ({ runId }: { runId: string }) =>
+    React.createElement("div", {
+      "data-lifecycle-card-host": "run_card",
+      "data-inline-run-card": runId,
+    }),
+}));
+vi.mock("../../../../packages/agents/src/server-actions", () => ({
+  getRunRecommendedSkillsAction: vi.fn(async () => []),
+  getSkillsForAgentAction: vi.fn(async () => []),
+  getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({})),
+  confirmRunSkillSelectionAction: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock("../../../../packages/agents/src/run-recommendation-actions", () => ({
+  getRunRecommendationHoldStateAction: async () => ({ state: "none" }),
+  confirmRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
+  skipRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
+}));
+
+import {
+  createAgUiSinkAdapter,
+  extractAgentRunIdFromResult,
+  type AgUiTurnDurableContent,
+} from "@/lib/assistant-runtime/ag-ui-sink-adapter";
+import {
+  buildLifecycleViewEnvelope,
+  LIFECYCLE_PRODUCER_SERVER_LABEL,
+  type LifecycleViewType,
+} from "@/lib/assistant-runtime/lifecycle-view-envelope";
+import {
+  appendAssistantTurn,
+  createAssistantThread,
+  getAssistantThread,
+  reconstructThreadPayload,
+  updateAssistantTurn,
+} from "@/lib/assistant-thread-store";
+import { buildAssistantThreadMirrorQueries } from "@/lib/project-inheritance";
+import { postgresSchema, getPostgresConnectionString } from "@/lib/postgres-config";
+import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import {
+  CHAT_THREAD_CARRIAGE_CONTRACT,
+  HELD_TURN_MOUNT_OBLIGATIONS,
+  carriageRowFor,
+  projectsOwnerCard,
+  runIdOf,
+  type ChatThreadCarriageRow,
+  type ProjectedNode,
+  type TurnProjection,
+} from "@/lib/lifecycle/held-turn-card-contract";
+import { mountSurface } from "../../../../packages/chat/src/__tests__/conversation-column-harness";
+import type { UiMessage } from "../../../../packages/chat/src/types";
+import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../../../../packages/agents/src/lifecycle-card-runtime";
+
+// ---------------------------------------------------------------------------
+// The four carriages
+// ---------------------------------------------------------------------------
+
+/**
+ * One carriage: a ruled lifecycle kind, the first-party tool whose result mints
+ * it, and how that result is built.
+ *
+ * THE THREE ENVELOPE KINDS use the REAL producer builder, so the bytes the sink
+ * recognizes are the bytes a lifecycle primitive really returns — a hand-written
+ * JSON blob would let this suite pass against a recognizer that had drifted.
+ *
+ * THE RECOMMENDATION CASE IS DELIBERATELY NOT AN ENVELOPE. Its carriage is the
+ * durable `agent_run` dispatch result (`{ runId, status }`), which the sink parses
+ * with `extractAgentRunIdFromResult` and the S9h carriage contract reads back with
+ * `runIdOf`. Both shipped readers are asserted against it below, so the shape is
+ * pinned by the code that consumes it rather than by this file's opinion of it.
+ */
+type Carriage = {
+  kind: ChatThreadCarriageRow["kind"];
+  /** The first-party tool whose result mints this kind. */
+  toolName: string;
+  /** Deterministic per-kind prose, so the turn has a text part like a real one. */
+  prose: string;
+  /** Build the tool result; returns the serialized result and the identity in it. */
+  build: () => { result: string; identity: string };
+};
+
+/** The opaque ref of a lifecycle envelope, per kind. Bounded, printable, unique. */
+function refFor(viewType: LifecycleViewType): string {
+  return `${viewType}:${randomUUID()}`;
+}
+
+function envelopeCarriage(
+  viewType: LifecycleViewType,
+  toolName: string,
+  prose: string,
+): Carriage {
+  return {
+    kind: viewType,
+    toolName,
+    prose,
+    build: () => {
+      const ref = refFor(viewType);
+      const result = buildLifecycleViewEnvelope({ viewType, ref });
+      if (result === null) {
+        throw new Error(
+          `buildLifecycleViewEnvelope refused a ${viewType} ref of ${ref.length} chars — ` +
+            "the producer would emit nothing, so this carriage could not be driven at all",
+        );
+      }
+      return { result, identity: ref };
+    },
+  };
+}
+
+const CARRIAGES: readonly Carriage[] = Object.freeze([
+  envelopeCarriage(
+    "artifact_review_gate",
+    "artifact_review_gate_render",
+    "I put the draft up for review.",
+  ),
+  envelopeCarriage(
+    "trigger_schedule_proposal",
+    "schedule_proposal_render",
+    "Here is the schedule I would set.",
+  ),
+  envelopeCarriage(
+    "verification_summary",
+    "verification_record_render",
+    "I checked the change against what the review authorized.",
+  ),
+  {
+    kind: "recommendation_hold",
+    toolName: "agent_run",
+    prose: "I started the agent and it is waiting on you.",
+    build: () => {
+      const runId = randomUUID();
+      // The durable dispatch answer, exactly as the held-dispatch turn persists
+      // it. Not an envelope, by design: the run is genuinely blocked on the
+      // answer, so this carriage is an INTERRUPT and its identity is the run.
+      const result = JSON.stringify({ runId, status: "pending_input" });
+      return { result, identity: runId };
+    },
+  },
+]);
+
+// ---------------------------------------------------------------------------
+// 1. The real sink
+// ---------------------------------------------------------------------------
+
+type SinkDrive = {
+  runId: string;
+  toolCallId: string;
+  /** The identity the producer minted: the envelope's ref, or the run's id. */
+  identity: string;
+  /** Every AG-UI event the adapter published, in order. */
+  events: Array<Record<string, unknown>>;
+  /** What the route would persist to `assistant_turns.content`. */
+  durable: AgUiTurnDurableContent;
+};
+
+/**
+ * Drive the SHIPPED sink adapter through one lifecycle turn and capture both of
+ * its outputs from the SAME drive: the AG-UI wire and the durable content.
+ *
+ * Capturing both from one drive is load-bearing. If the wire were driven twice —
+ * once for the events and once for the durable row — the two could disagree and
+ * this suite would never notice, which is the failure mode it is here to catch:
+ * the card on the wire and the card in the durable row must be the same card.
+ */
+async function driveTheRealSink(carriage: Carriage, threadId: string): Promise<SinkDrive> {
+  const runId = randomUUID();
+  const toolCallId = `call-${randomUUID()}`;
+  const { result, identity } = carriage.build();
+  const events: Array<Record<string, unknown>> = [];
+
+  const adapter = createAgUiSinkAdapter({
+    runId,
+    threadId,
+    publish: async (event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    },
+  });
+
+  adapter.start();
+  adapter.send("text", { content: carriage.prose });
+  adapter.send("tool_call", {
+    id: toolCallId,
+    name: carriage.toolName,
+    serverLabel: LIFECYCLE_PRODUCER_SERVER_LABEL,
+  });
+  adapter.send("tool_result", {
+    id: toolCallId,
+    name: carriage.toolName,
+    serverLabel: LIFECYCLE_PRODUCER_SERVER_LABEL,
+    resultLabel: `${carriage.toolName} ok`,
+    result,
+  });
+  adapter.send("done", {});
+  await adapter.drain();
+
+  const durable = adapter.durableContent();
+  if (durable === null) {
+    throw new Error(
+      `the sink produced no durable content for ${carriage.kind} — the turn had text and a tool round, ` +
+        "so a null here is the adapter losing the whole turn, not this carriage being empty",
+    );
+  }
+  return { runId, toolCallId, identity, events, durable };
+}
+
+/** The DATA_PART payloads the wire carried, in order. */
+function dataPartsOnTheWire(drive: SinkDrive): Array<Record<string, unknown>> {
+  return drive.events
+    .filter((e) => e.type === "DATA_PART")
+    .map((e) => e.data as Record<string, unknown>);
+}
+
+// ---------------------------------------------------------------------------
+// 2. The real store
+// ---------------------------------------------------------------------------
+
+const ORG_ID = "org-2823";
+const OWNER_ID = "user-2823";
+
+/**
+ * Persist the turn the way PRODUCTION persists it, and no other way.
+ *
+ * The USER's message goes through the legacy-mirror writer because that is where
+ * it really goes: `/chat` fires its whole-transcript save the moment the message
+ * is sent, "before routing, before LLM call". So by the time the assistant turn
+ * exists, the user's message is already durable.
+ *
+ * The ASSISTANT's turn goes through `appendAssistantTurn` +
+ * `updateAssistantTurn(content)` because that is the stream route's own
+ * persistence, and it is the ONLY server-side record of the turn. The
+ * second whole-transcript save — the one that would carry the assistant turn
+ * back down — is deliberately NOT made here: it is best-effort and silent, so a
+ * card that survives only because it landed is a card that vanishes the first
+ * time it does not.
+ */
+function persistThroughTheRealStore(args: {
+  threadId: string;
+  userText: string;
+  runId: string;
+  durable: AgUiTurnDurableContent;
+}): void {
+  const now = new Date().toISOString();
+  // A user message: no `parts`, no `dataParts`, nothing this file could use to
+  // smuggle render state past the reload.
+  const userMessage = { id: `u-${randomUUID()}`, role: "user" as const, content: args.userText };
+  // The SHIPPED mirror projection, driven exactly as `upsertChatThreadInDatabase`
+  // drives it (same builder, same schema, same one transaction). The wrapper
+  // itself is not called because its other half is the ARTIFACT-REF pin sync — a
+  // different subsystem, with nothing to sync for an attachment-less transcript,
+  // reached through a `require()` of a server-graph module this DOM-hosted tier
+  // has no business loading. What is under test is the mirror, and this is the
+  // mirror.
+  runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: buildAssistantThreadMirrorQueries({
+      schemaName: postgresSchema,
+      thread: {
+        id: args.threadId,
+        title: args.userText,
+        messages: [userMessage],
+        createdAt: now,
+        updatedAt: now,
+        ownerUserId: OWNER_ID,
+      },
+      explicitMirrorOrgId: ORG_ID,
+    }),
+  });
+  if (!getAssistantThread(args.threadId)) {
+    // The mirror is the thread's first writer here; if it did not land there is
+    // no thread to hang a turn on and the FK would say so less clearly.
+    throw new Error(`the legacy-mirror writer did not create thread ${args.threadId}`);
+  }
+  const turn = appendAssistantTurn({
+    threadId: args.threadId,
+    runId: args.runId,
+    role: "assistant",
+    status: "running",
+  });
+  updateAssistantTurn(turn.id, { status: "completed", content: args.durable });
+}
+
+// ---------------------------------------------------------------------------
+// 3. The reload — no Redis, no client memory
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything a cold reload has: the structured store, read back.
+ *
+ * There is no second source in this function ON PURPOSE. Every other way a card
+ * could reach the screen — the Redis AG-UI log, a live reducer, a client-held
+ * transcript — is absent from a reload, so any of them appearing here would make
+ * the assertion below untrue of the thing it claims to be about.
+ */
+function reloadWithNoRedisAndNoClientMemory(threadId: string): UiMessage[] {
+  const payload = reconstructThreadPayload(threadId);
+  if (payload === null) {
+    throw new Error(
+      `the reload found nothing for thread ${threadId} — the structured store reconstructed no payload at all`,
+    );
+  }
+  const messages = payload.messages;
+  if (!Array.isArray(messages)) {
+    throw new Error("the reconstructed payload carries no messages array");
+  }
+  return messages as UiMessage[];
+}
+
+/**
+ * The reloaded assistant turn, or `null` when the reload brought none back.
+ *
+ * IT RETURNS NULL RATHER THAN THROWING, deliberately. "The turn did not come
+ * back" is the defect this contract is about, so it has to be a failing
+ * ASSERTION inside the arm that asserts it — not an exception in a shared
+ * helper, which would red every arm at once and leave the record unable to say
+ * WHICH half broke. The wire arms below pass on a tree with no bridge at all;
+ * only the reload arms turn red. That distinction is the whole red-on-main
+ * record.
+ */
+function reloadedAssistantTurn(messages: UiMessage[]): UiMessage | null {
+  const assistants = messages.filter((m) => m.role === "assistant");
+  if (assistants.length !== 1) return null;
+  return assistants[0];
+}
+
+/** Assert the turn came back at all, and narrow it for the arms that need it. */
+function requireReloadedAssistantTurn(carried: Carried): UiMessage {
+  expect(
+    carried.assistant,
+    `the reload brought back no assistant turn for ${carried.carriage.kind} — the durable turn the ` +
+      "stream route persisted is not part of the reconstructed transcript, so its card cannot be redrawn " +
+      `(roles back: ${carried.reloaded.map((m) => m.role).join(", ") || "none"})`,
+  ).not.toBeNull();
+  return carried.assistant as UiMessage;
+}
+
+// ---------------------------------------------------------------------------
+// THE HAND-BUILT-RENDER-STATE REFUSAL
+// ---------------------------------------------------------------------------
+
+/**
+ * The methodological gate, executed rather than promised.
+ *
+ * The issue's rule is that this test never constructs `UiMessage.parts` or
+ * `UiMessage.dataParts` by hand. A rule like that is worth nothing as a promise
+ * in a comment — the whole reason this gap survived is that a suite CAN hand its
+ * renderer a transcript it wrote itself and still look like a passing contract.
+ * So it is executed, in two directions:
+ *
+ *   1. THE MOUNTED TRANSCRIPT IS THE STORE'S. Read the thread back a SECOND
+ *      time, from Postgres, with nothing in between, and require what is about
+ *      to be mounted to equal it. A transcript this file had shaped — a part
+ *      appended, a `dataParts` array supplied, a runId pinned — would not survive
+ *      a fresh read, because the fresh read does not know about it.
+ *   2. THIS FILE AUTHORS NO RENDER STATE AT ALL. The single message it does write
+ *      is the user's, and a user message carries neither field. Asserted on every
+ *      non-assistant message rather than assumed of the one.
+ */
+function refuseHandBuiltRenderState(mounted: UiMessage[], threadId: string): void {
+  const secondRead = reloadWithNoRedisAndNoClientMemory(threadId);
+  expect(
+    mounted,
+    "what is about to be mounted is not what a fresh read of the store returns — the transcript was shaped in this file",
+  ).toEqual(secondRead);
+  for (const message of mounted) {
+    if (message.role === "assistant") continue;
+    expect(
+      message.parts === undefined && message.dataParts === undefined,
+      `a ${message.role} message carries render state — this suite writes none, so it came from somewhere it should not have`,
+    ).toBe(true);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4. The real view
+// ---------------------------------------------------------------------------
+
+/** Refs the mounted cards asked the resolve endpoint about, in order. */
+let resolveAsks: Array<{ viewType: string; ref: string }> = [];
+let originalFetch: typeof globalThis.fetch;
+
+/**
+ * The authoritative-resolve seam, answered and RECORDED.
+ *
+ * A lifecycle card draws nothing until the server answers, so the mount needs an
+ * answer; and what the card ASKED is the strongest available statement that the
+ * ref survived — it is the persisted ref, read out of Postgres, travelling back
+ * to the server through the real card. The stub therefore records every ask, and
+ * the per-kind assertion reads it back.
+ */
+function installResolveStub(): void {
+  originalFetch = globalThis.fetch;
+  resolveAsks = [];
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === LIFECYCLE_VIEW_RESOLVE_PATH) {
+      let asked: { viewType?: unknown; ref?: unknown } = {};
+      try {
+        asked = JSON.parse(String(init?.body ?? "{}")) as { viewType?: unknown; ref?: unknown };
+      } catch {
+        /* recorded below as the empty ask it is */
+      }
+      resolveAsks.push({ viewType: String(asked.viewType ?? ""), ref: String(asked.ref ?? "") });
+      const kind = String(asked.viewType ?? "artifact_review_gate");
+      return json({
+        kind,
+        // `pending` for every kind: the card is open, so it draws. An `absent`
+        // answer draws no DOM at all (§IV) and would make the mount assertion
+        // measure the stub instead of the carriage.
+        state: { state: "pending", canDecide: true, canComment: true },
+        // Each kind gets the body IT is authorized to carry, because the shared
+        // parse refuses anything else outright: the review kind draws from its
+        // island and a body beside it is refused, while the other two fail closed
+        // WITHOUT one. A stub that handed every kind the same answer would draw
+        // no schedule card and the mount arm would read that as a carriage gap.
+        body: RESOLVE_BODIES[kind] ?? null,
+      });
+    }
+    // Everything else the column asks for is the harness's own business.
+    return json({}, 404);
+  }) as unknown as typeof fetch;
+}
+
+/**
+ * The per-kind resolve BODY, in the shape each kind's own schema demands.
+ *
+ * `artifact_review_gate` is absent on purpose: its target arrives through the
+ * review island, so the parse REFUSES a body beside it.
+ */
+const RESOLVE_BODIES: Record<string, unknown> = {
+  // §VII — the verification kind fails closed without a reading.
+  verification_summary: {
+    version: 1,
+    outcome: "verified",
+    reviewedRevisionId: "rev-base",
+    repairedRevisionId: "rev-fixed",
+    scopePaths: ["content.title"],
+    fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+  },
+  // §VI — the proposal card's pending body: the chosen option row, the duration
+  // line and the Confirm floor.
+  trigger_schedule_proposal: {
+    phase: "proposal",
+    version: 1,
+    agentName: "Proof Agent",
+    schedule: { kind: "scheduled", runAt: "2026-07-14T09:00", timezone: "Europe/Berlin" },
+    durationCopy: "About 45s – 3.4 hr.",
+    canConfirm: true,
+    restrictedReason: null,
+  },
+};
+
+/** Let the cards' own resolve effects settle before anything is measured. */
+async function settleResolvers(): Promise<void> {
+  for (let i = 0; i < 8; i += 1) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+}
+
+/** Mount the production `/chat` column on the RELOADED transcript. */
+async function mountReloadedChat(messages: UiMessage[]) {
+  const mounted = await mountSurface("chat", { messages });
+  const root = mounted.container.querySelector<HTMLElement>('[data-parity-surface="chat"]');
+  if (!root) throw new Error("the chat surface did not mount");
+  await settleResolvers();
+  return root;
+}
+
+/**
+ * The production DOM, read into the contract's own projection model.
+ *
+ * The conversation list renders one block per message; the assistant turn's block
+ * is its SLOT. A node carrying an owner anchor is attributed to the slot whose
+ * block contains it, so "the owner root under its slot" is measured rather than
+ * assumed, and an anchor that turned up under the user's block — or nowhere —
+ * reads as the absence it is.
+ */
+function projectionFromReloadedDom(
+  root: HTMLElement,
+  row: ChatThreadCarriageRow,
+  messages: UiMessage[],
+  drive: SinkDrive,
+  carriage: Carriage,
+): TurnProjection {
+  const list = root.querySelector("[data-conversation-list]");
+  if (!list) throw new Error("the reloaded transcript rendered no conversation list");
+  const blocks = Array.from(list.children) as HTMLElement[];
+  expect(
+    blocks.length,
+    "the reloaded transcript renders one block per reconstructed message",
+  ).toBe(messages.length);
+
+  const assistantSlot = messages.findIndex((m) => m.role === "assistant");
+  expect(assistantSlot, "the reloaded transcript has an assistant block").toBeGreaterThanOrEqual(0);
+
+  // The ordered parts of the turn, as the CONTRACT models them: the prose and
+  // the durable tool result that triggered the card. Both are read off what came
+  // back from the store, never off this file's inputs.
+  const parts: TurnProjection["parts"] = [
+    { kind: "text", slot: assistantSlot, text: carriage.prose },
+    {
+      kind: "tool_result",
+      slot: assistantSlot,
+      name: carriage.toolName,
+      result: durableToolResultOf(drive.durable, drive.toolCallId),
+    },
+  ];
+
+  const anchorsByEl = new Map<Element, string[]>();
+  for (const selector of [...row.ownerAnchors, ...row.ruledRootAnchors]) {
+    for (const el of Array.from(list.querySelectorAll(selector))) {
+      anchorsByEl.set(el, [...(anchorsByEl.get(el) ?? []), selector]);
+    }
+  }
+  const nodes: ProjectedNode[] = [];
+  for (const [el, anchors] of anchorsByEl) {
+    const slot = blocks.findIndex((b) => b === el || b.contains(el));
+    nodes.push({
+      anchors,
+      slot: slot === -1 ? null : slot,
+      insideSubtrees: row.foreignHostSubtrees.filter((s) => el.closest(s) !== null),
+    });
+  }
+  return { parts, nodes };
+}
+
+/** The durable tool_result payload the sink kept for this call, if any. */
+function durableToolResultOf(durable: AgUiTurnDurableContent, toolCallId: string): string | null {
+  for (const part of durable.parts) {
+    if (part.type === "tool_result" && part.id === toolCallId) {
+      return typeof part.result === "string" ? part.result : null;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// The run
+// ---------------------------------------------------------------------------
+
+/** One carriage driven all the way through, cached so the arms share one drive. */
+type Carried = {
+  carriage: Carriage;
+  threadId: string;
+  drive: SinkDrive;
+  reloaded: UiMessage[];
+  /** `null` when the reload brought no assistant turn back — see below. */
+  assistant: UiMessage | null;
+};
+
+const carried = new Map<string, Carried>();
+
+async function carry(carriage: Carriage): Promise<Carried> {
+  const cached = carried.get(carriage.kind);
+  if (cached) return cached;
+  const threadId = `thr-2823-${randomUUID()}`;
+  const drive = await driveTheRealSink(carriage, threadId);
+  persistThroughTheRealStore({
+    threadId,
+    userText: `Please handle the ${carriage.kind} case.`,
+    runId: drive.runId,
+    durable: drive.durable,
+  });
+  const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+  const value: Carried = {
+    carriage,
+    threadId,
+    drive,
+    reloaded,
+    assistant: reloadedAssistantTurn(reloaded),
+  };
+  carried.set(carriage.kind, value);
+  return value;
+}
+
+beforeAll(() => {
+  // The store bootstraps its own DDL on first use; do it once, loudly, so a
+  // provisioning failure is not mistaken for a persistence failure.
+  const probe = `thr-2823-probe-${randomUUID()}`;
+  createAssistantThread({ id: probe, ownerUserId: OWNER_ID, orgId: ORG_ID });
+  expect(getAssistantThread(probe), "the store did not provision").not.toBeNull();
+});
+
+beforeEach(() => {
+  installResolveStub();
+});
+
+afterEach(() => {
+  cleanup();
+  globalThis.fetch = originalFetch;
+});
+
+afterAll(() => {
+  carried.clear();
+});
+
+describe("the ruled carriage table is the one this contract drives", () => {
+  it("covers every chat_thread carriage, with no kind added or dropped", () => {
+    expect(CARRIAGES.map((c) => c.kind).sort()).toEqual(
+      CHAT_THREAD_CARRIAGE_CONTRACT.map((r) => r.kind).sort(),
+    );
+  });
+});
+
+describe.each(CARRIAGES.map((c) => [c.kind, c] as const))(
+  "the %s carriage survives stream → store → reload",
+  (_kind, carriage) => {
+    it("the sink mints the card on the wire from the producing tool result", async () => {
+      const { drive } = await carry(carriage);
+      const wire = dataPartsOnTheWire(drive);
+      if (carriage.kind === "recommendation_hold") {
+        // Not an envelope: the sink parses the dispatch answer and pins the run.
+        expect(wire).toEqual([
+          { kind: "agent_run", toolCallId: drive.toolCallId, runId: drive.identity },
+        ]);
+        expect(extractAgentRunIdFromResult(
+          durableToolResultOf(drive.durable, drive.toolCallId),
+        )).toBe(drive.identity);
+        return;
+      }
+      expect(wire).toEqual([
+        { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+      ]);
+    });
+
+    it("the reloaded transcript carries the identical runId/ref, from Postgres alone", async () => {
+      const carried = await carry(carriage);
+      const { drive } = carried;
+      const assistant = requireReloadedAssistantTurn(carried);
+      if (carriage.kind === "recommendation_hold") {
+        // The run's identity comes back on the durable `agent_run` part, which is
+        // what the transcript renders the run card from — and `runIdOf`, the
+        // shipped contract reader, agrees with what the sink pinned on the wire.
+        const toolPart = (assistant.parts ?? []).find(
+          (p) => p.kind === "tool_call" && p.name === "agent_run",
+        );
+        expect(toolPart, "the reloaded turn carries its durable agent_run part").toBeDefined();
+        expect(toolPart && toolPart.kind === "tool_call" ? toolPart.runId : null).toBe(
+          drive.identity,
+        );
+        expect(runIdOf(durableToolResultOf(drive.durable, drive.toolCallId))).toBe(drive.identity);
+        return;
+      }
+      const views = assistant.dataParts ?? [];
+      expect(
+        views,
+        `the reloaded ${carriage.kind} turn carries no renderable view — the card cannot be redrawn`,
+      ).toEqual([{ viewType: carriage.kind, schemaVersion: 1, ref: drive.identity }]);
+    });
+
+    it("the real chat view projects the owner root under the turn's own slot", async () => {
+      const carried = await carry(carriage);
+      const { drive, reloaded } = carried;
+      requireReloadedAssistantTurn(carried);
+      refuseHandBuiltRenderState(reloaded, carried.threadId);
+      const row = carriageRowFor(carriage.kind);
+      const root = await mountReloadedChat(reloaded);
+      const projection = projectionFromReloadedDom(root, row, reloaded, drive, carriage);
+
+      // The recommendation hold's chat_thread MOUNT has not landed (S9k/S9l own
+      // it), so its expectation is read from the SAME ratchet the S9h gates use
+      // rather than asserted flat. The day that mount lands and the row is
+      // struck, this arm starts asserting the card without an edit here — and a
+      // row struck without the mount reds immediately.
+      const mountIsOwed = HELD_TURN_MOUNT_OBLIGATIONS.includes(carriage.kind);
+      expect(
+        projectsOwnerCard(projection, row),
+        mountIsOwed
+          ? `${row.owner}'s chat mount is still on HELD_TURN_MOUNT_OBLIGATIONS — if it now mounts, strike the row`
+          : `the reloaded transcript did not project ${row.owner} at the assistant turn's own slot`,
+      ).toBe(!mountIsOwed);
+
+      if (carriage.kind === "recommendation_hold") {
+        // What S9j DOES owe this carriage: the durable run identity reaches the
+        // ruled run_card mount in the reloaded turn. The hold card's own mount is
+        // the next slice's; the persistence beneath it is this one's.
+        const pinned = root.querySelector(`[data-inline-run-card="${drive.identity}"]`);
+        expect(
+          pinned,
+          "the reloaded turn did not mount the run card on the persisted runId",
+        ).not.toBeNull();
+      }
+    });
+
+    it("the card re-asks the server about exactly the persisted ref", async () => {
+      if (carriage.kind === "recommendation_hold") {
+        // No authoritative-resolve seam: this carriage is an interrupt, and its
+        // identity assertion is the run-card mount above.
+        return;
+      }
+      const carried = await carry(carriage);
+      const { drive, reloaded } = carried;
+      requireReloadedAssistantTurn(carried);
+      await mountReloadedChat(reloaded);
+      expect(resolveAsks).toContainEqual({
+        viewType: carriage.kind,
+        ref: drive.identity,
+      });
+    });
+  },
+);
