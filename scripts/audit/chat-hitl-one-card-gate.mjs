@@ -227,8 +227,10 @@ export const RETIRED_PARALLELS = Object.freeze([
     // reading in a chat transcript drew the S1 shell. Two drawings of one
     // reading is exactly the drift this gate exists to catch, so the core moved
     // into `VerificationSummaryCard` and `VerificationView` became a composition
-    // of that card plus its two page-only adjuncts (the pinned visual pair, the
-    // navigation back to the gate).
+    // of that card plus its one page-only adjunct, the pinned visual pair. (The
+    // navigation back to the gate went with the drawing: plan §8.3(5) and §8.4
+    // say the link exists only because the reading lived on its own page, so it
+    // goes when the card lands — cinatra#2861.)
     //
     // BANNED BY THE §VII ANCHORS, NOT BY A COMPONENT NAME, and deliberately so.
     // `VerificationView` still exists and must — it is the legitimate adjunct
@@ -247,7 +249,7 @@ export const RETIRED_PARALLELS = Object.freeze([
       "g",
     ),
     allow: ["packages/agents/src/verification-summary-card.tsx"],
-    fix: "`VerificationView` mounts <VerificationSummaryCard> and keeps only its page-only adjuncts; the card owns §VII's core.",
+    fix: "`VerificationView` mounts <VerificationSummaryCard> and keeps only its page-only adjunct; the card owns §VII's core.",
   },
   {
     id: "page-direct-decision-composition",

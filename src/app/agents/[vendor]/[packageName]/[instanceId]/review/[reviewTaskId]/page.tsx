@@ -109,7 +109,7 @@ async function loadRunStepsContext(
 }
 
 export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
-  const { vendor, packageName, instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
+  const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
   const runId = decodeURIComponent(rawInstanceId);
   const reviewTaskId = decodeURIComponent(rawTaskId);
@@ -145,7 +145,6 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     // where the ADVISORY COMMENTS now travel, so this branch no longer reads
     // them either.
     const record = await readVerificationRecordForGate(gate.id);
-    const backHref = `/agents/${vendor}/${packageName}/${encodeURIComponent(runId)}/review/${encodeURIComponent(reviewTaskId)}`;
     // S6 (#2044 L-D): the field diff's VISUAL counterpart — the reviewed proposal
     // beside the page as it actually landed, with the read-back's own
     // out-of-scope paths outlined on the applied side. A pure store read of the
@@ -169,11 +168,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     return (
       <ReviewShell>
         {record ? (
-          <VerificationView
-            cardRef={verificationCardRef}
-            gateHref={backHref}
-            visualPair={visualPair}
-          />
+          <VerificationView cardRef={verificationCardRef} visualPair={visualPair} />
         ) : (
           <ReviewGateBlocked reason="no-longer-pending" />
         )}

@@ -11,10 +11,12 @@
 //     composition that happens to look alike;
 //   · it declares `page_gate_region` as its host, so the fail-closed surface
 //     gate applies to this mount exactly as it does to a turn's;
-//   · the PAGE-ONLY adjuncts survive the move: the pinned visual pair and the
-//     navigation back to the gate;
+//   · the PAGE-ONLY adjunct survives the move: the pinned visual pair;
+//   · the "Back to the review gate" link is GONE (plan §8.3(5), §8.4 — the link
+//     exists only because the reading lived on its own page, so it goes when
+//     the card lands, and this slice is named as what resolves it);
 //   · a page that cannot mint a ref draws no core rather than falling back to
-//     a second composition — and still keeps its adjuncts.
+//     a second composition.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
@@ -58,13 +60,11 @@ function mockResolve(state: LifecycleCardState, body: VerificationSummaryBody | 
   return fetchMock;
 }
 
-const GATE_HREF = "/agents/acme/mailer/run-1/review/task-1";
-
 describe("the review page reuses the ONE §VII core", () => {
   it("draws the same card, with the same anchors, on the page's own host", async () => {
     mockResolve({ state: "advisory" });
     const { container } = render(
-      <VerificationView cardRef="ref-verification-1" gateHref={GATE_HREF} />,
+      <VerificationView cardRef="ref-verification-1" />,
     );
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="verification-card"]')).not.toBeNull(),
@@ -99,18 +99,23 @@ describe("the review page reuses the ONE §VII core", () => {
     expect(drifted.dataset.diffInScope).toBe("false");
   });
 
-  it("keeps its PAGE-ONLY adjuncts composed around the core", async () => {
+  it("keeps its PAGE-ONLY adjunct composed around the core, and NO back link", async () => {
     mockResolve({ state: "advisory" });
     const { container } = render(
-      <VerificationView cardRef="ref-verification-1" gateHref={GATE_HREF} visualPair={null} />,
+      <VerificationView cardRef="ref-verification-1" visualPair={null} />,
     );
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="verification-card"]')).not.toBeNull(),
     );
-    // The navigation back to the gate — a route affordance only a route has.
-    const back = container.querySelector<HTMLAnchorElement>("[data-verification-back-to-gate]")!;
-    expect(back).not.toBeNull();
-    expect(back.getAttribute("href")).toBe(GATE_HREF);
+    // Plan §8.3(5) and §8.4: the "Back to the review gate" link exists only
+    // because the reading lived on its own page, so it goes when the card
+    // lands. §VII's no-floor rule points the same way — the reading "asks
+    // nothing, so it draws nothing to press", and this was the last pressable
+    // thing on the surface. Nothing anywhere in the region, by anchor, by role
+    // or by copy.
+    expect(container.querySelector("[data-verification-back-to-gate]")).toBeNull();
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).not.toContain("Back to the review gate");
     // The region still identifies itself as the run surface's verification view.
     const region = container.querySelector<HTMLElement>('[data-surface="verification"]')!;
     expect(region).not.toBeNull();
@@ -119,25 +124,26 @@ describe("the review page reuses the ONE §VII core", () => {
 
   it("draws NO core at all when the page could not mint a ref — never a second composition", () => {
     const fetchMock = mockResolve({ state: "advisory" });
-    const { container } = render(<VerificationView cardRef={null} gateHref={GATE_HREF} />);
+    const { container } = render(<VerificationView cardRef={null} />);
     expect(container.querySelector('[data-conformance-id="verification-card"]')).toBeNull();
     expect(container.querySelector("[data-verification-chrome]")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
-    // The adjuncts are unaffected — the page is still a page.
-    expect(container.querySelector("[data-verification-back-to-gate]")).not.toBeNull();
+    // The region is still drawn — it just has no reading in it.
+    expect(container.querySelector('[data-surface="verification"]')).not.toBeNull();
+    expect(container.querySelector("[data-verification-back-to-gate]")).toBeNull();
   });
 
   it("draws no core when the resolve answers `absent`, on this host as on any other", async () => {
     const fetchMock = mockResolve({ state: "absent" }, null);
     const { container } = render(
-      <VerificationView cardRef="ref-verification-1" gateHref={GATE_HREF} />,
+      <VerificationView cardRef="ref-verification-1" />,
     );
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="verification-card"]')).toBeNull(),
     );
     expect(container.querySelector("[data-lifecycle-card]")).toBeNull();
-    // …and the reader still has their way back out.
-    expect(container.querySelector("[data-verification-back-to-gate]")).not.toBeNull();
+    // …and the retired back link did not come back on this path either.
+    expect(container.querySelector("[data-verification-back-to-gate]")).toBeNull();
   });
 });

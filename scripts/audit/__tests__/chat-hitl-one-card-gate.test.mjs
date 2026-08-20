@@ -222,9 +222,14 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
     for (const anchor of VERIFICATION_CORE_ANCHORS) {
       expect(src.includes(`data-verification-${anchor}`)).toBe(false);
     }
-    // The page-only ADJUNCTS survive — deleting them was never the ask.
+    // The page-only ADJUNCT survives — deleting it was never the ask.
     expect(src).toMatch(/<\s*ReviewPinnedCapture\b/);
-    expect(src).toContain("data-verification-back-to-gate");
+    // …but the "Back to the review gate" link does NOT: plan §8.3(5) and §8.4
+    // say it exists only because the reading lived on its own page, so it goes
+    // when the card lands (cinatra#2861). Pinned here as well as in the view's
+    // own suite, because this is the file the gate reads.
+    expect(src).not.toContain("data-verification-back-to-gate");
+    expect(src).not.toContain("Back to the review gate");
   });
 
   it("a second §VII drawing anywhere is an R2 violation, whatever it is called", () => {
@@ -239,8 +244,8 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
 
   // Named explicitly, NOT via the loop above, so this mutation check survives
   // the anchor being dropped from the list again: the revision pins are §VII
-  // core (the page's own ruling names only the pinned VISUAL pair and the
-  // back-link as adjuncts), so a second module drawing them must fail R2.
+  // core (the page's own ruling now names exactly ONE adjunct, the pinned
+  // VISUAL pair), so a second module drawing them must fail R2.
   it("a second emitter of the REVISION PINS fails R2 — they are core, not an adjunct", () => {
     const hits = scanModule(
       "src/app/agents/[vendor]/[packageName]/[instanceId]/review/revision-pins.tsx",
@@ -250,11 +255,10 @@ describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
     expect(hits.map((h) => h.detail).join(" ")).toMatch(/page-direct-verification-composition/);
   });
 
-  it("the back-to-gate adjunct is NOT an anchor — the page may keep it", () => {
-    const hits = scanModule(
-      VERIFICATION_VIEW,
-      'return <a data-verification-back-to-gate="">Back</a>;',
-    );
+  it("the pinned VISUAL pair is NOT an anchor — the page may keep its one adjunct", () => {
+    // The adjunct that stayed. It is not part of §VII's drawing, so composing
+    // it around the card must not read as a second renderer.
+    const hits = scanModule(VERIFICATION_VIEW, "return <ReviewPinnedCapture pair={pair} />;");
     expect(hits).toEqual([]);
   });
 });
