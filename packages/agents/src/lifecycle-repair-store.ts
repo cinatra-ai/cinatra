@@ -52,6 +52,7 @@ import {
   lifecycleBatchDisposition,
 } from "./schema";
 import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
+import { dispatchAutoGateResolved } from "./run-wait-notifier";
 
 import {
   validateChangesRequested,
@@ -177,7 +178,23 @@ export async function recordChangesRequested(
     .from(lifecycleRepair)
     .where(eq(lifecycleRepair.gateId, request.gateId))
     .limit(1);
-  if (existing[0]) return reconcileExistingRepair(existing[0], request);
+  if (existing[0]) {
+    // cinatra#2864 — a RE-DRIVE clears too. A repair row exists for this gate only
+    // because a prior call's transaction committed, and that transaction CASed the
+    // gate to `resolved` in the same breath — so the gate is closed, whatever this
+    // re-drive goes on to answer, and its open notification is owed a delete.
+    //
+    // Without this, the clear had exactly ONE chance: the post-commit dispatch of
+    // the first call. Lost to a swallowed notifier error or a process that died
+    // between the commit and the dispatch, it was never re-attempted, and a retry
+    // — the very thing a response-lost caller does — returned success past the
+    // stale row. The delete is idempotent, so re-driving it costs nothing.
+    await dispatchAutoGateResolved({
+      runId: input.runId,
+      reviewTaskId: input.reviewTaskId,
+    });
+    return reconcileExistingRepair(existing[0], request);
+  }
 
   // 2. Base-revision CAS at FIRST-record time (the same TOCTOU the decision core
   //    guards): the base must still be the revision the reviewer saw.
@@ -305,6 +322,21 @@ export async function recordChangesRequested(
   });
 
   if (!persisted.row) throw new Error("lifecycle_repair row vanished after insert-conflict");
+  // cinatra#2864 — `changes_requested` is a TERMINAL disposition: the CAS above
+  // just closed this review attempt, so the gate's open notification goes with it.
+  // Third of the three transitions that take a gate out of `pending` (the other
+  // two are the ordinary decision commit and the optional-expiry drain), and the
+  // last one that still left its bell entry behind — a reviewer who asked for
+  // changes kept an entry pointing at a review that had already closed.
+  //
+  // AFTER the transaction, never inside it: the same ordering (and the same
+  // reason) as the decision commit — a notification failure can never roll back a
+  // committed repair record. `dispatchAutoGateResolved` swallows its own errors,
+  // so this await cannot fail the record either.
+  await dispatchAutoGateResolved({
+    runId: input.runId,
+    reviewTaskId: input.reviewTaskId,
+  });
   if (!persisted.fresh) return reconcileExistingRepair(persisted.row, request);
   return { ok: true, repairId: persisted.row.id, route, attempt: cycle.attempt, status, idempotent: false };
 }
