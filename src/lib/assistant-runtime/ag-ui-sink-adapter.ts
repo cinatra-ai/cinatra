@@ -30,11 +30,14 @@
 //                     envelope from the allowlisted cinatra self-MCP (server,
 //                     tool) tuple additionally emits a `DATA_PART { viewType,
 //                     schemaVersion, ref }` — an opaque ref, never content
-//                     (cinatra#2565; see ./lifecycle-view-envelope). Every
-//                     DATA_PART but `citations` is ALSO kept in the durable
-//                     content (cinatra#2823 S9j), because a card the wire
-//                     carries and the durable row drops is a card that renders
-//                     live and is gone after a reload.
+//                     (cinatra#2565; see ./lifecycle-view-envelope) — stamped
+//                     with the PRODUCING `toolCallId` on the event (cinatra#2827)
+//                     so the client can fold the card into the ordered trace at
+//                     that call rather than after the turn. Every DATA_PART but
+//                     `citations` is ALSO kept in the durable content
+//                     (cinatra#2823 S9j), because a card the wire carries and
+//                     the durable row drops is a card that renders live and is
+//                     gone after a reload.
 //   citations       → DATA_PART { kind: "citations", citations }
 //   error           → seal open text, RUN_ERROR (terminal)
 //   done            → seal open text, RUN_FINISHED (terminal)
@@ -212,10 +215,29 @@ export function createAgUiSinkAdapter(params: {
    * emitted it" and "the sink kept it" the same statement rather than two
    * statements a later edit can separate. `citations` deliberately does NOT come
    * through here — it has its own ordered durable part.
+   *
+   * `producingToolCallId` is the SLOT STAMP (cinatra#2827 S9i): it rides the
+   * EVENT and is deliberately NOT written into `data`, because the durable
+   * payload has to stay the byte-identical strict `{ viewType, schemaVersion,
+   * ref }` object a `.strict()` parser accepts on re-read — a slot written into
+   * the payload would be re-emitted as payload on reload and rejected there.
+   * A reloaded card therefore keeps its content and, until the store-side
+   * projection carries a slot of its own, falls back to the turn-level list
+   * exactly as a consumer that never saw the field would (the named #2879
+   * follow-up). Omitted when absent, so an unstamped emit is byte-identical to
+   * what it was before the field existed.
    */
-  function emitDurableDataPart(data: Record<string, unknown>): void {
+  function emitDurableDataPart(
+    data: Record<string, unknown>,
+    producingToolCallId?: string,
+  ): void {
     contentDataParts.push(data);
-    emit({ type: "DATA_PART", data, timestamp: Date.now() } as AgUiEvent);
+    emit({
+      type: "DATA_PART",
+      data,
+      ...(producingToolCallId !== undefined ? { toolCallId: producingToolCallId } : {}),
+      timestamp: Date.now(),
+    } as AgUiEvent);
   }
 
   function sealOpenText(): void {
@@ -339,7 +361,14 @@ export function createAgUiSinkAdapter(params: {
             result: d.result,
           });
         if (lifecycleView) {
-          emitDurableDataPart({ ...lifecycleView });
+          // SLOT IDENTITY (cinatra#2827): the producing tool call rides the
+          // EVENT, never the payload — the payload stays the strict
+          // `{ viewType, schemaVersion, ref }` a `.strict()` schema accepts, and
+          // the client folds the card into the ordered trace at this call
+          // instead of appending it after the turn. It rides the durable-emit
+          // helper (cinatra#2823 S9j) so the stamp and the durable keep stay one
+          // statement: this call emits the slotted card AND retains its payload.
+          emitDurableDataPart({ ...lifecycleView }, id);
         }
         return;
       }

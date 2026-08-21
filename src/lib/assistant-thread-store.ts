@@ -1827,6 +1827,73 @@ function lifecycleViewRefsOf(dataParts: unknown): Set<string> {
   return refs;
 }
 
+/**
+ * The renderable views a message's TRACE carries at its slots (cinatra#2827,
+ * epic #2784 S9i) — the payloads folded onto the `tool_call` part that produced
+ * them, which the ordered-parts renderer draws inside that part's own container.
+ *
+ * WHY THIS EXISTS BESIDE `lifecycleViewRefsOf`. Since S9i a view whose DATA_PART
+ * named its producing call is folded onto that PART and is deliberately ABSENT
+ * from the turn-level `dataParts` list — the two mounts partition the turn's
+ * views so a card is drawn once, never twice. So `dataParts` alone stopped being
+ * the whole answer to "what does this message already show": a turn whose only
+ * card is slotted has NO `dataParts` key while the reader is looking straight at
+ * that card. Every reader below asks BOTH places.
+ */
+function slottedViewsOf(parts: unknown): Array<Record<string, unknown>> {
+  const views: Array<Record<string, unknown>> = [];
+  if (!Array.isArray(parts)) return views;
+  for (const raw of parts) {
+    if (!isRecord(raw)) continue;
+    if (raw.kind !== "tool_call") continue;
+    if (!Array.isArray(raw.views)) continue;
+    for (const view of raw.views) {
+      if (isRecord(view)) views.push(view);
+    }
+  }
+  return views;
+}
+
+/** Every lifecycle view ref a message carries ANYWHERE — turn-level list and
+ *  producing slots both (cinatra#2827 S9i). See `slottedViewsOf`. */
+function allLifecycleViewRefsOf(message: Record<string, unknown>): Set<string> {
+  const refs = lifecycleViewRefsOf(message.dataParts);
+  for (const ref of lifecycleViewRefsOf(slottedViewsOf(message.parts))) refs.add(ref);
+  return refs;
+}
+
+/**
+ * Does the spine ALREADY DRAW this durable view at one of its slots?
+ *
+ * Ref identity (`viewType|ref`) is the card's own identity and is the test
+ * wherever the payload carries one. A payload that carries no ref falls back to
+ * STRUCTURAL equality — the same fallback `attachViewToToolCall` uses on the
+ * reducer side, and for the same reason: the wire carries no per-view id to key
+ * on, so two byte-identical payloads are one card.
+ */
+function slotAlreadyDraws(
+  view: Record<string, unknown>,
+  slotted: Array<Record<string, unknown>>,
+  slottedRefs: Set<string>,
+): boolean {
+  const viewType = stringOrNull(view.viewType);
+  const ref = stringOrNull(view.ref);
+  if (viewType !== null && viewType.length > 0 && ref !== null) {
+    return slottedRefs.has(`${viewType}|${ref}`);
+  }
+  try {
+    const serialized = JSON.stringify(view);
+    if (serialized === undefined) return false;
+    return slotted.some((v) => JSON.stringify(v) === serialized);
+  } catch {
+    // Unserializable (a hostile getter, a cycle) — treat as NOT already drawn.
+    // Re-adding a view the reader may already see is a doubled card; dropping
+    // one they cannot see is a card lost to a silent save. Neither is good, and
+    // the reducer resolves the same tie toward rendering, so this does too.
+    return false;
+  }
+}
+
 /** The runs a message's render trace has PINNED, keyed by tool-call id. */
 function pinnedRunsOf(message: unknown): Map<string, string> {
   const runs = new Map<string, string>();
@@ -1866,7 +1933,11 @@ function contradictsDurableTurn(
     const durableRunId = durableRuns.get(callId);
     if (durableRunId !== undefined && durableRunId !== runId) return true;
   }
-  const spineRefs = lifecycleViewRefsOf(spine.dataParts);
+  // Both places (cinatra#2827 S9i): a spine whose cards are all SLOTTED carries
+  // no turn-level list, and reading `dataParts` alone would call it silent —
+  // silence contradicts nothing, so a spine showing an entirely different card
+  // would have been accepted as this turn.
+  const spineRefs = allLifecycleViewRefsOf(spine);
   if (spineRefs.size === 0) return false;
   const durableRefs = lifecycleViewRefsOf(projected.dataParts);
   if (durableRefs.size === 0) return false;
@@ -2082,7 +2153,10 @@ function foldDurableLifecycleTurnsInto(
  * unanswered question for the server to answer. Own-property presence is the
  * test — the same presence-gating discipline `extractPausedParticipantsFromThread`
  * uses for the pause set, and for the same reason: a partial write must never be
- * read as a positive assertion, nor an explicit one as a gap.
+ * read as a positive assertion, nor an explicit one as a gap. Since cinatra#2827
+ * (S9i) that presence test is NOT sufficient on its own: a card folded onto its
+ * producing slot is drawn without any turn-level list at all, so the absent key
+ * is cross-checked against what the slots already show (see below).
  *
  * Returns the SAME object when nothing was owed, which is what lets the caller
  * leave the transcript untouched instead of rebuilding an identical one.
@@ -2093,7 +2167,23 @@ function repairedSpineMessage(
 ): Record<string, unknown> {
   const carriesOwnViews =
     Object.prototype.hasOwnProperty.call(spine, "dataParts") && spine.dataParts !== undefined;
-  const owesViews = !carriesOwnViews && (projected.dataParts?.length ?? 0) > 0;
+  // A VIEW ALREADY DRAWN AT ITS SLOT IS NOT OWED (cinatra#2827 S9i). Since S9i a
+  // view that named its producing call is folded onto that PART and is absent
+  // from `dataParts` by design, so "no `dataParts` key" no longer means "the
+  // reader sees no card" — for a lifecycle card it is now the NORMAL shape.
+  // Filling the turn-level list from the durable row in that state would draw
+  // the very same card a SECOND time, turn-level, beside the one already drawn
+  // at its step: precisely the "once, never twice" invariant S9i is named for.
+  // So the durable views are filtered against what the slots already show, and
+  // only a card the reader genuinely cannot see is restored — which is still
+  // every card a dropped save costs, because a dropped save leaves no slot
+  // either.
+  const slotted = slottedViewsOf(spine.parts);
+  const slottedRefs = lifecycleViewRefsOf(slotted);
+  const owedViews = carriesOwnViews
+    ? []
+    : (projected.dataParts ?? []).filter((view) => !slotAlreadyDraws(view, slotted, slottedRefs));
+  const owesViews = owedViews.length > 0;
 
   const runIdByCall = new Map<string, string>();
   for (const durablePart of projected.parts ?? []) {
@@ -2120,7 +2210,7 @@ function repairedSpineMessage(
   if (!owesViews && !owesRun) return spine;
   return {
     ...spine,
-    ...(owesViews ? { dataParts: projected.dataParts } : {}),
+    ...(owesViews ? { dataParts: owedViews } : {}),
     ...(owesRun ? { parts: repairedParts } : {}),
   };
 }

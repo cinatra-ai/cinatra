@@ -49,6 +49,14 @@
  * here; what THIS gate catches is the silent rename, the quiet deletion, and the
  * green claim with nothing behind it.
  *
+ * THE ANCHOR CONTRACT rides it too (cinatra#2826, S9m). The manifest half checks
+ * that a named proof exists; the capture half checks that a screenshot shows what
+ * it claims; the anchor half checks that all of them are still talking about the
+ * SAME drawing — a digest over the design pin, the executable DOM expectations
+ * and the anchors a capture is graded against. A pin moved without an explicit
+ * re-ratification fails HERE, which is the one place a reader looks to ask
+ * whether the program's claims are current. See `lib/anchor-contract.mjs`.
+ *
  * THE CAPTURE INDEX rides the same entrypoint. A criterion row names a proof;
  * a capture record names a SCREEN. The manifest half catches the proof that was
  * renamed away; the capture half catches the screenshot filed under a host it
@@ -57,6 +65,7 @@
  * Usage:
  *   node scripts/audit/chat-hitl-acceptance-gate.mjs            # audit
  *   node scripts/audit/chat-hitl-acceptance-gate.mjs --strict   # done-check
+ *   node scripts/audit/chat-hitl-acceptance-gate.mjs --print-anchor-digest
  *
  * Exit 0 -> clean; exit 1 -> at least one violation; exit 2 -> script error.
  */
@@ -69,6 +78,14 @@ import {
   CAPTURE_INDEX_PATH,
   validateCaptureIndex as validateCanonicalIndex,
 } from "../ci/lib/capture-record-contract.mjs";
+import {
+  ANCHOR_CONTRACT_PATH,
+  anchorDigestInputs,
+  auditAnchorContract,
+  captureAnchorExpectations,
+  computeAnchorDigest,
+  loadAnchorContract,
+} from "./lib/anchor-contract.mjs";
 import {
   chatThreadRequirementsFor,
   hashFile,
@@ -90,7 +107,7 @@ export const MANIFEST_PATH = join(__dirname, "chat-hitl-acceptance-manifest.json
 // the capture driver's default output; this gate read it while the CI gate read
 // the populated one. Both halves now resolve the same constant, which
 // `scripts/ci/__tests__/capture-index-path.test.mjs` pins.
-export { CAPTURE_INDEX_PATH };
+export { CAPTURE_INDEX_PATH, ANCHOR_CONTRACT_PATH };
 
 /** The valid dispositions. See the header for what each one claims. */
 export const DISPOSITIONS = ["MAPPED", "BUILT", "MISSING"];
@@ -478,6 +495,43 @@ function main(argv) {
     return 2;
   }
   const manifest = loadManifest();
+
+  // The re-ratification helper: print what the digest WOULD be, and write
+  // nothing. Deliberately read-only — a digest a script refreshes on its own
+  // alarms about nothing, so the new value is pasted by the person who
+  // re-examined the anchors.
+  if (argv.includes("--print-anchor-digest")) {
+    if (!existsSync(ANCHOR_CONTRACT_PATH)) {
+      console.error(`[${LABEL}] anchor contract not found at ${ANCHOR_CONTRACT_PATH}`);
+      return 2;
+    }
+    const anchorContract = loadAnchorContract();
+    const digest = computeAnchorDigest(
+      anchorDigestInputs({
+        specCommit: manifest.specCommit,
+        domExpectations: anchorContract.domExpectations,
+        captureAnchors: captureAnchorExpectations(),
+      }),
+    );
+    console.log(`[${LABEL}] design pin  : ${manifest.specCommit}`);
+    console.log(`[${LABEL}] recorded    : ${anchorContract.digest}`);
+    console.log(`[${LABEL}] recomputed  : ${digest}`);
+    return 0;
+  }
+
+  if (!existsSync(ANCHOR_CONTRACT_PATH)) {
+    console.error(`[${LABEL}] anchor contract not found at ${ANCHOR_CONTRACT_PATH}`);
+    return 2;
+  }
+  const anchorViolations = auditAnchorContract({ manifest });
+  if (anchorViolations.length > 0) {
+    console.error(
+      `[${LABEL}] ${anchorViolations.length} anchor-contract violation(s) — the design pin, the ` +
+        "executable DOM expectations and the capture anchors must be re-ratified together:\n",
+    );
+    for (const v of anchorViolations) console.error(`  ${v}`);
+    return 1;
+  }
   const rows = manifest.rows ?? [];
   const counts = summarise(rows);
 
@@ -509,7 +563,8 @@ function main(argv) {
         `[${LABEL}] manifest honest — ${rows.length} rows ` +
           `(${counts.MAPPED} MAPPED, ${counts.BUILT} BUILT, ${counts.MISSING} MISSING); ` +
           "every named proof exists in the tree. " +
-          `Capture index host-anchored — ${captureCount} record(s).`,
+          `Capture index host-anchored — ${captureCount} record(s). ` +
+          "Anchor contract ratified at the manifest's design pin.",
       );
       return 0;
     }

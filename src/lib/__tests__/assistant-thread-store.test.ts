@@ -501,6 +501,117 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
     expect(spineAssistant).toEqual(before);
   });
 
+  it("NEVER re-adds a view the spine already draws at its PRODUCING SLOT", () => {
+    // Exactly the shape the S9i reducer produces for a SLOTTED card
+    // (cinatra#2827): the view is folded onto the tool_call that produced it and
+    // the turn-level `dataParts` key is never created. The absent key is NOT a
+    // dropped save here — it is the normal post-S9i shape — so the fold-in must
+    // not "repair" it into a second, turn-level copy of a card already on screen.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        {
+          kind: "tool_call",
+          id: "call-1",
+          name: "artifact_review_gate_render",
+          status: "completed",
+          views: [{ ...REVIEW_VIEW }],
+        },
+      ],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    // Nothing was owed — the card is already drawn at its slot — so the reader's
+    // own message object comes back untouched, and the transcript draws the card
+    // ONCE (S9i's invariant), at the step that produced it.
+    expect(messages[0]).toBe(spineAssistant);
+    expect(messages[0].dataParts).toBeUndefined();
+  });
+
+  it("restores ONLY the views no slot already draws, when a turn carries both", () => {
+    // Two cards on the durable row; the spine draws one of them at its slot and
+    // lost the other. The unseen one is owed; the seen one is not.
+    const UNSLOTTED_VIEW = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "gate-ref-2" };
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        {
+          kind: "tool_call",
+          id: "call-1",
+          name: "artifact_review_gate_render",
+          status: "completed",
+          views: [{ ...REVIEW_VIEW }],
+        },
+      ],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW, UNSLOTTED_VIEW] }),
+        }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // The slotted one is NOT duplicated into the turn-level list; the lost one is.
+    expect(messages[0].dataParts).toEqual([UNSLOTTED_VIEW]);
+  });
+
+  it("a spine whose SLOTTED cards are all different does not claim the durable turn", () => {
+    // `contradictsDurableTurn` reads the spine's views to catch "this message is
+    // showing a different card entirely". Post-S9i those views can live only at
+    // the slots, and a reader that asked `dataParts` alone would call this spine
+    // SILENT — and silence contradicts nothing, so the run pin below would have
+    // been folded onto a message that is demonstrably another turn.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "a different turn",
+      parts: [
+        {
+          kind: "tool_call",
+          id: "call-1",
+          name: "artifact_review_gate_render",
+          status: "completed",
+          views: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref: "SOME-OTHER-ref" }],
+        },
+      ],
+    };
+    const before = JSON.parse(JSON.stringify(spineAssistant));
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // The contradiction is seen: the durable turn is placed as its OWN message
+    // rather than repairing a spine message that is showing another card.
+    expect(messages).toHaveLength(2);
+    expect(spineAssistant).toEqual(before);
+  });
+
   it("NEVER overwrites a view the spine already carries", () => {
     // The reader's save DID land with the view on it — the SAME view the server
     // recorded, because both sides read it off the same wire.
