@@ -113,6 +113,54 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
       }),
     ).toBe("agentic");
   });
+
+  it("answers exactly one panel for every run shape — the two run_card adapters are never both chosen", () => {
+    // WHY THIS TEST EXISTS. The review-gate card's `run_card` host carries TWO
+    // production adapters: `agentic-run-panel.tsx` and
+    // `orchestrator-stepper-panel.tsx`. `runDetailPanelKind` is the picker the
+    // one-card gate names for that pair, so the property the gate is citing is
+    // this one: the function is TOTAL and SINGLE-VALUED over every shape the
+    // screen can be handed, which is what makes "one rendered instance" true
+    // rather than hoped for. The neighbouring `screenHostsRecommendationCard`
+    // suite proves the OTHER picker; it does not prove this one.
+    const PANELS: RunDetailPanelKind[] = ["none", "stepper", "agentic"];
+    const shapes: Parameters<typeof runDetailPanelKind>[0][] = [];
+    for (const runStatus of [
+      null,
+      undefined,
+      "pending_input",
+      "running",
+      "pending_approval",
+      "completed",
+      "failed",
+      "stopped",
+    ]) {
+      for (const templateType of ["agent", "orchestrator", "flow"]) {
+        for (const sourceType of ["package", "external"]) {
+          for (const stepperStepCount of [0, 2]) {
+            shapes.push({ runStatus, templateType, sourceType, stepperStepCount });
+          }
+        }
+      }
+    }
+
+    // TOTAL: no shape leaves the picker without an answer, and no shape gets an
+    // answer outside the three named branches. A shape with no answer is a run
+    // for which nothing decides, which is the two-adapters-at-once failure.
+    expect(
+      shapes
+        .filter((s) => !PANELS.includes(runDetailPanelKind(s)))
+        .map((s) => JSON.stringify(s)),
+    ).toEqual([]);
+
+    // …and all three branches are really reachable, so neither run_card adapter
+    // is dead code the picker can never select.
+    expect([...new Set(shapes.map((s) => runDetailPanelKind(s)))].sort()).toEqual([
+      "agentic",
+      "none",
+      "stepper",
+    ]);
+  });
 });
 
 describe("screenHostsRecommendationCard — exactly one renderer per branch", () => {
