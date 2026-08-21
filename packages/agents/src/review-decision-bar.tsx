@@ -155,8 +155,24 @@ export function ReviewDecisionBar({
         </p>
       ) : null}
       {/* Decision rationale (§IV) — optional on approve, expected on reject, the
-          substance of a comment. Travels into the audit trail + the resume note. */}
-      <div className="px-4 pt-3">
+          substance of a comment. Travels into the audit trail + the resume note.
+
+          §I INPUT HIERARCHY — SUBORDINATE (design specs/app-lifecycle-cards.html
+          §I, the `.notefield` / `.nf-input` rules). A conversation carrying this
+          card has two places a reader could type — this note field and the
+          conversation's chat box — and drawn at the same weight they read as a
+          choice. They are not a choice: the chat box is the ONE primary input.
+          So the note field gives up the three things that make an input read as
+          somewhere to type — the enclosing box, the raised ground and the send
+          affordance — and keeps a single quiet dashed baseline under its mono
+          label. Nothing is hidden and nothing is disabled; only the weight
+          moves, and the label and placeholder are unchanged.
+
+          DISABLED / SETTLED. A disabled or settled note field keeps the SAME
+          dashed rule and takes the platform's standard disabled opacity. It
+          never falls back to the stock filled, boxed disabled treatment, which
+          would put back the box the hierarchy just took out. */}
+      <div data-conformance-id="review-note-field-subordinate" className="px-4 pt-3">
         <label
           htmlFor="review-rationale"
           className="mb-1.5 block font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground"
@@ -171,7 +187,7 @@ export function ReviewDecisionBar({
           onChange={(e) => setComment(e.target.value)}
           disabled={pending || settled}
           placeholder="Add a note for the run and the audit trail…"
-          className="min-h-[44px] text-xs"
+          className="min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent"
         />
       </div>
 
