@@ -24,8 +24,8 @@
     "URL, or whose chat anchors were never asserted, is a mislabeled capture and fails. A PENDING",
     "capture owes its decision controls; a DECIDED one owes their ABSENCE and its own decided summary.",
     "",
-    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: EIGHT records,",
-    "from three lanes, on two of the four hosts. Each group is ONE run of the recorder against a",
+    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: 24 records,",
+    "from five lanes, on three of the four hosts. Each group is ONE run of the recorder against a",
     "LIVE app on a lane database, not a hand-assembled set:",
     "",
     "  A3 / A4 / A5 - chat_thread - cinatra#2855 (PR #2862), evidence/2855-settled-outcome.",
@@ -57,6 +57,16 @@
     "nobody made. Adopting the pictures above under their names, on the strength of a shared C1,",
     "would be exactly the mislabel this index exists to refuse. They stay grandfathered findings",
     "in the rollout policy until that re-capture happens.",
+    "",
+    "  W1 / W2 / W3 / H1 / H2 / H3 / H4 - site_widget - cinatra#2790 (PR #2890),",
+    "  evidence/2790-s9f-host-parity. The SKILLS-RECOMMENDATION card in the embedded conversation",
+    "  column on a genuinely cross-site host page: HELD in both palettes, shot both as the whole",
+    "  widget column (W, the composer in frame) and on the card root alone (H), one chip mid-decision,",
+    "  and the SETTLED row read back through the broker after a decision driven from inside the frame.",
+    "  Each was run through capture-record-contract.mjs and came back record/ok before it was written",
+    "  here. The same lane's page_gate_region records (R1-R3) stay in its own capture-records.json for",
+    "  the URL-class reason set out below, and its DIAGNOSTIC is registered nowhere at all, because a",
+    "  diagnostic claims no card.",
     "",
     "THE page_gate_region RECORDS ARE DELIBERATELY ELSEWHERE, not missing. #2862 photographed the",
     "review page's gate region once (A1) and #2863 twice (B1, B2); all three stay in their own",
@@ -603,7 +613,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:21.024Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out \u2014 they are sealed bearer strings \u2014 so each is reported by length, url-safe shape and a truncated digest."
+      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out — they are sealed bearer strings — so each is reported by length, url-safe shape and a truncated digest."
     },
     {
       "cell": "C3__review-card__site_widget__pending",
@@ -669,7 +679,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:29.104Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL \u2014 the single empty-island element every denial draws, which is why the framed region is blank \u2014 and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
+      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL — the single empty-island element every denial draws, which is why the framed region is blank — and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
     },
     {
       "cell": "V1__recommendation-card__run_card__held",
@@ -1930,6 +1940,538 @@
       "recordedAt": "2026-08-20T19:58:33.351Z",
       "runtime": "dev-runtime",
       "note": "The settled row in its page: nothing is summarised above it and there is nothing left to press."
+    },
+    {
+      "cell": "W1__recommendation-card__site_widget__held__column",
+      "declaredHost": "site_widget",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2790-s9f-host-parity/captures/W1__recommendation-card__site_widget__held__column.png",
+      "sha256": "cebf386436fa2ff42a4a00e9057cc430d45f927a95a99e71cbf4bee74127900a",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T19:21:36.577Z",
+      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+      "note": "The whole embedded widget on a THIRD-PARTY page, uncropped: the turn the visitor typed, the assistant's reply, and the recommendation card HELD in the real transcript column — with the widget's OWN composer in frame beneath it. Every read behind this picture went to the broker with the widget's credential and NO cookie (see `wire`)."
+    },
+    {
+      "cell": "H1__recommendation-card__site_widget__held",
+      "declaredHost": "site_widget",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2790-s9f-host-parity/captures/H1__recommendation-card__site_widget__held.png",
+      "sha256": "ab5e55be0cf202107fa0f2bd6ed3aad292b95b8aea3ba7c26e1fc9c61679bf5c",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T19:21:36.621Z",
+      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+      "note": "The same held card, framed on its own root so the drawing can be graded against §V: one chip per skill, each carrying its OWN Confirm / Adjust / Skip, each printing the owning extension's manifest displayName rather than a slug or a package id."
+    },
+    {
+      "cell": "W2__recommendation-card__site_widget__held__column__dark",
+      "declaredHost": "site_widget",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2790-s9f-host-parity/captures/W2__recommendation-card__site_widget__held__column__dark.png",
+      "sha256": "2c1ce25d73a062031c77617e711ff255ad9c2708d39a71d9f6136adeacd2afe5",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T19:21:37.593Z",
+      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+      "note": "The SAME held card in the SAME embedded column, in the dark palette — the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed."
+    },
+    {
+      "cell": "H2__recommendation-card__site_widget__held__dark",
+      "declaredHost": "site_widget",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2790-s9f-host-parity/captures/H2__recommendation-card__site_widget__held__dark.png",
+      "sha256": "286f1e5d63c9e1e1b337bacd6815e583b57253c16983b1367553d222e604eb5b",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T19:21:37.637Z",
+      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+      "note": "The SAME held card on its own root, same run, same frame selector, in `dark`."
+    },
+    {
+      "cell": "H3__recommendation-card__site_widget__held__mid-decision",
+      "declaredHost": "site_widget",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2790-s9f-host-parity/captures/H3__recommendation-card__site_widget__held__mid-decision.png",
+      "sha256": "408f06dbe4270c8cd22a761d4c971bbf072c0bd06571577fe31837b0894d5ef7",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T19:21:40.129Z",
+      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+      "note": "The SAME cross-site card after ONE chip was decided by pressing its own Confirm in a real browser. That chip carries its mark; every other chip still shows all three affordances and is still pressable — the row is never decided as a unit."
+    },
+    {
+      "cell": "W3__recommendation-card__site_widget__settled__column",
+      "declaredHost": "site_widget",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2790-s9f-host-parity/captures/W3__recommendation-card__site_widget__settled__column.png",
+      "sha256": "2cc7ae07e3b7914ac2ced3e5445d51fb22100970653a3236b8d6e26cb4268c8f",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T19:23:35.138Z",
+      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+      "note": "The SETTLED row on the same cross-site widget host, in the whole embedded column with the widget's own composer in frame: one chip per skill stating what it recorded — Confirmed, Adjusted, Skipped — and nothing left to press. Read back through the broker with the widget's credential and no cookie."
+    },
+    {
+      "cell": "H4__recommendation-card__site_widget__settled",
+      "declaredHost": "site_widget",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "finalUrl": "/host-page.html",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2790-s9f-host-parity/captures/H4__recommendation-card__site_widget__settled.png",
+      "sha256": "83fa01670e027c0d1d789e24cb94db8f9d116a022247aeb3bc6b8359920a1bee",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T19:23:35.185Z",
+      "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+      "note": "The SAME settled row framed on its own root: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row — the decided row has nothing to press."
     }
   ]
 }

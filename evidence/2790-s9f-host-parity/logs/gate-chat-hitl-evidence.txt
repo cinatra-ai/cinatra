@@ -1,5 +1,22 @@
-[chat-hitl-evidence-gate] ENFORCING on "feat/2790-s9f-host-parity" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
+$ node scripts/ci/chat-hitl-evidence-gate.mjs
+[chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
   grandfathered  evidence/unbound-cell
       C1__review-card__chat_thread__pending: scripts/audit/chat-hitl-acceptance-manifest.json row "Chat-dispatch → typed chip-row hold → confirm → artifact → r…" cites a "chat_thread" capture that no index record answers -- an unindexed screenshot counts as zero
   grandfathered  evidence/unbound-cell
       C2__review-card__chat_thread__decided: scripts/audit/chat-hitl-acceptance-manifest.json row "Chat-dispatch → typed chip-row hold → confirm → artifact → r…" cites a "chat_thread" capture that no index record answers -- an unindexed screenshot counts as zero
+exit=0
+
+--- ISOLATION: the same gate with this lane's evidence/ directory moved aside AND
+--- scripts/ci/chat-hitl-capture-index.json restored to HEAD.
+[chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
+  grandfathered  evidence/unbound-cell
+      C1__review-card__chat_thread__pending: scripts/audit/chat-hitl-acceptance-manifest.json row "Chat-dispatch → typed chip-row hold → confirm → artifact → r…" cites a "chat_thread" capture that no index record answers -- an unindexed screenshot counts as zero
+  grandfathered  evidence/unbound-cell
+      C2__review-card__chat_thread__decided: scripts/audit/chat-hitl-acceptance-manifest.json row "Chat-dispatch → typed chip-row hold → confirm → artifact → r…" cites a "chat_thread" capture that no index record answers -- an unindexed screenshot counts as zero
+exit=0
+
+The two runs are BYTE-IDENTICAL. Both findings are PRE-EXISTING and belong to
+evidence/2573-s7-visuals-lane: its C1/C2 chat_thread cells are cited by the acceptance
+manifest and answered by no index record. They are grandfathered, the gate exits 0,
+and nothing in this commit causes or absorbs them. This commit's own seven site_widget
+records are bound: validateCaptureIndex reports 24 records, 0 violations.

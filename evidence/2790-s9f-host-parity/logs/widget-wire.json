@@ -21,9 +21,9 @@
       "widgetAssistant": "present"
     },
     {
-      "label": "recommendation-resolve",
+      "label": "recommendation-decide",
       "method": "POST",
-      "path": "/api/lifecycle-views/recommendation-hold",
+      "path": "/api/lifecycle-views/recommendation-hold/decide",
       "resourceType": "fetch",
       "cookie": "absent",
       "widgetUserToken": "present (cwu_)",
@@ -54,23 +54,32 @@
   "responses": [
     {
       "path": "/api/lifecycle-views/recommendation-hold",
-      "status": 307
+      "status": 200
     },
     {
       "path": "/api/lifecycle-views/recommendation-hold",
-      "status": 307
+      "status": 200
+    },
+    {
+      "path": "/api/lifecycle-views/recommendation-hold/decide",
+      "status": 200
     },
     {
       "path": "/api/lifecycle-views/recommendation-hold",
-      "status": 307
+      "status": 200
     },
     {
       "path": "/api/lifecycle-views/recommendation-hold",
-      "status": 307
-    },
+      "status": 200
+    }
+  ],
+  "decideOutcomes": [
     {
-      "path": "/api/lifecycle-views/recommendation-hold",
-      "status": 307
+      "path": "/api/lifecycle-views/recommendation-hold/decide",
+      "status": 200,
+      "outcomeOk": false,
+      "outcomeError": "unauthorized",
+      "outcomeDispatched": null
     }
   ]
 }

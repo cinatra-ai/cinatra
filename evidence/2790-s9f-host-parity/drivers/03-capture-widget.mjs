@@ -78,6 +78,10 @@ function noteRequest(req, label) {
   say(`WIRE ${JSON.stringify(entry)}`);
 }
 const wireResponses = [];
+// The decide route answers 200 for BOTH a refusal and a success (its uniform-refusal
+// contract), so the HTTP code alone cannot say what the reader was told. The
+// outcome's own `ok`/`error` is therefore recorded — product text, never a value.
+const decideOutcomes = [];
 
 const browser = await chromium.launch({ headless: true });
 // NO storageState: this context starts with an EMPTY cookie jar, so every cookie
@@ -96,16 +100,26 @@ page.on("request", (req) => {
 page.on("response", async (res) => {
   const u = res.url();
   if (!u.includes("/api/lifecycle-views/recommendation-hold")) return;
-  wireResponses.push({
-    path: (() => {
-      try {
-        return new URL(u).pathname;
-      } catch {
-        return "<unparseable>";
-      }
-    })(),
-    status: res.status(),
-  });
+  const path = (() => {
+    try {
+      return new URL(u).pathname;
+    } catch {
+      return "<unparseable>";
+    }
+  })();
+  wireResponses.push({ path, status: res.status() });
+  if (u.includes("/api/lifecycle-views/recommendation-hold/decide")) {
+    const body = await res.json().catch(() => null);
+    const outcome = (body ?? {}).outcome ?? null;
+    decideOutcomes.push({
+      path,
+      status: res.status(),
+      outcomeOk: outcome && typeof outcome === "object" ? Boolean(outcome.ok) : null,
+      outcomeError: outcome && typeof outcome === "object" ? (outcome.error ?? null) : null,
+      outcomeDispatched:
+        outcome && typeof outcome === "object" && "dispatched" in outcome ? outcome.dispatched : null,
+    });
+  }
 });
 
 const embedFrame = () => page.frames().find((f) => f.url().includes("/embed/assistant"));
@@ -205,12 +219,20 @@ async function chipReadout() {
 const records = [];
 const results = [];
 
-async function shoot(cell, declaredState, note, extra = {}) {
+// THE TWO FRAMINGS, both uncropped at deviceScaleFactor 2.
+//   "card"   — the card ROOT, so the drawing can be graded against §V without
+//              anything else in the picture.
+//   "column" — the WHOLE embedded widget as the site visitor sees it, shot as
+//              the `.cw-frame` element on the THIRD-PARTY page, so the card is
+//              visible IN the real transcript column with the widget's own
+//              composer in frame.
+async function shoot(cell, declaredState, note, extra = {}, framing = "card") {
   await stripDevOverlay();
   const f = embedFrame();
   const rel = `${SHOT_DIR_REL}/${cell}.png`;
   const abs = join(REPO_ROOT, rel);
-  await f.locator(CARD_ROOT).first().screenshot({ path: abs, scale: "device" });
+  const target = framing === "column" ? page.locator(".cw-frame").first() : f.locator(CARD_ROOT).first();
+  await target.screenshot({ path: abs, scale: "device" });
   const bytes = readFileSync(abs);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const dims = { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
@@ -244,10 +266,11 @@ async function shoot(cell, declaredState, note, extra = {}) {
     rootAttributes: attrs,
     chips,
     themeClass: theme,
+    framing,
     ...extra,
   });
-  results.push({ cell, pixels: dims, sha256, observed, rootAttributes: attrs, chips, themeClass: theme, cardText: cardText.slice(0, 2000) });
-  say(`CAP ${cell} ${dims.width}x${dims.height} chips=${chips.length} theme="${theme}"`);
+  results.push({ cell, framing, pixels: dims, sha256, observed, rootAttributes: attrs, chips, themeClass: theme, cardText: cardText.slice(0, 2000) });
+  say(`CAP ${cell} ${dims.width}x${dims.height} framing=${framing} state=${attrs?.["data-lifecycle-card-state"] ?? "?"} chips=${chips.length}`);
   return dims;
 }
 
@@ -263,6 +286,66 @@ async function setTheme(name) {
     el.style.colorScheme = t === "dark" ? "dark" : "light";
   }, name);
   await page.waitForTimeout(900);
+}
+
+/**
+ * The embed frame's OWN hosted-PKCE sign-in, run INSIDE the frame. Extracted
+ * because the frame re-mounts ANONYMOUS on every page load, so a second load of
+ * the third-party page must run exactly the same shipped flow again — the host
+ * page never holds a credential on the frame's behalf.
+ */
+async function runFrameSignIn() {
+let frame = embedFrame();
+  const signin = frame.locator("[data-embed-signin]").first();
+if ((await signin.count()) > 0) {
+  say("frame is anonymous — running the frame's own hosted PKCE sign-in");
+  const [popup] = await Promise.all([
+    page.waitForEvent("popup", { timeout: 180_000 }),
+    signin.click(),
+  ]);
+  const alive = () => !popup.isClosed();
+  const settle = async (ms) => {
+    if (alive()) await popup.waitForTimeout(ms).catch(() => {});
+  };
+  await popup.waitForLoadState("domcontentloaded", { timeout: 180_000 }).catch(() => {});
+  say(`popup opened on path: ${alive() ? new URL(popup.url()).pathname : "<closed immediately>"}`);
+  await settle(3000);
+  if (alive()) {
+    const emailField = popup.locator('input[type="email"], input[name="email"]').first();
+    if ((await emailField.count().catch(() => 0)) > 0) {
+      await emailField.fill(ACTOR.email).catch(() => {});
+      await popup.locator('input[type="password"], input[name="password"]').first().fill(ACTOR.password).catch(() => {});
+      await popup.locator('button[type="submit"]').first().click().catch(() => {});
+      await settle(5000);
+    }
+  }
+  for (let i = 0; i < 4 && alive(); i += 1) {
+    const btn = popup
+      .locator('button:has-text("Continue"), button:has-text("Allow"), button:has-text("Approve"), button:has-text("Sign in")')
+      .first();
+    if ((await btn.count().catch(() => 0)) === 0) break;
+    await btn.click({ timeout: 20_000 }).catch(() => {});
+    await settle(3000);
+  }
+  if (alive()) await popup.waitForEvent("close", { timeout: 120_000 }).catch(() => {});
+  say(`popup closed: ${popup.isClosed()}`);
+
+  for (let i = 0; i < 90; i += 1) {
+    await page.waitForTimeout(2000);
+    const f = embedFrame();
+    if (!f) continue;
+    const stillAnonymous = await f.evaluate(() => Boolean(document.querySelector("[data-embed-signin]"))).catch(() => true);
+    const text = await f.evaluate(() => document.body?.innerText?.slice(0, 120) ?? "").catch(() => "");
+    if (!stillAnonymous && !/Waiting for the Cinatra sign-in/i.test(text)) {
+      say(`frame left the anonymous state after ~${(i + 1) * 2}s`);
+      break;
+    }
+  }
+} else {
+  say("frame already carried a session (unexpected on a fresh context)");
+}
+frame = embedFrame();
+return frame;
 }
 
 try {
@@ -300,55 +383,7 @@ try {
   }
   frame = embedFrame();
 
-  // --- the frame's own hosted-PKCE sign-in ---------------------------------
-  const signin = frame.locator("[data-embed-signin]").first();
-  if ((await signin.count()) > 0) {
-    say("frame is anonymous — running the frame's own hosted PKCE sign-in");
-    const [popup] = await Promise.all([
-      page.waitForEvent("popup", { timeout: 180_000 }),
-      signin.click(),
-    ]);
-    const alive = () => !popup.isClosed();
-    const settle = async (ms) => {
-      if (alive()) await popup.waitForTimeout(ms).catch(() => {});
-    };
-    await popup.waitForLoadState("domcontentloaded", { timeout: 180_000 }).catch(() => {});
-    say(`popup opened on path: ${alive() ? new URL(popup.url()).pathname : "<closed immediately>"}`);
-    await settle(3000);
-    if (alive()) {
-      const emailField = popup.locator('input[type="email"], input[name="email"]').first();
-      if ((await emailField.count().catch(() => 0)) > 0) {
-        await emailField.fill(ACTOR.email).catch(() => {});
-        await popup.locator('input[type="password"], input[name="password"]').first().fill(ACTOR.password).catch(() => {});
-        await popup.locator('button[type="submit"]').first().click().catch(() => {});
-        await settle(5000);
-      }
-    }
-    for (let i = 0; i < 4 && alive(); i += 1) {
-      const btn = popup
-        .locator('button:has-text("Continue"), button:has-text("Allow"), button:has-text("Approve"), button:has-text("Sign in")')
-        .first();
-      if ((await btn.count().catch(() => 0)) === 0) break;
-      await btn.click({ timeout: 20_000 }).catch(() => {});
-      await settle(3000);
-    }
-    if (alive()) await popup.waitForEvent("close", { timeout: 120_000 }).catch(() => {});
-    say(`popup closed: ${popup.isClosed()}`);
-
-    for (let i = 0; i < 90; i += 1) {
-      await page.waitForTimeout(2000);
-      const f = embedFrame();
-      if (!f) continue;
-      const stillAnonymous = await f.evaluate(() => Boolean(document.querySelector("[data-embed-signin]"))).catch(() => true);
-      const text = await f.evaluate(() => document.body?.innerText?.slice(0, 120) ?? "").catch(() => "");
-      if (!stillAnonymous && !/Waiting for the Cinatra sign-in/i.test(text)) {
-        say(`frame left the anonymous state after ~${(i + 1) * 2}s`);
-        break;
-      }
-    }
-  } else {
-    say("frame already carried a session (unexpected on a fresh context)");
-  }
+  frame = await runFrameSignIn();
 
   // --- THE COOKIE FACT, measured -------------------------------------------
   // The popup was a TOP-LEVEL window on the app origin, so the app's session
@@ -432,7 +467,7 @@ try {
     records.push(diagnostic);
     results.push({ cell: diagnostic.cell, sha256, observed, columnText: columnText.slice(0, 1200), isDiagnostic: true });
     say(`DIAG recorded: ${JSON.stringify(observed.map((o) => `${o.scope}::${o.selector}=${o.count}`))}`);
-    writeFileSync(join(OUT, "wire.json"), JSON.stringify({ requests: wire, responses: wireResponses }, null, 2));
+    writeFileSync(join(OUT, "wire.json"), JSON.stringify({ requests: wire, responses: wireResponses, decideOutcomes }, null, 2));
     writeFileSync(
       join(OUT, "capture-results.json"),
       JSON.stringify({ results, wire, wireResponses, cookieJar: appCookies.map((c) => ({ name: c.name, domain: c.domain, sameSite: c.sameSite, httpOnly: c.httpOnly })) }, null, 2),
@@ -443,20 +478,33 @@ try {
     process.exit(0);
   }
 
-  // ---- H1 — the held card, cross-site, light -------------------------------
+  // ---- the HELD reading, both framings, both palettes ---------------------
   await setTheme("cinatra");
+  await shoot(
+    "W1__recommendation-card__site_widget__held__column",
+    "pending",
+    "The whole embedded widget on a THIRD-PARTY page, uncropped: the turn the visitor typed, the assistant's reply, and the recommendation card HELD in the real transcript column — with the widget's OWN composer in frame beneath it. Every read behind this picture went to the broker with the widget's credential and NO cookie (see `wire`).",
+    {},
+    "column",
+  );
   await shoot(
     "H1__recommendation-card__site_widget__held",
     "pending",
-    "The recommendation card HELD in the embedded conversation column on a THIRD-PARTY page. One chip per skill, each carrying its own Confirm / Adjust / Skip, each printing the owning extension's manifest displayName. The read that produced it went to the broker resolve route with the widget's own credential and NO cookie (see `wire`).",
+    "The same held card, framed on its own root so the drawing can be graded against §V: one chip per skill, each carrying its OWN Confirm / Adjust / Skip, each printing the owning extension's manifest displayName rather than a slug or a package id.",
   );
 
-  // ---- H2 — the same card, same framing, dark ------------------------------
   await setTheme("dark");
+  await shoot(
+    "W2__recommendation-card__site_widget__held__column__dark",
+    "pending",
+    "The SAME held card in the SAME embedded column, in the dark palette — the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed.",
+    {},
+    "column",
+  );
   await shoot(
     "H2__recommendation-card__site_widget__held__dark",
     "pending",
-    "The SAME held card, same run, same frame selector and same framing, in the dark palette — the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed.",
+    "The SAME held card on its own root, same run, same frame selector, in `dark`.",
   );
   await setTheme("cinatra");
 
@@ -493,30 +541,134 @@ try {
     }
   }
 
-  // ---- H4 — the SETTLED reading -------------------------------------------
-  for (let i = 0; i < 60; i += 1) {
+  // ---- what the reader is TOLD, measured in place --------------------------
+  // The decide route answers 200 whether it recorded the decision or refused it,
+  // so what matters is the OUTCOME it returned and what the row then drew. Both
+  // are recorded rather than assumed.
+  for (let i = 0; i < 45; i += 1) {
     await page.waitForTimeout(2000);
-    const f = embedFrame();
-    const state = await f
-      ?.evaluate((s) => document.querySelector(s)?.getAttribute("data-lifecycle-card-state") ?? null, CARD_ROOT)
+    const st = await embedFrame()
+      ?.evaluate((s2) => document.querySelector(s2)?.getAttribute("data-lifecycle-card-state") ?? null, CARD_ROOT)
       .catch(() => null);
-    if (state === "decided") {
-      say(`card settled after ~${(i + 1) * 2}s`);
+    if (st === "decided") {
+      say(`card settled IN PLACE after ~${(i + 1) * 2}s`);
+      break;
+    }
+  }
+  await page.waitForTimeout(2500);
+  const settledInPlace =
+    (await embedFrame()
+      ?.evaluate((s2) => document.querySelector(s2)?.getAttribute("data-lifecycle-card-state") ?? null, CARD_ROOT)
+      .catch(() => null)) === "decided";
+  say(`DECIDE OUTCOMES ${JSON.stringify(decideOutcomes)}`);
+  say(`settled in place: ${settledInPlace}`);
+
+  if (!settledInPlace) {
+    // NOT A CELL. The row did not settle where it was decided, so the honest
+    // output is a measured diagnostic of what the reader is actually shown —
+    // never a cell claiming a settled row that is not on screen.
+    await stripDevOverlay();
+    const fd = embedFrame();
+    const rel = `${SHOT_DIR_REL}/DIAG__site-widget-column__decide-dispatch-refused.png`;
+    const abs = join(REPO_ROOT, rel);
+    await page.locator(".cw-frame").first().screenshot({ path: abs, scale: "device" });
+    const bytes = readFileSync(abs);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const observed = await counts(ASSERTIONS);
+    const cardText = await fd.locator(CARD_ROOT).first().innerText().catch(() => "");
+    const attrs = await rootAttributes();
+    const diagnostic = {
+      cell: "DIAG__site-widget-column__decide-dispatch-refused",
+      isDiagnostic: true,
+      declaredHost: "site_widget",
+      declaredKind: null,
+      declaredState: null,
+      finalUrl: new URL(page.url()).pathname,
+      frameUrl: (() => {
+        const u = new URL(fd.url());
+        return u.pathname + (u.search ? "?<frame disambiguators>" : "");
+      })(),
+      screenshot: rel,
+      sha256,
+      assertions: observed,
+      rootAttributes: attrs,
+      chips: await chipReadout(),
+      decideOutcomes,
+      cardText: cardText.slice(0, 1200),
+      recordedBy: "cinatra-lifecycle-capture-recorder@1",
+      recordedAt: new Date().toISOString(),
+      runtime: process.env.S9F_RUNTIME_NOTE ?? "",
+      note:
+        "DIAGNOSTIC, NOT A CELL. The row where it was decided: every chip carries its mark, the card root still declares data-lifecycle-card-state=\"held\", and a refusal line is drawn under the row. The decide route answered 200 and its OUTCOME is recorded in `decideOutcomes`. Filed as a diagnostic so nothing here claims a settled row that is not on screen.",
+    };
+    records.push(diagnostic);
+    results.push({ cell: diagnostic.cell, sha256, observed, cardText: cardText.slice(0, 1200), isDiagnostic: true });
+    say(`DIAG recorded: ${JSON.stringify(observed.map((o) => `${o.scope}::${o.selector}=${o.count}`))}`);
+  }
+
+  // ---- the SETTLED reading, re-read through the broker ---------------------
+  // The decision is durable, so the settled row is reachable by RE-READING the
+  // run's authoritative hold state on the same host — a fresh page load of the
+  // same third-party page, a fresh turn naming the same run, and the same broker
+  // read that drew the held row. Nothing is seeded and nothing is re-decided.
+  say("reloading the third-party page to re-read the decided run through the broker");
+  await page.goto(HOST, { waitUntil: "domcontentloaded", timeout: 180_000 });
+  for (let i = 0; i < 90; i += 1) {
+    await page.waitForTimeout(2000);
+    const f2 = embedFrame();
+    const ready = await f2
+      ?.evaluate(
+        () =>
+          Boolean(document.querySelector("[data-embed-signin]")) ||
+          Boolean(document.querySelector('[role="textbox"][contenteditable="true"]')),
+      )
+      .catch(() => false);
+    if (ready) {
+      say(`embed frame re-drew after ~${(i + 1) * 2}s`);
+      break;
+    }
+  }
+  // The frame comes back ANONYMOUS: the host page holds no credential, so the
+  // frame runs its own hosted PKCE sign-in again, exactly as on the first load.
+  frame = await runFrameSignIn();
+  const composer2 = frame.locator('[role="textbox"][contenteditable="true"]').first();
+  await composer2.waitFor({ state: "visible", timeout: 240_000 });
+  await composer2.click();
+  await composer2.type(PROMPT, { delay: 12 });
+  await stripDevOverlay();
+  await composer2.press("Enter");
+  say("second turn sent through the widget's OWN composer, naming the SAME (now decided) run");
+
+  for (let i = 0; i < 90; i += 1) {
+    await page.waitForTimeout(2000);
+    const st = await embedFrame()
+      ?.evaluate((s2) => document.querySelector(s2)?.getAttribute("data-lifecycle-card-state") ?? null, CARD_ROOT)
+      .catch(() => null);
+    if (st === "decided") {
+      say(`the decided row drew after ~${(i + 1) * 2}s`);
       break;
     }
   }
   await page.waitForTimeout(3000);
+  await setTheme("cinatra");
+  await shoot(
+    "W3__recommendation-card__site_widget__settled__column",
+    "decided",
+    "The SETTLED row on the same cross-site widget host, in the whole embedded column with the widget's own composer in frame: one chip per skill stating what it recorded — Confirmed, Adjusted, Skipped — and nothing left to press. Read back through the broker with the widget's credential and no cookie.",
+    {},
+    "column",
+  );
   await shoot(
     "H4__recommendation-card__site_widget__settled",
     "decided",
-    "The SETTLED row on the same cross-site widget host: one chip per skill stating what it recorded, nothing left to press. The release travelled to the broker DECIDE route with the widget's own credential and no cookie (see `wire`).",
+    "The SAME settled row framed on its own root: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row — the decided row has nothing to press.",
   );
 
-  writeFileSync(join(OUT, "wire.json"), JSON.stringify({ requests: wire, responses: wireResponses }, null, 2));
+  writeFileSync(join(OUT, "wire.json"), JSON.stringify({ requests: wire, responses: wireResponses, decideOutcomes }, null, 2));
   writeFileSync(
     join(OUT, "capture-results.json"),
     JSON.stringify(
-      { results, wire, wireResponses, cookieJar: appCookies.map((c) => ({ name: c.name, domain: c.domain, sameSite: c.sameSite, httpOnly: c.httpOnly })) },
+      { results, wire, wireResponses, decideOutcomes, cookieJar: appCookies.map((c) => ({ name: c.name, domain: c.domain, sameSite: c.sameSite, httpOnly: c.httpOnly })) },
       null,
       2,
     ),
