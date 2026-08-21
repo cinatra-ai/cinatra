@@ -139,9 +139,46 @@ function poolNameFor(connectionString: string): string {
 // ONCE at module load — `getPooledDb` fingerprints a pool's config and refuses
 // a later caller that resolves a different one, so this value has to be stable
 // for the life of the process.
+//
+// And bounded FROM ABOVE, which is not a taste call — above 2^31-1 ms BOTH
+// mechanisms that enforce this ceiling stop working, in opposite and equally
+// silent ways:
+//
+//   `SET LOCAL statement_timeout` — `statement_timeout` is a Postgres GUC of
+//     type integer, in milliseconds, so its maximum is 2147483647. Ask for
+//     more and the server refuses the SET (`... is outside the valid range for
+//     parameter "statement_timeout"`). Because that SET travels WITH the BEGIN
+//     as one round trip (`beginTransactionSql`), the transaction path would
+//     then fail on its FIRST statement, before any caller query runs at all.
+//   `query_timeout` / `connectionTimeoutMillis` — pg arms both with
+//     `setTimeout`, whose delay is a signed 32-bit integer. Node clamps an
+//     out-of-range delay to 1ms (with a `TimeoutOverflowWarning` and nothing
+//     else), so a ceiling asked to be enormous becomes an INSTANT read timeout
+//     on every query — the precise opposite of the intent, and it would look
+//     to every caller like a database that answers nothing.
+//
+// So an over-large value does not degrade gracefully in either direction, and
+// `Number.isFinite(raw) && raw > 0` does not catch it: only the exponent forms
+// that reach `Infinity` (`1e400`) fail that test, while the ones that stay
+// finite (`1e10`) pass it and land squarely in the broken range.
+//
+// The clamp is at ONE HOUR rather than at the 2147483647 both limits sit on.
+// This value is a SETTLE guarantee: past an hour the promise has not settled
+// in any sense a caller or an operator cares about, and 2^31-1 ms is 24.8 days
+// — representable, and meaningless. Every value this repo actually sets is far
+// under it (30s default, 4s in `vitest.integration-2882.config.ts`, and 90s
+// for the sibling sync ceiling under a Turbopack-starved dev server), so the
+// clamp only ever engages on a value that was a mistake. Clamped rather than
+// rejected back to the default because the intent of an over-large value is
+// "wait a very long time"; answering it with the longest bound this seam can
+// actually enforce honours that, where falling back to 30s would quietly
+// SHORTEN the ceiling for the one env-override use case it exists to serve.
+const MAX_TIMEOUT_MS = 3_600_000;
 const DEFAULT_TIMEOUT_MS = (() => {
   const raw = Number(process.env.POSTGRES_ASYNC_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+  return Number.isFinite(raw) && raw > 0
+    ? Math.min(raw, MAX_TIMEOUT_MS)
+    : 30_000;
 })();
 
 // The transaction path's server-side cancel sits BELOW the client's read
@@ -164,8 +201,10 @@ const TRANSACTION_STATEMENT_TIMEOUT_MS = Math.max(
  * They are a single statement string on purpose: it makes "the `SET LOCAL`
  * never travels outside a transaction block" structural rather than a thing a
  * later edit has to remember. `SET` takes no bind parameters, so the value is
- * interpolated — it is `Math.floor`ed from a `Number.isFinite`-validated env
- * read above, never caller input.
+ * interpolated — it is `Math.floor`ed from an env read above that is
+ * `Number.isFinite`-validated AND clamped to `MAX_TIMEOUT_MS`, so it is always
+ * a positive integer inside `statement_timeout`'s int32 range, never caller
+ * input.
  */
 function beginTransactionSql(): string {
   return `BEGIN; SET LOCAL statement_timeout = ${TRANSACTION_STATEMENT_TIMEOUT_MS}`;
