@@ -319,6 +319,19 @@ export type ChatThreadCarriageRow = {
    * these are mislabeled evidence, not a chat mount.
    */
   foreignHostSubtrees: readonly string[];
+  /**
+   * The REAL decision controls the drawn card offers the reader, read off the
+   * shipped component (cinatra#2827, epic #2784 S9i). This is what a SHELL
+   * cannot satisfy: the placeholder draws a title and a state line and offers
+   * nothing to press, so a matrix row that requires these refuses to certify it
+   * as the kind's owner.
+   *
+   * EMPTY IS A RULING, NOT A GAP, and only §VII may take it: the verification
+   * card "carries no floor at all — it asks nothing, so it draws nothing to
+   * press". A kind with an empty list is held to the root declaration instead,
+   * which the shell also cannot emit — see `chatCarriageRootAnchorsFor`.
+   */
+  decisionControls: readonly string[];
   enforcer: CarriageEnforcer;
 };
 
@@ -358,13 +371,38 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     owner: "RecommendationHoldCard",
     // Read off the SHIPPED component: `RecommendationHoldCard` composes
     // `RunRecommendationChipRow`, whose root carries the conformance id and
-    // whose two decision controls carry these action names.
+    // whose decision controls carry these action names.
+    //
+    // RE-READ AFTER THE §V REDRAW (cinatra#2841). The row used to carry ONE
+    // Confirm/Skip pair for the whole card; the ratified drawing decides PER
+    // CHIP, so the shipped controls are now Confirm / Adjust / Skip on each
+    // skill and the two row-level names this list used to hold are emitted
+    // nowhere. Naming them anyway would have failed the real mount on names the
+    // component never used — the exact defect this field exists to prevent — so
+    // they are replaced by what the component really draws, not dropped.
+    // Same three the capture contract names (`decisionControls` in
+    // `scripts/ci/lib/capture-record-contract.mjs`); the capture suite asserts
+    // the two lists stay in step, so neither can drift alone.
     ownerAnchors: Object.freeze([
       '[data-conformance-id="run-chip-row"]',
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ]),
     ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
+    // §V's terminal acts, on the shipped `RunRecommendationChipRow` — the SAME
+    // three the owner anchors above and the capture contract
+    // (`decisionControls` in `scripts/ci/lib/capture-record-contract.mjs`)
+    // already name. The §V redraw (cinatra#2841) made the decision PER CHIP, so
+    // the row-level `confirm-run-recommendation` / `skip-run-recommendation`
+    // pair this list used to hold is emitted nowhere; cinatra#2866 renamed the
+    // owner anchors but left this field behind, which is what asserted a
+    // selector the shipped row never draws.
+    decisionControls: Object.freeze([
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
+    ]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "held-turn-card-contract",
   },
@@ -376,6 +414,14 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     owner: "ReviewGateCard",
     ownerAnchors: Object.freeze(['[data-conformance-id="review-gate-card"]']),
     ruledRootAnchors: rootAnchorsFor("artifact_review_gate"),
+    // §II's floor, on the shipped `ReviewDecisionBar` the card composes. The
+    // three the bar really emits — a reader who may only comment keeps Comment,
+    // so the set is what the card CAN offer, checked against the state it drew.
+    decisionControls: Object.freeze([
+      '[data-action="approve-review -> resolved"]',
+      '[data-action="reject-review -> resolved"]',
+      '[data-action="comment-review -> annotated"]',
+    ]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
@@ -387,6 +433,13 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     owner: "ScheduleProposalCard",
     ownerAnchors: Object.freeze([`[data-lifecycle-card="trigger_schedule_proposal"]`]),
     ruledRootAnchors: rootAnchorsFor("trigger_schedule_proposal"),
+    // §VI's two acts. NAMED BEFORE THEY EXIST, on purpose: the row is an owed
+    // ratchet until S9d draws the card, and an obligation with no named target
+    // is a row that can be struck against nothing.
+    decisionControls: Object.freeze([
+      '[data-action="adjust-schedule-proposal"]',
+      '[data-action="confirm-schedule-proposal"]',
+    ]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
@@ -398,6 +451,9 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     owner: "VerificationSummaryCard",
     ownerAnchors: Object.freeze([`[data-lifecycle-card="verification_summary"]`]),
     ruledRootAnchors: rootAnchorsFor("verification_summary"),
+    // §VII asks nothing, so it draws nothing to press. The empty list is the
+    // ruling; the root declaration below is what this row is held to.
+    decisionControls: Object.freeze([]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
@@ -454,10 +510,214 @@ export function heldTurnMountIsOwed(kind: LifecycleCardKind): boolean {
  * and asserts the declaration is STILL missing, so the day the owning slice adds
  * it the row must be struck. Same ratchet discipline as the mount obligations:
  * an obligation is a red done-check, never a waiver.
+ *
+ * EMPTY, AND THAT IS THE RATCHET WORKING. `recommendation_hold` was the one row
+ * here, and the §V redraw (cinatra#2841) put the declaration on the chip row's
+ * own outermost element — the row IS the card — in BOTH of its states, held and
+ * decided. The obligation was therefore struck the moment the declaration
+ * landed, which is the only moment it may be struck.
+ *
+ * STRIKING IT DID NOT RETIRE THE MEASUREMENT. The transcript suite still reads
+ * the real card's root and compares what it found against this list, so the
+ * declaration disappearing puts `recommendation_hold` back into the OBSERVED
+ * set and turns that arm red against this empty list; and the arm that runs
+ * only once a row is struck reads the shipped component and requires both
+ * attributes to really be there. Both directions stay live with the list empty.
  */
-export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
-  "recommendation_hold",
+export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([]);
+
+// ---------------------------------------------------------------------------
+// The four-kind chat_thread CARRIAGE MATRIX (cinatra#2827, epic #2784 S9i)
+// ---------------------------------------------------------------------------
+//
+// The table above says which component owns a kind and where it must render.
+// This section says WHAT COUNTS as that component having rendered — because
+// until now nothing did, and a gate with no answer to that question certifies
+// the S1 placeholder shell as §VI and §VII. The shell emits
+// `data-lifecycle-card="<kind>"` and `data-lifecycle-card-state`, so a check
+// built on those two alone passes on a card that draws a title and a sentence
+// and asks the reader for nothing.
+//
+// THE TWO THINGS A SHELL CANNOT DO, and they are the matrix:
+//
+//   1. DECLARE ITS HOST ON ITS OWN ROOT. `data-lifecycle-card-host` says which
+//      of the four hosts drew this card. The shell renders identically on every
+//      host and names none; `ReviewGateCard` writes the host it read from the
+//      surface declaration. The declaration is required ON ONE ELEMENT with the
+//      kind and the state — split across two, it is two elements agreeing by
+//      coincidence rather than one card identifying itself.
+//   2. OFFER THE KIND'S REAL DECISION CONTROLS. Named per row, read off the
+//      shipped component. §VII is the one ruled empty list (it asks nothing), so
+//      it is held to (1) alone — which the shell still cannot satisfy.
+//
+// AND THE POSITION IS PART OF THE ANSWER (the other half of this slice): the
+// root must sit at the ordered slot of the part that PRODUCED the view, outside
+// every foreign-host subtree. A card anywhere else in the turn is a card the
+// reader has to go looking for.
+
+/** The state attribute every drawn lifecycle card carries on its own root. */
+export const LIFECYCLE_CARD_STATE_ANCHOR = "[data-lifecycle-card-state]";
+
+/**
+ * The anchors ONE element — the card's own root — must carry for the row's
+ * owner to be considered drawn: its kind, the chat host, and a resolved state.
+ */
+export function chatCarriageRootAnchorsFor(
+  row: ChatThreadCarriageRow,
+): readonly string[] {
+  return Object.freeze([...row.ruledRootAnchors, LIFECYCLE_CARD_STATE_ANCHOR]);
+}
+
+/**
+ * Kinds whose chat_thread OWNER is not drawn on main yet, and why each is here:
+ *
+ *   · `trigger_schedule_proposal` — the registry still dispatches it to the S1
+ *     shell; S9d (#2788) draws `ScheduleProposalCard` and strikes it.
+ *   · `verification_summary` — same shell; S9e (#2789) draws
+ *     `VerificationSummaryCard` and strikes it.
+ *
+ * `recommendation_hold` is deliberately NOT repeated here. Its chat mount is
+ * owed for its own reason (S9b, #2786) and already ratcheted by
+ * `HELD_TURN_MOUNT_OBLIGATIONS`; the matrix READS that list, so the slice that
+ * lands the mount strikes ONE row and both ratchets move together. Two lists
+ * naming the same kind is exactly how a struck ratchet goes stale somewhere else.
+ */
+export const SHELL_OWNED_CHAT_KINDS: readonly LifecycleCardKind[] = Object.freeze([
+  "trigger_schedule_proposal",
+  "verification_summary",
 ]);
+
+/**
+ * The whole owed set of the matrix — a RED DONE-CHECK, never a waiver. The
+ * matrix asserts the OBSERVED unmounted set is EXACTLY this list, so an owner
+ * landing without its row struck is red, and a row struck without its owner is
+ * red the same day.
+ */
+export const CHAT_OWNER_MOUNT_OBLIGATIONS: readonly LifecycleCardKind[] =
+  Object.freeze([...HELD_TURN_MOUNT_OBLIGATIONS, ...SHELL_OWNED_CHAT_KINDS]);
+
+/** Is this kind's chat_thread OWNER render still owed? */
+export function chatOwnerMountIsOwed(kind: LifecycleCardKind): boolean {
+  return CHAT_OWNER_MOUNT_OBLIGATIONS.includes(kind);
+}
+
+/**
+ * ONE kind's observation, read off the rendered transcript by the caller that
+ * holds the DOM. Kept as data so the JUDGEMENT lives here, beside the table it
+ * is judging against, and the DOM walk lives with the surface that produced it.
+ */
+export type ChatCarriageObservation = {
+  /**
+   * Anchor sets, one per element that carried ANY of the row's root anchors and
+   * sits outside every foreign-host subtree. One element carrying all three is
+   * a declaration; three elements carrying one each is not.
+   */
+  rootCandidates: ReadonlyArray<{
+    anchors: readonly string[];
+    /** The ordered transcript slot this element renders at, or null. */
+    slot: number | null;
+    /** The row's decision controls found INSIDE this element. */
+    controls: readonly string[];
+  }>;
+  /** The slot of the part that produced this kind's view, or null when absent. */
+  producingSlot: number | null;
+};
+
+export type ChatCarriageViolation = {
+  code:
+    | "owner_root_absent"
+    | "root_declaration_incomplete"
+    | "controls_absent"
+    | "root_off_producing_slot"
+    | "no_producing_slot";
+  detail: string;
+};
+
+/**
+ * Judge one kind's observed carriage against its row.
+ *
+ * An empty result means the kind's REAL owner rendered, declared itself, offered
+ * what it offers, and did so at the step that produced it. Anything else names
+ * what was missing — and the wording matters, because these strings are what a
+ * later slice reads when its ratchet turns red.
+ */
+export function evaluateChatCarriage(
+  observation: ChatCarriageObservation,
+  row: ChatThreadCarriageRow,
+): ChatCarriageViolation[] {
+  const violations: ChatCarriageViolation[] = [];
+  const required = chatCarriageRootAnchorsFor(row);
+  const complete = observation.rootCandidates.filter((c) =>
+    required.every((a) => c.anchors.includes(a)),
+  );
+
+  if (complete.length === 0) {
+    if (observation.rootCandidates.length === 0) {
+      violations.push({
+        code: "owner_root_absent",
+        detail:
+          `${row.owner} did not render for ${row.kind}: no element carries ` +
+          `[${required.join(", ")}] in the chat transcript outside every foreign host`,
+      });
+    } else {
+      // TWO SHAPES, ONE CODE, and they are the same defect: something drew for
+      // this kind but nothing IDENTIFIED itself as the kind's card on a host.
+      // The S1 shell lands here (it names the kind and its state and declares no
+      // host), and so does a declaration spread over a wrapper and its child —
+      // two elements agreeing by coincidence rather than one card saying what it
+      // is. Named apart from "absent" so a placeholder is never read as nothing.
+      violations.push({
+        code: "root_declaration_incomplete",
+        detail:
+          `${row.kind} rendered, but no SINGLE element declares its kind, its ` +
+          `chat host and its state together — observed ` +
+          observation.rootCandidates.map((c) => `[${c.anchors.join(", ")}]`).join(" + "),
+      });
+    }
+    return violations;
+  }
+
+  // A kind's controls must live inside the root that declared itself, not
+  // somewhere else in the turn.
+  const best = complete.find((c) => row.decisionControls.every((a) => c.controls.includes(a)));
+  if (row.decisionControls.length > 0 && best === undefined) {
+    const found = new Set(complete.flatMap((c) => c.controls));
+    violations.push({
+      code: "controls_absent",
+      detail:
+        `${row.owner} drew no operable floor for ${row.kind}: ` +
+        `[${row.decisionControls.filter((a) => !found.has(a)).join(", ")}] ` +
+        "render nowhere inside the card's own root",
+    });
+  }
+
+  const root = best ?? complete[0];
+  if (observation.producingSlot === null) {
+    violations.push({
+      code: "no_producing_slot",
+      detail:
+        `the turn carries no producing step for ${row.kind}, so the card's ` +
+        "position cannot be checked — a card with no slot identity is the defect",
+    });
+  } else if (root.slot !== observation.producingSlot) {
+    violations.push({
+      code: "root_off_producing_slot",
+      detail:
+        `${row.owner} rendered at slot ${root.slot ?? "none"} but ${row.kind} was ` +
+        `produced at slot ${observation.producingSlot} — the card must render in ` +
+        "its producing step's OWN container",
+    });
+  }
+  return violations;
+}
+
+/** Does the observed transcript carry this kind's REAL owner, at its slot? */
+export function carriesChatOwner(
+  observation: ChatCarriageObservation,
+  row: ChatThreadCarriageRow,
+): boolean {
+  return evaluateChatCarriage(observation, row).length === 0;
+}
 
 /**
  * VOCABULARY-INDEPENDENT probes for "a lifecycle card of ANY spelling is mounted

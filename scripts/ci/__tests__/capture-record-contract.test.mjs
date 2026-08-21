@@ -127,8 +127,11 @@ describe("requiredAssertionsFor", () => {
       state: "decided",
     });
     expect(forbidden.map((f) => f.selector)).toContain(
-      '[data-action="confirm-run-recommendation"]',
+      '[data-skill-action="confirm"]',
     );
+    // …and the other two the §V redraw put on every chip (cinatra#2841).
+    expect(forbidden.map((f) => f.selector)).toContain('[data-skill-action="adjust"]');
+    expect(forbidden.map((f) => f.selector)).toContain('[data-skill-action="skip"]');
   });
 });
 

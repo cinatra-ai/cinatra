@@ -52,6 +52,7 @@ import {
   lifecycleBatchDisposition,
 } from "./schema";
 import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
+import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 
 import {
   validateChangesRequested,
@@ -177,7 +178,23 @@ export async function recordChangesRequested(
     .from(lifecycleRepair)
     .where(eq(lifecycleRepair.gateId, request.gateId))
     .limit(1);
-  if (existing[0]) return reconcileExistingRepair(existing[0], request);
+  if (existing[0]) {
+    // cinatra#2864 — a RE-DRIVE clears too. A repair row exists for this gate only
+    // because a prior call's transaction committed, and that transaction CASed the
+    // gate to `resolved` in the same breath — so the gate is closed, whatever this
+    // re-drive goes on to answer, and its open notification is owed a delete.
+    //
+    // Without this, the clear had exactly ONE chance: the post-commit dispatch of
+    // the first call. Lost to a swallowed notifier error or a process that died
+    // between the commit and the dispatch, it was never re-attempted, and a retry
+    // — the very thing a response-lost caller does — returned success past the
+    // stale row. The delete is idempotent, so re-driving it costs nothing.
+    await dispatchAutoGateResolved({
+      runId: input.runId,
+      reviewTaskId: input.reviewTaskId,
+    });
+    return reconcileExistingRepair(existing[0], request);
+  }
 
   // 2. Base-revision CAS at FIRST-record time (the same TOCTOU the decision core
   //    guards): the base must still be the revision the reviewer saw.
@@ -305,6 +322,21 @@ export async function recordChangesRequested(
   });
 
   if (!persisted.row) throw new Error("lifecycle_repair row vanished after insert-conflict");
+  // cinatra#2864 — `changes_requested` is a TERMINAL disposition: the CAS above
+  // just closed this review attempt, so the gate's open notification goes with it.
+  // Third of the three transitions that take a gate out of `pending` (the other
+  // two are the ordinary decision commit and the optional-expiry drain), and the
+  // last one that still left its bell entry behind — a reviewer who asked for
+  // changes kept an entry pointing at a review that had already closed.
+  //
+  // AFTER the transaction, never inside it: the same ordering (and the same
+  // reason) as the decision commit — a notification failure can never roll back a
+  // committed repair record. `dispatchAutoGateResolved` swallows its own errors,
+  // so this await cannot fail the record either.
+  await dispatchAutoGateResolved({
+    runId: input.runId,
+    reviewTaskId: input.reviewTaskId,
+  });
   if (!persisted.fresh) return reconcileExistingRepair(persisted.row, request);
   return { ok: true, repairId: persisted.row.id, route, attempt: cycle.attempt, status, idempotent: false };
 }
@@ -498,7 +530,13 @@ export async function submitRepairResponse(
   // linked to it; keying on the linkage is precise (never re-points an unrelated
   // event).
   type FinalizeOutcome =
-    | { kind: "finalized"; successorGateId: string }
+    // cinatra#2833 — `gateFresh` carries the emit's `idempotent` flag OUT of the
+    // transaction so the notification can be dispatched POST-COMMIT (below) with
+    // the same "only a genuinely new gate notifies" posture as every other
+    // review-opening path. It cannot be dispatched inside the tx: this emit is
+    // ENLISTED (Seam A), so a rollback would leave a notification pointing at a
+    // gate that never existed.
+    | { kind: "finalized"; successorGateId: string; gateFresh: boolean }
     | { kind: "concurrent" }
     | { kind: "pin-conflict"; message: string };
   // Any NON-finalized outcome must ROLL BACK the transaction, not commit it —
@@ -515,6 +553,7 @@ export async function submitRepairResponse(
   const outcome: FinalizeOutcome = await db
     .transaction(async (tx): Promise<FinalizeOutcome> => {
       let successorGateId: string;
+      let gateFresh: boolean;
       try {
         const emitted = await emitArtifactReviewGate(
           {
@@ -532,6 +571,7 @@ export async function submitRepairResponse(
           tx,
         );
         successorGateId = emitted.gateId;
+        gateFresh = !emitted.idempotent;
       } catch (err) {
         // A pin conflict aborts with nothing written (only a read ran on the
         // conflict path). Surface it so the caller maps it to successor-pin-conflict
@@ -565,7 +605,7 @@ export async function submitRepairResponse(
         .update(artifactProducedOutbox)
         .set({ continuationAddress: successorGateId })
         .where(eq(artifactProducedOutbox.continuationAddress, repair.gateId));
-      return { kind: "finalized", successorGateId };
+      return { kind: "finalized", successorGateId, gateFresh };
     })
     .catch((err: unknown): FinalizeOutcome => {
       if (err instanceof FinalizeRollback) return err.outcome;
@@ -584,6 +624,25 @@ export async function submitRepairResponse(
     return { ok: false, code: "concurrent-finalize", error: "the repair was finalized concurrently" };
   }
   const successorGateId = outcome.successorGateId;
+
+  // cinatra#2833 — the repair SUCCESSOR pin is a review opening, so it notifies
+  // through the same seam as every other one. It was outside both notifying
+  // paths by construction (a direct `emitArtifactReviewGate`, never the
+  // orchestration sweep), so a repaired artifact re-entered review in silence.
+  //
+  // POST-COMMIT, and that is load-bearing: the emit above is ENLISTED in the
+  // finalize transaction (Seam A), which ROLLS BACK on every non-finalized
+  // outcome — dispatching inside it would notify a human about a successor gate
+  // that a concurrent finalize discarded microseconds later. Reaching here means
+  // `outcome.kind === "finalized"`, i.e. the gate, the finalize CAS and the
+  // effect re-point are all durable. `gateFresh` keeps the single path's
+  // idempotency posture: a re-drive that re-emits the same deterministic
+  // successor gate must not re-notify. Best-effort like the verification trigger
+  // below — the dispatcher swallows every error, so the (already-committed)
+  // repair can never fail on a notification.
+  if (outcome.gateFresh && repair.producerRunId) {
+    await dispatchAutoGateOpen({ runId, reviewTaskId: successorTaskId });
+  }
 
   // S4 (cinatra#2042): a landed repair TRIGGERS post-change verification — the
   // before/after "Core analysis" record the run rail opens, and (on a failed

@@ -379,30 +379,30 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "skillNames",
       ],
     },
+    // TRANSCRIBED from the ratified source, not chosen here: cinatra#2841 redrew
+    // §V so the decision affordances are PER CHIP, and cinatra#2826's anchor
+    // contract (scripts/audit/chat-hitl-anchor-contract.json, digest-pinned and
+    // bound by src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts) names
+    // this owner's ratified anchors. The row-level pair this list used to carry
+    // ('[data-action="confirm-run-recommendation"]' and its skip twin) is not
+    // emitted on any host any more, so naming it here would make this gate assert
+    // a requirement the ratified drawing retired.
     anchors: [
       '[data-lifecycle-card="recommendation_hold"]',
       "[data-run-recommendation-chip-row]",
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-conformance-id="run-chip-row"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ],
-    // THREE of the four anchors are emitted today. The lifecycle-card identity
-    // attribute is not, and neither is the root's host/state pair: this owner
-    // returns the shipped chip row, whose root carries the row's own attributes
-    // and no lifecycle-card ones at all. Recorded rather than enforced, because
-    // closing it edits a product module this slice does not own — see the entry.
-    openObligations: [
-      {
-        id: "recommendation-root-identity",
-        requires: [
-          '[data-lifecycle-card="recommendation_hold"]',
-          "data-lifecycle-card-host",
-          "data-lifecycle-card-state",
-        ],
-        why: "The owner returns the shipped chip row directly, and that row's root carries no lifecycle-card identity, host or state attribute. So the card cannot be addressed on a host the way every other lifecycle card can, and a capture cannot assert which host or state it photographed.",
-        closedBy:
-          "The slice that owns this card's reachability and host parity, or an owner ruling assigning the attribute change to this contracts slice. Naming the owner of the edit is an open question, not a decision this gate may take.",
-      },
-    ],
+    // The 'recommendation-root-identity' obligation recorded here is CLOSED by
+    // cinatra#2841: the redrawn owner emits the lifecycle-card identity attribute
+    // and the root's host/state pair on both the held and the decided root. The
+    // gate's own both-directions check ("recorded as unmet and the owner now emits
+    // every part of it — strike the record here, in whichever change lands
+    // second") names this merge as the change landing second, so the record is
+    // struck rather than carried forward as a requirement the tree already meets.
+    openObligations: [],
     hosts: {
       chat_thread: null,
       site_widget: null,
@@ -449,11 +449,11 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // declared host, feeds it a validated hold state, and reads the row, its
       // two ratified decisions and the count back out of real DOM.
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-      testName: "host run_card draws EXACTLY ONE chip row, carrying both ratified decisions",
+      testName: "host run_card draws EXACTLY ONE chip row, carrying the ratified decisions",
     },
     instanceProof: {
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-      testName: "host run_card draws EXACTLY ONE chip row, carrying both ratified decisions",
+      testName: "host run_card draws EXACTLY ONE chip row, carrying the ratified decisions",
       hosts: ["run_card"],
     },
   },

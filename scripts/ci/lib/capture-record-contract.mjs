@@ -116,7 +116,8 @@ export const HOST_URL_CLASS = {
  * decision controls a PENDING capture owes. Selectors are read off the shipped
  * components, not invented here:
  *   `packages/agents/src/review-gate-card.tsx`          (root + decision bar)
- *   `packages/agents/src/run-recommendation-chip-row.tsx` (confirm / skip)
+ *   `packages/agents/src/run-recommendation-chip-row.tsx` (per-chip confirm /
+ *                                                        adjust / skip)
  */
 export const CARD_KINDS = {
   artifact_review_gate: {
@@ -126,10 +127,21 @@ export const CARD_KINDS = {
   },
   recommendation_hold: {
     cellTokens: ["recommendation-hold", "recommendation-card", "recommendation"],
+    // The row IS the card (§V), so this root is the chip-row's own outermost
+    // element, which carries the kind/host/state declaration from cinatra#2841
+    // exactly as `ReviewGateCard` does. Before that fix no truthful capture of
+    // this card could satisfy this contract, because the shipped row emitted
+    // none of the three.
     root: '[data-lifecycle-card="recommendation_hold"]',
+    // REDRAWN by cinatra#2841 to the ratified §V drawing: the card's decision
+    // controls are PER CHIP (Confirm / Adjust / Skip on each skill), and the
+    // row-level Confirm/Skip pair the previous selectors named no longer exists.
+    // A pending capture owes at least one of the three; a decided capture owes
+    // the absence of all three, which is exactly what a settled row draws.
     decisionControls: [
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ],
   },
   trigger_schedule_proposal: {

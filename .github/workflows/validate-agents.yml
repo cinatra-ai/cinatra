@@ -175,18 +175,25 @@ jobs:
       - name: Boot the runtime over the pinned extension tree
         run: |
           set -euo pipefail
-          # The tree is mounted READ-WRITE on purpose: a freshly cloned repo has
-          # no `.cinatra-published.json`, and the loader's startup marker
-          # backfill is what makes `discover_agents` (hence the mount guard's
-          # parametrization) see the agents at all. A `:ro` mount would leave
-          # discovery empty and the guard would pass VACUOUSLY.
+          # The tree is mounted READ-ONLY, exactly as docker-compose.yml and
+          # the per-clone template mount it in production. It used to be
+          # mounted READ-WRITE because a freshly cloned repo carries no
+          # `.cinatra-published.json` and the loader's startup marker backfill
+          # — which is what makes `discover_agents` see the agents at all —
+          # could not write one through a `:ro` mount. That deviation hid
+          # cinatra#2873 from CI while every real install served ZERO agents.
+          # The loader now derives those markers into its own writable state
+          # dir, so the guard runs on the production mount shape, and
+          # `assert_mount_health.py` (mounted + failed == oas.json on disk)
+          # turns a regression of that into a RED job rather than a vacuous
+          # green.
           docker run -d --name wayflow-mount-guard -p 127.0.0.1:3010:3010 \
             -e PORT=3010 \
             -e CINATRA_AGENTS_DIR=/agents \
             -e CINATRA_BASE_URL=http://host.docker.internal:3000 \
             -e CINATRA_BRIDGE_TOKEN="mount-guard-$(openssl rand -hex 16)" \
             -e CINATRA_CONTEXT_ATTEST_KEY="mount-guard-$(openssl rand -hex 16)" \
-            -v "$PWD/extensions:/agents" \
+            -v "$PWD/extensions:/agents:ro" \
             cinatra-wayflow:mount-guard
           for i in $(seq 1 40); do
             if curl -fsS http://127.0.0.1:3010/.health >/dev/null 2>&1; then break; fi

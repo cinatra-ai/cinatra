@@ -740,11 +740,17 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
       "review-decision-bar",
       "review-decision-disabled",
     ],
+    // The REDRAWN set (cinatra#2841): the decision affordances are per chip, and
+    // scripts/audit/chat-hitl-anchor-contract.json ratifies these anchor names
+    // for this owner. The row-level confirm/skip pair this table used to mirror
+    // is not emitted on any host any more.
     recommendation_hold: [
       '[data-lifecycle-card="recommendation_hold"]',
       "[data-run-recommendation-chip-row]",
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-conformance-id="run-chip-row"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ],
     trigger_schedule_proposal: [
       "schedule-option-rows",

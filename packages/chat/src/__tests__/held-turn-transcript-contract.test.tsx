@@ -30,10 +30,14 @@
  *      URL and settles in the same mount point. The regex ban is defence in
  *      depth beside this, never a substitute for it.
  *
- *   4. THE ROOT-DECLARATION OBLIGATION. The real card does not yet emit
- *      `data-lifecycle-card` / `data-lifecycle-card-host` (the review card
- *      does). That is recorded as a red done-check against the real component,
- *      so adding it forces the row to be struck.
+ *   4. THE ROOT-DECLARATION LEDGER. The real card's own root declares its kind
+ *      and its host — the §V redraw (cinatra#2841) put `data-lifecycle-card` /
+ *      `data-lifecycle-card-host` on the chip row, which IS the card — so
+ *      `ROOT_DECLARATION_OBLIGATIONS` no longer carries its row. The
+ *      measurement did not go away with the obligation: the declaration is
+ *      still read off the real component and compared to the ledger, so
+ *      deleting it turns this red again, and the arm that only runs once the
+ *      row is struck requires both attributes in the shipped source.
  *
  * LOCAL NOTE: this suite runs under the chat package's own vitest config. CI
  * (Node 24) is authoritative for it.
@@ -66,6 +70,7 @@ import {
   type ProjectedNode,
   type TurnProjection,
 } from "@/lib/lifecycle/held-turn-card-contract";
+import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
 
 // --- the card's own graph, stubbed exactly as the agents suite stubs it ------
 
@@ -93,6 +98,18 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+/**
+ * The stand-in for `getRunRecommendationHoldStateAction`'s answer.
+ *
+ * The SETTLED halves carry `decided` because the authority's own union does
+ * (`RunRecommendationHoldState` in `run-recommendation-actions`), and because
+ * the §V settled row is BUILT from it: `RunRecommendationChipRow` draws one
+ * chip per decided skill and draws NOTHING when that evidence is empty. A
+ * stand-in that answered `{ state: "skipped" }` with no evidence would report a
+ * card that never appeared as a card that failed to settle. The element type is
+ * imported rather than re-spelled, so this cannot drift from the authority
+ * again.
+ */
 type HoldState =
   | { state: "none" }
   | {
@@ -107,8 +124,8 @@ type HoldState =
       }[];
       holdRef: string;
     }
-  | { state: "confirmed"; skillNames: string[] }
-  | { state: "skipped" };
+  | { state: "confirmed"; skillNames: string[]; decided: RunRecommendationDecidedSkill[] }
+  | { state: "skipped"; decided: RunRecommendationDecidedSkill[] };
 
 const holdStateMock = vi.fn(async (): Promise<HoldState> => ({ state: "none" }));
 const confirmMock = vi.fn(async () => ({ ok: true, dispatched: true }));
@@ -194,15 +211,35 @@ const DURABLE_RESULT = JSON.stringify({ runId: RUN_ID, status: "pending_input" }
 const DISPATCH_TEXT =
   "Dispatched `@cinatra-ai/proof-agent` (runId: `" + RUN_ID + "`, status: `pending_input`).";
 
+/**
+ * The one candidate the held fixture offers, named once.
+ *
+ * §V decides PER CHIP, so the card's decision controls are addressed by the
+ * skill they belong to, and the settled row states that skill's own outcome.
+ * One candidate keeps the whole-row release — the row releases once every chip
+ * has a mark — reachable in a single press, which is what these arms measure.
+ */
+const HELD_SKILL_ID = "skill-a";
+const HELD_SKILL_NAME = "Skill A";
+
 const HELD: HoldState = {
   state: "held",
   agentPackageName: "@cinatra-ai/proof-agent",
   promptText: "{}",
   recommendations: [
-    { skillId: "skill-a", skillRevisionId: "rev-a", recommended: true, name: "Skill A" },
+    {
+      skillId: HELD_SKILL_ID,
+      skillRevisionId: "rev-a",
+      recommended: true,
+      name: HELD_SKILL_NAME,
+    },
   ],
   holdRef: "hold-ref-2821",
 };
+
+/** The card's own decision controls, as the SHIPPED §V row draws them. */
+const CHIP_CONFIRM = `[data-skill-action="confirm"][data-skill-id="${HELD_SKILL_ID}"]`;
+const CHIP_SKIP = `[data-skill-action="skip"][data-skill-id="${HELD_SKILL_ID}"]`;
 
 /**
  * A PERSISTED transcript of a held dispatch turn: the deterministic answer and
@@ -659,19 +696,23 @@ describe("the structural invariant — a decision keeps the URL and settles in p
     });
     mountRealCardInto(triggerContainer);
 
+    // THE CONTROL THE SHIPPED CARD DRAWS, not a name it once used. §V's
+    // redraw moved the decision onto the chip: this is the Confirm on the one
+    // candidate, and pressing it decides every chip the row offers, which is
+    // what releases the hold.
     const confirm = await waitFor(() => {
-      const el = root.querySelector<HTMLButtonElement>(
-        '[data-action="confirm-run-recommendation"]',
-      );
+      const el = root.querySelector<HTMLButtonElement>(CHIP_CONFIRM);
       if (!el) throw new Error("the actionable card never appeared");
       return el;
     });
     const urlBefore = window.location.href;
 
-    // The decision lands and the authority now answers CONFIRMED.
+    // The decision lands and the authority now answers CONFIRMED, with the
+    // per-skill evidence the settled row is drawn from.
     holdStateMock.mockImplementation(async () => ({
       state: "confirmed",
-      skillNames: ["Skill A"],
+      skillNames: [HELD_SKILL_NAME],
+      decided: [{ skillId: HELD_SKILL_ID, name: HELD_SKILL_NAME, mark: "confirmed" }],
     }));
     await act(async () => {
       fireEvent.click(confirm);
@@ -688,9 +729,11 @@ describe("the structural invariant — a decision keeps the URL and settles in p
     expect(window.location.href).toBe(urlBefore);
     expect(routerPush).not.toHaveBeenCalled();
     expect(routerReplace).not.toHaveBeenCalled();
-    expect(
-      triggerContainer.querySelector('[data-action="confirm-run-recommendation"]'),
-    ).toBeNull();
+    // …and the settled card offers nothing to press. Asserted on the ATTRIBUTE
+    // rather than on the control that was pressed, because §V's settled row
+    // states each outcome in place and leaves no affordance of any kind behind
+    // — a card that kept one would invite a second decision on a released hold.
+    expect(triggerContainer.querySelector("[data-skill-action]")).toBeNull();
   });
 
   it("Skip settles the same mount point without navigating", async () => {
@@ -703,13 +746,19 @@ describe("the structural invariant — a decision keeps the URL and settles in p
     mountRealCardInto(triggerContainer);
 
     const skip = await waitFor(() => {
-      const el = root.querySelector<HTMLButtonElement>('[data-action="skip-run-recommendation"]');
+      const el = root.querySelector<HTMLButtonElement>(CHIP_SKIP);
       if (!el) throw new Error("the actionable card never appeared");
       return el;
     });
     const urlBefore = window.location.href;
 
-    holdStateMock.mockImplementation(async () => ({ state: "skipped" }));
+    // Skipping the only candidate keeps nothing, which is the whole-row skip —
+    // and the authority answers with the `user_skipped` evidence the settled
+    // row draws its one chip from.
+    holdStateMock.mockImplementation(async () => ({
+      state: "skipped",
+      decided: [{ skillId: HELD_SKILL_ID, name: HELD_SKILL_NAME, mark: "skipped" }],
+    }));
     await act(async () => {
       fireEvent.click(skip);
     });
@@ -722,11 +771,12 @@ describe("the structural invariant — a decision keeps the URL and settles in p
     expect(skipMock).toHaveBeenCalled();
     expect(window.location.href).toBe(urlBefore);
     expect(routerPush).not.toHaveBeenCalled();
+    expect(triggerContainer.querySelector("[data-skill-action]")).toBeNull();
   });
 });
 
 describe("the root-declaration obligation, measured on the real card's own root", () => {
-  it("records that the held card's ROOT declares neither its kind nor its host", async () => {
+  it("measures the held card's ROOT declaration against the obligation ledger", async () => {
     holdStateMock.mockImplementation(async () => HELD);
     const { root } = await mountHeldChat();
     const { triggerContainer } = projectionFromProductionTurn(root, {
