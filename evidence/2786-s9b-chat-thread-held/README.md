@@ -178,6 +178,35 @@ Every row additionally records `chatThreadMarker: true` (the
 `data-chat-thread-recommendation-hold` marker rides the card's own root) and
 `insideConversationList: true`.
 
+### Re-shot once more for §I (cinatra#2867), with the CARD proven unchanged
+
+The §I input hierarchy merged after these cells were registered, and it changed
+the INLINE RUN PANEL that sits below the card: the `Skills (n/m)` disclosure and
+its raw-slug chips are gone from the panel's input area, which now goes straight
+to the subordinate note field.
+
+**The card did not move, and that was measured before anything was re-shot.**
+The cells were re-driven on the merged tree into a scratch directory and
+compared with what was already committed:
+
+- every recorded assertion on all five cells reproduced **exactly**, all ten
+  selectors per cell, frame-scoped and root-scoped;
+- `S9b-2`, the shot framed on `[data-lifecycle-card="recommendation_hold"]`
+  itself, came back **byte-identical** to the committed blob (1472x136, 28045
+  bytes, `165869921db845bd…`), which is the drawn §V surface proving itself
+  untouched;
+- a pixel diff of the full-page cells put every difference OUTSIDE the card: the
+  run id, the notification badge, and the panel region §I changed.
+
+So no claim in the table below broke. The pictures were refreshed anyway, for
+one reason worth stating plainly: the previous `S9b-4` showed a `Skills (3)`
+disclosure and three raw-slug chips inside the run panel. Those are the exact
+vocabulary the §V redraw deleted, this README spends paragraphs insisting they
+are gone, and round 5 had already once refused this set for showing the deleted
+face. Keeping a picture on record that displays them, when the shipped app draws
+them nowhere on this screen, invites that misreading a second time. The refreshed
+cells show the app as it actually ships at this head.
+
 ### These five cells are REGISTERED, and that is new in this round
 
 A prose log is not an index. Until this round no record in
@@ -286,9 +315,9 @@ point.
 
 | moment | run row | park | jobs naming THIS run |
 |---|---|---|---|
-| held (run `b2a5bd99`) | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) |
+| held (run `a57988e1`) | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) |
 | after the row released as CONFIRMED | `pending_approval` | `released` | `1`, and that job key IS the run id |
-| held before Skip (run `fce41a7d`) | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) |
+| held before Skip (run `d6c9052c`) | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) |
 | after the row released as SKIPPED | `pending_approval` | `released` | `1`, and that job key IS the run id |
 
 **Read `jobs_naming_this_run`, not a queue total.** The load-bearing quantity is
