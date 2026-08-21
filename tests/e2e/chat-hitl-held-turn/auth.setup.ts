@@ -1,0 +1,188 @@
+// Identity + world for the S9k held-turn flow (chat-hitl S9k, cinatra#2824).
+//
+// Two jobs, in this order and for this reason:
+//
+//   1. A REAL account, made through the shipped Better Auth sign-up, promoted to
+//      platform admin BEFORE the sign-in whose cookie is persisted (Better Auth
+//      mints the role into the session token, so a later grant is invisible to a
+//      saved state), given an org, and set active. This is the render-smoke
+//      pattern; it is not invented here.
+//   2. The instance fixtures, through their SHIPPED writers, in a subprocess —
+//      see `fixtures.mts` for why they cannot run inside this file.
+//
+// NOTHING HERE CREATES A HOLD, A PARK, A RUN OR A DECISION. That is the line this
+// slice must not cross, and it is worth stating at the file that seeds the world:
+// #2824 asks for a runtime proof, so a fixture that pre-parks a run would make the
+// flow assert its own setup. Every one of those rows is written by the runtime,
+// while the browser drives it.
+import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { Client } from "pg";
+import { test as setup, expect } from "@playwright/test";
+
+import { DATABASE_URL } from "./probes";
+
+const EMAIL = process.env.E2E_CHAT_HITL_USER_EMAIL ?? "chat-hitl-s9k@local.test";
+const PASSWORD = process.env.E2E_CHAT_HITL_USER_PASSWORD ?? "ChatHitlS9k!2026";
+const STORAGE_PATH = "tests/e2e/chat-hitl-held-turn/.auth/state.json";
+
+function newClient(): Client {
+  return new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5_000 });
+}
+
+async function userIdByEmail(c: Client, email: string): Promise<string | null> {
+  const r = await c.query<{ id: string }>(`SELECT id FROM public."user" WHERE email = $1 LIMIT 1`, [
+    email,
+  ]);
+  return r.rowCount && r.rowCount > 0 ? r.rows[0]!.id : null;
+}
+
+/**
+ * Better Auth's admin plugin stores roles as a comma-separated string; the
+ * platform-admin check comma-splits and looks for "admin". Append rather than
+ * clobber, so an existing role set survives a re-run.
+ */
+async function promoteToPlatformAdmin(c: Client, userId: string): Promise<void> {
+  await c.query(
+    `UPDATE public."user"
+        SET role = CASE
+          WHEN role IS NULL OR btrim(role) = '' THEN 'admin'
+          WHEN ('admin' = ANY (string_to_array(role, ','))
+            OR 'admin' = ANY (regexp_split_to_array(role, '\\s*,\\s*'))) THEN role
+          ELSE role || ',admin'
+        END
+      WHERE id = $1`,
+    [userId],
+  );
+}
+
+async function ensureMemberOrg(c: Client, userId: string): Promise<string> {
+  const existing = await c.query<{ organizationId: string }>(
+    `SELECT "organizationId" FROM public."member" WHERE "userId" = $1 LIMIT 1`,
+    [userId],
+  );
+  if (existing.rowCount && existing.rowCount > 0) return existing.rows[0]!.organizationId;
+  // A DIRECT insert rather than `POST /api/auth/organization/create`: the team
+  // plugin's `team.slug NOT NULL` bug rejects that call for a fresh user. The
+  // notifications suite takes the same route for the same reason.
+  const orgId = `chat-hitl-s9k-org-${Date.now().toString(36)}`;
+  await c.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt")
+       VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [orgId, "Chat HITL S9k Org", orgId],
+  );
+  await c.query(
+    `INSERT INTO public."member" (id, "userId", "organizationId", role, "createdAt")
+       VALUES ($1, $2, $3, 'owner', now()) ON CONFLICT (id) DO NOTHING`,
+    [`chat-hitl-s9k-member-${Date.now().toString(36)}`, userId, orgId],
+  );
+  return orgId;
+}
+
+setup("create the owner, the org and the instance fixtures", async ({ request, baseURL }) => {
+  const origin = baseURL ?? "http://localhost:3000";
+  const headers = { Origin: origin } as const;
+
+  // 1. The account. Idempotent — an existing user answers 400/422.
+  const signUp = await request.post("/api/auth/sign-up/email", {
+    data: { email: EMAIL, password: PASSWORD, name: "Chat HITL S9k Owner" },
+    headers,
+    failOnStatusCode: false,
+  });
+  expect([200, 400, 422]).toContain(signUp.status());
+
+  // 2. Admin + org, BEFORE the sign-in that gets persisted.
+  const c = newClient();
+  await c.connect();
+  let orgId: string;
+  try {
+    const userId = await userIdByEmail(c, EMAIL);
+    if (!userId) throw new Error(`S9k owner not found after sign-up: ${EMAIL}`);
+    await promoteToPlatformAdmin(c, userId);
+    orgId = await ensureMemberOrg(c, userId);
+  } finally {
+    await c.end();
+  }
+
+  // 3. The session that carries the role.
+  const signIn = await request.post("/api/auth/sign-in/email", {
+    data: { email: EMAIL, password: PASSWORD },
+    headers,
+  });
+  expect(signIn.ok()).toBeTruthy();
+
+  await request.post("/api/auth/organization/set-active", {
+    data: { organizationId: orgId },
+    headers,
+    failOnStatusCode: false,
+  });
+
+  // 4. The instance fixtures, through their shipped writers.
+  //
+  //    FAIL LOUD. A silently skipped fixture is the worst outcome available here:
+  //    without the assigned skill the run dispatches UNHELD, the card correctly
+  //    draws nothing, and the flow fails much later with "no held card" and no
+  //    hint that the cause was a fixture. So the subprocess's exit code is the
+  //    setup's exit code, and its output is printed either way.
+  const fixtureOut = execFileSync(
+    process.execPath,
+    [
+      "--conditions=react-server",
+      "--env-file-if-exists=.env.local",
+      "--import",
+      "tsx",
+      "tests/e2e/chat-hitl-held-turn/fixtures.mts",
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, CINATRA_HELD_TURN_BASE_URL: origin },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  console.log(fixtureOut.trim());
+  expect(fixtureOut).toContain("fixtures done");
+
+  // 5. WARM `/api/mcp`, AND REFUSE TO PROCEED UNTIL IT IS FAST.
+  //
+  //    This is not a convenience. The assistant runtime probes the public MCP URL
+  //    before it will use platform tools, with a HARD 2500 ms budget, and Turbopack
+  //    compiles that route cold on its first hit. On a cold instance the probe
+  //    therefore loses a race it cannot win, the turn is answered with "Cinatra
+  //    tools are unavailable", and the pre-router never dispatches — so the flow
+  //    waits out its whole cold-compile budget for a card that was never going to
+  //    appear, and reports "no held card" for a cause that has nothing to do with
+  //    holds. That exact failure cost this lane a full run.
+  //
+  //    So the route is compiled here, and then MEASURED: the loop below does not
+  //    stop when the route merely answers, it stops when the route answers inside
+  //    the same budget the runtime's own probe uses. A route that never gets there
+  //    fails the SETUP, loudly, naming the reason — which is the difference between
+  //    a diagnosis and a mystery.
+  const MCP_PROBE_BUDGET_MS = 2_500;
+  const WARM_DEADLINE = Date.now() + 180_000;
+  let fastest = Number.POSITIVE_INFINITY;
+  let warm = false;
+  while (Date.now() < WARM_DEADLINE) {
+    const started = Date.now();
+    // A 401 is a perfectly good warm: the route compiled and answered. What is
+    // being measured is latency, not authorization.
+    await request.get("/api/mcp", { failOnStatusCode: false }).catch(() => undefined);
+    const elapsed = Date.now() - started;
+    fastest = Math.min(fastest, elapsed);
+    if (elapsed < MCP_PROBE_BUDGET_MS) {
+      warm = true;
+      break;
+    }
+  }
+  expect(
+    warm,
+    `/api/mcp never answered inside the runtime's own ${MCP_PROBE_BUDGET_MS}ms reachability ` +
+      `budget (fastest: ${Number.isFinite(fastest) ? `${fastest}ms` : "no response"}). Every chat ` +
+      "turn would be answered with \"Cinatra tools are unavailable\" and no run would be dispatched.",
+  ).toBe(true);
+  console.log(`[S9k setup] /api/mcp warm — fastest response ${fastest}ms`);
+
+  mkdirSync(dirname(STORAGE_PATH), { recursive: true });
+  await request.storageState({ path: STORAGE_PATH });
+});
