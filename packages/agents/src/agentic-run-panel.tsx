@@ -476,8 +476,10 @@ export function AgenticRunPanel({
   // confirm/skip routing both landed with S4, so a late joiner and a re-parked
   // run are covered by the wire rather than by re-asking every four seconds.
 
-  // Audit visibility is driven by
-  // the auditor-agent flow gate; renderer is mounted via field-renderer registry.
+  // No audit affordance is mounted here, and there is no auditor-agent flow gate
+  // driving one any more: the auditor agent is retired, and audit output now
+  // surfaces as the §VIII suggestion chips on the review card. The absence is
+  // held by `agentic-run-panel.no-audit-button.test.tsx`.
 
   // AG-UI SSE hook — provides live status + presentationHint when agUiEnabled=true.
   // When disabled (agUiEnabled != true), hook opens no EventSource — zero network overhead.

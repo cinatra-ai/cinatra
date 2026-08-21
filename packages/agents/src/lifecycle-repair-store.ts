@@ -52,7 +52,7 @@ import {
   lifecycleBatchDisposition,
 } from "./schema";
 import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
-import { dispatchAutoGateResolved } from "./run-wait-notifier";
+import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 
 import {
   validateChangesRequested,
@@ -530,7 +530,13 @@ export async function submitRepairResponse(
   // linked to it; keying on the linkage is precise (never re-points an unrelated
   // event).
   type FinalizeOutcome =
-    | { kind: "finalized"; successorGateId: string }
+    // cinatra#2833 — `gateFresh` carries the emit's `idempotent` flag OUT of the
+    // transaction so the notification can be dispatched POST-COMMIT (below) with
+    // the same "only a genuinely new gate notifies" posture as every other
+    // review-opening path. It cannot be dispatched inside the tx: this emit is
+    // ENLISTED (Seam A), so a rollback would leave a notification pointing at a
+    // gate that never existed.
+    | { kind: "finalized"; successorGateId: string; gateFresh: boolean }
     | { kind: "concurrent" }
     | { kind: "pin-conflict"; message: string };
   // Any NON-finalized outcome must ROLL BACK the transaction, not commit it —
@@ -547,6 +553,7 @@ export async function submitRepairResponse(
   const outcome: FinalizeOutcome = await db
     .transaction(async (tx): Promise<FinalizeOutcome> => {
       let successorGateId: string;
+      let gateFresh: boolean;
       try {
         const emitted = await emitArtifactReviewGate(
           {
@@ -564,6 +571,7 @@ export async function submitRepairResponse(
           tx,
         );
         successorGateId = emitted.gateId;
+        gateFresh = !emitted.idempotent;
       } catch (err) {
         // A pin conflict aborts with nothing written (only a read ran on the
         // conflict path). Surface it so the caller maps it to successor-pin-conflict
@@ -597,7 +605,7 @@ export async function submitRepairResponse(
         .update(artifactProducedOutbox)
         .set({ continuationAddress: successorGateId })
         .where(eq(artifactProducedOutbox.continuationAddress, repair.gateId));
-      return { kind: "finalized", successorGateId };
+      return { kind: "finalized", successorGateId, gateFresh };
     })
     .catch((err: unknown): FinalizeOutcome => {
       if (err instanceof FinalizeRollback) return err.outcome;
@@ -616,6 +624,25 @@ export async function submitRepairResponse(
     return { ok: false, code: "concurrent-finalize", error: "the repair was finalized concurrently" };
   }
   const successorGateId = outcome.successorGateId;
+
+  // cinatra#2833 — the repair SUCCESSOR pin is a review opening, so it notifies
+  // through the same seam as every other one. It was outside both notifying
+  // paths by construction (a direct `emitArtifactReviewGate`, never the
+  // orchestration sweep), so a repaired artifact re-entered review in silence.
+  //
+  // POST-COMMIT, and that is load-bearing: the emit above is ENLISTED in the
+  // finalize transaction (Seam A), which ROLLS BACK on every non-finalized
+  // outcome — dispatching inside it would notify a human about a successor gate
+  // that a concurrent finalize discarded microseconds later. Reaching here means
+  // `outcome.kind === "finalized"`, i.e. the gate, the finalize CAS and the
+  // effect re-point are all durable. `gateFresh` keeps the single path's
+  // idempotency posture: a re-drive that re-emits the same deterministic
+  // successor gate must not re-notify. Best-effort like the verification trigger
+  // below — the dispatcher swallows every error, so the (already-committed)
+  // repair can never fail on a notification.
+  if (outcome.gateFresh && repair.producerRunId) {
+    await dispatchAutoGateOpen({ runId, reviewTaskId: successorTaskId });
+  }
 
   // S4 (cinatra#2042): a landed repair TRIGGERS post-change verification — the
   // before/after "Core analysis" record the run rail opens, and (on a failed
