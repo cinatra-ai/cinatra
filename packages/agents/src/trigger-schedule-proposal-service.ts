@@ -21,17 +21,28 @@ import "server-only";
 //              why Adjust needs no authority at all and can never half-arm a
 //              schedule.
 //
-// ADJUST HAS TWO FORMS, and they differ in exactly two places. Editing the rows
-// on a DRAWN card asks a different question, so it gets a fresh consume identity
-// and the superseded card stays separately answerable; it writes nothing at all.
-// Adjusting an EXPIRED card re-asks the SAME question off the same ref, so (a)
-// its replacement INHERITS the original's consume identity — one lineage, one
-// row in the consume table, one run, whatever order a re-propose and an
-// in-flight Confirm land in — and (b) it is IDEMPOTENT WHILE LIVE: the lineage
-// records the replacement holding its window open, and pressing Adjust again
-// hands that same token back rather than minting another. The expired ref is
-// readable forever by design, and that is the only thing stopping it being an
-// unbounded token mill. See `reproposeExpiredScheduleProposal`.
+// ADJUST HAS TWO FORMS, and they now differ in exactly ONE place: the question
+// they ask. Editing the rows on a DRAWN card asks a genuinely different one, so
+// its replacement carries the reader's NEW rows and the card it replaced stays
+// answerable for its own remaining TTL. Adjusting an EXPIRED card re-asks the
+// SAME question off the same ref, so it is IDEMPOTENT WHILE LIVE: pressing it
+// again hands the replacement already in flight back rather than minting
+// another. The expired ref is readable forever by design, which is why that
+// bound has to exist at all.
+//
+// EVERYTHING ELSE IS COMMON TO BOTH, and each half of that was once a defect.
+// (a) The replacement INHERITS the original's consume identity (cinatra#2859):
+// one lineage, one row in the consume table, ONE RUN, whatever order an adjust
+// and an in-flight Confirm land in. (b) The mint goes through the LINEAGE
+// RATCHET (cinatra#2837): the lineage row names the one replacement whose
+// window is open, an expired slot may be claimed, the slot's OWN token may be
+// rolled forward by the reader exchanging it, and a mint that can do neither is
+// refused rather than handed out uncounted. Before (b) reached the drawn form,
+// its Adjust minted beside the ratchet instead of through it — so the slot went
+// on naming a token the reader had already adjusted away from, and a later
+// press was handed that superseded token back.
+//
+// See `reproposeExpiredScheduleProposal` and `adjustLiveScheduleProposal`.
 //
 // THE AI CANNOT ARM ANYTHING. The producer is a read-only render primitive; it
 // mints a card. Confirm is a HUMAN SESSION action: it runs under a live cookie
@@ -144,6 +155,14 @@ export const PROPOSAL_REFUSALS = {
     "That time has already passed. Ask for a new time and confirm the new card.",
   supersededBySchedule:
     "This schedule was already set from this card, with different times than the ones shown here. Open the run to see the schedule that was set.",
+  /**
+   * What ADJUST says when the lineage's live slot is held by a proposal this
+   * press is not replacing. Names the state and the act that clears it, and
+   * enumerates nothing: a caller probing with a lifted ref learns only that
+   * this card is not the current one.
+   */
+  superseded:
+    "This card was already adjusted. Use the newest card for this schedule and confirm that one.",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -1061,4 +1080,162 @@ export async function reproposeExpiredScheduleProposal(
   // there is nothing to unwind and nothing to hand over. The next press starts
   // clean.
   return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+}
+
+// ---------------------------------------------------------------------------
+// ADJUST A LIVE CARD — the drawn form's Adjust, through the same ratchet
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-propose a LIVE card with the rows the reader just edited.
+ *
+ * The drawn form's Adjust, and the ONLY path the client-reachable
+ * `adjustScheduleProposal` server action takes. It exists because that action
+ * used to call the bare mint (`adjustTriggerSchedule`) and nothing else:
+ * authentic, inheriting the right consume identity, and INVISIBLE to the
+ * lineage ratchet.
+ *
+ * WHAT THAT COST, precisely. The ratchet's row names the one replacement whose
+ * window this lineage is holding open. A mint that never touches it leaves the
+ * row naming a token the reader has just adjusted AWAY from, so:
+ *
+ *   - a later Adjust on any expired member of the lineage is handed that
+ *     superseded token back, and the reader is returned to the schedule they
+ *     corrected;
+ *   - the slot's count is wrong by one, because a live token exists beside it
+ *     that the ratchet has never heard of — which is exactly the state
+ *     `claimLineageReproposal` was written to make unreachable.
+ *
+ * And it became WIRE-REACHABLE in this change. `"use server"` exports only get
+ * action ids once a client module imports the file, and the expired card's
+ * Adjust is the first client import of it — so the bypassing entry point stops
+ * being dead code the moment this branch ships. The fix belongs in the same
+ * change as the import.
+ *
+ * SO THE MINT GOES THROUGH THE SLOT, and the slot is what decides:
+ *
+ *   claimed  — the slot was free or expired, or it named THIS reader's own ref
+ *              and rolled forward onto the replacement. One live token in the
+ *              slot, one live token out.
+ *   yielded  — the slot names a DIFFERENT live token. FAIL CLOSED: the mint is
+ *              discarded and the reader is told this card was already adjusted.
+ *              It cannot be answered the way the expired path answers a yield,
+ *              because that hands back the WINNER's token — a proposal for
+ *              somebody else's rows, which on this path is not the question the
+ *              reader asked. Refusing is the only honest answer, and it costs
+ *              nothing to refuse: a discarded mint wrote no run and armed
+ *              nothing.
+ *   vanished — the slot emptied between the two statements. Re-claim once, then
+ *              refuse rather than hand out a token no row names. Same bound,
+ *              same reason as the expired path.
+ *
+ * WHAT THIS DOES AND DOES NOT BOUND, stated exactly, because the difference is
+ * the whole reason the two forms are separate acts. It bounds MINTING: at most
+ * one live token per lineage can be minted into the ratchet's slot at a time,
+ * on either path, so a ref lifted from a transcript is not a token mill and a
+ * lineage cannot branch. It does NOT revoke the card the reader adjusted away
+ * from — a proposal token is stateless and stays readable until its own TTL, and
+ * §VI's drawn Adjust deliberately leaves it answerable ("the superseded card
+ * stays separately answerable"). That predecessor cannot mint, cannot be handed
+ * back by the ratchet, and cannot produce a second RUN, because the whole
+ * lineage is one primary-keyed row in `trigger_schedule_proposal_consumes`.
+ *
+ * A HUMAN SESSION ACT, like every other entry point here: the actor comes from
+ * the live cookie session and never from an argument, and the prior ref is
+ * authenticated against that actor before anything is read or minted.
+ */
+export async function adjustLiveScheduleProposal(
+  actor: ConfirmProposalActor,
+  input: { ref: string; schedule: ProposalSchedule },
+): Promise<
+  { ok: true; token: string; expiresAt: number } | { ok: false; error: string }
+> {
+  const reading = readTriggerScheduleProposalToken({
+    token: input.ref,
+    expectedUserId: actor.userId,
+    expectedOrgId: actor.orgId,
+  });
+  if (!reading) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+  // An EXPIRED card re-asks its own question and goes through the expired path,
+  // which is idempotent while live. One answer for a forged ref, a foreign one
+  // and one whose window has closed — the same sentence, so a probe learns
+  // nothing.
+  if (reading.status !== "live") {
+    return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+  }
+  const { proposal } = reading;
+
+  // The lineage's ONE identity: the ratchet's key and the consume edge's key are
+  // the same derivation over the same nonce.
+  const consumeKey = proposalConsumeKey(proposal.nonce);
+  // ALREADY SETTLED. Some member of this family became a run, so every card in
+  // it resolves `settled` and a replacement would be dead on arrival. Honest
+  // UX rather than the safety property — that is the consume edge's job.
+  const consumed = await readProposalConsume(consumeKey);
+  if (consumed) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+
+  // THE SLOT, READ BEFORE THE MINT. Not the gate — the claim below is — but it
+  // spares the common refusal a pointless mint, and it is read exactly as the
+  // ratchet's own promise says: against the reader asking, and against the
+  // token's own clock rather than the row's.
+  const latest = await readLineageReproposal(consumeKey);
+  if (latest && latest.token !== input.ref) {
+    const held = readTriggerScheduleProposalToken({
+      token: latest.token,
+      expectedUserId: actor.userId,
+      expectedOrgId: actor.orgId,
+    });
+    if (held?.status === "live") {
+      return { ok: false, error: PROPOSAL_REFUSALS.superseded };
+    }
+  }
+
+  // The mint re-authenticates the ref itself and reads the template out of it,
+  // so Adjust can never be re-pointed at an agent this reader was never
+  // proposed. It writes nothing; the slot below is the only durable effect.
+  const proposed = await adjustTriggerSchedule({
+    priorToken: input.ref,
+    userId: actor.userId,
+    orgId: actor.orgId,
+    schedule: input.schedule,
+  });
+  if (!proposed.ok) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+
+  const claimInput = {
+    consumeKey,
+    token: proposed.token,
+    expiresAt: new Date(proposed.expiresAt * 1000),
+    orgId: actor.orgId,
+    templateId: proposal.templateId,
+    reproposedBy: actor.userId,
+    // THE ROLL. The reader holds the token the slot names and is exchanging it;
+    // any other live token in the slot refuses this claim.
+    supersedes: input.ref,
+  };
+  let claim = await claimLineageReproposal(claimInput);
+  // ONE BOUNDED RETRY, for the same reason and with the same bound as the
+  // expired path: `vanished` says the slot is free right now, so the same
+  // statement can be re-run into it; a second `vanished` is churn, and spinning
+  // on it would be worse than the refusal.
+  if (claim.outcome === "vanished") {
+    claim = await claimLineageReproposal(claimInput);
+  }
+
+  if (claim.outcome === "claimed") {
+    // Ours, and the row names it. `proposed.expiresAt` is the mint's own stamp:
+    // the row was written from it.
+    return { ok: true, token: claim.record.token, expiresAt: proposed.expiresAt };
+  }
+
+  // `yielded` and a second `vanished` both end here. Nothing of ours is
+  // installed anywhere, so there is nothing to unwind — and on this path there
+  // is nothing to hand over either, because the winner's token answers a
+  // different question than the one the reader just asked.
+  return {
+    ok: false,
+    error:
+      claim.outcome === "yielded"
+        ? PROPOSAL_REFUSALS.superseded
+        : PROPOSAL_REFUSALS.invalid,
+  };
 }

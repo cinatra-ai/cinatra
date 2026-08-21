@@ -16,16 +16,18 @@ import "server-only";
 //      of minting without bound. Unlike the other two it hangs off no run (it
 //      exists before one does) — see `claimLineageReproposal`.
 //
-// WHY BOTH ARE WRITTEN WITH THE RUN, IN ONE TRANSACTION. Confirm has to produce
-// three things together: the proposal is spent, the run exists, the schedule is
-// going to be installed. Any sequencing of those three has a crash window that
-// breaks a promise the card made — a run with no schedule coming, a schedule
-// with no run, or a second run from a re-pressed Confirm. They share the run's
-// own org-write-guarded transaction (`createAgentRunPendingInput`'s
+// WHY THE FIRST TWO ARE WRITTEN WITH THE RUN, IN ONE TRANSACTION. Confirm has
+// to produce three things together: the proposal is spent, the run exists, the
+// schedule is going to be installed. Any sequencing of those three has a crash
+// window that breaks a promise the card made — a run with no schedule coming,
+// a schedule with no run, or a second run from a re-pressed Confirm. They share
+// the run's own org-write-guarded transaction (`createAgentRunPendingInput`'s
 // `withinCreateTx`), so there is no window at all: either all three committed
-// or none did.
+// or none did. The RATCHET is written by neither: it is a bound on minting, it
+// exists before any run does, and nothing about it belongs in that transaction.
 //
-// RETENTION IS THE RUN'S. Both tables hang off `agent_runs(id)` with ON DELETE
+// RETENTION IS THE RUN'S — for the first two. They hang off `agent_runs(id)`
+// with ON DELETE
 // CASCADE and are keyed one-row-per-run, so neither grows independently of the
 // runs a person actually created: deleting a run takes its consume row and its
 // install intent with it, and no separate reaper or TTL is needed to keep them
@@ -33,6 +35,12 @@ import "server-only";
 // deliberately kept for the LIFE of its run rather than expired with the
 // proposal token: it is the answer to "which run did this proposal create?",
 // which the settled card asks on every reload, long after the token's own TTL.
+//
+// THE RATCHET RETIRES ITSELF INSTEAD. It cannot cascade from a run — the row
+// exists precisely before one does — so it is bounded by shape: ONE row per
+// lineage, upserted and never appended, and worthless the moment `expires_at`
+// passes. A reaper may delete any expired row at any time with no coordination
+// and no correctness cost. `..._expires_idx` is there for that pass.
 //
 // WHY THE INSTALL IS AN INTENT AND NOT AN INSTALL. The BullMQ scheduler is not
 // in the database, so it cannot join that transaction. Installing it inline
@@ -265,6 +273,23 @@ export async function readLineageReproposal(
  * with THAT token — its own mint is discarded unreturned, which costs nothing,
  * because minting writes no run and arms nothing.
  *
+ * `supersedes` IS THE SECOND WAY THE SLOT MAY MOVE, and the drawn form's Adjust
+ * is why it exists (cinatra#2837, this round). Re-proposing an EXPIRED card can
+ * always wait for the slot to expire, because the card it starts from has
+ * expired too. Adjusting a LIVE card cannot: the reader is holding the very
+ * token the slot names and is exchanging it, right now, for one with different
+ * rows. Making that wait would refuse the ordinary Adjust; letting it mint
+ * WITHOUT the slot is the defect — the slot would still name the token the
+ * reader just adjusted away from, and a later press would hand that superseded
+ * token back.
+ *
+ * So the condition widens by exactly one disjunct: the row may also be
+ * overwritten when the token it names IS the one the caller is replacing. ONE
+ * live token goes in and ONE comes out, the ratchet keeps counting, and the
+ * statement is still single. Every other case is untouched — a slot naming a
+ * DIFFERENT live token still refuses, which is what makes a concurrent
+ * double-adjust resolve to one winner instead of two branches.
+ *
  * Returns WHICH OF THE THREE OUTCOMES happened rather than a bare record, and
  * that distinction is the fix for codex round-5 finding 2. A record alone
  * cannot say whether the token in it is installed in the lineage row: `claimed`
@@ -281,7 +306,25 @@ export async function claimLineageReproposal(input: {
   orgId: string;
   templateId: string;
   reproposedBy: string;
+  /**
+   * The token this claim is EXCHANGING for `token`, when the caller holds it.
+   *
+   * Supplied by the drawn form's Adjust and by nothing else: the reader's own
+   * live ref, authenticated before the mint. A row naming exactly this token is
+   * rolled forward; a row naming any other live token is not.
+   */
+  supersedes?: string;
 }): Promise<LineageClaimResult> {
+  // THE RATCHET'S CONDITION. Expired is always overwritable; the token the
+  // caller is exchanging is overwritable BY THAT CALLER, and only while the
+  // row still names it.
+  const rollable =
+    input.supersedes === undefined
+      ? lte(triggerScheduleProposalLineage.expiresAt, sql`now()`)
+      : or(
+          lte(triggerScheduleProposalLineage.expiresAt, sql`now()`),
+          eq(triggerScheduleProposalLineage.latestToken, input.supersedes),
+        );
   const claimed = await db
     .insert(triggerScheduleProposalLineage)
     .values({
@@ -302,9 +345,10 @@ export async function claimLineageReproposal(input: {
         reproposedBy: input.reproposedBy,
         updatedAt: sql`now()`,
       },
-      // THE RATCHET, in SQL. A live replacement is never overwritten, so the
-      // window can only roll forward once the last one has genuinely closed.
-      setWhere: lte(triggerScheduleProposalLineage.expiresAt, sql`now()`),
+      // THE RATCHET, in SQL. A live replacement is never overwritten by a
+      // stranger, so the window can only roll forward once the last one has
+      // genuinely closed — or when the caller is exchanging that very token.
+      setWhere: rollable,
     })
     .returning();
   if (claimed[0]) {

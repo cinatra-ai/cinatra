@@ -72,6 +72,18 @@ export async function confirmScheduleProposal(args: {
  * out of a token this server minted, and the template is read from that
  * verified ref — so Adjust can never be re-pointed at an agent the reader was
  * never proposed.
+ *
+ * THROUGH THE LINEAGE RATCHET, NOT BESIDE IT (cinatra#2837). This action used
+ * to call the bare mint, which is authentic and inherits the right consume
+ * identity but is INVISIBLE to the row that names the one replacement a lineage
+ * is holding open — so the slot went on naming the token the reader had just
+ * adjusted away from, and a live token existed beside it that the ratchet had
+ * never heard of. It now routes through `adjustLiveScheduleProposal`, which
+ * claims or rolls that slot before answering and REFUSES rather than mint when
+ * it can do neither. There is no unclaimed mint path left on this module, which
+ * matters here in particular: a `"use server"` export only becomes wire-
+ * reachable once a client module imports the file, and the expired card's
+ * Adjust is the first such import.
  */
 export async function adjustScheduleProposal(args: {
   ref: string;
@@ -83,19 +95,16 @@ export async function adjustScheduleProposal(args: {
   const userId = session?.user?.id ?? null;
   const orgId = session?.session?.activeOrganizationId ?? null;
   if (!userId || !orgId) return { ok: false, error: "unauthorized" };
+  const role =
+    (session?.user as { role?: string | null } | null | undefined)?.role ?? null;
 
-  const { adjustTriggerSchedule } = await import("./trigger-schedule-propose");
-  const { PROPOSAL_REFUSALS } = await import(
+  const { adjustLiveScheduleProposal } = await import(
     "./trigger-schedule-proposal-service"
   );
-  const proposed = await adjustTriggerSchedule({
-    priorToken: args.ref,
-    userId,
-    orgId,
-    schedule: args.schedule,
-  });
-  if (!proposed.ok) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
-  return { ok: true, token: proposed.token, expiresAt: proposed.expiresAt };
+  return adjustLiveScheduleProposal(
+    { userId, orgId, role },
+    { ref: args.ref, schedule: args.schedule },
+  );
 }
 
 /**

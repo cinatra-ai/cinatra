@@ -125,14 +125,24 @@ const lineage = new Map<string, LineageRow>();
  * press. That is honest about what is modelled — the interleaving is real in
  * Postgres and stubbed here — and the branch under test is the SERVICE's
  * response to it, which is what the pin is about.
+ *
+ * `supersedes` IS THE SECOND DISJUNCT (cinatra#2837, the drawn form's Adjust):
+ * a live row may ALSO be overwritten when the token it names is the one the
+ * caller is exchanging. Modelled here because the drawn Adjust's whole bound is
+ * that this widening is exact — a live row naming any OTHER token still yields.
  */
 async function fakeClaimLineage(input: {
   consumeKey: string;
   token: string;
   expiresAt: Date;
+  supersedes?: string;
 }) {
   const held = lineage.get(input.consumeKey);
-  if (held && held.expiresAt.getTime() > Date.now()) {
+  if (
+    held &&
+    held.expiresAt.getTime() > Date.now() &&
+    held.token !== input.supersedes
+  ) {
     return { outcome: "yielded" as const, record: held };
   }
   const row: LineageRow = {
@@ -831,6 +841,247 @@ describe("the lineage holds ONE live replacement — Adjust is idempotent while 
     expect(result.ok).toBe(false);
     expect(claimLineageReproposal).not.toHaveBeenCalled();
     expect(lineage.size).toBe(0);
+  });
+});
+
+describe("the DRAWN card's Adjust goes through the same ratchet", () => {
+  // THE DEFECT THIS PINS SHUT (groganz round, 2026-08-21). `adjustScheduleProposal`
+  // — the drawn form's server action — minted BESIDE the lineage row instead of
+  // through it. The mint was authentic and inherited the right consume
+  // identity, so at most one member of the family could ever become a run; what
+  // it did not do was touch the slot that names the replacement the lineage is
+  // holding open. So the slot went on naming a token the reader had already
+  // adjusted away from, a later Adjust handed that superseded token back, and a
+  // live token existed beside the slot that the ratchet had never counted.
+  //
+  // It also stopped being unreachable in this branch: a `"use server"` export
+  // only gets an action id once a client module imports the file, and the
+  // expired card's Adjust is the first such import.
+  //
+  // The rule is now the same on both paths, and differs only where the two acts
+  // genuinely differ: the slot may be CLAIMED when free or expired, ROLLED when
+  // it names the very ref this reader is exchanging, and otherwise the press is
+  // REFUSED. A live adjust never adopts the winner's token, because that token
+  // answers a different question than the rows the reader just edited.
+
+  beforeEach(() => {
+    wireCreateRun();
+  });
+
+  const ADJUSTED: ProposalSchedule = {
+    ...WEEKDAYS_9AM,
+    selection: { ...WEEKDAYS_9AM.selection, hour: 8 },
+  } as ProposalSchedule;
+
+  it("CLAIMS the lineage slot for the replacement it mints", async () => {
+    const original = mintLive();
+    const adjusted = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: ADJUSTED,
+    });
+    if (!adjusted.ok) throw new Error("expected a fresh proposal");
+    expect(adjusted.token).not.toBe(original.token);
+    // One row, and it names what the reader is now holding.
+    expect(lineage.size).toBe(1);
+    expect(lineage.get(consumeKeyOf(original.token))?.token).toBe(adjusted.token);
+    // Same lineage, so still at most one run in the whole family.
+    expect(consumeKeyOf(adjusted.token)).toBe(consumeKeyOf(original.token));
+  });
+
+  it("ROLLS the slot forward when it names the ref being adjusted", async () => {
+    const original = mintLive();
+    const first = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: ADJUSTED,
+    });
+    if (!first.ok) throw new Error("expected a fresh proposal");
+
+    // The reader edits the rows again, off the card they are now looking at.
+    // The slot names that card, so it rolls: one live token in, one out.
+    const second = await service.adjustLiveScheduleProposal(READER, {
+      ref: first.token,
+      schedule: WEEKDAYS_9AM,
+    });
+    if (!second.ok) throw new Error("expected the slot to roll");
+    expect(second.token).not.toBe(first.token);
+    expect(lineage.size).toBe(1);
+    expect(lineage.get(consumeKeyOf(original.token))?.token).toBe(second.token);
+  });
+
+  it("REFUSES a stale card whose lineage slot is held by a LIVE successor", async () => {
+    const original = mintLive();
+    const current = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: ADJUSTED,
+    });
+    if (!current.ok) throw new Error("expected a fresh proposal");
+
+    // A second tab still shows the ORIGINAL card and presses Adjust on it. The
+    // slot is held by the successor, so this press mints nothing at all.
+    const stale = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: WEEKDAYS_9AM,
+    });
+    expect(stale.ok).toBe(false);
+    expect((stale as { error: string }).error).toBe(
+      service.PROPOSAL_REFUSALS.superseded,
+    );
+    // The slot is untouched and still names the successor.
+    expect(lineage.size).toBe(1);
+    expect(lineage.get(consumeKeyOf(original.token))?.token).toBe(current.token);
+  });
+
+  it("FAILS CLOSED on a yielded claim — never mints past a refused slot", async () => {
+    const original = mintLive();
+    // A concurrent press established the slot AFTER this one read it free: the
+    // pre-check passes, the claim is the thing that refuses.
+    claimLineageReproposal.mockImplementationOnce(async () => ({
+      outcome: "yielded" as const,
+      record: {
+        consumeKey: consumeKeyOf(original.token),
+        token: "someone-elses-replacement",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    }));
+    const result = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: ADJUSTED,
+    });
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error).toBe(
+      service.PROPOSAL_REFUSALS.superseded,
+    );
+    // The loser NEVER adopts the winner's token: it answers different rows.
+    expect(JSON.stringify(result)).not.toContain("someone-elses-replacement");
+    expect(lineage.size).toBe(0);
+  });
+
+  it("two racing adjusts leave ONE live token in the slot, and the loser is refused", async () => {
+    const original = mintLive();
+    const [a, b] = await Promise.all([
+      service.adjustLiveScheduleProposal(READER, {
+        ref: original.token,
+        schedule: ADJUSTED,
+      }),
+      service.adjustLiveScheduleProposal(READER, {
+        ref: original.token,
+        schedule: WEEKDAYS_9AM,
+      }),
+    ]);
+    const winners = [a, b].filter((r) => r.ok);
+    const losers = [a, b].filter((r) => !r.ok);
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(1);
+    expect((losers[0] as { error: string }).error).toBe(
+      service.PROPOSAL_REFUSALS.superseded,
+    );
+    // ONE row, naming the winner. The loser's mint is discarded unreturned.
+    expect(lineage.size).toBe(1);
+    expect(lineage.get(consumeKeyOf(original.token))?.token).toBe(
+      (winners[0] as { token: string }).token,
+    );
+  });
+
+  it("RE-CLAIMS once when the slot vanishes, and refuses if it vanishes again", async () => {
+    const original = mintLive();
+    claimLineageReproposal.mockImplementationOnce(async () => ({
+      outcome: "vanished" as const,
+    }));
+    const recovered = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: ADJUSTED,
+    });
+    expect(recovered.ok).toBe(true);
+    expect(claimLineageReproposal).toHaveBeenCalledTimes(2);
+
+    vi.clearAllMocks();
+    lineage.clear();
+    readLineageReproposal.mockImplementation(
+      async (key: string) => lineage.get(key) ?? null,
+    );
+    claimLineageReproposal.mockImplementation(async () => ({
+      outcome: "vanished" as const,
+    }));
+    const refused = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: ADJUSTED,
+    });
+    expect(refused.ok).toBe(false);
+    // No token is handed out that no row names.
+    expect(refused).not.toHaveProperty("token");
+    expect(claimLineageReproposal).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses an EXPIRED ref — that card re-asks its own question elsewhere", async () => {
+    const expired = mintExpired();
+    const result = await service.adjustLiveScheduleProposal(READER, {
+      ref: expired.token,
+      schedule: ADJUSTED,
+    });
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error).toBe(
+      service.PROPOSAL_REFUSALS.invalid,
+    );
+    expect(claimLineageReproposal).not.toHaveBeenCalled();
+  });
+
+  it("refuses a forged ref and another reader's ref with the ONE sentence", async () => {
+    const forged = await service.adjustLiveScheduleProposal(READER, {
+      ref: "not-a-token",
+      schedule: ADJUSTED,
+    });
+    expect(forged).toEqual({ ok: false, error: service.PROPOSAL_REFUSALS.invalid });
+
+    const theirs = mintLive();
+    const foreign = await service.adjustLiveScheduleProposal(
+      { userId: "user_someone_else", orgId: ORG },
+      { ref: theirs.token, schedule: ADJUSTED },
+    );
+    expect(foreign).toEqual({ ok: false, error: service.PROPOSAL_REFUSALS.invalid });
+    expect(claimLineageReproposal).not.toHaveBeenCalled();
+  });
+
+  it("refuses a SPENT lineage without touching the ratchet at all", async () => {
+    const original = mintLive();
+    ledgerSpend(consumeKeyOf(original.token), {
+      runId: "run_already",
+      orgId: ORG,
+      templateId: TEMPLATE,
+      consumedBy: USER,
+    });
+    const result = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: ADJUSTED,
+    });
+    expect(result.ok).toBe(false);
+    expect(claimLineageReproposal).not.toHaveBeenCalled();
+    expect(lineage.size).toBe(0);
+  });
+
+  it("hands the expired path a slot the drawn Adjust actually moved", async () => {
+    // The two forms compose. A live adjust rolls the slot; when everything in
+    // the lineage has expired, the expired card's Adjust re-proposes off the
+    // CURRENT head rather than being handed the card the reader corrected.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T10:00:00Z"));
+    const original = mintLive();
+    const adjusted = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: ADJUSTED,
+    });
+    if (!adjusted.ok) throw new Error("expected a fresh proposal");
+
+    // Everything expires; the reader presses Adjust on the transcript's card.
+    vi.setSystemTime(new Date((adjusted.expiresAt + 1) * 1000));
+    const renewed = await service.reproposeExpiredScheduleProposal(
+      READER,
+      original.token,
+    );
+    if (!renewed.ok) throw new Error("expected a fresh proposal");
+    // NOT the superseded token, and still one slot for the lineage.
+    expect(renewed.token).not.toBe(adjusted.token);
+    expect(lineage.size).toBe(1);
+    expect(lineage.get(consumeKeyOf(original.token))?.token).toBe(renewed.token);
   });
 });
 
