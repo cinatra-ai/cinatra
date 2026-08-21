@@ -25,6 +25,24 @@ export type AssistantToolCallPart = {
    * the assistant message. Always undefined for non-agent_run tools.
    */
   runId?: string;
+  /**
+   * The renderable views this tool call PRODUCED (cinatra#2827, epic #2784 S9i).
+   *
+   * A lifecycle card is minted at a tool RESULT, so the step that produced it is
+   * known on the wire (`DATA_PART.toolCallId`). Carrying it here is what makes
+   * "the card is at its part's position in the chat" a property of the trace
+   * rather than a claim: the ordered-parts renderer draws these inside this
+   * part's own container, and nothing appends them after the turn.
+   *
+   * RAW WIRE PAYLOADS, deliberately — the same `Record<string, unknown>` shape
+   * `UiMessage.dataParts` carries, validated and dispatched by the ONE
+   * renderable-view registry at render time. Parsing here would fork the one
+   * validation path every surface shares.
+   *
+   * Absent (not empty) on a call that produced none, so a turn carrying no view
+   * serializes byte-identically to before this field existed.
+   */
+  views?: Record<string, unknown>[];
 };
 
 export type AssistantMessagePart = AssistantTextPart | AssistantToolCallPart;
@@ -116,6 +134,42 @@ export function applyToolResultEvent(
   // If no match, return the original reference so React diffing skips
   // the message — avoids spurious re-renders on stray tool_result events.
   return matched ? next : parts;
+}
+
+/**
+ * Attach a renderable view to the tool call that PRODUCED it (cinatra#2827).
+ *
+ * Returns the ORIGINAL array reference when nothing changed — an unknown
+ * `toolCallId` (the producing call is not in this turn's trace) and a replayed
+ * identical payload are both no-ops, so a durable-log replay folds to the same
+ * trace it folded to live. The dedupe is STRUCTURAL, matching the reducer's
+ * `dataParts` dedupe, because the wire carries no per-view identity to key on.
+ *
+ * A payload that cannot be serialized (a hostile getter, a cycle) skips the
+ * dedupe and is attached anyway: the render path is guarded and draws its safe
+ * fallback, which is strictly better than dropping a view the producer sent.
+ */
+export function attachViewToToolCall(
+  parts: AssistantMessagePart[],
+  toolCallId: string,
+  view: Record<string, unknown>,
+): AssistantMessagePart[] {
+  if (!toolCallId) return parts;
+  const index = parts.findIndex((p) => p.kind === "tool_call" && p.id === toolCallId);
+  if (index === -1) return parts;
+  const target = parts[index] as AssistantToolCallPart;
+  const existing = target.views ?? [];
+  try {
+    const serialized = JSON.stringify(view);
+    if (serialized !== undefined && existing.some((v) => JSON.stringify(v) === serialized)) {
+      return parts;
+    }
+  } catch {
+    /* unserializable — attach rather than drop (see the doc above). */
+  }
+  const next = [...parts];
+  next[index] = { ...target, views: [...existing, view] };
+  return next;
 }
 
 /**
@@ -333,4 +387,73 @@ export function shouldShowLiveProgressStatus(message: StreamStatusMessage) {
   const latestPart = getLatestAssistantPart(message);
   if (latestPart) return latestPart.kind === "tool_call";
   return !hasVisibleStreamingText(message.content);
+}
+
+// ---------------------------------------------------------------------------
+// LIFECYCLE SLOTS — the parts a layout mode may not suppress (cinatra#2825, S9l)
+// ---------------------------------------------------------------------------
+// A lifecycle item reaches the transcript by one of two carriages: a typed
+// `DATA_PART` (carried on `dataParts`, an adjunct every layout already reveals)
+// or an ANCHORED SLOT in the ordered `parts` trace — today the `agent_run`
+// tool call the recommendation card mounts at (#2786). The second one is the
+// fragile half: the Slack layout pins its own turn shape and deliberately drops
+// `parts`, and an error turn skips the ordered-parts branch entirely, so a held
+// decision could be hidden by a presentation mode or by an unrelated stream
+// error. These helpers name that subset ONCE so the projection and the renderer
+// agree on what "a lifecycle slot" is instead of each testing for `agent_run`.
+//
+// This is a NARROWING of the trace, never a widening: the pinned Slack layout
+// keeps omitting the ordered `parts`, and what survives is only the anchored
+// lifecycle slot the reader may have to act on.
+
+/**
+ * The tool calls that anchor a lifecycle card in the ordered trace. One entry
+ * today; a kind that later anchors at its own tool call is added here, and both
+ * the projection and the renderer follow with no further edit.
+ */
+export const LIFECYCLE_SLOT_TOOL_NAMES: readonly string[] = ["agent_run"];
+
+/** Is this part the anchor a lifecycle card mounts at? */
+export function isLifecycleSlotPart(part: AssistantMessagePart): boolean {
+  return (
+    part.kind === "tool_call" &&
+    LIFECYCLE_SLOT_TOOL_NAMES.includes(part.name) &&
+    typeof part.runId === "string" &&
+    part.runId.length > 0
+  );
+}
+
+/**
+ * The lifecycle slots of a turn's ordered trace, in trace order. Returns the
+ * SAME part objects (no copy, no rewrite) so a slot renders through exactly the
+ * branch the full trace renders it through.
+ */
+export function lifecycleSlotParts(
+  parts: readonly AssistantMessagePart[] | undefined,
+): AssistantMessagePart[] {
+  return (parts ?? []).filter(isLifecycleSlotPart);
+}
+
+/**
+ * Does this turn carry a lifecycle item the reader may have to act on?
+ *
+ * Two carriages, both of which the transcript DRAWS today: a typed `DATA_PART`
+ * (the review card and its siblings, dispatched through the renderable-view
+ * registry) and a lifecycle slot — on the ordered trace, or on `lifecycleParts`
+ * when a layout projection omitted that trace. Structurally typed so the wire
+ * projection and the renderer can both ask, without either importing the other.
+ *
+ * The open `interrupt` slice is deliberately NOT counted: `/chat` does not draw
+ * one yet, so counting it would reveal a turn with nothing on screen. The day it
+ * draws one, this predicate is the single place that changes.
+ */
+export function turnCarriesLifecycleItems(message: {
+  dataParts?: readonly unknown[];
+  parts?: readonly AssistantMessagePart[];
+  lifecycleParts?: readonly AssistantMessagePart[];
+}): boolean {
+  return (
+    (message.dataParts?.length ?? 0) > 0 ||
+    lifecycleSlotParts(message.parts ?? message.lifecycleParts).length > 0
+  );
 }

@@ -208,8 +208,16 @@ fixture suites in `__tests__/`, which ride the root Vitest run;
 `.github/workflows/chat-hitl-evidence-gate.yml` is a thin caller with no logic of
 its own.
 
-`chat-hitl-capture-index.json` is the canonical capture index: a cell name is a
-claim, and a claim needs a record there or it counts as zero.
+`chat-hitl-capture-index.json` is the canonical capture index — the ONE of it: a
+cell name is a claim, and a claim needs a record there or it counts as zero.
+Both halves read this file, through the single `CAPTURE_INDEX_PATH` that
+`lib/capture-record-contract.mjs` exports; `scripts/audit/chat-hitl-acceptance-gate.mjs`
+used to read a second, empty index of its own that also called itself canonical,
+and `__tests__/capture-index-path.test.mjs` is what now keeps the readers on one
+path. The audit half is the stricter reader — painted counts, measured absences,
+a pinned card instance — and its extras are graded when present on a committed
+record and required of what its own driver writes, with this contract as the
+floor for every record either way.
 `chat-hitl-evidence-gate.rollout.json` is the warn-first policy — the gate
 enforces only for branches created after `gateLandedAt`, grandfathers the
 branches listed by name, and keeps the findings already on `main` as warnings

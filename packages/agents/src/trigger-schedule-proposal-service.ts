@@ -13,10 +13,13 @@ import "server-only";
 //   CONFIRM  — the reader presses Confirm. One transaction spends the proposal,
 //              creates the run pre-dispatch, and records the schedule-install
 //              intent; a drain then ARMS the run before EXPOSING its schedule.
-//   ADJUST   — the reader changes the rows. RE-PROPOSES: a fresh token, a fresh
-//              consume identity. It mutates nothing, because there is nothing
-//              to mutate — which is why Adjust needs no authority at all and can
-//              never half-arm a schedule.
+//   ADJUST   — the reader changes the rows. RE-PROPOSES: a fresh token that
+//              INHERITS the adjusted-away proposal's consume identity, so the
+//              whole family is one row in the consume table and at most one of
+//              its members can ever become a run (cinatra#2859). It still
+//              mutates nothing, because there is nothing to mutate — which is
+//              why Adjust needs no authority at all and can never half-arm a
+//              schedule.
 //
 // THE AI CANNOT ARM ANYTHING. The producer is a read-only render primitive; it
 // mints a card. Confirm is a HUMAN SESSION action: it runs under a live cookie
@@ -55,6 +58,7 @@ import {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  type AdjustScheduleInput,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
 } from "./trigger-schedule-propose";
@@ -63,6 +67,7 @@ export {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  type AdjustScheduleInput,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
 };
@@ -120,6 +125,8 @@ export const PROPOSAL_REFUSALS = {
     "The schedule could not be armed just now — please try again.",
   past:
     "That time has already passed. Ask for a new time and confirm the new card.",
+  supersededBySchedule:
+    "This schedule was already set from this card, with different times than the ones shown here. Open the run to see the schedule that was set.",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -171,6 +178,9 @@ export async function confirmTriggerScheduleProposal(
   // without opening a transaction that would only roll back.
   const existing = await readProposalConsume(consumeKey);
   if (existing) {
+    if (await settledOnAnotherSchedule(existing.runId, proposal.schedule)) {
+      return { ok: false, error: PROPOSAL_REFUSALS.supersededBySchedule };
+    }
     await driveInstall(existing.runId);
     return { ok: true, runId: existing.runId, alreadyConfirmed: true };
   }
@@ -246,6 +256,9 @@ export async function confirmTriggerScheduleProposal(
       // with the failed insert, so there is exactly one run and it is theirs.
       const winner = await readProposalConsume(consumeKey);
       if (winner) {
+        if (await settledOnAnotherSchedule(winner.runId, proposal.schedule)) {
+          return { ok: false, error: PROPOSAL_REFUSALS.supersededBySchedule };
+        }
         await driveInstall(winner.runId);
         return { ok: true, runId: winner.runId, alreadyConfirmed: true };
       }
@@ -260,6 +273,72 @@ export async function confirmTriggerScheduleProposal(
 
   await driveInstall(runId);
   return { ok: true, runId, alreadyConfirmed: false };
+}
+
+/**
+ * Did this family already settle on a DIFFERENT schedule than the one this card
+ * is showing? (cinatra#2859)
+ *
+ * ADJUST MAKES A FAMILY'S MEMBERS DISAGREE, which is what makes this check
+ * necessary and why it did not exist before. Every member of an adjust lineage
+ * shares ONE consume identity — that is the invariant that stops two runs — but
+ * unlike a re-proposed EXPIRED card, whose replacement re-asks the same question
+ * with the same rows, an adjusted card deliberately carries DIFFERENT rows. So
+ * "this identity is already spent" no longer implies "spent on what you are
+ * looking at": if a stale tab confirmed the adjusted-away card first, the run
+ * that exists is on the schedule the reader corrected away from.
+ *
+ * Answering that Confirm with the ordinary idempotent `alreadyConfirmed: true`
+ * would be a lie the reader cannot see through — their card would settle
+ * showing rows nothing was armed with. So it is refused in words instead, and
+ * the words name the discrepancy rather than the generic "no longer valid".
+ *
+ * Compares against the INSTALL INTENT, which is the durable record of what was
+ * actually committed for that run, written in the same transaction as the
+ * consume row. When there is nothing to compare against — the intent is missing,
+ * or this card's own schedule no longer translates — the answer is the
+ * pre-existing one: this function only ever converts a KNOWN disagreement into a
+ * refusal, never an unknown into one.
+ *
+ * A re-proposed expired card and a plain double-press both compare EQUAL, so
+ * #2837's lineage and the ordinary retry keep landing exactly as they did.
+ */
+async function settledOnAnotherSchedule(
+  runId: string,
+  schedule: ProposalSchedule,
+): Promise<boolean> {
+  return installedOnAnotherSchedule(await readInstallIntent(runId), schedule);
+}
+
+/**
+ * The comparison itself, over an install intent the caller ALREADY holds.
+ *
+ * Confirm reaches it through `settledOnAnotherSchedule`, which does the read.
+ * `resolveProposalForReader` calls it directly, because its settled branch has
+ * already fetched the same intent for `arming`. Deliberately ONE comparison
+ * behind both doors rather than a copy on each: the refusal Confirm gives and
+ * the line the settled card draws are two answers to the same question, and two
+ * implementations of it would be free to drift into disagreeing.
+ */
+function installedOnAnotherSchedule(
+  settled: Pick<
+    InstallIntentRow,
+    "triggerType" | "scheduledAt" | "cronExpression" | "timezone"
+  > | null,
+  schedule: ProposalSchedule,
+): boolean {
+  const shown = installIntentFor(schedule);
+  if (!shown) return false;
+  if (!settled) return false;
+  if (settled.triggerType !== shown.triggerType) return true;
+  if ((settled.cronExpression ?? null) !== (shown.cronExpression ?? null)) return true;
+  if (
+    (settled.scheduledAt?.getTime() ?? null) !==
+    (shown.scheduledAt?.getTime() ?? null)
+  ) {
+    return true;
+  }
+  return settled.timezone !== shown.timezone;
 }
 
 /**
@@ -540,6 +619,24 @@ export function describeProposalSchedule(schedule: ProposalSchedule): string {
   return describeRecurrence(schedule.selection as RecurringConfig);
 }
 
+/**
+ * The schedule line a SUPERSEDED settled card draws instead (cinatra#2859).
+ *
+ * It names the supersession and sends the reader to the run; it does NOT
+ * restate times. That is the deliberate part. The durable record of what was
+ * actually installed is the trigger row and the install intent — scheduler
+ * fields, not selections — so rendering "the schedule that was set" as prose
+ * would mean parsing the cron back into selections. `describeProposalSchedule`
+ * exists precisely to avoid that: the settled line is derived from selections
+ * "rather than from the cron, [because] a cron-to-prose renderer would be a
+ * second, drift-prone description of the same thing". Inventing one HERE — on
+ * the one card whose whole problem is that it was showing the wrong times —
+ * would be the worst place to start drifting. So the card stops claiming times
+ * it cannot vouch for and points at the row that is authoritative.
+ */
+export const SUPERSEDED_SCHEDULE_COPY =
+  "This card was adjusted before it was set — open the run to see the schedule that was set.";
+
 // ---------------------------------------------------------------------------
 // The card's authoritative state
 // ---------------------------------------------------------------------------
@@ -562,6 +659,15 @@ export type ProposalResolution =
       timezone: string;
       released: boolean;
       arming: boolean;
+      /**
+       * This card's rows are NOT the ones the family settled on — it was
+       * adjusted away from before Confirm landed. `scheduleCopy` says so and
+       * `triggerType`/`timezone` are the installed ones, so the card is honest
+       * without it; the flag is what lets a renderer say it in its own chrome.
+       * False for every ordinary settled card, including a double-press and
+       * #2837's re-proposed expired lineage.
+       */
+      superseded: boolean;
     };
 
 /**
@@ -576,6 +682,15 @@ export type ProposalResolution =
  * the trigger's chrome without the transcript carrying a run id: the token the
  * turn already holds addresses the consume row, and the consume row names the
  * run.
+ *
+ * "SPENT" IS NOT "SPENT ON THESE ROWS" (cinatra#2859). Sharing one consume
+ * identity across an adjust family is what stops the second run, and the price
+ * of it is exactly here: the reader's own token is no longer evidence of what
+ * was installed, because a sibling may have settled the family on different
+ * rows. Confirm already refuses that in words, but resolution is a READ — no
+ * Confirm is pressed when a stale tab is merely reopened — so the same
+ * divergence has to be answered on this side too, or the card quietly renders
+ * the schedule its family was corrected away from. `superseded` is that answer.
  */
 export async function resolveProposalForReader(
   token: string,
@@ -599,18 +714,28 @@ export async function resolveProposalForReader(
       readRunTriggerByRunId(consumed.runId),
       readInstallIntent(consumed.runId),
     ]);
+    // Spent — but spent on WHAT? Under #2859's shared consume identity every
+    // member of an adjust family addresses one row, so a matching row proves
+    // the family settled, not that it settled on the rows THIS card is holding.
+    // Same comparison Confirm refuses on, over the intent already in hand.
+    const superseded = installedOnAnotherSchedule(intent, proposal.schedule);
     return {
       phase: "settled",
       runId: consumed.runId,
       agentName,
+      // Both already come from the DURABLE rows rather than from the token, so
+      // a superseded card was never wrong about these two.
       triggerType:
         (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
         (intent?.triggerType ?? "immediate"),
-      scheduleCopy: describeProposalSchedule(proposal.schedule),
+      scheduleCopy: superseded
+        ? SUPERSEDED_SCHEDULE_COPY
+        : describeProposalSchedule(proposal.schedule),
       timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
       released: !!trigger?.releasedAt,
       // "Arming…" rather than controls over a schedule still being installed.
       arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      superseded,
     };
   }
 

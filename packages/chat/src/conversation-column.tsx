@@ -436,6 +436,14 @@ export function ConversationColumn({
           <PromptField
             ref={promptRef}
             editorTestId="chat-prompt-input"
+            // §I INPUT HIERARCHY. The conversation's chat box is the ONE primary
+            // input, and every field a card in the stream carries is drawn
+            // subordinate to it. Declared HERE, once: `/chat` and the embedded
+            // widget mount this same column, so the widget's composer reads as
+            // primary by construction rather than by a second opt-in that could
+            // drift.
+            primary
+            conformanceId="chat-composer-primary"
             placeholder={placeholder}
             storageKey={promptStorageKey}
             rows={1}

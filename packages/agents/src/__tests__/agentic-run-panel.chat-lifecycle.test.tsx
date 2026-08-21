@@ -425,9 +425,18 @@ const HELD_RECOMMENDATION = {
   agentPackageName: "@cinatra-ai/blog-draft-writer-agent",
   promptText: "draft a blog post",
   recommendations: [
-    { id: "skill-blog", name: "Blog content", description: "", selected: true },
+    {
+      skillId: "skill-blog",
+      skillRevisionId: "skill-blog@1",
+      name: "Blog content",
+      score: 0.9,
+      rank: 1,
+      recommended: true,
+      scoredFeatures: [],
+    },
   ],
   holdRef: "hold-ref-2729",
+  canDecide: true,
 };
 
 describe("the skill-recommendation screen reaches the conversation", () => {
@@ -462,7 +471,16 @@ describe("the skill-recommendation screen reaches the conversation", () => {
           throw new Error("recommendation card not drawn");
         }
       });
-      expect(screen.queryByText(/Confirm the skills for this run/i)).not.toBeNull();
+      // REDRAWN to the ratified §V drawing (cinatra#2841): the heading plate this
+      // used to name is gone — the row IS the card. What proves the card reached
+      // the conversation is the chip the reader shapes the run with.
+      expect(screen.queryByText(/Confirm the skills for this run/i)).toBeNull();
+      const chip = document.querySelector('[data-recommendation-chip]');
+      expect(chip).not.toBeNull();
+      expect(chip?.textContent).toContain("Blog content");
+      expect(chip?.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+      expect(chip?.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+      expect(chip?.querySelector('[data-skill-action="skip"]')).not.toBeNull();
     },
   );
 
