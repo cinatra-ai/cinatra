@@ -1,0 +1,432 @@
+[
+  {
+    "cell": "I1__review-card__chat_thread__pending",
+    "screenshot": "evidence/2865-section-i-hierarchy/captures/I1__review-card__chat_thread__pending.png",
+    "sha256": "3457e80244c2b2b7f9301c389ea8c09a59cecbacab4e8321ca5beb378dd2b22d",
+    "pixels": {
+      "width": 1944,
+      "height": 2672
+    },
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+    "framedOn": "the conversation column",
+    "dark": false,
+    "note": "§I input hierarchy, LIGHT: the ONE primary composer (boxed, raised, send affordance) and the card's subordinate note field (dashed baseline, transparent, no box) in ONE frame.",
+    "observed": {
+      "frame": {
+        "[data-conversation-list]": 1,
+        "[data-lifecycle-card-host=\"chat_thread\"]": 1,
+        "[data-lifecycle-card=\"artifact_review_gate\"]": 1,
+        "[data-conformance-id=\"chat-composer-primary\"]": 1,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1,
+        "[data-conformance-id=\"review-composer-bound\"]": 1,
+        "[data-conformance-id=\"review-composer-unbound\"]": 0,
+        "[data-lifecycle-card=\"recommendation_hold\"]": 0,
+        "[data-skill-action]": 0
+      },
+      "root": {
+        "[data-conformance-id=\"review-decision-bar\"]": 1,
+        "[data-lifecycle-card-state]": 0,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1
+      },
+      "theme": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "colorScheme": "normal",
+        "bodyBg": "rgb(241, 241, 237)"
+      },
+      "noteStyle": {
+        "borderBottomStyle": "dashed",
+        "borderTopWidth": "0px",
+        "borderBottomWidth": "1px",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "none",
+        "disabled": false
+      },
+      "composerStyle": {
+        "borderStyle": "solid",
+        "borderWidth": "1px",
+        "borderColor": "rgba(21, 33, 58, 0.14)",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px"
+      },
+      "decisionButtons": 3,
+      "url": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+      "bodyText": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nAnalytics\nTOOLS\nSkills\nConnectors\nLC\nLane Capture\nlane2865@example.invalid\nToggle Sidebar\nChat\nLaunch note review\nToggle theme\n1\nLane Capture\nLC\nShow me the review that is waiting on me.\nCinatra\n\nHere is the review.\n\nReview requested\nAwaiting your decision\nExpand\nCORE ANALYSIS · SUGGESTIONS\nartifact · sections · 0 · text\nREPLACE\nNOW\n\n# Launch note\n\n\nSUGGESTED\n\n# "
+    },
+    "measuredStyle": {
+      "note": {
+        "borderBottomStyle": "dashed",
+        "borderTopWidth": "0px",
+        "borderBottomWidth": "1px",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "none",
+        "disabled": false
+      },
+      "composer": {
+        "borderStyle": "solid",
+        "borderWidth": "1px",
+        "borderColor": "rgba(21, 33, 58, 0.14)",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px"
+      },
+      "theme": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "colorScheme": "normal",
+        "bodyBg": "rgb(241, 241, 237)"
+      }
+    }
+  },
+  {
+    "cell": "I2__review-card__chat_thread__pending__dark",
+    "screenshot": "evidence/2865-section-i-hierarchy/captures/I2__review-card__chat_thread__pending__dark.png",
+    "sha256": "d009107356501f6a8f5e835177f6212861275cf9b7dba81e36be008c824e6324",
+    "pixels": {
+      "width": 1944,
+      "height": 2672
+    },
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+    "framedOn": "the conversation column",
+    "dark": true,
+    "note": "§I input hierarchy, DARK: the same two inputs, same weight difference, on the dark field.",
+    "observed": {
+      "frame": {
+        "[data-conversation-list]": 1,
+        "[data-lifecycle-card-host=\"chat_thread\"]": 1,
+        "[data-lifecycle-card=\"artifact_review_gate\"]": 1,
+        "[data-conformance-id=\"chat-composer-primary\"]": 1,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1,
+        "[data-conformance-id=\"review-composer-bound\"]": 1,
+        "[data-conformance-id=\"review-composer-unbound\"]": 0,
+        "[data-lifecycle-card=\"recommendation_hold\"]": 0,
+        "[data-skill-action]": 0
+      },
+      "root": {
+        "[data-conformance-id=\"review-decision-bar\"]": 1,
+        "[data-lifecycle-card-state]": 0,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1
+      },
+      "theme": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "colorScheme": "dark",
+        "bodyBg": "lab(1.76974 1.32743 -9.28855)"
+      },
+      "noteStyle": {
+        "borderBottomStyle": "dashed",
+        "borderTopWidth": "0px",
+        "borderBottomWidth": "1px",
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "none",
+        "disabled": false
+      },
+      "composerStyle": {
+        "borderStyle": "solid",
+        "borderWidth": "1px",
+        "borderColor": "rgba(255, 255, 255, 0.1)",
+        "background": "lab(8.11015 0.0567511 -14.1465)",
+        "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px"
+      },
+      "decisionButtons": 3,
+      "url": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+      "bodyText": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nAnalytics\nTOOLS\nSkills\nConnectors\nLC\nLane Capture\nlane2865@example.invalid\nToggle Sidebar\nChat\nLaunch note review\nToggle theme\n1\nLane Capture\nLC\nShow me the review that is waiting on me.\nCinatra\n\nHere is the review.\n\nReview requested\nAwaiting your decision\nExpand\nCORE ANALYSIS · SUGGESTIONS\nartifact · sections · 0 · text\nREPLACE\nNOW\n\n# Launch note\n\n\nSUGGESTED\n\n# "
+    },
+    "measuredStyle": {
+      "note": {
+        "borderBottomStyle": "dashed",
+        "borderTopWidth": "0px",
+        "borderBottomWidth": "1px",
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "none",
+        "disabled": false
+      },
+      "composer": {
+        "borderStyle": "solid",
+        "borderWidth": "1px",
+        "borderColor": "rgba(255, 255, 255, 0.1)",
+        "background": "lab(8.11015 0.0567511 -14.1465)",
+        "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px"
+      },
+      "theme": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "colorScheme": "dark",
+        "bodyBg": "lab(1.76974 1.32743 -9.28855)"
+      }
+    }
+  },
+  {
+    "cell": "I3__review-card__chat_thread__pending__composer-bound",
+    "screenshot": "evidence/2865-section-i-hierarchy/captures/I3__review-card__chat_thread__pending__composer-bound.png",
+    "sha256": "8303cc90015b1b15c815e452a345fd237f08f06da15134d15e59d7e60e731fcc",
+    "pixels": {
+      "width": 1472,
+      "height": 2454
+    },
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+    "framedOn": "the review card root",
+    "dark": false,
+    "note": "§I: one open review binds the chat box with no press — the row above the buttons states the binding and offers the box back.",
+    "observed": {
+      "frame": {
+        "[data-conversation-list]": 1,
+        "[data-lifecycle-card-host=\"chat_thread\"]": 1,
+        "[data-lifecycle-card=\"artifact_review_gate\"]": 1,
+        "[data-conformance-id=\"chat-composer-primary\"]": 1,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1,
+        "[data-conformance-id=\"review-composer-bound\"]": 1,
+        "[data-conformance-id=\"review-composer-unbound\"]": 0,
+        "[data-lifecycle-card=\"recommendation_hold\"]": 0,
+        "[data-skill-action]": 0
+      },
+      "root": {
+        "[data-conformance-id=\"review-decision-bar\"]": 1,
+        "[data-lifecycle-card-state]": 0,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1
+      },
+      "theme": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "colorScheme": "normal",
+        "bodyBg": "rgb(241, 241, 237)"
+      },
+      "noteStyle": {
+        "borderBottomStyle": "dashed",
+        "borderTopWidth": "0px",
+        "borderBottomWidth": "1px",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "none",
+        "disabled": false
+      },
+      "composerStyle": {
+        "borderStyle": "solid",
+        "borderWidth": "1px",
+        "borderColor": "rgba(21, 33, 58, 0.14)",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px"
+      },
+      "decisionButtons": 3,
+      "url": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+      "bodyText": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nAnalytics\nTOOLS\nSkills\nConnectors\nLC\nLane Capture\nlane2865@example.invalid\nToggle Sidebar\nChat\nLaunch note review\nToggle theme\n1\nLane Capture\nLC\nShow me the review that is waiting on me.\nCinatra\n\nHere is the review.\n\nReview requested\nAwaiting your decision\nExpand\nCORE ANALYSIS · SUGGESTIONS\nartifact · sections · 0 · text\nREPLACE\nNOW\n\n# Launch note\n\n\nSUGGESTED\n\n# "
+    },
+    "measuredStyle": {
+      "note": {
+        "borderBottomStyle": "dashed",
+        "borderTopWidth": "0px",
+        "borderBottomWidth": "1px",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "none",
+        "disabled": false
+      },
+      "composer": {
+        "borderStyle": "solid",
+        "borderWidth": "1px",
+        "borderColor": "rgba(21, 33, 58, 0.14)",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px"
+      },
+      "theme": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "colorScheme": "normal",
+        "bodyBg": "rgb(241, 241, 237)"
+      }
+    }
+  },
+  {
+    "cell": "I4__review-card__site_widget__pending",
+    "screenshot": "evidence/2865-section-i-hierarchy/captures/I4__review-card__site_widget__pending.png",
+    "sha256": "9a355744773784d740cfa269edc40193e603f3cddfd6853fd9bc61c669083ebe",
+    "pixels": {
+      "width": 1440,
+      "height": 2360
+    },
+    "finalUrl": "<a third-party page on another site; see frameUrl>",
+    "frameUrl": "/embed/assistant?<frame disambiguators>",
+    "framedOn": "the conversation column inside the embed frame",
+    "dark": false,
+    "note": "§I input hierarchy inside the EMBEDDED CROSS-SITE widget column, LIGHT: a real held review card whose subordinate note field (dashed baseline, no box) and the widget's OWN primary composer are in one frame, on a page served by another site.",
+    "observed": {
+      "page": {
+        ".cw-frame": 1
+      },
+      "frame": {
+        "[data-embed-assistant][data-phase=\"active\"]": 1,
+        "[data-conversation-list]": 1,
+        "[data-lifecycle-card-host=\"site_widget\"]": 1,
+        "[data-lifecycle-card=\"artifact_review_gate\"]": 1,
+        "[data-conformance-id=\"chat-composer-primary\"]": 1,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1,
+        "[data-conformance-id=\"review-composer-bound\"]": 0,
+        "[data-conformance-id=\"review-composer-unbound\"]": 0,
+        "[data-lifecycle-card=\"recommendation_hold\"]": 0,
+        "[data-skill-action]": 0
+      },
+      "root": {
+        "[data-conformance-id=\"review-decision-bar\"]": 1,
+        "[data-lifecycle-card-state]": 1,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1
+      },
+      "theme": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "colorScheme": "normal",
+        "bodyBg": "rgb(241, 241, 237)"
+      },
+      "noteStyle": {
+        "borderBottomStyle": "dashed",
+        "borderTopWidth": "0px",
+        "borderBottomWidth": "1px",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "none",
+        "disabled": false
+      },
+      "composerStyle": {
+        "borderStyle": "solid",
+        "borderWidth": "1px",
+        "borderColor": "rgba(21, 33, 58, 0.14)",
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px"
+      },
+      "geometry": {
+        "note": {
+          "w": 654,
+          "h": 44,
+          "top": 975
+        },
+        "composer": {
+          "w": 688,
+          "h": 50,
+          "top": 1118
+        }
+      }
+    },
+    "wire": [
+      {
+        "label": "embed-document",
+        "method": "GET",
+        "path": "/embed/assistant",
+        "resourceType": "document",
+        "cookie": "absent",
+        "widgetUserToken": "absent",
+        "widgetOrigin": "absent",
+        "secFetchSite": null
+      },
+      {
+        "label": "lifecycle-resolve",
+        "method": "POST",
+        "path": "/api/lifecycle-views/resolve",
+        "resourceType": "fetch",
+        "cookie": "absent",
+        "widgetUserToken": "present (cwu_)",
+        "widgetOrigin": "present",
+        "secFetchSite": null
+      },
+      {
+        "label": "lifecycle-resolve",
+        "method": "POST",
+        "path": "/api/lifecycle-views/resolve",
+        "resourceType": "fetch",
+        "cookie": "absent",
+        "widgetUserToken": "present (cwu_)",
+        "widgetOrigin": "present",
+        "secFetchSite": null
+      }
+    ],
+    "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS · SUGGESTIONS\nartifact · sections · 0 · text\nREPLACE\nNOW\n# Launch note\nSUGGESTED\n# Launch note\nartifact · sections · 1 · text\nREPLACE\nNOW\n## Summary   \nThe connector ships this week.   \nIt replaces the manual export step.\nSUGGESTED\n## Summary\nThe connector ships this week.\nIt replaces the manual export step.\nartifact · sections · 2 · text\nREPLACE\nNOW\n## Rollout\n   Enable it per organization, then remove the old export job.   \nSUGGESTED\n## Rollout\n   Enable it per organization, then remove the old export job.\nPress a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below.\n3 of 3 suggestions accepted — they ride this decision. A reject records them as not taken.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove"
+  },
+  {
+    "cell": "I5__review-card__site_widget__pending__dark",
+    "screenshot": "evidence/2865-section-i-hierarchy/captures/I5__review-card__site_widget__pending__dark.png",
+    "sha256": "b5d444bf83cb70d33400408dfb3b8fc41b61a2627f1782adeaad484030b0fdd4",
+    "pixels": {
+      "width": 1440,
+      "height": 2360
+    },
+    "finalUrl": "<a third-party page on another site; see frameUrl>",
+    "frameUrl": "/embed/assistant?<frame disambiguators>",
+    "framedOn": "the conversation column inside the embed frame",
+    "dark": true,
+    "note": "§I input hierarchy inside the EMBEDDED CROSS-SITE widget column, DARK: the same two inputs and the same weight difference on the dark field; the record carries the theme read-back measured inside the embed frame.",
+    "observed": {
+      "page": {
+        ".cw-frame": 1
+      },
+      "frame": {
+        "[data-embed-assistant][data-phase=\"active\"]": 1,
+        "[data-conversation-list]": 1,
+        "[data-lifecycle-card-host=\"site_widget\"]": 1,
+        "[data-lifecycle-card=\"artifact_review_gate\"]": 1,
+        "[data-conformance-id=\"chat-composer-primary\"]": 1,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1,
+        "[data-conformance-id=\"review-composer-bound\"]": 0,
+        "[data-conformance-id=\"review-composer-unbound\"]": 0,
+        "[data-lifecycle-card=\"recommendation_hold\"]": 0,
+        "[data-skill-action]": 0
+      },
+      "root": {
+        "[data-conformance-id=\"review-decision-bar\"]": 1,
+        "[data-lifecycle-card-state]": 1,
+        "[data-conformance-id=\"review-note-field-subordinate\"]": 1
+      },
+      "theme": {
+        "htmlClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "colorScheme": "dark",
+        "bodyBg": "lab(1.76974 1.32743 -9.28855)"
+      },
+      "noteStyle": {
+        "borderBottomStyle": "dashed",
+        "borderTopWidth": "0px",
+        "borderBottomWidth": "1px",
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "none",
+        "disabled": false
+      },
+      "composerStyle": {
+        "borderStyle": "solid",
+        "borderWidth": "1px",
+        "borderColor": "rgba(255, 255, 255, 0.1)",
+        "background": "lab(8.11015 0.0567511 -14.1465)",
+        "boxShadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px"
+      },
+      "geometry": {
+        "note": {
+          "w": 654,
+          "h": 44,
+          "top": 975
+        },
+        "composer": {
+          "w": 688,
+          "h": 50,
+          "top": 1118
+        }
+      }
+    },
+    "wire": [
+      {
+        "label": "embed-document",
+        "method": "GET",
+        "path": "/embed/assistant",
+        "resourceType": "document",
+        "cookie": "absent",
+        "widgetUserToken": "absent",
+        "widgetOrigin": "absent",
+        "secFetchSite": null
+      },
+      {
+        "label": "lifecycle-resolve",
+        "method": "POST",
+        "path": "/api/lifecycle-views/resolve",
+        "resourceType": "fetch",
+        "cookie": "absent",
+        "widgetUserToken": "present (cwu_)",
+        "widgetOrigin": "present",
+        "secFetchSite": null
+      },
+      {
+        "label": "lifecycle-resolve",
+        "method": "POST",
+        "path": "/api/lifecycle-views/resolve",
+        "resourceType": "fetch",
+        "cookie": "absent",
+        "widgetUserToken": "present (cwu_)",
+        "widgetOrigin": "present",
+        "secFetchSite": null
+      }
+    ],
+    "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS · SUGGESTIONS\nartifact · sections · 0 · text\nREPLACE\nNOW\n# Launch note\nSUGGESTED\n# Launch note\nartifact · sections · 1 · text\nREPLACE\nNOW\n## Summary   \nThe connector ships this week.   \nIt replaces the manual export step.\nSUGGESTED\n## Summary\nThe connector ships this week.\nIt replaces the manual export step.\nartifact · sections · 2 · text\nREPLACE\nNOW\n## Rollout\n   Enable it per organization, then remove the old export job.   \nSUGGESTED\n## Rollout\n   Enable it per organization, then remove the old export job.\nPress a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below.\n3 of 3 suggestions accepted — they ride this decision. A reject records them as not taken.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove"
+  }
+]
