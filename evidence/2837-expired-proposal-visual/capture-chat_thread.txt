@@ -1,109 +1,132 @@
-Lane x2837f — capture log, host chat_thread, PR #2837 (issue #2836)
-Captured at: 2026-08-19T13:41:46.757Z
-Surface:     http://localhost:13837/chat/cinatra-ai/cinatra-assistant/x2837f-expired-proposal-f76cea0b-cdde-4620-aebb-35af3acac52e
-Reader:      userId=60b6ae95-504a-4a60-b4ee-3c25e6a7ec13  activeOrganizationId=760eb3f8-330e-4d8a-b0e1-d82c2b9c63fe
-Transcript data part: {"viewType": "trigger_schedule_proposal", "schemaVersion": 1, "ref": "iZDYzcxlua2jf5mujhvOTy1-4tYoXFH_\u2026(truncated, 318 chars)"}
+CAPTURE LOG - the expired schedule proposal on the real chat surface (chat_thread host)
+cinatra#2836 / PR #2837. Re-shot at the branch head that carries the lineage-claim fix.
 
-The ref is an opaque signed token. It is truncated in this log on purpose:
-it is a bearer value for this reader's own proposal, and the anchors below
-do not need it in full to be checkable.
+Captured at : 2026-08-21T14:32:20.585Z
+Base        : http://localhost:13838   (lane-private dev server, loopback only)
+Chat path   : /chat/cinatra-ai/cinatra-assistant/x2837f3-expired-proposal-25fd3d2c-ad5d-40b9-bdd6-4e4103b43aa6
+Reader      : userId=2a58f570-2610-4d57-aa4c-ead5ccb4d304  activeOrganizationId=b49fa320-0640-4cf5-81a1-b0565517f02e
+Data part   : {"viewType":"trigger_schedule_proposal","schemaVersion":1,"ref":"<transcript ref, elided>"}
 
-========================================================================
-ANCHORS — read off the card's OWN root immediately before each shot
-========================================================================
+A FILE NAME CARRIES NO AUTHORITY. Immediately before each shot the driver reads the
+card's own attributes off the DOM and counts the capture-record contract's selectors on
+that screen, in the scope the contract counts them in: 'frame' is the frame the picture
+was taken in, 'root' is INSIDE the card's own root and is :scope-inclusive. Both are
+written here and into capture-records.json beside the pictures, so a claim can be
+checked without trusting a name.
 
-AMENDMENT 2026-08-21, after the merge-forward onto main's ratified section-V
-drawing (PR #2866). The rows below are the untouched observation from the
-capture run of 2026-08-19 at the pre-merge head. ONE recorded value no longer
-holds at the merged head, and it is named here rather than rewritten, because
-an observation that is edited afterwards is no longer an observation:
+==============================================================================
+S10__schedule-card__chat_thread__settled
+cell 10 — the expired proposal is PRESENT in the conversation, and says so
+------------------------------------------------------------------------------
+  ANCHORS, read off the card's own root
+    data-lifecycle-card           = "trigger_schedule_proposal"
+    data-lifecycle-card-host      = "chat_thread"
+    data-lifecycle-card-state     = "settled"
+    data-lifecycle-card-phase     = "expired"
+    adjust button present         = true
+    adjust button disabled        = false
+    adjust button label           = "Adjust"
+    data-lifecycle-action-disabled= null
+    card text                     = "Schedule proposalThis proposal expired before it was confirmed.Blog Draft Writer Agent — Every weekday at 09:00Adjust"
+    page url                      = /chat/cinatra-ai/cinatra-assistant/x2837f3-expired-proposal-25fd3d2c-ad5d-40b9-bdd6-4e4103b43aa6
 
-  after-adjust ... data-lifecycle-card-host = "chat_thread"  ->  now ABSENT
+  CONTRACT ASSERTIONS, counted on this screen
+    [frame] 1  [data-conversation-list]
+    [frame] 1  [data-lifecycle-card-host="chat_thread"]
+    [frame] 1  [data-lifecycle-card="trigger_schedule_proposal"]
+    [root ] 1  [data-lifecycle-card-state]
+    [root ] 0  [data-action]
 
-Why. `data-lifecycle-card-host` is the third of the three attributes that MAKE
-an element a lifecycle card ROOT, and main's carriage matrix rules that the S1
-placeholder is not one: it names the kind and a state, declares no host, and
-offers nothing to press. The re-proposed card in the after-adjust row IS that
-placeholder ("Waiting for your decision."), so the shell no longer declares a
-host under it. The two EXPIRED rows are unaffected — the expired reading is an
-owner drawing, and it carries all three attributes exactly as recorded.
+==============================================================================
+S11__schedule-card__chat_thread__pending
+cell 11 — after Adjust, a live proposal in the card's place
+------------------------------------------------------------------------------
+  ANCHORS, read off the card's own root
+    data-lifecycle-card           = "trigger_schedule_proposal"
+    data-lifecycle-card-host      = null
+    data-lifecycle-card-state     = "pending"
+    data-lifecycle-card-phase     = null
+    adjust button present         = false
+    adjust button disabled        = n/a
+    adjust button label           = n/a
+    data-lifecycle-action-disabled= null
+    card text                     = "Schedule proposalWaiting for your decision."
+    page url                      = /chat/cinatra-ai/cinatra-assistant/x2837f3-expired-proposal-25fd3d2c-ad5d-40b9-bdd6-4e4103b43aa6
 
-Cell 11's claim does not rest on this value. Its pictures and its README
-section cite the state, the phase, the absent Adjust and the re-proposed ref,
-and every one of those still reads as recorded. Nothing else in this log
-changes. A re-capture would restate the same three cells with one blank field.
+  CONTRACT ASSERTIONS, counted on this screen
+    [frame] 1  [data-conversation-list]
+    [frame] 0  [data-lifecycle-card-host="chat_thread"]
+    [frame] 1  [data-lifecycle-card="trigger_schedule_proposal"]
+    [root ] 1  [data-lifecycle-card-state]
+    [root ] 0  [data-action]
 
---- before-adjust (expired card on chat_thread)
-    pictures: x2837f-10-chat-thread-expired-*
-    data-lifecycle-card              = "trigger_schedule_proposal"
-    data-lifecycle-card-host         = "chat_thread"
-    data-lifecycle-card-state        = "settled"
-    data-lifecycle-card-phase        = "expired"
-    data-lifecycle-action-disabled   = null
-    adjust button present            = true
-    adjust button disabled           = false
-    card text                        = "Schedule proposalThis proposal expired before it was confirmed.Blog Draft Writer Agent \u2014 Every weekday at 09:00Adjust"
-    page path                        = "/chat/cinatra-ai/cinatra-assistant/x2837f-expired-proposal-f76cea0b-cdde-4620-aebb-35af3acac52e"
+==============================================================================
+S12__schedule-card__chat_thread__settled__after-reload
+cell 12 — reload returns to the transcript's own ref, which reads expired
+------------------------------------------------------------------------------
+  ANCHORS, read off the card's own root
+    data-lifecycle-card           = "trigger_schedule_proposal"
+    data-lifecycle-card-host      = "chat_thread"
+    data-lifecycle-card-state     = "settled"
+    data-lifecycle-card-phase     = "expired"
+    adjust button present         = true
+    adjust button disabled        = false
+    adjust button label           = "Adjust"
+    data-lifecycle-action-disabled= null
+    card text                     = "Schedule proposalThis proposal expired before it was confirmed.Blog Draft Writer Agent — Every weekday at 09:00Adjust"
+    page url                      = /chat/cinatra-ai/cinatra-assistant/x2837f3-expired-proposal-25fd3d2c-ad5d-40b9-bdd6-4e4103b43aa6
 
---- after-adjust (re-proposed card in place)
-    pictures: x2837f-11-chat-thread-after-adjust-*
-    data-lifecycle-card              = "trigger_schedule_proposal"
-    data-lifecycle-card-host         = "chat_thread"
-    data-lifecycle-card-state        = "pending"
-    data-lifecycle-card-phase        = null
-    data-lifecycle-action-disabled   = null
-    adjust button present            = false
-    adjust button disabled           = null
-    card text                        = "Schedule proposalWaiting for your decision."
-    page path                        = "/chat/cinatra-ai/cinatra-assistant/x2837f-expired-proposal-f76cea0b-cdde-4620-aebb-35af3acac52e"
+  CONTRACT ASSERTIONS, counted on this screen
+    [frame] 1  [data-conversation-list]
+    [frame] 1  [data-lifecycle-card-host="chat_thread"]
+    [frame] 1  [data-lifecycle-card="trigger_schedule_proposal"]
+    [root ] 1  [data-lifecycle-card-state]
+    [root ] 0  [data-action]
 
---- after-reload (back to the transcript's own expired ref)
-    pictures: x2837f-12-chat-thread-after-reload-*
-    data-lifecycle-card              = "trigger_schedule_proposal"
-    data-lifecycle-card-host         = "chat_thread"
-    data-lifecycle-card-state        = "settled"
-    data-lifecycle-card-phase        = "expired"
-    data-lifecycle-action-disabled   = null
-    adjust button present            = true
-    adjust button disabled           = false
-    card text                        = "Schedule proposalThis proposal expired before it was confirmed.Blog Draft Writer Agent \u2014 Every weekday at 09:00Adjust"
-    page path                        = "/chat/cinatra-ai/cinatra-assistant/x2837f-expired-proposal-f76cea0b-cdde-4620-aebb-35af3acac52e"
+==============================================================================
+THE WIRE - every POST /api/lifecycle-views/resolve the page itself made
+==============================================================================
+resolve #1  HTTP 200
+  request.ref       = TRANSCRIPT-REF
+  response.kind     = trigger_schedule_proposal
+  state.state       = "settled"
+  body.phase        = "expired"
+  body.agentName    = "Blog Draft Writer Agent"
+  body.scheduleCopy = "Every weekday at 09:00"
 
-========================================================================
-WIRE — every POST /api/lifecycle-views/resolve the PAGE itself made
-========================================================================
+resolve #2  HTTP 200
+  request.ref       = RE-PROPOSED-REF
+  response.kind     = trigger_schedule_proposal
+  state.state       = "pending"
+  state.canDecide   = true
+  body.phase        = "proposal"
+  body.agentName    = "Blog Draft Writer Agent"
 
-  resolve #1  HTTP 200
-    request.ref  = TRANSCRIPT-REF  (iZDYzcxlua2jf5mujhvOTy1-…)
-    state.state  = "settled"
-    view.phase   = "expired"
-    view.agentName    = "Blog Draft Writer Agent"
-    view.scheduleCopy = "Every weekday at 09:00"
+resolve #3  HTTP 200
+  request.ref       = TRANSCRIPT-REF
+  response.kind     = trigger_schedule_proposal
+  state.state       = "settled"
+  body.phase        = "expired"
+  body.agentName    = "Blog Draft Writer Agent"
+  body.scheduleCopy = "Every weekday at 09:00"
 
-  resolve #2  HTTP 200
-    request.ref  = RE-PROPOSED-REF  (uiFr9hVRkgLw8fgA16gE2qTq…)
-    state.state  = "pending"
-    view.phase   = "proposal"
-    view.agentName    = "Blog Draft Writer Agent"
-
-  resolve #3  HTTP 200
-    request.ref  = TRANSCRIPT-REF  (iZDYzcxlua2jf5mujhvOTy1-…)
-    state.state  = "settled"
-    view.phase   = "expired"
-    view.agentName    = "Blog Draft Writer Agent"
-    view.scheduleCopy = "Every weekday at 09:00"
-
-========================================================================
-LINEAGE — the replacement Adjust minted, read back with the real crypto
-========================================================================
-
-  original    status=expired  nonce=7siL7dJXBBcCNUg3pP6cAw
-              consumeKey=d3c8147a6bef2290170306218b6d2d46de539a5631db7edd6a17f851322468ac
-              expiresAt=1787146768  templateId=ffb387cb-bd62-4115-a279-8b1efaea76ed
-  replacement status=live     nonce=7siL7dJXBBcCNUg3pP6cAw
-              consumeKey=d3c8147a6bef2290170306218b6d2d46de539a5631db7edd6a17f851322468ac
-              expiresAt=1787148727  templateId=ffb387cb-bd62-4115-a279-8b1efaea76ed
-
+==============================================================================
+THE LINEAGE, on these two REAL tokens and the row the press actually wrote
+==============================================================================
+Read back with the shipped crypto, bound to the reader above:
+  original     status=expired  nonce=97NJp8bOVJAB_fjA8YnDkQ
+  replacement  status=live     nonce=97NJp8bOVJAB_fjA8YnDkQ
+  consumeKey   33502a11bf046a51d4744e9a18174fb8bb4402560e6d211d69fbdfde1f55a8f6
   sameToken      = false   (a genuinely different token, on its own fresh window)
   sameConsumeKey = true    (ONE consume identity for the whole lineage)
 
+And the ratchet row the press wrote, read straight out of the lane database:
+  SELECT consume_key, left(latest_token,24), expires_at > now(), org_id, template_id, reproposed_by
+    FROM cinatra.trigger_schedule_proposal_lineage
+  -> exactly ONE row
+     consume_key   = 33502a11bf046a51d4744e9a18174fb8bb4402560e6d211d69fbdfde1f55a8f6
+     latest_token  = gtqLcXeoSZSOVmn6EZjuFNRp...  (the RE-PROPOSED ref, not the transcript's)
+     live          = t
+     reproposed_by = the reader above
+
+One live token per lineage, named by the ratchet, on the real surface.

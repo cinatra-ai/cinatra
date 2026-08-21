@@ -1,0 +1,160 @@
+{
+ "$comment": [
+  "CAPTURE RECORDS for cinatra#2836 (PR #2837), in the shape",
+  "scripts/ci/lib/capture-record-contract.mjs validates: the cell's claim, the host it declares,",
+  "the FINAL url, the screenshot with its sha256 as it sits on disk, and the anchors that were",
+  "counted on that screen with the scope they were counted in.",
+  "",
+  "RE-SHOT AT THIS HEAD. The previous round's pictures were taken before the merge-forward and",
+  "before the lineage-claim fix, and one recorded anchor had gone false at the newer head. These",
+  "were driven again, on a fresh lane stack, a fresh database, a fresh reader, a fresh",
+  "organization, a fresh thread and freshly minted tokens.",
+  "",
+  "THE CARD CROPS HASH IDENTICALLY TO THE 19 AUG ONES, and that is a result rather than a reuse.",
+  "The card crop is deterministic - same reading, same agent name, same schedule copy, same",
+  "control - so a truthful re-shoot of an unchanged drawing produces the same bytes. The",
+  "full-page shots beside them do NOT match, because they carry this run's own thread id in the",
+  "breadcrumb and the title bar; those are the frames that show the run is new.",
+  "",
+  "S10 AND S12 ARE REGISTERED IN scripts/ci/chat-hitl-capture-index.json, the file the gate",
+  "reads. S11 IS NOT, and its record carries the contract's own two findings verbatim: the",
+  "re-proposed reading is the S1 placeholder, which by main's carriage matrix declares no host",
+  "and offers nothing to press, so neither chat_thread/pending requirement can be met by the",
+  "shipped drawing. An unindexed screenshot counts as zero, and this one is counted as zero."
+ ],
+ "recorder": "cinatra-lifecycle-capture-recorder@1",
+ "records": [
+  {
+   "cell": "S10__schedule-card__chat_thread__settled",
+   "declaredHost": "chat_thread",
+   "declaredKind": "trigger_schedule_proposal",
+   "declaredState": "decided",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/x2837f3-expired-proposal-25fd3d2c-ad5d-40b9-bdd6-4e4103b43aa6",
+   "screenshot": "evidence/2837-expired-proposal-visual/captures/S10__schedule-card__chat_thread__settled.png",
+   "sha256": "217e43b6e5c7613e6596bebb4c847f6fc06bb95f25a7f4d92c11fb5ed54ff1d1",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-21T14:32:34.384Z",
+   "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a lane-private Postgres and Redis on loopback-only ports, own compose-free containers, own queue prefix; no model credential on this host and no model call in the path.",
+   "pageScreenshot": "evidence/2837-expired-proposal-visual/captures/S10__schedule-card__chat_thread__settled__page.png",
+   "pageSha256": "f107b47bd8af2876c842ba3b4ae03ea49cc8db742c64f83ae1ff961153f19b16",
+   "contractVerdict": "CONFORMANT - scripts/ci/lib/capture-record-contract.mjs returns zero findings for this record.",
+   "note": "THE DEFECT CLOSED. This ref used to resolve `absent`, and `absent` draws no card DOM at all, so the proposal vanished out of the reader's own transcript. The card is present, it says the proposal expired, and Adjust is drawn and enabled. The contract's decision-control forbiddance for a settled reading is met honestly rather than by luck: the Adjust control carries `data-lifecycle-action`, not `data-action`."
+  },
+  {
+   "cell": "S11__schedule-card__chat_thread__pending",
+   "declaredHost": "chat_thread",
+   "declaredKind": "trigger_schedule_proposal",
+   "declaredState": "pending",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/x2837f3-expired-proposal-25fd3d2c-ad5d-40b9-bdd6-4e4103b43aa6",
+   "screenshot": "evidence/2837-expired-proposal-visual/captures/S11__schedule-card__chat_thread__pending.png",
+   "sha256": "dacb7f5a597f9acc2259c2949cb944c7e0f38056ff5cd65b8ebe310aef40d59d",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-21T14:32:35.810Z",
+   "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a lane-private Postgres and Redis on loopback-only ports, own compose-free containers, own queue prefix; no model credential on this host and no model call in the path.",
+   "pageScreenshot": "evidence/2837-expired-proposal-visual/captures/S11__schedule-card__chat_thread__pending__page.png",
+   "pageSha256": "3ca1d086b9e8e5873f50268810d3fbf8a3ca68d998e37982625f7cafa747fe91",
+   "contractVerdict": [
+    "record/anchor-count-zero: \"[data-lifecycle-card-host=\"chat_thread\"]\" (frame-scoped) was observed 0 times on this screen",
+    "record/anchor-count-zero: \"[data-action]\" (root-scoped) was observed 0 times on this screen"
+   ],
+   "note": "NOT REGISTERED IN THE CANONICAL INDEX, and the contract's own two findings are recorded above rather than argued away. The re-proposed card is the S1 PLACEHOLDER: main's carriage matrix rules it is not a lifecycle-card root, so it names the kind and a state, declares NO host, and offers nothing to press. That makes both of the contract's chat_thread/pending requirements unmeetable BY THE SHIPPED DRAWING - `[data-lifecycle-card-host=\"chat_thread\"]` is absent because the placeholder declares no host, and `[data-action]` is absent because the placeholder has no controls. Registering it would manufacture a finding nobody can clear by re-photographing; the drawn SVI card that would satisfy both belongs to the stopped card-family epic's S9d slice, which this change does not draw. The picture and the counts are real; the CLASS is what does not describe this reading."
+  },
+  {
+   "cell": "S12__schedule-card__chat_thread__settled__after-reload",
+   "declaredHost": "chat_thread",
+   "declaredKind": "trigger_schedule_proposal",
+   "declaredState": "decided",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/x2837f3-expired-proposal-25fd3d2c-ad5d-40b9-bdd6-4e4103b43aa6",
+   "screenshot": "evidence/2837-expired-proposal-visual/captures/S12__schedule-card__chat_thread__settled__after-reload.png",
+   "sha256": "607be2149648ebe8b9bc8938f9749464b79cc8566399f30b48b0103ad8049ec2",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action]",
+     "scope": "root",
+     "count": 0
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "recordedAt": "2026-08-21T14:32:38.780Z",
+   "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a lane-private Postgres and Redis on loopback-only ports, own compose-free containers, own queue prefix; no model credential on this host and no model call in the path.",
+   "pageScreenshot": "evidence/2837-expired-proposal-visual/captures/S12__schedule-card__chat_thread__settled__after-reload__page.png",
+   "pageSha256": "36a298d493ffa10caaeaa7aad618b5b10ac50ee2cd0c935fde94e7bc5475c0de",
+   "contractVerdict": "CONFORMANT - scripts/ci/lib/capture-record-contract.mjs returns zero findings for this record.",
+   "note": "PROPOSE-PURITY ON THE REAL SURFACE. A proposal has no server record until Confirm, so the re-proposal is local to the screen and a reload returns to the transcript's own ref, which reads expired permanently and never blank."
+  }
+ ]
+}
