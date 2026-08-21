@@ -1995,7 +1995,7 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     expect(flow).toContain("messages: truncated");
     expect(flow).toContain("removedMessageIds }");
     expect(flow).toContain("{ removedRunIds }");
-    // NO OTHER /chat SAVE MENTIONS IT. If an ordinary whole-transcript save ever
+    // NO OTHER /chat MODULE NAMES IT. If an ordinary whole-transcript save ever
     // carried this field, every stale tab would be asserting removals again and
     // the defect would be back with a different first line. Comments are stripped
     // first: the save chain DOCUMENTS the intent it exists to order, and prose
@@ -2005,14 +2005,24 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
         .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
         .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
     //
-    // THE CHECK IS INVERTED AND WHOLE-PACKAGE (codex rounds 3-4, F2). A LIST OF
+    // THE CHECK IS INVERTED AND WHOLE-PACKAGE (codex rounds 3-5, F2). A LIST OF
     // FILES TO CHECK states a surface property it does not have: a new writer in
     // an unlisted module — or in a subdirectory, or reaching the save through an
-    // aliased import or a wrapper — passes it untouched. So the package is walked
-    // RECURSIVELY, every non-test module is read with its comments stripped, and
-    // the set of modules that MENTION either field must equal the allow-list
-    // below. A new carrier anywhere in the package fails this arm by existing,
-    // whatever it imports and whatever it calls the save.
+    // aliased import — passes it untouched. So the package is walked RECURSIVELY,
+    // every non-test module is read with its comments stripped, and the set of
+    // modules that MENTION either field must equal the allow-list below. A new
+    // module that names a field fails this arm by existing.
+    //
+    // AND THAT IS ALL IT IS: A LEXICAL TRIPWIRE OVER THE WHOLE PACKAGE, not a
+    // dataflow proof. No text scan can be one. A future saver could forward an
+    // object built by an allow-listed module and never name a field itself, and
+    // this arm would not see it. What actually BOUNDS the damage is server-side
+    // and is driven for real on a database in this file: the tombstone authorizes
+    // itself against the thread's ownership, it can only ever narrow what the
+    // reconcile removes, and the stale-tab arm proves an ordinary save asserting
+    // nothing supersedes nothing. This arm's job is to make a NEW carrier a
+    // deliberate act — an allow-list edit, with a reviewer on it — rather than a
+    // line nobody notices.
     const chatSrc = path.join(process.cwd(), "packages/chat/src");
     const walk = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
