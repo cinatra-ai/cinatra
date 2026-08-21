@@ -740,6 +740,19 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     };
     const truncated = [...prior, editedMessage];
     setMessages(truncated);
+    // THE TRUNCATION INTENT (cinatra#2823 S9j, review round 4, F1). This is the
+    // ONE save in /chat that truly truncates — the user edited `messageId`, so it
+    // and everything below it is deliberately gone. Saying so EXPLICITLY is what
+    // lets the server tombstone the removed turns' run-bound rows (the rows the
+    // mirror reconcile cannot touch, and which the reload would otherwise fold
+    // back in above the edited prompt).
+    //
+    // It has to be carried rather than inferred: every other save posts the whole
+    // transcript too, and one from a tab whose transcript PREDATES a turn omits
+    // that turn without ever having had it. "Absent from the payload" cannot tell
+    // those apart; only the writer knows which it is, and only here is it a
+    // removal.
+    const removedMessageIds = messages.slice(idx).map((m) => m.id);
 
     // Resolve threadId — edits always happen in an existing thread.
     const threadId = activeThreadId ?? activeThreadIdRef.current;
@@ -752,7 +765,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       // createdAt (covers the body loading before the summary list), then now
       // for a genuinely new thread (#283).
       const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-      saveChatThreadViaFetch({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId } as Record<string, unknown> & { id: string })
+      saveChatThreadViaFetch({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId, removedMessageIds } as Record<string, unknown> & { id: string })
         .catch((err) => console.error("[chat] saveChatThread failed (edit):", err));
     }
 

@@ -28,6 +28,7 @@ import {
   resolveAssistantMirrorOrgId,
   buildAssistantThreadMirrorUpsertQuery,
   buildAssistantTurnMirrorReconcileQueries,
+  extractRemovedMessageIdsFromThread,
   buildAssistantPauseStateReconcileQueries,
   buildAssistantThreadMirrorQueries,
   buildAssistantThreadMirrorDeleteQuery,
@@ -273,7 +274,7 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
   ];
 
   it("emits reconcile DELETE scoped to the mirror namespace, then one INSERT", () => {
-    const [, del, ins] = buildAssistantTurnMirrorReconcileQueries({
+    const [del, ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
@@ -299,7 +300,7 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
   });
 
   it("run_id is NULL (never fabricated), status 'completed', ordinal projected", () => {
-    const [, , ins] = buildAssistantTurnMirrorReconcileQueries({
+    const [, ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
@@ -308,7 +309,7 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
   });
 
   it("writes durable content + ordinal (PR1/PR2) and refreshes them on conflict", () => {
-    const [, , ins] = buildAssistantTurnMirrorReconcileQueries({
+    const [, ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
@@ -323,37 +324,63 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     }
   });
 
-  it("an empty message list emits ONLY the supersede + reconcile delete (full truncation)", () => {
+  it("an empty message list emits ONLY the reconcile delete (full truncation)", () => {
     const queries = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns: [],
     });
-    expect(queries).toHaveLength(2);
-    // Both are keyed on the same (thread, kept-ids) pair, which is what makes
-    // the tombstone and the truncation one decision rather than two.
+    expect(queries).toHaveLength(1);
     expect(queries[0].values).toEqual(["t1", []]);
-    expect(queries[1].values).toEqual(["t1", []]);
   });
 
-  // ── the supersede half (cinatra#2823 S9j, review round 3, blocker 2) ────────
+  // ── the supersede half (cinatra#2823 S9j, review round 3 blocker 2; re-scoped
+  //    onto an EXPLICIT truncation intent in round 4, F1) ──────────────────────
 
-  it("SUPERSEDES the run-bound turns the truncation removes, BEFORE the delete", () => {
+  it("a save that ASSERTS NOTHING emits NO supersede at all", () => {
+    // Round 4, F1 — the whole of the first fix. "The row is in the database and
+    // absent from this payload" is not an assertion of removal: a tab whose
+    // transcript predates a turn omits it without ever having had it, and its
+    // ordinary save would otherwise have tombstoned that turn permanently.
+    for (const removedMessageIds of [undefined, null, []]) {
+      const queries = buildAssistantTurnMirrorReconcileQueries({
+        schemaName: SCHEMA,
+        threadId: "t1",
+        turns,
+        removedMessageIds,
+      });
+      expect(queries).toHaveLength(2); // delete + insert, and nothing else
+      for (const q of queries) {
+        expect(q.text).not.toContain("superseded_at = now()");
+      }
+    }
+  });
+
+  it("SUPERSEDES the run-bound turns the save ASSERTS it removed, BEFORE the delete", () => {
     const [supersede, del] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
+      removedMessageIds: ["m9"],
     });
     // Ordered FIRST, because it reads the very rows the DELETE is about to take.
     expect(supersede.text).toContain(`UPDATE "${SCHEMA}"."assistant_turns" t`);
     expect(supersede.text).toContain("SET superseded_at = now()");
     expect(del.text).toContain(`DELETE FROM "${SCHEMA}"."assistant_turns"`);
-    // Its `removed` set is EXACTLY the DELETE's predicate — the rows this save
-    // takes away, and nothing else. A save that removes nothing supersedes
-    // nothing, which is what keeps a LOST save repairable.
+    // Its `removed` set is the DELETE's predicate INTERSECTED with the assertion:
+    // a row is tombstoned only when the writer both says it removed the message
+    // AND no longer carries it. The intent can only ever NARROW the reconcile.
     expect(supersede.text).toContain(`id LIKE '${LEGACY_MIRROR_TURN_ID_PREFIX}%'`);
     expect(supersede.text).toContain("NOT (id = ANY($2::text[]))");
-    expect(supersede.values).toEqual(["t1", ["legacy:2:t1:m1", "legacy:2:t1:m2"]]);
+    expect(supersede.text).toContain("AND id = ANY($3::text[])");
+    // The asserted ids are mapped into THIS thread's mirror namespace — the only
+    // namespace a legacy write may ever touch, so an assertion can never name a
+    // runtime-minted row.
+    expect(supersede.values).toEqual([
+      "t1",
+      ["legacy:2:t1:m1", "legacy:2:t1:m2"],
+      ["legacy:2:t1:m9"],
+    ]);
   });
 
   it("touches ONLY run-bound, un-superseded, durable-format rows", () => {
@@ -361,6 +388,7 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
+      removedMessageIds: ["m9"],
     });
     expect(supersede.text).toContain("t.run_id IS NOT NULL");
     expect(supersede.text).toContain("t.superseded_at IS NULL");
@@ -375,6 +403,7 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
+      removedMessageIds: ["m9"],
     });
     // The removed MIRROR rows: the ordinary trace, the Slack-mode layout that
     // omits it, turn-level cards, and cards folded onto their producing slot.
@@ -386,6 +415,31 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     // (`type`, not `kind`).
     expect(supersede.text).toContain("dp->>'type' = 'tool_call'");
     expect(supersede.text).toContain("t.content->'dataParts'");
+  });
+
+});
+
+describe("extractRemovedMessageIdsFromThread", () => {
+  // The truncation intent's own reader (round 4, F1). The payload is arbitrary
+  // JSON from many writers, so absence and garbage must both mean "asserts
+  // nothing" rather than failing the user's save.
+  it("null when the field is absent or not an array — the ordinary save", () => {
+    expect(extractRemovedMessageIdsFromThread({ id: "t1" })).toBeNull();
+    expect(extractRemovedMessageIdsFromThread({ removedMessageIds: "m1" })).toBeNull();
+    expect(extractRemovedMessageIdsFromThread({ removedMessageIds: 7 })).toBeNull();
+    expect(extractRemovedMessageIdsFromThread({ removedMessageIds: null })).toBeNull();
+  });
+
+  it("keeps the asserted ids, drops non-strings and duplicates", () => {
+    expect(
+      extractRemovedMessageIdsFromThread({
+        removedMessageIds: ["m1", "", "m2", 3, null, "m1", { id: "m4" }],
+      }),
+    ).toEqual(["m1", "m2"]);
+  });
+
+  it("an empty assertion is still an assertion of nothing", () => {
+    expect(extractRemovedMessageIdsFromThread({ removedMessageIds: [] })).toEqual([]);
   });
 });
 

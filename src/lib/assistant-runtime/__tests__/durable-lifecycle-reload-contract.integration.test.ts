@@ -485,6 +485,13 @@ function saveAStaleTranscriptCarryingALaterTurn(args: {
 function saveWholeTranscript(args: {
   threadId: string;
   messages: Array<Record<string, unknown>>;
+  /**
+   * The save's EXPLICIT truncation assertion (cinatra#2823 review round 4, F1):
+   * the message ids this writer is saying the user removed. Omitted by every
+   * ordinary save — a whole-transcript save asserts nothing about what it does
+   * not carry, because it may simply never have had it.
+   */
+  removedMessageIds?: string[];
 }): void {
   const now = new Date().toISOString();
   runPostgresQueriesSync({
@@ -499,10 +506,55 @@ function saveWholeTranscript(args: {
         createdAt: now,
         updatedAt: now,
         ownerUserId: OWNER_ID,
+        ...(args.removedMessageIds ? { removedMessageIds: args.removedMessageIds } : {}),
       },
       explicitMirrorOrgId: ORG_ID,
     }),
   });
+}
+
+/**
+ * The assistant message a client's own whole-transcript save carries for a turn
+ * it watched stream: the ordered trace's `tool_call` step and the turn's text,
+ * and NO render state. That is the honest shape — the card the sink minted lives
+ * in the run-bound durable row, and putting it on the spine by hand here would
+ * make the reload arms pass without the store having kept anything.
+ */
+function savedAssistantMessageFor(drive: SinkDrive, carriage: Carriage): Record<string, unknown> {
+  return {
+    id: `a-${randomUUID()}`,
+    role: "assistant" as const,
+    content: drive.durable.content,
+    parts: [
+      {
+        kind: "tool_call",
+        id: drive.toolCallId,
+        name: carriage.toolName,
+        status: "completed",
+      },
+    ],
+  };
+}
+
+/**
+ * A SECOND run-bound turn on a thread that already exists — the stream route's
+ * own persistence (`appendAssistantTurn` + `updateAssistantTurn`) and nothing
+ * else. `persistThroughTheRealStore` cannot be called twice for this: its mirror
+ * write carries a one-message transcript, so the second call would reconcile the
+ * first turn's spine row away.
+ */
+function persistAnotherRunBoundTurn(args: {
+  threadId: string;
+  runId: string;
+  durable: AgUiTurnDurableContent;
+}): void {
+  const turn = appendAssistantTurn({
+    threadId: args.threadId,
+    runId: args.runId,
+    role: "assistant",
+    status: "running",
+  });
+  updateAssistantTurn(turn.id, { status: "completed", content: args.durable });
 }
 
 /**
@@ -934,7 +986,13 @@ describe("edit-and-resend does not resurrect the turns the user removed", () => 
     // fresh stamp — later than the run-bound turn's, which is why the survivor
     // used to reappear ABOVE it.
     const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "actually, never mind" };
-    saveWholeTranscript({ threadId, messages: [editedPrompt] });
+    // ...and it says so: the edit-and-resend path carries the ids it dropped
+    // (round 4, F1), which is what distinguishes this from a stale tab's save.
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      removedMessageIds: [userMessage.id, assistantMessage.id],
+    });
 
     const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
     expect(
@@ -997,6 +1055,62 @@ describe("edit-and-resend does not resurrect the turns the user removed", () => 
       ]);
     });
   });
+});
+
+describe("a save can only tombstone a turn it ASSERTS the removal of", () => {
+  // cinatra#2823 review round 4 — the two holes in round 3's tombstone.
+  //
+  // Round 3 read "the mirror row is in the database and absent from THIS payload"
+  // as the writer asserting a removal. It is not one when the writer NEVER HAD
+  // the row, and it reaches turns the writer never touched when the identities of
+  // every removed row are pooled thread-wide. Both arms below are the shipped
+  // mirror write, on a real database, through the same reconcile production runs.
+
+  it("a STALE TAB's save cannot tombstone a turn it never observed", async () => {
+    // F1. Tab B loaded before the turn existed; Tab A saved it. Tab B then saves
+    // its own later message on a transcript that never had the turn in it. The
+    // reconcile DELETE drops the mirror row all the same — that DELETE is keyed
+    // on the payload, not on what this writer once knew — and round 3 read the
+    // deletion as an assertion of removal. It is silence, and silence is exactly
+    // the dropped save the fold-in exists to repair.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-staletab-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: `Please handle the ${carriage.kind} case.`,
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    // TAB A's save LANDS, carrying the turn: the mirror row for it now exists.
+    saveWholeTranscript({
+      threadId,
+      messages: [userMessage, savedAssistantMessageFor(drive, carriage)],
+    });
+    expect(reloadWithNoRedisAndNoClientMemory(threadId).map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+
+    // TAB B — stale, and ASSERTING NOTHING. No edit happened; this is an ordinary
+    // whole-transcript save from a realm whose transcript predates the turn.
+    const fromTheStaleTab = {
+      id: `u-${randomUUID()}`,
+      role: "user" as const,
+      content: "meanwhile, in the other tab",
+    };
+    saveWholeTranscript({ threadId, messages: [userMessage, fromTheStaleTab] });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(
+      reloaded.map((m) => m.role),
+      "a stale tab permanently tombstoned a turn it never observed — the repair this whole leg exists for is now blocked, and the block is forever",
+    ).toEqual(["user", "assistant", "user"]);
+    expect(viewsCarriedBy(reloaded[1]).atSlot(drive.toolCallId)).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+    ]);
+  });
+
 });
 
 describe("a reloaded card lands at its slot, and a pre-slot row still lands at turn level", () => {
@@ -1168,6 +1282,36 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     // ...and still runs it in ONE transaction, which is the other half of what
     // `persistThroughTheRealStore` reproduces.
     expect(body).toContain("transaction: true");
+  });
+
+  it("edit-and-resend is the ONLY /chat save that asserts a truncation", () => {
+    // The other half of the round-4 F1 seam, and the same kind of claim: the
+    // server now tombstones ONLY under an explicit `removedMessageIds`, so the
+    // deliberate edit keeps working only while the edit path keeps carrying it —
+    // and a stale tab stays harmless only while no OTHER save carries it. Both
+    // halves are source-level for the reason the arm above is: `chat-page.tsx` is
+    // the whole /chat surface, and mounting it here to drive one handler would
+    // pull a graph this tier has no business booting.
+    const source = readFileSync(
+      path.join(process.cwd(), "packages/chat/src/chat-page.tsx"),
+      "utf8",
+    );
+    const fnStart = source.indexOf("async function editAndResend(");
+    expect(fnStart).toBeGreaterThan(-1);
+    const nextFn = source.indexOf("\n  async function ", fnStart + 1);
+    const body = source.slice(fnStart, nextFn === -1 ? undefined : nextFn);
+    // It derives the assertion from the truncation it just performed — the edited
+    // message and every successor — rather than restating a list by hand.
+    expect(body).toContain("const removedMessageIds = messages.slice(idx).map((m) => m.id);");
+    // ...and posts it with the truncated transcript, in the same save.
+    expect(body).toContain("messages: truncated");
+    expect(body).toContain("removedMessageIds }");
+    // NO OTHER SAVE IN THE FILE MENTIONS IT. If an ordinary whole-transcript save
+    // ever carried this field, every stale tab would be asserting removals again
+    // and F1 would be back with a different first line.
+    const everywhere = source.split("removedMessageIds").length - 1;
+    const inEditAndResend = body.split("removedMessageIds").length - 1;
+    expect(everywhere).toBe(inEditAndResend);
   });
 });
 

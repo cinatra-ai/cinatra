@@ -484,8 +484,41 @@ function jsonbArrayOrEmpty(expr: string): string {
 }
 
 /**
- * The SQL that TOMBSTONES the run-bound turns a truncating save removes
- * (cinatra#2823 S9j, review round 3, blocker 2).
+ * The message ids a save EXPLICITLY ASSERTS it removed (cinatra#2823 S9j, review
+ * round 4, F1) — the truncation intent, carried by the one caller that truly
+ * truncates.
+ *
+ * ABSENT (`null`) IS THE ORDINARY STATE and it means the save asserts NOTHING.
+ * A whole-transcript save is silent about every message it does not carry,
+ * because it may simply never have had it: the same thread open in a second tab
+ * saves a transcript that predates a turn, and the reconcile DELETE drops that
+ * turn's mirror row exactly as a real truncation would. The DELETE is keyed on
+ * the payload; only this field is keyed on the writer's own intent.
+ *
+ * Defensive, like every other reader here: the payload is arbitrary JSON from
+ * many writers, so a non-array field is "no assertion" and a non-string entry is
+ * dropped rather than failing the user's save. An empty result asserts nothing
+ * and supersedes nothing.
+ */
+export function extractRemovedMessageIdsFromThread(
+  thread: Record<string, unknown>,
+): string[] | null {
+  const raw = thread.removedMessageIds;
+  if (!Array.isArray(raw)) return null;
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    if (typeof value !== "string" || value.length === 0) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    ids.push(value);
+  }
+  return ids;
+}
+
+/**
+ * The SQL that TOMBSTONES the run-bound turns a truncating save ASSERTS it
+ * removed (cinatra#2823 S9j, review round 3 blocker 2; re-scoped in round 4).
  *
  * THE DEFECT. The reconcile DELETE below is scoped `id LIKE 'legacy:%'` so a
  * legacy write can never delete a runtime-minted row — correct, and it left an
@@ -498,17 +531,30 @@ function jsonbArrayOrEmpty(expr: string): string {
  * THE SEPARATION, STATED HONESTLY. Server time cannot tell a lost save from a
  * deliberate truncation, and neither can "the turn is absent from the payload" —
  * a lost save looks exactly like that, and repairing it is what this whole leg is
- * for. What CAN tell them apart is whether this save REMOVED something that was
- * showing the turn:
+ * for. Round 3 drew the line at "the row was in the database and this payload
+ * dropped it", reasoning that a save DELETING a durable message is asserting its
+ * removal.
  *
- *   * a save that DELETES a durable message is ASSERTING its removal. It had the
- *     row, it no longer carries it, and the removal is a state transition the
- *     server itself recorded — not a claim about a message the client never had.
- *   * a save that simply never carried the turn is SILENT about it, and silence
- *     is the dropped save the fold-in repairs.
+ * ROUND 4 PUNCTURED THAT: the DELETE is keyed on the PAYLOAD, not on what this
+ * writer ever knew. A second tab loaded before turn X existed saves its own stale
+ * transcript, the reconcile drops X's mirror row because the payload omits it,
+ * and X was tombstoned by a writer that NEVER OBSERVED IT — permanently blocking
+ * the very repair this leg exists for, from a plain save with no edit in it.
  *
- * That is the same discipline the fold-in's own refusals follow (a side that is
- * merely silent contradicts nothing) applied to the write side.
+ * SO THE ASSERTION IS NOW EXPLICIT, and it is the only thing that tombstones. The
+ * edit-and-resend path is the one caller that truly truncates: it knows the user
+ * edited message M and dropped its successors, and it now CARRIES that intent
+ * (`removedMessageIds`, `packages/chat/src/chat-page.tsx`). A plain full-payload
+ * save — from any tab, stale or fresh — asserts nothing and supersedes nothing.
+ * `removedIds` is that assertion, already narrowed to this thread's mirror
+ * namespace, and it is INTERSECTED with the payload's own removals below: a row
+ * can be tombstoned only when the writer BOTH asserts it removed the message AND
+ * no longer carries it. The intent can only ever narrow what the reconcile
+ * removes, never widen it.
+ *
+ * The reach of a false assertion is the writer's OWN thread and its worst outcome
+ * is that writer losing the repair of its own turn — the same self-harm boundary
+ * `findCoveringSpineIndex` states for the spine it reads.
  *
  * HOW A REMOVED MIRROR ROW IS LINKED TO A RUN-BOUND ONE. The two writers share no
  * key — the mirror row's id is built from the CLIENT's message id and the
@@ -517,8 +563,10 @@ function jsonbArrayOrEmpty(expr: string): string {
  * matched to the durable row's own: the tool-call ids (`parts[].id` in the
  * ordinary layout, `thoughtGroups[].toolCalls[].id` in Slack mode) and the
  * lifecycle cards' `viewType|ref` (turn-level `dataParts`, or folded onto a
- * `tool_call` part since S9i). One identity discipline, the same one
- * `claimsDurableTurn` reads on the reload side.
+ * `tool_call` part since S9i).
+ *
+ * One identity discipline, the same one `claimsDurableTurn` reads on the reload
+ * side.
  *
  * ORDERED BEFORE THE DELETE, in the SAME transaction the whole mirror write runs
  * in, so it sees the rows that are about to go and cannot half-apply: the
@@ -528,6 +576,8 @@ function buildSupersedeRunBoundTurnsQuery(args: {
   schema: string;
   threadId: string;
   keptIds: string[];
+  /** The asserted removals, as this thread's mirror row ids. Never empty. */
+  removedIds: string[];
 }): { text: string; values: unknown[] } {
   const { schema } = args;
   const parts = jsonbArrayOrEmpty("r.content->'parts'");
@@ -540,6 +590,7 @@ function buildSupersedeRunBoundTurnsQuery(args: {
    WHERE thread_id = $1
      AND id LIKE '${LEGACY_MIRROR_TURN_ID_PREFIX}%'
      AND NOT (id = ANY($2::text[]))
+     AND id = ANY($3::text[])
      AND content IS NOT NULL
 ),
 removed_identity AS (
@@ -586,16 +637,19 @@ UPDATE "${schema}"."assistant_turns" t
           AND ('view:' || (dd->>'viewType') || '|' || (dd->>'ref')) IN (SELECT token FROM removed_identity)
      )
    )`,
-    values: [args.threadId, args.keptIds],
+    values: [args.threadId, args.keptIds, args.removedIds],
   };
 }
 
 /**
  * Build the assistant_turns mirror reconcile queries for one thread write:
- *   0. SUPERSEDE the run-bound turns the truncation below is about to remove —
- *      the rows the DELETE cannot touch and the reload would otherwise fold back
- *      in (`buildSupersedeRunBoundTurnsQuery`). Ordered FIRST because it reads
- *      the rows the DELETE removes.
+ *   0. SUPERSEDE the run-bound turns this save ASSERTS it removed — the rows the
+ *      DELETE cannot touch and the reload would otherwise fold back in
+ *      (`buildSupersedeRunBoundTurnsQuery`). Ordered FIRST because it reads the
+ *      rows the DELETE removes. EMITTED ONLY when the caller carried an explicit
+ *      truncation intent (`removedMessageIds`): an ordinary whole-transcript save
+ *      asserts nothing about what it does not carry, so it emits no supersede at
+ *      all and this is the [delete] / [delete, insert] pair it always was.
  *   1. DELETE mirror-namespace rows for messages no longer in the payload
  *      (edit/regenerate truncation). Scoped by `id LIKE 'legacy:%'` so a
  *      legacy write can NEVER delete a runtime-minted turn row.
@@ -606,17 +660,37 @@ UPDATE "${schema}"."assistant_turns" t
  *      re-written message (edit/regenerate reusing the same id) refreshes its
  *      durable content; the identity metadata (role/created_at/attribution) is
  *      immutable and left as first inserted.
- * Returns [supersede, delete] when there are no rows, else [supersede, delete, insert].
+ * Returns [delete] / [delete, insert], with the supersede PREPENDED when — and
+ * only when — the save carried an explicit truncation intent.
  */
 export function buildAssistantTurnMirrorReconcileQueries(args: {
   schemaName: string;
   threadId: string;
   turns: AssistantTurnMirrorRow[];
+  /**
+   * The message ids this save ASSERTS it removed (cinatra#2823 round 4, F1), or
+   * null when it asserts nothing — which is every save but an edit-and-resend.
+   * Mapped here into this thread's mirror namespace, the only namespace a legacy
+   * write may ever touch.
+   */
+  removedMessageIds?: string[] | null;
 }): Array<{ text: string; values: unknown[] }> {
   const schema = args.schemaName.replaceAll('"', '""');
   const ids = args.turns.map((t) => t.id);
+  const assertedRemovedIds = (args.removedMessageIds ?? []).map((messageId) =>
+    buildLegacyMirrorTurnId(args.threadId, messageId),
+  );
   const queries: Array<{ text: string; values: unknown[] }> = [
-    buildSupersedeRunBoundTurnsQuery({ schema, threadId: args.threadId, keptIds: ids }),
+    ...(assertedRemovedIds.length > 0
+      ? [
+          buildSupersedeRunBoundTurnsQuery({
+            schema,
+            threadId: args.threadId,
+            keptIds: ids,
+            removedIds: assertedRemovedIds,
+          }),
+        ]
+      : []),
     {
       text: `DELETE FROM "${schema}"."assistant_turns"
 WHERE thread_id = $1
@@ -756,6 +830,9 @@ export function buildAssistantThreadMirrorQueries(args: {
       schemaName,
       threadId: thread.id,
       turns,
+      // The save's EXPLICIT truncation intent (round 4, F1). Null on every
+      // ordinary save, and null is what makes it tombstone nothing.
+      removedMessageIds: extractRemovedMessageIdsFromThread(thread),
     }),
     // Structured pause/resume write-through — only when the payload carried the
     // field (a partial write must not clear pause state it never saw).
