@@ -282,7 +282,10 @@ export async function runPostgresQueriesAsync(input: {
   const transaction = input.transaction === true;
   // `release(err)` with a truthy argument DESTROYS the client instead of
   // returning it to the pool. Set only for an error that leaves the connection
-  // unusable — a server-side statement_timeout cancel does not.
+  // unfit for the next caller — a client read timeout (desynced stream) or a
+  // ROLLBACK that failed (the transaction is still open). A server-side
+  // statement_timeout cancel is neither: it rolls back cleanly and the
+  // connection goes straight back.
   let destroyOnRelease: Error | undefined;
   try {
     if (transaction) {
@@ -319,11 +322,36 @@ export async function runPostgresQueriesAsync(input: {
       destroyOnRelease = error;
     } else if (transaction) {
       // Best-effort, exactly like the sync worker's rollback: a rollback that
-      // itself fails must not mask the error the caller actually needs to see.
+      // itself fails must not mask the error the caller actually needs to see,
+      // so it is caught and the ORIGINAL error is what gets rethrown below.
+      //
+      // But "do not mask it" is not "ignore it". A ROLLBACK that fails is the
+      // one case where this client is provably unfit for the pool, and for the
+      // same two reasons at once:
+      //
+      //   - the transaction is still OPEN. The BEGIN succeeded, the caller
+      //     query failed, and the statement meant to close the block did not
+      //     land — so the next checkout of this client inherits an in-progress
+      //     transaction, holding its locks and its snapshot, and its first
+      //     statement joins that transaction instead of starting clean.
+      //   - the protocol stream may be DESYNCED. The likeliest failure here is
+      //     the ROLLBACK blowing `query_timeout` in its turn (a server that
+      //     stopped answering answers nothing, not even a two-phase abort), and
+      //     that is the same abandoned-in-flight-query state the read-timeout
+      //     branch above destroys the client for.
+      //
+      // Neither is repaired by handing the client back, so destroy it: closing
+      // the socket is what aborts the open transaction server-side. The cost of
+      // being wrong is one extra connection setup; the cost of the previous
+      // behaviour was a poisoned client, silently, on a best-effort path whose
+      // callers swallow the error that would have named it.
       try {
         await client.query("ROLLBACK");
-      } catch {
-        /* non-fatal */
+      } catch (rollbackError) {
+        destroyOnRelease =
+          rollbackError instanceof Error
+            ? rollbackError
+            : new Error(String(rollbackError));
       }
     }
     throw error;

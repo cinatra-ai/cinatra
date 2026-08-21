@@ -190,6 +190,21 @@ function flushTimers(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Poll `predicate` until it holds, or give up after ~2s and let the caller's
+ * assertion report the failure. Destroying a pooled client ends its socket and
+ * Postgres drops the backend from `pg_stat_activity` when it notices — two
+ * asynchronous steps, so the reading has to be settled rather than snatched.
+ */
+async function waitFor(predicate: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() >= deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   admin = new Client({ connectionString: DB_URL });
@@ -517,6 +532,159 @@ describeDb("cinatra#2882 async notification-delete seam", () => {
       await deleteNotificationsByDedupeKeyForUserAsync({
         userId: "user-a",
         dedupeKey: "txn",
+      });
+      expect(await snapshot()).toEqual([]);
+    }, 120_000);
+  });
+
+  /**
+   * cinatra#2882 round 1 — a ROLLBACK that FAILS must destroy its client.
+   *
+   * On the transaction path a caller-query failure is followed by a best-effort
+   * ROLLBACK, caught so a rollback error cannot mask the caller's. "Do not mask
+   * it" was implemented as "ignore it": `release()` then ran with no argument
+   * and the client went back to the idle set — with its transaction still OPEN,
+   * holding whatever locks it had taken, and (when the rollback failed by
+   * blowing `query_timeout`) with pg's protocol stream desynced too.
+   *
+   * WHY THE ROLLBACK'S FAILURE IS INJECTED HERE and nothing else is. A ROLLBACK
+   * cannot be made to fail against a live Postgres on cue: it takes no locks and
+   * returns in microseconds, so no timeout reaches it, and the one thing that
+   * does fail it — killing the backend — takes the socket with it, which pg
+   * surfaces as an `'error'` event on a CHECKED-OUT client. The pool removes its
+   * own listener at checkout (`pg-pool`), so that event has no handler and Node
+   * turns it into an uncaught exception that kills the runner before any
+   * assertion runs. (Verified against pg 8.22.0; it is the same hazard the
+   * `holdTableLock` helper above absorbs with an explicit listener on a client
+   * it owns.)
+   *
+   * So exactly ONE thing is faked — the ROLLBACK's answer, and with the precise
+   * error pg raises when `query_timeout` fires. Everything else is real: a real
+   * BEGIN with its real `SET LOCAL`, a real DELETE against real rows, a real
+   * Postgres error (22012) to enter the catch, a real pool, and a real backend
+   * left holding a real open transaction. That last part is the point — the
+   * assertions below are the ones the unit tier CANNOT make, because they are
+   * about what the server sees.
+   */
+  describe("a ROLLBACK that fails", () => {
+    /** Fail ONLY the ROLLBACK on the next checkout, as a pg read timeout. */
+    function failNextRollback(pool: ReturnType<typeof getPostgresAsyncPool>): {
+      restore: () => void;
+      readonly rollbackError: Error | undefined;
+    } {
+      const realConnect = pool.connect.bind(pool);
+      const state: { rollbackError: Error | undefined } = {
+        rollbackError: undefined,
+      };
+      Object.assign(pool, {
+        connect: async () => {
+          const client = await realConnect();
+          const realQuery = client.query.bind(client);
+          Object.assign(client, {
+            query: (...args: unknown[]) => {
+              const first = args[0];
+              const text =
+                typeof first === "string"
+                  ? first
+                  : (first as { text?: string } | undefined)?.text;
+              if (text === "ROLLBACK") {
+                // pg's own message when `query_timeout` expires — the shape
+                // this takes in production, where the server that failed the
+                // caller's statement is also the one not answering this one.
+                state.rollbackError = new Error("Query read timeout");
+                return Promise.reject(state.rollbackError);
+              }
+              return (realQuery as (...a: unknown[]) => unknown)(...args);
+            },
+          });
+          return client;
+        },
+      });
+      return {
+        restore: () => Object.assign(pool, { connect: realConnect }),
+        get rollbackError() {
+          return state.rollbackError;
+        },
+      };
+    }
+
+    /** Backends of THIS database sitting in an open transaction, right now. */
+    async function idleInTransactionCount(): Promise<number> {
+      const res = await admin.query(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND pid <> pg_backend_pid()
+            AND state = 'idle in transaction'`,
+      );
+      return (res.rows[0] as { n: number }).n;
+    }
+
+    it("destroys the client, so the open transaction dies with it", async () => {
+      await seed([
+        { id: "n-rollback", user_id: "user-a", dedupe_key: "rollback" },
+      ]);
+      const pool = getPostgresAsyncPool(DB_URL);
+      // Same known-pool-state setup as the ceiling pins above, for the same
+      // reason: "the client was destroyed, not returned" has to be a reading,
+      // not a guess about what earlier tests left behind.
+      await runPostgresQueriesAsync({
+        connectionString: DB_URL,
+        queries: [{ text: "SELECT 1" }],
+      });
+      const idleBefore = pool.idleCount;
+      expect(idleBefore).toBeGreaterThan(0);
+      expect(pool.totalCount - pool.idleCount).toBe(0);
+      expect(await idleInTransactionCount()).toBe(0);
+
+      const injected = failNextRollback(pool);
+      let outcome: unknown;
+      try {
+        outcome = await runPostgresQueriesAsync({
+          connectionString: DB_URL,
+          transaction: true,
+          queries: [
+            {
+              text: `DELETE FROM ${TABLE} WHERE user_id = $1 AND dedupe_key = $2`,
+              values: ["user-a", "rollback"],
+            },
+            // A REAL Postgres error, on a connection that stays healthy: this
+            // is what puts the run into the catch with an open transaction to
+            // close, which is the situation the fix is about.
+            { text: "SELECT 1 / 0" },
+          ],
+        })
+          .then(() => "resolved" as const)
+          .catch((error: unknown) => error);
+      } finally {
+        injected.restore();
+      }
+
+      // The CALLER's error is what surfaced — the rollback failure did not mask
+      // it, which is the property the original `catch {}` was protecting.
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as { code?: string }).code).toBe("22012");
+      // ...and the rollback really was attempted and really did fail.
+      expect(injected.rollbackError).toBeInstanceOf(Error);
+
+      // THE PIN. The client was released with a truthy argument, so the pool
+      // DESTROYED it instead of pooling it: closing the socket is what aborts
+      // the transaction the failed ROLLBACK could not. Before the fix this
+      // read 1 — a backend parked `idle in transaction`, reachable by the next
+      // caller who checked that client out.
+      await waitFor(async () => (await idleInTransactionCount()) === 0);
+      expect(await idleInTransactionCount()).toBe(0);
+      // ...and the pool agrees: the checkout came back, by being dropped.
+      expect(pool.totalCount - pool.idleCount).toBe(0);
+      expect(pool.idleCount).toBe(idleBefore - 1);
+      expect(pool.waitingCount).toBe(0);
+
+      // The DELETE never took effect — the transaction aborted, as it must.
+      expect(await snapshot()).toEqual(["n-rollback|user-a|rollback"]);
+
+      // And the pool is still serviceable on a fresh connection.
+      await deleteNotificationsByDedupeKeyForUserAsync({
+        userId: "user-a",
+        dedupeKey: "rollback",
       });
       expect(await snapshot()).toEqual([]);
     }, 120_000);

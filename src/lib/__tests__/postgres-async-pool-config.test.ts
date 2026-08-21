@@ -39,13 +39,24 @@ vi.mock("@/lib/db/pooled", () => ({
 
 type PoolConfig = Record<string, unknown>;
 
-/** The queries a run issued, in order, with a fake client that records them. */
-function installFakePool(): { texts: string[]; released: unknown[] } {
+/**
+ * The queries a run issued, in order, with a fake client that records them.
+ *
+ * `reject` decides, per statement, that the client answers with an error
+ * instead of a result. It is how the failure paths get driven at this tier: a
+ * ROLLBACK that fails needs a server that stops answering ONLY for the
+ * ROLLBACK, which no real database can be asked for on cue.
+ */
+function installFakePool(options?: {
+  reject?: (text: string) => unknown;
+}): { texts: string[]; released: unknown[] } {
   const texts: string[] = [];
   const released: unknown[] = [];
   const client = {
     query: async (text: string) => {
       texts.push(text);
+      const failure = options?.reject?.(text);
+      if (failure !== undefined) throw failure;
       return { rows: [], rowCount: 0 };
     },
     release: (err?: unknown) => {
@@ -263,5 +274,132 @@ describe("cinatra#2882 async seam — the ceiling's upper bound", () => {
     const ms = Number(/statement_timeout = (\d+)/.exec(texts[0])?.[1]);
     expect(ms).toBe(Math.floor(MAX_TIMEOUT_MS * 0.9));
     expect(ms).toBeLessThanOrEqual(INT32_MAX);
+  });
+});
+
+/**
+ * cinatra#2882 round 1 — a ROLLBACK that FAILS may not put its client back.
+ *
+ * On the transaction path a caller-query failure is followed by a best-effort
+ * ROLLBACK, caught so that a rollback error cannot mask the error the caller
+ * actually needs to see. "Do not mask it" was implemented as "ignore it", and
+ * that is the bug: when the ROLLBACK itself fails, the transaction it was
+ * supposed to close is still OPEN, and the likeliest way for it to fail is
+ * blowing `query_timeout` in its turn — which leaves pg's protocol stream
+ * desynced exactly as the read-timeout branch does. The old code then called
+ * `release()` with no argument, handing that client — open transaction, held
+ * locks, possibly a pending reply — to the next caller.
+ *
+ * `release(err)` with a TRUTHY argument destroys the client; `release()` /
+ * `release(undefined)` returns it to the idle set. That single argument is
+ * what these arms read.
+ *
+ * The real-Postgres half (a ROLLBACK that fails against a live server, and the
+ * pool counts that follow) is in
+ * `notification-delete-async-seam.integration.test.ts`.
+ */
+describe("cinatra#2882 async seam — a failed ROLLBACK destroys the client", () => {
+  const CONNECTION_STRING = "postgres://stub-async-seam/db";
+  const QUERIES = [
+    { text: "DELETE FROM notifications WHERE id = $1", values: ["a"] },
+  ];
+  const callerError = new Error("deadlock detected");
+
+  /** Reject the caller's DELETE, and hand `rollbackOutcome` to the ROLLBACK. */
+  function runWithFailingRollback(rollbackOutcome: unknown) {
+    const fake = installFakePool({
+      reject: (text) => {
+        if (text.startsWith("DELETE")) return callerError;
+        if (text === "ROLLBACK") return rollbackOutcome;
+        return undefined;
+      },
+    });
+    return fake;
+  }
+
+  it("destroys the client when the ROLLBACK blows the read timeout", async () => {
+    // pg's own message when `query_timeout` fires — the shape this actually
+    // takes in production, and the one the sibling branch already destroys for.
+    const rollbackError = new Error("Query read timeout");
+    const { texts, released } = runWithFailingRollback(rollbackError);
+    const { runPostgresQueriesAsync } = await seam();
+
+    await expect(
+      runPostgresQueriesAsync({
+        connectionString: CONNECTION_STRING,
+        queries: QUERIES,
+        transaction: true,
+      }),
+      // The CALLER's error still wins — the rollback failure must not mask it.
+    ).rejects.toBe(callerError);
+
+    // The rollback really was attempted (and was the last thing tried).
+    expect(texts.at(-1)).toBe("ROLLBACK");
+    // ...and the client was released exactly once, DESTROYED.
+    expect(released).toHaveLength(1);
+    expect(released[0]).toBe(rollbackError);
+  });
+
+  it("destroys on ANY rollback failure, not only a read timeout", async () => {
+    // A server-side refusal answers immediately and leaves the stream in sync —
+    // but the transaction is still open, which is reason enough on its own.
+    const rollbackError = Object.assign(
+      new Error("terminating connection due to administrator command"),
+      { code: "57P01" },
+    );
+    const { released } = runWithFailingRollback(rollbackError);
+    const { runPostgresQueriesAsync } = await seam();
+
+    await expect(
+      runPostgresQueriesAsync({
+        connectionString: CONNECTION_STRING,
+        queries: QUERIES,
+        transaction: true,
+      }),
+    ).rejects.toBe(callerError);
+
+    expect(released).toHaveLength(1);
+    expect(released[0]).toBe(rollbackError);
+  });
+
+  it("destroys even when the rollback rejects with a non-Error", async () => {
+    // `release(err)` keys off TRUTHINESS, and a bare string is truthy — but pg
+    // reads `err` as an Error elsewhere, so the seam wraps it rather than
+    // passing it through. The pin is that the client is still destroyed.
+    const { released } = runWithFailingRollback("connection ended");
+    const { runPostgresQueriesAsync } = await seam();
+
+    await expect(
+      runPostgresQueriesAsync({
+        connectionString: CONNECTION_STRING,
+        queries: QUERIES,
+        transaction: true,
+      }),
+    ).rejects.toBe(callerError);
+
+    expect(released).toHaveLength(1);
+    expect(released[0]).toBeInstanceOf(Error);
+    expect((released[0] as Error).message).toBe("connection ended");
+  });
+
+  it("still POOLS the client when the ROLLBACK succeeds", async () => {
+    // The control arm — without it, "destroy" could be unconditional on the
+    // transaction path and every one of the arms above would still pass.
+    const { texts, released } = installFakePool({
+      reject: (text) => (text.startsWith("DELETE") ? callerError : undefined),
+    });
+    const { runPostgresQueriesAsync } = await seam();
+
+    await expect(
+      runPostgresQueriesAsync({
+        connectionString: CONNECTION_STRING,
+        queries: QUERIES,
+        transaction: true,
+      }),
+    ).rejects.toBe(callerError);
+
+    expect(texts.at(-1)).toBe("ROLLBACK");
+    expect(released).toHaveLength(1);
+    expect(released[0]).toBeUndefined();
   });
 });
