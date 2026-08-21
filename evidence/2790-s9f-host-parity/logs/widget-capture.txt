@@ -1,4 +1,4 @@
-# cinatra#2790 S9f widget capture — 2026-08-21T19:21:16.101Z
+# cinatra#2790 S9f widget capture — 2026-08-21T21:36:33.606Z
 # top-level page (NOT the Cinatra app): /host-page.html
 embed frame appeared after ~2s
 embed frame url path: /embed/assistant
@@ -17,6 +17,7 @@ CAP W1__recommendation-card__site_widget__held__column 1244x2364 framing=column 
 CAP H1__recommendation-card__site_widget__held 1176x290 framing=card state=held chips=4
 CAP W2__recommendation-card__site_widget__held__column__dark 1244x2364 framing=column state=held chips=4
 CAP H2__recommendation-card__site_widget__held__dark 1176x290 framing=card state=held chips=4
+agent_runs.status BEFORE the decision: pending_input
 pressed confirm on chip 0 (@cinatra-ai/blog-post-matcher-skill:blog-post-matcher)
 CAP H3__recommendation-card__site_widget__held__mid-decision 1176x290 framing=card state=held chips=4
 pressed adjust on chip 1 (@cinatra-ai/blog-writing-skill:blog-writing)
@@ -24,19 +25,11 @@ adjust panel: pressed 'Keep it in this run'
 pressed skip on chip 2 (@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher)
 WIRE {"label":"recommendation-decide","method":"POST","path":"/api/lifecycle-views/recommendation-hold/decide","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
 pressed confirm on chip 3 (@cinatra-ai/web-research-skill:web-research)
-DECIDE OUTCOMES [{"path":"/api/lifecycle-views/recommendation-hold/decide","status":200,"outcomeOk":false,"outcomeError":"unauthorized","outcomeDispatched":null}]
-settled in place: false
-DIAG recorded: ["page::.cw-frame=1","frame::[data-embed-assistant][data-phase=\"active\"]=1","frame::[data-conversation-list]=1","frame::[data-lifecycle-card-host=\"site_widget\"]=1","frame::[data-lifecycle-card=\"recommendation_hold\"]=1","frame::[data-lifecycle-card=\"artifact_review_gate\"]=0","root::[data-lifecycle-card-state]=1","root::[data-skill-action=\"confirm\"]=4","root::[data-skill-action=\"adjust\"]=4","root::[data-skill-action=\"skip\"]=4","root::[data-recommendation-chip]=4","frame::[data-conformance-id=\"run-chip-row\"]=1"]
-reloading the third-party page to re-read the decided run through the broker
-embed frame re-drew after ~2s
-frame is anonymous — running the frame's own hosted PKCE sign-in
-popup opened on path: /widget-auth
-popup closed: true
-frame left the anonymous state after ~2s
-second turn sent through the widget's OWN composer, naming the SAME (now decided) run
 WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
-WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
-the decided row drew after ~6s
+card settled IN PLACE after ~2s
+DECIDE OUTCOMES [{"path":"/api/lifecycle-views/recommendation-hold/decide","status":200,"outcomeOk":true,"outcomeError":null,"outcomeDispatched":true}]
+settled in place: true
+agent_runs.status AFTER the decision: pending_approval (advanced out of pending_input: true)
 CAP W3__recommendation-card__site_widget__settled__column 1244x2364 framing=column state=decided chips=4
 CAP H4__recommendation-card__site_widget__settled 1176x122 framing=card state=decided chips=4
-CAPTURE OK
+CAPTURE OK (settled in place)

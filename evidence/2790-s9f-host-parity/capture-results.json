@@ -391,7 +391,7 @@
           "width": 1244,
           "height": 2364
         },
-        "sha256": "cebf386436fa2ff42a4a00e9057cc430d45f927a95a99e71cbf4bee74127900a",
+        "sha256": "47fb4015b21cb132cbdc190c0691a8a2ef2fc5c04c66c7bb786248a8749dce25",
         "observed": [
           {
             "selector": ".cw-frame",
@@ -655,7 +655,7 @@
           "width": 1244,
           "height": 2364
         },
-        "sha256": "2c1ce25d73a062031c77617e711ff255ad9c2708d39a71d9f6136adeacd2afe5",
+        "sha256": "34e8932495ba3462e2af775e7c9ea2839704395198198ce48d686af28cf2c12c",
         "observed": [
           {
             "selector": ".cw-frame",
@@ -1045,81 +1045,13 @@
         "cardText": "Blog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
       },
       {
-        "cell": "DIAG__site-widget-column__decide-dispatch-refused",
-        "sha256": "a9d6c582010ad7676210c627d77db7f96d9cc43cf1507e1cccf85cfce8e9b49b",
-        "observed": [
-          {
-            "selector": ".cw-frame",
-            "scope": "page",
-            "count": 1
-          },
-          {
-            "selector": "[data-embed-assistant][data-phase=\"active\"]",
-            "scope": "frame",
-            "count": 1
-          },
-          {
-            "selector": "[data-conversation-list]",
-            "scope": "frame",
-            "count": 1
-          },
-          {
-            "selector": "[data-lifecycle-card-host=\"site_widget\"]",
-            "scope": "frame",
-            "count": 1
-          },
-          {
-            "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-            "scope": "frame",
-            "count": 1
-          },
-          {
-            "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-            "scope": "frame",
-            "count": 0
-          },
-          {
-            "selector": "[data-lifecycle-card-state]",
-            "scope": "root",
-            "count": 1
-          },
-          {
-            "selector": "[data-skill-action=\"confirm\"]",
-            "scope": "root",
-            "count": 4
-          },
-          {
-            "selector": "[data-skill-action=\"adjust\"]",
-            "scope": "root",
-            "count": 4
-          },
-          {
-            "selector": "[data-skill-action=\"skip\"]",
-            "scope": "root",
-            "count": 4
-          },
-          {
-            "selector": "[data-recommendation-chip]",
-            "scope": "root",
-            "count": 4
-          },
-          {
-            "selector": "[data-conformance-id=\"run-chip-row\"]",
-            "scope": "frame",
-            "count": 1
-          }
-        ],
-        "cardText": "Blog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\n\nunauthorized",
-        "isDiagnostic": true
-      },
-      {
         "cell": "W3__recommendation-card__site_widget__settled__column",
         "framing": "column",
         "pixels": {
           "width": 1244,
           "height": 2364
         },
-        "sha256": "2cc7ae07e3b7914ac2ced3e5445d51fb22100970653a3236b8d6e26cb4268c8f",
+        "sha256": "05b654f4cdca87fbc5f952d5fb492f3c5e672f232bee2fd6f2954a8f26aff4bb",
         "observed": [
           {
             "selector": ".cw-frame",
@@ -1188,9 +1120,9 @@
           "data-lifecycle-card": "recommendation_hold",
           "data-lifecycle-card-state": "decided",
           "data-lifecycle-card-host": "site_widget",
+          "data-variant": "inline",
           "data-run-recommendation-decision": "confirmed",
-          "data-run-recommendation-settled": "true",
-          "data-variant": "inline"
+          "data-run-recommendation-settled": "true"
         },
         "chips": [
           {
@@ -1305,9 +1237,9 @@
           "data-lifecycle-card": "recommendation_hold",
           "data-lifecycle-card-state": "decided",
           "data-lifecycle-card-host": "site_widget",
+          "data-variant": "inline",
           "data-run-recommendation-decision": "confirmed",
-          "data-run-recommendation-settled": "true",
-          "data-variant": "inline"
+          "data-run-recommendation-settled": "true"
         },
         "chips": [
           {
@@ -1387,16 +1319,6 @@
         "widgetUserToken": "present (cwu_)",
         "widgetOrigin": "present",
         "widgetAssistant": "present"
-      },
-      {
-        "label": "recommendation-resolve",
-        "method": "POST",
-        "path": "/api/lifecycle-views/recommendation-hold",
-        "resourceType": "fetch",
-        "cookie": "absent",
-        "widgetUserToken": "present (cwu_)",
-        "widgetOrigin": "present",
-        "widgetAssistant": "present"
       }
     ],
     "wireResponses": [
@@ -1415,21 +1337,33 @@
       {
         "path": "/api/lifecycle-views/recommendation-hold",
         "status": 200
-      },
-      {
-        "path": "/api/lifecycle-views/recommendation-hold",
-        "status": 200
       }
     ],
     "decideOutcomes": [
       {
         "path": "/api/lifecycle-views/recommendation-hold/decide",
         "status": 200,
-        "outcomeOk": false,
-        "outcomeError": "unauthorized",
-        "outcomeDispatched": null
+        "outcomeOk": true,
+        "outcomeError": null,
+        "outcomeDispatched": true
       }
     ],
+    "settleFacts": {
+      "settledInPlace": true,
+      "reloadedBeforeReading": false,
+      "runStatusBeforeDecide": "pending_input",
+      "runStatusAfterDecide": "pending_approval",
+      "runAdvanced": true,
+      "decideOutcomes": [
+        {
+          "path": "/api/lifecycle-views/recommendation-hold/decide",
+          "status": 200,
+          "outcomeOk": true,
+          "outcomeError": null,
+          "outcomeDispatched": true
+        }
+      ]
+    },
     "cookieJar": [
       {
         "name": "better-auth.session_token",

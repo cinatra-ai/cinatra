@@ -1,36 +1,37 @@
 # cinatra#2790 (S9f) — the skills-recommendation card on its two new hosts
 
-Head under proof: `291bfee0fea914008d8b75036f527fe4d5378ebc` (PR #2890), plus
+Head under proof: `aa29034f2a7a8f093eafd77762fa223eb65598d3` (PR #2890), plus
 this evidence commit.
 
 ## The headline, first
 
-**The widget mount works and is photographed.** The card draws **held** inside
-the embedded cross-site widget column — light and dark, one chip per skill, each
-chip carrying its own Confirm / Adjust / Skip — a decision was driven from inside
-the frame through the card's own broker `/decide` route, and the **settled** row
-is photographed on the same host.
+**The widget mount works, the decision is taken inside the frame, and the row
+settles where it was decided.** The card draws **held** inside the embedded
+cross-site widget column — light and dark, one chip per skill, each chip
+carrying its own Confirm / Adjust / Skip. Every chip was then decided from
+INSIDE the frame through the card's own controls (Confirm, Adjust → *“Keep it in
+this run”*, Skip, Confirm), the release went out as a single cookieless broker
+`/decide` POST, and the row **settled in place**: the SAME frame instance that
+drew it held now draws the per-chip outcomes, with **no reload, no second
+sign-in and no second turn**. The run underneath left `pending_input`.
 
-The previous round could not deliver those cells. It measured why, photographed
-the failure and named the one-line cause: the two routes this branch adds were
-missing from the app's cookieless-reachable path list, so every broker POST from
-the widget was **307**'d to `/sign-in` before the route handler ran. **That defect
-was found, fixed at `291bfee0f`, and every widget cell below was shot at the fixed
-head.** The diagnostic that documented it is deleted, because it no longer
-describes this branch. The fix's own pinned rows are in
-`src/lib/__tests__/auth-route-guard-public-paths.test.ts`; measured live in this
-lane, all four lifecycle routes now answer their handler's own **401** cookieless
-rather than a 307.
+Two rounds of defect precede that sentence, and both are closed:
 
-**The review-page mount** was proven in the previous round and is unchanged here
+1. **The previous round could not draw the card at all.** The two routes this
+   branch adds were missing from the app's cookieless-reachable path list, so
+   every broker POST from the widget was **307**'d to `/sign-in` before the route
+   handler ran. Fixed at `291bfee0f`; all four lifecycle routes now answer their
+   own handler's **401** cookieless rather than a redirect.
+2. **The round after it drew the card, recorded the decision, and then told the
+   reader `unauthorized`.** The post-decision dispatch was cookie-bound, so a
+   cross-site frame had no session to resolve: the selections were written and
+   the hold released, but `agent_runs.status` stayed `pending_input` and the row
+   never learned it had succeeded. **That defect is fixed at the head above**,
+   and the live settle below is its proof. Its diagnostic capture is deleted,
+   because it no longer describes this branch.
+
+**The review-page mount** was proven in the first round and is unchanged here
 (`R1` / `R2` / `R3`).
-
-**One further defect was found in this round, and it is NOT fixed here.** A
-decision taken in the widget is **recorded** — the selection rows are written and
-the hold is released — and is then **reported to the reader as `unauthorized`**,
-because the post-decision dispatch is cookie-bound. The run therefore never
-starts. It is measured, photographed as a diagnostic, and set out in
-[“The decision lands and the dispatch is refused”](#the-decision-lands-and-the-dispatch-is-refused).
 
 ## The runtime, said first
 
@@ -42,7 +43,7 @@ branch's own extension tree (114 packages) and a raised
 `CINATRA_BOOT_READY_TIMEOUT_MS`. **Placeholder-only environment: no model
 credential of any kind exists on this host**, and none is used. The lane tree is
 an APFS clone of the repository pinned to the head above, with per-package
-installs carried across and its one absolute symlink rewritten worktree-local.
+installs carried across; every symlink in it was measured to be worktree-local.
 
 `CINATRA_E2E_SETUP_BYPASS=true` is set, and stated because it is set: the lane
 database is a clone of an already-provisioned instance, so the setup wizard has
@@ -102,6 +103,12 @@ present. That is the cross-site fact this host page exists to produce.
    extension's manifest `cinatra.displayName`, resolved server-side by the
    scorer; nothing is re-derived in the recorder.
 
+**Two held runs were driven, not one.** Both were seeded and parked the same
+way, both were decided chip by chip inside the frame, and **both settled in
+place**. The committed cells are the second run
+(`logs/walk-state-widget.json`); the first is named there so a single lucky pass
+cannot be mistaken for a result.
+
 **The run intent was chosen, not the scores.** The prompt is the one
 `evidence/2841-v-redraw` measured, which puts three of the four assigned skills
 over the recommend threshold and leaves `web-research` under it. Measured on this
@@ -116,15 +123,13 @@ chip; the fourth is the shipped force-add candidate, and the DOM confirms it
 1. **Exactly one organization.** The platform's own
    `ensureDefaultOrganizationMembership` adopts a platform admin into the
    `slug="default"` organization on every session bootstrap and makes it the
-   session's active one. The cloned fixture's single organization was therefore
-   renamed to `Default` / `default` BEFORE boot, so the row the bootstrap
-   resolves and the row the lane's data lives in are the same row. The lane
-   setup driver then created a second organization of its own (its `list` call
-   runs before that adoption); it was removed, together with its one membership
-   row, and the template repointed at the remaining organization. **Exactly one
-   organization exists in this database.** The shipped delete route refuses
-   (`ORGANIZATION_DELETION_DISABLED`), so that removal is lane data written
-   directly — it changes who may open the run, never what the card draws.
+   session's active one. The lane setup driver creates a second organization of
+   its own, because its `list` call runs before that adoption. The shipped
+   delete route refuses (`ORGANIZATION_DELETION_DISABLED`), so that second
+   organization and its membership row were removed as lane data written
+   directly, and the template repointed at the remaining one. **Exactly one
+   organization exists in this database**, and it is the one the bootstrap
+   resolves.
 2. **`agent_templates.org_id`** repointed to this lane's organization, the same
    repair `evidence/2841-v-redraw` recorded.
 3. **The cloned database's `public.jwks` row** was encrypted under the source
@@ -132,18 +137,15 @@ chip; the fourth is the shipped force-add candidate, and the DOM confirms it
    the hosted widget sign-in would return 500. The row was deleted and Better
    Auth minted a fresh key — the remedy the error itself names.
 
-## The blocker the previous round measured, and its fix
+## The two defects, and what closed them
 
-The previous round recorded five cookieless broker POSTs, each answered **307**
-to `/sign-in`, and named the cause: `src/lib/auth-route-guard.ts` carries an
-**exact-path** list of routes reachable without a session cookie, and the two
-routes this branch adds were not on it, so `guardAppRoute` redirected them before
-the handler ran. `fetch` follows a 307 with method and body intact, `/sign-in`
-serves GET only and refuses the POST, the transport bails on the non-OK answer,
-and the card drew nothing at all.
+### 1. The card could not be read (fixed at `291bfee0f`)
 
-`291bfee0f` adds both paths, each with its own entry, and adds nine pinned rows
-to the guard's suite. **Measured live in this lane, cookieless:**
+`src/lib/auth-route-guard.ts` carries an **exact-path** list of routes reachable
+without a session cookie, and the two routes this branch adds were not on it, so
+`guardAppRoute` redirected them before the handler ran. `291bfee0f` adds both
+paths, each with its own entry, and adds nine pinned rows to the guard's suite.
+**Measured live in this lane, cookieless:**
 
 ```
 POST /api/lifecycle-views/recommendation-hold          -> 401
@@ -152,28 +154,27 @@ POST /api/lifecycle-views/resolve                      -> 401
 POST /api/lifecycle-views/decide                       -> 401
 ```
 
-All four now reach their own handler and refuse properly. Nothing on this branch
-307s to a sign-in page any more.
+### 2. The decision could not dispatch (fixed at `aa29034f2`)
 
-**The wire, this round** (`logs/widget-wire.json`; presence/absence only, never a
-value). Five broker calls, every one `cookie: absent`,
-`x-cinatra-widget-user-token: present (cwu_)`, widget origin and assistant
-headers present:
+`releaseAndDispatch` (`packages/agents/src/run-recommendation-core.ts`) performs
+the selection write, the verified release and the resume announcement, and then
+calls the dispatcher the entry handed it. The broker decide route used to hand it
+`triggerAgentRun`, whose first act is `requireAuthSession()` — the **ambient
+cookie session**. A cross-site frame has none, so the dispatch answered
+`{ok: false, error: "unauthorized"}`, `releaseAndDispatch` returned that as the
+whole decision's outcome, the card believed the decision had failed and never
+fired its `onDecided` re-read, and the run stayed parked at `pending_input`
+forever.
 
-| Route | Calls | Status |
-|---|---|---|
-| `POST /api/lifecycle-views/recommendation-hold` | 4 | **200** |
-| `POST /api/lifecycle-views/recommendation-hold/decide` | 1 | **200** |
+`aa29034f2` parameterises the run-start dispatch on an already-verified
+principal — `run-dispatch-core.ts`, deliberately not a `"use server"` module —
+and the widget entry mints a dispatcher bound to the actor its `cwu_` just
+proved, for the one run the route already bound to that widget session, in the
+org the credential names. `triggerAgentRun` keeps the cookie host unchanged.
 
-## The decision lands and the dispatch is refused
-
-**What was driven.** Four chips, in a real browser, inside the cross-site frame:
-Confirm, Adjust → *“Keep it in this run”*, Skip, Confirm. The shipped row
-releases once every chip carries a mark, and that release went out as the single
-broker `/decide` POST above.
-
-**What the core recorded** — read back from the lane database, not from the
-screen:
+**Measured live in this lane, at that head** — the decide answered **200** with
+`outcome.ok = true`, `outcome.dispatched = true`, and the card's `onDecided`
+re-read followed it on the wire, which is exactly what was absent before:
 
 | Row | Value |
 |---|---|
@@ -182,40 +183,30 @@ screen:
 | | `blog-writing` → `user_adjusted` |
 | | `web-research` → `recommended_confirmed` |
 | `run_rejected_recommendations` | `brand-voice-matcher` → `recommended_not_kept` |
-| `agent_runs.status` | **`pending_input`** — never dispatched |
+| `agent_runs.status` **before** the decision | `pending_input` |
+| `agent_runs.status` **after** the decision | **`pending_approval`** — the run advanced |
 
-So the decision travelled end to end through the broker: the widget's own
-credential, no cookie, the execute-tier selection write, the verified release.
+**The run's status is READ BACK, never read off the screen.** The inline run
+panel in this column is a cookie-bound surface that cannot load the run from a
+cross-site frame (see *Also visible, and pre-existing* below), so the column does
+NOT show the run's state and no cell here claims that it does. `agent_runs.status`
+is queried on either side of the decision and carried on the settled cells as
+`settleFacts`, together with `settledInPlace: true` and
+`reloadedBeforeReading: false`.
 
-**What the reader was told.** The route answered **200**, and the outcome inside
-it was `{ok: false, error: "unauthorized"}` (`decideOutcomes` in
-`capture-results.json`). The row therefore did not settle where it was decided:
-it kept `data-lifecycle-card-state="held"`, every chip kept its mark and its three
-affordances, and a red **`unauthorized`** line was drawn beneath the row —
-photographed as `captures/DIAG__site-widget-column__decide-dispatch-refused.png`.
+**The wire, this round** (`logs/widget-wire.json`; presence/absence only, never a
+value). Four broker calls, every one `cookie: absent`,
+`x-cinatra-widget-user-token: present (cwu_)`, widget origin and assistant
+headers present:
 
-**Why.** `releaseAndDispatch` (`packages/agents/src/run-recommendation-core.ts`)
-performs the selection write, the verified release and the resume announcement,
-and then calls the dispatcher the entry handed it. The broker decide route hands
-it `triggerAgentRun`, whose first act is
-`requireAuthSession()` — the **ambient cookie session**. The widget branch is
-cookieless by construction, so there is no session to resolve, `triggerAgentRun`
-returns `{ok: false, error: "unauthorized"}`, and `releaseAndDispatch` returns
-that as the whole decision's outcome. The card believes the decision failed, so
-it never fires its `onDecided` re-read: no resolve call follows the decide on the
-wire, which is how this was told apart from a rendering problem.
+| Route | Calls | Status |
+|---|---|---|
+| `POST /api/lifecycle-views/recommendation-hold` | 3 | **200** |
+| `POST /api/lifecycle-views/recommendation-hold/decide` | 1 | **200**, `outcome.ok=true`, `dispatched=true` |
 
-**This is a named class, made certain.** Plan §6.4 item 7 already says a
-Confirm/Skip *“can also record its decision and then fail on the dispatch that
-follows — the red line is not proof that nothing happened.”* On a cookie host that
-is an occasional race. On the widget it is **structural and total**: every widget
-decision releases its hold, chooses its skills, tells the person it was
-unauthorized, and leaves the run parked forever at `pending_input`.
-
-**Not fixed here, deliberately.** The fix belongs where the guard fix went — in a
-slice with its own review — because it means giving the broker route a dispatcher
-that is authorized the way the rest of that route is (from the presented `cwu_`),
-which is a new authorization path, not an evidence change.
+The third resolve is the card's own post-decision re-read. Its presence is the
+wire-level difference between this round and the last one, where the refusal
+meant no resolve ever followed the decide.
 
 ## Cells DELIVERED — the widget
 
@@ -232,17 +223,29 @@ be graded against §V with nothing else in the picture.
 | `W2__recommendation-card__site_widget__held__column__dark` | 1244×2364 | The same column, same run, in `dark`. |
 | `H2__recommendation-card__site_widget__held__dark` | 1176×290 | The same card root in `dark`. |
 | `H3__recommendation-card__site_widget__held__mid-decision` | 1176×290 | After **one** chip was decided by pressing its own `Confirm` in a real browser: that chip carries its confirmed tint; every other chip still shows all three affordances and is still pressable. The row is never decided as a unit. |
-| `W3__recommendation-card__site_widget__settled__column` | 1244×2364 | The **settled** row in the same embedded column, composer in frame: `Blog Post Matcher Skill ✓ CONFIRMED`, `Blog Writing Skill ADJUSTED`, `Brand Voice Matcher Skill ✗ SKIPPED`, `Web Research Skill ✓ CONFIRMED`. Nothing left to press. |
+| `W3__recommendation-card__site_widget__settled__column` | 1244×2364 | The row **SETTLED IN PLACE** in the same embedded column, composer in frame: `Blog Post Matcher Skill ✓ CONFIRMED`, `Blog Writing Skill ADJUSTED`, `Brand Voice Matcher Skill ✗ SKIPPED`, `Web Research Skill ✓ CONFIRMED`. Nothing left to press. |
 | `H4__recommendation-card__site_widget__settled` | 1176×122 | The same settled row on its own root. |
 
-**How the settled cells were obtained, stated plainly.** The row does not settle
-in place, for the dispatch reason above. The decision is nevertheless durable, so
-the settled reading was taken by **re-reading** it: a fresh load of the same
-third-party page, the frame's own hosted sign-in run again (the frame comes back
-anonymous — the host page holds no credential), a fresh turn naming the **same**
-run, and the same broker read that drew the held row. Nothing was re-seeded and
-nothing was re-decided. The two resolve calls behind those cells are the last two
-rows of the wire table above.
+**How the settled cells were obtained, stated plainly.** They were shot **where
+the decision was made**: the same page load, the same frame instance and the same
+card instance that drew the held row, after its own four chips were pressed. The
+recorder waits for the root's `data-lifecycle-card-state` to turn `decided` and
+shoots; there is no `page.goto` between the held cells and the settled ones, and
+the run's status is read back from the database on either side. The recorder
+still carries the honest fallback it needed last round: if the row does NOT
+settle in place, it records a diagnostic and every settled cell it then takes
+declares `reloadedBeforeReading: true` rather than claiming a settle. On this
+round that branch did not run.
+
+**Four of the seven PNGs are byte-identical to the previous round's, and that is
+stated rather than left to look like untouched evidence.** `H1`, `H2`, `H3` and
+`H4` frame the card root alone, and the card root carries no run id, so the same
+drawing hashes the same. `H4` in particular is byte-identical while its
+**provenance changed completely** — it was a re-read after a fresh load, and it
+is now a live in-place settle. Pixels cannot tell those apart; the record and the
+log can, which is why `settleFacts` sits on the cell and the whole capture run is
+committed verbatim in `logs/widget-capture.txt`. The three `W` cells changed,
+because the column shows the turn text and this round names a different run.
 
 Measured on every one of the seven widget cells, and carried in each record's
 `assertions`:
@@ -266,9 +269,10 @@ The card root carries, on all seven: `data-run-recommendation-chip-row`,
 `data-conformance-id="run-chip-row"`,
 `data-lifecycle-card="recommendation_hold"`,
 `data-lifecycle-card-host="site_widget"`, `data-variant="inline"`; plus
-`data-can-decide="true"` on the five held cells.
+`data-can-decide="true"` on the five held cells and no `data-can-decide` at all
+on the two settled ones.
 
-## Cells DELIVERED — the review page (previous round, unchanged)
+## Cells DELIVERED — the review page (first round, unchanged)
 
 | Cell | Pixels | What is VISIBLY on screen |
 |---|---|---|
@@ -292,36 +296,45 @@ Against design §V (the ratified redraw the card renders, quoted verbatim in
 | 1 | §V *“one chip per skill, each carrying its own Confirm, Adjust and Skip”* | ≥1 chip, each with its own three affordances | `W1`/`H1`/`W2`/`H2`: 4 chips × 3 = 12 buttons, per chip | **PASS** |
 | 2 | §V *“The row is the whole card … no heading plate above it and no row-level submit beneath it”* | no heading, no card-level submit inside the root | `H1`/`H2`: the root is the row; nothing above or below it | **PASS** |
 | 3 | §V settled chips name the skill, not an id | manifest `displayName` on every chip | the four names, held and settled | **PASS** |
-| 4 | Plan §6.3 item 3 / §10.10 — *“the card is withheld from the widget”* is closed | the card drawn on `site_widget`, resolved through the broker | `[data-lifecycle-card-host="site_widget"]`=1 and card root=1 on all seven cells; 4 broker reads, `cookie: absent`, 200 | **PASS** |
+| 4 | Plan §6.3 item 3 / §10.10 — *“the card is withheld from the widget”* is closed | the card drawn on `site_widget`, resolved through the broker | `[data-lifecycle-card-host="site_widget"]`=1 and card root=1 on all seven cells; 3 broker reads, `cookie: absent`, 200 | **PASS** |
 | 5 | Plan §6.4 — the card appears *“in the widget”*, in the reply, in the conversation the reader was already in | the card in the real transcript column with the composer | `W1`/`W2`: turn, reply, card, composer, one `.cw-frame` | **PASS** |
 | 6 | §V — a chip is settled by pressing one of **its own** affordances, never the row as a unit | one chip decided, the rest still pressable | `H3`: chip 0 confirmed, chips 1–3 undecided with 3 affordances each | **PASS** |
-| 7 | S9f — a decision is **carried by the widget's own credential** to the `/decide` route | a cookieless decide POST that reaches the handler and is accepted | 1 × `/decide`, `cookie: absent`, `cwu_` present, **200**; park `released`; 3 selected + 1 rejected rows written | **PASS** |
+| 7 | S9f — a decision is **carried by the widget's own credential** to the `/decide` route | a cookieless decide POST that reaches the handler and is accepted | 1 × `/decide`, `cookie: absent`, `cwu_` present, **200**, `outcome.ok=true`; park `released`; 3 selected + 1 rejected rows written | **PASS** |
 | 8 | §V — the **settled** row states each skill's own outcome with nothing to press | a decided reading on this host | `W3`/`H4`: state `decided`, 4 marked chips, **0/0/0** affordances | **PASS** |
 | 9 | Both palettes resolve | the same card in light and dark, both framings | `W1`/`W2` and `H1`/`H2` | **PASS** |
-| 10 | Plan §6.4 — *“the card settles in place showing what you chose, and the run card underneath advances”* | the row settling **where it was decided**, and the run advancing | the row stays `held` and draws `unauthorized`; `agent_runs.status` stays `pending_input` | **FAIL — the dispatch defect above; the settled reading is reachable only by re-reading** |
+| 10 | Plan §6.4 — *“the card settles in place showing what you chose, and the run card underneath advances”* | the row settling **where it was decided**, and the run advancing | `W3`/`H4` shot on the same frame instance with no reload (`settledInPlace: true`, `reloadedBeforeReading: false`); `agent_runs.status` `pending_input` → **`pending_approval`** | **PASS** |
 | 11 | Plan §6.3 item 4 — *“No mount on the review page”* is closed | the card present on the review route under `page_gate_region` | `R1`–`R3`: host=2 (card + gate), card root=1 | **PASS** |
 | 12 | Plan §6.4 — *“the same row appears … on the review page”*, **above** the gate | the card ABOVE the review gate card | `cardAboveGate: true`, `domOrder: card-then-gate`, visible in `R2` | **PASS** |
 | 13 | Plan §9 — review page *“mostly seen in its decided form”* | a decided reading on the review page | **not shot** — the review-page run is genuinely held | **NOT DELIVERED** |
+
+Row 10 is the one that changed. It read **FAIL** on the previous evidence
+commit, against the same requirement, on the round that measured the dispatch
+defect. Nothing in the requirement was softened to turn it: the same driver
+waits for the same `decided` state on the same root with no reload in between,
+and the run status is read from the database rather than the screen.
+
+The **run card underneath** the row is a separate surface from the run itself,
+and it is not the thing this cell photographs advancing — see the pre-existing
+panel note below. What is measured here is the run: it left `pending_input`.
 
 ## Cells NOT delivered
 
 | Cell | Why |
 |---|---|
-| the row settling **in place** on the widget after its own decision | **Blocked by the branch**, not by this lane: the decision is recorded and the dispatch is refused `unauthorized`, so the card never learns it succeeded. Measured, photographed as a diagnostic and diagnosed above. The settled reading itself IS delivered (`W3`, `H4`), by re-reading. |
 | a **decided** reading on the review page (plan §9's “mostly seen”) | Would need the hold decided first. Deciding it on the review page is possible — that host is a cookie surface and works — but it would consume the only held run on that host, and the cell asked for there is the **held** one. Named rather than implied. |
 | the card in the **chat** conversation | Not on this branch. It depends on the conversation-origin hold S9b (#2786) builds, exactly as the PR body says. |
 
 ## Also visible, and pre-existing
 
 Every column cell shows a grey panel reading *“Could not load agent run
-f18f63df — please try again.”* That is the inline run panel
+9c4879ee — please try again.”* That is the inline run panel
 (`packages/chat/src/inline-agent-run-card.tsx`), which seeds itself with a plain
 `GET /api/agents/runs/<id>` carrying no credential header. Measured cookieless in
 this lane: **307 → `/sign-in`**. It is not one of the two routes this branch adds,
 it is not on the guard's list, and it is not introduced by S9f — the branch's own
 comment already calls that panel a cookie-bound surface that “carries nothing at
-all”. It is stated because it is in the pictures, and it is not diagnosed further
-here.
+all”. It is stated because it is in the pictures, and it is why the run's advance
+is read from the database rather than claimed off the column.
 
 ## Registration in the capture index
 
@@ -330,9 +343,10 @@ here.
 validator (`scripts/ci/lib/capture-record-contract.mjs`) first and came back with
 **zero** violations — `record/ok` — because `site_widget` has a valid URL class
 (`embed_assistant`), which the frame path satisfies. `validateCaptureIndex` over
-the whole file after the append: **24 records, 0 violations.** The file's own
-inventory paragraph was corrected to match what is now in it (it still said
-“EIGHT records, from three lanes” while holding seventeen from four).
+the whole file after this round's replacement: **24 records, 0 violations.** The
+file's own inventory paragraph for this lane was rewritten to say what the cells
+now show — the row settling in place rather than being read back — and its
+mention of a diagnostic was removed with the diagnostic.
 
 **The three review-page records are NOT registered, and that is the contract
 working rather than a lapse.** Each comes back with **exactly one** violation,
@@ -345,14 +359,10 @@ for the `page_gate_region` records from #2862 (A1) and #2863 (B1, B2). They stay
 in this lane's `capture-records.json`. Appending them would make the index invalid
 and turn a green gate red for a defect in the class.
 
-The diagnostic is not a cell and is registered nowhere: its name carries no host
-token, so the contract classes it `record/unclassifiable-cell` — which is correct,
-because it claims no card.
-
 ## Gates — real exits
 
-Both were run at this tree, and both were re-run with this lane's directory moved
-aside, so nothing pre-existing is absorbed into this commit.
+Both were run at this tree, and both were re-run with this lane contributing
+nothing at all, so no pre-existing finding is absorbed into this commit.
 
 | Gate | Exit | Findings |
 |---|---|---|
@@ -360,13 +370,12 @@ aside, so nothing pre-existing is absorbed into this commit.
 | `scripts/audit/chat-hitl-acceptance-gate.mjs` | **1** | 4 capture-index violations, **all pre-existing**: the same two `chat_thread` cells, cited by manifest rows 1 and 15. These are the four the PR body already names as reproducing on main. |
 
 **The isolation was measured, not asserted.** Each gate was re-run with this
-lane's `evidence/` directory moved aside **and**
-`scripts/ci/chat-hitl-capture-index.json` restored to `HEAD`. Both runs are
-**byte-identical** to the runs above, so this commit causes none of these findings
-and absorbs none of them. Its own seven records are bound rather than unbound:
-`validateCaptureIndex` over the whole file reports **24 records, 0 violations**.
-Full output: `logs/gate-chat-hitl-evidence.txt`,
-`logs/gate-chat-hitl-acceptance.txt`.
+lane's `evidence/` directory moved aside **and** this lane's seven records
+removed from `scripts/ci/chat-hitl-capture-index.json`, so the run saw a repo
+this lane had never touched. Both runs are **byte-identical** to the runs above.
+This commit therefore causes none of these findings and absorbs none of them; its
+own seven records are bound rather than unbound. Full output:
+`logs/gate-chat-hitl-evidence.txt`, `logs/gate-chat-hitl-acceptance.txt`.
 
 ## Layout
 
@@ -376,7 +385,7 @@ Full output: `logs/gate-chat-hitl-evidence.txt`,
   are also in the canonical index.
 - `capture-results.json` — the machine record beside the pixels: counts, the
   root's own `data-*` attributes, the per-chip DOM read-out, the card text, the
-  wire, the decide outcome and the cookie jar.
+  wire, the decide outcome, `settleFacts` and the cookie jar.
 - `logs/` — the two capture runs verbatim (`*.txt`), the widget's broker wire
   (present/absent only, never a value), the seeded ids for both rounds, and both
   gate outputs.

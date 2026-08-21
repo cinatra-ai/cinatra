@@ -413,7 +413,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W1__recommendation-card__site_widget__held__column.png",
-    "sha256": "cebf386436fa2ff42a4a00e9057cc430d45f927a95a99e71cbf4bee74127900a",
+    "sha256": "47fb4015b21cb132cbdc190c0691a8a2ef2fc5c04c66c7bb786248a8749dce25",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -477,7 +477,7 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T19:21:36.577Z",
+    "recordedAt": "2026-08-21T21:36:54.476Z",
     "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
     "note": "The whole embedded widget on a THIRD-PARTY page, uncropped: the turn the visitor typed, the assistant's reply, and the recommendation card HELD in the real transcript column — with the widget's OWN composer in frame beneath it. Every read behind this picture went to the broker with the widget's credential and NO cookie (see `wire`).",
     "rootAttributes": {
@@ -614,7 +614,7 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T19:21:36.621Z",
+    "recordedAt": "2026-08-21T21:36:54.526Z",
     "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
     "note": "The same held card, framed on its own root so the drawing can be graded against §V: one chip per skill, each carrying its OWN Confirm / Adjust / Skip, each printing the owning extension's manifest displayName rather than a slug or a package id.",
     "rootAttributes": {
@@ -687,7 +687,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W2__recommendation-card__site_widget__held__column__dark.png",
-    "sha256": "2c1ce25d73a062031c77617e711ff255ad9c2708d39a71d9f6136adeacd2afe5",
+    "sha256": "34e8932495ba3462e2af775e7c9ea2839704395198198ce48d686af28cf2c12c",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -751,7 +751,7 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T19:21:37.593Z",
+    "recordedAt": "2026-08-21T21:36:55.498Z",
     "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
     "note": "The SAME held card in the SAME embedded column, in the dark palette — the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed.",
     "rootAttributes": {
@@ -888,7 +888,7 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T19:21:37.637Z",
+    "recordedAt": "2026-08-21T21:36:55.542Z",
     "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
     "note": "The SAME held card on its own root, same run, same frame selector, in `dark`.",
     "rootAttributes": {
@@ -1025,7 +1025,7 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T19:21:40.129Z",
+    "recordedAt": "2026-08-21T21:36:58.052Z",
     "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
     "note": "The SAME cross-site card after ONE chip was decided by pressing its own Confirm in a real browser. That chip carries its mark; every other chip still shows all three affordances and is still pressable — the row is never decided as a unit.",
     "rootAttributes": {
@@ -1091,152 +1091,6 @@
     "framing": "card"
   },
   {
-    "cell": "DIAG__site-widget-column__decide-dispatch-refused",
-    "isDiagnostic": true,
-    "declaredHost": "site_widget",
-    "declaredKind": null,
-    "declaredState": null,
-    "finalUrl": "/host-page.html",
-    "frameUrl": "/embed/assistant?<frame disambiguators>",
-    "screenshot": "evidence/2790-s9f-host-parity/captures/DIAG__site-widget-column__decide-dispatch-refused.png",
-    "sha256": "a9d6c582010ad7676210c627d77db7f96d9cc43cf1507e1cccf85cfce8e9b49b",
-    "assertions": [
-      {
-        "selector": ".cw-frame",
-        "scope": "page",
-        "count": 1
-      },
-      {
-        "selector": "[data-embed-assistant][data-phase=\"active\"]",
-        "scope": "frame",
-        "count": 1
-      },
-      {
-        "selector": "[data-conversation-list]",
-        "scope": "frame",
-        "count": 1
-      },
-      {
-        "selector": "[data-lifecycle-card-host=\"site_widget\"]",
-        "scope": "frame",
-        "count": 1
-      },
-      {
-        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-        "scope": "frame",
-        "count": 1
-      },
-      {
-        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-        "scope": "frame",
-        "count": 0
-      },
-      {
-        "selector": "[data-lifecycle-card-state]",
-        "scope": "root",
-        "count": 1
-      },
-      {
-        "selector": "[data-skill-action=\"confirm\"]",
-        "scope": "root",
-        "count": 4
-      },
-      {
-        "selector": "[data-skill-action=\"adjust\"]",
-        "scope": "root",
-        "count": 4
-      },
-      {
-        "selector": "[data-skill-action=\"skip\"]",
-        "scope": "root",
-        "count": 4
-      },
-      {
-        "selector": "[data-recommendation-chip]",
-        "scope": "root",
-        "count": 4
-      },
-      {
-        "selector": "[data-conformance-id=\"run-chip-row\"]",
-        "scope": "frame",
-        "count": 1
-      }
-    ],
-    "rootAttributes": {
-      "data-run-recommendation-chip-row": "",
-      "data-conformance-id": "run-chip-row",
-      "data-lifecycle-card": "recommendation_hold",
-      "data-lifecycle-card-state": "held",
-      "data-lifecycle-card-host": "site_widget",
-      "data-variant": "inline",
-      "data-can-decide": "true"
-    },
-    "chips": [
-      {
-        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
-        "mark": "confirmed",
-        "forced": false,
-        "label": "Blog Post Matcher Skill",
-        "text": "Blog Post Matcher SkillConfirmAdjustSkip",
-        "actions": [
-          "confirm",
-          "adjust",
-          "skip"
-        ]
-      },
-      {
-        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
-        "mark": "adjusted",
-        "forced": false,
-        "label": "Blog Writing Skill",
-        "text": "Blog Writing SkillConfirmAdjustSkip",
-        "actions": [
-          "confirm",
-          "adjust",
-          "skip"
-        ]
-      },
-      {
-        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
-        "mark": "skipped",
-        "forced": false,
-        "label": "Brand Voice Matcher Skill",
-        "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
-        "actions": [
-          "confirm",
-          "adjust",
-          "skip"
-        ]
-      },
-      {
-        "skillId": "@cinatra-ai/web-research-skill:web-research",
-        "mark": "confirmed",
-        "forced": true,
-        "label": "Web Research Skill",
-        "text": "Web Research SkillConfirmAdjustSkip",
-        "actions": [
-          "confirm",
-          "adjust",
-          "skip"
-        ]
-      }
-    ],
-    "decideOutcomes": [
-      {
-        "path": "/api/lifecycle-views/recommendation-hold/decide",
-        "status": 200,
-        "outcomeOk": false,
-        "outcomeError": "unauthorized",
-        "outcomeDispatched": null
-      }
-    ],
-    "cardText": "Blog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\n\nunauthorized",
-    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T19:23:17.551Z",
-    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "DIAGNOSTIC, NOT A CELL. The row where it was decided: every chip carries its mark, the card root still declares data-lifecycle-card-state=\"held\", and a refusal line is drawn under the row. The decide route answered 200 and its OUTCOME is recorded in `decideOutcomes`. Filed as a diagnostic so nothing here claims a settled row that is not on screen."
-  },
-  {
     "cell": "W3__recommendation-card__site_widget__settled__column",
     "declaredHost": "site_widget",
     "declaredKind": "recommendation_hold",
@@ -1244,7 +1098,7 @@
     "finalUrl": "/host-page.html",
     "frameUrl": "/embed/assistant?<frame disambiguators>",
     "screenshot": "evidence/2790-s9f-host-parity/captures/W3__recommendation-card__site_widget__settled__column.png",
-    "sha256": "2cc7ae07e3b7914ac2ced3e5445d51fb22100970653a3236b8d6e26cb4268c8f",
+    "sha256": "05b654f4cdca87fbc5f952d5fb492f3c5e672f232bee2fd6f2954a8f26aff4bb",
     "assertions": [
       {
         "selector": ".cw-frame",
@@ -1308,18 +1162,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T19:23:35.138Z",
+    "recordedAt": "2026-08-21T21:37:08.226Z",
     "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The SETTLED row on the same cross-site widget host, in the whole embedded column with the widget's own composer in frame: one chip per skill stating what it recorded — Confirmed, Adjusted, Skipped — and nothing left to press. Read back through the broker with the widget's credential and no cookie.",
+    "note": "The row SETTLED IN PLACE, in the SAME embedded column and the SAME frame instance that drew it held — no reload, no second sign-in, no second turn. Each chip states what it recorded (Confirmed / Adjusted / Skipped) and there is nothing left to press. `agent_runs.status` read back beside this cell in `settleFacts`.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
       "data-lifecycle-card": "recommendation_hold",
       "data-lifecycle-card-state": "decided",
       "data-lifecycle-card-host": "site_widget",
+      "data-variant": "inline",
       "data-run-recommendation-decision": "confirmed",
-      "data-run-recommendation-settled": "true",
-      "data-variant": "inline"
+      "data-run-recommendation-settled": "true"
     },
     "chips": [
       {
@@ -1356,7 +1210,23 @@
       }
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
-    "framing": "column"
+    "framing": "column",
+    "settleFacts": {
+      "settledInPlace": true,
+      "reloadedBeforeReading": false,
+      "runStatusBeforeDecide": "pending_input",
+      "runStatusAfterDecide": "pending_approval",
+      "runAdvanced": true,
+      "decideOutcomes": [
+        {
+          "path": "/api/lifecycle-views/recommendation-hold/decide",
+          "status": 200,
+          "outcomeOk": true,
+          "outcomeError": null,
+          "outcomeDispatched": true
+        }
+      ]
+    }
   },
   {
     "cell": "H4__recommendation-card__site_widget__settled",
@@ -1430,18 +1300,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-21T19:23:35.185Z",
+    "recordedAt": "2026-08-21T21:37:08.265Z",
     "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-    "note": "The SAME settled row framed on its own root: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row — the decided row has nothing to press.",
+    "note": "The SAME settled row framed on its own root, in place: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row.",
     "rootAttributes": {
       "data-run-recommendation-chip-row": "",
       "data-conformance-id": "run-chip-row",
       "data-lifecycle-card": "recommendation_hold",
       "data-lifecycle-card-state": "decided",
       "data-lifecycle-card-host": "site_widget",
+      "data-variant": "inline",
       "data-run-recommendation-decision": "confirmed",
-      "data-run-recommendation-settled": "true",
-      "data-variant": "inline"
+      "data-run-recommendation-settled": "true"
     },
     "chips": [
       {
@@ -1478,6 +1348,22 @@
       }
     ],
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
-    "framing": "card"
+    "framing": "card",
+    "settleFacts": {
+      "settledInPlace": true,
+      "reloadedBeforeReading": false,
+      "runStatusBeforeDecide": "pending_input",
+      "runStatusAfterDecide": "pending_approval",
+      "runAdvanced": true,
+      "decideOutcomes": [
+        {
+          "path": "/api/lifecycle-views/recommendation-hold/decide",
+          "status": 200,
+          "outcomeOk": true,
+          "outcomeError": null,
+          "outcomeDispatched": true
+        }
+      ]
+    }
   }
 ]

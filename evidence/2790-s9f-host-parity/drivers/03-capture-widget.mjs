@@ -20,6 +20,16 @@
 // RESOLVE and DECIDE routes — with `cookie` and `x-cinatra-widget-user-token`
 // reported as present/absent, never by value.
 //
+// THE SETTLED READING IS TAKEN WHERE THE DECISION WAS MADE. Once every chip
+// carries a mark the shipped store releases the hold, the broker decide route
+// dispatches the run as the actor its `cwu_` proved, and the row settles in the
+// SAME frame instance that drew it held. The settled pair is therefore shot
+// with NO reload, NO second sign-in and NO second turn, and `agent_runs.status`
+// is read back on either side of the decision and carried on the cells. The
+// re-read path below it is kept as the honest fallback: if the row does NOT
+// settle in place, the run records a diagnostic and every settled cell it then
+// takes declares `reloadedBeforeReading: true` rather than claiming a settle.
+//
 // NO SECRET IS EVER WRITTEN OUT, and no origin is hard-coded: every origin is
 // read from the environment.
 //
@@ -29,6 +39,7 @@ import { chromium } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Client } from "pg";
 
 const HOST = process.argv[2];
 const OUT = process.argv[3];
@@ -47,6 +58,32 @@ if (!HOST || !OUT || !REPO_ROOT || !ACTOR.email || !ACTOR.password || !RUN_ID) {
 // word (review / gate / waiting / approval / check / verification), because the
 // provider reads that intent FIRST and would answer the pull instead.
 const PROMPT = `Show me the run ${RUN_ID} please.`;
+
+// --- the RUN's own status, read back from the lane database ------------------
+// The decide route answers 200 for a refusal as well as a success, and the
+// inline run panel in this column is a cookie-bound surface that cannot read
+// the run from a cross-site frame. So "the run advanced" is not taken from the
+// screen: it is READ BACK from `agent_runs.status` on either side of the
+// decision and recorded beside the cell. The connection string is read from the
+// environment and never written out.
+const DB_URL = process.env.S9F_DB_URL ?? "";
+const DB_SCHEMA = (process.env.S9F_DB_SCHEMA ?? "cinatra").replaceAll('"', '""');
+async function readRunStatus() {
+  if (!DB_URL) return null;
+  const client = new Client({ connectionString: DB_URL });
+  try {
+    await client.connect();
+    const r = await client.query(
+      `select status from "${DB_SCHEMA}".agent_runs where id = $1`,
+      [RUN_ID],
+    );
+    return r.rows[0]?.status ?? null;
+  } catch (e) {
+    return `<unreadable: ${String(e?.message ?? e).slice(0, 80)}>`;
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
 
 const log = [];
 const say = (m) => {
@@ -514,6 +551,8 @@ try {
   // release deviation). So the row is driven chip by chip, in a real browser,
   // and the release that follows is the broker POST recorded on the wire.
   const chipsBefore = await chipReadout();
+  const runStatusBeforeDecide = await readRunStatus();
+  say(`agent_runs.status BEFORE the decision: ${runStatusBeforeDecide}`);
   const plan = ["confirm", "adjust", "skip", "confirm"];
   for (let i = 0; i < chipsBefore.length; i += 1) {
     const action = plan[i] ?? "confirm";
@@ -560,8 +599,69 @@ try {
     (await embedFrame()
       ?.evaluate((s2) => document.querySelector(s2)?.getAttribute("data-lifecycle-card-state") ?? null, CARD_ROOT)
       .catch(() => null)) === "decided";
+  // The run's OWN status, read back after the decision. This is what "the run
+  // underneath advances" means in plan §6.4, and it is measured rather than
+  // inferred from anything drawn on the page.
+  let runStatusAfterDecide = await readRunStatus();
+  if (runStatusAfterDecide === "pending_input") {
+    // The dispatch is asynchronous once the release returns; give it a bounded
+    // window to leave the parked status before the reading is taken as final.
+    for (let i = 0; i < 15 && runStatusAfterDecide === "pending_input"; i += 1) {
+      await page.waitForTimeout(2000);
+      runStatusAfterDecide = await readRunStatus();
+    }
+  }
+  const runAdvanced = Boolean(runStatusAfterDecide) && runStatusAfterDecide !== "pending_input";
+  const settleFacts = {
+    settledInPlace,
+    reloadedBeforeReading: false,
+    runStatusBeforeDecide,
+    runStatusAfterDecide,
+    runAdvanced,
+    decideOutcomes,
+  };
   say(`DECIDE OUTCOMES ${JSON.stringify(decideOutcomes)}`);
   say(`settled in place: ${settledInPlace}`);
+  say(`agent_runs.status AFTER the decision: ${runStatusAfterDecide} (advanced out of pending_input: ${runAdvanced})`);
+
+  if (settledInPlace) {
+    // ---- the SETTLED reading, TAKEN WHERE IT WAS DECIDED -------------------
+    // No reload, no second sign-in, no second turn: this is the SAME frame
+    // instance that drew the held row, after its own chips were pressed. The
+    // pair below is therefore a live settle, not a re-read of a durable row.
+    await setTheme("cinatra");
+    await shoot(
+      "W3__recommendation-card__site_widget__settled__column",
+      "decided",
+      "The row SETTLED IN PLACE, in the SAME embedded column and the SAME frame instance that drew it held — no reload, no second sign-in, no second turn. Each chip states what it recorded (Confirmed / Adjusted / Skipped) and there is nothing left to press. `agent_runs.status` read back beside this cell in `settleFacts`.",
+      { settleFacts },
+      "column",
+    );
+    await shoot(
+      "H4__recommendation-card__site_widget__settled",
+      "decided",
+      "The SAME settled row framed on its own root, in place: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row.",
+      { settleFacts },
+    );
+
+    writeFileSync(join(OUT, "wire.json"), JSON.stringify({ requests: wire, responses: wireResponses, decideOutcomes }, null, 2));
+    writeFileSync(
+      join(OUT, "capture-results.json"),
+      JSON.stringify(
+        { results, wire, wireResponses, decideOutcomes, settleFacts, cookieJar: appCookies.map((c) => ({ name: c.name, domain: c.domain, sameSite: c.sameSite, httpOnly: c.httpOnly })) },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(join(OUT, "records.json"), JSON.stringify(records, null, 2));
+    say("CAPTURE OK (settled in place)");
+    // The log is the record of the run, so it is flushed HERE as well: this
+    // branch returns out of `try` rather than falling through, and a `finally`
+    // that never ran would leave the run unwitnessed.
+    writeFileSync(join(OUT, "capture.log"), log.join("\n") + "\n");
+    await browser.close();
+    process.exit(0);
+  }
 
   if (!settledInPlace) {
     // NOT A CELL. The row did not settle where it was decided, so the honest
@@ -611,6 +711,7 @@ try {
   // run's authoritative hold state on the same host — a fresh page load of the
   // same third-party page, a fresh turn naming the same run, and the same broker
   // read that drew the held row. Nothing is seeded and nothing is re-decided.
+  settleFacts.reloadedBeforeReading = true;
   say("reloading the third-party page to re-read the decided run through the broker");
   await page.goto(HOST, { waitUntil: "domcontentloaded", timeout: 180_000 });
   for (let i = 0; i < 90; i += 1) {
@@ -654,27 +755,28 @@ try {
   await shoot(
     "W3__recommendation-card__site_widget__settled__column",
     "decided",
-    "The SETTLED row on the same cross-site widget host, in the whole embedded column with the widget's own composer in frame: one chip per skill stating what it recorded — Confirmed, Adjusted, Skipped — and nothing left to press. Read back through the broker with the widget's credential and no cookie.",
-    {},
+    "RE-READ, NOT A LIVE SETTLE. The settled row on the same cross-site widget host after a fresh load, a second hosted sign-in and a second turn naming the same run: one chip per skill stating what it recorded — Confirmed, Adjusted, Skipped — and nothing left to press. `settleFacts.reloadedBeforeReading` is true on this cell.",
+    { settleFacts },
     "column",
   );
   await shoot(
     "H4__recommendation-card__site_widget__settled",
     "decided",
-    "The SAME settled row framed on its own root: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row — the decided row has nothing to press.",
+    "RE-READ, NOT A LIVE SETTLE. The same settled row framed on its own root: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row.",
+    { settleFacts },
   );
 
   writeFileSync(join(OUT, "wire.json"), JSON.stringify({ requests: wire, responses: wireResponses, decideOutcomes }, null, 2));
   writeFileSync(
     join(OUT, "capture-results.json"),
     JSON.stringify(
-      { results, wire, wireResponses, decideOutcomes, cookieJar: appCookies.map((c) => ({ name: c.name, domain: c.domain, sameSite: c.sameSite, httpOnly: c.httpOnly })) },
+      { results, wire, wireResponses, decideOutcomes, settleFacts, cookieJar: appCookies.map((c) => ({ name: c.name, domain: c.domain, sameSite: c.sameSite, httpOnly: c.httpOnly })) },
       null,
       2,
     ),
   );
   writeFileSync(join(OUT, "records.json"), JSON.stringify(records, null, 2));
-  say("CAPTURE OK");
+  say("CAPTURE OK (re-read fallback)");
 } catch (e) {
   say(`CAPTURE ERROR: ${e?.stack || e}`);
   await page.screenshot({ path: join(OUT, "error.png"), fullPage: true }).catch(() => {});

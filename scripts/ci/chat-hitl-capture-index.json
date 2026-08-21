@@ -62,11 +62,11 @@
     "  evidence/2790-s9f-host-parity. The SKILLS-RECOMMENDATION card in the embedded conversation",
     "  column on a genuinely cross-site host page: HELD in both palettes, shot both as the whole",
     "  widget column (W, the composer in frame) and on the card root alone (H), one chip mid-decision,",
-    "  and the SETTLED row read back through the broker after a decision driven from inside the frame.",
-    "  Each was run through capture-record-contract.mjs and came back record/ok before it was written",
-    "  here. The same lane's page_gate_region records (R1-R3) stay in its own capture-records.json for",
-    "  the URL-class reason set out below, and its DIAGNOSTIC is registered nowhere at all, because a",
-    "  diagnostic claims no card.",
+    "  and the row SETTLED IN PLACE after every chip was decided from inside the frame -- the same",
+    "  frame instance that drew it held, with no reload, no second sign-in and no second turn. Each",
+    "  was run through capture-record-contract.mjs and came back record/ok before it was written",
+    "  here. The same lane's page_gate_region records (R1-R3) stay in its own capture-records.json",
+    "  for the URL-class reason set out below.",
     "",
     "THE page_gate_region RECORDS ARE DELIBERATELY ELSEWHERE, not missing. #2862 photographed the",
     "review page's gate region once (A1) and #2863 twice (B1, B2); all three stay in their own",
@@ -1949,7 +1949,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/W1__recommendation-card__site_widget__held__column.png",
-      "sha256": "cebf386436fa2ff42a4a00e9057cc430d45f927a95a99e71cbf4bee74127900a",
+      "sha256": "47fb4015b21cb132cbdc190c0691a8a2ef2fc5c04c66c7bb786248a8749dce25",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -2013,7 +2013,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T19:21:36.577Z",
+      "recordedAt": "2026-08-21T21:36:54.476Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
       "note": "The whole embedded widget on a THIRD-PARTY page, uncropped: the turn the visitor typed, the assistant's reply, and the recommendation card HELD in the real transcript column — with the widget's OWN composer in frame beneath it. Every read behind this picture went to the broker with the widget's credential and NO cookie (see `wire`)."
     },
@@ -2089,7 +2089,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T19:21:36.621Z",
+      "recordedAt": "2026-08-21T21:36:54.526Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
       "note": "The same held card, framed on its own root so the drawing can be graded against §V: one chip per skill, each carrying its OWN Confirm / Adjust / Skip, each printing the owning extension's manifest displayName rather than a slug or a package id."
     },
@@ -2101,7 +2101,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/W2__recommendation-card__site_widget__held__column__dark.png",
-      "sha256": "2c1ce25d73a062031c77617e711ff255ad9c2708d39a71d9f6136adeacd2afe5",
+      "sha256": "34e8932495ba3462e2af775e7c9ea2839704395198198ce48d686af28cf2c12c",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -2165,7 +2165,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T19:21:37.593Z",
+      "recordedAt": "2026-08-21T21:36:55.498Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
       "note": "The SAME held card in the SAME embedded column, in the dark palette — the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed."
     },
@@ -2241,7 +2241,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T19:21:37.637Z",
+      "recordedAt": "2026-08-21T21:36:55.542Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
       "note": "The SAME held card on its own root, same run, same frame selector, in `dark`."
     },
@@ -2317,7 +2317,7 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T19:21:40.129Z",
+      "recordedAt": "2026-08-21T21:36:58.052Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
       "note": "The SAME cross-site card after ONE chip was decided by pressing its own Confirm in a real browser. That chip carries its mark; every other chip still shows all three affordances and is still pressable — the row is never decided as a unit."
     },
@@ -2329,7 +2329,7 @@
       "finalUrl": "/host-page.html",
       "frameUrl": "/embed/assistant?<frame disambiguators>",
       "screenshot": "evidence/2790-s9f-host-parity/captures/W3__recommendation-card__site_widget__settled__column.png",
-      "sha256": "2cc7ae07e3b7914ac2ced3e5445d51fb22100970653a3236b8d6e26cb4268c8f",
+      "sha256": "05b654f4cdca87fbc5f952d5fb492f3c5e672f232bee2fd6f2954a8f26aff4bb",
       "assertions": [
         {
           "selector": ".cw-frame",
@@ -2393,9 +2393,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T19:23:35.138Z",
+      "recordedAt": "2026-08-21T21:37:08.226Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The SETTLED row on the same cross-site widget host, in the whole embedded column with the widget's own composer in frame: one chip per skill stating what it recorded — Confirmed, Adjusted, Skipped — and nothing left to press. Read back through the broker with the widget's credential and no cookie."
+      "note": "The row SETTLED IN PLACE, in the SAME embedded column and the SAME frame instance that drew it held — no reload, no second sign-in, no second turn. Each chip states what it recorded (Confirmed / Adjusted / Skipped) and there is nothing left to press. `agent_runs.status` read back beside this cell in `settleFacts`."
     },
     {
       "cell": "H4__recommendation-card__site_widget__settled",
@@ -2469,9 +2469,9 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-21T19:23:35.185Z",
+      "recordedAt": "2026-08-21T21:37:08.265Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The SAME settled row framed on its own root: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row — the decided row has nothing to press."
+      "note": "The SAME settled row framed on its own root, in place: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row."
     }
   ]
 }

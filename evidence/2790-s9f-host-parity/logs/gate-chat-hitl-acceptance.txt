@@ -1,24 +1,7 @@
-$ node scripts/audit/chat-hitl-acceptance-gate.mjs
 [chat-hitl-acceptance] 4 capture-index violation(s) — a capture's declared host must match its recorded anchors; file names carry no authority:
 
   manifest row 1 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
   manifest row 1 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
   manifest row 15 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
   manifest row 15 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-exit=1
-
---- ISOLATION: the same gate with this lane's evidence/ directory moved aside AND
---- scripts/ci/chat-hitl-capture-index.json restored to HEAD.
-[chat-hitl-acceptance] 4 capture-index violation(s) — a capture's declared host must match its recorded anchors; file names carry no authority:
-
-  manifest row 1 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 1 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 15 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 15 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-exit=1
-
-The two runs are BYTE-IDENTICAL. This gate is RED at HEAD and stays exactly as red:
-all four violations are the same two PRE-EXISTING chat_thread cells above, cited by
-manifest rows 1 and 15 from evidence/2573-s7-visuals-lane. They are the four the PR
-body already names as reproducing on main. This commit neither adds a violation nor
-removes one, and it does not absorb them.
+EXIT=1
