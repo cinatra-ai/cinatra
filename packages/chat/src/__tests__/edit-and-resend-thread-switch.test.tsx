@@ -465,3 +465,53 @@ describe("editAndResend resumes on the thread it started on, or not at all", () 
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE LEDGER'S THREAD BOUNDARY (codex round 2, finding 2).
+//
+// A turn that ENDED is still nameable until a committed transcript carries it,
+// so the ended-uncommitted ledger OUTLIVES the last stream. The page dropped it
+// only when a stream happened to be in flight at the moment of the switch —
+// `streams.size()` counts in-flight turns and nothing else — so an ordinary
+// switch, made after the last turn ended, carried the whole ledger into the
+// next thread. Its ids belong to the thread that was left and nothing over here
+// would ever release them, and the next edit ASSERTS them: on an id collision
+// the server tombstones a turn of this thread that nobody removed, and without
+// one they are stale in every payload for the rest of the session.
+//
+// The arm drives it through the real surfaces — a turn that ends without
+// revealing, the thread panel's own switch event, and the intent an edit posts.
+// ---------------------------------------------------------------------------
+
+describe("the ended-uncommitted ledger does not cross a thread switch", () => {
+  it("an edit on the new thread asserts ITS turns only, with no stream in flight", async () => {
+    const net = chatNetwork();
+    const view = await mountOnOriginThread();
+
+    // A turn ENDS on A without ever revealing: the drive stub takes the dispatch
+    // and returns, so nothing appends the assistant message and no committed
+    // transcript ever carries it. That is the aborted-turn shape — the id enters
+    // the ledger and NOTHING releases it.
+    await editFirstUserTurn(view, "alpha question, rephrased");
+    await waitFor(() => expect(net.saves.length).toBeGreaterThan(0));
+    net.settle(0);
+    await net.drain();
+    await waitFor(() => expect(driveCalls.length).toBe(1));
+    await waitFor(() => expect(view.getByText("alpha question, rephrased")).toBeTruthy());
+
+    // The user switches AFTER that turn ended, so nothing is in flight.
+    selectThread(THREAD_B);
+    await waitFor(() => expect(view.getByText("bravo question")).toBeTruthy());
+
+    // An edit over here may assert B's own truncated slice and NOTHING else.
+    await editFirstUserTurn(view, "bravo question, rephrased");
+    await waitFor(() =>
+      expect(net.saves.some((s) => s.id === THREAD_B && s.removedMessageIds)).toBe(true),
+    );
+    const intentB = net.saves.find((s) => s.id === THREAD_B && s.removedMessageIds);
+    expect(
+      intentB?.removedMessageIds,
+      "the edit on the switched-to thread asserted a turn that streamed in the thread the user left",
+    ).toEqual(["b-u1", "b-a1"]);
+  });
+});

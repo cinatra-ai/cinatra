@@ -15,7 +15,10 @@
  * COMMITTED transcript proves it landed.
  */
 import { describe, it, expect } from "vitest";
-import { createTurnStreamRegistry } from "../turn-stream-registry";
+import {
+  createTurnStreamRegistry,
+  MAX_ENDED_UNCOMMITTED_TURN_IDS,
+} from "../turn-stream-registry";
 
 const controller = () => new AbortController();
 
@@ -98,6 +101,69 @@ describe("createTurnStreamRegistry", () => {
     streams.reset();
     expect(streams.removableTurnIds()).toEqual([]);
     expect(streams.size()).toBe(0);
+  });
+
+  it("a LATE end from the thread that was left cannot repopulate the ledger", () => {
+    // CODEX ROUND 2, FINDING 1. `reset()` aborts the in-flight stream and clears
+    // both maps — but the drive unwinds on its OWN schedule, and its `finally`
+    // calls `end` afterwards, with an id that belongs to the thread just left.
+    // An unconditional `end` wrote that id into the NEW thread's ledger, where
+    // the next edit would assert it as removed: a collision tombstones a turn of
+    // the new thread that nobody removed, and a miss is a stale id forever.
+    const streams = createTurnStreamRegistry();
+    const live = new AbortController();
+    streams.begin("a-old", live);
+
+    streams.reset(); // the thread switch
+
+    streams.end("a-old"); // ...and only now does the old drive's finally run
+    expect(live.signal.aborted).toBe(true);
+    expect(streams.removableTurnIds()).toEqual([]);
+    // The new thread's own turns are unaffected — the generation moved, it did
+    // not stop.
+    streams.begin("a-new", new AbortController());
+    streams.end("a-new");
+    expect(streams.removableTurnIds()).toEqual(["a-new"]);
+  });
+
+  it("drops the ledger when the THREAD changes, with no stream left in flight", () => {
+    // CODEX ROUND 2, FINDING 2. The ledger outlives the last stream: an ended
+    // turn stays nameable until a committed transcript carries it, so "nothing
+    // is in flight" says nothing about whether the ledger is empty. The boundary
+    // is the THREAD, not the stream count, and it is the registry that knows
+    // which thread its ids belong to.
+    const streams = createTurnStreamRegistry();
+    expect(streams.resetForThread("t-a")).toBe(false); // adoption, not a change
+    streams.begin("a3", new AbortController());
+    streams.end("a3");
+    expect(streams.size()).toBe(0); // nothing in flight...
+    expect(streams.removableTurnIds()).toEqual(["a3"]); // ...and still nameable
+
+    expect(streams.resetForThread("t-a")).toBe(false); // the same thread twice
+    expect(streams.removableTurnIds()).toEqual(["a3"]);
+
+    expect(streams.resetForThread("t-b")).toBe(true); // an ACTUAL switch
+    expect(streams.removableTurnIds()).toEqual([]);
+  });
+
+  it("BOUNDS the ledger, evicting the oldest id — the stated cost of a bound", () => {
+    // CODEX ROUND 2, FINDING 3. An aborted turn is released by nothing, so an
+    // unbounded ledger grows for the whole page session and every later edit
+    // carries all of it. The bound is a cap with oldest-first eviction; what an
+    // eviction costs is stated at the eviction site.
+    const streams = createTurnStreamRegistry();
+    const overflow = 5;
+    for (let i = 0; i < MAX_ENDED_UNCOMMITTED_TURN_IDS + overflow; i += 1) {
+      streams.begin(`a${i}`, new AbortController());
+      streams.end(`a${i}`);
+    }
+    const nameable = streams.removableTurnIds();
+    expect(nameable).toHaveLength(MAX_ENDED_UNCOMMITTED_TURN_IDS);
+    // The OLDEST went, and the newest — the ones an edit made now is most likely
+    // to be about — are all still there.
+    expect(nameable).not.toContain("a0");
+    expect(nameable[0]).toBe(`a${overflow}`);
+    expect(nameable).toContain(`a${MAX_ENDED_UNCOMMITTED_TURN_IDS + overflow - 1}`);
   });
 
   it("abortAll aborts without forgetting — each drive's own finally still ends it", () => {

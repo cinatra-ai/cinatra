@@ -376,16 +376,15 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // Load thread messages when activeThreadId changes.
   useEffect(() => {
     // Defense in depth: eagerly abort every in-flight stream when the active
-    // thread changes. The stillOnOriginThread guard inside streamResponse also
-    // short-circuits any late setMessages chunks arriving after this point, so
-    // even if an aborted stream's final reader.read() resolves mid-switch it
-    // cannot mutate the new thread's messages list. `reset` drops the
-    // ended-uncommitted ledger too: those ids belong to the thread being left,
-    // and no other thread's transcript would ever release them.
-    if (streams.size() > 0) {
-      streams.reset();
-      setStreamingCount(0);
-    }
+    // thread changes, and drop the ended-uncommitted ledger with it — its ids
+    // belong to the thread being left and no other thread's transcript would
+    // ever release them. The registry decides that on the THREAD, not on the
+    // stream count: an ended turn stays nameable until its reveal commits, so
+    // the ledger outlives the last stream and a switch made after it still has
+    // to drop it (codex round 2). The stillOnOriginThread guard inside
+    // streamResponse short-circuits any late setMessages chunks arriving after
+    // this point, so an aborted stream cannot mutate the new thread's list.
+    if (streams.resetForThread(activeThreadId)) setStreamingCount(0);
     if (skipNextThreadLoadRef.current) {
       skipNextThreadLoadRef.current = false;
       return;
