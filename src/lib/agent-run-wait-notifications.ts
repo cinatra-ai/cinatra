@@ -57,6 +57,7 @@ import type {
 import {
   classifyRunWaitInterrupt,
   type RunWaitInterruptDescriptor,
+  type RunWaitInterruptKind,
 } from "@cinatra-ai/agents/run-surface-status";
 import {
   RUN_AWAITING_HUMAN_CATEGORY,
@@ -154,6 +155,17 @@ export function buildAutoGateOpenNotificationInput(input: {
  * unmodified `RunHumanWaitReason`, so no consumer's state, filter, or route
  * changes; with no `interrupt` in hand the classifier fails closed to the
  * pre-existing approval copy.
+ *
+ * cinatra#2835 — `waitKind` is the CALLER-SUPPLIED form of that same
+ * classification, for a wait with no interrupt to derive from. The run-start
+ * recommendation HOLD parks an already-`pending_input` run on a card, so
+ * `deriveRunHitlContext` has nothing to answer with and the derivation would
+ * fail closed to the generic continue-copy — while the hold is, by the #2729
+ * ruling, exactly an INPUT wait. An explicit `"input"` therefore selects the
+ * input copy for EITHER reason; anything else leaves the pre-existing
+ * reason+interrupt derivation untouched. Its ONE caller is
+ * `onEnterRecommendationHold` — the transition seam derives instead of stating
+ * (cinatra#2838 dropped the field the transition seam never filled).
  */
 export function buildRunAwaitingHumanNotificationInput(input: {
   runId: string;
@@ -161,17 +173,44 @@ export function buildRunAwaitingHumanNotificationInput(input: {
   runTitle?: string | null;
   href?: string;
   interrupt?: RunWaitInterruptDescriptor | null;
+  waitKind?: RunWaitInterruptKind;
+  /**
+   * cinatra#2835 — the continuation park this row belongs to, for a row minted by
+   * a run-start recommendation HOLD. Stamped into the metadata so the hold's clear
+   * can name its OWN row: the dedupeKey is per-RUN, and a clear retried by a later
+   * sweep would otherwise be free to delete whatever wait happens to occupy that
+   * key by then. Absent for every other writer, whose rows the hold clear
+   * therefore cannot touch.
+   */
+  holdParkId?: string;
 }): NotificationInput {
   const name = input.runTitle?.trim();
   const subject = name ? `"${name}"` : "A run";
   const awaitingInput =
-    input.reason === "pending_approval" &&
-    classifyRunWaitInterrupt(input.interrupt) === "input";
+    input.waitKind === "input" ||
+    (input.reason === "pending_approval" &&
+      classifyRunWaitInterrupt(input.interrupt) === "input");
   let title: string;
   let body: string;
   if (awaitingInput) {
     title = `${subject} needs your input`;
-    body = "Open the run to fill in the requested fields.";
+    // Two different destinations share this title, so they must not share a body.
+    // A derived input wait (`interrupt` classified `"input"`) really does land on a
+    // form with fields. The run-start recommendation HOLD (`waitKind: "input"`, whose
+    // one caller is `onEnterRecommendationHold`) does NOT: it lands on the skills
+    // chip row, whose own copy reads "Confirm the skills for this run … Adjust the
+    // selection, then confirm — or skip". Telling that reader to "fill in the
+    // requested fields" names fields the card does not have.
+    //
+    // INTERIM WORDING (cinatra#2838). The hold's final bell copy is the epic's ONE
+    // reserved decision and is NOT settled here; this line only stops the shipped
+    // row from describing a destination that does not exist. Whoever settles the
+    // reserved decision replaces this string — the branch, not the words, is the
+    // durable part.
+    body =
+      input.waitKind === "input"
+        ? "Open the run to confirm or skip the recommended skills."
+        : "Open the run to fill in the requested fields.";
   } else if (input.reason === "pending_approval") {
     title = `${subject} is awaiting your approval`;
     body = "Open the run to review and approve the pending step.";
@@ -187,7 +226,11 @@ export function buildRunAwaitingHumanNotificationInput(input: {
     dedupeKey: runAwaitingHumanDedupeKey(input.runId),
     metadata: {
       category: RUN_AWAITING_HUMAN_CATEGORY,
-      runAwaitingHuman: { runId: input.runId, reason: input.reason },
+      runAwaitingHuman: {
+        runId: input.runId,
+        reason: input.reason,
+        ...(input.holdParkId ? { holdParkId: input.holdParkId } : {}),
+      },
     },
   };
 }
@@ -322,6 +365,13 @@ export const runWaitNotifier: RunWaitNotifier = {
       // conversation (a run started outside chat, a turn not yet persisted, a
       // store that cannot answer) keeps the run page, the pre-existing
       // destination.
+      //
+      // The classification is DERIVED here and never stated by the caller: every
+      // caller of this seam is `transitionRunStatus`, which knows only that a
+      // status changed. The one wait that states its own flavour — the
+      // recommendation hold, which carries no interrupt to derive from — enters
+      // through `onEnterRecommendationHold` below instead (cinatra#2838 dropped the
+      // unused caller-supplied field from this seam).
       let href = runHref;
       if (classifyRunWaitInterrupt(interrupt) === "input") {
         const { findChatConversationPathForAgentRun } = await import(
@@ -466,6 +516,156 @@ export const runWaitNotifier: RunWaitNotifier = {
         "[run-awaiting-human] could not clear auto-gate-open notification:",
         err instanceof Error ? err.message : err,
       );
+    }
+  },
+
+  // cinatra#2835 — a run-start recommendation HOLD parked a run.
+  //
+  // THE WRITE IS FENCED. Every other emitter in this module writes on a fact that
+  // already happened and cannot un-happen (a committed status transition, a
+  // created gate). A hold is different: the park it names can go terminal at any
+  // instant, and because a hold moves no run status, the park's own transition is
+  // the ONLY event that ever clears this row. A write that lands after it is stale
+  // forever. Ordering the check before the write does not help — the check is over
+  // the moment it returns.
+  //
+  // So the check IS the write. `buildHoldNotificationFence` supplies a
+  // `SELECT … FOR UPDATE` of the park matched on (id, run, checkpoint,
+  // status='parked'); the insert is driven from its rows inside one transaction on
+  // one connection. That gives two properties at once:
+  //
+  //   FABRICATION (finding 2) — an invented park id, a park belonging to another
+  //     run, an auto-gate `review` park, or an already-terminal park all yield no
+  //     guard row and therefore no notification. Nothing upstream has to be
+  //     trusted, and no cast can help: the park table decides.
+  //   TOCTOU (finding 1) — `FOR UPDATE` takes the park's row lock, which is the
+  //     same lock `sweepParks`' `status = 'parked'` CAS must take. Enter and sweep
+  //     therefore serialise: either we commit first and the sweep's clear finds our
+  //     row, or the sweep commits first and our guard, re-evaluated against the new
+  //     row version, matches nothing. There is no interleaving left in which the
+  //     clear precedes the write it was meant to remove.
+  //
+  // The fence's `mark` records `hold_notification = 'live'` on the same park in the
+  // same statement, which is what makes the matching clear RETRYABLE (finding 3):
+  // see `onClearRecommendationHold` below. It is gated on the INSERT's `RETURNING`
+  // output (cinatra#2838), because a guard row does not by itself mean a row was
+  // written: the insert also carries `ON CONFLICT … DO NOTHING`, and an initiator
+  // who already holds a row on this run's key writes nothing. Marking `live` there
+  // would have claimed a row no park id of this hold's ever reached, and the
+  // park-scoped clear below would then match nothing and ack the obligation as
+  // discharged — a hold announced to nobody, recorded as announced.
+  //
+  // `waitKind: "input"` and the conversation deep-link are the #2729 ruling for a
+  // held run (it carries no HITL interrupt to derive a classification from), and
+  // `reason: "pending_input"` is the run's ACTUAL status — presentation and
+  // destination only, no consumer's state, filter or route sees anything new.
+  async onEnterRecommendationHold({ runId, parkId }) {
+    try {
+      await import("@/lib/notifications-host");
+      const { readAgentRunById } = await import("@cinatra-ai/agents");
+      const run = await readAgentRunById(runId);
+      const userId = run?.runBy;
+      // No initiator (system-/trigger-launched run) → no one to notify, and the
+      // park stays `hold_notification = 'none'`: nothing written, nothing owed.
+      if (!userId) return;
+      const { buildHoldNotificationFence } = await import(
+        "@cinatra-ai/agents/run-wait-notifier"
+      );
+      const {
+        resolveAgentRunHref,
+        createNotificationForRecipient,
+        NOTIFICATION_WRITE_CTE,
+      } = await import("@cinatra-ai/notifications/server");
+      // The park-side SQL comes from the package that OWNS the park table; this
+      // module is only the translator that knows both vocabularies (and is the one
+      // place that can reach both tables on a single connection). The insert's CTE
+      // name travels the same way — the notifications package owns it, and the
+      // park package's `mark` gates itself on it (cinatra#2838).
+      const holdFence = buildHoldNotificationFence({
+        schema: appSchemaName(),
+        parkId,
+        runId,
+        insertedCte: NOTIFICATION_WRITE_CTE,
+      });
+      const runHref = await resolveAgentRunHref({ runId });
+      // A held run belongs to the conversation it was started in — the same
+      // destination an unanswered input field gets. Best-effort: no resolvable
+      // conversation keeps the run page, the pre-existing destination.
+      const { findChatConversationPathForAgentRun } = await import(
+        "@/lib/assistant-thread-store"
+      );
+      const conversationHref = await Promise.resolve()
+        .then(() => findChatConversationPathForAgentRun(runId))
+        .catch(() => null);
+      await createNotificationForRecipient(
+        { kind: "user", userId },
+        buildRunAwaitingHumanNotificationInput({
+          runId,
+          reason: "pending_input",
+          runTitle: run.title,
+          href: conversationHref ?? runHref,
+          waitKind: "input",
+          holdParkId: parkId,
+        }),
+        {
+          // Single, already-resolved recipient: the fence takes ONE park row lock
+          // for ONE insert. (A fenced write with an expanded roster would take the
+          // lock once per recipient, in separate transactions — correct, but not a
+          // shape any caller needs today.)
+          recipientUserIds: [userId],
+          fence: {
+            values: holdFence.values,
+            precondition: holdFence.guard,
+            after: [holdFence.mark],
+          },
+        },
+      );
+    } catch (err) {
+      console.warn(
+        "[run-awaiting-human] could not emit recommendation-hold notification:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  },
+
+  // cinatra#2835 — the hold ended: hard-delete the row its enter wrote.
+  //
+  // Scoped to the park id the row carries, not just the run's per-run key: this
+  // clear can be a RETRY driven by a sweep long after the fact, and by then the key
+  // may legitimately belong to a different, still-live wait on the same run. A hold
+  // only ever deletes its own row.
+  //
+  // The boolean is the sweeper's ACK, and it is only ever `true` for a delete that
+  // actually committed — a throw returns `false` and the park keeps its
+  // `hold_notification = 'live'` obligation for the next sweep. "Matched no row" is
+  // still `true`: the obligation is discharged either way, and the delete is
+  // idempotent by construction.
+  async onClearRecommendationHold({ runId, parkId }) {
+    try {
+      await import("@/lib/notifications-host");
+      const { readAgentRunById } = await import("@cinatra-ai/agents");
+      const run = await readAgentRunById(runId);
+      const userId = run?.runBy;
+      // The row is addressed by (user, key, park). Without the initiator there is
+      // no address — and no row either: the enter writes only for a resolvable
+      // initiator, so a park marked `live` always had one. An unreadable run here
+      // is a purged run, and retrying forever would never find it, so the
+      // obligation is retired rather than left to spin.
+      if (!userId) return true;
+      const { deleteHoldNotificationForUser } = await import(
+        "@cinatra-ai/notifications/server"
+      );
+      return deleteHoldNotificationForUser({
+        userId,
+        dedupeKey: runAwaitingHumanDedupeKey(runId),
+        holdParkId: parkId,
+      });
+    } catch (err) {
+      console.warn(
+        "[run-awaiting-human] could not clear recommendation-hold notification:",
+        err instanceof Error ? err.message : err,
+      );
+      return false;
     }
   },
 
