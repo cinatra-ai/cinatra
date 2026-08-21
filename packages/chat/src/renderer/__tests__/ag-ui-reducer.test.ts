@@ -148,6 +148,117 @@ describe("agUiReduce — citations via DATA_PART", () => {
   });
 });
 
+describe("agUiReduce — DATA_PART slot identity (cinatra#2827)", () => {
+  const REVIEW = {
+    viewType: "artifact_review_gate",
+    schemaVersion: 1,
+    ref: "gate-ref-1",
+  } as const;
+  const slotted = (toolCallId: string, view: Record<string, unknown> = { ...REVIEW }): AgUiEvent =>
+    ({ type: "DATA_PART", data: view, toolCallId }) as AgUiEvent;
+
+  it("folds a slotted renderable view onto the tool call that produced it", () => {
+    const s = reduceAgUiEvents([
+      runStarted(),
+      toolStart("t1", "artifact_review_gate_render"),
+      toolEnd("t1"),
+      slotted("t1"),
+    ]);
+    const part = toolCallParts(s)[0];
+    expect(part.kind === "tool_call" && part.views).toEqual([REVIEW]);
+    // It is folded, not ALSO appended — a view drawn from both lists is drawn
+    // twice, once at its step and once after the turn.
+    expect(s.dataParts).toEqual([]);
+  });
+
+  it("keeps a view whose toolCallId names no call in this trace", () => {
+    // Never dropped for having a slot the trace cannot place: it still owes the
+    // reader a render, so it falls through to the turn-level list.
+    const s = reduceAgUiEvents([
+      runStarted(),
+      toolStart("t1", "artifact_review_gate_render"),
+      slotted("tX"),
+    ]);
+    const part = toolCallParts(s)[0];
+    expect(part.kind === "tool_call" && part.views).toBeUndefined();
+    expect(s.dataParts).toEqual([REVIEW]);
+  });
+
+  it("keeps EXACTLY the previous behaviour for a view with no slot at all", () => {
+    const s = reduceAgUiEvents([
+      runStarted(),
+      toolStart("t1", "artifact_review_gate_render"),
+      { type: "DATA_PART", data: { ...REVIEW } } as AgUiEvent,
+    ]);
+    expect(s.dataParts).toEqual([REVIEW]);
+    expect(toolCallParts(s)[0]).not.toHaveProperty("views");
+  });
+
+  it("is idempotent — a replayed slotted view is a no-op by reference", () => {
+    let s = reduceAgUiEvents([
+      runStarted(),
+      toolStart("t1", "artifact_review_gate_render"),
+      slotted("t1"),
+    ]);
+    const before = s;
+    s = agUiReduce(s, slotted("t1"));
+    expect(s).toBe(before);
+    const part = toolCallParts(s)[0];
+    expect(part.kind === "tool_call" && part.views).toHaveLength(1);
+  });
+
+  it("keeps two DISTINCT views produced by the same call, in wire order", () => {
+    const second = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "gate-ref-2" };
+    const s = reduceAgUiEvents([
+      runStarted(),
+      toolStart("t1", "artifact_review_gates_list"),
+      slotted("t1"),
+      slotted("t1", second),
+    ]);
+    const part = toolCallParts(s)[0];
+    expect(part.kind === "tool_call" && part.views).toEqual([REVIEW, second]);
+  });
+
+  it("does NOT hijack the structural kinds — an agent_run pin still pins", () => {
+    // `agent_run` and `citations` carry their own `toolCallId`-shaped payloads
+    // and their own transitions; the fold must run AFTER them, never instead.
+    const s = reduceAgUiEvents([
+      runStarted(),
+      toolStart("t1", "agent_run"),
+      toolEnd("t1"),
+      agentRunDataPart("t1", "agent-run-99", 0),
+    ]);
+    const part = toolCallParts(s)[0];
+    expect(part.kind === "tool_call" && part.runId).toBe("agent-run-99");
+    expect(part.kind === "tool_call" && part.views).toBeUndefined();
+  });
+
+  it("does not fold a NON-view structured payload that happens to carry a slot", () => {
+    const s = reduceAgUiEvents([
+      runStarted(),
+      toolStart("t1", "some_tool"),
+      { type: "DATA_PART", data: { kind: "opaque", id: "1" }, toolCallId: "t1" } as AgUiEvent,
+    ]);
+    expect(toolCallParts(s)[0]).not.toHaveProperty("views");
+    expect(s.dataParts).toEqual([{ kind: "opaque", id: "1" }]);
+  });
+
+  it("survives a STATE_SNAPSHOT — the folded view rides the resumed trace", () => {
+    const live = reduceAgUiEvents([
+      runStarted(),
+      toolStart("t1", "artifact_review_gate_render"),
+      toolEnd("t1"),
+      slotted("t1"),
+    ]);
+    const resumed = agUiReduce(initialConversationState(), {
+      type: "STATE_SNAPSHOT",
+      snapshot: live,
+    } as AgUiEvent);
+    const part = resumed.message.parts.find((p) => p.kind === "tool_call");
+    expect(part && part.kind === "tool_call" && part.views).toEqual([REVIEW]);
+  });
+});
+
 describe("agUiReduce — HITL interrupt/resume", () => {
   it("opens an interrupt slice on INTERRUPT and clears it on RESUME", () => {
     let s = agUiReduce(initialConversationState(), runStarted());

@@ -25,6 +25,24 @@ export type AssistantToolCallPart = {
    * the assistant message. Always undefined for non-agent_run tools.
    */
   runId?: string;
+  /**
+   * The renderable views this tool call PRODUCED (cinatra#2827, epic #2784 S9i).
+   *
+   * A lifecycle card is minted at a tool RESULT, so the step that produced it is
+   * known on the wire (`DATA_PART.toolCallId`). Carrying it here is what makes
+   * "the card is at its part's position in the chat" a property of the trace
+   * rather than a claim: the ordered-parts renderer draws these inside this
+   * part's own container, and nothing appends them after the turn.
+   *
+   * RAW WIRE PAYLOADS, deliberately — the same `Record<string, unknown>` shape
+   * `UiMessage.dataParts` carries, validated and dispatched by the ONE
+   * renderable-view registry at render time. Parsing here would fork the one
+   * validation path every surface shares.
+   *
+   * Absent (not empty) on a call that produced none, so a turn carrying no view
+   * serializes byte-identically to before this field existed.
+   */
+  views?: Record<string, unknown>[];
 };
 
 export type AssistantMessagePart = AssistantTextPart | AssistantToolCallPart;
@@ -116,6 +134,42 @@ export function applyToolResultEvent(
   // If no match, return the original reference so React diffing skips
   // the message — avoids spurious re-renders on stray tool_result events.
   return matched ? next : parts;
+}
+
+/**
+ * Attach a renderable view to the tool call that PRODUCED it (cinatra#2827).
+ *
+ * Returns the ORIGINAL array reference when nothing changed — an unknown
+ * `toolCallId` (the producing call is not in this turn's trace) and a replayed
+ * identical payload are both no-ops, so a durable-log replay folds to the same
+ * trace it folded to live. The dedupe is STRUCTURAL, matching the reducer's
+ * `dataParts` dedupe, because the wire carries no per-view identity to key on.
+ *
+ * A payload that cannot be serialized (a hostile getter, a cycle) skips the
+ * dedupe and is attached anyway: the render path is guarded and draws its safe
+ * fallback, which is strictly better than dropping a view the producer sent.
+ */
+export function attachViewToToolCall(
+  parts: AssistantMessagePart[],
+  toolCallId: string,
+  view: Record<string, unknown>,
+): AssistantMessagePart[] {
+  if (!toolCallId) return parts;
+  const index = parts.findIndex((p) => p.kind === "tool_call" && p.id === toolCallId);
+  if (index === -1) return parts;
+  const target = parts[index] as AssistantToolCallPart;
+  const existing = target.views ?? [];
+  try {
+    const serialized = JSON.stringify(view);
+    if (serialized !== undefined && existing.some((v) => JSON.stringify(v) === serialized)) {
+      return parts;
+    }
+  } catch {
+    /* unserializable — attach rather than drop (see the doc above). */
+  }
+  const next = [...parts];
+  next[index] = { ...target, views: [...existing, view] };
+  return next;
 }
 
 /**
