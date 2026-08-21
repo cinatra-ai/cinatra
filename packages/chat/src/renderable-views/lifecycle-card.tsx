@@ -228,12 +228,28 @@ export function LifecycleCard({
       className="my-3 rounded-lg border border-line bg-surface-muted p-3 text-xs text-muted-foreground"
       data-lifecycle-card={view.viewType}
       data-lifecycle-card-state={state.state}
-      // The HOST this card actually drew on. It is the surface's own
-      // declaration — never anything about the subject — so it discloses
-      // nothing the page does not already know about itself, and it makes the
-      // three facts a screenshot has to prove (which kind, which host, which
-      // state) readable off the card's own root rather than asserted beside it.
-      data-lifecycle-card-host={host}
+      // The HOST this card actually drew on — declared ONLY when this element
+      // is an owner root, which for this shell means exactly the one reading it
+      // owns: §VI's expired proposal.
+      //
+      // `data-lifecycle-card-host` is the third of the three attributes that
+      // MAKE an element a card root (cinatra#2827's carriage matrix, and the
+      // capture contract that cites the same three). The S1 placeholder is not
+      // a card root: it names the kind and a state, declares no host, and
+      // offers nothing to press — that is what keeps a kind whose owner has not
+      // landed inside `CHAT_OWNER_MOUNT_OBLIGATIONS`. Declaring the host on
+      // every state line would have made the placeholder answer to a gate it
+      // must fail, and it did: §VII's summary, whose ruled control set is
+      // empty, passed the matrix on the declaration alone.
+      //
+      // So the attribute follows the DRAWING, not the element. Where the
+      // expired reading is on screen the three facts a screenshot has to prove
+      // (which kind, which host, which state) are readable off this root
+      // exactly as the review gate's are off its own; where the shell is only
+      // holding S1's floor, they are not, because there is no owner there to
+      // read them from. Nothing about the subject is disclosed either way — the
+      // value is the surface's own declaration.
+      data-lifecycle-card-host={expired === null ? undefined : host}
     >
       <div className="font-semibold text-foreground">{CARD_TITLES[view.viewType]}</div>
       {expired === null ? (
