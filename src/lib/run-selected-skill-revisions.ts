@@ -25,6 +25,8 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
+import { SELECTION_SOURCES } from "@cinatra-ai/skills/recommendation";
+
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import type { SelectionSource } from "@cinatra-ai/skills/recommendation";
@@ -358,4 +360,81 @@ export function readRunRejectedRecommendations(runId: string): RunRejectedRecomm
     recommendationSource: String(r.recommendation_source),
     recommendedRank: r.recommended_rank == null ? null : Number(r.recommended_rank),
   }));
+}
+
+/**
+ * What ONE chip recorded, for the SETTLED reading the ratified drawing fixes
+ * (design `specs/app-lifecycle-cards.html` §V at 60b27dfbb8a2: "one chip per
+ * skill, each showing what it recorded"). Derived from the run's OWN durable
+ * evidence — nothing new is written to represent it:
+ *
+ *   confirmed — a selection row whose source is `recommended_confirmed`
+ *               (the reader took the skill as scored);
+ *   adjusted  — a selection row whose source is `user_adjusted` (the reader
+ *               opened ADJUST on a scored skill and settled it there) or
+ *               `user_forced` (the reader put a skill the scorer did NOT
+ *               recommend onto the run). Both are "the reader shaped this one";
+ *               the two sources are kept apart in the store because only the
+ *               second contradicts the scorer.
+ *   skipped   — a rejected-recommendation row (`recommended_not_kept` from a
+ *               confirm that left it out, or `user_skipped` from a skip).
+ *
+ * `name` is the skill's DISPLAY NAME — what §V's chips print, held and settled
+ * alike ("Enrich contacts", never `@vendor/pkg:enrich` and never the slug
+ * `enrich-contacts`). It is the OWNING EXTENSION'S MANIFEST `cinatra.displayName`,
+ * resolved server-side beside the rest of the skill's metadata; the evidence
+ * rows carry ids only, so the name is joined in by the caller that can resolve
+ * it and falls back to the id when nothing can: a settled chip prints the best
+ * true name available, never an invented one.
+ */
+export type RunRecommendationDecidedSkill = {
+  skillId: string;
+  name: string;
+  mark: "confirmed" | "adjusted" | "skipped";
+};
+
+/**
+ * Build §V's settled per-chip reading out of the two durable halves the run
+ * already writes. A selection row wins over a rejected row for the same skill
+ * (a skill that is IN the run's authoritative set was kept, whatever else was
+ * recorded on the way), and the order is by skill id so the settled row is
+ * stable across reads.
+ *
+ * `nameBySkillId` is the display-name join (cinatra#2841). The evidence rows are
+ * ids; §V's chips are names. An id with no resolved name keeps the id as its
+ * name — the settled row prints the truest label it has rather than dropping the
+ * chip or inventing a title.
+ */
+export function decidedSkillsFromEvidence(
+  selected: Pick<RunSelectedSkillRevision, "skillId" | "selectionSource">[],
+  rejected: Pick<RunRejectedRecommendation, "skillId">[],
+  nameBySkillId?: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
+): RunRecommendationDecidedSkill[] {
+  const nameOf = (skillId: string): string => {
+    const resolved =
+      nameBySkillId instanceof Map
+        ? nameBySkillId.get(skillId)
+        : (nameBySkillId as Record<string, string> | undefined)?.[skillId];
+    return resolved != null && resolved !== "" ? resolved : skillId;
+  };
+  const marks = new Map<string, RunRecommendationDecidedSkill["mark"]>();
+  for (const row of selected) {
+    // BOTH human-edit sources read as §V's `adjusted` mark: `user_adjusted` (an
+    // in-set skill settled through ADJUST) and `user_forced` (a skill the scorer
+    // did not recommend, put on by the reader). Anything else — a plain confirm
+    // or a headless auto-apply — is `confirmed`.
+    marks.set(
+      row.skillId,
+      row.selectionSource === SELECTION_SOURCES.userForced ||
+        row.selectionSource === SELECTION_SOURCES.userAdjusted
+        ? "adjusted"
+        : "confirmed",
+    );
+  }
+  for (const row of rejected) {
+    if (!marks.has(row.skillId)) marks.set(row.skillId, "skipped");
+  }
+  return [...marks.entries()]
+    .map(([skillId, mark]) => ({ skillId, name: nameOf(skillId), mark }))
+    .sort((a, b) => (a.skillId < b.skillId ? -1 : a.skillId > b.skillId ? 1 : 0));
 }

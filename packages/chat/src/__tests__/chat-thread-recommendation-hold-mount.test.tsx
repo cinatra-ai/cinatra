@@ -217,17 +217,30 @@ describe("the §V card is mounted in the conversation transcript", () => {
     expect(wrapper?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
   });
 
-  it("puts the chip row and BOTH action anchors inside that wrapper", async () => {
+  it("puts the chip row and ITS PER-CHIP action anchors on that marker root", async () => {
+    // RE-ANCHORED to the §V redraw (cinatra#2841), same guarantee. This pinned
+    // "the marked element really carries the decidable row, not a pointer to
+    // it". Two things about the drawing moved underneath it: the row IS the
+    // card, so the chip row is the marker's OWN element rather than a
+    // descendant of it; and the decision affordances are PER CHIP, so the
+    // row-level Confirm/Skip pair this used to name is drawn nowhere. Both
+    // halves are still asserted here — the row, and real pressable decision
+    // controls inside it — so a pointer still cannot satisfy this test.
     const { container } = await mountHeldTurn();
     const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
 
     await waitFor(() => {
-      if (!wrapper?.querySelector("[data-run-recommendation-chip-row]")) {
-        throw new Error("chip row not drawn inside the wrapper");
+      if (!wrapper?.querySelector("[data-recommendation-chip]")) {
+        throw new Error("no chip drawn on the marked row");
       }
     });
-    expect(wrapper?.querySelector('[data-action="confirm-run-recommendation"]')).not.toBeNull();
-    expect(wrapper?.querySelector('[data-action="skip-run-recommendation"]')).not.toBeNull();
+    expect(wrapper?.hasAttribute("data-run-recommendation-chip-row")).toBe(true);
+    expect(wrapper?.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+    expect(wrapper?.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+    expect(wrapper?.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+    // §V deleted the row-level pair; it may not come back on this host either.
+    expect(wrapper?.querySelector('[data-action="confirm-run-recommendation"]')).toBeNull();
+    expect(wrapper?.querySelector('[data-action="skip-run-recommendation"]')).toBeNull();
   });
 
   it("keeps the card OUTSIDE the inline run panel's subtree", async () => {
@@ -256,21 +269,36 @@ describe("the §V card is mounted in the conversation transcript", () => {
     expect(root?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
     expect(root?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
     expect(root?.getAttribute("data-lifecycle-card-state")).toBe("held");
-    // The chip row is INSIDE that root, so the anchor set reads as one card.
-    expect(root?.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull();
+    // RE-ANCHORED (cinatra#2841): the chip row used to sit INSIDE this root, so
+    // the pin looked for it as a descendant. §V made THE ROW THE CARD, so the
+    // row and the identity are now the same element — which is the stronger
+    // reading of what this always guarded: the anchor set reads as ONE card.
+    expect(root?.hasAttribute("data-run-recommendation-chip-row")).toBe(true);
   });
 
   it("moves the root's state attribute with the decision", async () => {
+    // RE-ANCHORED (cinatra#2841), same behaviour: the root's state attribute
+    // still MOVES when the hold settles, and the host stays this mount's. Only
+    // the settled vocabulary changed — §V's row draws `held` while live and
+    // `decided` once released, and says WHICH way it went on
+    // `data-run-recommendation-decision` rather than by spelling the outcome
+    // into the lifecycle state. Both are asserted, so this pins strictly more
+    // than the single attribute it used to read.
     holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
     const result = await mountSurface("chat", { messages: dispatchTurn() });
 
     await waitFor(() => {
-      if (!result.container.querySelector('[data-lifecycle-card-state="confirmed"]')) {
-        throw new Error("root state did not settle to confirmed");
+      if (!result.container.querySelector('[data-lifecycle-card-state="decided"]')) {
+        throw new Error("root state did not settle to decided");
       }
     });
     const root = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
     expect(root?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+    expect(root?.getAttribute("data-run-recommendation-decision")).toBe("confirmed");
+    // It really MOVED: the live reading is gone from this turn.
+    expect(
+      result.container.querySelector('[data-lifecycle-card-state="held"]'),
+    ).toBeNull();
   });
 
   it("asks the card's own authority for THIS run", async () => {
@@ -311,15 +339,34 @@ describe("the decided card settles in the same conversation", () => {
       }
     });
     const wrapper = result.container.querySelector("[data-chat-thread-recommendation-hold]");
-    expect(wrapper?.querySelector('[data-run-recommendation-decision="confirmed"]')).not.toBeNull();
-    // Settled means settled: the live controls are gone, in place, with no
-    // navigation and nothing else taking over the turn.
+    // RE-ANCHORED (cinatra#2841): the settled row IS the marked root, so the
+    // decision it recorded is read off that element instead of a descendant.
+    expect(wrapper?.getAttribute("data-run-recommendation-decision")).toBe("confirmed");
+    // §V: "each chip states its own outcome in place" — the settled reading is
+    // still per chip, in the same turn, with no navigation.
+    expect(
+      wrapper?.querySelector('[data-recommendation-chip][data-chip-mark="confirmed"]'),
+    ).not.toBeNull();
+    // Settled means settled: nothing left to press. Both the per-chip
+    // affordances §V draws while live AND the row-level pair it deleted are
+    // absent — the second half keeps the old drawing from creeping back.
+    expect(wrapper?.querySelector("[data-skill-action]")).toBeNull();
     expect(wrapper?.querySelector('[data-action="confirm-run-recommendation"]')).toBeNull();
     expect(wrapper?.querySelector('[data-action="skip-run-recommendation"]')).toBeNull();
   });
 
   it("shows the skipped summary in place", async () => {
-    holdState.current = { state: "skipped", runId: RUN_ID };
+    // FIXTURE RE-ANCHORED (cinatra#2841), same pin. §V's settled row states each
+    // skill's own outcome, so it draws from the hold's per-skill evidence; a
+    // skipped hold naming no skill at all has nothing per-skill to say and §V
+    // draws no chip-less settled reading. The fixture therefore carries the
+    // `decided` evidence a real skipped hold carries. The behaviour pinned is
+    // unchanged: the skipped reading settles IN this conversation.
+    holdState.current = {
+      state: "skipped",
+      runId: RUN_ID,
+      decided: [{ skillId: "@cinatra-ai/chat:blog-content", name: "blog-content", mark: "skipped" }],
+    };
     const result = await mountSurface("chat", { messages: dispatchTurn() });
 
     await waitFor(() => {
@@ -328,7 +375,10 @@ describe("the decided card settles in the same conversation", () => {
       }
     });
     const wrapper = result.container.querySelector("[data-chat-thread-recommendation-hold]");
-    expect(wrapper?.querySelector('[data-run-recommendation-decision="skipped"]')).not.toBeNull();
+    expect(wrapper?.getAttribute("data-run-recommendation-decision")).toBe("skipped");
+    expect(
+      wrapper?.querySelector('[data-recommendation-chip][data-chip-mark="skipped"]'),
+    ).not.toBeNull();
   });
 });
 
@@ -376,7 +426,14 @@ describe("the turn shows exactly one recommendation card", () => {
   });
 
   it("draws one SKIPPED summary — the state the duplication showed up in", async () => {
-    const roots = await countCardRoots({ state: "skipped", runId: RUN_ID });
+    // Same fixture re-anchor as the skipped pin above (cinatra#2841): §V's
+    // settled row needs the per-skill evidence to have a card to draw at all,
+    // and this pin is about HOW MANY cards that turn shows, not how few.
+    const roots = await countCardRoots({
+      state: "skipped",
+      runId: RUN_ID,
+      decided: [{ skillId: "@cinatra-ai/chat:blog-content", name: "blog-content", mark: "skipped" }],
+    });
 
     expect(roots).toHaveLength(1);
     expect(roots[0].getAttribute("data-lifecycle-card-host")).toBe("chat_thread");

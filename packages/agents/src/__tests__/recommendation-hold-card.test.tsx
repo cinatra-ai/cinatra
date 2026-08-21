@@ -80,20 +80,37 @@ type HoldState =
         name?: string;
       }[];
       holdRef: string;
+      canDecide?: boolean;
     }
-  | { state: "confirmed"; skillNames: string[] }
-  | { state: "skipped" };
+  | { state: "confirmed"; skillNames: string[]; decided?: DecidedSkill[] }
+  | { state: "skipped"; decided?: DecidedSkill[] };
+
+type DecidedSkill = {
+  skillId: string;
+  /** §V's chips print the NAME, settled and held alike (cinatra#2841). */
+  name: string;
+  mark: "confirmed" | "adjusted" | "skipped";
+};
 
 const holdStateMock = vi.fn(async (input: { runId: string }): Promise<HoldState> => {
   void input;
   return { state: "none" };
 });
-const confirmMock = vi.fn(async () => ({ ok: true, dispatched: true }));
+// Takes the confirm PAYLOAD so the suite can read it back: cinatra#2841's
+// per-chip adjusted set rides that payload, and a mock that swallowed it could
+// not tell a durable adjustment from a plain confirm.
+const confirmMock = vi.fn(async (input?: unknown) => {
+  void input;
+  return { ok: true, dispatched: true };
+});
 const skipMock = vi.fn(async () => ({ ok: true, dispatched: true }));
 
 vi.mock("../run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction: (input: { runId: string }) => holdStateMock(input),
-  confirmRunRecommendationAction: () => confirmMock(),
+  // The ARGUMENTS are forwarded (cinatra#2841): the reader's per-chip adjust
+  // decisions ride the confirm payload, so a suite that swallowed them could not
+  // tell a durable adjustment from a plain confirm.
+  confirmRunRecommendationAction: (input: unknown) => confirmMock(input),
   skipRunRecommendationAction: () => skipMock(),
 }));
 
@@ -432,22 +449,28 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     // The card root also carries `data-lifecycle-card-host`, which by
     // definition differs per host — it is the mount's IDENTITY, required on the
     // §V root so each authorized mount is labelled with the host it actually
-    // declared. That is not the thing this pin guards. The guarantee here is
+    // declared (cinatra#2841; `ReviewGateCard` has emitted it per host since it
+    // shipped). That is not the thing this pin guards. The guarantee here is
     // that what a host DRAWS — its content, its affordances, its state — is not
     // a property of which host it is, so the label is normalised and everything
-    // else still compares byte for byte, including both action anchors.
+    // else still compares byte for byte, including all three chip actions.
     const stripGeneratedIds = (html: string) =>
       html
         .replaceAll(/radix-_r_[0-9a-z]+_/g, "radix-_r_ID_")
-        .replaceAll(/data-lifecycle-card-host="[^"]*"/g, 'data-lifecycle-card-host="HOST"')
+        .replaceAll(/data-lifecycle-card-host="[a-z_]+"/g, 'data-lifecycle-card-host="HOST"')
         // The chat host also stamps its own evidence marker on the same root —
         // again an identity, not a drawing. Normalised for the same reason, and
         // asserted explicitly below so its presence is still pinned.
         .replaceAll(/ ?data-chat-thread-recommendation-hold=""/g, "");
     const widgetHtml = stripGeneratedIds(widget.container.innerHTML);
     expect(widgetHtml).not.toBe("");
-    expect(widgetHtml).toContain('data-action="confirm-run-recommendation"');
-    expect(widgetHtml).toContain('data-action="skip-run-recommendation"');
+    // REDRAWN (cinatra#2841): the decision affordances are PER CHIP now — the
+    // row-level pair this used to name does not exist on any host.
+    expect(widgetHtml).toContain('data-action="confirm-skill -> confirmed"');
+    expect(widgetHtml).toContain('data-action="adjust-skill -> adjusted"');
+    expect(widgetHtml).toContain('data-action="skip-skill -> skipped"');
+    expect(widgetHtml).not.toContain("confirm-run-recommendation");
+    expect(widgetHtml).not.toContain("skip-run-recommendation");
     // The label is normalised above, so assert it is REALLY there and really
     // host-correct on each mount — otherwise the normalisation could hide a
     // missing or wrong identity.
@@ -485,22 +508,33 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     );
   });
 
-  it("draws the shipped chip-row for a held run and the shipped summaries for a decided one", async () => {
+  it("draws the redrawn chip-row for a held run and the settled row for a decided one", async () => {
+    // The old assertion named the heading plate ("Confirm the skills for this
+    // run"). That heading is not drawn any more (§V: "the row is the whole
+    // card"), so the assertion is replaced by the thing that IS drawn — a chip
+    // carrying its own three affordances — rather than deleted.
     holdStateMock.mockImplementation(async () => HELD);
     const { unmount } = await mountCard({ wireRef: "hold-ref-1" });
     await waitFor(() =>
-      expect(screen.queryByText(/confirm the skills for this run/i)).not.toBeNull(),
+      expect(document.querySelectorAll("[data-recommendation-chip]")).toHaveLength(1),
     );
+    expect(screen.queryByText(/confirm the skills for this run/i)).toBeNull();
     unmount();
     cleanup();
 
-    holdStateMock.mockImplementation(async () => ({ state: "skipped" }));
+    holdStateMock.mockImplementation(async () => ({
+      state: "skipped",
+      decided: [{ skillId: "skill-a", name: "Skill A", mark: "skipped" }],
+    }));
     await mountCard({ wireRef: null });
     await waitFor(() =>
       expect(
         document.querySelector('[data-run-recommendation-decision="skipped"]'),
       ).not.toBeNull(),
     );
+    expect(
+      document.querySelector('[data-recommendation-chip][data-chip-mark="skipped"]'),
+    ).not.toBeNull();
   });
 
   it("draws nothing at all for a run that was never held", async () => {
@@ -508,6 +542,244 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     const { container } = await mountCard({ wireRef: null });
     await waitFor(() => expect(holdStateMock).toHaveBeenCalled());
     expect(container.innerHTML).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE RATIFIED §V DRAWING (cinatra#2841)
+// ---------------------------------------------------------------------------
+//
+// design `specs/app-lifecycle-cards.html` §V at design commit 60b27dfbb8a2:
+//
+//   "one chip per skill, each carrying its own Confirm, Adjust and Skip";
+//   "THE ROW IS THE WHOLE CARD. There is no heading plate above it and no
+//    row-level submit beneath it … A skill is settled by pressing one of ITS
+//    OWN three affordances, and each chip then shows what it recorded."
+//
+// Both halves are asserted: what §V draws must render, and what it does NOT
+// draw must be absent. The absence half is written as an EXPLICIT negative,
+// because "the heading is gone" is the whole point of the redraw and a suite
+// that only checks the new chips would pass with the old plate still on screen.
+// The last test in the block is the negative control for those negatives.
+
+const THREE_SKILLS = [
+  { skillId: "skill-enrich", skillRevisionId: "rev-1", recommended: true, name: "Enrich contacts" },
+  { skillId: "skill-draft", skillRevisionId: "rev-2", recommended: true, name: "Draft email" },
+  { skillId: "skill-send", skillRevisionId: "rev-3", recommended: true, name: "Schedule send" },
+];
+
+const HELD_THREE: HoldState = {
+  state: "held",
+  agentPackageName: "@cinatra-test/hold-fixture-agent",
+  promptText: "{}",
+  recommendations: THREE_SKILLS,
+  holdRef: "hold-ref-3",
+  canDecide: true,
+};
+
+const chips = () => [...document.querySelectorAll("[data-recommendation-chip]")];
+const chipFor = (skillId: string) =>
+  document.querySelector(`[data-recommendation-chip][data-skill-id="${skillId}"]`);
+const press = async (skillId: string, action: "confirm" | "adjust" | "skip") => {
+  const btn = document.querySelector(
+    `[data-skill-action="${action}"][data-skill-id="${skillId}"]`,
+  ) as HTMLButtonElement | null;
+  if (!btn) throw new Error(`no ${action} affordance on ${skillId}`);
+  await act(async () => {
+    btn.click();
+    await Promise.resolve();
+  });
+};
+
+describe("§V — one chip per skill, each with its own Confirm / Adjust / Skip", () => {
+  it("draws ONE chip per offered skill, and each chip carries all three affordances", async () => {
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    for (const skill of THREE_SKILLS) {
+      const chip = chipFor(skill.skillId);
+      expect(chip).not.toBeNull();
+      expect(chip!.textContent).toContain(skill.name);
+      // Its OWN three, scoped to the chip — not three shared by the row.
+      expect(chip!.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+      expect(chip!.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+      expect(chip!.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+      expect(chip!.getAttribute("data-chip-mark")).toBe("undecided");
+    }
+    // Three chips × three affordances, and nothing else that presses.
+    expect(document.querySelectorAll("[data-skill-action]")).toHaveLength(9);
+  });
+
+  it("draws NO heading plate — nothing states the question a second time", async () => {
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    expect(screen.queryByText(/confirm the skills for this run/i)).toBeNull();
+    expect(screen.queryByText(/recommended for your request/i)).toBeNull();
+    expect(screen.queryByText(/adjust the selection, then confirm/i)).toBeNull();
+    // …and no collapsible "Skills (n/m)" selector plate either.
+    expect(screen.queryByText(/^Skills \(\d+\/\d+\)$/)).toBeNull();
+  });
+
+  it("draws NO card-level submit — nothing decides every skill at once", async () => {
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    const { container } = await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    expect(container.querySelector('[data-action="confirm-run-recommendation"]')).toBeNull();
+    expect(container.querySelector('[data-action="skip-run-recommendation"]')).toBeNull();
+    // Structural form of the same claim: every button on the card belongs to a
+    // chip. A row-level pair would be a button with no chip ancestor.
+    const buttons = [...container.querySelectorAll("button")];
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) {
+      expect(b.closest("[data-recommendation-chip]")).not.toBeNull();
+    }
+  });
+
+  it("records each chip's OWN mark and releases only once EVERY chip is decided", async () => {
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    await press("skill-enrich", "confirm");
+    expect(chipFor("skill-enrich")!.getAttribute("data-chip-mark")).toBe("confirmed");
+    // Two chips are still undecided — the run is NOT released.
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(skipMock).not.toHaveBeenCalled();
+
+    await press("skill-draft", "skip");
+    expect(chipFor("skill-draft")!.getAttribute("data-chip-mark")).toBe("skipped");
+    expect(confirmMock).not.toHaveBeenCalled();
+
+    await press("skill-send", "confirm");
+    expect(chipFor("skill-send")!.getAttribute("data-chip-mark")).toBe("confirmed");
+    // The last chip completes the row, and the whole-row release fires ONCE
+    // (the named store deviation — the hold has no partial-decision record).
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    expect(skipMock).not.toHaveBeenCalled();
+  });
+
+  it("a row whose every chip was SKIPPED releases through the skip path, not an empty confirm", async () => {
+    // An empty confirmed selection writes no selection row at all, which reads
+    // back as NO decision — so "the reader kept nothing" is recorded as the
+    // hold's skip evidence, which is exactly what it means.
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    await press("skill-enrich", "skip");
+    await press("skill-draft", "skip");
+    await press("skill-send", "skip");
+
+    await waitFor(() => expect(skipMock).toHaveBeenCalledTimes(1));
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("ADJUST opens that skill's own panel, and settling it there marks the chip adjusted", async () => {
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    await press("skill-draft", "adjust");
+    // The panel is THIS skill's — it names the skill Adjust was pressed on.
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-skill-action="adjust-keep"][data-skill-id="skill-draft"]'),
+      ).not.toBeNull(),
+    );
+    const keep = document.querySelector(
+      '[data-skill-action="adjust-keep"][data-skill-id="skill-draft"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      keep.click();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(chipFor("skill-draft")!.getAttribute("data-chip-mark")).toBe("adjusted"),
+    );
+    // Adjust decides ONE skill; the other two still hold the row open.
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("§V — the settled and the read-only readings", () => {
+  it("SETTLED: one chip per skill, each stating what it recorded, and nothing left to press", async () => {
+    holdStateMock.mockImplementation(async () => ({
+      state: "confirmed",
+      skillNames: ["Enrich contacts", "Draft email"],
+      decided: [
+        { skillId: "skill-enrich", name: "Enrich contacts", mark: "confirmed" },
+        { skillId: "skill-draft", name: "Draft email", mark: "adjusted" },
+        { skillId: "skill-send", name: "Schedule send", mark: "skipped" },
+      ],
+    }));
+    const { container } = await mountCard({ wireRef: null });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    expect(chipFor("skill-enrich")!.getAttribute("data-chip-mark")).toBe("confirmed");
+    expect(chipFor("skill-enrich")!.textContent).toContain("Confirmed");
+    expect(chipFor("skill-draft")!.getAttribute("data-chip-mark")).toBe("adjusted");
+    expect(chipFor("skill-draft")!.textContent).toContain("Adjusted");
+    expect(chipFor("skill-send")!.getAttribute("data-chip-mark")).toBe("skipped");
+    expect(chipFor("skill-send")!.textContent).toContain("Skipped");
+
+    // "there is nothing left to press", and nothing summarised above the row.
+    expect(container.querySelectorAll("button")).toHaveLength(0);
+    expect(container.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+    expect(screen.queryByText(/skills confirmed/i)).toBeNull();
+  });
+
+  it("READ-ONLY: every chip keeps its three affordances on screen, DISABLED, over the reason", async () => {
+    holdStateMock.mockImplementation(async () => ({ ...HELD_THREE, canDecide: false }));
+    const { container } = await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    // Drawn, not removed — "the reader sees exactly what is being asked, and
+    // that it is not theirs to answer."
+    const controls = [...container.querySelectorAll("[data-skill-action]")];
+    expect(controls).toHaveLength(9);
+    for (const c of controls) expect((c as HTMLButtonElement).disabled).toBe(true);
+    for (const chip of chips()) expect(chip.getAttribute("aria-disabled")).toBe("true");
+    expect(container.querySelector("[data-run-recommendation-restricted]")?.textContent).toMatch(
+      /needs run access on it/i,
+    );
+
+    // And a disabled affordance decides nothing.
+    await press("skill-enrich", "confirm").catch(() => undefined);
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(chipFor("skill-enrich")!.getAttribute("data-chip-mark")).toBe("undecided");
+  });
+
+  it("NEGATIVE CONTROL: the absence assertions above can fail — the same queries find what IS drawn", async () => {
+    // Every negative in this block is only worth its ink if the query behind it
+    // is live. Same query APIs, same DOM, asserted POSITIVELY here: a suite that
+    // silently stopped matching anything would go red on this test first.
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    const { container } = await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    // `queryByText` (used for the absent heading) does find text on this card.
+    expect(screen.queryByText("Enrich contacts")).not.toBeNull();
+    // `querySelector('[data-action=…]')` (used for the absent row-level submit)
+    // does find an action attribute on this card.
+    expect(container.querySelector('[data-action="confirm-skill -> confirmed"]')).not.toBeNull();
+    // The chip count is read off the fixture, not hardcoded: a four-skill hold
+    // draws four chips, so "three" is a measurement rather than a constant.
+    cleanup();
+    holdStateMock.mockImplementation(async () => ({
+      ...HELD_THREE,
+      recommendations: [
+        ...THREE_SKILLS,
+        { skillId: "skill-extra", skillRevisionId: "rev-4", recommended: false, name: "Log outcome" },
+      ],
+    }));
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(4));
+    // …and the non-recommended candidate keeps its shipped marking.
+    expect(chipFor("skill-extra")!.getAttribute("data-forced")).toBe("true");
   });
 });
 
@@ -581,5 +853,310 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     // the bounded FAILURE budget, which `setInterval` could never express.
     expect(card).not.toMatch(/setInterval/);
     expect([...card.matchAll(/setTimeout\(/g)]).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE THREE GRADED §V CONFORMANCE FINDINGS (cinatra#2841 / PR #2866)
+// ---------------------------------------------------------------------------
+//
+// The live capture grading of the redrawn card found three ways the shipped
+// surface still failed the ratified drawing. Each is pinned here at the level
+// the defect actually lived at:
+//
+//   1. the ADJUSTED settled mark was UNREACHABLE — an in-set Adjust landed as a
+//      `recommended_confirmed` row and read back `Confirmed`, so §V's three
+//      marks reduced to two on screen;
+//   2. the settled chip printed the package-qualified skill ID while the held
+//      chip printed the display NAME — §V names skills, on both readings;
+//   3. no truthful `recommendation_hold` capture could satisfy the capture
+//      contract, because the card root emitted none of the three
+//      `data-lifecycle-card*` attributes the contract identifies it by.
+
+/** Open a skill's ADJUST panel and settle it there with "Keep it in this run". */
+const adjustKeep = async (skillId: string) => {
+  await press(skillId, "adjust");
+  await waitFor(() =>
+    expect(
+      document.querySelector(`[data-skill-action="adjust-keep"][data-skill-id="${skillId}"]`),
+    ).not.toBeNull(),
+  );
+  const keep = document.querySelector(
+    `[data-skill-action="adjust-keep"][data-skill-id="${skillId}"]`,
+  ) as HTMLButtonElement;
+  await act(async () => {
+    keep.click();
+    await Promise.resolve();
+  });
+};
+
+type ConfirmPayload = {
+  confirmedSkillIds: string[];
+  adjustedSkillIds?: string[];
+  forcedRevisions?: Record<string, string>;
+};
+const confirmPayload = (): ConfirmPayload =>
+  confirmMock.mock.calls[0]![0] as ConfirmPayload;
+
+describe("finding 1 — the ADJUSTED mark is reachable for a skill IN the scored set", () => {
+  it("an in-set Adjust -> Keep is carried to the store as an ADJUSTED skill, not a plain confirm", async () => {
+    // THE DEFECT: `deriveConfirmedSelection` stamps `user_forced` — the only
+    // source that read back as `adjusted` — exclusively for an id OUTSIDE the
+    // scored set, and this row only ever offers the scored set. So the reader
+    // could open Adjust, keep the skill, and get a chip reading `Confirmed`.
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    await press("skill-enrich", "confirm");
+    await adjustKeep("skill-draft");
+    expect(chipFor("skill-draft")!.getAttribute("data-chip-mark")).toBe("adjusted");
+    await press("skill-send", "confirm");
+
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    const payload = confirmPayload();
+    // All three are kept, and exactly the adjusted one is named as adjusted.
+    expect([...payload.confirmedSkillIds].sort()).toEqual([
+      "skill-draft",
+      "skill-enrich",
+      "skill-send",
+    ]);
+    expect(payload.adjustedSkillIds).toEqual(["skill-draft"]);
+  });
+
+  it("NEGATIVE CONTROL: a row settled with plain Confirms names NO adjusted skill", async () => {
+    // The assertion above is only worth its ink if the field can be absent.
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    await press("skill-enrich", "confirm");
+    await press("skill-draft", "confirm");
+    await press("skill-send", "confirm");
+
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    expect(confirmPayload().adjustedSkillIds).toBeUndefined();
+  });
+
+  it("an ADJUSTED skill that was never recommended still rides forcedRevisions", async () => {
+    // Forcing a below-threshold candidate on IS its adjustment, and the store
+    // keeps that apart from an in-set edit (`user_forced` vs `user_adjusted`) —
+    // only the first contradicts the scorer. The row reports both facts and the
+    // derivation decides; it never drops the pinned revision.
+    holdStateMock.mockImplementation(async () => ({
+      ...HELD_THREE,
+      recommendations: [
+        ...THREE_SKILLS,
+        { skillId: "skill-extra", skillRevisionId: "rev-4", recommended: false, name: "Log outcome" },
+      ],
+    }));
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(4));
+
+    await press("skill-enrich", "confirm");
+    await press("skill-draft", "confirm");
+    await press("skill-send", "confirm");
+    await adjustKeep("skill-extra");
+
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
+    const payload = confirmPayload();
+    expect(payload.forcedRevisions).toEqual({ "skill-extra": "rev-4" });
+    expect(payload.adjustedSkillIds).toEqual(["skill-extra"]);
+  });
+
+  it("SETTLED: the mark the store can now record draws as `Adjusted`, not `Confirmed`", async () => {
+    // The other end of the same chain: a `user_adjusted` selection row is
+    // derived to the `adjusted` mark (pinned in the actions suite), and the
+    // settled chip draws it. Before the fix no server answer could produce this.
+    holdStateMock.mockImplementation(async () => ({
+      state: "confirmed",
+      skillNames: ["Draft email"],
+      decided: [{ skillId: "skill-draft", name: "Draft email", mark: "adjusted" }],
+    }));
+    await mountCard({ wireRef: null });
+    await waitFor(() => expect(chips()).toHaveLength(1));
+
+    expect(chipFor("skill-draft")!.getAttribute("data-chip-mark")).toBe("adjusted");
+    expect(chipFor("skill-draft")!.textContent).toContain("Adjusted");
+    expect(chipFor("skill-draft")!.textContent).not.toContain("Confirmed");
+  });
+});
+
+describe("finding 2 — a settled chip prints the SAME display name a held chip prints", () => {
+  it("prints the name, and never the package-qualified id", async () => {
+    holdStateMock.mockImplementation(async () => ({
+      state: "confirmed",
+      skillNames: ["Blog writing"],
+      decided: [
+        {
+          skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+          name: "Blog writing",
+          mark: "confirmed",
+        },
+      ],
+    }));
+    const { container } = await mountCard({ wireRef: null });
+    await waitFor(() => expect(chips()).toHaveLength(1));
+
+    const chip = chips()[0]!;
+    expect(chip.textContent).toContain("Blog writing");
+    // The id is machine-readable on the chip, and printed nowhere: §V draws a
+    // name and no second, package-qualified line beside it.
+    expect(chip.getAttribute("data-skill-id")).toBe(
+      "@cinatra-ai/blog-writing-skill:blog-writing",
+    );
+    expect(container.textContent).not.toContain("@cinatra-ai/blog-writing-skill");
+  });
+
+  it("the HELD and the SETTLED reading label the same skill identically", async () => {
+    // The graded defect stated exactly: held chips read `blog-writing`, settled
+    // chips read `@cinatra-ai/blog-writing-skill:blog-writing`.
+    holdStateMock.mockImplementation(async () => ({
+      state: "held",
+      agentPackageName: "@cinatra-test/hold-fixture-agent",
+      promptText: "{}",
+      recommendations: [
+        {
+          skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+          skillRevisionId: "rev-b",
+          recommended: true,
+          name: "Blog writing",
+        },
+      ],
+      holdRef: "hold-ref-name",
+    }));
+    await mountCard({ wireRef: "hold-ref-name" });
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    const heldLabel = chips()[0]!.querySelector(".font-medium")!.textContent;
+    cleanup();
+
+    holdStateMock.mockImplementation(async () => ({
+      state: "confirmed",
+      skillNames: ["Blog writing"],
+      decided: [
+        {
+          skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+          name: "Blog writing",
+          mark: "confirmed",
+        },
+      ],
+    }));
+    await mountCard({ wireRef: null });
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    const settledLabel = chips()[0]!.querySelector(".font-medium")!.textContent;
+
+    expect(settledLabel).toBe(heldLabel);
+    expect(settledLabel).toBe("Blog writing");
+  });
+
+  it("falls back to the id when nothing could name the skill — a true label, never an invented one", async () => {
+    holdStateMock.mockImplementation(async () => ({
+      state: "skipped",
+      // What `decidedSkillsFromEvidence` produces when the name join resolves
+      // nothing: the id IS the name, which is the truest label available.
+      decided: [{ skillId: "orphan-skill", name: "orphan-skill", mark: "skipped" }],
+    }));
+    await mountCard({ wireRef: null });
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(chips()[0]!.textContent).toContain("orphan-skill");
+  });
+});
+
+describe("finding 3 — the card root declares its kind, its host and its state", () => {
+  const root = () => document.querySelector("[data-run-recommendation-chip-row]");
+
+  it("a HELD row declares recommendation_hold / run_card / held on its own root", async () => {
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+
+    expect(root()!.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+    expect(root()!.getAttribute("data-lifecycle-card-host")).toBe("run_card");
+    expect(root()!.getAttribute("data-lifecycle-card-state")).toBe("held");
+  });
+
+  it("a SETTLED row declares the same kind and host, with the state moved to decided", async () => {
+    holdStateMock.mockImplementation(async () => ({
+      state: "confirmed",
+      skillNames: ["Draft email"],
+      decided: [{ skillId: "skill-draft", name: "Draft email", mark: "confirmed" }],
+    }));
+    await mountCard({ wireRef: null });
+    await waitFor(() => expect(chips()).toHaveLength(1));
+
+    expect(root()!.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+    expect(root()!.getAttribute("data-lifecycle-card-host")).toBe("run_card");
+    expect(root()!.getAttribute("data-lifecycle-card-state")).toBe("decided");
+  });
+
+  it("the host declared is the host that OPTED IN, not a constant", async () => {
+    holdStateMock.mockImplementation(async () => HELD_THREE);
+    await mountCard({ wireRef: "hold-ref-3", host: "chat_thread" });
+    await waitFor(() => expect(chips()).toHaveLength(3));
+    expect(root()!.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+
+  it("NEGATIVE CONTROL: with no surface provider the host attribute is ABSENT, never guessed", async () => {
+    // The card itself refuses to draw without a declared host, so this can only
+    // be reached by rendering the row directly — which is what proves the
+    // attribute is read from the provider rather than hardcoded.
+    const { RunRecommendationChipRow } = await import("../run-recommendation-chip-row");
+    const { container } = render(
+      <RunRecommendationChipRow
+        runId="run-2841"
+        agentPackageName="@cinatra-test/hold-fixture-agent"
+        initialRecommendations={[]}
+        decision={{
+          kind: "confirmed",
+          skillNames: ["Draft email"],
+          decided: [{ skillId: "skill-draft", name: "Draft email", mark: "confirmed" }],
+        }}
+      />,
+    );
+    const el = container.querySelector("[data-run-recommendation-chip-row]")!;
+    expect(el.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+    expect(el.getAttribute("data-lifecycle-card-state")).toBe("decided");
+    expect(el.hasAttribute("data-lifecycle-card-host")).toBe(false);
+  });
+
+  it("satisfies the CAPTURE CONTRACT's own required anchors for a decided run_card record", async () => {
+    // The contract is the other half of finding 3, so it is asked directly
+    // rather than transcribed: every anchor it requires for
+    // `recommendation-card__run_card__decided` is counted against this DOM the
+    // way the capture driver counts it (root scope INCLUDES the root element).
+    const { requiredAssertionsFor, CARD_KINDS } = await import(
+      "../../../../scripts/ci/lib/capture-record-contract.mjs"
+    );
+    holdStateMock.mockImplementation(async () => ({
+      state: "confirmed",
+      skillNames: ["Draft email"],
+      decided: [{ skillId: "skill-draft", name: "Draft email", mark: "confirmed" }],
+    }));
+    await mountCard({ wireRef: null });
+    await waitFor(() => expect(chips()).toHaveLength(1));
+
+    const rootSel = CARD_KINDS.recommendation_hold.root;
+    const cardRoot = document.querySelector(rootSel);
+    expect(cardRoot).not.toBeNull();
+    const count = (selector: string, scope: string) =>
+      scope === "root"
+        ? (cardRoot!.matches(selector) ? 1 : 0) + cardRoot!.querySelectorAll(selector).length
+        : document.querySelectorAll(selector).length;
+
+    const { required, forbidden } = requiredAssertionsFor({
+      host: "run_card",
+      kind: "recommendation_hold",
+      state: "decided",
+    });
+    expect(required.length).toBeGreaterThan(0);
+    for (const req of required) {
+      expect({ selector: req.selector, count: count(req.selector, req.scope) }).toEqual({
+        selector: req.selector,
+        count: expect.any(Number),
+      });
+      expect(count(req.selector, req.scope)).toBeGreaterThanOrEqual(1);
+    }
+    // …and a decided capture owes the ABSENCE of every decision control.
+    for (const f of forbidden) expect(count(f.selector, f.scope)).toBe(0);
   });
 });

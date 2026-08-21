@@ -8,6 +8,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const readSkillMatchesByAgent = vi.fn();
 const listInstalledSkills = vi.fn();
 const readSkillActiveRevisionFromDatabase = vi.fn();
+// The on-disk extension scan (cinatra#2841). Mocked here for the same reason the
+// three DB readers are: this stays a unit test of candidate SHAPING. The
+// declaration→skillId derivation it feeds is exercised for real against
+// `buildSkillIdDisplayNames` in `extension-skill-resolver.test.ts`.
+// `vi.hoisted` because this one's factory is async (it keeps the module's real
+// `buildSkillIdDisplayNames` via `importOriginal`), so the binding must exist
+// before the hoisted factory closes over it.
+const { scanSkillExtensions } = vi.hoisted(() => ({ scanSkillExtensions: vi.fn() }));
 
 vi.mock("../llm-matching/skill-matches-store", () => ({
   readSkillMatchesByAgent: (...a: unknown[]) => readSkillMatchesByAgent(...a),
@@ -19,6 +27,13 @@ vi.mock("@/lib/skill-lifecycle-store", () => ({
   readSkillActiveRevisionFromDatabase: (...a: unknown[]) =>
     readSkillActiveRevisionFromDatabase(...a),
 }));
+// `buildSkillIdDisplayNames` is deliberately the REAL one — the join from a
+// scanned manifest declaration to a skill id is the thing under test on the
+// display-name cases below; only the filesystem walk is stubbed.
+vi.mock("../extension-skill-resolver", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, scanSkillExtensions: (...a: unknown[]) => scanSkillExtensions(...a) };
+});
 
 import {
   buildRecommendationCandidatesForAgent,
@@ -29,6 +44,8 @@ beforeEach(() => {
   readSkillMatchesByAgent.mockReset();
   listInstalledSkills.mockReset();
   readSkillActiveRevisionFromDatabase.mockReset();
+  scanSkillExtensions.mockReset();
+  scanSkillExtensions.mockResolvedValue([]);
   readSkillActiveRevisionFromDatabase.mockImplementation((id: string) => ({
     activeRevisionId: `${id}@active`,
     contentDigest: `dig-${id}`,
@@ -131,5 +148,113 @@ describe("recommendSkillsForAgentTask (candidate-gen + scoring)", () => {
     });
     expect(recs[0].skillId).toBe("blog");
     expect(recs[0].score).toBeGreaterThan(recs[1].score);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2841 — THE GRADED §V DEFECT. The recommendation chip-row printed a
+// catalog `name`, which for an extension-owned skill is the SKILL.md frontmatter
+// name — i.e. the SLUG (`blog-post-matcher`). The label every surface prints is
+// the owning extension's manifest `cinatra.displayName`
+// ("Blog Post Matcher Skill"), and it is resolved HERE, server-side, beside the
+// rest of the candidate's metadata — never re-derived on the client, never a map.
+// ---------------------------------------------------------------------------
+describe("displayName resolution (cinatra#2841)", () => {
+  const ext = (over: Record<string, unknown> = {}) => ({
+    pkgDir: "/x/extensions/cinatra-ai/blog-post-matcher-skill",
+    pkgName: "@cinatra-ai/blog-post-matcher-skill",
+    pkgDirName: "blog-post-matcher-skill",
+    kind: "skill",
+    displayName: "Blog Post Matcher Skill",
+    dependencies: [],
+    capabilities: {},
+    slugs: ["blog-post-matcher"],
+    ...over,
+  });
+  const catalogRow = {
+    id: "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+    name: "blog-post-matcher",
+    description: "classifies a blog post",
+    content: "",
+    level: "system",
+  };
+
+  it("resolves the owning extension's manifest displayName onto the candidate", async () => {
+    scanSkillExtensions.mockResolvedValue([ext()]);
+    listInstalledSkills.mockResolvedValue([catalogRow]);
+    readSkillMatchesByAgent.mockResolvedValue([{ skillId: catalogRow.id, score: 0.4, matched: true }]);
+
+    const [cand] = await buildRecommendationCandidatesForAgent({ agentId: "@x/a", intent: {} });
+    expect(cand.displayName).toBe("Blog Post Matcher Skill");
+    // The catalog name is preserved as the identity/token surface, unchanged.
+    expect(cand.name).toBe("blog-post-matcher");
+  });
+
+  it("the RANKED row a surface reads carries the manifest title, never the slug", async () => {
+    scanSkillExtensions.mockResolvedValue([ext()]);
+    listInstalledSkills.mockResolvedValue([catalogRow]);
+    readSkillMatchesByAgent.mockResolvedValue([{ skillId: catalogRow.id, score: 0.4, matched: true }]);
+
+    const [row] = await recommendSkillsForAgentTask({ agentId: "@x/a", intent: {} });
+    expect(row.displayName).toBe("Blog Post Matcher Skill");
+    expect(row.displayName).not.toBe("blog-post-matcher");
+    // …and never the package-qualified id either.
+    expect(row.displayName).not.toContain("@cinatra-ai/");
+  });
+
+  it("FALLBACK: a skill whose owner declares no displayName keeps its catalog name", async () => {
+    scanSkillExtensions.mockResolvedValue([ext({ displayName: undefined })]);
+    listInstalledSkills.mockResolvedValue([catalogRow]);
+    readSkillMatchesByAgent.mockResolvedValue([{ skillId: catalogRow.id, score: 0.4, matched: true }]);
+
+    const [row] = await recommendSkillsForAgentTask({ agentId: "@x/a", intent: {} });
+    // Exactly the label that shipped before this join existed.
+    expect(row.displayName).toBe("blog-post-matcher");
+  });
+
+  it("FALLBACK: a skill no scanned extension owns (a user-authored one) keeps its catalog name", async () => {
+    scanSkillExtensions.mockResolvedValue([ext()]);
+    listInstalledSkills.mockResolvedValue([
+      { id: "custom-1", name: "my-custom-skill", description: "", content: "", level: "personal" },
+    ]);
+    readSkillMatchesByAgent.mockResolvedValue([{ skillId: "custom-1", score: 0.4, matched: true }]);
+
+    const [row] = await recommendSkillsForAgentTask({ agentId: "@x/a", intent: {} });
+    expect(row.displayName).toBe("my-custom-skill");
+  });
+
+  it("BEST-EFFORT: a failed scan costs labels, never candidates", async () => {
+    scanSkillExtensions.mockRejectedValue(new Error("fs down"));
+    listInstalledSkills.mockResolvedValue([catalogRow]);
+    readSkillMatchesByAgent.mockResolvedValue([{ skillId: catalogRow.id, score: 0.4, matched: true }]);
+
+    const rows = await recommendSkillsForAgentTask({ agentId: "@x/a", intent: {} });
+    expect(rows.map((r) => r.skillId)).toEqual([catalogRow.id]);
+    expect(rows[0].displayName).toBe("blog-post-matcher");
+  });
+
+  it("the resolved title does NOT change the scored set (labels are not scored)", async () => {
+    const rows = [
+      { id: "@a/x:alpha", name: "alpha", description: "", content: "", level: "system" },
+      { id: "@a/y:beta", name: "beta", description: "", content: "", level: "system" },
+    ];
+    listInstalledSkills.mockResolvedValue(rows);
+    readSkillMatchesByAgent.mockResolvedValue(rows.map((r) => ({ skillId: r.id, score: 0.4, matched: true })));
+
+    scanSkillExtensions.mockResolvedValue([]);
+    const bare = await recommendSkillsForAgentTask({ agentId: "@x/a", intent: { promptText: "alpha beta gamma" } });
+    scanSkillExtensions.mockResolvedValue([
+      ext({ pkgName: "@a/x", pkgDirName: "x", displayName: "Alpha Beta Gamma Toolkit", slugs: ["alpha"] }),
+      ext({ pkgName: "@a/y", pkgDirName: "y", displayName: "Beta Gamma Alpha Toolkit", slugs: ["beta"] }),
+    ]);
+    const titled = await recommendSkillsForAgentTask({ agentId: "@x/a", intent: { promptText: "alpha beta gamma" } });
+
+    expect(titled.map((r) => [r.skillId, r.score, r.rank])).toEqual(
+      bare.map((r) => [r.skillId, r.score, r.rank]),
+    );
+    expect(titled.map((r) => r.displayName)).toEqual([
+      "Alpha Beta Gamma Toolkit",
+      "Beta Gamma Alpha Toolkit",
+    ]);
   });
 });

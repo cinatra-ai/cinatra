@@ -376,17 +376,43 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     owner: "RecommendationHoldCard",
     // Read off the SHIPPED component: `RecommendationHoldCard` composes
     // `RunRecommendationChipRow`, whose root carries the conformance id and
-    // whose two decision controls carry these action names.
+    // whose decision controls carry these action names.
+    //
+    // RE-READ AFTER THE §V REDRAW (cinatra#2841). The row used to carry ONE
+    // Confirm/Skip pair for the whole card; the ratified drawing decides PER
+    // CHIP, so the shipped controls are now Confirm / Adjust / Skip on each
+    // skill and the two row-level names this list used to hold are emitted
+    // nowhere. Naming them anyway would have failed the real mount on names the
+    // component never used — the exact defect this field exists to prevent — so
+    // they are replaced by what the component really draws, not dropped.
+    // Same three the capture contract names (`decisionControls` in
+    // `scripts/ci/lib/capture-record-contract.mjs`); the capture suite asserts
+    // the two lists stay in step, so neither can drift alone.
     ownerAnchors: Object.freeze([
       '[data-conformance-id="run-chip-row"]',
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ]),
     ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
-    // §V's two terminal acts, on the shipped `RunRecommendationChipRow`.
+    // §V's decision acts, on the shipped `RunRecommendationChipRow`.
+    //
+    // RE-READ AFTER THE §V REDRAW (cinatra#2841), for the same reason and off
+    // the same component as `ownerAnchors` above. This field held the ROW-LEVEL
+    // Confirm/Skip pair, which the ratified drawing deleted — the row is decided
+    // PER CHIP now. The stale names survived the redraw because nothing
+    // exercised them: `recommendation_hold` had no chat_thread mount, so the
+    // matrix took its ratchet arm and never observed the real card. S9b
+    // (cinatra#2786) lands that mount and strikes the ratchet, which is what
+    // reads this list against the shipped DOM for the first time — and the
+    // evaluator requires EVERY selector here inside one declaring root, so
+    // leaving the row-level pair would have failed the real card on controls it
+    // no longer draws. These are the same three `ownerAnchors` names and the
+    // same three the capture contract names.
     decisionControls: Object.freeze([
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "held-turn-card-contract",
@@ -503,15 +529,28 @@ export function heldTurnMountIsOwed(kind: LifecycleCardKind): boolean {
  * and asserts the declaration is STILL missing, so the day the owning slice adds
  * it the row must be struck. Same ratchet discipline as the mount obligations:
  * an obligation is a red done-check, never a waiver.
+ *
+ * EMPTY, AND THAT IS THE RATCHET WORKING. `recommendation_hold` was the one row
+ * here, and the §V redraw (cinatra#2841) put the declaration on the chip row's
+ * own outermost element — the row IS the card — in BOTH of its states, held and
+ * decided. The obligation was therefore struck the moment the declaration
+ * landed, which is the only moment it may be struck.
+ *
+ * STRIKING IT DID NOT RETIRE THE MEASUREMENT. The transcript suite still reads
+ * the real card's root and compares what it found against this list, so the
+ * declaration disappearing puts `recommendation_hold` back into the OBSERVED
+ * set and turns that arm red against this empty list; and the arm that runs
+ * only once a row is struck reads the shipped component and requires both
+ * attributes to really be there. Both directions stay live with the list empty.
+ *
+ * S9b (cinatra#2786) CONSUMES that root rather than adding a second one. The
+ * chat_thread mount renders `RecommendationHoldCard`, which composes the very
+ * chip row whose outermost element carries the declaration above, and the host
+ * value is read from the provider the mount declared — so the chat mount is
+ * labelled `chat_thread` by construction, a mount cannot claim a host it is
+ * not, and the "ONE root" this list measures stays one.
  */
-export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
-  // EMPTY for the same reason and on the same day. `RunRecommendationChipRow`
-  // now writes `data-lifecycle-card="recommendation_hold"`,
-  // `data-lifecycle-card-host={host}` and `data-lifecycle-card-state` on ONE
-  // root (packages/agents/src/run-recommendation-chip-row.tsx), with the host
-  // read from the provider the mount declared. `ReviewGateCard` was already
-  // absent here; the held card joins it.
-]);
+export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([]);
 
 // ---------------------------------------------------------------------------
 // The four-kind chat_thread CARRIAGE MATRIX (cinatra#2827, epic #2784 S9i)

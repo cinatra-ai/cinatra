@@ -25,7 +25,10 @@ const getRunRecommendations = vi.fn();
 const triggerAgentRun = vi.fn();
 const confirmRunSkillSelectionAction = vi.fn();
 const readRunSelectedSkillRevisions = vi.fn();
+const readRunRejectedRecommendations = vi.fn();
 const hasRunRecommendationSkip = vi.fn();
+const readRunCoOwners = vi.fn();
+const enforceRunAccess = vi.fn();
 const writeRunRejectedRecommendations = vi.fn();
 const writeRunRecommendationSkip = vi.fn();
 const publishRecommendationHoldResume = vi.fn();
@@ -34,8 +37,12 @@ vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
   requireActorContext: (...a: unknown[]) => requireActorContext(...a),
 }));
-vi.mock("@/lib/run-selected-skill-revisions", () => ({
+vi.mock("@/lib/run-selected-skill-revisions", async (importOriginal) => ({
+  // Keep the module's PURE exports (decidedSkillsFromEvidence and the row
+  // types' runtime constants) real; stub only the store reads/writes.
+  ...(await importOriginal<typeof import("@/lib/run-selected-skill-revisions")>()),
   readRunSelectedSkillRevisions: (...a: unknown[]) => readRunSelectedSkillRevisions(...a),
+  readRunRejectedRecommendations: (...a: unknown[]) => readRunRejectedRecommendations(...a),
   hasRunRecommendationSkip: (...a: unknown[]) => hasRunRecommendationSkip(...a),
   writeRunRejectedRecommendations: (...a: unknown[]) => writeRunRejectedRecommendations(...a),
   writeRunRecommendationSkip: (...a: unknown[]) => writeRunRecommendationSkip(...a),
@@ -44,6 +51,14 @@ vi.mock("@/lib/run-selected-skill-revisions", () => ({
 vi.mock("../store", () => ({
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...a),
   readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
+  readRunCoOwners: (...a: unknown[]) => readRunCoOwners(...a),
+}));
+// The redraw's READ-ONLY reading (cinatra#2841) asks the SAME execute-tier gate
+// the confirm path enforces, so the gate is the seam this suite flips. Only that
+// one export is replaced; the rest of the policy module is the real one.
+vi.mock("../auth-policy", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  enforceRunAccess: (...a: unknown[]) => enforceRunAccess(...a),
 }));
 vi.mock("../recommendation-hold", () => ({
   RECOMMENDATION_DECISION_REFUSAL: "This run's skill selection cannot be decided from here.",
@@ -112,8 +127,11 @@ beforeEach(() => {
   getRunRecommendations.mockResolvedValue([
     {
       skillId: "org-scoped-skill",
-      skillRevisionId: "org-scoped-skill@1",
-      name: "Org Scoped",
+      // The catalog name is the SLUG for an extension-owned skill; the label a
+      // surface prints is the manifest title (cinatra#2841). Fixtures keep the
+      // two DIFFERENT so a regression back onto `name` fails loudly.
+      name: "org-scoped",
+      displayName: "Org Scoped",
       score: 0.9,
       rank: 1,
       recommended: true,
@@ -123,10 +141,13 @@ beforeEach(() => {
   releaseRecommendationParkForRun.mockResolvedValue(true);
   triggerAgentRun.mockResolvedValue({ ok: true });
   readRunSelectedSkillRevisions.mockReturnValue([]);
+  readRunRejectedRecommendations.mockReturnValue([]);
   hasRunRecommendationSkip.mockReturnValue(false);
   // The run-level skip marker writer VERIFIES its write and returns whether the
   // marker read back (cinatra#2794); the happy path is "it landed".
   writeRunRecommendationSkip.mockReturnValue(true);
+  readRunCoOwners.mockResolvedValue([]);
+  enforceRunAccess.mockResolvedValue(undefined);
 });
 
 describe("getRunRecommendationHoldStateAction — run access door (cinatra#2148)", () => {
@@ -271,5 +292,269 @@ describe("releaseAndDispatch — a live park is never reported as dispatched (ci
 
     expect(res).toEqual({ ok: true, dispatched: false });
     expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE §V REDRAW'S TWO SERVER-SIDE READINGS (cinatra#2841)
+// ---------------------------------------------------------------------------
+//
+// The redrawn card draws one chip per skill in its SETTLED state too, each
+// stating what it recorded, and draws a READ-ONLY row for a reader who may see
+// the proposal but not shape it. Both are derived here from evidence the run
+// ALREADY writes — no new store semantics — so both are pinned here.
+
+describe("the settled reading — one mark per skill, derived from the run's own evidence", () => {
+  beforeEach(() => {
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-1",
+      checkpoint: "recommendation",
+      status: "released",
+    });
+  });
+
+  it("reads confirmed / adjusted / skipped off the selection and rejection rows", async () => {
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-kept", selectionSource: "recommended_confirmed" },
+      { skillId: "s-forced", selectionSource: "user_forced" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([
+      { skillId: "s-dropped", recommendationSource: "recommended_not_kept" },
+    ]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state.state).toBe("confirmed");
+    expect(state).toMatchObject({
+      decided: [
+        // Ordered by skill id, so the settled row is stable across reads.
+        { skillId: "s-dropped", mark: "skipped" },
+        { skillId: "s-forced", mark: "adjusted" },
+        { skillId: "s-kept", mark: "confirmed" },
+      ],
+    });
+  });
+
+  it("a whole-row SKIP still names every skill it left out, so the settled row has chips", async () => {
+    readRunSelectedSkillRevisions.mockReturnValue([]);
+    hasRunRecommendationSkip.mockReturnValue(true);
+    readRunRejectedRecommendations.mockReturnValue([
+      { skillId: "s-a", recommendationSource: "user_skipped" },
+      { skillId: "s-b", recommendationSource: "user_skipped" },
+    ]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toEqual({
+      state: "skipped",
+      decided: [
+        // No name resolves for either id here, so each keeps its id as its
+        // label — the truest one available (cinatra#2841).
+        { skillId: "s-a", name: "s-a", mark: "skipped" },
+        { skillId: "s-b", name: "s-b", mark: "skipped" },
+      ],
+    });
+  });
+
+  it("a rejection row for a skill that is ALSO in the selection reads as kept, not skipped", async () => {
+    // The efficacy split can record a skill on both halves across re-decisions.
+    // Being in the run's authoritative set is the stronger fact.
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-both", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([
+      { skillId: "s-both", recommendationSource: "recommended_not_kept" },
+    ]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({ decided: [{ skillId: "s-both", mark: "confirmed" }] });
+  });
+
+  it("an unreadable rejection store costs the marks, never the settled card", async () => {
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-kept", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockImplementation(() => {
+      throw new Error("store down");
+    });
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "confirmed",
+      skillNames: ["s-kept"],
+      decided: [{ skillId: "s-kept", name: "s-kept", mark: "confirmed" }],
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // THE GRADED §V FINDINGS (cinatra#2841 / PR #2866), server side
+  // -------------------------------------------------------------------------
+
+  it("finding 1 — a `user_adjusted` selection row reads back as ADJUSTED", async () => {
+    // The mark the redraw could not reach. `user_forced` is stamped only for an
+    // id OUTSIDE the scored set, and the chip row offers exactly the scored set,
+    // so an in-set Adjust used to be written `recommended_confirmed` and read
+    // back `Confirmed`. `user_adjusted` is the in-set edit's own source.
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-adjusted", selectionSource: "user_adjusted" },
+      { skillId: "s-plain", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      decided: [
+        { skillId: "s-adjusted", mark: "adjusted" },
+        { skillId: "s-plain", mark: "confirmed" },
+      ],
+    });
+  });
+
+  it("finding 1 — a headless AUTO-APPLIED row is confirmed, not adjusted (negative control)", async () => {
+    // Only the two HUMAN-edit sources read as `adjusted`. A run nobody shaped
+    // must never claim a reader shaped it.
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-auto", selectionSource: "recommended_auto_applied" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({ decided: [{ skillId: "s-auto", mark: "confirmed" }] });
+  });
+
+  it("finding 2 — the settled rows carry the DISPLAY NAME, resolved the way the held branch resolves it", async () => {
+    // §V names skills on BOTH readings. The evidence rows are ids, so the names
+    // are joined in from the same candidate seam + scorer the held branch uses.
+    // The name taken is the ranked row's `displayName` — the owning extension's
+    // manifest title — NOT its catalog `name`, which for these ids is the slug.
+    getRunRecommendations.mockResolvedValue([
+      {
+        skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+        skillRevisionId: "rev-b",
+        name: "blog-writing",
+        displayName: "Blog Writing Skill",
+        score: 0.9,
+        rank: 1,
+        recommended: true,
+        scoredFeatures: [],
+      },
+      {
+        skillId: "@cinatra-ai/outreach-skill:schedule-send",
+        skillRevisionId: "rev-s",
+        name: "schedule-send",
+        displayName: "Schedule Send Skill",
+        score: 0.2,
+        rank: 2,
+        recommended: true,
+        scoredFeatures: [],
+      },
+    ]);
+    readRunSelectedSkillRevisions.mockReturnValue([
+      {
+        skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+        selectionSource: "recommended_confirmed",
+      },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([
+      {
+        skillId: "@cinatra-ai/outreach-skill:schedule-send",
+        recommendationSource: "recommended_not_kept",
+      },
+    ]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "confirmed",
+      // The field is called `skillNames`; it now truthfully holds names.
+      skillNames: ["Blog Writing Skill"],
+      decided: [
+        {
+          skillId: "@cinatra-ai/blog-writing-skill:blog-writing",
+          name: "Blog Writing Skill",
+          mark: "confirmed",
+        },
+        {
+          skillId: "@cinatra-ai/outreach-skill:schedule-send",
+          name: "Schedule Send Skill",
+          mark: "skipped",
+        },
+      ],
+    });
+    // THE GRADED DEFECT, pinned as a negative: neither settled chip may print
+    // the slug the catalog row carries.
+    const settled = state.state === "confirmed" ? state.decided : [];
+    expect(settled.map((d) => d.name)).not.toContain("blog-writing");
+    expect(settled.map((d) => d.name)).not.toContain("schedule-send");
+    // The name join is NOT viewer-intersected — the decided summary is the set
+    // THIS run resolved, exactly as the branch's own comment states.
+    expect(resolveRecommendationCandidateSkillIds).toHaveBeenCalledWith({
+      run: expect.objectContaining({ id: "run-1" }),
+      packageName: "@vendor/agent",
+    });
+  });
+
+  it("finding 2 — the HELD row hands the card the SAME resolved label, never the slug", async () => {
+    // The other half of "held and settled label a skill identically": the held
+    // branch maps the ranked row onto `RecommendedSkillForChip`, whose `name` IS
+    // the label the chip prints. It must be the manifest title too. This
+    // describe's `beforeEach` releases the park to reach the settled branch, so
+    // the LIVE hold is put back for this one case.
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-1",
+      checkpoint: "recommendation",
+      status: "parked",
+    });
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "held",
+      recommendations: [
+        expect.objectContaining({ skillId: "org-scoped-skill", name: "Org Scoped" }),
+      ],
+    });
+    const held = state.state === "held" ? state.recommendations : [];
+    expect(held.map((r) => r.name)).not.toContain("org-scoped");
+  });
+
+  it("finding 2 — an unresolvable name costs the label, never the settled card", async () => {
+    getRunRecommendations.mockRejectedValue(new Error("scorer down"));
+    readRunSelectedSkillRevisions.mockReturnValue([
+      { skillId: "s-kept", selectionSource: "recommended_confirmed" },
+    ]);
+    readRunRejectedRecommendations.mockReturnValue([]);
+
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({
+      state: "confirmed",
+      skillNames: ["s-kept"],
+      decided: [{ skillId: "s-kept", name: "s-kept", mark: "confirmed" }],
+    });
+  });
+});
+
+describe("the read-only reading — canDecide rides the SAME execute gate the confirm enforces", () => {
+  it("a reader the execute gate admits gets the affordances", async () => {
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({ state: "held", canDecide: true });
+    expect(enforceRunAccess).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "run-1" }),
+      expect.anything(),
+      "execute",
+      expect.objectContaining({ platformRole: "platform_admin" }),
+    );
+  });
+
+  it("a reader the execute gate REFUSES still gets the card, drawn read-only", async () => {
+    enforceRunAccess.mockRejectedValue(new Error("forbidden"));
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    // The proposal is still shown — §V draws the chips disabled with the reason,
+    // it does not withhold the card.
+    expect(state).toMatchObject({ state: "held", canDecide: false });
+  });
+
+  it("FAIL-OPEN on a derivation that cannot answer — the flag is presentation, never authority", async () => {
+    // The decision actions re-authorize on their own, so an unresolvable hint
+    // must not strip the affordances from a reader who may in fact decide.
+    readRunCoOwners.mockRejectedValue(new Error("co-owner store down"));
+    enforceRunAccess.mockResolvedValue(undefined);
+    const state = await getRunRecommendationHoldStateAction({ runId: "run-1" });
+    expect(state).toMatchObject({ state: "held", canDecide: true });
   });
 });
