@@ -267,7 +267,11 @@ const TURN_REFUSALS = [
   // The pre-router DID fire and the dispatch was refused — an opt-in agent that is
   // registered but not installed, or one whose connector needs are unmet. The
   // sentence is the boundary's own, and it names the cause far better than a
-  // fifteen-minute silence followed by "no held card" ever could.
+  // fifteen-minute silence followed by "no held card" ever could. It covers the
+  // template-scope refusal (`agent-template-scope: … cross_org`) that a test user
+  // outside the agent's own organization gets, which is otherwise invisible: the
+  // dispatch is refused BEFORE any run row exists, so there is nothing in
+  // `agent_runs` to look at afterwards.
   "I tried to dispatch",
 ] as const;
 
