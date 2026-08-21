@@ -34,9 +34,12 @@ export type EditAndResendDeps = {
    *  in flight AND the ones that ENDED without their reveal having committed
    *  yet (`./turn-stream-registry`). Read LIVE, at intent-build time. */
   removableTurnIds: () => Iterable<string>;
-  /** The RUN IDS of exactly those turns — the only identity the server can act on
-   *  for a turn no saved transcript ever carried. Read LIVE, beside the ids. */
-  removableRunIds: () => Iterable<string>;
+  /** The RUN IDS the edit may act on — the only identity the server can act on
+   *  for a turn no saved transcript ever carried. Read LIVE, and NARROWED by the
+   *  ids this edit removed: a run id names the run-bound row outright, so a turn
+   *  dispatched for a prompt this edit KEPT must not be offered
+   *  (`./turn-stream-registry`). */
+  removableRunIds: (removedMessageIds: ReadonlySet<string>) => Iterable<string>;
   activeThreadId: string | null;
   /** Latest-value read of the active thread, for the post-await guards. */
   currentThreadId: () => string | null;
@@ -108,8 +111,11 @@ export async function editAndResend(
   // ...and the SERVER'S name for the ones the transcript could not name. Naming
   // them by bubble id alone asserts something the server has never seen: those
   // turns have no mirror row, and the mirror row is what every other key is read
-  // out of (`buildRemovedRunIntent`, `./truncation-intent`).
-  const removedRunIds = buildRemovedRunIntent(deps.removableRunIds());
+  // out of (`buildRemovedRunIntent`, `./truncation-intent`). The registry is
+  // asked with the ids ABOVE, so it can withhold the run of a concurrent turn
+  // whose prompt this edit kept — a run id reaches the row outright, and that is
+  // the one assertion here that over-naming would not be safe for.
+  const removedRunIds = buildRemovedRunIntent(deps.removableRunIds(new Set(removedMessageIds)));
 
   // Resolve threadId — edits always happen in an existing thread.
   const threadId = deps.activeThreadId ?? deps.currentThreadId();

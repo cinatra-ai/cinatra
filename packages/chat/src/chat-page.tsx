@@ -580,9 +580,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   }, [activeThreadId, threads]);
 
   // Acquired immediately before streamResponse's try, so the finally is sure.
-  function beginStream(assistantId: string, controller: AbortController) {
+  // `anchorMessageId` is the PROMPT this turn answers — how the intent tells a turn BELOW an edit point from one above it.
+  function beginStream(assistantId: string, controller: AbortController, anchorMessageId: string | null) {
     setStreamingCount((n) => n + 1);
-    return streams.begin(assistantId, controller); // THIS instance's token
+    return streams.begin(assistantId, controller, anchorMessageId); // THIS instance's token
   }
 
   // Idempotent — the count moves only if this instance really was the live one.
@@ -600,7 +601,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // await — re-reading the ref would guard the WRONG thread after a mid-await switch).
     const originThreadId = threadId;
     const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
-    const token = beginStream(assistantId, abortController); // never the id
+    const token = beginStream(assistantId, abortController, contextMessages[contextMessages.length - 1]?.id ?? null); // never the id
     try {
       await driveAssistantChatTurn({
         threadId,
@@ -731,7 +732,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         isSlackMode,
         hasActiveStream,
         removableTurnIds: () => streams.removableTurnIds(),
-        removableRunIds: () => streams.removableRunIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
         activeThreadId,
         currentThreadId: () => activeThreadIdRef.current,
         loadedThreadCreatedAt: () => loadedThreadCreatedAtRef.current,

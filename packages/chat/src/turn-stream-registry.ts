@@ -94,6 +94,26 @@
  * the server still has nothing to key on for it — the honest residual, and a
  * strictly smaller one than before.
  *
+ * ── WHY THE RUN IDS ARE ANCHORED, AND THE IDS ARE NOT ────────────────────────
+ *
+ * "Over-naming is the safe direction" is the argument the ID union rests on, and
+ * it is TRUE THERE for one reason only: a bubble id the server cannot link to a
+ * row does nothing. A RUN ID is different — it names the run-bound row outright
+ * — so the same union offered as run ids would not be safe, and this is not a
+ * hypothetical. Slack mode runs turns CONCURRENTLY: a turn dispatched for an
+ * EARLIER prompt can still be streaming while the user edits a LATER one, and
+ * the ledger holds it for the same reason it holds any uncommitted turn. Named
+ * as a run, that turn — whose prompt the user KEPT — would be tombstoned
+ * permanently by an edit that had nothing to do with it.
+ *
+ * So a run is offered only when the turn's ANCHOR — the prompt it was dispatched
+ * to answer, recorded at `begin` — is itself among the messages the edit removed.
+ * That is the property "this turn is below the edit point" stated as something
+ * the registry can actually check, instead of assumed. A turn with NO anchor is
+ * not offered either: for run ids the fail-closed direction is under-naming,
+ * because a missed removal costs a turn that folds back in and a wrong one costs
+ * a kept turn its card forever.
+ *
  * ── THE INSTANCE TOKEN, CONTINUED ────────────────────────────────────────────
  *
  * THE INSTANCE *IS* THE GENERATION, which is why there is no generation counter
@@ -155,8 +175,16 @@ export type TurnStreamToken = {
 export type TurnStreamRegistry = {
   /** Register an in-flight turn and return its INSTANCE TOKEN. Call from inside
    *  the drive's `try`, so the matching `end` in its `finally` is guaranteed,
-   *  and let that `finally` close over the returned token — not over the id. */
-  begin(assistantId: string, controller: AbortController): TurnStreamToken;
+   *  and let that `finally` close over the returned token — not over the id.
+   *  `anchorMessageId` is the PROMPT this turn was dispatched to answer (the
+   *  last message of its dispatch context); it is what lets `removableRunIds`
+   *  tell a turn below an edit point from one above it. `null` when the caller
+   *  has none, which withholds this turn's run from every intent. */
+  begin(
+    assistantId: string,
+    controller: AbortController,
+    anchorMessageId?: string | null,
+  ): TurnStreamToken;
   /** This turn instance's stream is over. Acts only while `token` is still the
    *  registered instance for its id, and returns whether it was, so the caller
    *  can keep its own count in step. The id then moves to the ledger — it is
@@ -201,10 +229,14 @@ export type TurnStreamRegistry = {
   /** Every turn an edit must name BESIDE the ones in its own transcript slice:
    *  the in-flight turns and the ended-but-uncommitted ones. */
   removableTurnIds(): string[];
-  /** The RUN IDS of exactly those turns — the identity the server can act on for
-   *  a turn no saved transcript ever carried. A turn whose run id never arrived
-   *  contributes nothing. Deduplicated; the caller treats it as a SET. */
-  removableRunIds(): string[];
+  /** The RUN IDS the edit may act on — the identity the server can use for a turn
+   *  no saved transcript ever carried. NARROWER than `removableTurnIds` on
+   *  purpose: only a turn whose ANCHOR PROMPT is among `removedMessageIds` is
+   *  offered, because a run id names the run-bound row outright and a turn
+   *  dispatched for a prompt the edit KEPT must never be tombstoned. A turn with
+   *  no anchor, or whose run id never arrived, contributes nothing. Deduplicated;
+   *  the caller treats it as a SET. */
+  removableRunIds(removedMessageIds: Iterable<string>): string[];
 };
 
 /** The registered instance: the token a caller holds, plus what the registry
@@ -214,6 +246,9 @@ type RegisteredTurn = {
   controller: AbortController;
   /** The server's run for THIS instance, once the wire named one. */
   runId: string | null;
+  /** The prompt this turn answers — its position claim, in the only currency
+   *  the intent can check it against. */
+  anchorId: string | null;
 };
 
 export function createTurnStreamRegistry(): TurnStreamRegistry {
@@ -222,16 +257,17 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
    *  holds one instance per id, and only that instance's token can end it. */
   const inFlight = new Map<string, RegisteredTurn>();
   /** Ended, and not yet seen in a committed transcript: assistantId → the run the
-   *  turn streamed under, or null when the wire never named one. Insertion-
-   *  ordered, which is what makes "evict the oldest" meaningful at the cap. */
-  const endedUncommitted = new Map<string, string | null>();
+   *  turn streamed under and the prompt it answered (either may be null when the
+   *  wire or the caller never named one). Insertion-ordered, which is what makes
+   *  "evict the oldest" meaningful at the cap. */
+  const endedUncommitted = new Map<string, { runId: string | null; anchorId: string | null }>();
   /** The thread these ids belong to, once one has been observed. */
   let heldThreadId: string | null = null;
   let threadObserved = false;
 
   /** Record an ended turn — and the run it streamed under — under the ledger's
    *  cap. */
-  function rememberEnded(assistantId: string, runId: string | null): void {
+  function rememberEnded(assistantId: string, runId: string | null, anchorId: string | null): void {
     if (!endedUncommitted.has(assistantId) && endedUncommitted.size >= MAX_ENDED_UNCOMMITTED_TURN_IDS) {
       // THE EVICTION, AND WHAT IT COSTS — stated here, at the line that actually
       // drops a nameable removal, rather than left to the constant.
@@ -250,7 +286,7 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       const oldest = endedUncommitted.keys().next().value;
       if (typeof oldest === "string") endedUncommitted.delete(oldest);
     }
-    endedUncommitted.set(assistantId, runId);
+    endedUncommitted.set(assistantId, { runId, anchorId });
   }
 
   /** Is the registry holding anything at all? The two sets ARE its state — see
@@ -271,9 +307,11 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
   }
 
   return {
-    begin(assistantId, controller) {
+    begin(assistantId, controller, anchorMessageId) {
       const token: TurnStreamToken = { assistantId };
-      inFlight.set(assistantId, { token, controller, runId: null });
+      const anchorId =
+        typeof anchorMessageId === "string" && anchorMessageId.length > 0 ? anchorMessageId : null;
+      inFlight.set(assistantId, { token, controller, runId: null, anchorId });
       return token;
     },
     noteRunId(token, runId) {
@@ -306,7 +344,8 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       inFlight.delete(token.assistantId);
       // Unconditional from here: this instance really was the live one, and the
       // turn whose reveal never came is exactly the one the ledger has to keep.
-      if (token.assistantId.length > 0) rememberEnded(token.assistantId, registered.runId);
+      if (token.assistantId.length > 0)
+        rememberEnded(token.assistantId, registered.runId, registered.anchorId);
       return true;
     },
     has(assistantId) {
@@ -367,20 +406,27 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       for (const id of endedUncommitted.keys()) if (!inFlight.has(id)) ids.push(id);
       return ids;
     },
-    removableRunIds() {
-      // EXACTLY the turns `removableTurnIds` names, read for the other identity.
-      // The in-flight instance's own run wins over a ledger entry under the same
+    removableRunIds(removedMessageIds) {
+      // The turns `removableTurnIds` names, read for the other identity AND
+      // FILTERED to the ones whose prompt this edit actually removed. The
+      // in-flight instance's own record wins over a ledger entry under the same
       // id, for the same reason `removableTurnIds` skips the ledger entry there:
       // the live instance is the turn that id currently means.
+      const removed = removedMessageIds instanceof Set ? removedMessageIds : new Set(removedMessageIds);
       const runIds: string[] = [];
       const seen = new Set<string>();
-      const offer = (runId: string | null) => {
+      const offer = (runId: string | null, anchorId: string | null) => {
+        // NO ANCHOR IS NO CLAIM. A run whose turn cannot show it sits below the
+        // edit point is withheld: for run ids the expensive mistake is naming a
+        // turn the user kept, not missing one they removed.
+        if (typeof anchorId !== "string" || anchorId.length === 0) return;
+        if (!removed.has(anchorId)) return;
         if (typeof runId !== "string" || runId.length === 0 || seen.has(runId)) return;
         seen.add(runId);
         runIds.push(runId);
       };
-      for (const registered of inFlight.values()) offer(registered.runId);
-      for (const [id, runId] of endedUncommitted) if (!inFlight.has(id)) offer(runId);
+      for (const registered of inFlight.values()) offer(registered.runId, registered.anchorId);
+      for (const [id, rec] of endedUncommitted) if (!inFlight.has(id)) offer(rec.runId, rec.anchorId);
       return runIds;
     },
   };

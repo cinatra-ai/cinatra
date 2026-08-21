@@ -1984,8 +1984,12 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     );
     // ...and derives the STREAMING half from the registry's run ids — the only
     // identity a turn with no mirror row shares with the server.
+    // ...and it asks the registry with the ids it just derived, so a concurrent
+    // turn anchored to a prompt this edit KEPT is withheld: a run id reaches the
+    // run-bound row outright, and over-naming is not free there the way it is
+    // for a bubble id.
     expect(flow).toContain(
-      "const removedRunIds = buildRemovedRunIntent(deps.removableRunIds());",
+      "const removedRunIds = buildRemovedRunIntent(deps.removableRunIds(new Set(removedMessageIds)));",
     );
     // ...and posts both with the truncated transcript, in the same save.
     expect(flow).toContain("messages: truncated");

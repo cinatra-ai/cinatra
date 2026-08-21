@@ -86,7 +86,7 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     await editAndResend(
       deps({
         removableTurnIds: () => streams.removableTurnIds(),
-        removableRunIds: () => streams.removableRunIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
       }),
       "u2",
       "edited",
@@ -116,7 +116,7 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     await editAndResend(
       deps({
         removableTurnIds: () => streams.removableTurnIds(),
-        removableRunIds: () => streams.removableRunIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
       }),
       "u2",
       "edited",
@@ -136,7 +136,7 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     await editAndResend(
       deps({
         removableTurnIds: () => streams.removableTurnIds(),
-        removableRunIds: () => streams.removableRunIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
       }),
       "u2",
       "edited",
@@ -157,14 +157,15 @@ describe("editAndResend carries the SERVER's name for a turn with no mirror row"
 
   it("posts the run id of the ended-but-uncommitted turn beside its bubble id", async () => {
     const streams = createTurnStreamRegistry();
-    const token = streams.begin("a-slack", new AbortController());
+    // ANCHORED to the message this edit removes: the turn answers `u2`.
+    const token = streams.begin("a-slack", new AbortController(), "u2");
     streams.noteRunId(token, "run-slack-1"); // RUN_STARTED arrived on the wire
     streams.end(token);
 
     await editAndResend(
       deps({
         removableTurnIds: () => streams.removableTurnIds(),
-        removableRunIds: () => streams.removableRunIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
       }),
       "u2",
       "edited",
@@ -176,13 +177,13 @@ describe("editAndResend carries the SERVER's name for a turn with no mirror row"
 
   it("posts the run of a turn that is STILL streaming", async () => {
     const streams = createTurnStreamRegistry();
-    const token = streams.begin("a-live", new AbortController());
+    const token = streams.begin("a-live", new AbortController(), "u2");
     streams.noteRunId(token, "run-live-1");
 
     await editAndResend(
       deps({
         removableTurnIds: () => streams.removableTurnIds(),
-        removableRunIds: () => streams.removableRunIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
       }),
       "u2",
       "edited",
@@ -196,7 +197,7 @@ describe("editAndResend carries the SERVER's name for a turn with no mirror row"
     // when its turn's id does, so a turn the transcript names is removed through
     // its mirror row and asserts no run at all.
     const streams = createTurnStreamRegistry();
-    const token = streams.begin("a1", new AbortController());
+    const token = streams.begin("a1", new AbortController(), "u1");
     streams.noteRunId(token, "run-a1");
     streams.end(token);
     streams.noteCommittedTranscript(STALE_SNAPSHOT);
@@ -204,12 +205,62 @@ describe("editAndResend carries the SERVER's name for a turn with no mirror row"
     await editAndResend(
       deps({
         removableTurnIds: () => streams.removableTurnIds(),
-        removableRunIds: () => streams.removableRunIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
       }),
       "u2",
       "edited",
     );
 
+    expect(saved[0].removedRunIds).toBeUndefined();
+  });
+
+  it("omits the run of a CONCURRENT turn whose prompt the edit KEPT", async () => {
+    // The one place over-naming stops being free. Slack runs turns concurrently:
+    // a turn dispatched for `u1` can still be streaming while the user edits
+    // `u2`, and the ledger holds it because no committed transcript carries it.
+    // Named as a run it would be tombstoned permanently — a turn whose prompt is
+    // still on the screen, losing its card forever. Its ANCHOR is `u1`, which
+    // this edit does not remove, so it is withheld.
+    const streams = createTurnStreamRegistry();
+    const kept = streams.begin("a-for-u1", new AbortController(), "u1");
+    streams.noteRunId(kept, "run-for-u1");
+    const removedTurn = streams.begin("a-for-u2", new AbortController(), "u2");
+    streams.noteRunId(removedTurn, "run-for-u2");
+
+    await editAndResend(
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
+      }),
+      "u2",
+      "edited",
+    );
+
+    // Both are still NAMED by bubble id — that assertion cannot reach a row it
+    // has no mirror for, so over-naming there stays free...
+    const removedIds = saved[0].removedMessageIds as string[];
+    expect(removedIds).toContain("a-for-u1");
+    expect(removedIds).toContain("a-for-u2");
+    // ...and exactly one RUN is asserted: the turn below the edit point.
+    expect(saved[0].removedRunIds as string[]).toEqual(["run-for-u2"]);
+  });
+
+  it("omits the run of a turn with NO anchor at all", async () => {
+    // Fail-closed: a turn that cannot show where it sits is not offered as a run.
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a-anchorless", new AbortController(), null);
+    streams.noteRunId(token, "run-anchorless");
+
+    await editAndResend(
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
+      }),
+      "u2",
+      "edited",
+    );
+
+    expect(saved[0].removedMessageIds as string[]).toContain("a-anchorless");
     expect(saved[0].removedRunIds).toBeUndefined();
   });
 });

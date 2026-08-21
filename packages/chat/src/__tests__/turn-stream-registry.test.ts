@@ -288,69 +288,97 @@ describe("the run id — the identity the server shares with these turns", () =>
   // A bubble id is minted in the page, so a turn no saved transcript carries
   // leaves no server-side row holding any name this registry knows. The run id
   // does exist on both sides, so the registry keeps it beside the id under the
-  // SAME release rule and offers it to the truncation intent.
+  // SAME release rule and offers it to the truncation intent — NARROWED to the
+  // turns whose anchor prompt the edit actually removed, because a run id names
+  // the run-bound row outright and over-naming is not free there.
 
-  it("offers the run of an IN-FLIGHT turn", () => {
+  /** The edit's removed set, as the flow hands it over. */
+  const removing = (...ids: string[]) => new Set(ids);
+
+  it("offers the run of an IN-FLIGHT turn anchored to a removed prompt", () => {
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a1", controller(), "u1");
+    expect(streams.noteRunId(token, "run-1")).toBe(true);
+    expect(streams.removableRunIds(removing("u1", "a1"))).toEqual(["run-1"]);
+  });
+
+  it("WITHHOLDS the run of a concurrent turn anchored to a KEPT prompt", () => {
+    // Slack streams turns concurrently, so an uncommitted turn is NOT necessarily
+    // below the edit point. Its bubble id may still be named — that reaches no row
+    // — but its run must not be, or an edit tombstones a turn the user kept.
+    const streams = createTurnStreamRegistry();
+    const kept = streams.begin("a-for-u1", controller(), "u1");
+    streams.noteRunId(kept, "run-for-u1");
+    const removed = streams.begin("a-for-u2", controller(), "u2");
+    streams.noteRunId(removed, "run-for-u2");
+    expect(streams.removableTurnIds()).toEqual(["a-for-u1", "a-for-u2"]);
+    expect(streams.removableRunIds(removing("u2", "a-for-u1", "a-for-u2"))).toEqual([
+      "run-for-u2",
+    ]);
+  });
+
+  it("WITHHOLDS the run of a turn with no anchor — fail-closed", () => {
     const streams = createTurnStreamRegistry();
     const token = streams.begin("a1", controller());
-    expect(streams.noteRunId(token, "run-1")).toBe(true);
-    expect(streams.removableRunIds()).toEqual(["run-1"]);
+    streams.noteRunId(token, "run-1");
+    expect(streams.removableTurnIds()).toEqual(["a1"]);
+    expect(streams.removableRunIds(removing("u1", "a1"))).toEqual([]);
   });
 
   it("keeps the run after the stream ENDS, and drops it when the transcript proves the turn landed", () => {
     const streams = createTurnStreamRegistry();
-    const token = streams.begin("a1", controller());
+    const token = streams.begin("a1", controller(), "u1");
     streams.noteRunId(token, "run-1");
     streams.end(token);
-    expect(streams.removableRunIds()).toEqual(["run-1"]); // ended, still nameable
+    expect(streams.removableRunIds(removing("u1"))).toEqual(["run-1"]); // ended, still nameable
     streams.noteCommittedTranscript([{ id: "a1" }]);
     expect(streams.removableTurnIds()).toEqual([]);
-    expect(streams.removableRunIds()).toEqual([]);
+    expect(streams.removableRunIds(removing("u1"))).toEqual([]);
   });
 
   it("a turn whose run never arrived contributes NO run — and is still named by its id", () => {
     const streams = createTurnStreamRegistry();
-    streams.end(streams.begin("a-aborted", controller()));
+    streams.end(streams.begin("a-aborted", controller(), "u1"));
     expect(streams.removableTurnIds()).toEqual(["a-aborted"]);
-    expect(streams.removableRunIds()).toEqual([]);
+    expect(streams.removableRunIds(removing("u1"))).toEqual([]);
   });
 
   it("a SUPERSEDED token cannot stamp its run onto the turn wearing its id now", () => {
     // The instance gate, for the other identity. A late drive reporting its run
     // would otherwise hand the next edit a run belonging to a turn that is gone.
     const streams = createTurnStreamRegistry();
-    const first = streams.begin("x", controller());
-    const second = streams.begin("x", controller()); // same id, new instance
+    const first = streams.begin("x", controller(), "u1");
+    const second = streams.begin("x", controller(), "u1"); // same id, new instance
     expect(streams.noteRunId(first, "run-first")).toBe(false);
-    expect(streams.removableRunIds()).toEqual([]);
+    expect(streams.removableRunIds(removing("u1"))).toEqual([]);
     expect(streams.noteRunId(second, "run-second")).toBe(true);
-    expect(streams.removableRunIds()).toEqual(["run-second"]);
+    expect(streams.removableRunIds(removing("u1"))).toEqual(["run-second"]);
   });
 
   it("the FIRST run observed for an instance is kept — the drive reports it on every fold", () => {
     const streams = createTurnStreamRegistry();
-    const token = streams.begin("a1", controller());
+    const token = streams.begin("a1", controller(), "u1");
     expect(streams.noteRunId(token, "run-1")).toBe(true);
     expect(streams.noteRunId(token, "run-1")).toBe(false); // idempotent
     expect(streams.noteRunId(token, "run-2")).toBe(false); // and not overwritten
-    expect(streams.removableRunIds()).toEqual(["run-1"]);
+    expect(streams.removableRunIds(removing("u1"))).toEqual(["run-1"]);
   });
 
   it("an empty run id is not a run", () => {
     const streams = createTurnStreamRegistry();
-    const token = streams.begin("a1", controller());
+    const token = streams.begin("a1", controller(), "u1");
     expect(streams.noteRunId(token, "")).toBe(false);
-    expect(streams.removableRunIds()).toEqual([]);
+    expect(streams.removableRunIds(removing("u1"))).toEqual([]);
   });
 
   it("leaving the thread drops the runs with the ids they belong to", () => {
     const streams = createTurnStreamRegistry();
     expect(streams.resetForThread("t-a")).toBe(false);
-    const token = streams.begin("a1", controller());
+    const token = streams.begin("a1", controller(), "u1");
     streams.noteRunId(token, "run-1");
     streams.end(token);
     expect(streams.resetForThread("t-b")).toBe(true);
-    expect(streams.removableRunIds()).toEqual([]);
+    expect(streams.removableRunIds(removing("u1"))).toEqual([]);
     expect(streams.retainedIdCount()).toBe(0);
   });
 });

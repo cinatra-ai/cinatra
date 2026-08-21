@@ -87,6 +87,13 @@ export function buildTruncationIntent(
  * carries is removed through its mirror row, which is the narrower, payload-
  * intersected path. This assertion is only ever about the turns that have no such
  * row. Deduplicated; the server treats it as a SET.
+ *
+ * AND IT IS NOT A UNION OF EVERY UNCOMMITTED TURN. "Over-naming is safe" holds
+ * for the ids above because a bubble id the server cannot link to a row does
+ * nothing; a run id names the run-bound row outright, so the same generosity
+ * would tombstone a concurrently-streaming turn whose prompt the edit KEPT.
+ * The registry therefore hands over only the runs whose turn is anchored to a
+ * removed prompt, and this builder is the pure shaping of that set.
  */
 export function buildRemovedRunIntent(removableRunIds: Iterable<string>): string[] {
   const runIds: string[] = [];
