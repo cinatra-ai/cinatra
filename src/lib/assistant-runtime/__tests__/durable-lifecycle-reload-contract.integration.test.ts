@@ -2005,34 +2005,52 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
         .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
         .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
     //
-    // THE SURFACE IS DERIVED, NOT LISTED (codex round 3, F2). A hard-coded file
-    // list states a whole-surface property it does not check: a new writer in an
-    // unlisted module would pass it. So the set is every module in the /chat
-    // package that actually ISSUES a thread save, found by scanning for the two
-    // save entry points, minus the edit flow itself. The shared conversation
-    // column's own write builder (`conversation-services.ts`) is deliberately NOT
-    // in that set and deliberately DOES carry the field: the widget surface truly
-    // truncates too, and its route authorizes the tombstone the same way.
+    // THE CHECK IS INVERTED AND WHOLE-PACKAGE (codex rounds 3-4, F2). A LIST OF
+    // FILES TO CHECK states a surface property it does not have: a new writer in
+    // an unlisted module — or in a subdirectory, or reaching the save through an
+    // aliased import or a wrapper — passes it untouched. So the package is walked
+    // RECURSIVELY, every non-test module is read with its comments stripped, and
+    // the set of modules that MENTION either field must equal the allow-list
+    // below. A new carrier anywhere in the package fails this arm by existing,
+    // whatever it imports and whatever it calls the save.
     const chatSrc = path.join(process.cwd(), "packages/chat/src");
-    const savers = readdirSync(chatSrc)
-      .filter((name) => /\.tsx?$/.test(name) && name !== "message-edit-flow.ts")
-      .map((name) => ({ name, src: stripComments(readFileSync(path.join(chatSrc, name), "utf8")) }))
-      .filter(
-        ({ src }) => src.includes("saveChatThreadInOrder(") || src.includes("saveChatThreadViaFetch("),
-      );
-    // The scan must FIND the savers, or the loop below proves nothing.
-    expect(savers.map((s) => s.name).sort()).toEqual(["ag-ui-chat-client.ts", "chat-page.tsx"]);
-    // ...and the routing/dispatch modules the field must never reach either.
-    for (const name of ["chat-routing.ts", "actions.ts"]) {
-      savers.push({ name, src: stripComments(readFileSync(path.join(chatSrc, name), "utf8")) });
-    }
-    for (const { name, src } of savers) {
-      expect(src, `${name} carries a truncation assertion`).not.toContain("removedMessageIds");
-      // Same statement for the STREAMING half, and it matters more there: a run
-      // id needs no mirror row to reach a run-bound row, so an ordinary save that
-      // carried one would tombstone a turn nobody removed.
-      expect(src, `${name} carries a run-id truncation assertion`).not.toContain("removedRunIds");
-    }
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) return entry.name === "__tests__" ? [] : walk(abs);
+        return /\.tsx?$/.test(entry.name) ? [abs] : [];
+      });
+    const carriers = walk(chatSrc)
+      .filter((abs) => {
+        // BOTH halves, and it matters more for the run id: a run id needs no
+        // mirror row to reach a run-bound row, so an ordinary save that carried
+        // one would tombstone a turn nobody removed.
+        const src = stripComments(readFileSync(abs, "utf8"));
+        return src.includes("removedMessageIds") || src.includes("removedRunIds");
+      })
+      .map((abs) => path.relative(chatSrc, abs).split(path.sep).join("/"))
+      .sort();
+    expect(
+      carriers,
+      "a /chat module carries the truncation intent that did not before — if an ordinary whole-transcript save ever carries it, every stale tab is asserting removals again",
+    ).toEqual(
+      [
+        // The edit flow: the ONE caller that truly truncates, and the only /chat
+        // page-side module that may assert a removal at all.
+        "message-edit-flow.ts",
+        // The registry the streaming half is read out of, which names the field
+        // as the parameter it filters on. It issues no save.
+        // (`truncation-intent.ts` names the fields in PROSE only, so it is
+        // correctly absent here — comments are stripped before the scan.)
+        "turn-stream-registry.ts",
+        // The SHARED conversation column and its write builder. The widget
+        // surface truly truncates too (its `onEditAndResend` rewrites a message
+        // and drops every successor), and its route authorizes the tombstone
+        // exactly as the /chat route does.
+        "conversation-column.tsx",
+        "conversation-services.ts",
+      ].sort(),
+    );
   });
 
   it("edit-and-resend WAITS for its truncation intent before it changes anything", () => {
