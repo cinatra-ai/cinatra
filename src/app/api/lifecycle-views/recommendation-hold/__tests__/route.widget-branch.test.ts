@@ -37,7 +37,7 @@ const resolveRecommendationHoldStateForActor = vi.fn();
 const confirmRecommendationForActor = vi.fn();
 const skipRecommendationForActor = vi.fn();
 const writeRunSkillSelectionForActor = vi.fn();
-const triggerAgentRun = vi.fn();
+const dispatchRunStartForPrincipal = vi.fn();
 const resolveWidgetLifecycleActorContext = vi.fn();
 const resolveAssistantWidgetBinding = vi.fn();
 
@@ -54,8 +54,8 @@ vi.mock("@cinatra-ai/agents/run-recommendation-core", () => ({
 vi.mock("@cinatra-ai/agents/recommendation-hold", () => ({
   RECOMMENDATION_DECISION_REFUSAL: "This run's skill selection cannot be decided from here.",
 }));
-vi.mock("@cinatra-ai/agents/run-actions", () => ({
-  triggerAgentRun: (...a: unknown[]) => triggerAgentRun(...a),
+vi.mock("@cinatra-ai/agents/run-dispatch-core", () => ({
+  dispatchRunStartForPrincipal: (...a: unknown[]) => dispatchRunStartForPrincipal(...a),
 }));
 vi.mock("@/lib/lifecycle/widget-lifecycle-actor", async (importOriginal) => {
   // The GRANT constants are imported for real — each route must pass the
@@ -132,6 +132,7 @@ beforeEach(() => {
   resolveRecommendationHoldStateForActor.mockResolvedValue({ state: "none" });
   confirmRecommendationForActor.mockResolvedValue({ ok: true, dispatched: true });
   skipRecommendationForActor.mockResolvedValue({ ok: true, dispatched: true });
+  dispatchRunStartForPrincipal.mockResolvedValue({ ok: true });
 });
 
 describe("the credential is the only way in", () => {
@@ -319,10 +320,22 @@ describe("behind the door it is the ONE core, taking the widget's actor", () => 
         who: { actor: WIDGET_ACTOR.actor, roleHints: WIDGET_ACTOR.roleHints },
       }),
     );
-    // …and the dispatcher is the canonical one, handed in by this entry: the
-    // route never picks a dispatch path of its own.
-    await call.dispatch({ runId: RUN_ID, templateSlug: "tpl-1" });
-    expect(triggerAgentRun).toHaveBeenCalledWith({ runId: RUN_ID, templateSlug: "tpl-1" });
+    // …and the dispatcher is bound to the SAME verified widget principal, for
+    // the ONE run this request bound — never a session-derived one, which on a
+    // cross-site frame has no cookie to resolve and would refuse the release it
+    // has already written (cinatra#2790, plan §6.4).
+    await expect(call.dispatch({ runId: RUN_ID, templateSlug: "tpl-1" })).resolves.toEqual({
+      ok: true,
+    });
+    expect(dispatchRunStartForPrincipal).toHaveBeenCalledWith(
+      { runId: RUN_ID, templateSlug: "tpl-1" },
+      {
+        via: "widget-credential",
+        userId: CLAIMS.userId,
+        orgId: CLAIMS.orgId,
+        runId: RUN_ID,
+      },
+    );
   });
 
   it("DECIDE/skip: routes to the skip core, with the hold it was taken against", async () => {

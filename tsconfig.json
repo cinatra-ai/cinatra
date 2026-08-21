@@ -101,6 +101,7 @@
       "@cinatra-ai/agents/run-recommendation-core": ["./packages/agents/src/run-recommendation-core.ts"],
       "@cinatra-ai/agents/run-recommendation-chip-row": ["./packages/agents/src/run-recommendation-chip-row.tsx"],
       "@cinatra-ai/agents/run-actions": ["./packages/agents/src/run-actions.ts"],
+      "@cinatra-ai/agents/run-dispatch-core": ["./packages/agents/src/run-dispatch-core.ts"],
       "@cinatra-ai/agents/artifact-review-gate-store": ["./packages/agents/src/artifact-review-gate-store.ts"],
       "@cinatra-ai/agents/lifecycle-verification-store": ["./packages/agents/src/lifecycle-verification-store.ts"],
       "@cinatra-ai/agents/lifecycle-verification-read-store": ["./packages/agents/src/lifecycle-verification-read-store.ts"],

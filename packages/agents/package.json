@@ -47,6 +47,7 @@
     "./run-recommendation-core": "./src/run-recommendation-core.ts",
     "./run-recommendation-chip-row": "./src/run-recommendation-chip-row.tsx",
     "./run-actions": "./src/run-actions.ts",
+    "./run-dispatch-core": "./src/run-dispatch-core.ts",
     "./review-gate-card": "./src/review-gate-card.tsx",
     "./review-decision-bar": "./src/review-decision-bar.tsx",
     "./review-gate-states": "./src/review-gate-states.tsx",

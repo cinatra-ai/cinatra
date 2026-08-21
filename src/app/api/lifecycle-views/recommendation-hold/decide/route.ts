@@ -9,11 +9,10 @@ import {
   skipRecommendationForActor,
   writeRunSkillSelectionForActor,
 } from "@cinatra-ai/agents/run-recommendation-core";
-import { triggerAgentRun } from "@cinatra-ai/agents/run-actions";
-
 import { WIDGET_RECOMMENDATION_DECIDE_GRANT } from "@/lib/lifecycle/widget-lifecycle-actor";
 import {
   resolveWidgetRecommendationCaller,
+  widgetRunStartDispatcher,
   widgetSessionOwnsRun,
 } from "@/lib/lifecycle/recommendation-hold-widget-branch";
 
@@ -35,6 +34,15 @@ import {
 // is written. A widget decision therefore can never be recorded against whoever
 // else is signed in on the browser the frame happens to live in, and a run the
 // conversation does not own cannot be decided from it.
+//
+// THE DISPATCH CARRIES THE SAME IDENTITY AS THE WRITE. A decision ends by
+// releasing the park and dispatching the run, and the canonical dispatcher used
+// to resolve its own identity from a cookie session — which a cross-site frame
+// does not have. So this entry hands the core a dispatcher bound to the actor it
+// just verified, for the ONE run it just bound, exactly as it already hands in
+// the broker selection write. There is no session fallback and no widening: a
+// widget principal dispatches the run it decided, in the org its credential
+// binds, or nothing at all.
 //
 // EVERY REFUSAL IS THE SAME ONE. "You may not decide this run", "that hold is
 // stale" and "there is no such run" answer identically at 200, exactly as the
@@ -93,13 +101,16 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  // The BROKER dispatcher — minted here, for THIS credential and THIS run.
+  const dispatch = widgetRunStartDispatcher({ claims: caller.claims, run });
+
   const outcome =
     body.decision === "skip"
       ? await skipRecommendationForActor({
           runId: body.runId,
           who,
           ...(body.holdRef !== undefined ? { holdRef: body.holdRef } : {}),
-          dispatch: triggerAgentRun,
+          dispatch,
         })
       : await confirmRecommendationForActor({
           runId: body.runId,
@@ -113,7 +124,7 @@ export async function POST(request: Request): Promise<Response> {
           ...(body.forcedRevisions ? { forcedRevisions: body.forcedRevisions } : {}),
           ...(body.adjustedSkillIds ? { adjustedSkillIds: body.adjustedSkillIds } : {}),
           ...(body.holdRef !== undefined ? { holdRef: body.holdRef } : {}),
-          dispatch: triggerAgentRun,
+          dispatch,
         });
 
   return Response.json({ outcome }, { headers: { "Cache-Control": "no-store" } });

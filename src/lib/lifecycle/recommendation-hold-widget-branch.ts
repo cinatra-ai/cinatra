@@ -15,6 +15,10 @@ import "server-only";
 // request here proves itself with the widget's own `cwu_` or it is refused.
 // ---------------------------------------------------------------------------
 
+import { RECOMMENDATION_DECISION_REFUSAL } from "@cinatra-ai/agents/recommendation-hold";
+import { dispatchRunStartForPrincipal } from "@cinatra-ai/agents/run-dispatch-core";
+import type { RecommendationDispatch } from "@cinatra-ai/agents/run-recommendation-core";
+
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import {
@@ -105,4 +109,57 @@ export function widgetSessionOwnsRun(
   // A run with no org recorded cannot be shown to belong to the token's org.
   if (!run.orgId || run.orgId !== claims.orgId) return false;
   return true;
+}
+
+/**
+ * THE BROKER HOST'S DISPATCHER, bound to the actor this request already proved
+ * (cinatra#2790, epic #2784 S9f).
+ *
+ * WHY IT EXISTS. A decision ends in a dispatch, and the canonical dispatch used
+ * to resolve its own identity from a cookie session. On this surface there is no
+ * cookie — the frame is cross-site by design — so the decision succeeded at every
+ * step it owned (the credential authenticated, the park released, the selections
+ * were written) and then died at the last one: the dispatch answered
+ * `unauthorized`, the run stayed `pending_input`, and the card drew a refusal on
+ * a decision the run had already accepted. The card must settle in place with the
+ * run advancing (plan §6.4), so the entry hands the core a dispatcher carrying
+ * the identity the entry itself verified — exactly as it already does for the
+ * selection write.
+ *
+ * THERE IS NO SESSION FALLBACK HERE EITHER, and for the same reason as
+ * everywhere else on this branch: the embed frame is same-origin to the app, so
+ * an ambient Cinatra cookie would happily dispatch — as whoever else is signed in
+ * on that browser.
+ *
+ * IT WIDENS NOTHING. The dispatcher is minted per request, for the ONE run the
+ * caller supplied and this request already bound to the widget session, in the
+ * org the credential names. It re-asserts that binding on every call — the run id
+ * it is handed must be the run it was minted for, and {@link widgetSessionOwnsRun}
+ * must still hold — and the dispatch core re-checks both facts again against the
+ * row it loads for itself. A widget principal therefore reaches precisely the run
+ * it decided and nothing else.
+ */
+export function widgetRunStartDispatcher(input: {
+  claims: UserTokenClaims;
+  /** The run row this request already read THROUGH the access door. */
+  run: { id: string; runBy?: string | null; orgId?: string | null };
+}): RecommendationDispatch {
+  const { claims, run } = input;
+  const refusal = { ok: false as const, error: RECOMMENDATION_DECISION_REFUSAL };
+  return async ({ runId, templateSlug }) => {
+    if (!claims.userId || !claims.orgId) return refusal;
+    // Exactly the run this dispatcher was minted for — never a second one.
+    if (!runId || runId !== run.id) return refusal;
+    // The same binding the route consumed, re-asserted at the moment of use.
+    if (!widgetSessionOwnsRun(run, claims)) return refusal;
+    return dispatchRunStartForPrincipal(
+      { runId, templateSlug },
+      {
+        via: "widget-credential",
+        userId: claims.userId,
+        orgId: claims.orgId,
+        runId: run.id,
+      },
+    );
+  };
 }
