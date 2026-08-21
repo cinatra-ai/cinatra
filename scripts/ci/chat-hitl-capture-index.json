@@ -603,7 +603,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:21.024Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out \u2014 they are sealed bearer strings \u2014 so each is reported by length, url-safe shape and a truncated digest."
+      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out — they are sealed bearer strings — so each is reported by length, url-safe shape and a truncated digest."
     },
     {
       "cell": "C3__review-card__site_widget__pending",
@@ -669,7 +669,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:29.104Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL \u2014 the single empty-island element every denial draws, which is why the framed region is blank \u2014 and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
+      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL — the single empty-island element every denial draws, which is why the framed region is blank — and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
     },
     {
       "cell": "V1__recommendation-card__run_card__held",
@@ -809,7 +809,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:56:52.794Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
+      "note": "§V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
     },
     {
       "cell": "V2__recommendation-card__run_card__held__dark",
@@ -1089,7 +1089,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:57:15.084Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
+      "note": "§V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
     },
     {
       "cell": "V4__recommendation-card__run_card__held__adjust-panel",
@@ -1369,7 +1369,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:57:59.190Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
+      "note": "§V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
     },
     {
       "cell": "V6__recommendation-card__run_card__settled__dark",
@@ -1649,7 +1649,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:58:17.869Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
+      "note": "§V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
     },
     {
       "cell": "V8__recommendation-card__run_card__held__trigger-position",
@@ -1789,7 +1789,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:58:25.799Z",
       "runtime": "dev-runtime",
-      "note": "\u00a76.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
+      "note": "§6.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
     },
     {
       "cell": "V9__recommendation-card__run_card__decided__page",
@@ -2137,6 +2137,201 @@
           "data-conformance-id": "review-gate-card"
         }
       }
+    },
+    {
+      "cell": "I1__review-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+      "screenshot": "evidence/2865-section-i-hierarchy/captures/I1__review-card__chat_thread__pending.png",
+      "sha256": "3457e80244c2b2b7f9301c389ea8c09a59cecbacab4e8321ca5beb378dd2b22d",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-bound\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T10:49:34.787Z",
+      "runtime": "dev-runtime",
+      "note": "§I input hierarchy, LIGHT: the ONE primary composer (boxed, raised, send affordance) and the card's subordinate note field (dashed baseline, transparent, no box) in ONE frame."
+    },
+    {
+      "cell": "I2__review-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+      "screenshot": "evidence/2865-section-i-hierarchy/captures/I2__review-card__chat_thread__pending__dark.png",
+      "sha256": "d009107356501f6a8f5e835177f6212861275cf9b7dba81e36be008c824e6324",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-bound\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T10:49:34.787Z",
+      "runtime": "dev-runtime",
+      "note": "§I input hierarchy, DARK: the same two inputs, same weight difference, on the dark field."
+    },
+    {
+      "cell": "I3__review-card__chat_thread__pending__composer-bound",
+      "declaredHost": "chat_thread",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/launch-note-review",
+      "screenshot": "evidence/2865-section-i-hierarchy/captures/I3__review-card__chat_thread__pending__composer-bound.png",
+      "sha256": "8303cc90015b1b15c815e452a345fd237f08f06da15134d15e59d7e60e731fcc",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-bound\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T10:49:34.787Z",
+      "runtime": "dev-runtime",
+      "note": "§I: one open review binds the chat box with no press — the row above the buttons states the binding and offers the box back."
     }
   ]
 }
