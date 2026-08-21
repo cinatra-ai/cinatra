@@ -459,6 +459,30 @@ async function recordCapture(
   };
   const { playwrightPage } = driver;
   const { observeCapture, validateCaptureRecord, hashFile } = recorder;
+
+  // WAIT FOR THE PIXELS BEFORE OPENING THE SHUTTER.
+  //
+  // The recorder requires every anchor to be PAINTED, not merely attached — a
+  // card behind `display:none` satisfies a selector and appears nowhere in the
+  // screenshot the record is filed with, so "attached DOM is not a photograph" is
+  // a refusal rather than a warning. That is exactly right, and it is also why the
+  // capture cannot be taken the instant an assertion passes: a decision triggers
+  // `router.refresh()`, and during that re-render the transcript is briefly
+  // attached and unpainted. A capture taken in that window measures zero cards and
+  // the record is refused — which is a REAL red, on a page that is perfectly
+  // healthy a moment later.
+  //
+  // Measured: this reddened one run in two, on the confirm-settled cell, and
+  // nowhere else. `retries: 0` means it has to be waited for rather than absorbed.
+  //
+  // So the two anchors the record is graded on are required to be VISIBLE first.
+  // This cannot mask a genuine disappearance: the card is already asserted
+  // `decided` by this point, and a card that never comes back fails here loudly
+  // instead of producing a refused record.
+  await expect(page.locator(CONVERSATION_LIST)).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator(`${CARD_ROOT}${CARD_HOST_CHAT}`).first()).toBeVisible({
+    timeout: 60_000,
+  });
   await stripDevOverlay(page);
   const screenshot = `${EVIDENCE_DIR}/${spec.file}`;
   const record = await observeCapture({
