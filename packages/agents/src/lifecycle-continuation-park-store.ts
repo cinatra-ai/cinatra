@@ -574,11 +574,18 @@ function dispatchHoldClearedBounded(park: {
  * delayed, for as long as the wedge lasts. Two things fix that:
  *
  *   1. THE QUEUE IS ORDERED BY THE CURSOR, not by `RETURNING`. The claim carries
- *      every row's PRE-CLAIM cursor out with it and the queue is sorted on exactly
- *      the key the claim ranks the page by. Stated honestly: this half is
- *      BELT-AND-BRACES. The joined claim below is measured to hand its rows back in
- *      claim order already, so removing the sort changes nothing observable today —
- *      it would just put a fairness property back at the mercy of a plan.
+ *      every row's PRE-CLAIM cursor out with it and the queue is sorted on that
+ *      cursor. Read that as the claim's key at a COARSER RESOLUTION, not as the
+ *      claim's exact key: Postgres ranks the page on microsecond timestamps, while
+ *      the same cursor reaches this sort through a JS `Date` and so compares in
+ *      whole milliseconds. Two parks born inside one millisecond tie here, fall to
+ *      the `id` tie-break, and can dispatch in the opposite order to the claim.
+ *      That costs fairness nothing, because point 2 below is what stops a row from
+ *      starving; this ordering only keeps the common case off the planner. Stated
+ *      honestly: this half is BELT-AND-BRACES. The joined claim below is measured
+ *      to hand its rows back in claim order already, so removing the sort changes
+ *      nothing observable today — it would just put a fairness property back at
+ *      the mercy of a plan.
  *   2. A SKIPPED ROW GETS ITS CURSOR BACK. This half is the one that carries the
  *      fix, and reverting it alone reddens the pins. One UPDATE before returning restores
  *      `hold_notify_attempted_at` to its pre-claim value on every row the breaker
@@ -690,6 +697,14 @@ async function drainHoldNotifications(limit: number): Promise<number> {
   // row order comes from a seq scan of the target), so this sort is what makes the
   // dispatch order a property of the CODE. It is deliberately belt-and-braces: no
   // test can discriminate it while the plan keeps agreeing with it.
+  //
+  // RESOLUTION, stated rather than implied: `getTime()` is MILLISECONDS, while the
+  // claim's `ORDER BY` ranks the same cursor in Postgres microseconds. This sort is
+  // therefore the claim's key rounded, not the claim's key. Two rows whose cursors
+  // fall inside one millisecond tie here and are separated by the `id` tie-break
+  // below, which can put them in the opposite order to the claim. Fairness does not
+  // rest on this: the pre-claim restore is what keeps a skipped row from starving,
+  // and it does so whatever order this queue lands in.
   const cursorOf = (p: { priorAttemptedAt: Date | null; priorCreatedAt: Date }) =>
     (p.priorAttemptedAt ?? p.priorCreatedAt).getTime();
   const queue = [...owing].sort(
