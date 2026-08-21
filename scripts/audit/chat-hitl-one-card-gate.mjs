@@ -26,8 +26,8 @@
  *      Anywhere else, declaring a component whose name is that card's — or a
  *      `Prefixed…` look-alike of it — is a violation.
  *
- *   R2 THE RETIRED PARALLELS ARE GONE. The three renderers the epic ordered
- *      deleted may not come back, by name:
+ *   R2 THE RETIRED PARALLELS ARE GONE. The renderers the epic ordered deleted
+ *      may not come back, by name (or, for §VII, by anchor):
  *        · the review REDIRECT card (`ArtifactReviewRedirectCard`) — the
  *          display-only "Continue to review" link that sent a reader away;
  *        · a DIRECT `<RunRecommendationChipRow` mount on a lifecycle HOST — the
@@ -36,15 +36,23 @@
  *          mounted by the page instead of by the card. (Scoped to the BAR: the
  *          page's own ROUTE-LEVEL `ReviewGateBlocked` panel is legitimate and
  *          uses the shipped component — see the entry's own note.)
+ *        · the review page's DIRECT §VII composition — `VerificationView`
+ *          drawing the verification core itself instead of mounting
+ *          `VerificationSummaryCard`. (Scoped to the §VII ANCHORS, not to the
+ *          component name: `VerificationView` legitimately survives as the
+ *          page's adjunct composition — see the entry's own note.)
  *
  *   R3 EVERY MOUNT IS HOST-DECLARED. A lifecycle card may only be mounted
  *      inside a `LifecycleCardSurfaceProvider` subtree, so the fail-closed host
  *      gate cannot be bypassed by a surface that simply renders the component.
  *      Checked per FILE (a mount and its provider live in one component tree).
  *
- *   R4 ONE REGISTRY ENTRY PER KIND. The renderable-view component registry maps
- *      each lifecycle viewType exactly once; a second dispatch table anywhere is
- *      a parallel registry by another name.
+ *   R4 ONE REGISTRY ENTRY PER KIND, AND IT NAMES THE OWNER. The renderable-view
+ *      component registry maps each lifecycle viewType exactly once, and that
+ *      one line must dispatch to the kind's OWNER from `CARD_OWNERS`. A second
+ *      dispatch table anywhere is a parallel registry by another name; a row
+ *      that still counts as "exactly one" while pointing at a different
+ *      component is the retirement quietly undone.
  *
  * WHAT THE COMPLETENESS RULES ADD (the S9 round). R1–R4 answer "is there more
  * than one renderer?". They never answered "is there ONE?" — and that is how a
@@ -86,11 +94,19 @@
  *      A dev-preview adapter is enumerated and marked, never counted as
  *      production and never hidden.
  *
- *   R9 THE RETIRED PARALLEL CORE RENDERERS. `VerificationView` — the route-bound
- *      page component that draws the §VII reading outside the card — is banned
- *      by name. Its own module is recorded as a PENDING RETIREMENT, and that
- *      record is valid ONLY while the verification kind is a placeholder: the
- *      slice that draws the card must delete the parallel renderer with it.
+ *   R9 THE RETIRED PARALLEL CORE RENDERERS. The route-bound page drawing of the
+ *      §VII reading — the same facts drawn a second time, outside the card — is
+ *      banned. S9a (cinatra#2792) shipped that ban as a PENDING RETIREMENT: the
+ *      identifier `VerificationView` banned by name, with the two route modules
+ *      allowlisted while the verification kind was still a placeholder, and the
+ *      record due to die with the slice that drew the card. S9e (cinatra#2789)
+ *      IS that slice. The card is DRAWN, the route modules draw none of §VII's
+ *      regions any more, the route-module allowlist is empty and the record is
+ *      deleted. The ban itself stays and got sharper: it now identifies the
+ *      retired drawing by §VII's five REGION ANCHORS rather than by an
+ *      identifier, because `VerificationView` legitimately survives as the
+ *      page's adjunct composition and a name ban would have banned the right
+ *      answer. The whole account lives on the R2 entry, with its history.
  *
  * TWO MODES, and the DEFAULT is the required one:
  *   (no flag) — the DONE check, and the gate this repository runs. Every kind
@@ -111,6 +127,24 @@
  * give it no anchor id. Those are recorded as OPEN ANCHOR NAMES rather than
  * filled in, because filling them in is exactly the implementer choice a closed
  * set forbids, and the done-check stays red until they are named.
+ *
+ * A PLACEHOLDER'S ANCHOR LIST IS NOT A RATIFICATION, and the difference matters
+ * enough to state (cinatra#2861). A PLACEHOLDER row is written by a slice that
+ * has not drawn the card: it records what the drawing OWES, in whatever words
+ * were available before the body and the DOM existed. That is an obligation, and
+ * an obligation can be WRONG about the drawing in a way a ratification cannot —
+ * it can paraphrase a body field, or mistake an ARTBOARD id (a marker the design
+ * page puts around an example specimen, like `state-loading`) for an anchor the
+ * card is supposed to emit. So the slice that draws a placeholder kind re-reads
+ * the row against the DRAWING AT THE PIN and records each correction where it
+ * occurs, with the drawing sentence it rests on. It is still not free to choose
+ * WHICH regions are required — those come from the drawing — only to name a
+ * region the drawing ratifies in PROSE and gives no id of its own, in the tree's
+ * existing convention. That naming is not new here either: the schedule-proposal
+ * row below names two controls on exactly that footing ("ratified in prose and
+ * are now named, in the existing verb-object convention"). What stays forbidden
+ * is the thing this paragraph opened with — drawing first and calling the result
+ * the requirement afterwards.
  *
  * AND WHERE THE TABLE SHAPE COMES FROM. The host-ownership table carries a
  * component-owner column and a wire-carriage column, and each row below carries
@@ -498,44 +532,165 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     gap: "The card is not drawn. The registry dispatches this kind to the S1 shell, which calls itself not-yet-drawn; the server already returns the proposal body and the client parses only the state name; the confirm action has no user interface caller. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.",
   },
 
+  // DRAWN by S9e (cinatra#2789), which is why this row no longer reads as a
+  // placeholder. Its PLACEHOLDER obligation was re-read against the drawing at
+  // the pin (design@92c1be7c §VII) rather than transcribed, per the header's
+  // "a placeholder's anchor list is not a ratification"; the three places the
+  // obligation and the drawing disagreed are corrected where they occur, each
+  // with the drawing sentence it rests on. A row that keeps a guess after the
+  // drawing lands is the same dishonesty as a placeholder that keeps a name
+  // after the card lands.
   verification_summary: {
-    status: "PLACEHOLDER",
+    status: "DRAWN",
     design: "§VII (the verification card) — advisory, no floor",
     component: "VerificationSummaryCard",
     wireCarriage: "data_part",
-    owner: null,
+    owner: "packages/agents/src/verification-summary-card.tsx",
     composes: [],
+    openObligations: [],
     body: {
-      // The obligation the drawing slice inherits, named for the reader that
-      // exists. #2870 split `useLifecycleCardState` apart; the validated seam is
+      // #2870 split `useLifecycleCardState` apart; the validated seam is
       // `useLifecycleCardResolve` (see the review row's note above for the
-      // parse-seam property this name asserts). An obligation may not point at a
-      // hook nobody can call.
+      // parse-seam property this name asserts). The placeholder named this hook
+      // and the shipped card really calls it, so this line is unchanged.
       validator: "useLifecycleCardResolve",
       params: ["view"],
-      fields: ["state", "outcome", "revisions", "fields", "comments"],
+      // The placeholder's guess is corrected here (1 of 3), against the SERVER
+      // rather than against the card. The obligation read
+      // `["state", "outcome", "revisions", "fields", "comments"]`
+      // — a paraphrase of §VII's regions, written before the body existed. The
+      // AUTHORIZED body is `verificationSummaryBodySchema`
+      // (packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts),
+      // and these are its field names, plus the envelope's own `state`. Naming
+      // the paraphrase instead would make this gate assert that the card
+      // consumes fields the server never sends.
+      fields: [
+        "state",
+        "outcome",
+        "reviewedRevisionId",
+        "repairedRevisionId",
+        "fieldDiff",
+        "advisoryComments",
+      ],
     },
-    anchors: ["verification-in-thread"],
+    // THE RATIFIED SET, CLOSED — and the placeholder's guess is corrected here
+    // (2 of 3). Read the header's "a placeholder's anchor list is not a
+    // ratification" first: the requirement below comes from the DRAWING, and
+    // only the NAMES come from the tree's convention.
+    //
+    // WHAT WAS WRONG. The obligation PINNED `["verification-in-thread"]` — it
+    // recorded that name, which is not the same act as ratifying it. That
+    // is an ARTBOARD id: in the drawing at design@92c1be7c it wraps the specimen
+    // slot inside §VII's "the verification card in the assistant turn" figure,
+    // exactly as `state-loading` wraps §IV's and `review-target-in-thread` wraps
+    // §II's — and this table ratifies neither of those for the review card. An
+    // artboard marker is how the design page labels its own examples; it is not
+    // something a shipped card emits. The corroboration is independent of this
+    // slice: scripts/audit/lib/chat-hitl-capture-recorder.mjs has graded a
+    // capture of this kind against the conformance id `verification-card` since
+    // before either S9a or S9e, and `verification-in-thread` appears nowhere in
+    // this repository's executable expectations.
+    //
+    // WHAT THE DRAWING RATIFIES. §VII names this card's regions in one sentence:
+    // "the **Core analysis** heading with its outcome pill, the scope sentence,
+    // and the two revision pins, and the field-by-field before / after of
+    // exactly what was inspected … It closes with **Advisory comments**: a label
+    // over one panel per comment." That is the closed set — chrome, outcome,
+    // revisions, field-diff, advisory — and it is the drawing's, not this
+    // slice's. The scope sentence is deliberately NOT in it: §VII draws it as
+    // copy inside the chrome rather than as a region, so it gets no anchor, and
+    // an anchor nobody drew is the implementer choice a closed set forbids.
+    //
+    // WHERE THE NAMES COME FROM. §VII gives those five regions no ids of its
+    // own, so they are named here in the tree's existing attribute convention —
+    // the same footing, and the same wording, as the schedule-proposal row's two
+    // controls three rows up ("ratified in prose and are now named, in the
+    // existing verb-object convention"). Naming a prose-ratified region is not
+    // choosing the requirement; adding or dropping one would be, and neither
+    // happened. A reader checking this row checks it against §VII's sentence,
+    // not against the card.
+    //
+    // The same five are `VERIFICATION_CORE_ANCHORS` below, which is what R2 bans
+    // outside this owner. One list, read from both ends: the drawing may not be
+    // redrawn elsewhere, and it may not quietly stop being drawn here.
+    anchors: [
+      "[data-verification-chrome]",
+      "[data-verification-outcome]",
+      "[data-verification-revisions]",
+      "[data-verification-field-diff]",
+      "[data-verification-advisory]",
+    ],
     instanceRootSelector: '[data-lifecycle-card="verification_summary"]',
-    instanceProof: null,
-    // "plus exactly one outcome anchor of …" — read as: the card must be able to
-    // draw each outcome, and any one rendering shows exactly one of them. So the
-    // owner emits all three and the rendered proof asserts the exactly-one.
-    anchorsOneOf: {
-      id: "verification-outcome",
-      of: ["verification-verified", "verification-drift", "verification-findings-not-met"],
-      why: "The outcome pill is the only place this card carries state colour, so exactly one of the three is drawn at a time and all three must be reachable.",
-    },
+    // NO `anchorsOneOf`, and the placeholder's guess is corrected here (3 of 3).
+    // The obligation expressed §VII's three outcomes as three conformance ids
+    // (`verification-verified` / `-drift` / `-findings-not-met`) — again the
+    // drawing's three SPECIMEN artboards, not three things one card emits. The
+    // shipped card carries the outcome as the VALUE of one anchor,
+    // `data-verification-outcome={body.outcome}`, over the closed enum
+    // `VERIFICATION_SUMMARY_OUTCOMES`. That is the same requirement, better
+    // drawn: "exactly one of the three at a time" is structural in a single
+    // valued attribute rather than a rule about three ids, and all three remain
+    // reachable. Keeping the three-id form would have failed R7 against a card
+    // that draws §VII correctly — a gate rejecting a correct tree.
+    //
+    // The three-outcome requirement is not dropped, it MOVED to where it can be
+    // proven: `renderedProof` below drives `verified`, `drifted` and `unmet`
+    // through real DOM and reads §VII's own three labels back out.
     hosts: {
-      chat_thread: null,
-      site_widget: null,
-      run_card: null,
-      page_gate_region: null,
+      chat_thread: [
+        {
+          module: "packages/chat/src/renderable-views/registry.tsx",
+          adapter: "registry",
+          surface: "production",
+          why: "the transcript dispatch — the same one registry row the review card uses; the chat column declares the host once and every turn resolves inside it",
+        },
+      ],
+      site_widget: [
+        {
+          module: "packages/chat/src/renderable-views/registry.tsx",
+          adapter: "registry",
+          surface: "production",
+          why: "the SAME registry row serves the widget transcript; a second table would be a parallel registry",
+        },
+      ],
+      run_card: [
+        {
+          module: "packages/agents/src/instance-screens.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the run screen draws one card per verification record the run carries, under its own <LifecycleCardSurfaceProvider host=\"run_card\">",
+        },
+      ],
+      page_gate_region: [
+        {
+          module:
+            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the review page's verification region mounts the card and composes only its page-only adjunct around it — R2's 'page-direct-verification-composition' entry is what keeps it from drawing the core itself",
+        },
+      ],
     },
-    hostGap:
-      "No host mounts this kind, because no component draws it. The rich reading exists only as a route-bound page component, which R9 records as a pending retirement, and the review page reuses the card once it is drawn.",
-    renderedProof: null,
-    gap: "The card is not drawn. The registry dispatches this kind to the S1 shell; the resolver answers with an advisory state name and no body; the rich reading of the same facts lives in a route-bound page component that is not a lifecycle card. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.",
+    // All four hosts carry a mount, so there is no `hostGap` to write. §IX's
+    // "every card appears on every host" is met for this kind.
+    // The SAME rendered test carries both proofs, exactly as the review card's
+    // does: it drives all four hosts, counts the roots on each, reads the two
+    // required root attributes, and reads all five ratified anchors back out of
+    // real DOM. One executed test, so the declaration above and the pixels can
+    // never be two separate claims.
+    renderedProof: {
+      file: "packages/agents/src/__tests__/verification-summary-card.test.tsx",
+      testName:
+        "the root carries its identity, host and state, and draws EXACTLY ONE instance per host",
+    },
+    instanceProof: {
+      file: "packages/agents/src/__tests__/verification-summary-card.test.tsx",
+      testName:
+        "the root carries its identity, host and state, and draws EXACTLY ONE instance per host",
+      // Named explicitly, like the review card's: two of the four hosts are
+      // registry-served, so a JSX-mount scan alone would leave them uncounted.
+      hosts: ["chat_thread", "site_widget", "run_card", "page_gate_region"],
+    },
   },
 });
 
@@ -569,13 +724,48 @@ export function cardDefinitionPattern(component) {
 }
 
 /**
- * R2 — the three retired parallel renderers, as exact JSX/identifier forms.
+ * R2 — the retired parallel renderers, as exact JSX / identifier / anchor forms.
  *
  * Each entry names WHAT was deleted and WHY it may not return, because the ban
  * is the whole content of the criterion. `allow` lists the modules where the
  * token is legitimate: the component's own definition module, and (for the
  * decision bar / blocked state) the ONE card that composes them.
  */
+/**
+ * The STRUCTURAL ANCHORS of §VII's core — the data attributes that identify the
+ * verification drawing itself, independently of what any component is called.
+ *
+ * Exported because two things read them and they must not drift: the R2 rule
+ * below (which bans them outside the owner module) and the slice's own
+ * one-renderer test (which asserts the owner really emits every one of them, so
+ * the ban can never go vacuous by the anchors quietly disappearing).
+ *
+ * They are the sections §VII names: the Core-analysis chrome, the outcome pill,
+ * the REVISION PINS, the field-by-field before/after, and the advisory
+ * comments. §VII draws no authorized-scope region — the plan's own binding
+ * correction puts the authorization in the card's copy and in the before/after
+ * columns — so there is no anchor for one, and an "authorized-scope" anchor
+ * appearing anywhere would be a region outside the closed set rather than a
+ * parallel drawing of one inside it (cinatra#2861).
+ *
+ * `revisions` is in this list and must stay: the two revision pins are §VII
+ * CORE, not a page adjunct. The page's own ruling names exactly two adjuncts —
+ * the pinned VISUAL pair (#2044 L-D) and the back-to-gate route affordance —
+ * and the revision pins are neither. The name collision between "the revision
+ * pins" and "the pinned visual pair" is precisely how this anchor was left out
+ * of the first cut of this list (restored in cinatra#2861): without it, a
+ * production module could emit `data-verification-revisions` and redraw that
+ * portion of the reading without tripping R2 or the emitter test — which is
+ * exactly the parallel renderer this gate exists to forbid.
+ */
+export const VERIFICATION_CORE_ANCHORS = Object.freeze([
+  "chrome",
+  "outcome",
+  "revisions",
+  "field-diff",
+  "advisory",
+]);
+
 export const RETIRED_PARALLELS = Object.freeze([
   {
     id: "review-redirect-card",
@@ -616,6 +806,94 @@ export const RETIRED_PARALLELS = Object.freeze([
     fix: "Mount <RecommendationHoldCard> under a declared host; the card composes the row.",
   },
   {
+    id: "page-direct-verification-composition",
+    // The review page's `VerificationView` DRAWING §VII itself. Before S9e
+    // (cinatra#2789) that component composed the whole reading — the
+    // Core-analysis chrome, the outcome pill, the revision pins, the
+    // field-by-field before/after and the advisory comments — while the same
+    // reading in a chat transcript drew the S1 shell. Two drawings of one
+    // reading is exactly the drift this gate exists to catch, so the core moved
+    // into `VerificationSummaryCard` and `VerificationView` became a composition
+    // of that card plus its one page-only adjunct, the pinned visual pair. (The
+    // navigation back to the gate went with the drawing: plan §8.3(5) and §8.4
+    // say the link exists only because the reading lived on its own page, so it
+    // goes when the card lands — cinatra#2861.)
+    //
+    // BANNED BY THE §VII ANCHORS, NOT BY A COMPONENT NAME, and deliberately so.
+    // `VerificationView` still exists and must — it is the legitimate adjunct
+    // composition — so banning its name would ban the right answer. What may
+    // not come back is the DRAWING, and the drawing is identified by the
+    // structural anchors §VII's core carries: the Core-analysis chrome, the
+    // outcome pill, the REVISION PINS, the before/after table and the
+    // advisory-comment list — every section the history above says the page
+    // used to draw, because the ban and that history have to name the same
+    // drawing or the ban has a hole in it.
+    // Emitting any of those outside the owner module is a second §VII renderer
+    // whatever it is called — which also catches the look-alike that R1's name
+    // patterns structurally cannot see.
+    //
+    // R9'S RETIREMENT, COMPLETED HERE — the history kept, because an
+    // empty-looking allowlist hides what it cost (the same posture the
+    // `direct-chip-row-mount` entry above keeps for S7's). S9a (cinatra#2792)
+    // shipped this ban in its PENDING form: the pattern was the identifier
+    // `VerificationView`, and the allowlist named the two route modules that
+    // carried the parallel drawing —
+    // `…/review/[reviewTaskId]/verification-view.tsx` and its `page.tsx`. That
+    // record said, in its own words, that it was "valid ONLY while the
+    // verification kind is a placeholder: the slice that draws the card must
+    // delete the parallel renderer with it", and that "the slice that draws the
+    // card deletes this and empties the allowlist in the same change". This is
+    // that slice, and this is that change:
+    //
+    //   · the PARALLEL DRAWING is deleted — `VerificationView` composed §VII's
+    //     five regions itself and now composes none of them; it mounts
+    //     `VerificationSummaryCard` under `host="page_gate_region"` and adds one
+    //     page-only adjunct. Neither route module emits a single
+    //     `data-verification-*` anchor any more, which is a property this very
+    //     rule now checks on every run rather than a claim in a comment.
+    //   · the ROUTE-MODULE ALLOWLIST is emptied — both entries are gone above.
+    //     What remains in `allow` is the owner's own definition module, which is
+    //     not an exception at all: every entry in this table allows the module
+    //     that defines the shipped thing (`run-recommendation-chip-row.tsx` for
+    //     the row, `review-gate-card.tsx` / `review-decision-bar.tsx` for the
+    //     floor). An `allow: []` here would flag the one renderer for drawing.
+    //   · the PENDING_RETIREMENT record is deleted, with its expiry check in
+    //     `auditContracts`. Its whole content was "these modules must be gone
+    //     the moment the kind is DRAWN"; the kind is DRAWN and the drawing is
+    //     gone from them, so carrying the record would be carrying a debt
+    //     nobody owes.
+    //
+    // AND THE IDENTITY OF THE BAN MOVED WITH IT, deliberately. A name ban plus
+    // an empty allowlist would have banned the RIGHT answer: `VerificationView`
+    // survives, and must, because it carries the page-only visual pair (#2044
+    // L-D) that no card in a turn can draw. So the ban now names the DRAWING —
+    // §VII's five regions — instead of the identifier that used to carry it.
+    //
+    // WHAT THAT TRADE COSTS AND BUYS, stated both ways rather than as a win.
+    // WIDER: any module redrawing a §VII region trips it whatever it is called,
+    // which is precisely the look-alike R1's name patterns structurally cannot
+    // see. NARROWER: a second component merely NAMED `VerificationView` that
+    // emits no §VII region no longer trips R2 — but that is a wrapper, an alias
+    // or a harness, not a parallel core renderer, and R9 never existed to catch
+    // it. UNCHANGED, and recorded because it is the honest limit: a renderer
+    // that copies the drawing under a novel name AND invents its own attributes
+    // evades both forms. It always did — it is the first entry in this file's
+    // MISSES list — and R3, R4 and review are what stand behind the lexical
+    // rule there.
+    //
+    // OVER-DETECTION, accepted on purpose: the `\b` makes the pattern fire on a
+    // prefixed relative too (`data-verification-chrome-extra`). A neighbouring
+    // attribute on a §VII region drawn outside the owner is the same second
+    // drawing, and this file's recorded posture is that a spurious red is one
+    // conversation while a miss is a second approval surface.
+    re: new RegExp(
+      String.raw`data-verification-(?:${VERIFICATION_CORE_ANCHORS.join("|")})\b`,
+      "g",
+    ),
+    allow: ["packages/agents/src/verification-summary-card.tsx"],
+    fix: "`VerificationView` mounts <VerificationSummaryCard> and keeps only its page-only adjunct; the card owns §VII's core.",
+  },
+  {
     id: "page-direct-decision-composition",
     // The review PAGE composing the DECISION FLOOR itself. S2 moved the bar into
     // the card so all four hosts draw one floor, bound to one decision module.
@@ -634,43 +912,11 @@ export const RETIRED_PARALLELS = Object.freeze([
     ],
     fix: "The page mounts <ReviewGateCard> in its gate region; the card owns the floor.",
   },
-  {
-    id: "verification-page-view",
-    // R9 — the route-bound page component that draws the §VII reading OUTSIDE
-    // the card. It is a parallel core renderer of the verification kind: the
-    // same facts, a second drawing, on one host only. It may not spread, and it
-    // may not survive the card.
-    re: /(?:<\s*VerificationView\b|\b(?:function|const|class)\s+(?:[A-Z][A-Za-z0-9]*)?VerificationView\s*[({=])/g,
-    // Filled from PENDING_RETIREMENT below — the two modules that carry it
-    // today, allowed ONLY while the verification kind has no card.
-    allow: [
-      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
-      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
-    ],
-    fix: "The verification reading is a lifecycle card; the review page reuses that card rather than composing its own view.",
-  },
 ]);
 
-/**
- * R9's one recorded exception, with its expiry written into the record.
- *
- * The parallel renderer exists today because the card does not. The moment the
- * verification kind is DRAWN, these modules must be gone — so the exception is
- * checked against the contract's own status rather than against a date or a
- * reviewer's memory.
- */
-export const PENDING_RETIREMENT = Object.freeze({
-  id: "verification-page-view",
-  kind: "verification_summary",
-  modules: Object.freeze([
-    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
-    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
-  ]),
-  why: "The route-bound §VII view, kept only while the verification kind has no card of its own. The slice that draws the card deletes this and empties the allowlist in the same change.",
-});
-
 /** R3 — the JSX mounts that are lifecycle CARD mounts. */
-const CARD_MOUNT_RE = /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard)\b/g;
+const CARD_MOUNT_RE =
+  /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard|VerificationSummaryCard)\b/g;
 const HOST_PROVIDER_RE = /<\s*LifecycleCardSurfaceProvider\b/;
 
 /**
@@ -688,7 +934,17 @@ export const HOST_PROVIDED_BY_PARENT = Object.freeze({
     "packages/chat/src/chat-messages-view.tsx (<LifecycleCardSurfaceProvider {...lifecycleSurface}>)",
 });
 
-/** R4 — the one registry, and the one line per kind inside it.
+/** R4 — the one registry, the one line per kind inside it, and WHAT that line
+ * dispatches to.
+ *
+ * CHECKING THE RIGHT-HAND SIDE IS THE POINT (cinatra#2861). Counting `kind:`
+ * occurrences alone leaves the rule half-blind: reverting
+ * `verification_summary: VerificationSummaryCard` to
+ * `verification_summary: LifecycleCard` keeps the count at exactly one and
+ * sails through, silently un-retiring the S1 shell for a kind the epic has
+ * DRAWN. So the row's component is compared against `CARD_OWNERS[kind]`, which
+ * is the same table R1 enforces ownership with — one source of truth for who
+ * draws a kind, read from both ends.
  *
  * SCOPED TO THE DATA-PART KINDS. `recommendation_hold` rides a typed INTERRUPT,
  * not a `DATA_PART` (`LIFECYCLE_CARD_CARRIAGE`), so it is correctly absent from
@@ -797,12 +1053,48 @@ export function scanRegistry(source) {
   const code = stripComments(source);
   const findings = [];
   for (const kind of REGISTRY_KINDS) {
-    const hits = [...code.matchAll(new RegExp(String.raw`^\s*${kind}\s*:`, "gm"))];
+    // The row and its WHOLE right-hand side in one match: everything from the
+    // colon to the value's own terminator, which in an object literal is the
+    // next `,` or the closing `}`. The side is then required to be a BARE
+    // IDENTIFIER — the registry is a map of imported components, so that is its
+    // only legal shape, and a call, an inline arrow, a member expression, a
+    // ternary or a string is reported as a row whose owner could not be read.
+    //
+    // TWO FAIL-OPENS, both found by cinatra#2861's Codex rounds, both fixed
+    // here, and recorded because the shape of the mistake is instructive: each
+    // time, the pattern read only the FRONT of the value and the expected name
+    // was sitting there.
+    //   · capturing a leading identifier — `verification_summary:
+    //     VerificationSummaryCard(kind),` passed, because the capture stopped at
+    //     the `(` and the prefix equalled the owner.
+    //   · stopping the capture at a NEWLINE — the same call written across two
+    //     lines passed for the same reason. A newline does not end a JavaScript
+    //     value, so it may not end the capture either.
+    // So the terminator set is `,` and `}` ONLY. Whitespace, newlines and the
+    // rest of a continued expression stay inside the captured side, where the
+    // bare-identifier test can see them and refuse them.
+    const hits = [
+      ...code.matchAll(new RegExp(String.raw`^\s*${kind}\s*:([^,}]*)`, "gm")),
+    ];
     if (hits.length !== 1) {
       findings.push({
         rule: "R4",
         detail: `the renderable-view registry maps '${kind}' ${hits.length} time(s) — expected exactly 1`,
         line: hits.length > 0 ? lineOf(code, hits[0].index) : 1,
+      });
+      continue;
+    }
+    const expected = CARD_OWNERS[kind]?.component;
+    const side = hits[0][1].trim();
+    const actual = /^[A-Za-z_$][\w$]*$/.test(side) ? side : null;
+    if (expected && actual !== expected) {
+      findings.push({
+        rule: "R4",
+        detail:
+          `the renderable-view registry dispatches '${kind}' to ` +
+          `${actual ? `'${actual}'` : "an expression this gate cannot read"} — ` +
+          `CARD_OWNERS names '${expected}' (${CARD_OWNERS[kind].owner}) as the one renderer of this kind`,
+        line: lineOf(code, hits[0].index),
       });
     }
   }
@@ -1391,14 +1683,14 @@ export function auditContracts(contracts = LIFECYCLE_CARD_CONTRACTS) {
     }
   }
 
-  // R9 — the recorded parallel renderer outlives nothing.
-  const retiringKind = contracts[PENDING_RETIREMENT.kind];
-  if (retiringKind !== undefined && retiringKind.status === "DRAWN") {
-    push(
-      "R9",
-      `'${PENDING_RETIREMENT.kind}' is DRAWN, so the pending-retirement record for ${PENDING_RETIREMENT.id} must be gone — ${PENDING_RETIREMENT.modules.join(", ")}`,
-    );
-  }
+  // R9's expiry check is gone with the record it checked. It asked one
+  // question — "is `verification_summary` DRAWN while the pending-retirement
+  // record still stands?" — and cinatra#2789 answered it by drawing the card
+  // and retiring the record in the same change. The BAN did not go anywhere:
+  // it is the `page-direct-verification-composition` entry in
+  // RETIRED_PARALLELS, which now identifies the retired drawing by §VII's own
+  // anchors and is enforced on every module in the tree. See that entry for
+  // what the record cost and why the allowlist is down to the owner.
   return findings;
 }
 

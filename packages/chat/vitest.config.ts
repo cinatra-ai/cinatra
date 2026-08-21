@@ -85,6 +85,12 @@ export default defineConfig({
         root,
         "packages/agents/src/review-gate-card.tsx",
       ),
+      // cinatra#2789 — §VII's ONE audit renderer, dispatched by the registry
+      // under test. Subpath alias, so it stays above the bare-package entry.
+      "@cinatra-ai/agents/verification-summary-card": path.join(
+        root,
+        "packages/agents/src/verification-summary-card.tsx",
+      ),
       // The proposal card's Adjust action. The expired-reading test vi.mocks
       // it, but vite import-analysis must resolve the bare specifier before a
       // factory mock can replace it.
