@@ -43,6 +43,7 @@
 // Usage: node 02-capture-chat-thread.mjs <baseUrl> <sessionDir> <outDir>
 import { chromium } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -84,6 +85,77 @@ const say = (m) => {
   console.log(m);
 };
 const flush = () => writeFileSync(join(OUT, "capture-log.txt"), log.join("\n") + "\n");
+
+// ── the CAPTURE RECORDS: the half that binds a picture to what was on screen ──
+// cinatra#2821 rules that a file name claims nothing: a cell name is a claim,
+// and a claim needs a RECORD. Until this round the driver wrote a prose log and
+// no records, so all five cells were unindexed, and an unindexed screenshot
+// counts as zero however honest the picture is.
+//
+// A record carries the cell, the host/kind/state it declares, the final URL, the
+// screenshot with its SHA-256, and the selector counts OBSERVED on that screen.
+// The counts are taken from the live page at the moment of the shot, never
+// derived afterwards from the log and never from the prose; that is the whole
+// point of the contract.
+//
+// `scripts/ci/lib/capture-record-contract.mjs` names what a chat_thread
+// `recommendation_hold` record owes:
+//   every cell    : `[data-conversation-list]` and
+//                   `[data-lifecycle-card-host="chat_thread"]` and the card root,
+//                   all counted in the FRAME;
+//   a `held` cell : at least one of the three per-chip controls, counted INSIDE
+//                   the card's own root;
+//   a `decided`   : `[data-lifecycle-card-state]` inside the root, and the three
+//                   per-chip controls ABSENT from it.
+// The driver looks for every one of them on every shot, so a decided cell states
+// the zero it owes rather than staying silent about it.
+const records = [];
+const RECORDED_BY = "cinatra-lifecycle-capture-recorder@1";
+const RUNTIME_NOTE =
+  "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), " +
+  "CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted; a lane-private " +
+  "Postgres (55794) and Redis (56794) on loopback, compose project x2794cap; no real " +
+  "model credential on this host";
+
+// The selectors counted on every shot. `frame` counts in the document the
+// picture was taken in; `root` counts INSIDE the card's own root, and the root
+// ITSELF counts, because the redraw publishes the card's kind, host and state on
+// that element rather than on a wrapper.
+const COUNTED = [
+  { selector: "[data-conversation-list]", scope: "frame" },
+  { selector: '[data-lifecycle-card-host="chat_thread"]', scope: "frame" },
+  { selector: '[data-lifecycle-card="recommendation_hold"]', scope: "frame" },
+  { selector: "[data-lifecycle-card-state]", scope: "root" },
+  { selector: "[data-recommendation-chip]", scope: "root" },
+  { selector: '[data-skill-action="confirm"]', scope: "root" },
+  { selector: '[data-skill-action="adjust"]', scope: "root" },
+  { selector: '[data-skill-action="skip"]', scope: "root" },
+  // The DELETED face, counted rather than described, so the record carries the
+  // zero as an observation instead of the README carrying it as a sentence.
+  { selector: '[data-action="confirm-run-recommendation"]', scope: "root" },
+  { selector: '[data-action="skip-run-recommendation"]', scope: "root" },
+];
+
+const COUNT_IN_PAGE = (counted) => {
+  const roots = [...document.querySelectorAll('[data-lifecycle-card="recommendation_hold"]')];
+  const panels = [...document.querySelectorAll("h2")]
+    .filter((h) => (h.textContent || "").trim() === "Agentic Run Progress")
+    .map((h) => h.closest("section"))
+    .filter(Boolean);
+  const outside = roots.filter((r) => !panels.some((p) => p.contains(r)));
+  const root = outside[0] || roots[0] || null;
+  return counted.map(({ selector, scope }) => {
+    let count = 0;
+    if (scope === "root") {
+      if (root) {
+        count = root.querySelectorAll(selector).length + (root.matches(selector) ? 1 : 0);
+      }
+    } else {
+      count = document.querySelectorAll(selector).length;
+    }
+    return { selector, scope, count };
+  });
+};
 
 // ── the DECLARED display names, read from the extension manifests ────────────
 // The card must print `cinatra.displayName`, never the slug on `data-skill-id`.
@@ -302,22 +374,50 @@ async function anchors() {
   return page.evaluate(ANCHORS);
 }
 
-async function shot(name, selector) {
+async function shot(name, { selector, declaredState, note } = {}) {
   await page.evaluate(stripDevOverlay);
   const path = join(OUT, name);
+
+  // OBSERVE FIRST, then photograph. The counts and the picture must answer the
+  // same screen, and nothing between these two statements changes the DOM.
+  const observed = await page.evaluate(COUNT_IN_PAGE, COUNTED);
+  const u = new URL(page.url());
+  const finalUrl = u.pathname + (u.search || "");
+
+  let kindOfPicture = "full page";
+  let taken = false;
   if (selector) {
     try {
       await page.locator(selector).first().screenshot({ path });
-      say(`captured ${name} (element: ${selector})`);
-      return;
+      kindOfPicture = `element: ${selector}`;
+      taken = true;
     } catch (e) {
       // Never let a geometry quirk cost the round: fall back to the full page
       // and SAY so, so the log records which kind of picture this is.
       say(`element shot failed for ${name} (${String(e).slice(0, 120)}) — full page instead`);
     }
   }
-  await page.screenshot({ path, fullPage: true });
-  say(`captured ${name} (full page)`);
+  if (!taken) await page.screenshot({ path, fullPage: true });
+  say(`captured ${name} (${kindOfPicture})`);
+
+  // The digest is taken from the file ON DISK, never from anything in memory.
+  const sha256 = createHash("sha256").update(readFileSync(path)).digest("hex");
+  records.push({
+    cell: name.replace(/\.png$/, ""),
+    declaredHost: "chat_thread",
+    declaredKind: "recommendation_hold",
+    declaredState,
+    finalUrl,
+    screenshot: `evidence/2786-s9b-chat-thread-held/${name}`,
+    sha256,
+    assertions: observed,
+    recordedBy: RECORDED_BY,
+    recordedAt: new Date().toISOString(),
+    runtime: RUNTIME_NOTE,
+    note,
+  });
+  say(`    record: state=${declaredState} url=${finalUrl} sha256=${sha256}`);
+  say(`    observed: ${observed.map((o) => `${o.scope}:${o.selector}=${o.count}`).join("  ")}`);
 }
 
 async function freshThread() {
@@ -460,14 +560,25 @@ try {
   record("HELD", held);
   recordLabels("HELD", held, declared);
   recordBackend("HELD", runId);
-  await shot("S9b-1__chat_thread__recommendation-hold-held.png");
+  await shot("S9b-1__recommendation-hold__chat_thread__held.png", {
+    declaredState: "pending",
+    note:
+      "The held row in the transcript: one chip per skill, each printing its manifest " +
+      "display name and carrying its own Confirm, Adjust and Skip. No heading plate, no " +
+      "disclosure, no row-level pair. The card sits ABOVE the inline run panel and the " +
+      "panel carries no copy of it.",
+  });
   // The close-up. Since the §V redraw the card's identity root IS the chip row —
   // a real box with real geometry — so this frames THE ROOT ITSELF, which the
   // pre-redraw driver could not do (the old root was `display: contents`).
-  await shot(
-    "S9b-2__chat_thread__hold-wrapper-anchors.png",
-    '[data-lifecycle-card="recommendation_hold"]',
-  );
+  await shot("S9b-2__recommendation-hold__chat_thread__held__root.png", {
+    selector: '[data-lifecycle-card="recommendation_hold"]',
+    declaredState: "pending",
+    note:
+      "The card root alone, framed on the selector the capture contract identifies the " +
+      "card by. The redraw made this root photographable; before it the root was " +
+      "`display: contents` and had no geometry.",
+  });
 
   // ── S9b-2b — ONE SKILL SHAPED IN CHAT, the row still live. ────────────────
   // The pre-redraw cell ticked a selection pill. §V deleted that: a skill is
@@ -487,7 +598,13 @@ try {
       `state=${shaped.state} and ${shaped.chips.filter((c) => c.mark === "undecided").length} ` +
       `chip(s) stay undecided — nothing released, no row-level control was pressed (there is none).`,
   );
-  await shot("S9b-2b__chat_thread__skill-selected-in-chat.png");
+  await shot("S9b-2b__recommendation-hold__chat_thread__held__shaped.png", {
+    declaredState: "pending",
+    note:
+      "One skill shaped in place through its OWN Adjust panel, while the row stays live: " +
+      "that chip carries the adjusted mark, its neighbours stay undecided, and the root " +
+      "still reads state=held. Nothing released, and no row-level control was pressed.",
+  });
 
   // ── Decide the rest, chip by chip, until the row releases as CONFIRMED. ───
   // The URL is read IMMEDIATELY BEFORE the last press, so the comparison
@@ -514,7 +631,13 @@ try {
       say(`CONFIRMED url after settle: ${page.url()}`);
       say(`CONFIRMED settled without navigation: ${page.url() === urlAtRelease}`);
       say(`CONFIRMED settled without reload: true (the driver issues no reload)`);
-      await shot("S9b-3__chat_thread__confirmed-settled-in-place.png");
+      await shot("S9b-3__recommendation-hold__chat_thread__decided__confirmed.png", {
+        declaredState: "decided",
+        note:
+          "The settled row, in the same transcript position, with no navigation and no " +
+          "reload: each chip states its own outcome, nothing is summarised above it, and " +
+          "there is nothing left to press.",
+      });
       confirmedAnchors = confirmed;
     } else {
       await pressChip(rest[i].skillId, action);
@@ -550,7 +673,13 @@ try {
       say(`SKIPPED url after settle: ${page.url()}`);
       say(`SKIPPED settled without navigation: ${page.url() === urlAtSkip}`);
       say(`SKIPPED settled without reload: true (the driver issues no reload)`);
-      await shot("S9b-4__chat_thread__skipped-settled-in-place.png");
+      await shot("S9b-4__recommendation-hold__chat_thread__decided__skipped.png", {
+        declaredState: "decided",
+        note:
+          "The settled row after a whole-row skip: all three chips present, each on §V's " +
+          "skipped treatment, display names intact, controls gone, still inside the " +
+          "conversation list, and the panel below carries no second copy.",
+      });
     } else {
       await pressChip(held2.chips[i].skillId, "skip");
       await waitForChipMark("skip-turn", held2.chips[i].skillId, "skipped");
@@ -597,6 +726,15 @@ try {
   throw err;
 } finally {
   flush();
+  // The lane's own copy of the records, written whatever happened, so a run that
+  // dies half way still says which cells it actually bound. The canonical index
+  // is `scripts/ci/chat-hitl-capture-index.json`; this file is its twin, and the
+  // two must carry the same records for these five cells.
+  writeFileSync(
+    join(OUT, "capture-records.json"),
+    JSON.stringify({ recorder: RECORDED_BY, records }, null, 2) + "\n",
+  );
+  console.log(`records written: ${records.length}`);
   await browser.close();
 }
 console.log("capture done");

@@ -3,7 +3,7 @@ runtime: development (node scripts/dev-server.mjs), CINATRA_TEST_LLM_PROVIDER=sc
 face under proof: the RATIFIED §V redraw (cinatra#2841) — the chip row IS the card, one chip per skill printing its manifest display name, each with its own Confirm/Adjust/Skip. No heading plate, no Skills(n/m) disclosure, no row-level pair.
 fresh thread: http://localhost:3794/chat/cinatra-ai/cinatra-assistant (recommendation_hold roots on entry = 0)
 [held] sent, mention tokens = 0: "run cinatra_blog-draft-writer-agent to draft a blog post about onboarding"
-runId=8cb45f6b-06f4-42f2-bcab-0b60ffcd3bb2   (agent_runs before this turn = 12)
+runId=b2a5bd99-1497-403b-8fd1-d8556d1738eb   (agent_runs before this turn = 15)
 HELD anchors: {
  "cards": 1,
  "kind": "recommendation_hold",
@@ -12,7 +12,7 @@ HELD anchors: {
  "chatThreadMarker": true,
  "conversationList": true,
  "insideConversationList": true,
- "inlineRunPanels": 1,
+ "inlineRunPanels": 0,
  "cardsOutsideInlineRunPanel": 1,
  "cardsInsideInlineRunPanel": 0,
  "summariesInsideInlineRunPanel": 0,
@@ -64,8 +64,12 @@ HELD run intent the scorer reads (agent_runs.input_params): {}
 HELD queue:
     jobs_naming_this_run=0
     job_keys_naming_this_run=<none>
-captured S9b-1__chat_thread__recommendation-hold-held.png (full page)
-captured S9b-2__chat_thread__hold-wrapper-anchors.png (element: [data-lifecycle-card="recommendation_hold"])
+captured S9b-1__recommendation-hold__chat_thread__held.png (full page)
+    record: state=pending url=/chat/cinatra-ai/cinatra-assistant/e9fd51fa-565b-490d-8cb7-94c0f280c6de sha256=bddd505e2111400791a69f0dbddd770f0452d80670b7a1094bb8169686f4377c
+    observed: frame:[data-conversation-list]=1  frame:[data-lifecycle-card-host="chat_thread"]=1  frame:[data-lifecycle-card="recommendation_hold"]=1  root:[data-lifecycle-card-state]=1  root:[data-recommendation-chip]=3  root:[data-skill-action="confirm"]=3  root:[data-skill-action="adjust"]=3  root:[data-skill-action="skip"]=3  root:[data-action="confirm-run-recommendation"]=0  root:[data-action="skip-run-recommendation"]=0
+captured S9b-2__recommendation-hold__chat_thread__held__root.png (element: [data-lifecycle-card="recommendation_hold"])
+    record: state=pending url=/chat/cinatra-ai/cinatra-assistant/e9fd51fa-565b-490d-8cb7-94c0f280c6de sha256=165869921db845bd6111ef7092b7bc8f539e3eb8e37ca030bec014dc2ec9fb57
+    observed: frame:[data-conversation-list]=1  frame:[data-lifecycle-card-host="chat_thread"]=1  frame:[data-lifecycle-card="recommendation_hold"]=1  root:[data-lifecycle-card-state]=1  root:[data-recommendation-chip]=3  root:[data-skill-action="confirm"]=3  root:[data-skill-action="adjust"]=3  root:[data-skill-action="skip"]=3  root:[data-action="confirm-run-recommendation"]=0  root:[data-action="skip-run-recommendation"]=0
 pressed the "adjust" button ON THE CHIP for @cinatra-ai/chat:blog-content
 pressed "adjust-keep" in the ADJUST panel for @cinatra-ai/chat:blog-content
 SHAPED-IN-CHAT anchors: {
@@ -76,7 +80,7 @@ SHAPED-IN-CHAT anchors: {
  "chatThreadMarker": true,
  "conversationList": true,
  "insideConversationList": true,
- "inlineRunPanels": 1,
+ "inlineRunPanels": 0,
  "cardsOutsideInlineRunPanel": 1,
  "cardsInsideInlineRunPanel": 0,
  "summariesInsideInlineRunPanel": 0,
@@ -124,7 +128,9 @@ SHAPED-IN-CHAT chip labels — the DISPLAY NAME, checked against the manifest:
     id=@cinatra-ai/chat:chat-automation-authoring  printed="Automation Authoring Skill"  manifest.cinatra.displayName="Automation Authoring Skill"  matches=true  isNotTheId=true  mark=undecided  forced=true
     id=@cinatra-ai/chat:company-research  printed="Company Research Skill"  manifest.cinatra.displayName="Company Research Skill"  matches=true  isNotTheId=true  mark=undecided  forced=true
 SHAPED-IN-CHAT: chip "@cinatra-ai/chat:blog-content" reads mark=adjusted while the card root still reads state=held and 2 chip(s) stay undecided — nothing released, no row-level control was pressed (there is none).
-captured S9b-2b__chat_thread__skill-selected-in-chat.png (full page)
+captured S9b-2b__recommendation-hold__chat_thread__held__shaped.png (full page)
+    record: state=pending url=/chat/cinatra-ai/cinatra-assistant/e9fd51fa-565b-490d-8cb7-94c0f280c6de sha256=620d08a9fd270659a90644300bfbbecde50cd51a603a8fa21cf9aa52fb543354
+    observed: frame:[data-conversation-list]=1  frame:[data-lifecycle-card-host="chat_thread"]=1  frame:[data-lifecycle-card="recommendation_hold"]=1  root:[data-lifecycle-card-state]=1  root:[data-recommendation-chip]=3  root:[data-skill-action="confirm"]=3  root:[data-skill-action="adjust"]=3  root:[data-skill-action="skip"]=3  root:[data-action="confirm-run-recommendation"]=0  root:[data-action="skip-run-recommendation"]=0
 pressed the "confirm" button ON THE CHIP for @cinatra-ai/chat:chat-automation-authoring
 pressed the "skip" button ON THE CHIP for @cinatra-ai/chat:company-research
 CONFIRMED anchors: {
@@ -176,17 +182,19 @@ CONFIRMED db: status|human_present = pending_approval|true; park = released
 CONFIRMED run intent the scorer reads (agent_runs.input_params): {}
 CONFIRMED queue:
     jobs_naming_this_run=1
-    job_keys_naming_this_run=bull:cinatra-x2794cap-jobs:8cb45f6b-06f4-42f2-bcab-0b60ffcd3bb2
+    job_keys_naming_this_run=bull:cinatra-x2794cap-jobs:b2a5bd99-1497-403b-8fd1-d8556d1738eb
 CONFIRMED durable selection rows: @cinatra-ai/chat:blog-content:user_adjusted @cinatra-ai/chat:chat-automation-authoring:recommended_confirmed
 CONFIRMED durable rejection rows: <none>
-CONFIRMED url at release : http://localhost:3794/chat/cinatra-ai/cinatra-assistant/eee5b6f4-eb1f-4895-bd95-8b7bf417e3c4
-CONFIRMED url after settle: http://localhost:3794/chat/cinatra-ai/cinatra-assistant/eee5b6f4-eb1f-4895-bd95-8b7bf417e3c4
+CONFIRMED url at release : http://localhost:3794/chat/cinatra-ai/cinatra-assistant/e9fd51fa-565b-490d-8cb7-94c0f280c6de
+CONFIRMED url after settle: http://localhost:3794/chat/cinatra-ai/cinatra-assistant/e9fd51fa-565b-490d-8cb7-94c0f280c6de
 CONFIRMED settled without navigation: true
 CONFIRMED settled without reload: true (the driver issues no reload)
-captured S9b-3__chat_thread__confirmed-settled-in-place.png (full page)
+captured S9b-3__recommendation-hold__chat_thread__decided__confirmed.png (full page)
+    record: state=decided url=/chat/cinatra-ai/cinatra-assistant/e9fd51fa-565b-490d-8cb7-94c0f280c6de sha256=173d87f930166ac492414b0951b2f61b5c5de5a4e6260f4e0d111ab9bb4fc3b2
+    observed: frame:[data-conversation-list]=1  frame:[data-lifecycle-card-host="chat_thread"]=1  frame:[data-lifecycle-card="recommendation_hold"]=1  root:[data-lifecycle-card-state]=1  root:[data-recommendation-chip]=2  root:[data-skill-action="confirm"]=0  root:[data-skill-action="adjust"]=0  root:[data-skill-action="skip"]=0  root:[data-action="confirm-run-recommendation"]=0  root:[data-action="skip-run-recommendation"]=0
 fresh thread: http://localhost:3794/chat/cinatra-ai/cinatra-assistant (recommendation_hold roots on entry = 0)
 [skip] sent, mention tokens = 0: "run cinatra_blog-draft-writer-agent to draft a blog post about onboarding"
-second runId=adc95da9-2898-4481-bedb-7413057ba9fe
+second runId=fce41a7d-b531-4d37-b02e-0ff7cb493b4c
 HELD-BEFORE-SKIP anchors: {
  "cards": 1,
  "kind": "recommendation_hold",
@@ -309,15 +317,17 @@ SKIPPED db: status|human_present = pending_approval|true; park = released
 SKIPPED run intent the scorer reads (agent_runs.input_params): {}
 SKIPPED queue:
     jobs_naming_this_run=1
-    job_keys_naming_this_run=bull:cinatra-x2794cap-jobs:adc95da9-2898-4481-bedb-7413057ba9fe
+    job_keys_naming_this_run=bull:cinatra-x2794cap-jobs:fce41a7d-b531-4d37-b02e-0ff7cb493b4c
 SKIPPED durable selection rows: <none>
 SKIPPED per-skill evidence rows: @cinatra-ai/chat:blog-content:user_skipped:NULL @cinatra-ai/chat:chat-automation-authoring:user_skipped:NULL @cinatra-ai/chat:company-research:user_skipped:NULL
 SKIPPED run-level marker in run_recommendation_skips: 1 row(s); candidate_count=3
-SKIPPED url at decision : http://localhost:3794/chat/cinatra-ai/cinatra-assistant/79db57e4-e68a-4116-b689-0bf085857395
-SKIPPED url after settle: http://localhost:3794/chat/cinatra-ai/cinatra-assistant/79db57e4-e68a-4116-b689-0bf085857395
+SKIPPED url at decision : http://localhost:3794/chat/cinatra-ai/cinatra-assistant/994c1775-de81-4d63-9b73-95bf8815337a
+SKIPPED url after settle: http://localhost:3794/chat/cinatra-ai/cinatra-assistant/994c1775-de81-4d63-9b73-95bf8815337a
 SKIPPED settled without navigation: true
 SKIPPED settled without reload: true (the driver issues no reload)
-captured S9b-4__chat_thread__skipped-settled-in-place.png (full page)
+captured S9b-4__recommendation-hold__chat_thread__decided__skipped.png (full page)
+    record: state=decided url=/chat/cinatra-ai/cinatra-assistant/994c1775-de81-4d63-9b73-95bf8815337a sha256=bba0208bee633ae96ae30718087887f7757ee03afecb7aa48cff6595b1120055
+    observed: frame:[data-conversation-list]=1  frame:[data-lifecycle-card-host="chat_thread"]=1  frame:[data-lifecycle-card="recommendation_hold"]=1  root:[data-lifecycle-card-state]=1  root:[data-recommendation-chip]=3  root:[data-skill-action="confirm"]=0  root:[data-skill-action="adjust"]=0  root:[data-skill-action="skip"]=0  root:[data-action="confirm-run-recommendation"]=0  root:[data-action="skip-run-recommendation"]=0
 
 === ACCEPTANCE — the ONE-CARD criteria, unchanged ===
 held: recommendation_hold roots=1 host=chat_thread state=held decision=- outsideInlinePanel=1 insideInlinePanel=0 summariesUnderAgenticRunProgress=0

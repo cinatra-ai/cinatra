@@ -57,6 +57,7 @@ that used to carry the identity is gone, and so is every card-level control.
 | Framed the chip row because the root had no box | Frames the ROOT itself — since the redraw the root has real geometry |
 | Recorded no label claim | Records every chip's printed label beside its id AND beside the manifest declaration it must equal, so the display-name rule is a comparison and not an impression |
 | Recorded no absence claim | Records the DELETED face per shot: heading plate, `Skills (n/m)` disclosure, row-level Confirm, row-level Skip — all must read `false` |
+| Wrote a prose log and no records, so every cell stayed unindexed | Counts the capture contract's own selectors on the screen it photographs, writes a record per cell into `capture-records.json`, and those records are registered in `scripts/ci/chat-hitl-capture-index.json` |
 
 The fixture changed with it: the agent is assigned THREE skills rather than one,
 because the redraw made the decision per chip and the row does not release until
@@ -75,10 +76,25 @@ while its neighbours stay live, and three lets ONE settled row carry all three o
 | Setup wizard | `CINATRA_E2E_SETUP_BYPASS=true` — the wizard only |
 | LLM | none. `CINATRA_TEST_LLM_PROVIDER=scripted`, so the turn takes the real hard pre-router with no model call. |
 | Viewport | 1440 × 1200 at `deviceScaleFactor: 2`; full-page cells uncropped |
-| Operator's stack | untouched. Its containers stayed up across the whole round and none was started, stopped, read or written. |
+| Operator's stack | not read and not written. Its ports were briefly bound and released before the capture, disclosed below. |
 
 Neither production fence (`assertScriptedProviderNotProduction`,
 `lifecycleSeedEnvVerdict` FENCE 1a) was weakened; this branch does not touch them.
+
+**A port trap, disclosed rather than smoothed over.** The registration round ran
+on a machine that had just rebooted, so the operator's own containers were down
+and its ports were free. Twice the repo's tooling took them. `docker compose -f
+docker-compose.yml -f docker-compose.dev.yml` publishes the OPERATOR's 5434 and
+6379, because that override hardcodes them; and `scripts/dev-server.mjs`, finding
+the connector service down, ran its own `docker compose up -d nango-server`,
+which brought up a lane `nango-db` on the operator's 5435 and re-created the lane
+Redis back onto 6379. Both were caught within seconds and released, and nothing
+of the operator's was read, written or deleted. The fix is the two the prior
+round already knew: publish through a lane-private override (the file this lane
+used is the same one recorded in `x2794cap-artifacts/lane-compose.yml`) and run
+the dev server with `CINATRA_SKIP_DEV_PREFLIGHT=1`, which turns off both the
+DB-port preflight and the nango auto-start. The capture itself ran with the lane
+on 55794 / 56794 only.
 
 ## The driving message
 
@@ -134,11 +150,11 @@ instance's bundled extension set.
 
 | cell | what §V requires | what the picture shows | verdict |
 |---|---|---|---|
-| `S9b-1__chat_thread__recommendation-hold-held.png` | The held card in the transcript: a chip per skill, display-name labels, per-chip Confirm/Adjust/Skip, no heading plate, no disclosure, no row-level pair | Three chips — **Blog Content Skill**, **Automation Authoring Skill**, **Company Research Skill** — each with its own Confirm, Adjust and Skip. No heading, no subtitle, no disclosure, no row-level control. Thread and composer in frame; the card sits ABOVE the inline run panel, which reads `pending input` / "No messages yet." and carries no copy of it | **Conforms** |
-| `S9b-2__chat_thread__hold-wrapper-anchors.png` | The card root, close up | The ROOT ITSELF, framed on `[data-lifecycle-card="recommendation_hold"]` — which the redraw made photographable. Three display-name chips, nine per-chip buttons, nothing above and nothing below | **Conforms** |
-| `S9b-2b__chat_thread__skill-selected-in-chat.png` | One skill shaped in place, the row still live | **Blog Content Skill** carries the adjusted tint after its own Adjust → *Keep it in this run*; the other two stay undecided; the card root still reads `state=held` and the panel still reads `pending input`. Nothing released, and no row-level control was pressed — there is none | **Conforms**, with one honest reading below |
-| `S9b-3__chat_thread__confirmed-settled-in-place.png` | The settled row: each chip states its own outcome, nothing summarised above it, nothing left to press | **Blog Content Skill ⇄ ADJUSTED** and **Automation Authoring Skill ✓ CONFIRMED**, in the same transcript position, no navigation and no reload; the panel below has advanced to its actionable input step | **Conforms for the kept set; deviates on the skipped chip** — see the residual below |
-| `S9b-4__chat_thread__skipped-settled-in-place.png` | The settled row after a whole-row skip | All three chips present, each **× SKIPPED** on §V's dashed treatment, display names intact, controls gone, still inside the conversation list; the panel below carries NO second copy | **Conforms** |
+| `S9b-1__recommendation-hold__chat_thread__held.png` | The held card in the transcript: a chip per skill, display-name labels, per-chip Confirm/Adjust/Skip, no heading plate, no disclosure, no row-level pair | Three chips — **Blog Content Skill**, **Automation Authoring Skill**, **Company Research Skill** — each with its own Confirm, Adjust and Skip. No heading, no subtitle, no disclosure, no row-level control. Thread and composer in frame; the card sits ABOVE the inline run panel, which reads `pending input` / "No messages yet." and carries no copy of it | **Conforms** |
+| `S9b-2__recommendation-hold__chat_thread__held__root.png` | The card root, close up | The ROOT ITSELF, framed on `[data-lifecycle-card="recommendation_hold"]` — which the redraw made photographable. Three display-name chips, nine per-chip buttons, nothing above and nothing below | **Conforms** |
+| `S9b-2b__recommendation-hold__chat_thread__held__shaped.png` | One skill shaped in place, the row still live | **Blog Content Skill** carries the adjusted tint after its own Adjust → *Keep it in this run*; the other two stay undecided; the card root still reads `state=held` and the panel still reads `pending input`. Nothing released, and no row-level control was pressed — there is none | **Conforms**, with one honest reading below |
+| `S9b-3__recommendation-hold__chat_thread__decided__confirmed.png` | The settled row: each chip states its own outcome, nothing summarised above it, nothing left to press | **Blog Content Skill ⇄ ADJUSTED** and **Automation Authoring Skill ✓ CONFIRMED**, in the same transcript position, no navigation and no reload; the panel below has advanced to its actionable input step | **Conforms for the kept set; deviates on the skipped chip** — see the residual below |
+| `S9b-4__recommendation-hold__chat_thread__decided__skipped.png` | The settled row after a whole-row skip | All three chips present, each **× SKIPPED** on §V's dashed treatment, display names intact, controls gone, still inside the conversation list; the panel below carries NO second copy | **Conforms** |
 
 `capture-log.txt` is the unedited machine output: the anchors, the label
 comparison, the run/park reads, the queue probes and the decision-evidence reads.
@@ -152,15 +168,63 @@ the record and the file name is the error.
 
 | File | Recorded kind | Recorded host | Recorded state | Recorded decision | Where the record is |
 |---|---|---|---|---|---|
-| `S9b-1__chat_thread__recommendation-hold-held.png` | `recommendation_hold` | `chat_thread` | `held` | — | `HELD anchors` |
-| `S9b-2__chat_thread__hold-wrapper-anchors.png` | `recommendation_hold` | `chat_thread` | `held` | — | `HELD anchors` |
-| `S9b-2b__chat_thread__skill-selected-in-chat.png` | `recommendation_hold` | `chat_thread` | `held` | — | `SHAPED-IN-CHAT anchors` |
-| `S9b-3__chat_thread__confirmed-settled-in-place.png` | `recommendation_hold` | `chat_thread` | `decided` | `confirmed` | `CONFIRMED anchors` |
-| `S9b-4__chat_thread__skipped-settled-in-place.png` | `recommendation_hold` | `chat_thread` | `decided` | `skipped` | `SKIPPED anchors` |
+| `S9b-1__recommendation-hold__chat_thread__held.png` | `recommendation_hold` | `chat_thread` | `held` | — | `HELD anchors` |
+| `S9b-2__recommendation-hold__chat_thread__held__root.png` | `recommendation_hold` | `chat_thread` | `held` | — | `HELD anchors` |
+| `S9b-2b__recommendation-hold__chat_thread__held__shaped.png` | `recommendation_hold` | `chat_thread` | `held` | — | `SHAPED-IN-CHAT anchors` |
+| `S9b-3__recommendation-hold__chat_thread__decided__confirmed.png` | `recommendation_hold` | `chat_thread` | `decided` | `confirmed` | `CONFIRMED anchors` |
+| `S9b-4__recommendation-hold__chat_thread__decided__skipped.png` | `recommendation_hold` | `chat_thread` | `decided` | `skipped` | `SKIPPED anchors` |
 
 Every row additionally records `chatThreadMarker: true` (the
 `data-chat-thread-recommendation-hold` marker rides the card's own root) and
 `insideConversationList: true`.
+
+### These five cells are REGISTERED, and that is new in this round
+
+A prose log is not an index. Until this round no record in
+`scripts/ci/chat-hitl-capture-index.json` answered any of these five cells, and
+`scripts/ci/lib/capture-record-contract.mjs` is explicit about what that means:
+an unindexed screenshot counts as zero, however honest the picture is. The log
+also could not be turned into records after the fact, because it never looked
+for the anchors the contract requires. It read
+`data-chat-thread-recommendation-hold`, which is a different attribute from
+`[data-lifecycle-card-host="chat_thread"]`, and it wrote booleans where the
+contract wants counts.
+
+So the driver now OBSERVES the contract's selectors on each screen and
+photographs it in the same breath, and it writes a record per cell into
+`capture-records.json` beside the pictures. The same five records are registered
+in the canonical index. Each carries the cell, the declared host, kind and
+state, the final URL, the screenshot with its SHA-256, and the counts observed:
+
+| Cell | Declared state | `[data-conversation-list]` | `[data-lifecycle-card-host="chat_thread"]` | card root | per-chip Confirm / Adjust / Skip, inside the root |
+|---|---|---|---|---|---|
+| `S9b-1…held` | `pending` | 1 | 1 | 1 | 3 / 3 / 3 |
+| `S9b-2…held__root` | `pending` | 1 | 1 | 1 | 3 / 3 / 3 |
+| `S9b-2b…held__shaped` | `pending` | 1 | 1 | 1 | 3 / 3 / 3 |
+| `S9b-3…decided__confirmed` | `decided` | 1 | 1 | 1 | 0 / 0 / 0 |
+| `S9b-4…decided__skipped` | `decided` | 1 | 1 | 1 | 0 / 0 / 0 |
+
+The two decided cells owe the ABSENCE of the decision controls, and the record
+states that zero as an observation rather than the README stating it as a
+sentence. Both also record `[data-lifecycle-card-state]` inside the root, which
+is the marker a settled capture owes.
+
+**The cells were RENAMED for the same reason.** The old names put the descriptor
+after the host (`S9b-1__chat_thread__recommendation-hold-held`), and
+`parseCellName` reads the kind from the token BEFORE the host and the state from
+the tokens after it. Under the old names every record would have parsed as kind
+`null` and state `null`, so the contract would have asked for nothing and the
+registration would have proved nothing. The names now carry the contract's own
+vocabulary, which is what makes the held cells owe their controls and the
+decided cells owe the absence of them.
+
+**The pictures were re-shot, and nothing about the drawing moved.** A record
+binds to one image by digest, so records for the earlier files could not be
+written without re-taking them. The re-shoot reproduced the previous round's
+readings exactly: three chips, per-chip Confirm/Adjust/Skip while held, no chip
+printing its raw id, no heading plate, no disclosure, no row-level pair, and the
+same four acceptance lines. The five earlier files are deleted; nothing in the
+tree cites them.
 
 ## The ratified face, measured per shot
 
@@ -222,9 +286,9 @@ point.
 
 | moment | run row | park | jobs naming THIS run |
 |---|---|---|---|
-| held (run `8cb45f6b`) | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) |
+| held (run `b2a5bd99`) | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) |
 | after the row released as CONFIRMED | `pending_approval` | `released` | `1`, and that job key IS the run id |
-| held before Skip (run `adc95da9`) | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) |
+| held before Skip (run `fce41a7d`) | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) |
 | after the row released as SKIPPED | `pending_approval` | `released` | `1`, and that job key IS the run id |
 
 **Read `jobs_naming_this_run`, not a queue total.** The load-bearing quantity is
