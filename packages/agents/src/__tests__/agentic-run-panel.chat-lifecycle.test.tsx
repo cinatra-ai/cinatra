@@ -530,7 +530,33 @@ describe("the skill-recommendation screen reaches the conversation", () => {
         throw new Error("recommendation card not drawn for a parked chat run");
       }
     });
-    expect(screen.queryByText(/Confirm the skills for this run/i)).not.toBeNull();
+    // RE-ANCHORED to the ratified §V drawing (cinatra#2841), same guarantee.
+    // This used to read the heading plate's question back — the plate was the
+    // human-readable proof the card had drawn its HELD content in the panel
+    // rather than an empty marker node. §V deleted the plate ("the row IS the
+    // whole card"), so that proof moves onto the row's own root and its chips,
+    // exactly as the sibling case above was re-anchored. Asserted negatively
+    // too, so the old drawing cannot creep back.
+    expect(screen.queryByText(/Confirm the skills for this run/i)).toBeNull();
+
+    const row = document.querySelector('[data-conformance-id="run-chip-row"]');
+    expect(row).not.toBeNull();
+    // Still the HELD reading this case is named for.
+    expect(row?.getAttribute("data-lifecycle-card-state")).toBe("held");
+    // ONE declaring root in the panel — the contract the wrapper removal fixed.
+    // The panel renders the row directly and now carries the declaration itself.
+    expect(
+      document.querySelectorAll('[data-lifecycle-card="recommendation_hold"]'),
+    ).toHaveLength(1);
+    expect(row?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+
+    // What the reader shapes the run with, inside that one root.
+    const chip = row?.querySelector("[data-recommendation-chip]");
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toContain("Blog content");
+    expect(chip?.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+    expect(chip?.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+    expect(chip?.querySelector('[data-skill-action="skip"]')).not.toBeNull();
   });
 
   it("resolves Confirm through the canonical release action", async () => {
