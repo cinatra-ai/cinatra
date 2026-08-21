@@ -378,14 +378,18 @@ deliberately loaded with the skills' own vocabulary, with the same result,
 because those words never reach the scorer. The RECOMMENDED reading of the same
 row is proven on the run surface in `evidence/2841-v-redraw`.
 
-**The panel's "Skills (3)" block is not the deleted disclosure.** On `S9b-4` the
-inline run panel below the card shows `Skills (3)` over three slug chips. That is
-the RUN PANEL's own assigned-skills readout, outside the card and outside this
-PR's surface: it is not a `recommendation_hold` root, not a
-`[data-run-recommendation-decision]` summary, and not the deleted `Skills (n/m)`
-selector — which was a selection counter INSIDE the card and is absent from every
-cell (`skillsDisclosure=false`, measured on the card's own text). That it prints
-slugs rather than display names is a different surface's label, untouched here.
+**The panel draws no "Skills (3)" block at this head.** This paragraph used to
+explain one, because the PRE-REFRESH `S9b-4` showed a `Skills (3)` readout over
+three raw-slug chips inside the run panel. The refreshed cell does not: below the
+three SKIPPED chips, `S9b-4` shows the inline panel as *Agentic Run Progress* with
+an **Awaiting input** badge, the optional *Idea* JSON field with its **Continue**
+button, and the line "No messages yet.", followed by the *Open the run page* link
+and the dispatch line. No `Skills (n/m)` text and no slug chip is in the frame at
+all. The distinction the paragraph drew is therefore moot on this evidence, and it
+is kept only to record why: a run-panel assigned-skills readout was never the
+deleted in-card `Skills (n/m)` selector, which was a selection counter INSIDE the
+card and is absent from every cell (`skillsDisclosure=false`, measured on the
+card's own text).
 
 **The confirmed chip's source.** The kept, non-recommended
 `chat-automation-authoring` was written `recommended_confirmed` rather than
