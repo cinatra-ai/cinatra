@@ -1420,7 +1420,7 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n"),
       ).toMatch(
         new RegExp(
-          `${dropped.replace(/[[\]]/g, "\\$&")} PRESENT \\(root-scoped\\)`,
+          `${dropped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} PRESENT \\(root-scoped\\)`,
         ),
       );
     }
