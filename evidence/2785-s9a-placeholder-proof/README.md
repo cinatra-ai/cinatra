@@ -58,11 +58,11 @@ the envelope is built inside the tool handler, and the recognizer accepts it onl
 from the server label the runtime stamps from a dispatch it actually performed.
 The required gate re-ran after the change and its output was byte-identical to
 `required-gate-run.txt` as that file stood AT S9a. That sentence describes S9a's
-own change. The committed copy has moved TWICE since, because the gate suite
-holds it byte-identical to a fresh run: cinatra#2789 (S9e) drew the verification
-card, and cinatra#2786 (S9b) enumerated the `chat_thread` mount for
-`recommendation_hold` — each changed the gate's output and re-recorded the
-transcript with it (see the table below). The S9a claim above is about the S9a
+own change. The committed copy has moved for TWO reasons since, because the gate
+suite holds it byte-identical to a fresh run: cinatra#2789 (S9e) drew the
+verification card, and cinatra#2786 (S9b) enumerated the `chat_thread` mount for
+`recommendation_hold`. Each retired a finding, and this head is the first tree
+that carries both (see the table below). The S9a claim above is about the S9a
 run, not about the bytes in the file today.
 
 **One sentence in the pull-request body is now narrower than the tree.** That
