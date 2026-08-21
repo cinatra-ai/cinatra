@@ -41,6 +41,14 @@ export function undoDeepLink(changeSetId: string): string {
   // That route holds to the same per-object eligibility the affordance already
   // checked and auto-opens the restore confirmation, so a rendered control never
   // dead-ends on the not-authorized panel.
+  //
+  // WHAT KEEPS THAT PROMISE TRUE NOW (cinatra#2701, epic #2699). The route moved
+  // under the platform-admin gate, so per-object eligibility alone no longer
+  // implies reachability. Every caller of this builder therefore renders its
+  // control for an ADMIN session only: the toast action (below), the chat
+  // "Undo last action" chip (its candidate read returns nothing to a non-admin)
+  // and the object-history restore button (its panel withholds it). The builder
+  // itself is unchanged — it is a URL, not a decision.
   return `/configuration/artifacts/restore/${encodeURIComponent(changeSetId)}`;
 }
 
@@ -70,10 +78,21 @@ async function renderUndoToast(
   // Suppress the Undo affordance unless the actor is eligible to restore this
   // change-set (§VI, no admin bypass). Fail closed on any error.
   let eligible = false;
+  let admin = false;
   try {
-    ({ eligible } = await canRestoreChangeSetAction({ changeSetId }));
+    ({ eligible, admin } = await canRestoreChangeSetAction({ changeSetId }));
   } catch {
     eligible = false;
+    admin = false;
+  }
+  // ALIGNED AFFORDANCE (cinatra#2701, epic #2699 S2). The Undo action
+  // deep-links into `/configuration/artifacts/...`, which is admin-only, so a
+  // non-admin is offered no link at all. The save still reports itself — the
+  // toast INFORMS without a link — because the epic removes the dead entry
+  // point, not the feedback that the write landed.
+  if (!admin) {
+    toast.success(opts.title ?? `Saved ${opts.objectLabel ?? "object"}`);
+    return;
   }
   if (!eligible) return; // ineligible → render nothing (no toast Undo action)
   toast.success(opts.title ?? `Saved ${opts.objectLabel ?? "object"}`, {

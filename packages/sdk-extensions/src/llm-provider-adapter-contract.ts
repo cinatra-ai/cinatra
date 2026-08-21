@@ -42,8 +42,9 @@ export type { LlmProvider };
  * from agents (that would invert the layering / create a cycle — the same
  * reason `LlmProvider` is duplicated here). The host reads the capability from
  * the OAS block and threads it DOWN into orchestration as data on
- * `GenerateInput.capabilityRequired`; the values are identical to
- * `LlmCapability`, so a host value is directly assignable.
+ * `GenerateInput.capabilityRequired` / `StreamInput.capabilityRequired`; the
+ * values are identical to `LlmCapability`, so a host value is directly
+ * assignable.
  *
  * Consumed today by the Anthropic adapter's native_mcp fail-closed hardening
  * (llm-providers S1, #1712): under `"native_mcp"` the adapter refuses to
@@ -546,6 +547,21 @@ export type StreamInput = {
    * self-MCP; any other id is looked up in external_mcp_servers.
    */
   declaredToolboxIds?: string[];
+  /**
+   * cinatra#2776: the capability the dispatching surface pins for THIS stream,
+   * mirroring `GenerateInput.capabilityRequired` field-for-field so an adapter
+   * reads one field on both entry points.
+   *
+   * The chat and widget runtimes set `"native_mcp"` whenever they hand the
+   * adapter the Cinatra self-MCP toolbox: the self-MCP catalog must reach the
+   * model as ONE provider-hosted MCP reference and never as inline function
+   * schemas, so a connector configured for function-tools emulation must REFUSE
+   * the stream (fail-closed, before any credential-bearing egress) rather than
+   * flatten the catalog. Absent ⇒ no capability gate (existing behavior);
+   * `"function_tools"` is the explicit opt-in a caller declares when function
+   * tools are what it actually wants.
+   */
+  capabilityRequired?: LlmCapabilityRequirement;
   /** Optional artifact attachments (see GenerateInput.attachments). Resolved
    *  by the orchestration layer. */
   attachments?: LlmAttachmentRef[];

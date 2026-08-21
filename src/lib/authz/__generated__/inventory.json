@@ -255,17 +255,17 @@
     {
       "primitiveName": "approvals_decide",
       "file": "src/lib/approvals/approvals-mcp.ts",
-      "line": 339
+      "line": 349
     },
     {
       "primitiveName": "approvals_get",
       "file": "src/lib/approvals/approvals-mcp.ts",
-      "line": 334
+      "line": 344
     },
     {
       "primitiveName": "approvals_list",
       "file": "src/lib/approvals/approvals-mcp.ts",
-      "line": 329
+      "line": 339
     },
     {
       "primitiveName": "artifact_assertion_get",
@@ -320,12 +320,12 @@
     {
       "primitiveName": "artifact_review_gate_render",
       "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
-      "line": 448
+      "line": 452
     },
     {
       "primitiveName": "artifact_review_gates_list",
       "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
-      "line": 440
+      "line": 444
     },
     {
       "primitiveName": "artifact_source_compile",
@@ -1255,7 +1255,7 @@
     {
       "primitiveName": "verification_record_render",
       "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
-      "line": 457
+      "line": 461
     },
     {
       "primitiveName": "wordpress_site_tool_call",

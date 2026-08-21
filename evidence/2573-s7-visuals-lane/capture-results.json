@@ -1,0 +1,593 @@
+{
+ "capturedAt": "2026-08-13T16:45:08.410Z",
+ "base": "http://localhost:3000",
+ "host": "a lane host (<lane-host>)",
+ "round": "a lane host-dev",
+ "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted (model layer only), CINATRA_TURBOPACK_DEV_FS_CACHE=0",
+ "branch": "preview/2573-visuals @ 579819c25edd79b724d30836cb2d9c8f87ad1f72",
+ "note": "Long base64url tokens (sealed lifecycle gate refs) are redacted in this JSON. One remains visible inside the typed chat message in the B3-B5 PNGs; by the shipped design a ref is an addressing handle only - artifact_review_gate_render re-runs the whole access ladder server-side on every call, so naming one grants nothing.",
+ "results": [
+  {
+   "id": "A1__run-detail__held-at-recommendation-checkpoint",
+   "claim": "A real run HELD at the run-start recommendation checkpoint (pending_input), rendering through the ONE card D-1 leaves on the run-detail screen.",
+   "requestedUrl": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/new",
+   "finalUrl": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/4df320f3-024f-4519-a4f2-6ba6d8f5fe5f",
+   "httpStatus": 200,
+   "runId": "4df320f3-024f-4519-a4f2-6ba6d8f5fe5f",
+   "heldCardAppeared": true,
+   "screenshot": "A1__run-detail__held-at-recommendation-checkpoint.png",
+   "dom": {
+    "conformanceIds": [
+     "run-chip-row",
+     "run-surface",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [],
+    "lifecycleHosts": [],
+    "recommendationChipRows": 1,
+    "decidedSummaryOccurrences": 0,
+    "decidedSummaryKinds": [],
+    "decidedSummaryTextMatches": 0,
+    "offeredChips": [
+     "@cinatra-ai/chat:blog-content"
+    ],
+    "reviewGateCards": 0,
+    "headings": [
+     "Blog Draft Writer Agent",
+     "Command Palette"
+    ]
+   },
+   "pageErrors": [],
+   "delivered": true
+  },
+  {
+   "id": "A2__run-detail__decided-summary-exactly-once",
+   "claim": "The SAME run after the human confirmed, re-read from the server: the decided summary is drawn EXACTLY ONCE.",
+   "finalUrl": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/4df320f3-024f-4519-a4f2-6ba6d8f5fe5f",
+   "runId": "4df320f3-024f-4519-a4f2-6ba6d8f5fe5f",
+   "screenshot": "A2__run-detail__decided-summary-exactly-once.png",
+   "dom": {
+    "conformanceIds": [
+     "run-surface",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [],
+    "lifecycleHosts": [],
+    "recommendationChipRows": 0,
+    "decidedSummaryOccurrences": 1,
+    "decidedSummaryKinds": [
+     "confirmed"
+    ],
+    "decidedSummaryTextMatches": 1,
+    "offeredChips": [],
+    "reviewGateCards": 0,
+    "headings": [
+     "Blog Draft Writer Agent (3)",
+     "Agentic Run Progress",
+     "Command Palette"
+    ]
+   },
+   "pageErrors": [],
+   "delivered": true
+  },
+  {
+   "id": "B1__chat__composer-binding-row-above-the-decision-floor",
+   "claim": "One marked review gate open in /chat: the composer-binding row sits ABOVE the card's decision floor, says the composer routes to this review, and offers the release ('Press again to chat normally').",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/db71c730-da43-4ea9-8747-72bf7c0330fa",
+   "screenshot": "B1__chat__composer-binding-row-above-the-decision-floor.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-bound",
+     "review-composer-focus",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread"
+    ],
+    "reviewGateCards": 1,
+    "composerFocusRows": 1,
+    "composerBound": 1,
+    "composerAmbiguous": 0,
+    "composerUnbound": 0,
+    "decisionBars": 1,
+    "focusButtons": [
+     {
+      "label": "Replying to this review",
+      "pressed": "true"
+     }
+    ],
+    "iframes": [
+     {
+      "srcHead": "/lifecycle/review-island?ref=IoBNO1Wls4TpG\u2026",
+      "sandbox": "allow-scripts allow-same-origin"
+     }
+    ],
+    "transcriptTail": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "delivered": true
+  },
+  {
+   "id": "C1__review-card__chat_thread__pending",
+   "claim": "AC-15 cell \u2014 the artifact_review_gate card on the CHAT_THREAD surface, pending state, on the DEV runtime.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/db71c730-da43-4ea9-8747-72bf7c0330fa",
+   "screenshot": "C1__review-card__chat_thread__pending.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-bound",
+     "review-composer-focus",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread"
+    ],
+    "reviewGateCards": 1,
+    "composerFocusRows": 1,
+    "composerBound": 1,
+    "composerAmbiguous": 0,
+    "composerUnbound": 0,
+    "decisionBars": 1,
+    "focusButtons": [
+     {
+      "label": "Replying to this review",
+      "pressed": "true"
+     }
+    ],
+    "iframes": [
+     {
+      "srcHead": "/lifecycle/review-island?ref=IoBNO1Wls4TpG\u2026",
+      "sandbox": "allow-scripts allow-same-origin"
+     }
+    ],
+    "transcriptTail": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "delivered": true
+  },
+  {
+   "id": "B2__chat__comment-typed-while-bound-lands-on-the-gate",
+   "claim": "The reader typed an ordinary chat message while the composer was bound. It landed as THIS review's comment through the card's own comment path \u2014 not as a turn to the model.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/db71c730-da43-4ea9-8747-72bf7c0330fa",
+   "screenshot": "B2__chat__comment-typed-while-bound-lands-on-the-gate.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-bound",
+     "review-composer-focus",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread"
+    ],
+    "reviewGateCards": 1,
+    "composerFocusRows": 1,
+    "composerBound": 1,
+    "composerAmbiguous": 0,
+    "composerUnbound": 0,
+    "decisionBars": 1,
+    "focusButtons": [
+     {
+      "label": "Replying to this review",
+      "pressed": "true"
+     }
+    ],
+    "iframes": [
+     {
+      "srcHead": "/lifecycle/review-island?ref=IoBNO1Wls4TpG\u2026",
+      "sandbox": "allow-scripts allow-same-origin"
+     }
+    ],
+    "transcriptTail": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nS7 a lane host proof: a comment typed in the chat box while the composer was bound to this review.\nCinatra\n\nComment added to the review. It is still open.\n\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "ackObserved": true,
+   "newAuditRows": [
+    "afad9aca-2a9c-45d5-a98c-10c76b0a8f6c comment 2026-08-13 16:54:21.070863+00"
+   ],
+   "delivered": true
+  },
+  {
+   "id": "C2__review-card__chat_thread__decided",
+   "claim": "AC-15 cell \u2014 the SAME chat-hosted card after the reader approved it on the card's own floor: the decided state on the CHAT_THREAD surface.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/db71c730-da43-4ea9-8747-72bf7c0330fa",
+   "screenshot": "C2__review-card__chat_thread__decided.png",
+   "dom": {
+    "conformanceIds": [
+     "review-gate-blocked",
+     "review-gate-card",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "settled"
+    ],
+    "lifecycleHosts": [
+     "chat_thread"
+    ],
+    "reviewGateCards": 1,
+    "composerFocusRows": 0,
+    "composerBound": 0,
+    "composerAmbiguous": 0,
+    "composerUnbound": 0,
+    "decisionBars": 0,
+    "focusButtons": [],
+    "iframes": [],
+    "transcriptTail": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nThis review is no longer open\n\nThe gate was already decided or the run moved on.\n\nRefresh\nCinatra UAT\nCU\nS7 a lane host proof: a comment typed in the chat box while the composer was bound to this review.\nCinatra\n\nComment added to the review. It is still open.\n\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "delivered": true
+  },
+  {
+   "id": "B3__chat__two-open-gates-no-focus-the-pick-a-card-refusal",
+   "claim": "TWO marked review gates open in one thread and none chosen: BOTH cards say nothing is routed until the reader picks one \u2014 the refusal said BEFORE they type.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/c81ca31b-2fa0-43ac-b8d2-c8ba89b9ea50",
+   "screenshot": "B3__chat__two-open-gates-no-focus-the-pick-a-card-refusal.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-ambiguous",
+     "review-composer-focus",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending",
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread",
+     "chat_thread"
+    ],
+    "reviewGateCards": 2,
+    "composerFocusRows": 2,
+    "composerBound": 0,
+    "composerAmbiguous": 2,
+    "composerUnbound": 0,
+    "decisionBars": 2,
+    "focusButtons": [
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     },
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     }
+    ],
+    "transcriptTail": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nMore than one review is waiting. Choose the one you want to reply to \u2014 chat messages are not routed until you do.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nAlso show me this review: <sealed-lifecycle-ref redacted>\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Also show me this review: <sealed-lifecycle-ref redacted>\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nMore than one review is waiting. Choose the one you want to reply to \u2014 chat messages are not routed until you do.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "refsListed": 5,
+   "delivered": true
+  },
+  {
+   "id": "B3b__chat__the-ambiguous-send-is-refused-and-goes-nowhere",
+   "claim": "A message sent while two reviews are open and none is chosen is refused out loud and reaches nothing: the audit trail is unchanged across the send.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/c81ca31b-2fa0-43ac-b8d2-c8ba89b9ea50",
+   "screenshot": "B3b__chat__the-ambiguous-send-is-refused-and-goes-nowhere.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-ambiguous",
+     "review-composer-focus",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending",
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread",
+     "chat_thread"
+    ],
+    "reviewGateCards": 2,
+    "composerFocusRows": 2,
+    "composerBound": 0,
+    "composerAmbiguous": 2,
+    "composerUnbound": 0,
+    "decisionBars": 2,
+    "focusButtons": [
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     },
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     }
+    ],
+    "transcriptTail": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nMore than one review is waiting. Choose the one you want to reply to \u2014 chat messages are not routed until you do.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nAlso show me this review: <sealed-lifecycle-ref redacted>\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Also show me this review: <sealed-lifecycle-ref redacted>\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nMore than one review is waiting. Choose the one you want to reply to \u2014 chat messages are not routed until you do.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nS7 a lane host proof: sent while two reviews are open and none is chosen.\nCinatra\n\n2 reviews are waiting for you, so this message was not sent anywhere. Choose the review you want to reply to \u2014 press \u201cReply from the chat box\u201d on its card \u2014 and send it again. To keep chatting normally, press that control twice on any one of them.\n\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "auditUnchanged": true,
+   "delivered": true
+  },
+  {
+   "id": "B4a__chat__explicit-focus-binds-that-card-only",
+   "claim": "The reader pressed 'Reply from the chat box' on the SECOND card: that card alone says it is bound; the first still says nothing is routed to it.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/c81ca31b-2fa0-43ac-b8d2-c8ba89b9ea50",
+   "screenshot": "B4a__chat__explicit-focus-binds-that-card-only.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-bound",
+     "review-composer-focus",
+     "review-composer-unbound",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending",
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread",
+     "chat_thread"
+    ],
+    "reviewGateCards": 2,
+    "composerFocusRows": 2,
+    "composerBound": 1,
+    "composerAmbiguous": 0,
+    "composerUnbound": 1,
+    "decisionBars": 2,
+    "focusButtons": [
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     },
+     {
+      "label": "Replying to this review",
+      "pressed": "true"
+     }
+    ],
+    "transcriptTail": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nAlso show me this review: <sealed-lifecycle-ref redacted>\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Also show me this review: <sealed-lifecycle-ref redacted>\".\n\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nS7 a lane host proof: sent while two reviews are open and none is chosen.\nCinatra\n\n2 reviews are waiting for you, so this message was not sent anywhere. Choose the review you want to reply to \u2014 press \u201cReply from the chat box\u201d on its card \u2014 and send it again. To keep chatting normally, press that control twice on any one of them.\n\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "delivered": true
+  },
+  {
+   "id": "B4__chat__the-comment-routes-to-the-focused-card-only",
+   "claim": "The comment typed after the explicit focus reached ONE gate: exactly one new audit row, on the focused gate's id.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/c81ca31b-2fa0-43ac-b8d2-c8ba89b9ea50",
+   "screenshot": "B4__chat__the-comment-routes-to-the-focused-card-only.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-bound",
+     "review-composer-focus",
+     "review-composer-unbound",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending",
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread",
+     "chat_thread"
+    ],
+    "reviewGateCards": 2,
+    "composerFocusRows": 2,
+    "composerBound": 1,
+    "composerAmbiguous": 0,
+    "composerUnbound": 1,
+    "decisionBars": 2,
+    "focusButtons": [
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     },
+     {
+      "label": "Replying to this review",
+      "pressed": "true"
+     }
+    ],
+    "transcriptTail": "INTELLIGENCE\nChat\nNew chat\nThreads\nTeam chats\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nAlso show me this review: <sealed-lifecycle-ref redacted>\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Also show me this review: <sealed-lifecycle-ref redacted>\".\n\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nS7 a lane host proof: sent while two reviews are open and none is chosen.\nCinatra\n\n2 reviews are waiting for you, so this message was not sent anywhere. Choose the review you want to reply to \u2014 press \u201cReply from the chat box\u201d on its card \u2014 and send it again. To keep chatting normally, press that control twice on any one of them.\n\nCinatra UAT\nCU\nS7 a lane host proof: this comment must reach the FOCUSED review and no other.\nCinatra\n\nComment added to the review. It is still open.\n\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "ackObserved": true,
+   "newAuditRows": [
+    "5a12bc51-df20-48d7-bd82-0ceca844b534 comment 2026-08-13 17:03:21.554327+00"
+   ],
+   "delivered": true
+  },
+  {
+   "id": "B4b__chat__moving-the-focus-moves-where-the-comment-lands",
+   "claim": "The reader moved the focus to the FIRST card and sent again: the new audit row is on a DIFFERENT gate id \u2014 two distinct reviews, and the binding decides which one a message reaches.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/c81ca31b-2fa0-43ac-b8d2-c8ba89b9ea50",
+   "screenshot": "B4b__chat__moving-the-focus-moves-where-the-comment-lands.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-bound",
+     "review-composer-focus",
+     "review-composer-unbound",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending",
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread",
+     "chat_thread"
+    ],
+    "reviewGateCards": 2,
+    "composerFocusRows": 2,
+    "composerBound": 1,
+    "composerAmbiguous": 0,
+    "composerUnbound": 1,
+    "decisionBars": 2,
+    "focusButtons": [
+     {
+      "label": "Replying to this review",
+      "pressed": "true"
+     },
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     }
+    ],
+    "transcriptTail": "FORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nAlso show me this review: <sealed-lifecycle-ref redacted>\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Also show me this review: <sealed-lifecycle-ref redacted>\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nS7 a lane host proof: sent while two reviews are open and none is chosen.\nCinatra\n\n2 reviews are waiting for you, so this message was not sent anywhere. Choose the review you want to reply to \u2014 press \u201cReply from the chat box\u201d on its card \u2014 and send it again. To keep chatting normally, press that control twice on any one of them.\n\nCinatra UAT\nCU\nS7 a lane host proof: this comment must reach the FOCUSED review and no other.\nCinatra\n\nComment added to the review. It is still open.\n\nCinatra UAT\nCU\nS7 a lane host proof: the focus moved, so this one must reach the OTHER review.\nCinatra\n\nComment added to the review. It is still open.\n\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "ackObserved": true,
+   "newAuditRows": [
+    "94492f62-b0a8-4a3e-9a64-e5dbe7600f15 comment 2026-08-13 17:03:30.273652+00"
+   ],
+   "delivered": true
+  },
+  {
+   "id": "B5a__chat__released-the-composer-is-a-chat-box-again",
+   "claim": "The reader pressed the bound control again: the binding is given back and every open card says chat messages are not going to it.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/c81ca31b-2fa0-43ac-b8d2-c8ba89b9ea50",
+   "screenshot": "B5a__chat__released-the-composer-is-a-chat-box-again.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-focus",
+     "review-composer-unbound",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending",
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread",
+     "chat_thread"
+    ],
+    "reviewGateCards": 2,
+    "composerFocusRows": 2,
+    "composerBound": 0,
+    "composerAmbiguous": 0,
+    "composerUnbound": 2,
+    "decisionBars": 2,
+    "focusButtons": [
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     },
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     }
+    ],
+    "transcriptTail": "NT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nChat\nWhich reviews are waiting for me?\nToggle theme\nCinatra UAT\nCU\nWhich reviews are waiting for me?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Which reviews are waiting for me?\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nAlso show me this review: <sealed-lifecycle-ref redacted>\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Also show me this review: <sealed-lifecycle-ref redacted>\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nS7 a lane host proof: sent while two reviews are open and none is chosen.\nCinatra\n\n2 reviews are waiting for you, so this message was not sent anywhere. Choose the review you want to reply to \u2014 press \u201cReply from the chat box\u201d on its card \u2014 and send it again. To keep chatting normally, press that control twice on any one of them.\n\nCinatra UAT\nCU\nS7 a lane host proof: this comment must reach the FOCUSED review and no other.\nCinatra\n\nComment added to the review. It is still open.\n\nCinatra UAT\nCU\nS7 a lane host proof: the focus moved, so this one must reach the OTHER review.\nCinatra\n\nComment added to the review. It is still open.\n\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "delivered": true
+  },
+  {
+   "id": "B5__chat__after-release-the-next-message-is-an-ordinary-chat-turn",
+   "claim": "After the release the next message was answered as an ordinary chat turn and reached NO review: the audit trail is unchanged across the send.",
+   "finalUrl": "http://localhost:3000/chat/cinatra-ai/cinatra-assistant/c81ca31b-2fa0-43ac-b8d2-c8ba89b9ea50",
+   "screenshot": "B5__chat__after-release-the-next-message-is-an-ordinary-chat-turn.png",
+   "dom": {
+    "conformanceIds": [
+     "review-composer-focus",
+     "review-composer-unbound",
+     "review-decision-bar",
+     "review-gate-card",
+     "review-target-island",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleCardStates": [
+     "pending",
+     "pending",
+     "pending"
+    ],
+    "lifecycleHosts": [
+     "chat_thread",
+     "chat_thread",
+     "chat_thread"
+    ],
+    "reviewGateCards": 3,
+    "composerFocusRows": 3,
+    "composerBound": 0,
+    "composerAmbiguous": 0,
+    "composerUnbound": 3,
+    "decisionBars": 3,
+    "focusButtons": [
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     },
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     },
+     {
+      "label": "Reply from the chat box",
+      "pressed": "false"
+     }
+    ],
+    "transcriptTail": "\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nAlso show me this review: <sealed-lifecycle-ref redacted>\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Also show me this review: <sealed-lifecycle-ref redacted>\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nCinatra UAT\nCU\nS7 a lane host proof: sent while two reviews are open and none is chosen.\nCinatra\n\n2 reviews are waiting for you, so this message was not sent anywhere. Choose the review you want to reply to \u2014 press \u201cReply from the chat box\u201d on its card \u2014 and send it again. To keep chatting normally, press that control twice on any one of them.\n\nCinatra UAT\nCU\nS7 a lane host proof: this comment must reach the FOCUSED review and no other.\nCinatra\n\nComment added to the review. It is still open.\n\nCinatra UAT\nCU\nS7 a lane host proof: the focus moved, so this one must reach the OTHER review.\nCinatra\n\nComment added to the review. It is still open.\n\nCinatra UAT\nCU\nIs there anything else waiting for a review decision?\nCinatra\n\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Is there anything else waiting for a review decision?\".\n\nReview requested\nAwaiting your decision\nExpand\nReply from the chat box\nChat messages are not going to this review.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove\nType a message...\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "auditUnchanged": true,
+   "delivered": true
+  },
+  {
+   "id": "C3__review-card__run_card__live-run",
+   "claim": "AC-15 cell \u2014 the artifact_review_gate card on the RUN_CARD surface of a live run: the run's own agentic panel hosts the gate.",
+   "url": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/4df320f3-024f-4519-a4f2-6ba6d8f5fe5f",
+   "httpStatus": 200,
+   "finalUrl": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/4df320f3-024f-4519-a4f2-6ba6d8f5fe5f",
+   "screenshot": "C3__review-card__run_card__live-run.png",
+   "dom": {
+    "conformanceIds": [
+     "run-step-rail",
+     "run-surface",
+     "sidebar-assistants-entry"
+    ],
+    "lifecycleHosts": [],
+    "lifecycleCardStates": [],
+    "lifecycleCards": [],
+    "composerFocusRows": 0,
+    "iframes": [],
+    "headings": [
+     "Blog Draft Writer Agent (3)",
+     "Reviewchanges_requested",
+     "Review",
+     "Core analysisdrifted",
+     "Review",
+     "Review skippedcore-defaultcore default skips review",
+     "Review skippedcore-defaultcore default skips review",
+     "Agentic Run Progress",
+     "Command Palette"
+    ],
+    "text": "INTELLIGENCE\nChat\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nTOOLS\nSkills\nConnectors\nCU\nCinatra UAT\ncinatra-uat@example.com\nToggle Sidebar\nAgents\nBlog Draft Writer Agent (3)\nToggle theme\n@cinatra-ai/blog-draft-writer-agent\nBlog Draft Writer Agent (3)\nSetup\nPermissions\nReviewCHANGES_REQUESTED\nReview\nCore analysisDRIFTED\nReview\nReview skippedCORE-DEFAULT\ncore default skips review\nReview skippedCORE-DEFAULT\ncore default skips review\nAgentic Run Progress\npending approval\nSkills confirmed (1)\n@cinatra-ai/chat:blog-content\nIdea\n(optional)\n\nThis field expects a JSON object \u2014 for example {\"title\": \"\u2026\"}.\n\nContinue\n\nNo messages yet.\n\nCommand Palette\n\nSearch for a command to run..."
+   },
+   "pageErrors": [],
+   "delivered": false,
+   "notDeliveredBecause": "The run_card host IS declared and drawn (AgenticRunPanel wraps its body in LifecycleCardSurfaceProvider host=\"run_card\"), and a REAL review gate is now bound to this run - the run's own step rail draws it (Review CHANGES_REQUESTED / Core analysis DRIFTED). The card still does not mount because the panel gates the run_card ReviewGateCard on the run being PAUSED at the artifact-review HITL step: isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef. That interrupt context is live orchestration state, not a row, so it needs an LLM-backed run that actually reaches the review checkpoint - unreachable on this credential-free host."
+  }
+ ]
+}

@@ -245,7 +245,7 @@ Image / runtime majors offered: postgres 18, redis 8, valkey 8, mariadb 12,
 wordpress 7 (plus 6.9), php 8.5, python 3.14, tailscale 1.98 (held — see §1),
 rabbitmq 4. npm / toolchain majors offered: ESLint 10, Next 16.x (the
 `eslint-config-next` + `next` pair), the React monorepo, `@opentelemetry/*` 2
-(deferred per the overrides note), **`typescript` 7 (the native/Go compiler GA'd
+(applied — see §10), **`typescript` 7 (the native/Go compiler GA'd
 2026-07-09 as `typescript@7`; see §8 — the `@typescript/native-preview` package
 that previewed it stays a dev/nightly channel, excluded from the bar, and is
 obsoleted by adopting the stable GA)**, `cron-parser` 5, `pdfjs-dist` 6,
@@ -633,9 +633,9 @@ upstream-dictated (§1).
 
 ## 10. OpenTelemetry SDK 1.x → 2.x — applied (the stack-majors OTel group)
 
-The `@opentelemetry/*` SDK-suite lift the §4.2 / §5 notes deferred is applied
-(the stack-layer-majors lane, cinatra#1149; in-repo tracker cinatra#673). The
-suite moves together as one coupled group:
+The `@opentelemetry/*` SDK-suite lift — previously listed as deferred in §5 —
+is applied (the stack-layer-majors lane, cinatra#1149; in-repo tracker
+cinatra#673). The suite moves together as one coupled group:
 
 | Pin | Before | After |
 |---|---|---|
@@ -646,7 +646,7 @@ suite moves together as one coupled group:
 | `@opentelemetry/semantic-conventions` (root) | `^1.41.1` | `^1.43.0` (in-range) |
 | `@opentelemetry/api` | `^1.9.1` | unchanged (2.x SDK peers api 1.x) |
 
-**Code adaptation** (the breakage the §4.2 note predicted, plus one more):
+**Code adaptation** (required by the SDK 2.x API changes, plus one more):
 
 1. `src/lib/otel-bootstrap.ts`: `new Resource({...})` →
    `defaultResource().merge(resourceFromAttributes({...}))` (the 2.x provider

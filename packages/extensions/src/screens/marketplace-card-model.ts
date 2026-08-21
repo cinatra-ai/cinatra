@@ -594,7 +594,19 @@ export type MarketplaceCardCta =
   | { state: "restore" }
   | { state: "install"; disabled: boolean }
   | { state: "update"; disabled: boolean }
-  | { state: "installed" }
+  | {
+      state: "installed";
+      /**
+       * cinatra#2698 (S4, change 3): the reach a WORKSPACE install was made at,
+       * when the package's effective row is a live workspace row. The card's
+       * existing disabled "Installed" pill states it —
+       * "Installed (Workspace: All)" / "Installed (Workspace: Admins only)" —
+       * so every organization can see WHY there is no install action. Absent for
+       * every organization-anchored install: the pill reads "Installed" exactly
+       * as it always has.
+       */
+      workspaceReach?: "workspace" | "admin";
+    }
   | { state: "incompatible"; blockedAction: "install" | "update" };
 
 /**
@@ -628,12 +640,42 @@ export type MarketplaceCardCta =
  * the pending label of the install form's submit (useFormStatus), layered on
  * "install"/"update"/"restore" at render time.
  */
+/**
+ * The disabled "Installed" pill's label when the package's effective row is a
+ * live workspace row (cinatra#2698 change 3). Pure + client-safe, so the card
+ * composition can render it without pulling the server-only resolver.
+ */
+export function workspaceReachLabel(audience: "workspace" | "admin"): string {
+  return audience === "admin"
+    ? "Installed (Workspace: Admins only)"
+    : "Installed (Workspace: All)";
+}
+
 export function resolveMarketplaceCardCta(
   card: Pick<MarketplaceCardData, "packageVersion">,
-  installedInfo: { version: string; isArchived: boolean } | undefined,
+  installedInfo:
+    | { version: string; isArchived: boolean; workspaceReach?: "workspace" | "admin" }
+    | undefined,
   registryConnected: boolean,
   compatState: ExtensionCompatState,
+  /** Whether the viewer may act on an app-wide workspace row (cinatra#2698). */
+  viewerIsPlatformAdmin = false,
 ): MarketplaceCardCta {
+  // cinatra#2698 (S4, change 3) — REVERSE INSTALLS ARE REFUSED, so the card must
+  // not offer one. The package's effective row is a LIVE WORKSPACE row, which
+  // means it is installed for every organization; an organization admin gets the
+  // disabled pill stating the reach, and no install/update/restore action at
+  // all. It is decided FIRST — ahead of the archived arm — because the archived
+  // row this viewer's organization may still carry is precisely the row the
+  // workspace install superseded, and offering "Restore" for it would be the
+  // reverse install the server boundary refuses.
+  //
+  // A PLATFORM ADMIN keeps the ordinary states (they are the principal the
+  // lifecycle resolver addresses the workspace row for, so an Update they see is
+  // an Update they can run) and the reach is stated on the Installed pill.
+  if (installedInfo?.workspaceReach && !viewerIsPlatformAdmin) {
+    return { state: "installed", workspaceReach: installedInfo.workspaceReach };
+  }
   if (installedInfo?.isArchived) {
     return { state: "restore" };
   }
@@ -649,5 +691,7 @@ export function resolveMarketplaceCardCta(
     }
     return { state: "update", disabled: !registryConnected };
   }
-  return { state: "installed" };
+  return installedInfo?.workspaceReach
+    ? { state: "installed", workspaceReach: installedInfo.workspaceReach }
+    : { state: "installed" };
 }

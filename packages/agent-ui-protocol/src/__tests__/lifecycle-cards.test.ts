@@ -11,12 +11,15 @@ import {
   LIFECYCLE_CARD_KINDS,
   LIFECYCLE_CARD_STATES,
   LIFECYCLE_DATA_PART_VIEW_TYPES,
+  LIFECYCLE_DECIDER_NAME_MAX_LENGTH,
   LIFECYCLE_REVIEW_CARD_STATES,
+  LIFECYCLE_SETTLED_OUTCOMES,
   LIFECYCLE_SUGGESTION_ID_MAX_LENGTH,
   LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH,
   LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
   LIFECYCLE_VIEW_SCHEMA_VERSION,
+  LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH,
   MAX_LIFECYCLE_SUGGESTIONS,
   isLifecycleDataPartViewType,
   lifecycleCardStateSchema,
@@ -314,14 +317,59 @@ describe("§VIII the projection", () => {
     { id: "s2", fieldPath: "/items/0/bcc", op: "remove", message: "Every disclosed field is empty." },
   ];
 
-  it("projects a producer row into a chip, and NEVER carries its value", () => {
+  it("projects a producer row into a chip, CARRYING §VIII's before/after pair", () => {
     const chips = projectLifecycleSuggestions([
-      { ...produced[0], value: "Q3 re-engagement" } as never,
+      { ...produced[0], before: "Re-connecting on Q3 priorities  ", value: "Re-connecting on Q3 priorities" },
     ]);
     expect(chips).toEqual([
-      { id: "s1", label: "subject", op: "replace", message: "Not canonical." },
+      {
+        id: "s1",
+        label: "subject",
+        op: "replace",
+        message: "Not canonical.",
+        before: "Re-connecting on Q3 priorities  ",
+        after: "Re-connecting on Q3 priorities",
+      },
     ]);
-    expect(JSON.stringify(chips)).not.toContain("Q3 re-engagement");
+  });
+
+  it("a row with NO values projects the label + class chip and nothing else", () => {
+    // The negative control. A snapshot written before the pair existed, a
+    // `remove` (no one value), and an `add` of the empty string all land here —
+    // absence is not a signal, and an empty panel would claim a blank change.
+    expect(projectLifecycleSuggestions([produced[1]])).toEqual([
+      {
+        id: "s2",
+        label: "items · 0 · bcc",
+        op: "remove",
+        message: "Every disclosed field is empty.",
+      },
+    ]);
+    expect(
+      projectLifecycleSuggestions([{ ...produced[0], before: "   ", value: "" }])[0],
+    ).toEqual({ id: "s1", label: "subject", op: "replace", message: "Not canonical." });
+  });
+
+  it("CLAMPS an over-long side rather than dropping the panel", () => {
+    const long = "x".repeat(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH + 200);
+    const [chip] = projectLifecycleSuggestions([{ ...produced[0], before: long, value: long }]);
+    expect(chip.before).toHaveLength(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH);
+    expect(chip.after?.endsWith("…")).toBe(true);
+    expect(lifecycleSuggestionSchema.safeParse(chip).success).toBe(true);
+  });
+
+  it("the schema REFUSES a side past the bound, and an empty one", () => {
+    const base = { id: "s", label: "l", op: "replace" as const, message: "m" };
+    expect(
+      lifecycleSuggestionSchema.safeParse({
+        ...base,
+        before: "x".repeat(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(lifecycleSuggestionSchema.safeParse({ ...base, after: "" }).success).toBe(false);
+    // …and ROUND-TRIPS a legal pair unchanged.
+    const pair = { ...base, before: "now", after: "next" };
+    expect(lifecycleSuggestionSchema.parse(pair)).toEqual(pair);
   });
 
   it("attaches ONLY the marks it was given — an unmarked id keeps none", () => {
@@ -355,5 +403,136 @@ describe("§VIII the projection", () => {
     for (const chip of projectLifecycleSuggestions(produced)) {
       expect(lifecycleSuggestionSchema.safeParse(chip).success).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The SETTLED READING (cinatra#2855; plan §4.2)
+// ---------------------------------------------------------------------------
+
+describe("a settled card carries its recorded outcome and decider", () => {
+  it("declares exactly the three outcomes a RESOLVED gate row can hold", () => {
+    // `approve` / `reject` from the decision core's terminal CAS,
+    // `changes_requested` from the prompt-window path. A `comment` never
+    // resolves a gate, so it is not an outcome a settled card can carry — and a
+    // fourth value appearing here without a store that writes it would be the
+    // card inventing a reading.
+    expect([...LIFECYCLE_SETTLED_OUTCOMES]).toEqual([
+      "approved",
+      "rejected",
+      "changes_requested",
+    ]);
+  });
+
+  it("round-trips an outcome with its decider", () => {
+    const state = {
+      state: "settled",
+      outcome: "approved",
+      decidedByName: "Dana Okonkwo",
+    };
+    expect(lifecycleCardStateSchema.parse(state)).toEqual(state);
+  });
+
+  it("round-trips every outcome, with and without a decider", () => {
+    for (const outcome of LIFECYCLE_SETTLED_OUTCOMES) {
+      expect(lifecycleCardStateSchema.parse({ state: "settled", outcome })).toEqual({
+        state: "settled",
+        outcome,
+      });
+      expect(
+        lifecycleCardStateSchema.parse({
+          state: "settled",
+          outcome,
+          decidedByName: "R. Vale",
+        }),
+      ).toEqual({ state: "settled", outcome, decidedByName: "R. Vale" });
+    }
+  });
+
+  it("keeps the outcome OPTIONAL — a record that predates it is still legal", () => {
+    // The bare settled state is what a gate resolved before the outcome
+    // travelled resolves to, and it is what a disposition this build cannot
+    // read degrades to. Both must parse, because both draw the generic reading
+    // the card has always drawn.
+    expect(lifecycleCardStateSchema.parse({ state: "settled" })).toEqual({
+      state: "settled",
+    });
+  });
+
+  it("carries the outcome alongside the recorded suggestion partition", () => {
+    const state = {
+      state: "settled",
+      outcome: "rejected",
+      decidedByName: "Dana Okonkwo",
+      suggestions: [
+        { id: "s1", label: "content.body", op: "replace", message: "m", mark: "accepted" },
+      ],
+    };
+    expect(lifecycleCardStateSchema.safeParse(state).success).toBe(true);
+  });
+
+  it("FAILS CLOSED on an outcome outside the closed set", () => {
+    // A refused parse leaves the card with no state at all, so it draws
+    // nothing — the same posture it holds before the first resolve lands. A
+    // card is never talked into naming an outcome this build cannot read.
+    for (const outcome of ["commented", "closed", "APPROVED", "", null, 7]) {
+      expect(
+        lifecycleCardStateSchema.safeParse({ state: "settled", outcome }).success,
+        `${String(outcome)}`,
+      ).toBe(false);
+    }
+  });
+
+  it("REFUSES a decider with no outcome beside it", () => {
+    // It would name a person for a decision the card cannot state.
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "settled",
+        decidedByName: "Dana Okonkwo",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("REFUSES an empty or over-long decider name", () => {
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "settled",
+        outcome: "approved",
+        decidedByName: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "settled",
+        outcome: "approved",
+        decidedByName: "n".repeat(LIFECYCLE_DECIDER_NAME_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "settled",
+        outcome: "approved",
+        decidedByName: "n".repeat(LIFECYCLE_DECIDER_NAME_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+  });
+
+  it("does not let the outcome onto a state that is not settled", () => {
+    // Every other arm is `.strict()`, so an outcome smuggled onto a pending or
+    // restricted card is refused rather than ignored.
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "pending",
+        canDecide: true,
+        canComment: true,
+        outcome: "approved",
+      }).success,
+    ).toBe(false);
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "absent",
+        outcome: "approved",
+      }).success,
+    ).toBe(false);
   });
 });

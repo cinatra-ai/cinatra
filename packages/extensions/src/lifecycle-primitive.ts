@@ -17,6 +17,7 @@ import "server-only";
 import {
   _internalDeleteInstalledExtension,
   _internalInsertInstalledExtension,
+  _internalReanchorInstallRowAtomic,
   _internalUpdateInstalledExtensionMetadata,
   _internalUpdateInstalledExtensionSource,
   _internalUpdateInstalledExtensionStatus,
@@ -27,6 +28,12 @@ import { deleteExtensionPermissions } from "./permissions-store";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
 import { isStaticBundleAnchorSource } from "./static-bundle-anchor";
 import {
+  isWorkspaceAnchoredRow,
+  isWorkspaceRowAnchor,
+  sameRowAnchor,
+} from "./canonical-types";
+import {
+  PLATFORM_OWNER_SENTINEL,
   DESTRUCTIVE_OPS,
   LOCKED_REJECTED_OPS,
   isResolvedConnectorAccessDeclaration,
@@ -34,6 +41,7 @@ import {
   type ExtensionDependency,
   type ExtensionLifecycleStatus,
   type ExtensionSource,
+  type InstallRowOwnership,
   type InstalledExtension,
   type LifecycleTransitionOp,
   type ResolvedConnectorAccessDeclaration,
@@ -199,18 +207,32 @@ export async function installExtensionManifest(
       { sourceErrors },
     );
   }
-  // Connector org-anchor invariant (cinatra#1125): connector installs are
-  // organization-owned by invariant — the canonical connector resolver
-  // (connector-access-resolver.ts / extension-resource-identity.ts) reads a
-  // connector ONLY at owner_level='organization' with owner_id =
-  // organization_id, so a connector row at any other anchor is resolver-
-  // invisible. Reject it at the single install chokepoint. The one legitimate
-  // non-org connector shape is a platform/workspace STATIC-BUNDLE anchor (the
-  // boot seeder's bundled-provenance anchor/tombstone rows) — allowed through
-  // ONLY when the source is actually a static-bundle anchor, so a non-bundled
-  // platform/workspace connector (e.g. a verdaccio install) cannot slip past
-  // as resolver-invisible. The M1 migration (core__0017) normalizes any
-  // pre-existing stray rows; this guard keeps the invariant closed going forward.
+  // Connector anchor invariant (cinatra#1125, RELAXED by cinatra#2697/S3).
+  //
+  // #1125: connector installs were organization-owned by invariant — the
+  // canonical connector resolvers (connector-access-resolver.ts /
+  // extension-resource-identity.ts) read a connector ONLY at
+  // owner_level='organization' with owner_id = organization_id, so a connector
+  // row at any other anchor was resolver-INVISIBLE. That is why this chokepoint
+  // refused every non-bundled non-org connector: the row would have been
+  // unreachable, not merely unusual.
+  //
+  // #2697 (S3) removes the premise for exactly ONE more shape. Both canonical
+  // resolvers (and the runtime card record's trust anchor + discovery query)
+  // now resolve ORG-ROW-FIRST WITH A WORKSPACE FALLBACK, so a row at the
+  // PRODUCT-INSTALL workspace anchor — the exact S1 (#2695) contract tuple
+  // owner_level='workspace' / organization_id NULL / owner_id='__platform__',
+  // which the DB's platform-invariant CHECK already admits — is fully visible
+  // and serves every organization. It is therefore admitted here regardless of
+  // source type: a "Workspace: All" marketplace install of a connector is a
+  // verdaccio source, not a static bundle.
+  //
+  // UNCHANGED: bundled/system rows keep their existing path (a platform/
+  // workspace STATIC-BUNDLE anchor — the boot seeder's bundled-provenance
+  // anchor/tombstone rows), and every OTHER non-org anchor is still refused —
+  // notably a non-bundled owner_level='platform' connector, and a 'workspace'
+  // row carrying an owning org or a non-sentinel owner (neither is the S1
+  // contract, and neither is a shape the resolvers' fallback arm keys on).
   if (row.kind === "connector") {
     const isBundleAnchor =
       (row.ownerLevel === "platform" || row.ownerLevel === "workspace") &&
@@ -219,11 +241,14 @@ export async function installExtensionManifest(
       row.ownerLevel === "organization" &&
       row.organizationId != null &&
       row.ownerId === row.organizationId;
-    if (!isBundleAnchor && !isOrgAnchor) {
+    const isWorkspaceProductAnchor = isWorkspaceAnchoredRow(row);
+    if (!isBundleAnchor && !isOrgAnchor && !isWorkspaceProductAnchor) {
       throw new LifecycleTransitionError(
         "INVALID_INPUT",
         `connector install must be organization-anchored (owner_level='organization', ` +
-          `owner_id = organization_id) or a static-bundle platform/workspace anchor; got ` +
+          `owner_id = organization_id), workspace-anchored (owner_level='workspace', ` +
+          `organization_id NULL, owner_id='${PLATFORM_OWNER_SENTINEL}'), or a static-bundle ` +
+          `platform/workspace anchor; got ` +
           `owner_level='${row.ownerLevel}', owner_id='${row.ownerId}', ` +
           `organization_id='${row.organizationId ?? "null"}', source.type='${
             (row.source as { type?: string } | null)?.type ?? "null"
@@ -323,6 +348,252 @@ export async function transitionExtensionLifecycle(
 
   if (newStatus === ext.status && op !== "update") return ext;
   return _internalUpdateInstalledExtensionStatus(id, newStatus);
+}
+
+// ---------------------------------------------------------------------------
+// SUPERSESSION ON INSTALL (cinatra#2694 / S4 #2698, change 2) — owner ruling
+// 2026-08-16.
+//
+// After a "Workspace: All" / "Workspace: Admins only" install FINALIZES, the
+// package's existing organization rows are redundant: the workspace row already
+// reaches every organization. They are archived IN PLACE — a plain row lifecycle
+// TRANSITION, `status → archived`, and nothing else.
+//
+// What "in place" rules out, and why each matters:
+//
+//  - NOT `registry.archive()` / `registry.uninstall()`. Those are the operator's
+//    package-level operations: they fire the per-kind handler, retire artifact
+//    claims, tear down capabilities, and on the hard-delete branch drop the row
+//    (cascading its dependency edges) and run the data teardown that removes
+//    EVERY organization's package settings and secrets. Supersession must lose
+//    none of that — the organization's row keeps its id, so its permissions and
+//    co-owners (keyed on `installed_extension.id`) survive; its dependency
+//    provenance survives; its settings, secrets, connections and artifact claims
+//    survive. Archiving is a status change, so it preserves all of it by
+//    construction.
+//  - NOT a supersession bookkeeping table. There is no backward-compatibility
+//    obligation and nothing to reconcile later: the archived row IS the record,
+//    and an authorized admin restores one through the ordinary guarded path once
+//    the workspace install is gone (change 4 — no automatic revival).
+//
+// COMPENSATION: the archives are applied one row at a time and every applied
+// row is remembered. If any row refuses (a `locked` row is a legitimate refusal)
+// or the store fails mid-way, the rows already archived by THIS call are
+// transitioned back to `active` and the error propagates — so the caller never
+// observes a half-superseded package. A compensation that itself fails is
+// reported in the thrown error rather than swallowed.
+//
+// Callers MUST hold the per-package install lock (the dispatcher does), which is
+// what makes the read-then-archive sequence safe against a concurrent install.
+// ---------------------------------------------------------------------------
+
+export class WorkspaceSupersessionError extends Error {
+  public readonly code = "WORKSPACE_SUPERSESSION_FAILED";
+  constructor(
+    public readonly packageName: string,
+    message: string,
+    public readonly compensated: boolean,
+  ) {
+    super(message);
+    this.name = "WorkspaceSupersessionError";
+  }
+}
+
+/**
+ * Archive, in place, every live organization-anchored row of `packageName` —
+ * the supersession a finalized workspace install performs.
+ *
+ * Returns the ids of the rows archived by this call (empty when the package had
+ * no organization rows, which is the ordinary case). Idempotent: an
+ * already-archived organization row is left exactly as it is.
+ */
+export async function supersedeOrganizationRowsForWorkspaceInstall(
+  packageName: string,
+  actor: { source: string; orgId?: string; userId?: string; roles?: string[] },
+): Promise<string[]> {
+  const rows = await readInstalledExtensionsByPackageName(packageName);
+  // `active` only. A `locked` organization row is the required-in-prod / admin
+  // lock, which the transition matrix refuses every destructive op on — including
+  // this one — and the lock is deliberately stronger than any automatic
+  // rewrite. Refusing the whole supersession over it would fail an install that
+  // has ALREADY finalized, so a locked row is left exactly as it is; the
+  // effective-row rule still makes the workspace row the one in force, and the
+  // lock stays the administrator's explicit decision to unwind by hand.
+  const targets = rows.filter(
+    (r) => (r.organizationId ?? null) !== null && r.status === "active",
+  );
+  if (targets.length === 0) return [];
+
+  const archived: string[] = [];
+  try {
+    for (const row of targets) {
+      await transitionExtensionLifecycle(row.id, "archive", {
+        actor,
+        reason:
+          `superseded by the workspace install of ${packageName} ` +
+          `(cinatra#2698 — archived in place; row, permissions, dependency ` +
+          `provenance, settings, secrets, connections and claims retained)`,
+      });
+      archived.push(row.id);
+    }
+    return archived;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    let compensated = true;
+    for (const id of archived) {
+      try {
+        await transitionExtensionLifecycle(id, "activate", {
+          actor,
+          reason: `supersession compensation for ${packageName} (cinatra#2698)`,
+        });
+      } catch {
+        compensated = false;
+      }
+    }
+    throw new WorkspaceSupersessionError(
+      packageName,
+      compensated
+        ? `The workspace install of ${packageName} could not supersede an existing ` +
+          `organization install (${detail}); every row this attempt archived was ` +
+          `restored, so no package is half-superseded.`
+        : `The workspace install of ${packageName} could not supersede an existing ` +
+          `organization install (${detail}) AND the compensation did not fully ` +
+          `complete — at least one organization row is still archived. An ` +
+          `administrator must restore it through the normal restore path.`,
+      compensated,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE §V RE-ANCHOR (cinatra#2694 / S5 #2802) — the SANCTIONED primitive.
+//
+// Owner ruling 2026-08-16 (entry 350): "§V re-anchors". The settings page's
+// access picker is the widening AND narrowing surface, and saving it must move
+// the canonical row's ANCHOR — not just relabel its audience. Before S5 a save
+// wrote a `workspace` audience onto an organization-anchored row, which the
+// cross-org guard still fenced to that organization: the picker promised
+// app-wide reach and delivered organization reach.
+//
+// This primitive is the ONE sanctioned way that move happens. It holds the
+// package lifecycle lock (so no install/update/uninstall of the package
+// interleaves), then delegates the whole mutation to the store's single
+// transaction, which takes the row locks, decides the destination slot, moves
+// the anchor, applies the S4 supersession, re-resolves the affected dependency
+// edges and writes the audience policy — atomically. Every refusal writes
+// nothing.
+//
+// What it deliberately does NOT do (owner ruling): it never runs the install
+// ACTIVATION hook and never re-registers the package. The package bytes and the
+// in-process capabilities did not change — only which row identity owns the
+// install — so re-running activation would be a second install of something
+// already installed. It also never restores, relocates or deletes a row that
+// occupies the destination: an occupied slot is a refusal, full stop.
+// ---------------------------------------------------------------------------
+
+/** Why a re-anchor was refused. Typed, transport-independent, no-write. */
+export class ReanchorRefusedError extends Error {
+  constructor(
+    public readonly code: "not_found" | "anchor_conflict" | "closure_broken",
+    message: string,
+    public readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "ReanchorRefusedError";
+  }
+}
+
+export type ReanchorOutcome = {
+  /** The moved row, re-read post-commit. Its `id` is the id it always had. */
+  row: InstalledExtension;
+  /** Organization rows archived in place by the supersession, if any. */
+  supersededRowIds: string[];
+  /** Did the anchor actually change, or was this an ordinary policy edit? */
+  anchorMoved: boolean;
+};
+
+/**
+ * Re-anchor an install row to `destination` and persist `policy`, atomically.
+ *
+ * `destination` is the anchor the audience selection resolved to — the
+ * workspace anchor for a widening selection, the destination organization's
+ * tuple for a narrowing one. When it already equals the row's own anchor this
+ * is an ordinary policy edit: the same transaction runs, the anchor UPDATE is a
+ * no-op rewrite of the same tuple, and nothing is superseded.
+ *
+ * The SUPERSESSION applies only to a genuine widening — moving TO the workspace
+ * anchor. Re-saving the same audience on a row already at that anchor archives
+ * nothing new (the organization rows were archived when it first landed there),
+ * because only `active` organization rows are targets.
+ *
+ * Callers own the authorization decision (only a platform admin may change an
+ * anchor) and the audience validation (the connector ceiling, the locus rules);
+ * this primitive owns the lock, the atomicity and the row-identity arithmetic.
+ */
+export async function reanchorInstallRow(args: {
+  rowId: string;
+  resourceKind: string;
+  destination: InstallRowOwnership;
+  policy: unknown;
+}): Promise<ReanchorOutcome> {
+  const { rowId, resourceKind, destination, policy } = args;
+  const current = await readInstalledExtensionById(rowId);
+  if (!current) {
+    throw new ReanchorRefusedError("not_found", `installed_extension '${rowId}' not found`);
+  }
+  const anchorMoved = !sameRowAnchor(current, destination);
+
+  // The per-package install lock — the SAME lock the install dispatcher, the
+  // workflow saga and the extension handler hold, so a re-anchor can never
+  // interleave with an install/update/uninstall of the same package. It is
+  // re-entrant via AsyncLocalStorage, so a caller that already holds it (none
+  // today) would run inline rather than deadlock.
+  //
+  // Imported from the lock's OWN module rather than the agents barrel: the
+  // barrel would drag the whole agents graph onto every route that can reach a
+  // §V save, and the lock module itself imports only node builtins. Dynamic
+  // import because @cinatra-ai/agents → @cinatra-ai/extensions is a static
+  // cycle (the same reason the dispatcher imports it this way).
+  const { withInstallLock } = await import("@cinatra-ai/agents/materialize-agent-package");
+  return withInstallLock(current.packageName, async () => {
+    const result = await _internalReanchorInstallRowAtomic({
+      rowId,
+      destination,
+      // Only a move TO the workspace anchor supersedes; a narrowing supersedes
+      // nothing (S4's rule is about a workspace install being in force).
+      supersedeOrganizationRows: anchorMoved && isWorkspaceRowAnchor(destination),
+      policy: { resourceKind, value: policy },
+    });
+    if (!result.ok) {
+      if (result.code === "anchor_conflict") {
+        throw new ReanchorRefusedError(
+          "anchor_conflict",
+          `"${current.packageName}" already occupies the destination ` +
+            `${result.conflict.reason === "default" ? "default" : "identity"} slot ` +
+            `(an archived row occupies it just as a live one does) — refusing to ` +
+            `re-anchor; nothing was written.`,
+          { conflictRowId: result.conflict.rowId, reason: result.conflict.reason },
+        );
+      }
+      if (result.code === "closure_broken") {
+        throw new ReanchorRefusedError(
+          "closure_broken",
+          `Re-anchoring "${current.packageName}" would leave a required dependency ` +
+            `unresolved for ${result.brokenBy.join(", ")} — refusing; nothing was written.`,
+          { brokenBy: result.brokenBy },
+        );
+      }
+      throw new ReanchorRefusedError(
+        "not_found",
+        `installed_extension '${rowId}' not found`,
+      );
+    }
+    return {
+      row: result.row,
+      supersededRowIds: result.supersededRowIds,
+      anchorMoved,
+    };
+  });
 }
 
 /**
@@ -566,22 +837,35 @@ export async function sourceSwitchExtension(
       { sourceErrors },
     );
   }
-  // Connector org-anchor invariant (cinatra#1125) — enforced on source-switch
-  // too, not just install. A source-switch preserves the row's ANCHOR
-  // (owner_level / owner_id / organization_id) but REPLACES its provenance, so
-  // switching an existing platform/workspace static-bundle connector to a
-  // non-bundle source (verdaccio / local / github) would recreate exactly the
-  // resolver-invisible non-bundled connector the install chokepoint rejects:
-  // the canonical connector resolver (src/lib/connector-access-resolver.ts,
-  // extension-resource-identity.ts) reads a connector ONLY at
-  // owner_level='organization' with owner_id = organization_id. Evaluate the
-  // SAME invariant against {existing anchor + NEW source}: the result must
-  // remain either an organization anchor or a platform/workspace static-bundle
-  // anchor. Legitimate connector switches pass — the boot seeder refreshes a
-  // platform anchor to another bundled source (still a bundle anchor), and
-  // recordProvenance / dev-recompile switch an ORG-anchored connector's
-  // provenance (the org anchor is preserved). A bundled-connector→verdaccio/
-  // local switch is the invariant break and is refused here.
+  // Connector anchor invariant (cinatra#1125) — enforced on source-switch too,
+  // not just install. A source-switch preserves the row's ANCHOR (owner_level /
+  // owner_id / organization_id) but REPLACES its provenance, so switching an
+  // existing platform static-bundle connector to a non-bundle source
+  // (verdaccio / local / github) would recreate exactly the resolver-invisible
+  // non-bundled connector the install chokepoint rejects. Evaluate the SAME
+  // invariant against {existing anchor + NEW source}: the result must remain an
+  // organization anchor, the #2697 workspace product anchor, or a platform/
+  // workspace static-bundle anchor. Legitimate connector switches pass — the
+  // boot seeder refreshes a platform anchor to another bundled source (still a
+  // bundle anchor), and recordProvenance / dev-recompile switch an ORG-anchored
+  // connector's provenance (the org anchor is preserved). A bundled-connector→
+  // verdaccio/local switch is the invariant break and is refused here.
+  //
+  // cinatra#2697 (S3): the workspace PRODUCT anchor is admitted for the same
+  // reason the install chokepoint now admits it — it is resolver-VISIBLE via
+  // the org-first/workspace-fallback arm. This is not an extra allowance but a
+  // REQUIREMENT of the relaxed install: the install pipeline records provenance
+  // through this very function (`recordProvenance` → sourceSwitchExtension, the
+  // only sanctioned provenance writer), so refusing here would leave every
+  // "Workspace: All" connector install failing one step after the row landed.
+  //
+  // A product row and a BUNDLED workspace anchor are indistinguishable by tuple
+  // (both are workspace / NULL / '__platform__'), so the discriminator is the
+  // row's EXISTING provenance: a row that is currently a static-bundle anchor is
+  // a bundled/system row and keeps the #1125 rule verbatim (it may only switch
+  // to another bundle source — a bundled-connector→verdaccio/local rewrite is
+  // still the invariant break). A workspace row whose current source is a real
+  // pipeline source is a product install and may re-record its provenance.
   if (ext.kind === "connector") {
     const isBundleAnchor =
       (ext.ownerLevel === "platform" || ext.ownerLevel === "workspace") &&
@@ -590,11 +874,15 @@ export async function sourceSwitchExtension(
       ext.ownerLevel === "organization" &&
       ext.organizationId != null &&
       ext.ownerId === ext.organizationId;
-    if (!isBundleAnchor && !isOrgAnchor) {
+    const isWorkspaceProductAnchor =
+      isWorkspaceAnchoredRow(ext) && !isStaticBundleAnchorSource(ext.source);
+    if (!isBundleAnchor && !isOrgAnchor && !isWorkspaceProductAnchor) {
       throw new LifecycleTransitionError(
         "INVALID_INPUT",
-        `connector source-switch would break the org-anchor invariant — a connector must remain ` +
-          `organization-anchored (owner_level='organization', owner_id = organization_id) or a ` +
+        `connector source-switch would break the connector-anchor invariant — a connector must ` +
+          `remain organization-anchored (owner_level='organization', owner_id = organization_id), ` +
+          `workspace-anchored (owner_level='workspace', organization_id NULL, ` +
+          `owner_id='${PLATFORM_OWNER_SENTINEL}'), or a ` +
           `static-bundle platform/workspace anchor; row is owner_level='${ext.ownerLevel}', ` +
           `owner_id='${ext.ownerId}', organization_id='${ext.organizationId ?? "null"}' and the new ` +
           `source.type='${

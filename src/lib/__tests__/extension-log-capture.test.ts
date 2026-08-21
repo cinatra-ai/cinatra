@@ -58,6 +58,48 @@ describe("resolveExtensionCaptureDirectory", () => {
     const dir = resolveExtensionCaptureDirectory("@@@", "///");
     expect(dir).toBe(path.join(dataRoot, "logs", "extension", "default"));
   });
+
+  // CWE-22 containment (CodeQL js/path-injection): packageName/channel arrive
+  // from extension-supplied, ultimately request-borne input. Whatever shape the
+  // caller sends, the resolved directory must stay under <data-root>/logs.
+  it("keeps every adversarial packageName/channel contained under the log root", () => {
+    const logsRoot = path.join(dataRoot, "logs");
+    const hostile: ReadonlyArray<readonly [string, string]> = [
+      ["../../etc", "../../passwd"],
+      ["/etc/shadow", "/root/.ssh"],
+      ["..", ".."],
+      ["....//....//", "..\\..\\"],
+      ["a/../../b", "%2e%2e/"],
+      ["\u0000/etc", "x\u0000y"],
+      [".", "./."],
+      ["~root", "$HOME"],
+    ];
+    for (const [packageName, channel] of hostile) {
+      const dir = resolveExtensionCaptureDirectory(packageName, channel);
+      expect(dir.startsWith(logsRoot + path.sep)).toBe(true);
+      expect(path.relative(logsRoot, dir).startsWith("..")).toBe(false);
+      expect(dir).not.toContain("..");
+      // exactly two segments below the root — no nesting smuggled in
+      expect(path.relative(logsRoot, dir).split(path.sep)).toHaveLength(2);
+    }
+  });
+
+  // CWE-1333 (CodeQL js/polynomial-redos): the segment sanitizer must stay
+  // linear on large all-separator input. NOTE: this does not fail against the
+  // pre-fix code — the leading `[^a-z0-9]+` collapse already made a long run of
+  // "-" unrepresentable at the edge-trim, so the flagged regex was unreachable.
+  // It pins the linearity so a future change to the collapse cannot reintroduce
+  // a super-linear trim unnoticed.
+  it("sanitizes pathological separator-heavy input in bounded time", () => {
+    const allSeparators = "-".repeat(200_000);
+    const alternating = `${"a-".repeat(100_000)}-`;
+    const started = performance.now();
+    const dir = resolveExtensionCaptureDirectory(allSeparators, alternating);
+    const elapsedMs = performance.now() - started;
+    expect(dir.startsWith(path.join(dataRoot, "logs", "extension") + path.sep)).toBe(true);
+    expect(path.basename(dir).length).toBeLessThanOrEqual(80);
+    expect(elapsedMs).toBeLessThan(1_000);
+  });
 });
 
 describe("captureExtensionLogEntry", () => {

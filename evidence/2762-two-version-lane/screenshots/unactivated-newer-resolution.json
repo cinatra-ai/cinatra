@@ -1,0 +1,80 @@
+{
+  "setupInstallId": "iext_unactivated_newer_2762",
+  "settingsVersion": "0.1.5",
+  "expectVersion": "0.1.5",
+  "expectServingVersion": "0.1.0",
+  "placeholder": {
+    "renderedPlaceholder": "No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here.",
+    "servedByBundle": true
+  },
+  "setupCalls": [
+    {
+      "installId": "iext_unactivated_newer_2762",
+      "actionId": "bookingPageGuideReady",
+      "status": 200
+    },
+    {
+      "installId": "iext_unactivated_newer_2762",
+      "actionId": "listCalendars",
+      "status": 200
+    },
+    {
+      "installId": "iext_unactivated_newer_2762",
+      "actionId": "listAppointmentSchedules",
+      "status": 200
+    }
+  ],
+  "lifecycle": {
+    "buttons": [
+      {
+        "label": "Workspace: All",
+        "disabled": false,
+        "slot": "popover-trigger",
+        "reason": null
+      },
+      {
+        "label": "Update",
+        "disabled": true,
+        "slot": "disabled-action",
+        "reason": "Already up to date"
+      },
+      {
+        "label": "Archive",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      },
+      {
+        "label": "Activate",
+        "disabled": true,
+        "slot": "disabled-action",
+        "reason": "Already active"
+      },
+      {
+        "label": "Retry activation",
+        "disabled": false,
+        "slot": "recovery-action",
+        "reason": null
+      },
+      {
+        "label": "Roll back to bundled",
+        "disabled": false,
+        "slot": "recovery-action",
+        "reason": null
+      },
+      {
+        "label": "Reinstall latest",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      },
+      {
+        "label": "Force-delete…",
+        "disabled": false,
+        "slot": "button",
+        "reason": null
+      }
+    ],
+    "visibleReasons": []
+  }
+}

@@ -68,6 +68,50 @@ export function isExtensionKind(value: unknown): value is ExtensionKind {
   );
 }
 
+/**
+ * The kinds whose polymorphic `resource_id` IS the canonical
+ * `installed_extension.id` — the prose fact recorded on {@link ExtensionKind}
+ * above, NAMED so a caller can consume it instead of restating the list.
+ *
+ * The distinction is load-bearing for anything that holds an install ROW and
+ * wants its access policy: `skill_package` / `agent_run` / `connection` ids come
+ * from their OWN identity tables (the skills catalog, `agent_runs`,
+ * `nango_connection`), so keying a policy read on an install row id under those
+ * kinds would authorize against a different resource entirely — a lookup in the
+ * wrong identity space, not a stricter one.
+ *
+ * Deliberately the same three kinds as `INSTALL_ACCESS_TARGET_KINDS`
+ * (./install-access-target.ts): a kind's install offers an access target exactly
+ * when the row it writes IS the resource that carries the audience. The two are
+ * stated independently — install-access-target is a PURE module and must not
+ * import this server-only one — and a conformance test pins them equal.
+ */
+export const INSTALL_ROW_RESOURCE_KINDS = [
+  "connector",
+  "artifact",
+  "workflow",
+] as const;
+
+export type InstallRowResourceKind = (typeof INSTALL_ROW_RESOURCE_KINDS)[number];
+
+/**
+ * Narrow a CANONICAL install row's `kind` to the permissions resource kind that
+ * addresses that row, or null when the row is not itself the access resource.
+ *
+ * Takes a plain string because the canonical row's kind vocabulary
+ * (`agent | connector | artifact | skill | workflow`) is NOT this module's
+ * resource-kind vocabulary — that mismatch is the whole reason this narrowing
+ * exists, and returning null is the honest answer for a row whose access
+ * resource lives elsewhere.
+ */
+export function installRowResourceKind(
+  rowKind: string,
+): InstallRowResourceKind | null {
+  return (INSTALL_ROW_RESOURCE_KINDS as readonly string[]).includes(rowKind)
+    ? (rowKind as InstallRowResourceKind)
+    : null;
+}
+
 export type ExtensionKindHooks = {
   /**
    * Confirm the resource exists. Returning false short-circuits all
@@ -132,7 +176,18 @@ export type ExtensionKindHooks = {
     // validated by the resource's org-containment rather than the actor's
     // personal memberships. Absent/undefined actor → the non-admin membership
     // path (unchanged behaviour).
-    ctx: { userId: string; actor?: ActorContext | null },
+    //
+    // `destinationOrganizationId` (cinatra#2802) is the organization the save
+    // will RE-ANCHOR the install row to — NULL for a widening to the app-wide
+    // workspace anchor. The installed-connector ceiling must be measured against
+    // the destination, not the row's current organization: the anchor is exactly
+    // what the §V save moves. Absent for kinds that do not re-anchor (the
+    // connection validator ignores it and keeps using the connection's own org).
+    ctx: {
+      userId: string;
+      actor?: ActorContext | null;
+      destinationOrganizationId?: string | null;
+    },
   ) => Promise<string | null | undefined>;
 
   /**
@@ -508,6 +563,10 @@ function installedExtensionAnchoredHooks(
 ): () => Promise<ExtensionKindHooks> {
   return async () => {
     const { readInstalledExtensionById } = await import("./canonical-store");
+    const {
+      installedAudienceWithinDeclaredCeiling,
+      isResolvedConnectorAccessDeclaration,
+    } = await import("./canonical-types");
     return {
       // Fail closed on a kind mismatch: a {kind, resourceId} pair that resolves
       // to an installed_extension of a DIFFERENT kind is treated as not-found,
@@ -529,6 +588,49 @@ function installedExtensionAnchoredHooks(
           organizationId: row.organizationId,
         };
       },
+      // INSTALLED-CONNECTOR ceiling (cinatra#2802, change 5). A connector that
+      // declares `access.scope.only` in its own cinatra/config.json caps the
+      // audience its install row may carry, and the §V picker is a grant surface
+      // — so the ceiling is enforced HERE, before the atomic re-anchor, and a
+      // refusal writes nothing.
+      //
+      // Written FRESH rather than reused from the `connection` validator: that
+      // one reasons about a connection identity (its owner user, its org anchor,
+      // its person-grants), none of which describes an install row, whose anchor
+      // is the very thing the save MOVES. The ceiling is therefore measured
+      // against the DESTINATION organization the save resolved.
+      //
+      // Source of the ceiling: the canonical row's CACHED `accessDeclaration`,
+      // stamped at registration/materialize. A row without one (a legacy row, or
+      // a package that declares nothing) carries no ceiling to exceed, so the
+      // save proceeds — the `only` mode is what locks, and only it.
+      validatePolicyWrite:
+        expectedKind !== "connector"
+          ? undefined
+          : async (id, policy, ctx) => {
+              const row = await readInstalledExtensionById(id);
+              if (row === null || row.kind !== "connector") return "not_found";
+              const declaration = row.accessDeclaration;
+              if (!isResolvedConnectorAccessDeclaration(declaration)) return null;
+              if (declaration.mode !== "only") return null;
+              const tokens: AgentAuthPolicyVisibility[] = [
+                ...policy.runListVisibility,
+                ...policy.runDataVisibility,
+                ...policy.runExecuteVisibility,
+              ];
+              const destinationOrganizationId =
+                ctx.destinationOrganizationId !== undefined
+                  ? ctx.destinationOrganizationId
+                  : row.organizationId;
+              const withinCeiling = tokens.every((token) =>
+                installedAudienceWithinDeclaredCeiling(
+                  token,
+                  declaration.scope,
+                  destinationOrganizationId,
+                ),
+              );
+              return withinCeiling ? null : "scope_locked_by_connector";
+            },
       selfRemoveRedirect,
     };
   };

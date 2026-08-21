@@ -25,6 +25,14 @@ import type { DanglingReferences } from "./audit-log";
 // dynamic import it always had, so nothing about the load graph changes.
 import type { ExtensionDataTeardownContext } from "./data-teardown-hook";
 import type { InstalledExtension } from "./canonical-types";
+// cinatra#2696: the planned row anchor an install writes at (PURE module — the
+// dispatcher-side half of S1's target→ownership contract).
+import { isWorkspaceRowAnchor, resolveInstallRowAnchor } from "./canonical-types";
+import type { InstallRowOwnership } from "./canonical-types";
+// cinatra#2698 (S4): the operator's explicit row choice, threaded from the
+// lifecycle actions into every row-targeting op. TYPE-ONLY — the resolver module
+// itself stays behind its existing dynamic imports.
+import type { LifecycleRowSelector } from "./lifecycle-target-resolver";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
 
 // ---------------------------------------------------------------------------
@@ -67,61 +75,6 @@ export class ExpectedInstalledVersionMismatchError extends Error {
 }
 
 /**
- * The STABLE, duck-typed code an activation-deferred install carries. Kept as a
- * bare string literal so a caller that cannot import this module (the host's
- * install batch, which must not close an import cycle back into this package)
- * still recognizes the outcome. It is the same no-cross-package-import contract
- * `REQUIRES_REBUILD` and `AGENT_PACKAGE_CONTRACT_VIOLATION` already use.
- */
-export const INSTALL_ACTIVATION_DEFERRED = "INSTALL_ACTIVATION_DEFERRED" as const;
-
-// ---------------------------------------------------------------------------
-// ExtensionActivationDeferredError: the THIRD install outcome.
-//
-// The real-integrity pipeline FINALIZED (real provenance recorded + journal
-// finalized), so the canonical row is committed and trusted-anchorable. But
-// in-process hot-activation did not register the package THIS call (the runtime
-// package loader refused the anchor). The package therefore loads on the next
-// boot, and the committed install is deliberately left intact.
-//
-// This is NOT a failure and NOT a plain success. Reporting it as a failure is
-// what made the install surface lie: the operator saw a generic error with a
-// support reference while the install had in fact landed. Reporting it as a
-// plain success would hide that the extension does not work until a restart.
-// The typed error carries a stable `code`. Every layer above this seam (the
-// host install batch, the marketplace server actions, the install form) can
-// route it to its own outcome: "installed; activates on the next restart".
-//
-// Thrown (not returned) on purpose: every existing caller already treats a
-// throw from this seam as "do not report a plain success", so the fail-closed
-// default is preserved for any caller that does not yet know the code.
-// ---------------------------------------------------------------------------
-export class ExtensionActivationDeferredError extends Error {
-  readonly code = INSTALL_ACTIVATION_DEFERRED;
-  constructor(
-    message: string,
-    public readonly packageName: string,
-    public readonly packageVersion?: string,
-  ) {
-    super(message);
-    this.name = "ExtensionActivationDeferredError";
-  }
-}
-
-/**
- * Duck-typed recognizer for the activation-deferred outcome. Walks the `cause`
- * chain (bounded depth) because the error crosses dynamic-import boundaries and
- * may be wrapped by an intermediate layer, so `instanceof` is not reliable here
- * (cinatra#2416 established the same duck-typing rule for lifecycle codes).
- */
-export function isActivationDeferredError(err: unknown, depth = 0): boolean {
-  if (depth > 6 || err == null || typeof err !== "object") return false;
-  const obj = err as { code?: unknown; cause?: unknown };
-  if (obj.code === INSTALL_ACTIVATION_DEFERRED) return true;
-  return "cause" in obj ? isActivationDeferredError(obj.cause, depth + 1) : false;
-}
-
-/**
  * FAIL-CLOSED resolver for the expected-version CAS: given ALL canonical rows
  * for a package and the actor's scope, return the SINGLE live installed version
  * at that scope, or `null` when the precondition cannot be proven (zero or more
@@ -136,15 +89,23 @@ export function resolveLiveInstalledVersionForCas(
   // structurally below. `version` is the canonical derived field.
   rows: {
     organizationId: string | null;
+    ownerLevel?: string;
     status: string;
     version?: string;
     source?: unknown;
   }[],
   scope: string | null,
+  /** cinatra#2698: the target row's anchor TIER. Omitted → the pre-S4 scope-only
+   *  match (every existing caller and every org-anchored install: an org scope
+   *  carries one tier). Supplied → the org-NULL scope is disambiguated, so a
+   *  workspace row's CAS is never proven against a bundled platform anchor
+   *  sitting at the same scope (and vice versa). */
+  ownerLevel?: string,
 ): string | null {
   const live = rows.filter(
     (r) =>
       (r.organizationId ?? null) === scope &&
+      (ownerLevel === undefined || r.ownerLevel === undefined || r.ownerLevel === ownerLevel) &&
       (r.status === "active" || r.status === "locked"),
   );
   if (live.length !== 1) return null; // 0 or >1 → cannot prove → fail closed
@@ -791,8 +752,60 @@ function isVerdaccioBackedRef(ref: PackageRef): boolean {
   return false;
 }
 
-// Ensure EXACTLY ONE canonical row (at the actor's org scope) before the native
-// handler + the real pipeline run (the host installer owns this ordering). Cases:
+// ---------------------------------------------------------------------------
+// The UPDATE path's anchor (cinatra#2694 / S4 #2698, change 2).
+//
+// An update never creates an install identity — it rewrites an EXISTING row's
+// version in place. So its anchor is the EXISTING row's own tuple, resolved
+// through the SAME addressing rule (and the SAME operator row selector) every
+// other lifecycle op uses. Deriving it from the actor instead — what the
+// dispatcher did before this slice — silently RE-ANCHORS: a "Workspace: All"
+// install updated from an org-scoped platform-admin session would fork into an
+// org-anchored row carrying the new version, while the app-wide row stayed
+// behind at the old one.
+//
+// Deliberately TOTAL (never throws) and NOT standing-gated:
+//   - a read failure or an unresolvable target yields `null`, and the caller
+//     falls back to the actor-derived anchor — byte-identically to the
+//     pre-#2698 behaviour, so an update of a package the actor has no row for
+//     still installs into the actor's scope exactly as it always did;
+//   - destructive standing lives on archive/uninstall/restore (which DO gate),
+//     and adding a new refusal to the update path is not this slice's business.
+// ---------------------------------------------------------------------------
+async function readRowsAndAnchorForUpdate(
+  packageName: string,
+  actor: Actor,
+  selector?: LifecycleRowSelector | null,
+): Promise<{ rows: InstalledExtension[] | null; anchor: InstallRowOwnership | null }> {
+  try {
+    const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+    const { resolveLifecycleScope, lifecycleRowAnchor } = await import(
+      "./lifecycle-target-resolver"
+    );
+    // ONE read, SHARED with the expected-version CAS below it (which used to
+    // make its own) — so the auto-update path's read count is unchanged, and a
+    // manual update pays one extra canonical read on a path that is already
+    // holding the per-package install lock and about to read again.
+    const rows = await readInstalledExtensionsByPackageName(packageName);
+    const resolution = resolveLifecycleScope(rows, actor, selector);
+    return { rows, anchor: resolution.ok ? lifecycleRowAnchor(resolution.row) : null };
+  } catch {
+    // The canonical read is the dispatcher's own concern one step later
+    // (syncCanonicalManifestInstall re-reads and fails loud for the
+    // store-pipeline kinds). Degrading to the actor-derived anchor here keeps
+    // this helper from turning a store outage into a NEW failure mode.
+    return { rows: null, anchor: null };
+  }
+}
+
+// Ensure EXACTLY ONE canonical row (at the install's RESOLVED ROW ANCHOR) before
+// the native handler + the real pipeline run (the host installer owns this
+// ordering). The anchor is the actor's org scope UNLESS the caller threaded a
+// planned row-ownership tuple (cinatra#2696): a "Workspace: All" / "Workspace:
+// Admins only" install anchors at the WORKSPACE tuple (`owner_level='workspace'`,
+// `organization_id NULL`, `owner_id='__platform__'`), which is what gives the row
+// app-wide reach. Every existing caller passes no tuple and keeps the exact
+// actor-derived anchor. Cases:
 //   - archived row(s) only → restore (re-activate the exact archived row); NO
 //     pipeline (a restore never re-materializes). needsPipeline:false.
 //   - a live row with PLACEHOLDER integrity (a fresh row from a prior call, or a
@@ -803,16 +816,22 @@ function isVerdaccioBackedRef(ref: PackageRef): boolean {
 //     failed update must not delete the previously-working install).
 //   - op:"install" + a live FINALIZED row → already installed; NO pipeline re-run.
 //     needsPipeline:false.
-//   - no row → create the placeholder row (org-scoped, else platform) + RUN the
-//     pipeline. needsPipeline:true, ownsRollback:true.
+//   - no row → create the placeholder row AT THE RESOLVED ANCHOR (org-scoped,
+//     else platform, else — when the install-access target says so — the
+//     workspace anchor) + RUN the pipeline. needsPipeline:true, ownsRollback:true.
 async function syncCanonicalManifestInstall(
   packageName: string,
   kind: string,
   ref: PackageRef,
   actor: Actor,
-  orgId: string | null,
+  rowAnchor: InstallRowOwnership,
   op: "install" | "update",
 ): Promise<CanonicalInstallEnsure> {
+  // The anchor's org is the scope EVERY row read/write below operates at — the
+  // pipeline (`fireExtensionActivate`) resolves the same (package, org) row, so
+  // the two must agree. For every caller that threads no tuple this is exactly
+  // `actor.orgId ?? null`, unchanged.
+  const orgId = rowAnchor.organizationId ?? null;
   // Carve-out: a github/local-sourced install (a GitHub/local skill
   // ref) is NOT verdaccio-pipeline-driven — the handler resolves + persists it.
   // Do NOT ensure a verdaccio placeholder canonical row for it (it would never
@@ -849,16 +868,53 @@ async function syncCanonicalManifestInstall(
     return { needsPipeline: false, rowId: null, ownsRollback: false };
   }
 
+  // cinatra#2698 (S4, change 3) — THE SERVER INSTALL BOUNDARY. While a live
+  // workspace row exists the package is already installed for every
+  // organization, so an ORGANIZATION-anchored install of it is refused here:
+  // both a fresh organization row and the re-activation of an archived one (the
+  // very rows the workspace install superseded) are creations of a second,
+  // redundant copy. The refusal is typed and it is deliberately placed ABOVE the
+  // ensure/transition block, so a refused install mutates nothing at all. The
+  // marketplace never offers the action (the card reads "Installed (Workspace:
+  // All)" / "Installed (Workspace: Admins only)"), so reaching this line means a
+  // caller went around the screen.
+  //
+  // OUTSIDE the try/catch below on purpose: that catch classifies STORE failures
+  // and must not swallow a policy refusal into a placeholder success.
+  {
+    const { assertNoWorkspaceSupersession } = await import("./lifecycle-target-resolver");
+    assertNoWorkspaceSupersession(packageName, all, rowAnchor);
+  }
+
   try {
     const { installExtensionManifest, transitionExtensionLifecycle } = await import(
       "./lifecycle-primitive"
     );
     const { isPackageRequiredInProd } = await import("./required-in-prod");
-    // Operate on the rows at THIS install's org scope only — the pipeline + the
-    // workflow saga both resolve the single (package, org) row via
-    // pickSingleActiveRow, so the dispatcher must ensure/retry/roll back the row
-    // at the SAME scope (a different org's row is unrelated to this install).
-    const existing = all.filter((r) => (r.organizationId ?? null) === orgId);
+    // Operate on the rows at THIS install's ROW IDENTITY only — the pipeline +
+    // the workflow saga both resolve the single row at that identity, so the
+    // dispatcher must ensure/retry/roll back the row at the SAME identity (a
+    // different org's row is unrelated to this install).
+    //
+    // cinatra#2698 (S4, change 1): at the ORG-NULL scope the identity is the
+    // ANCHOR, not the org alone. A product-installed WORKSPACE row and a
+    // bundled PLATFORM anchor can coexist there for one package — the DB's
+    // org-NULL identity index keys on `owner_level`, so it permits exactly
+    // that — and an org-only filter matched BOTH: the archived-row
+    // re-activation below would flip a stranger's row, and
+    // `existing.find(live)` would hand the update pipeline whichever row came
+    // first.
+    const existing = all.filter((r) => {
+      if ((r.organizationId ?? null) !== orgId) return false;
+      // An ORGANIZATION scope carries exactly one tier (the org identity index
+      // keys on the organization), so the org filter alone IS the identity
+      // there — left untouched, byte-identical. The tier only discriminates at
+      // the org-NULL scope. A row that carries no tier at all (a partial
+      // projection) falls back to matching, so this can never make an existing
+      // row invisible and cause a duplicate install.
+      if (orgId !== null) return true;
+      return (r.ownerLevel ?? rowAnchor.ownerLevel) === rowAnchor.ownerLevel;
+    });
     if (existing.length > 0) {
       // Re-activate any archived rows (locked rows are left as-is; transition
       // refuses them). Track the re-activated row: archive tore down the package's
@@ -939,9 +995,11 @@ async function syncCanonicalManifestInstall(
       // restore handled archived rows above). ownsRollback:false.
       return { needsPipeline: false, rowId: null, ownsRollback: false };
     }
-    // New install — create the placeholder canonical row at the actor's org scope
-    // (platform-scoped when the actor has no active org). Required-in-prod implies
-    // locked in non-dev mode.
+    // New install — create the placeholder canonical row AT THE RESOLVED ANCHOR:
+    // the actor's org scope (platform-scoped when the actor has no active org)
+    // for every caller that threads no tuple, or the planned tuple — for the two
+    // workspace install targets, the org-NULL workspace anchor (cinatra#2696).
+    // Required-in-prod implies locked in non-dev mode.
     const requiredInProd = isPackageRequiredInProd(packageName);
     const isDev = process.env.CINATRA_RUNTIME_MODE === "development";
     const { randomUUID } = await import("node:crypto");
@@ -950,9 +1008,12 @@ async function syncCanonicalManifestInstall(
       {
         id,
         packageName,
-        ownerLevel: orgId ? "organization" : "platform",
-        ownerId: orgId,
-        organizationId: orgId,
+        // cinatra#2696: the RESOLVED tuple — never re-derived from the actor
+        // here. `resolveInstallRowAnchor` produced it (actor-derived default, or
+        // the install-access target's planned anchor threaded end-to-end).
+        ownerLevel: rowAnchor.ownerLevel,
+        ownerId: rowAnchor.ownerId,
+        organizationId: rowAnchor.organizationId,
         kind: kind as never,
         source: {
           type: "verdaccio",
@@ -1035,10 +1096,39 @@ async function rollbackNonFinalizedCanonicalRow(rowId: string): Promise<void> {
     if (!nonFinalized) return;
     await deleteNonFinalizedCanonicalRow(rowId);
   } catch (err) {
-    console.warn(
-      `[extensions] rollback of non-finalized canonical row '${rowId}' failed (left non-anchorable; a re-install re-runs the pipeline):`,
-      err instanceof Error ? err.message : err,
+    // LOUD, not best-effort. A placeholder row this attempt created and could not
+    // remove is exactly the state the shadow defect is made of: a live canonical
+    // row for a package that never committed, competing with the working bundled
+    // implementation for the same identity. Swallowing it here is what let that
+    // row survive silently. The caller re-throws it as a recovery-required
+    // failure, so the operator is told the row needs removing instead of finding
+    // out when every action starts to 404.
+    throw new CanonicalRowCompensationFailedError(rowId, err);
+  }
+}
+
+/** The stable code a failed canonical-row compensation carries. */
+export const CANONICAL_ROW_COMPENSATION_FAILED = "CANONICAL_ROW_COMPENSATION_FAILED" as const;
+
+/**
+ * The compensating removal of a placeholder canonical row FAILED. The install
+ * itself did not commit, but a live row this attempt created is still present
+ * and an operator has to remove it. Reported loudly rather than logged, because
+ * the leftover row is what makes a package unserveable.
+ */
+export class CanonicalRowCompensationFailedError extends Error {
+  readonly code = CANONICAL_ROW_COMPENSATION_FAILED;
+  constructor(
+    public readonly rowId: string,
+    public readonly cause?: unknown,
+  ) {
+    super(
+      `the install did not commit, but its placeholder install row '${rowId}' could not be ` +
+        `removed (${cause instanceof Error ? cause.message : String(cause)}). RECOVERY REQUIRED: ` +
+        `that row is live for a package that has nothing behind it and will keep the bundled ` +
+        `version from serving until it is removed.`,
     );
+    this.name = "CanonicalRowCompensationFailedError";
   }
 }
 
@@ -1062,6 +1152,10 @@ async function rollbackNonFinalizedCanonicalRow(rowId: string): Promise<void> {
 async function compensateHandlerFailureAfterFinalize(input: {
   packageName: string;
   orgId: string | null;
+  /** cinatra#2698: the target row's anchor TIER, so the compensating re-install
+   *  re-pins the SAME row identity the failed attempt wrote — at the org-NULL
+   *  scope a workspace row and a bundled platform anchor are two rows. */
+  ownerLevel?: string;
   op: "install" | "update";
   rowId: string;
   ownsRollback: boolean;
@@ -1080,11 +1174,19 @@ async function compensateHandlerFailureAfterFinalize(input: {
     }
     try {
       const { fireExtensionActivate } = await import("./activate-hook");
-      const res = await fireExtensionActivate(
-        input.packageName,
-        input.orgId,
-        input.capturedPriorVersion,
-      );
+      const res =
+        input.ownerLevel === undefined
+          ? await fireExtensionActivate(
+              input.packageName,
+              input.orgId,
+              input.capturedPriorVersion,
+            )
+          : await fireExtensionActivate(
+              input.packageName,
+              input.orgId,
+              input.capturedPriorVersion,
+              { ownerLevel: input.ownerLevel },
+            );
       if (res.finalized !== true) {
         return {
           ok: false,
@@ -1114,6 +1216,73 @@ async function compensateHandlerFailureAfterFinalize(input: {
       detail: `archiving the finalized row failed (${err instanceof Error ? err.message : String(err)})`,
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// POST-COMMIT ACTIVATION COMPENSATION.
+//
+// The pipeline finalized but the package did not register in this process. The
+// row is real, but it serves nothing, and while it is live it holds the
+// package identity away from the implementation bundled in the image. Leaving
+// it is the shadow: every UI action 404s and the working bundled version is
+// unreachable through the product.
+//
+// So the row is ARCHIVED (the restorable lifecycle primitive, never a delete:
+// the payload and provenance are real and an operator may want them for
+// diagnosis) and the bundled implementation is put back in service through the
+// dedicated reactivation seam. Both steps are reported in the returned sentence
+// so the caller's error states exactly what is now true.
+//
+// Never throws: the caller is already reporting a failure and must be able to
+// surface the activation reason AND what compensation achieved.
+// ---------------------------------------------------------------------------
+async function compensatePostCommitActivationFailure(
+  packageName: string,
+  rowId: string | null,
+  actor: Actor,
+): Promise<string> {
+  const notes: string[] = [];
+  let archived = false;
+  if (rowId) {
+    try {
+      const { transitionExtensionLifecycle } = await import("./lifecycle-primitive");
+      await transitionExtensionLifecycle(rowId, "archive", {
+        actor: { source: actor.source ?? "dispatcher", userId: actor.userId },
+        reason: "install committed but could not activate in-process",
+      });
+      archived = true;
+      notes.push("The install was archived, so it no longer shadows the bundled version");
+    } catch (err) {
+      notes.push(
+        `RECOVERY REQUIRED: the committed row '${rowId}' could not be archived ` +
+          `(${err instanceof Error ? err.message : String(err)}), so it still holds the ` +
+          `package identity and must be archived by hand`,
+      );
+    }
+  }
+  // Put the bundled implementation back only once the override row is out of the
+  // way. Reactivating underneath a live override would leave two registrations
+  // racing for the same global names.
+  if (archived) {
+    try {
+      const { reactivateBundledFallbackInProcess } = await import(
+        "@/lib/static-bundle-loader"
+      );
+      const restored = await reactivateBundledFallbackInProcess(packageName);
+      notes.push(
+        restored.ok
+          ? "and the version bundled in the image is serving again"
+          : `but the bundled version could not be put back in service ` +
+            `(${restored.reason}); it returns on the next restart`,
+      );
+    } catch (err) {
+      notes.push(
+        `but restoring the bundled version threw ` +
+          `(${err instanceof Error ? err.message : String(err)}); it returns on the next restart`,
+      );
+    }
+  }
+  return notes.length > 0 ? `${notes.join(" ")}.` : "No install row was created.";
 }
 
 // The kinds that ship a HOT-LOADABLE `register(ctx)` server module, whose
@@ -1202,12 +1371,17 @@ class ExtensionRegistryImpl {
   }
 
   /** options.destination selects the publish registry ("private" | "public").
-   *  Forwarded to the handler; each concrete handler owns its routing. */
+   *  Forwarded to the handler; each concrete handler owns its routing.
+   *
+   *  `options.rowOwnership` (cinatra#2696) is the PLANNED canonical row anchor
+   *  the install-access target resolved (S1's `accessTargetToRowOwnership`),
+   *  threaded here by the dependency batch. ABSENT — every pre-#2696 caller —
+   *  keeps the actor-derived anchor exactly as before. */
   async install(
     typeId: string,
     ref: PackageRef,
     actor: Actor,
-    options?: { destination?: "private" | "public" },
+    options?: { destination?: "private" | "public"; rowOwnership?: InstallRowOwnership },
   ): Promise<void> {
     await this.runHostInstall(typeId, ref, actor, "install", options);
   }
@@ -1227,7 +1401,14 @@ class ExtensionRegistryImpl {
     typeId: string,
     ref: PackageRef,
     actor: Actor,
-    options?: { expectedInstalledVersion?: string },
+    options?: {
+      expectedInstalledVersion?: string;
+      /** cinatra#2698 (S4): the operator's explicit anchor-tier choice, where a
+       *  package carries more than one addressable row. The update RESOLVES the
+       *  existing row through it and rewrites THAT row's version in place —
+       *  never re-anchoring the install to the actor's scope. */
+      rowSelector?: LifecycleRowSelector | null;
+    },
   ): Promise<void> {
     await this.runHostInstall(typeId, ref, actor, "update", options);
   }
@@ -1271,7 +1452,12 @@ class ExtensionRegistryImpl {
     ref: PackageRef,
     actor: Actor,
     op: "install" | "update",
-    options?: { destination?: "private" | "public"; expectedInstalledVersion?: string },
+    options?: {
+      destination?: "private" | "public";
+      expectedInstalledVersion?: string;
+      rowOwnership?: InstallRowOwnership;
+      rowSelector?: LifecycleRowSelector | null;
+    },
   ): Promise<void> {
     // Serialize the WHOLE direct-install path (ensure-row → native handler →
     // real-integrity pipeline finalize → rollback) under the per-package install
@@ -1283,9 +1469,31 @@ class ExtensionRegistryImpl {
     // acquire (same package, same async context) runs inline — no deadlock.
     // Dynamic import: @cinatra-ai/agents → @cinatra-ai/extensions is a static cycle.
     const { withInstallLock } = await import("@cinatra-ai/agents");
-    return withInstallLock(ref.packageName, () =>
-      this.runHostInstallLocked(typeId, ref, actor, op, options),
-    );
+    return withInstallLock(ref.packageName, async () => {
+      await this.runHostInstallLocked(typeId, ref, actor, op, options);
+      // cinatra#2698 (S4, change 2) — SUPERSESSION ON INSTALL. A "Workspace:
+      // All" / "Workspace: Admins only" install has now FINALIZED, so the
+      // package's organization rows are redundant: archive them IN PLACE. It
+      // runs HERE — inside the same per-package install lock, after the whole
+      // install sequence succeeded (any failure above threw and left the
+      // organization rows untouched) — so no concurrent install can interleave
+      // and a failed install never supersedes anything. The primitive
+      // compensates its own partial work, so the package is never left
+      // half-superseded.
+      //
+      // `install` only: an UPDATE rewrites an existing row's version, it does
+      // not widen anything's reach, so it has nothing to supersede.
+      if (op !== "install") return;
+      const anchor = resolveInstallRowAnchor(actor.orgId ?? null, options?.rowOwnership);
+      if (!isWorkspaceRowAnchor(anchor)) return;
+      const { supersedeOrganizationRowsForWorkspaceInstall } = await import(
+        "./lifecycle-primitive"
+      );
+      await supersedeOrganizationRowsForWorkspaceInstall(ref.packageName, {
+        source: actor.source ?? "dispatcher",
+        userId: actor.userId,
+      });
+    });
   }
 
   private async runHostInstallLocked(
@@ -1293,7 +1501,12 @@ class ExtensionRegistryImpl {
     ref: PackageRef,
     actor: Actor,
     op: "install" | "update",
-    options?: { destination?: "private" | "public"; expectedInstalledVersion?: string },
+    options?: {
+      destination?: "private" | "public";
+      expectedInstalledVersion?: string;
+      rowOwnership?: InstallRowOwnership;
+      rowSelector?: LifecycleRowSelector | null;
+    },
   ): Promise<void> {
     const handler = this.resolve(typeId);
 
@@ -1346,12 +1559,78 @@ class ExtensionRegistryImpl {
     //    loop's cached (now-stale) target never overwrites the winner. Omitted
     //    (every manual-update caller) → no CAS, byte-unchanged. FAIL-CLOSED:
     //    zero or more-than-one live rows at the scope also refuse — the
-    //    precondition cannot be proven, so the update does not proceed.
+    //    precondition cannot be proven, so the update does not proceed. The CAS
+    //    itself now runs just BELOW the anchor resolution (0.75) so it reads the
+    //    row the update rewrites; nothing else about it changed.
+
+    // 0.75 THE ROW ANCHOR (cinatra#2696 + cinatra#2698). Resolved BEFORE the CAS
+    //    so the compare-and-set proves its precondition against the row the
+    //    update will actually rewrite.
+    //
+    //    cinatra#2696: the anchor is the actor's org for every caller that
+    //    threads no tuple (unchanged), and the PLANNED tuple when the
+    //    install-access target resolved one — for the two workspace targets an
+    //    org-NULL workspace anchor.
+    //
+    //    cinatra#2698 (S4, change 2): an UPDATE is a RECREATE against an
+    //    EXISTING row, so it takes that row's OWN anchor. Deriving the anchor
+    //    from the actor was the defect: updating a workspace-anchored install
+    //    from an org-scoped platform-admin session would have written the new
+    //    version against an ORG-anchored row, silently forking the app-wide
+    //    install into one organization's copy and leaving the workspace row
+    //    stranded at the old version. `readRowsAndAnchorForUpdate` is
+    //    NON-THROWING and NON-STANDING-GATED on purpose: it only ever REPLACES
+    //    the anchor when a row this actor may address actually resolves. An
+    //    update of a package with no addressable row keeps the actor-derived
+    //    anchor — exactly today's behaviour (the update installs into the
+    //    actor's scope), and the standing gates on the destructive ops are
+    //    untouched.
+    //
+    //    `rowOrgId` is therefore the ROW's org, which is the scope every row
+    //    read/write below must use; `actor.orgId` stays the ACTOR's scope and
+    //    keeps driving the actor-scoped gates above.
+    const updateTarget =
+      op === "update"
+        ? await readRowsAndAnchorForUpdate(ref.packageName, actor, options?.rowSelector)
+        : null;
+    const rowAnchor =
+      updateTarget?.anchor ??
+      resolveInstallRowAnchor(actor.orgId ?? null, options?.rowOwnership);
+    const rowOrgId = rowAnchor.organizationId ?? null;
+    // The anchor TIER handed to the host activate hook. Forwarded ONLY where it
+    // can change WHICH row the host resolves — the org-NULL WORKSPACE anchor,
+    // the one scope where two rows (a product-installed workspace row and a
+    // bundled platform anchor) share an `organization_id`.
+    //
+    // `pickSingleActiveRow` no longer fails closed on THAT pair: it applies the
+    // shared source precedence, so the product install outranks the bundled
+    // fallback (cinatra#2762). The tier is still forwarded, and still preferred,
+    // because it selects the workspace row DIRECTLY by identity rather than via a
+    // policy that reads a source discriminant — so a row whose provenance is
+    // neither bundled nor marketplace (a legacy or fixture row, which precedence
+    // deliberately leaves alone) still resolves here.
+    //
+    // Every other install — org-anchored, or the platform tier itself — keeps the
+    // pre-#2698 call exactly as it was, so "byte-identical to today" holds down
+    // to the hook invocation.
+    const activateAnchor =
+      rowOrgId === null && rowAnchor.ownerLevel === "workspace"
+        ? { ownerLevel: rowAnchor.ownerLevel }
+        : undefined;
+
+    // 0.7 EXPECTED-VERSION CAS — see the block comment above; it reads the live
+    //    version AT THE ROW'S OWN ANCHOR (cinatra#2698), which for every
+    //    org-anchored install is the actor's org exactly as before.
     if (op === "update" && options?.expectedInstalledVersion !== undefined) {
-      const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+      let rows = updateTarget?.rows ?? null;
+      if (rows === null) {
+        const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+        rows = await readInstalledExtensionsByPackageName(ref.packageName);
+      }
       const liveVersion = resolveLiveInstalledVersionForCas(
-        await readInstalledExtensionsByPackageName(ref.packageName),
-        actor.orgId ?? null,
+        rows,
+        rowOrgId,
+        rowAnchor.ownerLevel,
       );
       if (liveVersion !== options.expectedInstalledVersion) {
         throw new ExpectedInstalledVersionMismatchError(
@@ -1364,10 +1643,10 @@ class ExtensionRegistryImpl {
 
     // 1. Ensure exactly one canonical row BEFORE the native handler (so the
     //    workflow saga's recordProvenance + the pipeline both resolve it — the
-    //    Finding-4 ordering fix). Scoped to the actor's org so the saga (org-
-    //    scoped) and the activate hook (passed the same org) bind the SAME row.
-    const orgId = actor.orgId ?? null;
-    const ensure = await syncCanonicalManifestInstall(ref.packageName, typeId, ref, actor, orgId, op);
+    //    Finding-4 ordering fix). Scoped to the install's RESOLVED ROW ANCHOR so
+    //    the saga and the activate hook (passed the same anchor) bind the SAME
+    //    row.
+    const ensure = await syncCanonicalManifestInstall(ref.packageName, typeId, ref, actor, rowAnchor, op);
 
     // 1.5 (cinatra#793) METADATA-ONLY STORE-PIPELINE KINDS (agent/skill/
     //    artifact): fire the host activate hook (= the real-integrity pipeline:
@@ -1403,7 +1682,10 @@ class ExtensionRegistryImpl {
       const { fireExtensionActivate } = await import("./activate-hook");
       // `ref.version` = the REQUESTED install/target version (see step 3's
       // comment — on an UPDATE the row still carries the OLD version).
-      const result = await fireExtensionActivate(ref.packageName, orgId, ref.version);
+      const result =
+        activateAnchor === undefined
+          ? await fireExtensionActivate(ref.packageName, rowOrgId, ref.version)
+          : await fireExtensionActivate(ref.packageName, rowOrgId, ref.version, activateAnchor);
 
       if (result.finalized === false) {
         // The pipeline did NOT finalize — the store payload does not exist, so
@@ -1479,7 +1761,8 @@ class ExtensionRegistryImpl {
       if (pipelineFinalizedBeforeHandler && ensure.rowId) {
         const comp = await compensateHandlerFailureAfterFinalize({
           packageName: ref.packageName,
-          orgId,
+          orgId: rowOrgId,
+          ownerLevel: activateAnchor?.ownerLevel,
           op,
           rowId: ensure.rowId,
           ownsRollback: ensure.ownsRollback,
@@ -1551,7 +1834,10 @@ class ExtensionRegistryImpl {
     // the tail of the pipeline), so the host hook MUST use the requested version —
     // otherwise the pipeline re-installs the old version and the new one is never
     // materialized. A fresh install already has `row.source.version === ref.version`.
-    const result = await fireExtensionActivate(ref.packageName, orgId, ref.version);
+    const result =
+      activateAnchor === undefined
+        ? await fireExtensionActivate(ref.packageName, rowOrgId, ref.version)
+        : await fireExtensionActivate(ref.packageName, rowOrgId, ref.version, activateAnchor);
 
     // The activate hook reports two distinct signals from the real pipeline:
     //   - `finalized`: the install committed (real provenance recorded + journal
@@ -1640,29 +1926,29 @@ class ExtensionRegistryImpl {
       );
     }
 
-    // finalized === true but NOT activated: the install COMMITTED (anchorable;
-    //   the boot loader is the durable path) but in-process hot-activation did not
-    //   register the package this call — which breaks the no-restart invariant for
-    //   a connector. Do NOT roll back the committed/finalized install (the row is
-    //   real + anchorable; an update left the previous digest intact). THROW so the
-    //   op surfaces the truthful "did not hot-activate" outcome rather than a
-    //   silent finalized-but-not-loaded success.
+    // finalized === true but NOT activated. The pipeline committed, so the row is
+    // real and anchorable, yet the package did not register in THIS process.
     //
-    //   The throw is TYPED (ExtensionActivationDeferredError, stable
-    //   `code: "INSTALL_ACTIVATION_DEFERRED"`). The message is unchanged, because
-    //   it is the operator-side truth. The code lets every caller above this seam
-    //   tell this outcome apart from a real failure. It is the THIRD install
-    //   outcome: the row is committed and anchorable, so the caller must neither
-    //   roll it back nor report a generic failure; it reports "installed,
-    //   activation deferred to the next restart".
+    // There is no such thing as an acceptable committed-but-unactivated install.
+    // Hot install is the platform contract: a marketplace install must be usable
+    // in the running process. A live row that serves nothing does not merely
+    // fail to work, it takes the identity of the package away from the version
+    // bundled in the image, so the operator loses the working implementation too.
+    //
+    // The pre-finalize probe now proves activation for fresh installs as well as
+    // updates, so reaching here means activation failed AFTER the commit. That is
+    // compensated, never described: archive the row this install created and put
+    // the bundled implementation back in service. Then report the failure, naming
+    // the exact reason the activation was refused.
     if (!result.activated) {
-      throw new ExtensionActivationDeferredError(
-        `${op} of ${ref.packageName} finalized the real-integrity pipeline but did NOT ` +
-          `hot-activate in-process (${result.reason ?? "unknown"}) — the package is anchorable ` +
-          `(it will load on the next boot) but did not load without a restart this call. The ` +
-          `committed install was left intact.`,
+      const compensation = await compensatePostCommitActivationFailure(
         ref.packageName,
-        ref.version,
+        ensure.rowId,
+        actor,
+      );
+      throw new Error(
+        `${op} of ${ref.packageName} committed but could not activate in this process ` +
+          `(${result.reason ?? "unknown"}). ${compensation}`,
       );
     }
   }
@@ -1677,16 +1963,28 @@ class ExtensionRegistryImpl {
   //      a. checkDependents may throw ActiveDependentError (active dep blocks)
   //      b. archived dep exists / extensionHasBeenUsed → archive (row-scoped)
   //      c. otherwise → package-global hard-delete (platform-admin-only).
-  async uninstall(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+  async uninstall(
+    typeId: string,
+    ref: PackageRef,
+    actor: Actor,
+    options?: { rowSelector?: LifecycleRowSelector | null },
+  ): Promise<void> {
     // cinatra#1837 R4a: hold the install-lifecycle lock over the WHOLE
     // uninstall (soft-archive + hard-delete branches) so a concurrent
     // install/update cannot interleave with claim retirement. Re-entrant via ALS
     // (the nested handler.archive / handler.uninstall acquire is a no-op).
     const { withInstallLock } = await import("@cinatra-ai/agents");
-    return withInstallLock(ref.packageName, () => this._uninstallLocked(typeId, ref, actor));
+    return withInstallLock(ref.packageName, () =>
+      this._uninstallLocked(typeId, ref, actor, options),
+    );
   }
 
-  private async _uninstallLocked(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+  private async _uninstallLocked(
+    typeId: string,
+    ref: PackageRef,
+    actor: Actor,
+    options?: { rowSelector?: LifecycleRowSelector | null },
+  ): Promise<void> {
     // Locked-row protection is enforced at the dispatcher layer.
     await assertNoLockedCanonicalRow(ref.packageName, "uninstall");
     // Closure: refuse uninstall if an active dependent requires this package
@@ -1696,10 +1994,16 @@ class ExtensionRegistryImpl {
     const { resolveLifecycleTargetRow, isPlatformAdminActor } = await import(
       "./lifecycle-target-resolver"
     );
-    // Resolve to the actor's single row + gate standing FIRST — an org admin can
+    // Resolve to the single TARGET row + gate standing FIRST — an org admin can
     // only ever reach their own org's row (the primary bound; the standing check
-    // is the safety net under it).
-    const row = await resolveLifecycleTargetRow(ref.packageName, actor);
+    // is the safety net under it). cinatra#2698: `rowSelector` is the operator's
+    // explicit anchor-tier choice where more than one row is addressable; absent
+    // it, a multi-row scope refuses rather than guessing.
+    const row = await resolveLifecycleTargetRow(
+      ref.packageName,
+      actor,
+      options?.rowSelector,
+    );
     const { fireExtensionCapabilityTeardown } = await import("./capability-teardown-hook");
 
     // ORG-ADMIN parity: uninstall routes to the SOFT (archive) path only. The
@@ -1828,15 +2132,27 @@ class ExtensionRegistryImpl {
   // Explicit archive (no predicate/cascade — user-initiated). ROW-SCOPED +
   // standing-gated (P5): resolve the single actor-org row, gate write standing
   // over it, then transition exactly that row (never the package-wide fan-out).
-  async archive(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+  async archive(
+    typeId: string,
+    ref: PackageRef,
+    actor: Actor,
+    options?: { rowSelector?: LifecycleRowSelector | null },
+  ): Promise<void> {
     // cinatra#1837 R4a: hold the install-lifecycle lock over the WHOLE explicit
     // archive so a concurrent install/update cannot interleave with claim
     // retirement. Re-entrant via ALS.
     const { withInstallLock } = await import("@cinatra-ai/agents");
-    return withInstallLock(ref.packageName, () => this._archiveLocked(typeId, ref, actor));
+    return withInstallLock(ref.packageName, () =>
+      this._archiveLocked(typeId, ref, actor, options),
+    );
   }
 
-  private async _archiveLocked(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+  private async _archiveLocked(
+    typeId: string,
+    ref: PackageRef,
+    actor: Actor,
+    options?: { rowSelector?: LifecycleRowSelector | null },
+  ): Promise<void> {
     // Locked-row protection is enforced at the dispatcher layer:
     // reject archive if ANY canonical row for this package is locked
     // (package-wide over-block — standing-agnostic, the safe direction).
@@ -1846,7 +2162,11 @@ class ExtensionRegistryImpl {
     const { resolveLifecycleTargetRow, isPlatformAdminActor } = await import(
       "./lifecycle-target-resolver"
     );
-    const row = await resolveLifecycleTargetRow(ref.packageName, actor);
+    const row = await resolveLifecycleTargetRow(
+      ref.packageName,
+      actor,
+      options?.rowSelector,
+    );
     await this.resolve(typeId).archive(ref, actor);
     // cinatra#1454: FAIL-CLOSED artifact claim archival before the durable row
     // transition — retire the extension's type claims + archive its governed rows,
@@ -1895,16 +2215,28 @@ class ExtensionRegistryImpl {
   // activate path is idempotent (re-materialize is SRI-checked against the already-
   // finalized digest; the in-memory registries replace by id/name) and does NOT
   // re-record a new version's provenance.
-  async restore(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+  async restore(
+    typeId: string,
+    ref: PackageRef,
+    actor: Actor,
+    options?: { rowSelector?: LifecycleRowSelector | null },
+  ): Promise<void> {
     // cinatra#1837 R4a: hold the install-lifecycle lock over the WHOLE restore —
     // the same lock install/update/uninstall/archive/forceDelete take — so no
     // concurrent install/update can interleave with the claim reactivation.
     // Re-entrant via ALS (a nested handler acquire is a no-op).
     const { withInstallLock } = await import("@cinatra-ai/agents");
-    return withInstallLock(ref.packageName, () => this._restoreLocked(typeId, ref, actor));
+    return withInstallLock(ref.packageName, () =>
+      this._restoreLocked(typeId, ref, actor, options),
+    );
   }
 
-  private async _restoreLocked(typeId: string, ref: PackageRef, actor: Actor): Promise<void> {
+  private async _restoreLocked(
+    typeId: string,
+    ref: PackageRef,
+    actor: Actor,
+    options?: { rowSelector?: LifecycleRowSelector | null },
+  ): Promise<void> {
     // Closure: refuse restore if the restored extension's required deps are
     // archived/missing (a restore operates on a row whose .dependencies are
     // already materialized, so a forward closure check is meaningful).
@@ -1912,7 +2244,11 @@ class ExtensionRegistryImpl {
     // ROW-SCOPED + standing-gated (P5): resolve the single actor-org row + gate
     // write standing before re-activating exactly that row.
     const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
-    const row = await resolveLifecycleTargetRow(ref.packageName, actor);
+    const row = await resolveLifecycleTargetRow(
+      ref.packageName,
+      actor,
+      options?.rowSelector,
+    );
     await this.resolve(typeId).restore(ref, actor);
     // cinatra#1837 R3: FAIL-CLOSED artifact claim REACTIVATION before the durable
     // `activate` transition — reactivate the retired `objectTypes` claims + re-
@@ -1938,12 +2274,32 @@ class ExtensionRegistryImpl {
     // Only a hot-loadable-module kind re-registers in-process; other kinds ship no
     // runtime module (their handler.restore already re-surfaced them).
     if (!KINDS_USING_ACTIVATE_HOOK.has(typeId)) return;
-    const orgId = actor.orgId ?? null;
+    // cinatra#2698 (S4, change 2): the re-activation binds the RESOLVED ROW's
+    // OWN ANCHOR — never `actor.orgId`. The two agreed only while the resolver
+    // was org-equality-only; now that a platform admin addresses an org-NULL
+    // workspace row from an org-scoped session, the actor's org would send the
+    // host hook looking for a row in THAT organization — it would find none (or,
+    // worse, that org's unrelated row) and the restore would re-activate the
+    // canonical row while re-registering nothing, or the wrong thing. The anchor
+    // is the full identity: the row's org AND its `owner_level`, which is what
+    // separates a product-installed workspace row from a bundled platform anchor
+    // at the same org-NULL scope.
+    const orgId = row.organizationId ?? null;
     const { fireExtensionActivate } = await import("./activate-hook");
     // A restore re-activates the EXISTING finalized digest (no version change), so
     // `ref.version` matches the row's recorded version — pass it for consistency
     // with the install/update path (the host hook falls back to the row's version).
-    const result = await fireExtensionActivate(ref.packageName, orgId, ref.version);
+    // Same narrow rule as the install/update path: the tier is forwarded only
+    // where it can change which row the host resolves — and never as a trailing
+    // `undefined`, so a restore of an org row makes the byte-identical 3-arg call.
+    const restoreAnchor =
+      orgId === null && row.ownerLevel === "workspace"
+        ? { ownerLevel: row.ownerLevel }
+        : undefined;
+    const result =
+      restoreAnchor === undefined
+        ? await fireExtensionActivate(ref.packageName, orgId, ref.version)
+        : await fireExtensionActivate(ref.packageName, orgId, ref.version, restoreAnchor);
     // A restore must surface a re-registration failure (so the user is not told
     // "restored" when the package did not load in-process). We never roll the row
     // back — a restored healthy install stays active (the boot loader is the

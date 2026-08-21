@@ -631,10 +631,12 @@ describe("dispatcher host-install ordering + rollback", () => {
   });
 
   // -------------------------------------------------------------------------
-  // install/update success MUST be gated on ACTUAL hot activation —
-  // a finalized-but-not-activated result is NOT success (placeholder-as-success).
+  // install/update success MUST be gated on ACTUAL hot activation, and a
+  // finalized-but-not-activated result is COMPENSATED rather than left live:
+  // a committed row that serves nothing takes the package identity away from
+  // the version bundled in the image.
   // -------------------------------------------------------------------------
-  it("Finding 1: a finalized-but-NOT-activated install THROWS and does NOT roll back the committed install", async () => {
+  it("a finalized-but-NOT-activated install THROWS and ARCHIVES the committed row", async () => {
     extensionRegistry.register(makeHandler("connector"));
     // The pipeline finalized (committed + anchorable) but in-process activation
     // did NOT register the package (anchor refused / activator unavailable).
@@ -642,29 +644,32 @@ describe("dispatcher host-install ordering + rollback", () => {
 
     await expect(
       extensionRegistry.install("connector", makeRef("@v/h-connector"), orgActor),
-    ).rejects.toThrow(/did NOT\s+hot-activate in-process/);
+    ).rejects.toThrow(/committed but could not activate in this process/);
 
-    // The committed/finalized row is NOT rolled back (it is real + anchorable;
-    // the boot loader is the durable path).
+    // Archived through the canonical lifecycle primitive, never hand-deleted:
+    // the payload and provenance are real and stay available for diagnosis.
+    expect(transitionExtensionLifecycle).toHaveBeenCalledWith(
+      expect.any(String),
+      "archive",
+      expect.objectContaining({
+        reason: "install committed but could not activate in-process",
+      }),
+    );
     expect(_internalDeleteInstalledExtension).not.toHaveBeenCalled();
-    expect(rows.filter((r) => r.packageName === "@v/h-connector")).toHaveLength(1);
   });
 
-  it("Finding 1: a RETRY install after a finalized-but-NOT-activated connector RE-FIRES the activate hook (not short-circuited as already-installed)", async () => {
+  it("a RETRY install after a failed activation RE-FIRES the activate hook (not short-circuited as already-installed)", async () => {
     extensionRegistry.register(makeHandler("connector"));
 
-    // First install: a FRESH connector. The pipeline FINALIZES (the dispatcher's
-    // mocked pipeline = fireExtensionActivate) but in-process hot-activation does
-    // NOT register the package this call. The dispatcher throws — but the row is
-    // real + anchorable, so it is NOT rolled back (ownsRollback honored for the
-    // finalized-but-not-activated branch).
+    // First install: a FRESH connector. The pipeline FINALIZES but in-process
+    // hot-activation does not register the package this call, so the dispatcher
+    // throws and compensates.
     fireExtensionActivate.mockResolvedValueOnce({ finalized: true, activated: false, reason: "anchor-refused" });
     await expect(
       extensionRegistry.install("connector", makeRef("@v/retry-connector"), orgActor),
-    ).rejects.toThrow(/did NOT\s+hot-activate in-process/);
+    ).rejects.toThrow(/committed but could not activate in this process/);
 
-    // The row survives (anchorable; boot loader is the durable path) and was NOT
-    // rolled back. The first install created exactly one placeholder row.
+    // Exactly one row was created, and it was archived rather than deleted.
     expect(rows.filter((r) => r.packageName === "@v/retry-connector")).toHaveLength(1);
     expect(installExtensionManifest).toHaveBeenCalledTimes(1);
     expect(_internalDeleteInstalledExtension).not.toHaveBeenCalled();
@@ -694,7 +699,7 @@ describe("dispatcher host-install ordering + rollback", () => {
     expect(rows.filter((r) => r.packageName === "@v/retry-connector")).toHaveLength(1);
   });
 
-  it("Finding 1: a finalized-but-NOT-activated UPDATE of a healthy row THROWS and never deletes the prior install", async () => {
+  it("a finalized-but-NOT-activated UPDATE THROWS and never hand-deletes the prior install", async () => {
     rows = [
       {
         id: "iext_upd",
@@ -709,7 +714,8 @@ describe("dispatcher host-install ordering + rollback", () => {
 
     await expect(
       extensionRegistry.update("connector", makeRef("@v/i-connector"), orgActor),
-    ).rejects.toThrow(/did NOT\s+hot-activate in-process/);
+    ).rejects.toThrow(/committed but could not activate in this process/);
+    // Never hand-deleted: the row is archived through the lifecycle primitive.
     expect(_internalDeleteInstalledExtension).not.toHaveBeenCalled();
     expect(rows.find((r) => r.id === "iext_upd")).toBeDefined();
   });

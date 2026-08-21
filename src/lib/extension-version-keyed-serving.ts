@@ -55,6 +55,7 @@ import "server-only";
 // design — a teardown drops every version unconditionally).
 
 import type { HostMcpToolRegistration } from "@cinatra-ai/sdk-extensions";
+import { normalizeDelegatedChatToolClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 
 /** A version-keyed MCP tool, carrying the authoritative provider identity. */
 export type RetainedVersionKeyedMcpTool = HostMcpToolRegistration & { packageName: string };
@@ -210,7 +211,14 @@ export function beginVersionKeyedRegistration(
           `[extension-version-keyed-serving] ${packageName}@${version} MCP tool "${name}" has no handler`,
         );
       }
-      entry.mcpTools.set(name, tool);
+      // Same structural validation the default registry applies
+      // (cinatra#2771) — a RETAINED non-default version's declaration is read
+      // by the same edge-bound serve paths, so it must be normalized on the
+      // same terms or the two registration paths would disagree.
+      entry.mcpTools.set(name, {
+        ...tool,
+        delegatedChat: normalizeDelegatedChatToolClass(tool.delegatedChat),
+      });
     },
     retainCapabilityProvider: (capability, provider) => {
       if (!capability || typeof capability !== "string") {

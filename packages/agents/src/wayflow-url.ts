@@ -52,9 +52,90 @@ export const WAYFLOW_A2A_TIMEOUT_MS = 86_400_000;
 export const AGENT_RUN_TIMEOUT_MAX_SECONDS = 86_400;
 
 /**
+ * The `.env.local` key an install (`cinatra install` / `scripts/setup.sh`)
+ * records to say what it decided about the WayFlow runtime. Mirrors the
+ * `WAYFLOW_RUNTIME_KEY` constant in cinatra-cli's `wayflow-runtime.mjs` —
+ * that module and `cinatra doctor` are the canonical source for this
+ * three-way split; keep the mode strings in sync with it.
+ */
+export const WAYFLOW_RUNTIME_KEY = "CINATRA_WAYFLOW_RUNTIME";
+
+/** local    — this install owns a local stack and starts WayFlow in it.
+ *  off      — deliberate opt-out (`--no-wayflow` / `NO_WAYFLOW=1`).
+ *  external — this install owns no local stack, so it neither owns nor
+ *             starts a local WayFlow runtime; WAYFLOW_BASE_URL points at
+ *             one the operator runs elsewhere. */
+export type WayflowRuntimeMode = "local" | "off" | "external";
+
+const VALID_RUNTIME_MODES = new Set<WayflowRuntimeMode>([
+  "local",
+  "off",
+  "external",
+]);
+
+/**
+ * Normalize a recorded `CINATRA_WAYFLOW_RUNTIME` value. An unknown or absent
+ * value falls back to `"local"` — default-on is the contract, so a checkout
+ * that predates this key (or an unset env in a non-CLI context) is read as
+ * "should have a runtime" rather than silently excused. Matches
+ * `normalizeWayflowRuntimeMode` in cinatra-cli.
+ */
+export function normalizeWayflowRuntimeMode(
+  raw: string | null | undefined,
+): WayflowRuntimeMode {
+  const value = String(raw ?? "").trim().toLowerCase();
+  return VALID_RUNTIME_MODES.has(value as WayflowRuntimeMode)
+    ? (value as WayflowRuntimeMode)
+    : "local";
+}
+
+/**
+ * Build a `docker compose` invocation pinned to the live stack's compose
+ * project (`-p cinatra_cinatra`) and its two compose files, with `action`
+ * appended verbatim (e.g. `"up -d --build wayflow"`, `"build wayflow"`).
+ *
+ * Every WayFlow-recovery message in this module goes through this one
+ * builder so the project flag and profile can never drift between surfaces
+ * again — an unpinned invocation forks a SEPARATE compose project that
+ * can't see the running network. Exported so other surfaces that need a
+ * WayFlow compose command (e.g. the agent-not-registered preflight in
+ * `wayflow-preflight.ts`, whose recovery action differs — rebuild + force
+ * recreate rather than a plain `up`) build it from the same source instead
+ * of hand-writing the project/profile flags again.
+ */
+export function wayflowComposeCommand(action: string): string {
+  return (
+    `docker compose -p cinatra_cinatra -f docker-compose.yml -f docker-compose.dev.yml ` +
+    `--profile wayflow ${action}`
+  );
+}
+
+/**
+ * The complete, project-pinned docker fallback for bringing the WayFlow
+ * service up directly, without the CLI. Pinned to the live stack's compose
+ * project (`-p cinatra_cinatra`) so it never forks a second, network-isolated
+ * project, and preceded by the bridge-token env generator the wayflow
+ * container needs to boot at all.
+ */
+const DOCKER_FALLBACK =
+  "`source .env.local && node scripts/gen-wayflow-env.mjs --require-bridge-token " +
+  `&& ${wayflowComposeCommand("up -d --build wayflow")}\``;
+
+/** `cinatra instance wayflow start`, always caveated: it is not on every
+ *  released CLI yet (a fresh install runs the released CLI), so a bare
+ *  operator following it verbatim can hit a nonexistent command. */
+const CLI_START_HINT =
+  "`cinatra instance wayflow start` if your cinatra-cli has it (not every " +
+  "released CLI does yet)";
+
+/**
  * Map a dispatch error thrown while reaching the WayFlow runtime into an
  * actionable run-error string that names the target URL and the underlying
- * cause (#562).
+ * cause (#562), then tailors the recovery guidance to what this install
+ * actually recorded about the runtime (`CINATRA_WAYFLOW_RUNTIME`) —
+ * following `cinatra doctor`'s local/off/external split so the guidance
+ * never tells an operator to "start" a runtime this install never owned, or
+ * stays silent about a deliberate opt-out.
  *
  * When `client.sendTask` can't connect, undici's `fetch` throws a bare
  * `TypeError: fetch failed` whose only useful context lives in `err.cause`
@@ -63,18 +144,25 @@ export const AGENT_RUN_TIMEOUT_MAX_SECONDS = 86_400;
  * reason — which is undebuggable (the issue's exact symptom: started_at null,
  * no steps, bare "fetch failed").
  *
- * This helper is pure (no I/O, no env) so it is unit-testable and so the call
- * site can both log the structured form server-side and store the returned
- * string on the run. Non-fetch errors (e.g. a WayFlow 500 surfaced by the A2A
- * client) pass through unchanged so existing actionable messages — like the
- * OpenAI-key 401 that the error panel already linkifies — are preserved.
+ * This helper is pure (no I/O, no direct env read) so it stays unit-testable
+ * and so the call site can both log the structured form server-side and
+ * store the returned string on the run. The runtime mode is passed in by the
+ * caller (which reads `process.env.CINATRA_WAYFLOW_RUNTIME`) rather than read
+ * here, keeping the env access at the single call site. Non-fetch errors
+ * (e.g. a WayFlow 500 surfaced by the A2A client) pass through unchanged so
+ * existing actionable messages — like the OpenAI-key 401 that the error panel
+ * already linkifies — are preserved.
  *
  * @param err         The thrown dispatch error (unknown shape).
  * @param wayflowUrl  The resolved WayFlow A2A URL the dispatch targeted.
+ * @param options.runtimeMode  The raw `CINATRA_WAYFLOW_RUNTIME` value from
+ *   the caller's environment (normalized here); absent/unknown reads as
+ *   `"local"`, matching cinatra-cli's own fallback.
  */
 export function describeWayflowDispatchError(
   err: unknown,
   wayflowUrl: string,
+  options: { runtimeMode?: string | null } = {},
 ): string {
   const message = err instanceof Error ? err.message : String(err);
 
@@ -105,17 +193,43 @@ export function describeWayflowDispatchError(
 
   const detail = causeCode ?? causeMessage;
   const reason = detail ? ` (${detail})` : "";
+  const preamble = `Could not reach the agent runtime at ${wayflowUrl} — fetch failed${reason}.`;
+  const mode = normalizeWayflowRuntimeMode(options.runtimeMode);
+
+  if (mode === "off") {
+    return (
+      `${preamble} The WayFlow runtime is disabled for this install ` +
+      `(${WAYFLOW_RUNTIME_KEY}=off, e.g. \`--no-wayflow\` at install time), ` +
+      `so agent runs fail until you enable it. Re-run the install without the ` +
+      `opt-out, start it now with ${CLI_START_HINT}, or bring it up directly ` +
+      `from the checkout root: ${DOCKER_FALLBACK}.`
+    );
+  }
+
+  if (mode === "external") {
+    return (
+      `${preamble} This install is configured for an external WayFlow runtime ` +
+      `(${WAYFLOW_RUNTIME_KEY}=external) — it starts no local WayFlow container. ` +
+      `Check that the runtime WAYFLOW_BASE_URL points at is running and reachable.`
+    );
+  }
+
+  // "local": this install should own a running runtime and it is not
+  // reachable. An unset/legacy key normalizes to "local" too (an install
+  // predating the key never recorded an opt-out, so it reads as "promised" —
+  // truthful, since its agent runs do fail the same way); word that case as
+  // "expected" rather than falsely claiming a value was recorded.
+  const recordedLocal =
+    normalizeWayflowRuntimeMode(options.runtimeMode) === "local" &&
+    String(options.runtimeMode ?? "").trim().toLowerCase() === "local";
+  const localClause = recordedLocal
+    ? `recorded as local (${WAYFLOW_RUNTIME_KEY}=local)`
+    : `expected to be local (no ${WAYFLOW_RUNTIME_KEY} recorded — this install predates it, or the key is unset here)`;
   return (
-    `Could not reach the agent runtime at ${wayflowUrl} — fetch failed${reason}. ` +
-    `Check that the WayFlow runtime is running and reachable (e.g. the dev ` +
-    `tunnel/Funnel and WAYFLOW_BASE_URL). An install that owns a local stack ` +
-    `starts this runtime with it, so a down runtime means it was stopped, ` +
-    `opted out, or installed before that became the default. Try \`cinatra ` +
-    `instance wayflow start\` if your cinatra-cli has it (not every released ` +
-    `CLI does yet). Otherwise, from the checkout root: \`source .env.local && node ` +
-    `scripts/gen-wayflow-env.mjs --require-bridge-token && docker compose -p ` +
-    `cinatra_cinatra -f docker-compose.yml -f docker-compose.dev.yml --profile ` +
-    `wayflow up -d --build wayflow\`.`
+    `${preamble} This install's WayFlow runtime is ${localClause} — it ` +
+    `should be running and is not. Check that it's up and reachable (e.g. ` +
+    `the dev tunnel/Funnel and WAYFLOW_BASE_URL). Start it with ${CLI_START_HINT}. ` +
+    `Otherwise, bring it up directly from the checkout root: ${DOCKER_FALLBACK}.`
   );
 }
 

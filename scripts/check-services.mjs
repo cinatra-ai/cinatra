@@ -30,7 +30,7 @@ import {
   parseHostPort,
 } from "./lib/docker-port-drift.mjs";
 import { nangoHealthUrl, probeHttpHealth } from "./lib/nango-health.mjs";
-import { WAYFLOW_DOWN_HINT } from "./lib/wayflow-down-hint.mjs";
+import { wayflowDownHint } from "./lib/wayflow-down-hint.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -179,7 +179,11 @@ const services = [
     // 2xx probeHttpHealth: see probeWayflowHealth.
     probeHealth: probeWayflowHealth,
     note: "agent runtime; serves every installed agent",
-    downHint: WAYFLOW_DOWN_HINT,
+    // Mode-aware: a hint that ignores CINATRA_WAYFLOW_RUNTIME tells an
+    // operator who deliberately opted out, or who points at an external
+    // runtime, to "start" a local container this install never owns. See
+    // scripts/lib/wayflow-down-hint.mjs.
+    downHint: wayflowDownHint(env.CINATRA_WAYFLOW_RUNTIME),
   },
   {
     name: "Cinatra app",

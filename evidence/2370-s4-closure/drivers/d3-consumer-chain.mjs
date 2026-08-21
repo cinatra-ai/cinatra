@@ -12,7 +12,7 @@ import { chromium } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { authenticate, ensureDir, shot, BASE, withDb, EMAIL } from "./lib-auth.mjs";
 
-const OUT = ensureDir(process.env.S4_OUT ?? "/Users/ordnas/cinatra-lanes/2370-out/d3");
+const OUT = ensureDir(process.env.S4_OUT ?? "<lane-out>/2370-out/d3");
 const APPT = "/connectors/cinatra-ai/google-appointment-schedules-connector/setup";
 
 const SEEDED = {

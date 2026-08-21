@@ -1,0 +1,23 @@
+# Lane-private stack for the two-version install proof. Own project name, own
+# ports, own volumes: the operator's containers are never touched.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: cinatra
+      POSTGRES_PASSWORD: cinatra
+      POSTGRES_DB: cinatra
+    ports: ["127.0.0.1:55440:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cinatra"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:56390:6379"]
+  verdaccio:
+    image: verdaccio/verdaccio:6@sha256:bcd0dc5f10d0b9cca5a21b1f4fb3b08c6d90978bc87b8b46402abb271e0d573a
+    ports: ["127.0.0.1:4880:4873"]
+    volumes:
+      - ./verdaccio-config.yaml:/verdaccio/conf/config.yaml:ro

@@ -312,7 +312,11 @@ describe("the core's review lifecycle takes over in the conversation", () => {
       async () =>
         new Response(
           JSON.stringify({
+            // The per-kind resolve envelope (epic S9, slice S9c). The review
+            // kind carries state and no body; a body beside it is refused.
+            kind: "artifact_review_gate",
             state: { state: "pending", canDecide: true, canComment: true },
+            body: null,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),

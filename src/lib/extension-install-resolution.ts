@@ -20,6 +20,8 @@ import {
 import { readFile, readdir, stat } from "node:fs/promises";
 import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
+import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
+import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/canonical-types";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ConnectorUiManifest } from "@/lib/connector-ui-render";
 import {
@@ -175,7 +177,32 @@ export function pickActiveInstall<T extends InstallRowForPick>(
     actor.organizationId !== null &&
     row.organizationId !== actor.organizationId;
   const preferred = live.filter((row) => !isCrossOrg(row));
-  return preferred[0] ?? live[0];
+  // SUPERSESSION FIRST (cinatra#2698 S4). A live workspace install is the one row
+  // in force and every organization row of that package is superseded, so the
+  // superseded rows are dropped before anything else looks at them. This mirrors
+  // `effectiveInstallRows` rather than re-deriving it: which PRODUCT-INSTALLED
+  // row is in force is supersession's question, and this seam only consumes the
+  // answer. It matters even though the install path archives the org rows,
+  // because that archival deliberately skips a LOCKED organization row, which
+  // therefore stays live beside the workspace row.
+  const effective = <R extends InstallRowForPick>(rows: readonly R[]): readonly R[] =>
+    rows.some((row) =>
+      isWorkspaceAnchoredRow({
+        ownerLevel: row.ownerLevel ?? "",
+        ownerId: row.ownerId ?? null,
+        organizationId: row.organizationId ?? null,
+      }),
+    )
+      ? rows.filter((row) => (row.organizationId ?? null) === null)
+      : rows;
+  // SOURCE PRECEDENCE (the shared policy) runs over what supersession leaves.
+  // It answers only whether a product install outranks the copy bundled in the
+  // image, and refuses to guess between rows that are genuinely peers. Setup and
+  // action dispatch must address the SAME row every other seam does, or the page
+  // renders one version's surface and posts to the other one's id.
+  const rankedPreferred = applyInstallRowPrecedence(effective(preferred));
+  const rankedLive = applyInstallRowPrecedence(effective(live));
+  return rankedPreferred[0] ?? rankedLive[0] ?? null;
 }
 
 /** Back-compat thin wrapper: the picked row's id, or null (delegates to `pickActiveInstall`). */
@@ -386,11 +413,28 @@ async function resolveTrustedRuntimeStoreRecord(
   // OUTSIDE the writable store). Scope the anchor to the actor's active org so a
   // multi-org package never reads one org's record against another org's trust
   // decision. A null anchor = no real-pipeline install → refuse.
+  //
+  // cinatra#2694 / S3 #2697 — ORG-ROW-FIRST WITH WORKSPACE FALLBACK. An org
+  // actor previously resolved the anchor at `exact-org` ONLY, so a connector
+  // installed at "Workspace: All" (owner_level='workspace', organization_id
+  // NULL) resolved a NULL anchor for every organization and its card could
+  // never render — gate (a) admitted the row (the addressability predicate
+  // already treats an org-less row as addressable by any authenticated actor,
+  // see isInstallRowAddressableByActor above) while gate (b) refused it. The
+  // `org-then-workspace` scope closes exactly that: the actor's own org row
+  // still wins where it exists (byte-identical resolution), and only in its
+  // absence does the workspace-anchored row serve — with the grant/journal read
+  // at the workspace row's OWN scope, never the actor's org. Cross-ORG
+  // resolution stays impossible: the fallback arm is org-NULL only.
   const resolveTrustAnchor =
     deps.resolveTrustAnchor ??
     (await (async () => {
       const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
-      return makeDefaultInstallAnchorResolver(actor.organizationId ?? null);
+      const orgId = actor.organizationId ?? null;
+      return makeDefaultInstallAnchorResolver(
+        orgId,
+        orgId == null ? "platform-global" : "org-then-workspace",
+      );
     })());
   const anchor = await resolveTrustAnchor(packageName);
   if (!anchor) return null;

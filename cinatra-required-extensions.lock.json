@@ -5,9 +5,9 @@
     {
       "packageName": "@cinatra-ai/anthropic-connector",
       "repo": "cinatra-ai/anthropic-connector",
-      "resolvedSha": "ecb86f7372a5209d900d8a1b86bec69875e41bb7",
+      "resolvedSha": "53e27b41c2f415419c455c3fea1ebe124a300f38",
       "packageVersion": "0.1.5",
-      "treeSha256": "efce775f937bb78efc2b448fa8d7eb2983b1ad080a54aa96c5279bbe81f53766"
+      "treeSha256": "5da50d79582a7bad7f0daae13e97c9f455b35270bd7784ce2a2122e483c8004f"
     },
     {
       "packageName": "@cinatra-ai/audio-artifact",
@@ -117,9 +117,9 @@
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "182e542b0d48494e2d3fdb47027d6762847ef6b1",
+      "resolvedSha": "61e91277486dad625fb030a204519d08281a0025",
       "packageVersion": "0.1.7",
-      "treeSha256": "f2994b85b913feca8a2914a7bd1a3b8eb03401365281ad5190019424b2b35a3f"
+      "treeSha256": "3f0b7f51437ae389403efe3c4fdd512993537b03b018d6d854f5551a7b49174d"
     },
     {
       "packageName": "@cinatra-ai/openai-connector",

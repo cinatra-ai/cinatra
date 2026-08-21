@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { renderAPIPluginPage } from "@/app/plugins-registry";
+import { requireAdminSession } from "@/lib/auth-session";
 import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 
 export const metadata: Metadata = { title: "LLM Setup" };
@@ -23,6 +24,11 @@ function buildRedirectTarget(pathname: string, paramsObject: Record<string, stri
 }
 
 export default async function SettingsAPIPluginRoutePage({ params, searchParams }: SettingsAPIPluginRoutePageProps) {
+  // Platform-admin only (cinatra#2700, epic #2699). The gate runs BEFORE the
+  // slug dispatch below so a non-admin is refused here rather than at the
+  // redirect target — including for `initial-setup`, whose target `/setup/model`
+  // lives outside `/configuration` and keeps its own rules.
+  await requireAdminSession();
   const { apiSlug } = await params;
   const resolvedSearchParams = await (searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>));
 

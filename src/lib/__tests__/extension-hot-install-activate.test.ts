@@ -257,7 +257,7 @@ describe("installExtensionFromRegistry — post-commit activation throw is NON-F
       },
       // cinatra#158: the happy-path finalize is the supersession seam; record it.
       finalizeInstallOp: async () => { phases.push("finalized"); },
-      verifyActivatableBeforeFinalize: async () => ({ supersedes: false }),
+      verifyActivatableBeforeFinalize: async () => ({ supersedes: false, ok: true }),
     };
 
     const r = await installExtensionFromRegistry(

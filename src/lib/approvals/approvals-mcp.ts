@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 
+import { configurationHrefForViewer } from "@/lib/configuration-href";
 import { approvalSourceRegistry } from "./sources/registry";
 import type {
   ApprovalAction,
@@ -143,8 +144,17 @@ function resolveViewer(): ApprovalViewer {
 }
 
 /** Whitelist the PUBLIC row fields. The adapter-private `raw` is NEVER copied —
- *  nothing outside the owning source's rowRenderer may depend on its shape. */
-function toPublicRow(r: ApprovalRow) {
+ *  nothing outside the owning source's rowRenderer may depend on its shape.
+ *
+ *  `href` is additionally viewer-scoped (cinatra#2701, epic #2699 S2): the row
+ *  detail pages live under `/configuration`, which answers only to a
+ *  platform-admin session, so the field is omitted for a non-admin caller. An
+ *  agent acting for a member is therefore never handed a URL it can only be
+ *  refused at — the same rule the notifications feed applies at render, applied
+ *  here on the way out of the MCP surface. Nothing else about the row changes:
+ *  a non-admin author still reads their own request's status. */
+function toPublicRow(r: ApprovalRow, viewer: ApprovalViewer) {
+  const href = configurationHrefForViewer(r.href, viewer.isAdmin);
   return {
     id: r.id,
     sourceId: r.sourceId,
@@ -152,7 +162,7 @@ function toPublicRow(r: ApprovalRow) {
     ...(r.subtitle !== undefined ? { subtitle: r.subtitle } : {}),
     status: r.status,
     createdAt: r.createdAt,
-    ...(r.href !== undefined ? { href: r.href } : {}),
+    ...(href !== undefined ? { href } : {}),
     ...(r.eligibility ? { eligibility: r.eligibility } : {}),
     ...(r.version !== undefined ? { version: r.version } : {}),
   };
@@ -221,7 +231,7 @@ async function handleList(input: unknown) {
       }
       let count = 0;
       for (const r of env.rows) {
-        rows.push(toPublicRow(r));
+        rows.push(toPublicRow(r, viewer));
         count++;
       }
       sources.push({ sourceId: source.id, title: source.title, count });
@@ -274,7 +284,7 @@ async function handleGet(input: unknown) {
       return envelope({
         ok: true,
         sourceId,
-        item: toPublicRow(row),
+        item: toPublicRow(row, viewer),
         actions: env.actions.map(toPublicAction),
         availability,
       });
@@ -319,7 +329,7 @@ async function handleDecide(input: unknown) {
     sourceId,
     id,
     decision,
-    ...(result.row ? { item: toPublicRow(result.row) } : {}),
+    ...(result.row ? { item: toPublicRow(result.row, viewer) } : {}),
   });
 }
 

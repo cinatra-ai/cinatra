@@ -101,13 +101,16 @@ describe("§V — Maintenance: Update + complementary Archive/Activate", () => {
 
   it("the Update row's description carries the §III state spelled out in words (resolveUpdateRow)", () => {
     expect(VIEW).toContain("description={updateRow.description}");
-    // The per-state wordings live in the pure model — verbatim per the spec.
-    expect(MODEL).toContain(
-      "`Currently on version ${installedVersion} — version ${latestVersion} is available.`",
-    );
+    // The per-state wordings live in the pure model — verbatim per the spec. The
+    // "currently on" clause is composed through `installedLabel` since
+    // cinatra#2762, which swaps it for a two-version sentence when the installed
+    // version is NOT the one in service; both halves are pinned here, and
+    // extension-settings-model.test.ts pins the composed output.
+    expect(MODEL).toContain("`Currently on version ${installedVersion}`");
+    expect(MODEL).toContain("`${installedLabel} — version ${latestVersion} is available.`");
     expect(MODEL).toContain('"Newer version needs a newer Cinatra."');
     expect(MODEL).toContain('"No registry version to compare."');
-    expect(MODEL).toContain("`Currently on version ${installedVersion} — up to date.`");
+    expect(MODEL).toContain("`${installedLabel} — up to date.`");
   });
   it("the Update button greys out whenever there is nothing to run", () => {
     expect(VIEW).toContain("updateRow.enabled ? (");
@@ -205,5 +208,66 @@ describe("§V Skills — the slot, its placement, and who gets it", () => {
     // carry no suffix/template heuristic of its own.
     expect(SCREEN).not.toMatch(/-assistant/);
     expect(SCREEN).not.toContain("agent_kind");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2762 — §V names the INSTALLED-BUT-NOT-ACTIVE state.
+//
+// The state the issue is titled for had no surface at all: the page derived
+// everything from `installed_extension.status` (the LIFECYCLE fact), so a live
+// install serving nothing rendered as "Currently on version X — up to date" with
+// Activate greyed "Already active". These pin the row that names it, where it
+// sits, and — the load-bearing half — that it appears only on a positive,
+// server-derived fact.
+// ---------------------------------------------------------------------------
+describe("§V — the installed-but-not-active state is named", () => {
+  it("renders a Maintenance row addressable as `settings-not-in-service`", () => {
+    expect(VIEW).toContain('dataSlot="settings-not-in-service"');
+    expect(VIEW).toContain("servingState.title");
+    expect(VIEW).toContain("servingState.description");
+  });
+
+  it("the row is conditional on the NAMED verdict — never on a status guess", () => {
+    // `servingState?.named` and nothing else: no `status === "active"`, no
+    // version comparison re-derived in the view.
+    expect(VIEW).toMatch(/\{servingState\?\.named \?/);
+    expect(VIEW).not.toMatch(/servingState[^}]*\.version\s*[!=]==/);
+  });
+
+  it("sits FIRST in Maintenance, above Update", () => {
+    const maintenance = VIEW.indexOf('data-slot="settings-maintenance"');
+    const notInService = VIEW.indexOf('dataSlot="settings-not-in-service"');
+    const updateRow = VIEW.indexOf('title="Update"');
+    expect(maintenance).toBeGreaterThan(-1);
+    expect(notInService).toBeGreaterThan(maintenance);
+    expect(updateRow).toBeGreaterThan(notInService);
+  });
+
+  it("carries NO action of its own — Retry / Roll back are the affordances", () => {
+    const start = VIEW.indexOf('dataSlot="settings-not-in-service"');
+    const block = VIEW.slice(start, VIEW.indexOf('title="Update"'));
+    expect(block).not.toContain("<form");
+    expect(block).not.toContain("actions.");
+    // It states the state; the badge is a label, not a control.
+    expect(block).toContain("Not in service");
+  });
+
+  it("the loader derives it SERVER-SIDE from the activation seams' own record", () => {
+    expect(SCREEN).toContain("resolveServingState");
+    expect(SCREEN).toContain('await import(\n            "@/lib/extension-capabilities-registry"');
+    expect(SCREEN).toContain("readServingRecord(packageName)");
+    // The record read is best-effort — a failure must not blank the page.
+    expect(SCREEN).toMatch(/readServingRecord\(packageName\);\s*\}\s*catch\s*\{/);
+  });
+
+  it("the Update row stops calling the unserved version 'current'", () => {
+    expect(SCREEN).toMatch(/servingVersion:\s*servingState\.named \? servingState\.servingVersion : null/);
+  });
+
+  it("Activate's reason comes from the same verdict, not from 'Already active'", () => {
+    expect(SCREEN).toMatch(
+      /activateNotInServiceReason:\s*servingState\.named \? servingState\.activateReason : null/,
+    );
   });
 });

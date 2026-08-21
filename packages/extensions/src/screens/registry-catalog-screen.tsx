@@ -1,6 +1,6 @@
 import { Package, Settings, Upload } from "lucide-react";
 import Link from "next/link";
-import { requireAuthSession } from "@/lib/auth-session";
+import { requireAdminSession } from "@/lib/auth-session";
 // "More details" opens the §V detail modal in place (cinatra#948 reopen, §VI
 // L902) — the full-page marketplace route is no longer this page's target, so
 // an installed-but-unlisted or unscoped package can never dead-end on a 404
@@ -86,7 +86,11 @@ export async function RegistryCatalogScreen({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const session = await requireAuthSession();
+  // Platform-admin only (cinatra#2700, epic #2699): the extensions list is a
+  // `/configuration` surface, and its Upload / per-entry Settings affordances
+  // lead to admin-gated destinations. The route file gates too — this gate is
+  // the screen's own, so the surface cannot be mounted ungated elsewhere.
+  const session = await requireAdminSession();
 
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
 

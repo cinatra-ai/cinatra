@@ -73,17 +73,29 @@ import { isContainedRealpath } from "@/lib/fs-safety";
  * Returns the loader's `ActivationResult[]` for the package (empty when the
  * anchor refuses it — fail-closed; or a single `skipped`/`failed` result when the
  * new digest fails the pre-verify on an update — old left intact).
+ *
+ * ROW-BOUND MODE (`opts.expectRowId`, cinatra#2762 round-5 convergence): the
+ * resolver this pass uses is WRAPPED so that EVERY anchor it hands out must
+ * prove it binds that row. See {@link bindAnchorResolverToRow} — the binding
+ * lives on the resolution activation actually consumes, so there is no separate
+ * pre-read for the row to change out from under.
  */
 export async function activateInstalledPackageInProcess(
   packageName: string,
   orgId: string | null,
-  opts: { currentStoreDir?: string; storeRoot?: string } = {},
+  opts: { currentStoreDir?: string; storeRoot?: string; expectRowId?: string | null } = {},
 ): Promise<ActivationResult[]> {
   const storeRoot =
     opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
 
   const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
-  const resolveInstallAnchor = await makeDefaultInstallAnchorResolver(orgId);
+  // THE ONE resolver this activation uses — for the pre-verify, for the
+  // destroy-ports read, and for the loader's own trust pass. Under a row
+  // binding it is wrapped, so the identity check rides on each of those
+  // resolutions rather than on a separate guard read beside them.
+  const resolveInstallAnchor = opts.expectRowId
+    ? bindAnchorResolverToRow(await makeDefaultInstallAnchorResolver(orgId), opts.expectRowId)
+    : await makeDefaultInstallAnchorResolver(orgId);
 
   // Detect a hot-UPDATE: any materialized store dir for this package that is NOT
   // the just-installed current digest. (Empty for a clean NEW install / a SAME-
@@ -118,7 +130,13 @@ export async function activateInstalledPackageInProcess(
   try {
     const anchor = await resolveInstallAnchor(packageName);
     destroyPorts = (anchor?.approvedPorts ?? []) as readonly import("@cinatra-ai/sdk-extensions").HostPortName[];
-  } catch {
+  } catch (err) {
+    // BEST-EFFORT ONLY WHEN NOTHING WAS PROMISED. Under a row binding the
+    // caller asked us to prove which row we are activating, so an anchor we
+    // cannot read — or one that refuses the binding — is a FAILURE of that
+    // promise, never a shrug that lets the pass continue unbound
+    // (cinatra#2762 round-5 convergence).
+    if (opts.expectRowId) throw err;
     destroyPorts = [];
   }
 
@@ -606,6 +624,130 @@ export function summarizeActivation(results: ActivationResult[], packageName: st
   };
 }
 
+/**
+ * ACTIVATION-ONLY re-activation of a row that is ALREADY installed — the
+ * operator's "Retry activation" (cinatra#2762 item 2).
+ *
+ * WHY IT IS NOT `runHostExtensionInstallAndActivate`. That function is the
+ * dispatcher's INSTALL hook: it re-resolves a canonical row from the package
+ * name, then drives `installExtensionFromRegistry` — the full real-integrity
+ * pipeline. Retry used it, which made "retry activation" mean three things it
+ * must not mean:
+ *   - it NEEDED THE REGISTRY. An operator whose marketplace host is unreachable
+ *     could not retry an install whose bytes were already materialized and whose
+ *     journal was already finalized — the exact situation retry exists for;
+ *   - it re-resolved the row instead of using the one the lifecycle resolver had
+ *     just addressed, so retry could act on a different row than the operator
+ *     saw and than the standing check had passed;
+ *   - it re-ran a pipeline whose steps are only meaningful for an install.
+ *
+ * This is the seam boot reconciliation already uses to recover the same class of
+ * row: the shared loader, anchor-narrowed, scoped to one package. The bytes are
+ * already there; only the registration is missing.
+ *
+ * IT IS NOT SAFE ON ITS OWN, and does not pretend to be. The loader path fires
+ * an idempotent capability teardown before it activates (a re-activate must
+ * replace, not stack), so a retry whose activation then fails can leave NOTHING
+ * serving the package — which is the #2762 state itself. The caller MUST restore
+ * the bundled implementation on `activated:false`; `retryExtensionActivationFormAction`
+ * does, and is pinned on it.
+ *
+ * Never throws — a refusal is a verdict, not an exception.
+ */
+export async function activateInstalledRowInProcess(input: {
+  packageName: string;
+  /** The RESOLVED row's org, never the actor's. */
+  orgId: string | null;
+  /**
+   * The RESOLVED row's id (cinatra#2762 round 5 hardening).
+   *
+   * Activation binds its trust anchor from `(packageName, orgId)`, and for an
+   * org-NULL row that means platform-global selection
+   * (`pickSingleLiveRowAcrossOrgs`) — a SECOND resolution, from a coarser key
+   * than the one the lifecycle resolver used. The two agree on every row set
+   * seen so far, but "retry activation" carrying only the org threw the row
+   * identity away, so a divergence would activate a row other than the one the
+   * operator addressed and the standing gate passed.
+   *
+   * When supplied, the resolution activation ITSELF uses is bound to this row:
+   * every anchor that pass consumes must report this `installId` or the
+   * activation refuses. See {@link bindAnchorResolverToRow} for the two edge
+   * cases and why each is a refusal. Absent ⇒ the pre-existing unchecked
+   * behaviour, for callers that never resolved a row.
+   */
+  expectRowId?: string | null;
+}): Promise<HotUpdateActivateResult> {
+  try {
+    // ONE resolution, checked where it is consumed — cinatra#2762 round-5
+    // convergence. This used to be a separate best-effort pre-read
+    // (`findAnchorRowDrift`) followed by an INDEPENDENT re-resolution inside
+    // the activation: two reads, so the row could change between them, and the
+    // pre-read returned "no drift" on the two cases it could not decide (an
+    // identity-less anchor, a throwing read) — so a bound retry could reach
+    // activation having proved nothing. The binding now rides on the
+    // activation's own resolver instead.
+    const results = await activateInstalledPackageInProcess(input.packageName, input.orgId, {
+      expectRowId: input.expectRowId ?? null,
+    });
+    return summarizeActivation(results, input.packageName);
+  } catch (err) {
+    return { activated: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Wrap an install-anchor resolver so every anchor it returns must PROVE it binds
+ * `expectRowId` (cinatra#2762 round-5 convergence).
+ *
+ * Activation re-derives its trust anchor from `(packageName, orgId)`, and for an
+ * org-NULL row that is platform-global selection
+ * (`pickSingleLiveRowAcrossOrgs`) — a coarser key than the one the lifecycle
+ * resolver used to pick the row and pass the standing gate. Binding the ROW
+ * identity to the resolver is what makes "retry THIS row" mean it: the check
+ * runs on the resolution the pass consumes, so nothing can change in between.
+ *
+ * The two edge cases, decided deliberately:
+ *
+ *   - THE ANCHOR CANNOT PROVE IDENTITY (no `installId`) ⇒ REFUSE. The previous
+ *     guard let this through as "cannot contradict anything". But the caller
+ *     asked for a binding, and an unprovable binding is a refusal, not a pass —
+ *     otherwise `expectRowId` degrades to a hint exactly when it would matter.
+ *     Every anchor the shipped resolver produces carries `installId` (it is set
+ *     from the resolved row's `id`), so this refuses nothing the product
+ *     produces today; it refuses a resolver that stopped reporting identity.
+ *   - THE ANCHOR READ THROWS ⇒ propagate, i.e. the activation FAILS. The
+ *     previous guard swallowed it as "no drift" and activated unbound. A read
+ *     we could not complete is an identity we did not prove.
+ *
+ * A NULL anchor (the resolver's own fail-closed refusal: no live row, ambiguous
+ * multi-org, unfinalized journal) is passed through UNCHANGED — the loader
+ * refuses it on its own and reports the specific reason, which is strictly more
+ * useful than overwriting it with a binding message.
+ */
+function bindAnchorResolverToRow(
+  resolve: (pkg: string) => Promise<import("@/lib/extension-package-store").InstallTrustAnchor | null>,
+  expectRowId: string,
+): (pkg: string) => Promise<import("@/lib/extension-package-store").InstallTrustAnchor | null> {
+  return async (packageName: string) => {
+    const anchor = await resolve(packageName);
+    if (!anchor) return null;
+    const boundRowId = anchor.installId ?? null;
+    if (boundRowId === null) {
+      throw new Error(
+        `row-drift: the activation anchor for "${packageName}" reports no install row, so it ` +
+          `cannot prove it binds the addressed row — refusing rather than activating unbound`,
+      );
+    }
+    if (boundRowId !== expectRowId) {
+      throw new Error(
+        `row-drift: the addressed install row is no longer the one activation would bind ` +
+          `(the activation anchor for "${packageName}" resolves a different row)`,
+      );
+    }
+    return anchor;
+  };
+}
+
 /** Tear down the PARTIAL new registration after a failed new activation: fire the
  *  in-memory capability teardown for the package + destroy the new module if it
  *  loaded (so a half-registered new digest releases what it acquired). */
@@ -853,10 +995,18 @@ async function cleanupEmptyQuarantineRoots(entries: QuarantineEntry[]): Promise<
 }
 
 // cinatra#793: the kinds whose store payload is METADATA-ONLY (no hot-loadable
-// `register(ctx)` server module). Their pipeline runs with inert in-process
-// activation deps (see the override below); the dispatcher gates them on
-// `finalized` only and the NATIVE handler projects their run surface.
-const METADATA_ONLY_STORE_KINDS = new Set(["agent", "skill", "artifact"]);
+// `register(ctx)` server module) are `METADATA_ONLY_STORE_KINDS`. Their pipeline
+// runs with inert in-process activation deps (see the override below); the
+// dispatcher gates them on `finalized` only and the NATIVE handler projects
+// their run surface.
+//
+// The SET lives with the store kinds it partitions
+// (`extension-package-store-core`) because boot reconciliation must read the
+// SAME one: it decides whether a package that did not activate in-process is
+// stranded, and for these kinds not activating is the healthy outcome. It is
+// pulled the way this file pulls everything from that module — a LAZY import at
+// the use site, next to `isExtensionStoreKind`'s — so the module graph here is
+// unchanged.
 
 /**
  * The host activate-hook body. Records real provenance + activates a
@@ -867,16 +1017,43 @@ export async function runHostExtensionInstallAndActivate(
   packageName: string,
   orgId: string | null,
   passedVersion?: string,
+  anchor?: { ownerLevel?: string },
 ): Promise<ExtensionActivateResult> {
   // Resolve the canonical row to learn the source + version. The dispatcher
   // created it platform-scoped (organization_id IS NULL); the caller passes the
   // matching `orgId` (null for the dispatch path).
+  //
+  // cinatra#2694 / S4 (#2698): the caller may also pass the target row's ANCHOR
+  // TIER. It matters at exactly one scope: `orgId === null`, where a
+  // product-installed WORKSPACE row and a bundled PLATFORM anchor for the same
+  // package can coexist (the org-NULL identity index keys on `owner_level`).
+  // `pickSingleActiveRow(rows, null)` now applies the shared source-precedence
+  // policy, so that particular pair resolves to the product install rather than
+  // failing closed. The tier is still passed and still preferred: it selects the
+  // workspace row DIRECTLY, by identity, instead of relying on a policy that
+  // reads a source discriminant — so a row whose source is neither bundled nor
+  // marketplace (a legacy or fixture row, which precedence deliberately leaves
+  // alone) is still resolved here. With the tier we use the narrower
+  // workspace-anchor pick, which sees ONLY the product-installed workspace tier.
+  // Every other call is unchanged: no tier, or any tier other than `workspace`,
+  // keeps the exact existing pick.
   const { readInstalledExtensionsByPackageName } = await import(
     "@cinatra-ai/extensions/canonical-store"
   );
-  const { pickSingleActiveRow } = await import("@/lib/extension-install-anchor");
   const rows = await readInstalledExtensionsByPackageName(packageName);
-  const row = pickSingleActiveRow(rows, orgId);
+  // The workspace pick is imported ONLY on the branch that needs it, so every
+  // existing caller (and every existing test double of this module) sees the
+  // exact import shape it saw before #2698.
+  let row: (typeof rows)[number] | null;
+  if (orgId === null && anchor?.ownerLevel === "workspace") {
+    const { pickSingleWorkspaceAnchoredActiveRow } = await import(
+      "@/lib/extension-install-anchor"
+    );
+    row = pickSingleWorkspaceAnchoredActiveRow(rows);
+  } else {
+    const { pickSingleActiveRow } = await import("@/lib/extension-install-anchor");
+    row = pickSingleActiveRow(rows, orgId);
+  }
   if (!row) return { finalized: false, activated: false, reason: "no-active-canonical-row" };
   if (!row.source || row.source.type !== "verdaccio") {
     // github / local / add-from-chat are not real-integrity-pipeline sources.
@@ -917,6 +1094,7 @@ export async function runHostExtensionInstallAndActivate(
     //     (cinatra#796 — the anchor-narrowed readers ignore them; the
     //     maintenance reaper enforces `current + 2`). The dispatcher gates
     //     these kinds on `finalized` ONLY.
+    const { METADATA_ONLY_STORE_KINDS } = await import("@/lib/extension-package-store-core");
     if (METADATA_ONLY_STORE_KINDS.has(row.kind)) {
       deps.activateInProcess = async () => ({ activated: false, reason: "metadata-only-kind" });
       deps.activateUpdateWithRollback = async (i) => {
@@ -1174,7 +1352,8 @@ async function teardownSupersededDigests(
     await fireExtensionCapabilityTeardown(packageName);
   } catch (err) {
     console.warn(
-      `[extension-runtime-activate] capability teardown threw for "${packageName}" (non-fatal):`,
+      '[extension-runtime-activate] capability teardown threw for "%s" (non-fatal):',
+      packageName,
       err instanceof Error ? err.message : err,
     );
   }
@@ -1205,14 +1384,16 @@ async function teardownSupersededDigests(
         const res = await destroyExtensionModule(mod, ctx);
         if (res.status === "failed") {
           console.warn(
-            `[extension-runtime-activate] destroy(ctx) threw for old "${packageName}" digest (non-fatal):`,
+            '[extension-runtime-activate] destroy(ctx) threw for old "%s" digest (non-fatal):',
+            packageName,
             res.error instanceof Error ? res.error.message : res.error,
           );
         }
       }
     } catch (err) {
       console.warn(
-        `[extension-runtime-activate] could not destroy old "${packageName}" module (non-fatal):`,
+        '[extension-runtime-activate] could not destroy old "%s" module (non-fatal):',
+        packageName,
         err instanceof Error ? err.message : err,
       );
     }
@@ -1247,16 +1428,25 @@ export async function discoverSupersededStoreDirsForPackage(
 
 /**
  * The install pipeline's `verifyActivatableBeforeFinalize` DEFAULT (the
- * HOT-UPDATE pre-finalize probe). Detects supersession — any materialized
- * store dir for this package that is NOT the just-installed current digest =
- * a prior digest (an UPDATE); a fresh install has none → no pre-finalize gate
- * (`supersedes:false`). A superseding update probes that the NEW digest
- * imports + integrity-verifies + its `register(ctx)` succeeds against an
- * inert probe ctx. cinatra#793: a NEW manifest that declares NO serverEntry
- * (a metadata-only agent/skill/artifact payload) skips the import/register
- * probe — nothing to import; the integrity re-verify remains the gate, and
- * the post-commit durable rollback stays the safety boundary for
- * module-shipping kinds (connector).
+ * pre-finalize activation probe). It proves the just-materialized digest
+ * imports, integrity-verifies and completes `register(ctx)` against an inert
+ * probe ctx BEFORE the pipeline mutates any durable state.
+ *
+ * It now runs for a FRESH install as well as an update. It used to
+ * short-circuit on `supersedes:false` (no prior digest = a fresh install) and
+ * verify nothing, which is what let a fresh install commit and only then fail
+ * to activate, leaving a live finalized row that could never serve. There is no
+ * reason a fresh install should be proved less than an update: the probe is
+ * read-only and the caller aborts before the first durable write either way.
+ *
+ * `supersedes` is retained because the caller's error copy and its store-dir GC
+ * decision differ between the two cases: an update must leave the previous
+ * digest as the sole survivor, a fresh install leaves nothing behind.
+ *
+ * cinatra#793: a manifest that declares NO serverEntry (a metadata-only
+ * agent/skill/artifact payload) has nothing to import, so `metadataOnlyOk`
+ * passes it on its integrity re-verify alone. Module-bearing kinds run the full
+ * import/register probe.
  */
 export async function probeUpdateActivatableBeforeFinalize(i: {
   packageName: string;
@@ -1266,11 +1456,10 @@ export async function probeUpdateActivatableBeforeFinalize(i: {
   contentHash: string;
   approvedPorts: readonly string[];
   storeRoot?: string;
-}): Promise<{ supersedes: false } | { supersedes: true; ok: true } | { supersedes: true; ok: false; reason: string }> {
+}): Promise<{ supersedes: boolean; ok: boolean; reason?: string }> {
   const storeRoot =
     i.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
   const superseded = await discoverSupersededStoreDirsForPackage(i.packageName, storeRoot, i.storeDir);
-  if (superseded.length === 0) return { supersedes: false };
   const verdict = await verifyDigestImportsAndRegisters(
     i.packageName,
     storeRoot,
@@ -1282,7 +1471,10 @@ export async function probeUpdateActivatableBeforeFinalize(i: {
     },
     { metadataOnlyOk: true },
   );
-  return verdict.ok ? { supersedes: true, ok: true } : { supersedes: true, ok: false, reason: verdict.reason };
+  const supersedes = superseded.length > 0;
+  return verdict.ok
+    ? { supersedes, ok: true }
+    : { supersedes, ok: false, reason: verdict.reason };
 }
 
 /**

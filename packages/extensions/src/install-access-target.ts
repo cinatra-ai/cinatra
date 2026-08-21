@@ -35,6 +35,11 @@ import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 
 import { PLATFORM_OWNER_SENTINEL } from "./canonical-types";
 import type { ExtensionOwnerLevel } from "./canonical-types";
+import type { InstallRowOwnership } from "./canonical-types";
+
+export type { InstallRowOwnership };
+export { actorDerivedRowAnchor, resolveInstallRowAnchor, isWorkspaceRowAnchor, WORKSPACE_ANCHOR_ROW_OWNERSHIP } from "./canonical-types";
+import { WORKSPACE_ANCHOR_ROW_OWNERSHIP } from "./canonical-types";
 
 // ---------------------------------------------------------------------------
 // Server-action boundary rule (cinatra#1602 — the enforced picker contract).
@@ -153,46 +158,7 @@ export function accessTargetToInstallPolicy(
 // (#2698). Nothing here writes a row.
 // ---------------------------------------------------------------------------
 
-/**
- * The canonical row-identity tuple an install anchors to —
- * `(organizationId, ownerLevel, ownerId)`. Named `rowOwnership` upstream
- * (NEVER "scope"): this is WHO OWNS the installed row, not who may USE it
- * (that is the audience policy above).
- */
-export type InstallRowOwnership = {
-  ownerLevel: ExtensionOwnerLevel;
-  ownerId: string | null;
-  organizationId: string | null;
-};
 
-/**
- * The WORKSPACE ANCHOR tuple — the app-wide row identity the two workspace
- * targets resolve to. `organizationId` is NULL by construction, which is
- * exactly what makes the row reach every organization: the cross-org guard in
- * enforceExtensionAccess only fences rows that HAVE an owning org, so an
- * org-NULL anchor is evaluated on its audience tier alone (the same mechanism
- * the system's bundled workspace-tier extensions already ride).
- *
- * The DB admits this shape today — no schema change: the platform-invariant
- * CHECK `installed_extension_platform_invariant_chk` explicitly allows
- * `owner_level='workspace' AND organization_id IS NULL AND
- * owner_id='__platform__'` (src/lib/drizzle-store.ts), and the org-NULL
- * partial identity / one-default indexes
- * (`installed_extension_identity_platform_v_idx`,
- * `installed_extension_one_default_platform_idx`, both `WHERE organization_id
- * IS NULL`, keyed on `owner_level`) key workspace rows apart from
- * platform-bundled ones (src/lib/extension-grant-schema.ts).
- *
- * `ownerId` is the `__platform__` sentinel EXPLICITLY rather than null: the
- * canonical store would normalize null at this tier anyway
- * (`platformizeOwnerId`), but the CHECK constraint names the sentinel, so the
- * contract states it rather than depending on a downstream normalization.
- */
-export const WORKSPACE_ANCHOR_ROW_OWNERSHIP: InstallRowOwnership = Object.freeze({
-  ownerLevel: "workspace",
-  ownerId: PLATFORM_OWNER_SENTINEL,
-  organizationId: null,
-});
 
 /**
  * Map the validated target to the canonical row-ownership tuple.

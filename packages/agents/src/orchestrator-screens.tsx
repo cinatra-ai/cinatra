@@ -55,8 +55,17 @@ import type { SubAgentNodeData } from "./orchestrator-readiness";
 import { OrchestratorRunPanel } from "./orchestrator-run-panel";
 import { AgentPageLayout, AgentPanelBody } from "./agent-page-layout";
 
-function buildExtensionHeaderLink(packageName: string | null | undefined) {
-  if (!packageName) return null;
+/**
+ * The header's "this run came from extension X" link, which addresses the
+ * marketplace listing under `/configuration` — admin-only since cinatra#2700
+ * (epic #2699). `viewerIsAdmin` is therefore required: a member sees the run
+ * screen unchanged, minus a link that would land on not-authorized.
+ */
+function buildExtensionHeaderLink(
+  packageName: string | null | undefined,
+  viewerIsAdmin: boolean,
+) {
+  if (!packageName || !viewerIsAdmin) return null;
   const match = /^@([^/]+)\/(.+)$/.exec(packageName);
   if (!match) return null;
   return {
@@ -240,7 +249,10 @@ export async function OrchestratorRunScreen({
     agentId,
     instanceId,
   );
-  const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
+  const extensionHeaderLink = buildExtensionHeaderLink(
+    template.packageName,
+    isPlatformAdmin(await getAuthSession().catch(() => null)),
+  );
 
   return (
     <Main className="min-h-screen">

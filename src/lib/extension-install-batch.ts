@@ -19,6 +19,12 @@ import "server-only";
 //      (`extensionRegistry.install`) — every member gets the full pipeline
 //      (materialize → gates → journal → finalize → edges, #161/#180-PR-1
 //      included). The root installs LAST. Ledger states advance per member.
+//      Each member is installed AT ITS PLANNED ROW ANCHOR (cinatra#2696): the
+//      per-member `rowOwnership` the ledger already recorded is now the LIVE
+//      anchor — forwarded to the dispatcher, and the scope every pre-state
+//      read, provenance capture, journal read and compensation addresses.
+//      Absent a threaded install-access target the anchor is the batch's own
+//      org, so every pre-#2696 batch behaves identically.
 //   4. MEMBER FAILURE (anywhere — incl. the built-artifacts serverEntry gate
 //      or a migration preflight inside the member's own pipeline): abort the
 //      queue, COMPENSATE the rows THIS batch provably created (pre-existing
@@ -87,34 +93,8 @@ export type BatchInstallResult = {
   installedSideBySide: { packageName: string; version: string; evidence?: string }[];
   /** Closure members that were already present at the pin and were skipped. */
   alreadyInstalled: string[];
-  /**
-   * Members that COMMITTED (the real-integrity pipeline finalized, the canonical
-   * row is real + anchorable) but whose in-process hot-activation was refused
-   * this call. It is the third install outcome, carried by the
-   * `INSTALL_ACTIVATION_DEFERRED` code. These members are NOT failures: the
-   * install landed and the package loads on the next boot, so the batch keeps
-   * them, never compensates them, and reports the caveat instead of an error.
-   * Empty on a fully-activated batch.
-   */
-  activationDeferred: { packageName: string; version: string }[];
   batchId: string | null; // null = root-only fast path (no ledger row)
 };
-
-/**
- * Recognize the activation-deferred outcome from a thrown member install.
- *
- * String-literal code, walked over the `cause` chain. Deliberately NO import
- * from @cinatra-ai/extensions (that would close an import cycle back into the
- * package this host module serves). Same no-cross-package-import contract the
- * `REQUIRES_REBUILD` and `AGENT_PACKAGE_CONTRACT_VIOLATION` passthroughs below
- * already use. Bounded depth so a cyclic cause chain can never loop forever.
- */
-function isActivationDeferred(cause: unknown, depth = 0): boolean {
-  if (depth > 6 || cause == null || typeof cause !== "object") return false;
-  const obj = cause as { code?: unknown; cause?: unknown };
-  if (obj.code === "INSTALL_ACTIVATION_DEFERRED") return true;
-  return "cause" in obj ? isActivationDeferred(obj.cause, depth + 1) : false;
-}
 
 export class BatchMemberInstallError extends Error {
   constructor(
@@ -186,8 +166,25 @@ export type InstallBatchSagaDeps = {
    * fan-out. Defaults to the real `withSagaOwnedFanout` from @cinatra-ai/agents.
    */
   withSagaOwnedFanout: <T>(rootPackageName: string, fn: () => Promise<T>) => Promise<T>;
-  /** Install ONE package through the real dispatcher. */
-  installMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
+  /**
+   * Install ONE package through the real dispatcher.
+   *
+   * `member.rowOwnership` (cinatra#2696) is the PLANNED canonical row anchor for
+   * this member — the tuple the target→ownership contract resolved, threaded
+   * from the install action through the planner to here. The default impl
+   * forwards it to `extensionRegistry.install`, which writes the row AT that
+   * anchor instead of re-deriving one from the actor's organization. Absent (a
+   * legacy/injected plan) → the dispatcher's actor-derived default, unchanged.
+   */
+  installMember: (
+    member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      rowOwnership?: RowOwnership;
+    },
+    actor: Actor,
+  ) => Promise<void>;
   /**
    * Upgrade ONE already-installed shared dependency in place through the real
    * dispatcher's durable UPDATE pipeline (#1039 Option B `action:"update"`
@@ -778,6 +775,23 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         member.typeId,
         { registryUrl: "", packageName: member.packageName, version: member.version },
         actor,
+        // cinatra#2696: THREAD the planned anchor into the dispatcher. Passed
+        // only when the tuple names a level a CANONICAL ROW can carry — the
+        // planner's `RowOwnershipLevel` also admits `"project"` (an agent-path
+        // install TARGET with no canonical owner level), which must never reach
+        // the row write; such a member falls back to the dispatcher's
+        // actor-derived anchor exactly as before this slice.
+        ...(member.rowOwnership && member.rowOwnership.ownerLevel !== "project"
+          ? [
+              {
+                rowOwnership: {
+                  ownerLevel: member.rowOwnership.ownerLevel,
+                  ownerId: member.rowOwnership.ownerId,
+                  organizationId: member.rowOwnership.organizationId,
+                },
+              },
+            ]
+          : []),
       );
     },
     updateMemberPackage: async (member, actor, expectedInstalledVersion) => {
@@ -908,6 +922,18 @@ export async function installExtensionWithDependencies(
      */
     rootAction?: "install" | "update";
     /**
+     * cinatra#2696 — THE THREADED ROW ANCHOR. The canonical row-ownership tuple
+     * the install-access target resolved (S1's `accessTargetToRowOwnership`),
+     * handed down by the install action. It becomes the plan's ROOT tuple, so
+     * every member is planned, ledger-recorded, installed and compensated at
+     * that anchor (an agent dependency of a workspace-anchored root excepted —
+     * see `resolveMemberRowOwnership`). ABSENT — every caller that installs
+     * without an access target — falls back to the actor-derived default
+     * (`ownerLevel: orgId ? "organization" : "platform"`), the exact tuple this
+     * saga has always planned with, so those batches are byte-identical.
+     */
+    rowOwnership?: RowOwnership;
+    /**
      * #1042 slice-1 (auto-update loop only): the expected currently-installed
      * version of the ROOT, forwarded to `extensionRegistry.update` as the
      * compare-and-set precondition (`expectedInstalledVersion`) ONLY for the
@@ -995,6 +1021,30 @@ export async function installExtensionWithDependencies(
       }
     };
 
+    const sideBySideScopeOf = (m: { sideBySideScopeOrgId?: string | null }): string | null =>
+      m.sideBySideScopeOrgId === undefined ? orgId : m.sideBySideScopeOrgId;
+    /**
+     * The scope a member's canonical row lives at.
+     *
+     * cinatra#2696: this is the MEMBER'S OWN planned anchor — the ledger field
+     * the executor already recorded and then discarded is now what every
+     * row-addressing read and every compensation targets. A side-by-side member
+     * keeps resolving its own conflict-row scope. Absent tuple (a legacy or
+     * hand-injected plan) → the batch's org, the pre-#2696 value; for every
+     * org-anchored install the tuple's org IS the batch's org, so the resolved
+     * scope is unchanged.
+     */
+    const memberScopeOf = (m: {
+      action: "install" | "update" | "install-side-by-side";
+      sideBySideScopeOrgId?: string | null;
+      rowOwnership?: RowOwnership;
+    }): string | null =>
+      m.action === "install-side-by-side"
+        ? sideBySideScopeOf(m)
+        : m.rowOwnership
+          ? (m.rowOwnership.organizationId ?? null)
+          : orgId;
+
     // 2. PLAN (+ pre-state capture + overlap guard + ledger begin) under the
     //    GLOBAL lifecycle lock — then release it before installing members
     //    (each member install takes its own per-package lock; holding the
@@ -1004,12 +1054,15 @@ export async function installExtensionWithDependencies(
       const plan = await deps.plan({
         root: { packageName: input.packageName, version: rootVersion },
         orgId,
-        // cinatra#1039 decision 1+4: the extension-saga DERIVED-DEFAULT
-        // rowOwnership — an org install is organization-owned, a null-org
-        // install platform-owned (canonical-store's existing default). Forced
-        // immutably onto every member; behavior-neutral (the scope the path
-        // already installs at). The agent path (Phase 2) threads its real tuple.
-        rowOwnership: {
+        // cinatra#1039 decision 1+4 / cinatra#2696: the ROOT's rowOwnership.
+        // The install action's THREADED tuple when the install-access target
+        // resolved one (for the two workspace targets: the org-NULL workspace
+        // anchor); otherwise the extension-saga DERIVED-DEFAULT — an org install
+        // is organization-owned, a null-org install platform-owned
+        // (canonical-store's existing default). Forced onto every member (with
+        // the #2696 agent-dependency exception); byte-identical to the previous
+        // behavior whenever no tuple is threaded.
+        rowOwnership: input.rowOwnership ?? {
           ownerLevel: orgId ? "organization" : "platform",
           ownerId: orgId ?? null,
           organizationId: orgId ?? null,
@@ -1059,8 +1112,13 @@ export async function installExtensionWithDependencies(
       // PRE-STATE per member (under the same lock — precise compensation basis).
       const members: InstallBatchMember[] = [];
       for (const m of plan.ordered) {
-        const row = await deps.readLiveRowVersion(m.packageName, orgId);
-        const op = await deps.readInstallOp(m.packageName, orgId);
+        // cinatra#2696: the pre-state is read AT THE MEMBER'S OWN ANCHOR — the
+        // compensation basis must describe the row this member will actually
+        // write (an org-NULL workspace row is invisible to an org-scoped read).
+        // Identical to the batch org for every org-anchored install.
+        const memberScope = memberScopeOf(m);
+        const row = await deps.readLiveRowVersion(m.packageName, memberScope);
+        const op = await deps.readInstallOp(m.packageName, memberScope);
         members.push({
           packageName: m.packageName,
           version: m.version,
@@ -1113,28 +1171,16 @@ export async function installExtensionWithDependencies(
       // durable update pipeline, not a fresh install. A fresh depless install
       // stays exactly as before (installMember).
       const rootIsUpdate = root.action === "update";
-      // The root COMMITTED but its hot-activation was refused this call
-      // (INSTALL_ACTIVATION_DEFERRED). That is the third outcome, not a failure:
-      // the canonical row is finalized + anchorable and the dispatcher
-      // deliberately left it intact, so the fast path keeps it and reports the
-      // caveat. Any OTHER throw still propagates unchanged.
-      let rootActivationDeferred = false;
-      try {
-        await deps.withSagaOwnedFanout(input.packageName, () =>
-          rootIsUpdate
-            ? // #1042 slice-1: the depless root is always `input.packageName`, so
-              // forward the CAS precondition (undefined for manual callers).
-              deps.updateMemberPackage(root, input.actor, input.expectedRootInstalledVersion)
-            : deps.installMember(root, input.actor),
-        );
-      } catch (rootErr) {
-        if (!isActivationDeferred(rootErr)) throw rootErr;
-        rootActivationDeferred = true;
-      }
+      await deps.withSagaOwnedFanout(input.packageName, () =>
+        rootIsUpdate
+          ? // #1042 slice-1: the depless root is always `input.packageName`, so
+            // forward the CAS precondition (undefined for manual callers).
+            deps.updateMemberPackage(root, input.actor, input.expectedRootInstalledVersion)
+          : deps.installMember(root, input.actor),
+      );
       await maybeReloadAgentRuntime([root]);
       const rootEntry = { packageName: root.packageName, version: root.version };
       return {
-        activationDeferred: rootActivationDeferred ? [rootEntry] : [],
         rootPackage: input.packageName,
         // The PLANNED root version (dev "latest" already resolved concrete).
         rootVersion: root.version,
@@ -1169,11 +1215,9 @@ export async function installExtensionWithDependencies(
       typeId: string;
       action: "install" | "update" | "install-side-by-side";
       sideBySideScopeOrgId?: string | null;
+      /** cinatra#2696: the member's own anchor — drives compensation targeting. */
+      rowOwnership?: RowOwnership;
     }[] = [];
-    // Members that COMMITTED but whose in-process hot-activation was refused
-    // this call. They stay installed (the row is finalized + anchorable), so the
-    // batch reports them as a CAVEAT on a successful result, never as a failure.
-    const activationDeferred: { packageName: string; version: string }[] = [];
     // cinatra#2415: the member whose install THREW but which durably CREATED a
     // canonical row before failing (e.g. the dispatcher finalized the row and
     // then threw on the "did not hot-activate" check, which deliberately leaves
@@ -1188,15 +1232,10 @@ export async function installExtensionWithDependencies(
           typeId: string;
           action: "install" | "update" | "install-side-by-side";
           sideBySideScopeOrgId?: string | null;
+          /** cinatra#2696: the member's own anchor — drives compensation targeting. */
+          rowOwnership?: RowOwnership;
         }
       | null = null;
-    const sideBySideScopeOf = (m: { sideBySideScopeOrgId?: string | null }): string | null =>
-      m.sideBySideScopeOrgId === undefined ? orgId : m.sideBySideScopeOrgId;
-    /** The scope a member's canonical row lives at (side-by-side resolves its own). */
-    const memberScopeOf = (m: {
-      action: "install" | "update" | "install-side-by-side";
-      sideBySideScopeOrgId?: string | null;
-    }): string | null => (m.action === "install-side-by-side" ? sideBySideScopeOf(m) : orgId);
     /**
      * cinatra#2415: persist the member's creation provenance (`after \ before`)
      * to the ledger AND mirror it into the in-memory batch member (the
@@ -1209,6 +1248,7 @@ export async function installExtensionWithDependencies(
         packageName: string;
         action: "install" | "update" | "install-side-by-side";
         sideBySideScopeOrgId?: string | null;
+        rowOwnership?: RowOwnership;
       },
       before: string[],
       failed: boolean,
@@ -1376,33 +1416,19 @@ export async function installExtensionWithDependencies(
                 : deps.installMember(member, input.actor),
             );
           } catch (installErr) {
-            // ACTIVATION-DEFERRED is NOT a member failure. The real-integrity
-            // pipeline finalized, so this member's canonical row is committed and
-            // anchorable. It simply did not hot-activate in THIS process and
-            // loads on the next boot. Tearing it down here would delete a
-            // committed install and report a failure the operator cannot act on.
-            // Record the caveat and fall through to the member's normal success
-            // bookkeeping (ledger `installed`, provenance capture).
-            if (isActivationDeferred(installErr)) {
-              activationDeferred.push({
-                packageName: member.packageName,
-                version: member.version,
-              });
-            } else {
-              // The install THREW. Capture the provenance anyway (still inside the
-              // lock): a dispatcher that finalized a row and then threw leaves a
-              // durable row this batch created, and the invariant says it must not
-              // survive the abort. Recorded, then compensated with the rest.
-              //
-              // `null` = the capture itself failed. That is NOT "created nothing":
-              // the member is queued anyway so the compensation rule REFUSES it
-              // loudly (ROLLBACK INCOMPLETE) instead of dropping it silently.
-              const createdOnFailure = await captureCreatedRows(member, preRowIds, true);
-              if (createdOnFailure === null || createdOnFailure.length > 0) {
-                failedMemberWithRows = member;
-              }
-              throw installErr;
+            // The install THREW. Capture the provenance anyway (still inside the
+            // lock): a dispatcher that finalized a row and then threw leaves a
+            // durable row this batch created, and the invariant says it must not
+            // survive the abort. Recorded, then compensated with the rest.
+            //
+            // `null` = the capture itself failed. That is NOT "created nothing":
+            // the member is queued anyway so the compensation rule REFUSES it
+            // loudly (ROLLBACK INCOMPLETE) instead of dropping it silently.
+            const createdOnFailure = await captureCreatedRows(member, preRowIds, true);
+            if (createdOnFailure === null || createdOnFailure.length > 0) {
+              failedMemberWithRows = member;
             }
+            throw installErr;
           }
           // Track the durable install/update IMMEDIATELY — before the ledger write —
           // so a ledger failure right after a successful member op still routes it
@@ -1419,7 +1445,9 @@ export async function installExtensionWithDependencies(
                     member.version,
                   )
                   .catch(() => null)
-              : await deps.readInstallOp(member.packageName, orgId).catch(() => null);
+              : // cinatra#2696: the journal anchor of the row this member wrote
+                // — its OWN scope, not the actor's.
+                await deps.readInstallOp(member.packageName, memberScope).catch(() => null);
           await deps.ledger.updateMember(batch.batchId, member.packageName, {
             status: "installed",
             ...(op ? { installOpId: op.installOpId } : {}),
@@ -1493,7 +1521,6 @@ export async function installExtensionWithDependencies(
           return { packageName, version, ...(evidence ? { evidence } : {}) };
         }),
       alreadyInstalled,
-      activationDeferred,
       batchId: batch.batchId,
     };
 
@@ -1852,7 +1879,16 @@ export async function sweepStaleInstallBatches(
               typeId: m.typeId,
               packageName: m.packageName,
               version: m.version,
-              scopeOrgId: batch.orgId ?? null,
+              // cinatra#2696: the member's OWN recorded anchor. The ledger
+              // stamps `rowOwnership` per member, so boot recovery addresses the
+              // scope the row was actually created at — an org-NULL
+              // workspace-anchored row included, which the batch's org would
+              // never match (the inverse's provenance revalidation would refuse
+              // it and leave the row behind). Legacy members without the field
+              // fall back to the batch org, exactly as before.
+              scopeOrgId: m.rowOwnership
+                ? (m.rowOwnership.organizationId ?? null)
+                : (batch.orgId ?? null),
               createdRowIds: m.createdRowIds ?? null,
             },
             compensationActor,

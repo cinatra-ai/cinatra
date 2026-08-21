@@ -405,7 +405,13 @@ describe("cinatra#2580 — the request envelope is unchanged", () => {
     const system = capturedStreamInput!.system as string;
     expect(system.startsWith(SYSTEM_BODY)).toBe(true);
     expect(system).toContain("\n\nUser context:\n");
-    expect(system.endsWith(CONFIRMATION_POLICY)).toBe(true);
+    // cinatra#2771 lever 2 — the confirmation policy moved from LAST into the
+    // stable head, ahead of the volatile user context. Same fragments, new
+    // order, so the head is reusable across turns.
+    expect(system).toContain(CONFIRMATION_POLICY);
+    expect(system.indexOf(CONFIRMATION_POLICY)).toBeLessThan(
+      system.indexOf("\n\nUser context:\n"),
+    );
 
     const tools = capturedStreamInput!.tools as Array<Record<string, unknown>>;
     expect(tools).toHaveLength(3);
@@ -432,6 +438,10 @@ describe("cinatra#2580 — the request envelope is unchanged", () => {
     expect(Object.keys(capturedStreamInput!).sort()).toEqual(
       [
         "actorContext",
+        // cinatra#2776 — the ONE field added since: the native-MCP requirement
+        // the self-MCP toolbox is dispatched under. It rides beside
+        // `skipMcpInjection` and is absent on a conversation-only turn.
+        "capabilityRequired",
         "logLabel",
         "maxSteps",
         "messages",

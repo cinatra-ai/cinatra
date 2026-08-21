@@ -7,6 +7,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./materialize-agent-package": "./src/materialize-agent-package.ts",
     "./agent-runtime-mount": "./src/agent-runtime-mount.ts",
     "./installed-oas-path": "./src/installed-oas-path.ts",
     "./read-llm-requirement-from-mount": "./src/read-llm-requirement-from-mount.ts",
@@ -46,6 +47,7 @@
     "./run-recommendation-card": "./src/run-recommendation-chip-row.tsx",
     "./review-decision-bar": "./src/review-decision-bar.tsx",
     "./review-gate-states": "./src/review-gate-states.tsx",
+    "./run-step-rail-panel": "./src/run-step-rail-panel.tsx",
     "./lifecycle-verification-store": "./src/lifecycle-verification-store.ts",
     "./lifecycle-verification-read-store": "./src/lifecycle-verification-read-store.ts",
     "./cms-snapshot-readback-store": "./src/cms-snapshot-readback-store.ts",
