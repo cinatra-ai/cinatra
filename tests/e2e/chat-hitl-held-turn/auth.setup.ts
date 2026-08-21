@@ -21,7 +21,8 @@ import { dirname } from "node:path";
 import { Client } from "pg";
 import { test as setup, expect } from "@playwright/test";
 
-import { DATABASE_URL } from "./probes";
+import { HELD_TURN_AGENT_PACKAGE } from "./constants";
+import { DATABASE_URL, SCHEMA } from "./probes";
 
 const EMAIL = process.env.E2E_CHAT_HITL_USER_EMAIL ?? "chat-hitl-s9k@local.test";
 const PASSWORD = process.env.E2E_CHAT_HITL_USER_PASSWORD ?? "ChatHitlS9k!2026";
@@ -57,25 +58,43 @@ async function promoteToPlatformAdmin(c: Client, userId: string): Promise<void> 
   );
 }
 
-async function ensureMemberOrg(c: Client, userId: string): Promise<string> {
-  const existing = await c.query<{ organizationId: string }>(
-    `SELECT "organizationId" FROM public."member" WHERE "userId" = $1 LIMIT 1`,
-    [userId],
+/**
+ * JOIN THE ORG THAT OWNS THE AGENT, rather than minting a fresh one.
+ *
+ * The dispatch boundary enforces template scope: an `organization`-scoped template
+ * refuses a requesting actor from another org with
+ * `agent-template-scope: … cross_org`. Boot registers the required-closure
+ * templates under the instance's own default organization, so a test user given a
+ * brand-new org of their own is, correctly, a stranger to every agent on the
+ * instance — the dispatch is refused before any run is created, and the flow then
+ * waits for a card that was never going to exist.
+ *
+ * So the org is LOOKED UP from the template this flow dispatches. That is also the
+ * honest shape: a person runs an agent their organization owns.
+ *
+ * A missing template org is a hard failure rather than a fallback to a new org,
+ * because the fallback is exactly the state that produced the misleading red.
+ */
+async function orgOwningAgent(c: Client, userId: string, packageName: string): Promise<string> {
+  const r = await c.query<{ org_id: string | null }>(
+    `SELECT org_id FROM "${SCHEMA}"."agent_templates" WHERE package_name = $1 LIMIT 1`,
+    [packageName],
   );
-  if (existing.rowCount && existing.rowCount > 0) return existing.rows[0]!.organizationId;
-  // A DIRECT insert rather than `POST /api/auth/organization/create`: the team
-  // plugin's `team.slug NOT NULL` bug rejects that call for a fresh user. The
+  const orgId = r.rowCount ? r.rows[0]!.org_id : null;
+  if (!orgId) {
+    throw new Error(
+      `no organization owns ${packageName} in this instance — boot registers the required-closure ` +
+        "templates under the default organization, so its absence means the extension closure " +
+        "was never materialized (run scripts/ci/sync-dev-extensions.mjs and reboot)",
+    );
+  }
+  // A DIRECT insert rather than the Better Auth organization API: the team
+  // plugin's `team.slug NOT NULL` bug rejects that call for a fresh user, and the
   // notifications suite takes the same route for the same reason.
-  const orgId = `chat-hitl-s9k-org-${Date.now().toString(36)}`;
-  await c.query(
-    `INSERT INTO public."organization" (id, name, slug, "createdAt")
-       VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
-    [orgId, "Chat HITL S9k Org", orgId],
-  );
   await c.query(
     `INSERT INTO public."member" (id, "userId", "organizationId", role, "createdAt")
        VALUES ($1, $2, $3, 'owner', now()) ON CONFLICT (id) DO NOTHING`,
-    [`chat-hitl-s9k-member-${Date.now().toString(36)}`, userId, orgId],
+    [`chat-hitl-s9k-member-${userId.slice(0, 8)}`, userId, orgId],
   );
   return orgId;
 }
@@ -100,7 +119,7 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
     const userId = await userIdByEmail(c, EMAIL);
     if (!userId) throw new Error(`S9k owner not found after sign-up: ${EMAIL}`);
     await promoteToPlatformAdmin(c, userId);
-    orgId = await ensureMemberOrg(c, userId);
+    orgId = await orgOwningAgent(c, userId, HELD_TURN_AGENT_PACKAGE);
   } finally {
     await c.end();
   }
