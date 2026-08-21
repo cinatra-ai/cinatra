@@ -1,3 +1,56 @@
+// ---------------------------------------------------------------------------
+// THE SYNCHRONOUS POSTGRES BRIDGE — and its caller inventory (cinatra#2882).
+//
+// `runPostgresQueriesSync` spawns a worker thread and parks the CALLING thread
+// on `Atomics.wait` until the worker answers or `DEFAULT_TIMEOUT_MS` fires. In
+// the server process that calling thread is the main one, so for the whole of
+// that wait NO timer, NO abort listener and NO microtask runs anywhere in the
+// process: request handling, other timers and the BullMQ job heartbeats are all
+// frozen with it. A slow-but-not-dead database turns one keyed statement into
+// up to `POSTGRES_SYNC_TIMEOUT_MS` of a completely unresponsive event loop, per
+// call. And no `AbortSignal` can ever reach this path — un-abortable BY
+// CONSTRUCTION, not by omission (the finding PR #2875 had to design a
+// circuit-breaker around instead of real cancellation).
+//
+// ## Who is still on it (scan at the #2882 head; the ratchet keeps it current)
+//
+// 371 direct call sites across 83 production files. The machine-generated
+// per-file scan is `config/postgres-sync-inventory.json`; the per-file
+// classification + justification is `src/lib/postgres-sync-inventory.ts`; the
+// ratchet test that keeps both honest and forbids NEW call sites is
+// `src/lib/__tests__/postgres-sync-inventory.test.ts`.
+//
+// Split by whether the call site has an `await` to give:
+//
+//   76 of 371 sites (21 files) sit inside a function that is ALREADY `async` —
+//     they park the loop with a perfectly good `await` in hand. These are
+//     mechanically migratable to `@/lib/postgres-async`, one store at a time.
+//   295 of 371 sit inside a synchronous function. Those are only migratable by
+//     changing the enclosing signature — which is the #303 track's staged,
+//     per-store work, NOT something to smuggle in under an unrelated fix.
+//
+// The third shape is the one #2882 was filed about and is invisible to the
+// count above: a SYNCHRONOUS seam function whose production callers are all
+// async. `packages/notifications/src/service.ts` is the type specimen — 11 sync
+// sites, zero async enclosing functions, yet every caller of the notification
+// clear in `src/lib/agent-run-wait-notifications.ts` is an `async` handler that
+// was blocking the loop for a single keyed DELETE. The fix for that shape is an
+// ADDITIVE async seam beside the sync one, not a rewrite of it:
+// `deleteNotificationsByDedupeKeyForUserAsync` in
+// `packages/notifications/src/service-async.ts` drives the SAME statement
+// builder over `@/lib/postgres-async`, and the sync twin stays exactly where it
+// is for genuinely synchronous hosts.
+//
+// ## Before you add a call site here
+//
+// If your caller can `await`, use `@/lib/postgres-async` (`runPostgresQueriesAsync`)
+// — same input keys, same `{ rows, rowCount }` results, same build-phase no-op,
+// no frozen loop. This bridge is for callers that genuinely cannot: module-scope
+// schema init, the sync-leaf stores under the Turbopack sync-import contract
+// (see `src/lib/postgres-schema-init.ts`), and security-critical instant
+// decisions where an `await` would open a TOCTOU window.
+// ---------------------------------------------------------------------------
+
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -113,6 +166,16 @@ function runWorkerSync(input: {
   const status = Atomics.wait(signal, 0, 0, input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   if (status === "timed-out") {
+    // NOTE (cinatra#2882 ceiling review): a timeout here is NOT a rollback.
+    // Terminating the worker tears down its pg.Client socket, but Postgres only
+    // notices a dead client when it next tries to write — a statement that has
+    // already committed stays committed while this caller sees a throw. That
+    // divergence is bounded for the 52 call sites that pass `transaction: true`
+    // (losing the connection aborts an open transaction) and unbounded for the
+    // 319 that autocommit. It is why the 30s ceiling is NOT simply "too high":
+    // tightening it globally would raise the rate at which a caller reports
+    // failure for a write the database kept. Bound per call site instead, once
+    // that site's write is idempotent-by-key or transactional.
     void worker.terminate();
     throw new Error("Timed out while executing Postgres query.");
   }
