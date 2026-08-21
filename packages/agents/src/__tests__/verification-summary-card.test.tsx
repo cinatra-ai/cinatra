@@ -179,6 +179,50 @@ describe("one renderer, every host (§IX)", () => {
     expect(container.textContent).toBe("");
   });
 
+  // The ONE-INSTANCE proof, in the shape the review card's already uses
+  // (cinatra#2792 R7/R8, reconciled by cinatra#2861). The matrix test above
+  // establishes that each host draws the core; this one establishes that it
+  // draws it EXACTLY ONCE, which is a different fact and only visible as a
+  // count on rendered DOM. It also reads every ratified §VII anchor and both
+  // required root attributes off the card it mounted, so the gate's declaration
+  // and the pixels are proven by one executed test rather than by two claims.
+  it("the root carries its identity, host and state, and draws EXACTLY ONE instance per host", async () => {
+    // The hosts are named as literals, one per line, because this test IS the
+    // record of which hosts were actually driven.
+    for (const host of ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const) {
+      mockResolve({ state: "advisory" });
+      const { container, unmount } = renderOn(host);
+      await waitFor(() =>
+        expect(container.querySelector('[data-lifecycle-card="verification_summary"]')).not.toBeNull(),
+      );
+      // EXACTLY ONE instance on this host. A second adapter drawing beside this
+      // one is the failure the whole one-card rule exists to prevent.
+      expect(container.querySelectorAll('[data-lifecycle-card="verification_summary"]')).toHaveLength(1);
+      const root = container.querySelector<HTMLElement>(
+        '[data-conformance-id="verification-card"]',
+      )!;
+      expect(root.getAttribute("data-lifecycle-card")).toBe("verification_summary");
+      expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
+      expect(root.getAttribute("data-lifecycle-card-state")).toBe("advisory");
+      // §VII's five ratified regions, off the same root.
+      expect(root.querySelector("[data-verification-chrome]")).not.toBeNull();
+      expect(root.querySelector("[data-verification-outcome]")).not.toBeNull();
+      expect(root.querySelector("[data-verification-revisions]")).not.toBeNull();
+      expect(root.querySelector("[data-verification-field-diff]")).not.toBeNull();
+      expect(root.querySelector("[data-verification-advisory]")).not.toBeNull();
+      unmount();
+      cleanup();
+    }
+
+    // …and the state really tracks the resolve rather than a constant: the one
+    // other state this resolver issues draws no card at all.
+    mockResolve({ state: "absent" }, null);
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-lifecycle-card="verification_summary"]')).toBeNull(),
+    );
+  });
+
   it("gives each host its own FRAME and the SAME drawing inside it", async () => {
     const frames = new Map<LifecycleCardHost, string>();
     const drawings = new Map<LifecycleCardHost, string>();
