@@ -23,6 +23,13 @@ const SENSITIVE_KEYS = new Set([
   "token",
   "requestSecret",
   "request_secret",
+  // cinatra#2754 — the review-island credential's query parameter. A structured
+  // log record that carries the parsed query (`{ ref, ic }`) loses the value
+  // here; the string patterns below catch the address in unparsed text. The
+  // literal is pinned to `REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM` by
+  // `src/lib/__tests__/review-island-query-redaction.test.ts` rather than
+  // imported, so this leaf keeps its zero-dependency shape.
+  "ic",
 ]);
 
 // Structural key-based redaction does not catch Bearer tokens or request-secret
@@ -42,6 +49,39 @@ const STRING_PATTERN_SCRUBS: Array<[RegExp, string]> = [
   [/(\bauthorization\s*:\s*Bearer\s+)\S+/gi, "$1[redacted]"],
   // Bare "Bearer <token>" outside a header context.
   [/(\bBearer\s+)[A-Za-z0-9._\-]+/g, "$1[redacted]"],
+  // THE REVIEW-ISLAND CREDENTIAL (cinatra#2754). `/lifecycle/review-island` is
+  // the one route in this app whose QUERY is a bearer: an `<iframe src>` GET
+  // carries no header and, cross-site, no cookie, so the address itself
+  // authenticates the reader (plan §12). An address that reaches a log line is
+  // therefore a credential in a log line, and the ruling's third hardening says
+  // it must not survive there. Two entries, both narrow, added rather than
+  // broadening an existing pattern (this list's documented rule):
+  //
+  //   1. THE ADDRESS, wherever it appears — an access-log request line, a HAR
+  //      entry, a stringified DOM fragment. Anchored on the route's own path,
+  //      so nothing outside the island can be touched by it.
+  [
+    /(\/lifecycle\/review-island\?(?:[^\s"'<>]*?[?&])?ic=)[A-Za-z0-9_-]+/g,
+    "$1[redacted]",
+  ],
+  //   2. THE VALUE ALONE, for the shapes that carry the query without the path
+  //      (a `searchParams` dump, a query string logged on its own). Bounded to
+  //      the key `ic` AND to a value at least as long as a sealed credential
+  //      can be, so an ordinary short parameter that happens to be called `ic`
+  //      is left alone.
+  [/(\bic=)[A-Za-z0-9_-]{40,}/g, "$1[redacted]"],
+  //   3. THE ALREADY-SERIALIZED QUERY. The structural pass below removes the
+  //      value at the key `ic` while the record is still an OBJECT; a logger
+  //      that stringifies the query before handing it over presents
+  //      `{"ic":"…"}` as text, where only a string pattern can reach it. Same
+  //      key bound, same length bound.
+  [/(["']ic["']\s*:\s*["'])[A-Za-z0-9_-]{40,}/g, "$1[redacted]"],
+  //   4. THE PERCENT-ENCODED ADDRESS. An island URL nested inside another URL's
+  //      query (a redirect target, a proxied `next=`) arrives with its own
+  //      separators escaped, so neither `ic=` nor a word boundary before `ic`
+  //      ever appears. Anchored on the escaped (or literal) query separator that
+  //      must precede the key, which is what keeps it narrow.
+  [/((?:%3F|%26|[?&])ic%3D)[A-Za-z0-9_-]{40,}/gi, "$1[redacted]"],
 ];
 
 function scrubString(s: string): string {
