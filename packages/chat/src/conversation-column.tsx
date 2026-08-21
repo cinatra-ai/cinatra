@@ -93,6 +93,7 @@ import {
   generateId,
   type AssistantTurnRequestMessage,
 } from "./ag-ui-chat-client";
+import { buildTruncationIntent } from "./truncation-intent";
 import { startScrollSettlePin, type ScrollSettlePass } from "./scroll-settle";
 import dynamic from "next/dynamic";
 import type { UiMessage } from "./types";
@@ -565,6 +566,21 @@ export function useConversationColumnTurns({
   // stop control aborts every entry, and its size is `streamingCount`.
   const streamingRef = useRef(new Map<string, AbortController>());
   const [streamingCount, setStreamingCount] = useState(0);
+  // THE TRUNCATION INTENT THIS COLUMN OWES ITS HOST (cinatra#2823 S9j).
+  //
+  // `onEditAndResend` below truncates the transcript, and a truncating save is
+  // the ONE save the server may act on destructively: its reconcile DELETE drops
+  // the removed turns' mirror rows while their run-bound rows — minted when each
+  // run started — survive untouched, and the reload folds those back in above
+  // the edited prompt unless the save ASSERTED the removal. `/chat` carries that
+  // assertion (`message-edit-flow.ts`); this column truncated in silence, so a
+  // widget reader's edit came undone on every reload.
+  //
+  // It is ACCUMULATED rather than passed straight out, because the edit and the
+  // save are separate events here: the host saves when a TURN ENDS, which is one
+  // or more turns after the edit that truncated. The ids wait here until a save
+  // that carried them is known to have landed.
+  const removedMessageIdsRef = useRef<string[]>([]);
   // Remount key for mounted extension widgets — bumped when a turn ran a tool a
   // manifest declares as widget-refreshing, exactly as `/chat` bumps it.
   const [widgetRefreshKey, setWidgetRefreshKey] = useState(0);
@@ -673,11 +689,30 @@ export function useConversationColumnTurns({
           : {}),
       };
       const history = [...current.slice(0, idx), edited];
+      // Everything from the edit point down is deliberately gone, and the host's
+      // next save has to SAY so. `idx + 1` because the edited message keeps its
+      // own id here (unlike `/chat`, which mints a fresh one) — it is being
+      // rewritten in place, not removed, so asserting its removal would be a
+      // lie about a message the payload still carries.
+      const removed = buildTruncationIntent(current, idx + 1, streamingRef.current.keys());
+      for (const id of removed) {
+        if (!removedMessageIdsRef.current.includes(id)) removedMessageIdsRef.current.push(id);
+      }
       writeMessages(history);
       void runTurn(history);
     },
     [hasActiveStream, runTurn, writeMessages],
   );
+
+  /** The removals this column has truncated and not yet had saved. The host
+   *  puts them on its next write; they stay here until it confirms they
+   *  landed, so a save that silently failed does not lose the assertion. */
+  const peekRemovedMessageIds = useCallback(() => [...removedMessageIdsRef.current], []);
+  /** A save carrying exactly these ids came back OK — drop them. Anything the
+   *  edit added while that save was open is deliberately left standing. */
+  const confirmRemovedMessageIds = useCallback((ids: string[]) => {
+    removedMessageIdsRef.current = removedMessageIdsRef.current.filter((id) => !ids.includes(id));
+  }, []);
 
   const onStop = useCallback(() => {
     for (const controller of streamingRef.current.values()) controller.abort();
@@ -714,6 +749,8 @@ export function useConversationColumnTurns({
     streamingCount,
     isStreaming,
     onEditAndResend,
+    peekRemovedMessageIds,
+    confirmRemovedMessageIds,
     widgetRuntime,
     widgetSubmitRef,
     widgetRefreshKey,

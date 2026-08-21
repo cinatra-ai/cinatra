@@ -1013,6 +1013,103 @@ describe("edit-and-resend does not resurrect the turns the user removed", () => 
     ).toEqual([editedPrompt.id]);
   });
 
+  // ── THE WIDGET SURFACE TRUNCATES TOO (cinatra#2823 S9j) ───────────────────
+  // The embed mounts the SHARED conversation column, whose `onEditAndResend`
+  // rewrites a message and drops every successor, and the widget write handler
+  // posts the truncated transcript through this very upsert. Its allow-list
+  // carried the transcript and dropped the assertion, so the widget's edit was a
+  // silent truncation: the reconcile DELETE took the removed turn's mirror row,
+  // the run-bound row survived, and the reload folded it back in above the
+  // edited prompt. The actor was already plumbed through with nothing using it.
+  //
+  // Driven with the WIDGET's exact call shape: the acting writer is the token's
+  // principal rather than a session user, and the thread is personally owned by
+  // that principal — which is precisely what the handler's `writable` gate
+  // proves before it ever reaches here, and precisely what the tombstone's own
+  // ownership predicate re-checks inside this transaction.
+
+  it("a WIDGET principal's edit removes its own turn for good", async () => {
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-widget-${randomUUID()}`;
+    const WIDGET_PRINCIPAL = OWNER_ID; // the thread's owner IS the token's user
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: "Please handle it.",
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    // The widget's ordinary save, after the turn ended: the transcript really
+    // does carry the assistant turn, so it really does have a mirror row.
+    const assistantMessage = {
+      id: `a-${randomUUID()}`,
+      role: "assistant" as const,
+      content: drive.durable.content,
+      parts: [
+        { kind: "tool_call", id: drive.toolCallId, name: carriage.toolName, status: "completed" },
+      ],
+    };
+    saveWholeTranscript({
+      threadId,
+      messages: [userMessage, assistantMessage],
+      actorUserId: WIDGET_PRINCIPAL,
+    });
+    expect(reloadWithNoRedisAndNoClientMemory(threadId).map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+
+    // The reader edits in the widget. The column truncates, and the save that
+    // follows now CARRIES what it dropped.
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      removedMessageIds: [userMessage.id, assistantMessage.id],
+      actorUserId: WIDGET_PRINCIPAL,
+    });
+
+    expect(
+      reloadWithNoRedisAndNoClientMemory(threadId).map((m) => m.id),
+      "a widget reader's edit came undone — the truncating save removed the mirror row and left the run-bound row to fold in again",
+    ).toEqual([editedPrompt.id]);
+  });
+
+  it("NEGATIVE CONTROL: the same widget edit WITHOUT the assertion comes undone", async () => {
+    // The allow-list's old behaviour, driven. This is what the widget did on
+    // every edit, and it is what makes the arm above attributable to the
+    // assertion rather than to anything else in the write.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-widget-silent-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: "Please handle it.",
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    const assistantMessage = {
+      id: `a-${randomUUID()}`,
+      role: "assistant" as const,
+      content: drive.durable.content,
+      parts: [
+        { kind: "tool_call", id: drive.toolCallId, name: carriage.toolName, status: "completed" },
+      ],
+    };
+    saveWholeTranscript({
+      threadId,
+      messages: [userMessage, assistantMessage],
+      actorUserId: OWNER_ID,
+    });
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    // The truncated transcript, and NOTHING said about what went missing.
+    saveWholeTranscript({ threadId, messages: [editedPrompt], actorUserId: OWNER_ID });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(reloaded.map((m) => m.role)).toEqual(["assistant", "user"]);
+    expect(reloaded[1].id).toBe(editedPrompt.id);
+  });
+
   // ── THE INTENT'S REACH IS BOUNDED BY THE MIRROR ROW ───────────────────────
   // The tombstone links an asserted message id to a run-bound row THROUGH the
   // removed mirror row: `buildSupersedeRunBoundTurnsQuery` selects the removed

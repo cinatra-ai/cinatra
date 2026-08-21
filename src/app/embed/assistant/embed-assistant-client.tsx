@@ -667,12 +667,21 @@ function EmbedConversation({
     if (!wasRunningRef.current) return;
     wasRunningRef.current = false;
     if (messages.length === 0) return;
+    // THE COLUMN'S OUTSTANDING TRUNCATION INTENT (cinatra#2823 S9j). An edit in
+    // this column truncated the transcript, and this is the save that records
+    // it: without the assertion the server's reconcile DELETE drops the removed
+    // turns' mirror rows while their run-bound rows survive, and the reader's
+    // edit comes undone on the next reload. It is CONFIRMED rather than drained
+    // — a widget save is best-effort and silent, so an assertion dropped on a
+    // save that failed would be an assertion lost for good.
+    const removedMessageIds = turns.peekRemovedMessageIds();
     void saveThreadTranscript(
       buildThreadWrite({
         threadId: session.threadId,
         messages,
         createdAt: createdAtRef.current,
         activeAssistantHandle: session.assistant,
+        removedMessageIds,
       }),
       // THE BROKER TRANSPORT, like every other request this surface makes. The
       // headers are built at call time from the closure-held tokens and
@@ -680,8 +689,10 @@ function EmbedConversation({
       // widget's turns into the conversation of whoever else is signed in on
       // this browser.
       serviceTransport,
-    );
-  }, [localTurnStatus, messages, serviceTransport, session.threadId, session.assistant]);
+    ).then((landed) => {
+      if (landed && removedMessageIds.length > 0) turns.confirmRemovedMessageIds(removedMessageIds);
+    });
+  }, [localTurnStatus, messages, serviceTransport, session.threadId, session.assistant, turns]);
   const host = useMemo(
     () => ({ lifecycleSurface, onApplyIntent }),
     [lifecycleSurface, onApplyIntent],

@@ -279,6 +279,36 @@ export async function handleSaveAssistantThreadForWidget(
     ...(typeof body.activeAssistantHandle === "string"
       ? { activeAssistantHandle: body.activeAssistantHandle }
       : {}),
+    // THE TRUNCATION INTENT (cinatra#2823 S9j). Forwarded, because this surface
+    // really does truncate: the shared column's `onEditAndResend` rewrites a
+    // message and drops every successor, and the save that follows carries the
+    // truncated transcript. Without the assertion the reconcile DELETE takes the
+    // removed turns' mirror rows while their run-bound rows — minted when each
+    // run started — survive, and the reload folds them back in above the edited
+    // prompt. A widget reader's edit would come undone on every reload.
+    //
+    // ADDING IT TO THE ALLOW-LIST IS SAFE BECAUSE THE TOMBSTONE AUTHORIZES
+    // ITSELF, and this route cannot widen that. The statement reaches a
+    // run-bound row only on a thread the acting writer PERSONALLY OWNS
+    // (`buildSupersedeRunBoundTurnsQuery`), checked against the thread row
+    // inside the write's own transaction — and the `writable` gate above has
+    // ALREADY proved exactly that for this principal, so the predicate re-states
+    // what was authorized rather than trusting this body. What the body decides
+    // is only WHICH of the caller's own turns to drop, which is the one thing
+    // the caller is entitled to decide about their own thread.
+    //
+    // SHAPE-VALIDATED HERE, not just downstream. `extractRemovedMessageIdsFromThread`
+    // is defensive and would drop the garbage anyway; validating at the edge
+    // keeps a public-website body from reaching the mirror builder as a shape it
+    // has to be defensive ABOUT. A non-array is no assertion at all, so it is
+    // omitted rather than passed through empty.
+    ...(Array.isArray(body.removedMessageIds)
+      ? {
+          removedMessageIds: body.removedMessageIds.filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          ),
+        }
+      : {}),
   };
 
   // BOTH orgs are the TOKEN's org: the pin-sync scope and the structured

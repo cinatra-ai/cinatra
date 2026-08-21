@@ -113,6 +113,65 @@ describe("the widget thread write — what it accepts", () => {
     });
   });
 
+  // ── THE TRUNCATION INTENT REACHES THE WRITE (cinatra#2823 S9j) ───────────
+  // This surface truly truncates: the shared column's `onEditAndResend` rewrites
+  // a message and drops every successor. The allow-list carried the transcript
+  // but not the assertion, so the reconcile DELETE took the removed turns' mirror
+  // rows while their run-bound rows survived and the reload folded them back in
+  // above the edited prompt — the reader's edit undone on every reload, with the
+  // actor already plumbed through and nothing using it.
+
+  it("FORWARDS the truncation intent an edit carried", async () => {
+    getAssistantThread.mockReturnValue(OWN_ROW);
+    const { handleSaveAssistantThreadForWidget } = await import("@/lib/assistant-thread-http");
+    const res = await handleSaveAssistantThreadForWidget(
+      post({ ...TRANSCRIPT, removedMessageIds: ["m3", "m4"] }),
+      PRINCIPAL,
+    );
+    expect(res.status).toBe(200);
+    const [thread, options] = upsertChatThreadInDatabase.mock.calls[0];
+    expect(thread.removedMessageIds).toEqual(["m3", "m4"]);
+    // ...alongside the actor the tombstone authorizes against. The pair is the
+    // point: an intent with no actor tombstones nothing, and an actor with no
+    // intent was what this path had.
+    expect(options.actorUserId).toBe("widget-user");
+  });
+
+  it("VALIDATES the intent's shape at the edge — a public website posts this body", async () => {
+    getAssistantThread.mockReturnValue(OWN_ROW);
+    const { handleSaveAssistantThreadForWidget } = await import("@/lib/assistant-thread-http");
+    await handleSaveAssistantThreadForWidget(
+      post({ ...TRANSCRIPT, removedMessageIds: ["m3", 7, "", null, { id: "m5" }, "m6"] }),
+      PRINCIPAL,
+    );
+    // Non-empty strings only. The mirror builder is defensive about this too;
+    // validating here keeps it from having to be.
+    expect(upsertChatThreadInDatabase.mock.calls[0][0].removedMessageIds).toEqual(["m3", "m6"]);
+  });
+
+  it("OMITS a non-array intent rather than passing an empty assertion", async () => {
+    getAssistantThread.mockReturnValue(OWN_ROW);
+    const { handleSaveAssistantThreadForWidget } = await import("@/lib/assistant-thread-http");
+    for (const bogus of ["m3", 7, { m3: true }, null]) {
+      upsertChatThreadInDatabase.mockClear();
+      await handleSaveAssistantThreadForWidget(
+        post({ ...TRANSCRIPT, removedMessageIds: bogus }),
+        PRINCIPAL,
+      );
+      expect(upsertChatThreadInDatabase.mock.calls[0][0]).not.toHaveProperty("removedMessageIds");
+    }
+  });
+
+  it("an ordinary save carries NO intent — it asserts nothing about what it lacks", async () => {
+    // The separation the whole tombstone rests on. Every save posts the WHOLE
+    // transcript, so a save from a session that never had a turn looks exactly
+    // like one that removed it; only an explicit assertion tells them apart.
+    getAssistantThread.mockReturnValue(OWN_ROW);
+    const { handleSaveAssistantThreadForWidget } = await import("@/lib/assistant-thread-http");
+    await handleSaveAssistantThreadForWidget(post(TRANSCRIPT), PRINCIPAL);
+    expect(upsertChatThreadInDatabase.mock.calls[0][0]).not.toHaveProperty("removedMessageIds");
+  });
+
   it("NEVER reads a session — there is no ambient fallback to fall back TO", async () => {
     getAssistantThread.mockReturnValue(OWN_ROW);
     const { handleSaveAssistantThreadForWidget } = await import("@/lib/assistant-thread-http");
