@@ -395,20 +395,29 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
       '[data-skill-action="skip"]',
     ]),
     ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
-    // §V's decision acts, on the shipped `RunRecommendationChipRow`.
+    // §V's decision acts, on the shipped `RunRecommendationChipRow` — the SAME
+    // three the owner anchors above and the capture contract
+    // (`decisionControls` in `scripts/ci/lib/capture-record-contract.mjs`)
+    // already name. The capture suite asserts the two lists stay in step, so
+    // neither can drift alone.
     //
     // RE-READ AFTER THE §V REDRAW (cinatra#2841), for the same reason and off
     // the same component as `ownerAnchors` above. This field held the ROW-LEVEL
-    // Confirm/Skip pair, which the ratified drawing deleted — the row is decided
-    // PER CHIP now. The stale names survived the redraw because nothing
-    // exercised them: `recommendation_hold` had no chat_thread mount, so the
-    // matrix took its ratchet arm and never observed the real card. S9b
-    // (cinatra#2786) lands that mount and strikes the ratchet, which is what
-    // reads this list against the shipped DOM for the first time — and the
-    // evaluator requires EVERY selector here inside one declaring root, so
-    // leaving the row-level pair would have failed the real card on controls it
-    // no longer draws. These are the same three `ownerAnchors` names and the
-    // same three the capture contract names.
+    // `confirm-run-recommendation` / `skip-run-recommendation` pair, which the
+    // ratified drawing deleted — the row is decided PER CHIP now, and that pair
+    // is emitted nowhere.
+    //
+    // IT WENT STALE IN TWO PLACES AND WAS FOUND TWICE. cinatra#2866 renamed the
+    // owner anchors and left this field behind, which asserted a selector the
+    // shipped row never draws and turned main red (cinatra#2887, fixed by
+    // cinatra#2888). Independently, nothing on this branch had ever exercised
+    // it: `recommendation_hold` had no chat_thread mount, so the matrix took its
+    // ratchet arm and never observed the real card. S9b (cinatra#2786) lands
+    // that mount and strikes the ratchet, which is what reads this list against
+    // the shipped DOM for the first time — and the evaluator requires EVERY
+    // selector here inside one declaring root, so leaving the row-level pair
+    // would have failed the real card on controls it no longer draws. Both
+    // routes arrived at the same three names, which is the reassuring part.
     decisionControls: Object.freeze([
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',
