@@ -174,6 +174,9 @@ import {
   type TurnProjection,
 } from "@/lib/lifecycle/held-turn-card-contract";
 import { mountSurface } from "../../../../packages/chat/src/__tests__/conversation-column-harness";
+import { projectConversationMessage } from "../../../../packages/chat/src/ag-ui-chat-client";
+import { reduceAgUiEvents } from "../../../../packages/chat/src/renderer/ag-ui-reducer";
+import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
 import type { UiMessage } from "../../../../packages/chat/src/types";
 import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../../../../packages/agents/src/lifecycle-card-runtime";
 
@@ -444,6 +447,49 @@ function saveAStaleTranscriptCarryingALaterTurn(args: {
     }),
   });
   return { laterMessageId: laterMessage.id };
+}
+
+/**
+ * A whole-transcript save that LANDS, carrying exactly the messages given.
+ *
+ * The same shipped mirror projection every other save in this file runs, so the
+ * spine it writes is the spine production writes — including the reconcile
+ * DELETE, which is what makes this helper serve the truncation arms too.
+ */
+function saveWholeTranscript(args: {
+  threadId: string;
+  messages: Array<Record<string, unknown>>;
+}): void {
+  const now = new Date().toISOString();
+  runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: buildAssistantThreadMirrorQueries({
+      schemaName: postgresSchema,
+      thread: {
+        id: args.threadId,
+        title: "slack thread",
+        messages: args.messages,
+        createdAt: now,
+        updatedAt: now,
+        ownerUserId: OWNER_ID,
+      },
+      explicitMirrorOrgId: ORG_ID,
+    }),
+  });
+}
+
+/**
+ * The turn the SHIPPED Slack projection builds for this drive.
+ *
+ * Built by folding the sink's OWN events through the shipped AG-UI reducer and
+ * projecting the result with `slackMode: true` — the production path, not a
+ * shape this file decided on. That is what makes the arms below a statement
+ * about the two real records of one turn rather than about a fixture.
+ */
+function slackProjectionOf(drive: SinkDrive, assistantId: string): UiMessage {
+  const state = reduceAgUiEvents(drive.events as unknown as AgUiEvent[]);
+  return projectConversationMessage(state, { assistantId, slackMode: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -804,6 +850,82 @@ describe("a stale save cannot push a turn out of its place in time", () => {
     expect(assistant!.dataParts ?? []).toEqual([
       { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
     ]);
+  });
+});
+
+describe("a SLACK-MODE turn whose save SUCCEEDED is not folded in twice", () => {
+  // cinatra#2823 review round 3, blocker 1 — RE-VERIFIED at the merge-forward,
+  // where the shape has moved and the defect has not.
+  //
+  // The reviewer's reading (at `b1aaa66e`) was that the Slack projection "omits
+  // `parts` and keeps `dataParts`", so a Slack turn carried the card's own
+  // `viewType|ref` but no tool-call id to match on. Since S9i (#2879) it carries
+  // NEITHER: a stamped view is folded onto its producing `tool_call` PART, and
+  // the Slack branch is a whole-turn atomic reveal that omits `parts` outright.
+  // So the only server-minted identity a Slack turn still records is the
+  // tool-call id inside `thoughtGroups` — which is what the match now reads.
+  //
+  // The duplicate the reviewer reproduced is unchanged either way: unmatchable
+  // means the save reads as one that never happened, and the server's own copy
+  // folds in beside a turn that is already on screen.
+  //
+  // NOTHING HERE IS HAND-BUILT: the spine turn is produced by the SHIPPED Slack
+  // projection over the SHIPPED reducer, fed the sink's own events from the same
+  // drive that produced the durable row — the two real records of one turn.
+  it.each([
+    ["the lifecycle-view carriage", 0],
+    ["the agent_run pin carriage", 3],
+  ])("reloads the reviewer's three-message thread as TWO messages — %s", async (_label, index) => {
+    const carriage = CARRIAGES[index];
+    const threadId = `thr-2823-slack-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const slackTurn = slackProjectionOf(drive, `a-slack-${randomUUID()}`);
+    // The Slack layout really is partless — if that ever stops being true this
+    // arm stops testing what it says it tests.
+    expect(
+      slackTurn.parts,
+      "the Slack projection grew a `parts` key — this arm is about the layout that has none",
+    ).toBeUndefined();
+
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: `Please handle the ${carriage.kind} case.`,
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    // The client's whole-transcript save LANDS, carrying the Slack turn.
+    saveWholeTranscript({ threadId, messages: [userMessage, slackTurn] });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(
+      reloaded.map((m) => m.id),
+      "the reload duplicated a turn whose save SUCCEEDED — the Slack-projected turn could not be matched to its own durable row",
+    ).toEqual([userMessage.id, slackTurn.id]);
+    // ...and the card is drawn ONCE. There is one assistant turn to draw it on.
+    expect(reloaded.filter((m) => m.role === "assistant")).toHaveLength(1);
+  });
+
+  it("still repairs a Slack-mode turn whose save never landed", () => {
+    // The other half of the same discipline, and the reason the match is widened
+    // rather than the fold-in narrowed: a save that never carried the assistant
+    // turn is SILENT about it, and silence is exactly what this leg repairs. The
+    // spine here holds the user's message alone.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-slackdrop-${randomUUID()}`;
+    return driveTheRealSink(carriage, threadId).then((drive) => {
+      const { userMessage } = persistThroughTheRealStore({
+        threadId,
+        userText: `Please handle the ${carriage.kind} case.`,
+        runId: drive.runId,
+        durable: drive.durable,
+      });
+      const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+      expect(reloaded.map((m) => m.role)).toEqual(["user", "assistant"]);
+      expect(reloaded[0].id).toBe(userMessage.id);
+      expect(reloaded[1].dataParts ?? []).toEqual([
+        { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+      ]);
+    });
   });
 });
 

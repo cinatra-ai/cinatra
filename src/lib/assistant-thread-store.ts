@@ -1795,7 +1795,23 @@ export function carriesLifecycleRenderState(turn: ProjectedAssistantTurn): boole
   );
 }
 
-/** The tool-call ids a message's render trace carries. */
+/**
+ * The tool-call ids a message's render trace carries — from BOTH places a
+ * projected turn can record them.
+ *
+ * WHY BOTH (cinatra#2823, review round 3, blocker 1). `projectConversationMessage`
+ * has two shapes, not one. The ordinary shape carries the ordered `parts` trace.
+ * The SLACK-MODE shape — "whole-turn atomic reveal — deliberately NO `parts`"
+ * (`packages/chat/src/ag-ui-chat-client.ts`) — carries `thoughtGroups` instead,
+ * and Slack mode engages automatically once two assistants are tagged. Reading
+ * `parts` alone therefore said "this message has no tool calls" about a turn that
+ * has them and records them, one field over: the id is the SAME server-minted id
+ * off the SAME wire, written by the same projection, in the layout that turn uses.
+ *
+ * That was not a missing convenience, it was a duplicate: a Slack-projected turn
+ * could never share a key with its own durable row, so a save that SUCCEEDED read
+ * as a save that never happened and the server's copy folded in beside it.
+ */
 export function toolCallIdsOf(message: unknown): Set<string> {
   const ids = new Set<string>();
   if (!isRecord(message)) return ids;
@@ -1805,6 +1821,16 @@ export function toolCallIdsOf(message: unknown): Set<string> {
     if (part.kind !== "tool_call") continue;
     const id = stringOrNull(part.id);
     if (id !== null) ids.add(id);
+  }
+  const groups = Array.isArray(message.thoughtGroups) ? message.thoughtGroups : [];
+  for (const group of groups) {
+    if (!isRecord(group)) continue;
+    const toolCalls = Array.isArray(group.toolCalls) ? group.toolCalls : [];
+    for (const call of toolCalls) {
+      if (!isRecord(call)) continue;
+      const id = stringOrNull(call.id);
+      if (id !== null) ids.add(id);
+    }
   }
   return ids;
 }
@@ -1948,14 +1974,64 @@ function contradictsDurableTurn(
 }
 
 /**
- * The index of the spine message that is THIS turn, identified by a shared
- * server-minted tool-call id, or -1 when the spine does not carry the turn.
+ * Does this spine message CLAIM to be the durable turn — does it carry shared
+ * SERVER-MINTED identity evidence?
  *
- * A CORROBORATED match, not a bare id hit (cinatra#2823 codex round 2). The ids
- * on the SPINE side are read off content the CLIENT wrote — the whole-transcript
- * save is the client's own transcript — so a shared id is a claim, not a proof,
- * and being wrong about it means one turn's card or run pin landing on another
- * message. Two guards make the claim carry its own corroboration:
+ * TWO KINDS OF EVIDENCE, in strict precedence, both minted by the server and
+ * both reaching the client verbatim on the wire:
+ *
+ *   1. A SHARED TOOL-CALL ID. The primary key, unchanged since round 2, and
+ *      since round 3 read from `parts` AND `thoughtGroups` both, because those
+ *      are the two shapes `projectConversationMessage` produces (`toolCallIdsOf`).
+ *   2. A SHARED LIFECYCLE VIEW REF, and ONLY for a message that records NO tool
+ *      call anywhere. A card's `viewType|ref` is its own server-minted identity,
+ *      and for a turn that recorded no call it is the only identity left on the
+ *      message — a projection that keeps `dataParts` while dropping the trace
+ *      (Slack mode, an older persisted shape) has exactly that and nothing else.
+ *
+ * WHY (2) IS FENCED BEHIND "NO TOOL CALL AT ALL", which is the whole of the care
+ * this extension needs. A message that DOES record its calls and shares none of
+ * the durable turn's is not silent about its identity — it is saying it is a
+ * DIFFERENT turn. Falling back to a weaker key there would let a shared ref (a
+ * later turn legitimately re-rendering the same lifecycle entity) claim another
+ * turn's row, and a claim on this path costs the durable turn its fold-in
+ * entirely. So the fallback is offered only where there is nothing to contradict.
+ *
+ * The corroboration discipline on top is UNCHANGED and applies to whichever
+ * claimant emerges: more than one claimant is ambiguity and refuses
+ * (`findCoveringSpineIndex` (a)), and a claimant carrying a contradicting run pin
+ * or a disjoint card set refuses (`contradictsDurableTurn`). Nothing here loosens
+ * the forgery posture; it widens only WHERE the same server-minted evidence is
+ * read from.
+ */
+function claimsDurableTurn(
+  spine: Record<string, unknown>,
+  durableIds: Set<string>,
+  durableRefs: Set<string>,
+): boolean {
+  const spineIds = toolCallIdsOf(spine);
+  for (const id of spineIds) {
+    if (durableIds.has(id)) return true;
+  }
+  if (spineIds.size > 0) return false; // records its calls, shares none — not this turn
+  if (durableRefs.size === 0) return false;
+  for (const ref of allLifecycleViewRefsOf(spine)) {
+    if (durableRefs.has(ref)) return true;
+  }
+  return false;
+}
+
+/**
+ * The index of the spine message that is THIS turn, identified by shared
+ * server-minted identity evidence (`claimsDurableTurn`), or -1 when the spine
+ * does not carry the turn.
+ *
+ * A CORROBORATED match, not a bare id hit (cinatra#2823 codex round 2). The
+ * evidence on the SPINE side is read off content the CLIENT wrote — the
+ * whole-transcript save is the client's own transcript — so a shared id is a
+ * claim, not a proof, and being wrong about it means one turn's card or run pin
+ * landing on another message. Two guards make the claim carry its own
+ * corroboration:
  *
  *   (a) AMBIGUITY IS NOT A LICENSE. If MORE THAN ONE spine message claims a
  *       matching id, no repair is made — the turn is treated as one the spine
@@ -1988,17 +2064,11 @@ function findCoveringSpineIndex(
   // one always carries the call it came from. A durable turn with no call at all
   // therefore has no shared key, and is treated as one the spine does not have.
   if (durableIds.size === 0) return -1;
+  const durableRefs = lifecycleViewRefsOf(projected.dataParts);
   let claimant = -1;
   for (let i = 0; i < messages.length; i += 1) {
     if (messages[i].role !== "assistant") continue;
-    let shares = false;
-    for (const id of toolCallIdsOf(messages[i])) {
-      if (durableIds.has(id)) {
-        shares = true;
-        break;
-      }
-    }
-    if (!shares) continue;
+    if (!claimsDurableTurn(messages[i], durableIds, durableRefs)) continue;
     if (claimant !== -1) return -1; // (a) two claimants — ambiguous, no repair
     claimant = i;
   }
@@ -2255,7 +2325,12 @@ function repairedSpineMessage(
  *     different run pinned on the shared call, disjoint view refs) is refused
  *     rather than repaired — see `findCoveringSpineIndex`, which also states the
  *     trust boundary that remains. A corroborated match adds only what the save
- *     dropped (the views, the pinned run) and touches nothing else.
+ *     dropped (the views, the pinned run) and touches nothing else. The shared
+ *     key is read from EVERY shape the projection produces: the ordered `parts`
+ *     trace, the Slack-mode `thoughtGroups` that stand in for it, and — for a
+ *     turn that records no call at all — the card's own `viewType|ref`
+ *     (`claimsDurableTurn`). A projection that cannot be matched is a turn that
+ *     duplicates on every reload even when its save landed perfectly.
  *   * A turn the spine does NOT carry is folded in POSITIONALLY, by the server's
  *     `created_at` measured against the spine's own row timestamps. The tail
  *     would be right only if the spine were always a PREFIX of the conversation,

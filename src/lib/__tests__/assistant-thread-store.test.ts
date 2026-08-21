@@ -612,6 +612,180 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
     expect(spineAssistant).toEqual(before);
   });
 
+  // ── the SLACK-MODE projection (cinatra#2823, review round 3, blocker 1) ────
+  // `projectConversationMessage(state, { slackMode: true })` builds a turn with
+  // NO `parts` — Slack's layout is a whole-turn atomic reveal — while keeping
+  // `dataParts`, because a renderable view is an adjunct like citations. So a
+  // Slack-projected turn saved PERFECTLY carries no `parts` for a tool-call-id
+  // match to read, and before this round it could never be recognised as the
+  // durable turn: the fold-in read it as a save that never happened and folded
+  // the server's copy in beside it. Slack mode engages automatically at two
+  // tagged assistants, so this is the ordinary shape of a multi-assistant
+  // thread, not an edge case.
+
+  /** The turn `projectConversationMessage` builds in Slack mode: content +
+   *  thoughtGroups + citations + dataParts, and deliberately NO `parts`. */
+  function slackProjectedTurn(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      thoughtGroups: [
+        {
+          id: "main",
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "artifact_review_gate_render",
+              status: "completed",
+              resultLabel: "Reviewed",
+              serverLabel: "cinatra",
+            },
+          ],
+        },
+      ],
+      dataParts: [{ ...REVIEW_VIEW }],
+      ...over,
+    };
+  }
+
+  it("does NOT duplicate a SLACK-MODE turn whose save SUCCEEDED", () => {
+    // The reviewer's repro: the transcript comes back with THREE messages where
+    // two are right — the user's, the Slack turn that is already drawing the
+    // card, and the server's own copy of the same turn folded in beside it,
+    // carrying the identical `viewType|ref` in the `parts` layout Slack omits.
+    const userMsg = { id: "m1", role: "user", content: "review it" };
+    const slackTurn = slackProjectedTurn();
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: userMsg }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // TWO messages, not three. The save succeeded; there is nothing to repair.
+    expect(messages).toHaveLength(2);
+    // And the reader's own turn comes back reference-identical — nothing was
+    // owed, so nothing was rebuilt.
+    expect(messages[1]).toBe(slackTurn);
+  });
+
+  it("matches a PARTLESS Slack turn on its VIEW REFS when it carries no thoughtGroups", () => {
+    // The same projection minus the thought groups (a turn whose tool round the
+    // reader's client did not record, or an older persisted shape). The only
+    // server-minted identity left on it is the card's own `viewType|ref`, which
+    // reached the client verbatim on the wire — so that is what the match reads.
+    const slackTurn = slackProjectedTurn({ thoughtGroups: undefined });
+    delete slackTurn.thoughtGroups;
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toBe(slackTurn);
+  });
+
+  it("REFUSES the ref match when TWO spine turns draw the same card", () => {
+    // A lifecycle ref names a lifecycle ENTITY, so a later turn can legitimately
+    // re-render the same card. Two partless claimants is therefore ambiguity,
+    // not proof, and picking one would be picking by iteration order — the same
+    // rule the tool-call-id match has followed since round 2.
+    const first = slackProjectedTurn({ id: "a1", thoughtGroups: undefined });
+    delete first.thoughtGroups;
+    const second = slackProjectedTurn({ id: "a2", thoughtGroups: undefined });
+    delete second.thoughtGroups;
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: first }),
+        turn({ id: "legacy:4:th1:a2", content: second }),
+      ],
+      [],
+      null,
+    );
+    // Refused, and — as every refusal on this path does — folded in positionally
+    // rather than dropped: the server's record is the one thing here that cannot
+    // be re-derived.
+    expect(payload!.messages).toHaveLength(3);
+  });
+
+  it("does NOT ref-match a spine turn that carries tool-call ids of its OWN", () => {
+    // The ref path exists for a turn with NO id evidence at all. A turn that DOES
+    // record tool calls and shares none of the durable turn's is showing a
+    // different turn — evidence AGAINST the match, never a reason to fall back to
+    // a weaker key.
+    const otherTurn = {
+      id: "a1",
+      role: "assistant",
+      content: "a different turn",
+      parts: [{ kind: "tool_call", id: "call-OTHER", name: "artifact_review_gate_render", status: "completed" }],
+      dataParts: [{ ...REVIEW_VIEW }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: otherTurn }),
+      ],
+      [],
+      null,
+    );
+    expect(payload!.messages).toHaveLength(2);
+  });
+
+  it("still REPAIRS a Slack-mode turn whose save was genuinely dropped", () => {
+    // The other half of the same discipline: the reader's Slack turn landed
+    // WITHOUT its card (`dataParts` absent — the dropped save this fold-in exists
+    // for). Matching it is now possible, so the card is restored ONTO the
+    // reader's own turn instead of arriving as a second message.
+    const slackTurn = slackProjectedTurn({ dataParts: undefined });
+    delete slackTurn.dataParts;
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].dataParts).toEqual([REVIEW_VIEW]);
+    // Still Slack-shaped: the repair adds what the save dropped and nothing else.
+    expect(messages[0].parts).toBeUndefined();
+  });
+
+  it("REFUSES a Slack-mode match the run pin contradicts", () => {
+    // The corroboration discipline is not loosened by the new evidence: a
+    // thoughtGroup id can be matched, and the contradiction test still runs on
+    // top of it. Here the reader's turn is drawing a DIFFERENT card entirely.
+    const slackTurn = slackProjectedTurn({
+      dataParts: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref: "SOME-OTHER-ref" }],
+    });
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    expect(payload!.messages).toHaveLength(2);
+  });
+
   it("NEVER overwrites a view the spine already carries", () => {
     // The reader's save DID land with the view on it — the SAME view the server
     // recorded, because both sides read it off the same wire.
