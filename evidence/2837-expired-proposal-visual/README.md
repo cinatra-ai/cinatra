@@ -29,6 +29,14 @@ without trusting the file name.
 capture can cite the host off the card's own root instead of asserting it in
 prose, and it is pinned by the card suite in both directions.
 
+It sits on the EXPIRED reading's root and nowhere else. The attribute is the
+third of the three that make an element a lifecycle card root, and main's
+carriage matrix rules that the S1 placeholder is not one — it names the kind and
+a state, declares no host, and offers nothing to press. So the shell declares a
+host exactly where it draws an owner, which here is the expired card in cells 10
+and 12. Cell 11's re-proposed card is the placeholder, and it declares none;
+`capture-chat_thread.txt` carries the amendment that says so.
+
 ## Runtime
 
 | Fact | Value |

@@ -12,6 +12,27 @@ do not need it in full to be checkable.
 ANCHORS — read off the card's OWN root immediately before each shot
 ========================================================================
 
+AMENDMENT 2026-08-21, after the merge-forward onto main's ratified section-V
+drawing (PR #2866). The rows below are the untouched observation from the
+capture run of 2026-08-19 at the pre-merge head. ONE recorded value no longer
+holds at the merged head, and it is named here rather than rewritten, because
+an observation that is edited afterwards is no longer an observation:
+
+  after-adjust ... data-lifecycle-card-host = "chat_thread"  ->  now ABSENT
+
+Why. `data-lifecycle-card-host` is the third of the three attributes that MAKE
+an element a lifecycle card ROOT, and main's carriage matrix rules that the S1
+placeholder is not one: it names the kind and a state, declares no host, and
+offers nothing to press. The re-proposed card in the after-adjust row IS that
+placeholder ("Waiting for your decision."), so the shell no longer declares a
+host under it. The two EXPIRED rows are unaffected — the expired reading is an
+owner drawing, and it carries all three attributes exactly as recorded.
+
+Cell 11's claim does not rest on this value. Its pictures and its README
+section cite the state, the phase, the absent Adjust and the re-proposed ref,
+and every one of those still reads as recorded. Nothing else in this log
+changes. A re-capture would restate the same three cells with one blank field.
+
 --- before-adjust (expired card on chat_thread)
     pictures: x2837f-10-chat-thread-expired-*
     data-lifecycle-card              = "trigger_schedule_proposal"
