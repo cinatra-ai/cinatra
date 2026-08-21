@@ -31,6 +31,13 @@ import {
   type ConversationTransport,
 } from "../conversation-column";
 import { createChatWidgetRuntime, EMPTY_WIDGETS, EMPTY_WIDGET_MANIFESTS } from "../widget-runtime";
+import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card";
+import {
+  LIFECYCLE_VIEW_SCHEMA_VERSION,
+  TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
+  VERIFICATION_SUMMARY_VIEW_VERSION,
+  type LifecycleCardState,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { useBrokeredComposerInputs } from "../brokered-composer-inputs";
 import type { ConversationServiceTransport } from "../conversation-services";
 import type { UiMessage } from "../types";
@@ -192,6 +199,15 @@ export type SurfaceMountOptions = {
    * thread through the shared turn engine and ignores this.
    */
   threadId?: string;
+  /**
+   * Mount the CHAT arm in the SLACK layout (cinatra#2825, S9l) — the two-mention
+   * turn shape, whose pinned layout omits the ordered `parts` trace. `/chat`
+   * chooses this per thread, so a survival check has to be able to mount BOTH
+   * layouts on the same transcript. Default `false` keeps every existing arm
+   * mounting exactly what it mounted before. The widget arm resolves its own
+   * layout through the shared turn engine and ignores this.
+   */
+  slackMode?: boolean;
 };
 
 /**
@@ -215,7 +231,7 @@ export function chatSurfaceElement(options: SurfaceMountOptions = {}): ReactElem
       <ConversationColumn
         host={CHAT_THREAD_HOST}
         messages={messages}
-        isSlackMode={false}
+        isSlackMode={options.slackMode ?? false}
         animating={false}
         theme="github-light"
         userId="user-1"
@@ -357,6 +373,17 @@ export type WidgetServiceStubOptions = {
   undoChangeSetId?: string | null;
   /** Make one route refuse, so a check can prove the refusal is honoured. */
   unauthorized?: string[];
+  /**
+   * The LIFECYCLE resolve answer, per requested kind (cinatra#2826, S9m).
+   *
+   * The transcript's cards resolve their authority through the same fetch the
+   * rest of the surface uses, so the widget's server has to answer that route
+   * too — otherwise a card would draw nothing for want of a stub and a suite
+   * could read that silence as a surface that carries no cards. Returning
+   * `null` means "this reader gets nothing", which is a 200 `absent` envelope,
+   * not a transport failure.
+   */
+  lifecycle?: (viewType: string) => unknown | null;
 };
 
 /**
@@ -376,6 +403,18 @@ export function installWidgetServiceStub(options: WidgetServiceStubOptions = {})
     calls.push({ url, init: init ?? {} });
     if ((options.unauthorized ?? []).some((p) => url.startsWith(p))) {
       return json({ error: "Unauthorized" }, 401);
+    }
+    if (url === LIFECYCLE_VIEW_RESOLVE_PATH) {
+      if (!options.lifecycle) return json({ error: "no lifecycle stub" }, 404);
+      const requested = (() => {
+        try {
+          return String(JSON.parse(String(init?.body ?? "{}")).viewType ?? "");
+        } catch {
+          return "";
+        }
+      })();
+      const answer = options.lifecycle(requested);
+      return answer === null ? json({ error: "Not available to you." }, 404) : json(answer);
     }
     if (url.startsWith("/api/assistants/list")) {
       return json({ assistants: options.mentionables ?? [] });
@@ -700,3 +739,108 @@ export async function mountRunningSurface(
   globalThis.fetch = original;
   return Object.assign(result, { stream });
 }
+
+// ---------------------------------------------------------------------------
+// LIFECYCLE carriage on the shared column (cinatra#2826, epic #2784 S9m)
+// ---------------------------------------------------------------------------
+// The transcripts a lifecycle kind really arrives in, and the resolve answers a
+// server really returns for it. Both live here because BOTH arms use them: a
+// parity claim measured from two different fixtures measures the fixtures.
+
+/**
+ * A persisted turn carrying one lifecycle DATA_PART — the shape the whole-message
+ * save replays after a reload. The payload is the reserved envelope and nothing
+ * else: a ref, never content.
+ */
+export function lifecycleDataPartTranscript(viewType: string, ref: string): UiMessage[] {
+  return [
+    { id: "u1", role: "user", content: "What is waiting on me?" },
+    {
+      id: "a1",
+      role: "assistant",
+      content: "Here is what is waiting on you.",
+      dataParts: [{ viewType, schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION, ref }],
+    } as UiMessage,
+  ];
+}
+
+/** The run id the held transcript below parks on. */
+export const HELD_RUN_ID = "run-held-2826";
+
+/**
+ * A persisted HELD dispatch turn — the carriage of the one INTERRUPT kind. The
+ * durable `agent_run` part is what the server pinned, so this is what a reload
+ * replays.
+ */
+export function lifecycleHeldTranscript(): UiMessage[] {
+  return [
+    { id: "u1", role: "user", content: "Run the proof agent" },
+    {
+      id: "a1",
+      role: "assistant",
+      content: "",
+      parts: [
+        {
+          kind: "text",
+          content:
+            "Dispatched `@cinatra-ai/proof-agent` (runId: `" + HELD_RUN_ID + "`, status: `pending_input`).",
+        },
+        {
+          kind: "tool_call",
+          id: "t1",
+          name: "agent_run",
+          runId: HELD_RUN_ID,
+          status: "completed",
+          resultLabel: `runId: ${HELD_RUN_ID}, status: pending_input`,
+        },
+      ],
+    } as UiMessage,
+  ];
+}
+
+/** A §VII reading — the verification kind fails closed without one. */
+const VERIFICATION_BODY = {
+  version: VERIFICATION_SUMMARY_VIEW_VERSION,
+  outcome: "verified",
+  reviewedRevisionId: "rev-base",
+  repairedRevisionId: "rev-fixed",
+  scopePaths: ["content.title"],
+  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+};
+
+/** A live proposal — the schedule kind's own body. */
+const SCHEDULE_BODY = {
+  phase: "proposal",
+  version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
+  agentName: "Weekly digest",
+  schedule: { kind: "scheduled", runAt: "2026-09-01T09:00", timezone: "Europe/Berlin" },
+  durationCopy: "About 45s – 3.4 hr.",
+  canConfirm: true,
+  restrictedReason: null,
+};
+
+/** The per-kind body a drawn state must carry. `null` for the review kind — its
+ *  target arrives through its own island, never through the envelope. */
+function lifecycleBodyFor(viewType: string): unknown {
+  if (viewType === "verification_summary") return VERIFICATION_BODY;
+  if (viewType === "trigger_schedule_proposal") return SCHEDULE_BODY;
+  return null;
+}
+
+/**
+ * The resolve envelopes a stub returns, in the per-kind shape the card parses.
+ * The kind is ECHOED from the request, so a mount that asked about one kind can
+ * never be answered about another.
+ */
+export const LIFECYCLE_RESOLVE_ANSWERS = {
+  pending(viewType: string): unknown {
+    const state: LifecycleCardState =
+      viewType === "verification_summary"
+        ? { state: "advisory" }
+        : { state: "pending", canDecide: true, canComment: true };
+    return { kind: viewType, state, body: lifecycleBodyFor(viewType) };
+  },
+  absent(viewType: string): unknown {
+    return { kind: viewType, state: { state: "absent" }, body: null };
+  },
+};

@@ -155,24 +155,37 @@ describe("install pipeline × materialization plan (cinatra#181)", () => {
     expect(calls.provenance).toHaveLength(0);
   });
 
-  it("PROBE GATING: an UNTRUSTED closure-LESS package never reaches verifyActivatableBeforeFinalize (no code execution from the probe)", async () => {
-    // A closure package never even materializes (refused above); the probe
-    // gate matters for the closure-LESS untrusted case: an invalid signature
-    // (hard false) must not get probe code execution either.
-    const kp = generateExtensionSigningKeyPair();
-    const wrong = generateExtensionSigningKeyPair();
-    const badSig = signExtension({ packageName: PKG, version: VER, integrity: INTEGRITY }, wrong.privateKeyPkcs8DerB64);
-    process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS = kp.publicKeyDerB64;
+  it("an UNTRUSTED package never reaches verifyActivatableBeforeFinalize, because it never reaches ANY durable step", async () => {
+    // The probe executes package code (`register(ctx)`), so an untrusted package
+    // must never reach it. That was previously achieved by skipping the probe
+    // and letting the install continue, which is what allowed an untrusted
+    // package to commit and only fail afterwards.
+    //
+    // The property now holds for a stronger reason: an untrusted verdict refuses
+    // the whole install before the probe, before the journal, and before every
+    // other durable step. No code execution, and no committed row either.
+    process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES = "true";
     const probed: unknown[] = [];
+    const provenance: unknown[] = [];
     const { deps } = fakePipelineDeps({
-      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, signature: badSig }),
+      trustedActivationHosts: () => [],
+      allowMarketplaceBootstrapTrust: () => false,
+      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY }),
       verifyActivatableBeforeFinalize: async (i) => {
         probed.push(i);
-        return { supersedes: false };
+        return { supersedes: false, ok: true };
+      },
+      recordProvenance: async (i) => {
+        provenance.push(i);
       },
     });
-    await installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null }, deps);
-    expect(probed).toEqual([]); // invalid signature = untrusted -> the import/register probe must NOT run
+
+    await expect(
+      installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null }, deps),
+    ).rejects.toThrow(/refused before anything was committed/i);
+
+    expect(probed, "the probe never ran, so no package code executed").toEqual([]);
+    expect(provenance, "and nothing durable was written either").toEqual([]);
   });
 
   it("a v2 signature binding the recomputed closureHash IS trusted-signed (grant auto-approves)", async () => {

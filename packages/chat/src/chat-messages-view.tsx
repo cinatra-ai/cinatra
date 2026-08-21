@@ -60,6 +60,8 @@ import {
   getLiveProgressStatus,
   shouldShowLiveProgressStatus,
   formatToolName,
+  lifecycleSlotParts,
+  turnCarriesLifecycleItems,
   type AssistantMessagePart,
 } from "./assistant-parts";
 import { resolveAssistantDisplayName } from "./assistant-display-name";
@@ -195,6 +197,7 @@ function OrderedPartsSection({
   detectWidgets,
   onMarkdownClick,
   onActiveGateChange,
+  onApplyIntent,
 }: {
   parts: AssistantMessagePart[];
   trimContent?: (content: string) => string;
@@ -214,6 +217,10 @@ function OrderedPartsSection({
     gate: ChatGateDescriptor | null,
     instanceId: string,
   ) => void;
+  /** §6e apply-intent gesture seam (cinatra#2683), threaded to the views a part
+   *  produced so a SLOTTED card keeps the one gesture the widget owns. Absent
+   *  (`/chat`) ⇒ display-only, exactly as for the turn-level list. */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
 }) {
   if (parts.length === 0) return null;
   return (
@@ -233,11 +240,28 @@ function OrderedPartsSection({
             <div
               key={`text-${idx}`}
               data-embed-content
+              data-transcript-slot={idx}
               className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(raw, theme, detectWidgets) }}
             />
           );
         }
+        // The views this step PRODUCED (cinatra#2827, epic #2784 S9i). A
+        // lifecycle card is minted at a tool RESULT, and the wire names the call
+        // it was minted at, so the card is drawn HERE — inside the producing
+        // part's own container — rather than appended after the whole trace.
+        // Same `RenderableViewCard` the turn-level list dispatches: ONE registry,
+        // one validation path, one fallback. A card sits BESIDE the inline run
+        // card, never inside it: the run card is a `run_card` host of its own,
+        // and a chat card rendered in that subtree would be another host's mount.
+        const producedViews = part.kind === "tool_call" ? (part.views ?? []) : [];
+        const slottedViews = producedViews.map((view, i) => (
+          <RenderableViewCard
+            key={`slot-${idx}-view-${i}`}
+            data={view}
+            {...(onApplyIntent ? { onApplyIntent } : {})}
+          />
+        ));
         // `agent_run` tool_results carry a runId pinned by the tool_result
         // handler. Mount AgenticRunPanel inline so the user can drive HITL
         // gates (URL pickers, list pickers, reviewer approvals) from within
@@ -245,7 +269,7 @@ function OrderedPartsSection({
         // The card resolves to its own panel chrome — no extra Card wrapper here.
         if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
           return (
-            <div key={`agent-run-${part.runId}`}>
+            <div key={`agent-run-${part.runId}`} data-transcript-slot={idx}>
               <InlineAgentRunCard
                 runId={part.runId}
                 onActiveGateChange={onActiveGateChange}
@@ -253,6 +277,15 @@ function OrderedPartsSection({
               {/* Inline undo for a recent restorable change-set produced by
                   this run. */}
               <UndoActionChip runId={part.runId} />
+              {slottedViews}
+            </div>
+          );
+        }
+        // A step that produced a view gets its own container at its own slot.
+        if (slottedViews.length > 0) {
+          return (
+            <div key={`slot-${idx}`} data-transcript-slot={idx}>
+              {slottedViews}
             </div>
           );
         }
@@ -829,6 +862,14 @@ function MessageChartEmbeds({
  * fallback. An unknown or invalid payload renders the neutral fallback rather
  * than crashing the transcript; a lifecycle card renders nothing until its
  * authoritative refetch succeeds.
+ *
+ * WHAT THIS LIST NO LONGER CARRIES (cinatra#2827, epic #2784 S9i). A view whose
+ * `DATA_PART` named the tool call that produced it is folded onto that
+ * `tool_call` part by the reducer and drawn by `OrderedPartsSection` at that
+ * step's own container. So the two mounts PARTITION the turn's views by whether
+ * the wire gave them a position — a view is drawn once, never twice — and this
+ * list keeps exactly the ones with no producing step (an A2A artifact part, a
+ * bridge part, an external producer that stamps no slot).
  */
 function MessageRenderableViews({
   message,
@@ -852,6 +893,56 @@ function MessageRenderableViews({
       {...(onApplyIntent ? { onApplyIntent } : {})}
     />
   ));
+}
+
+/**
+ * The turn's LIFECYCLE SLOTS, drawn wherever the ordered-parts branch did not
+ * draw them (cinatra#2825, S9l).
+ *
+ * A lifecycle card mounted at a slot in the ordered trace — the `agent_run`
+ * anchor the recommendation card sits at (#2786) — used to disappear in two
+ * situations that have nothing to do with the decision it is holding:
+ *
+ *   · THE SLACK LAYOUT pins its own turn shape and omits the ordered `parts`,
+ *     so the anchor was never on the projected turn at all. The projection now
+ *     carries the slots (and only the slots) on `lifecycleParts`.
+ *   · AN ERROR TURN skips the ordered-parts branch entirely and draws the error
+ *     card alone, so a card the run had already produced went with it.
+ *
+ * It draws through `OrderedPartsSection`, the SAME branch the full trace draws a
+ * slot through, so there is one mount path for the inline run card rather than a
+ * second one that could drift. Its own guard — not the caller's — decides
+ * whether that branch already drew them, which is what keeps ONE rendered
+ * instance per kind per host however many ladder branches mount this.
+ */
+function MessageLifecycleSlots({
+  message,
+  theme,
+  detectWidgets,
+  onActiveGateChange,
+}: {
+  message: UiMessage;
+  theme: ThemeName;
+  detectWidgets: (content: string) => DetectedWidget[];
+  onActiveGateChange?: (
+    runId: string,
+    gate: ChatGateDescriptor | null,
+    instanceId: string,
+  ) => void;
+}) {
+  // The ordered-parts branch condition, restated: when it ran, it already drew
+  // every slot in the trace and this mount must draw nothing.
+  if (message.parts && message.parts.length > 0 && !message.error) return null;
+  const slots = lifecycleSlotParts(message.parts ?? message.lifecycleParts);
+  if (slots.length === 0) return null;
+  return (
+    <OrderedPartsSection
+      parts={slots}
+      theme={theme}
+      detectWidgets={detectWidgets}
+      onActiveGateChange={onActiveGateChange}
+    />
+  );
 }
 
 function MessageCitations({ message }: { message: UiMessage }) {
@@ -1214,6 +1305,7 @@ export function ChatMessagesView({
                         detectWidgets={widgetRuntime.detectWidgets}
                         onMarkdownClick={handleAssistantMarkdownClick}
                         onActiveGateChange={onActiveGateChange}
+                        onApplyIntent={onApplyIntent}
                       />
                     ) : (
                       <>
@@ -1231,7 +1323,21 @@ export function ChatMessagesView({
                       </>
                     )}
                     {message.error ? (
-                      <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                      // cinatra#2825 (S9l) — the error card is what this turn
+                      // ENDED as; the lifecycle items are what it is still
+                      // HOLDING. An unrelated stream error must not decide for
+                      // the reader by hiding a card they still owe an answer to,
+                      // so both are drawn, the error first.
+                      <>
+                        <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                        <MessageLifecycleSlots
+                          message={message}
+                          theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
+                          onActiveGateChange={onActiveGateChange}
+                        />
+                        <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
+                      </>
                     ) : (message.parts && message.parts.length > 0) ? (
                       // Rich-content adjuncts (mermaid, charts, citations,
                       // widgets) are computed from `message.content` which
@@ -1277,6 +1383,15 @@ export function ChatMessagesView({
                         />
                         <MessageMermaidEmbeds message={message} />
                         <MessageChartEmbeds message={message} chatViews={chatViews} />
+                        {/* cinatra#2825 (S9l) — in this layout the ordered trace
+                            is omitted by design, so the lifecycle slot it carried
+                            is drawn here, beside the other adjuncts. */}
+                        <MessageLifecycleSlots
+                          message={message}
+                          theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
+                          onActiveGateChange={onActiveGateChange}
+                        />
                         <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                         <MessageCitations message={message} />
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
@@ -1290,6 +1405,19 @@ export function ChatMessagesView({
                           isStreaming={isStreaming}
                           onEditAndResend={onEditAndResend}
                         />
+                      </>
+                    ) : turnCarriesLifecycleItems(message) ? (
+                      // cinatra#2825 (S9l) — a turn with no prose and no trace,
+                      // carrying only a card, used to fall through to `null` and
+                      // render nothing at all.
+                      <>
+                        <MessageLifecycleSlots
+                          message={message}
+                          theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
+                          onActiveGateChange={onActiveGateChange}
+                        />
+                        <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                       </>
                     ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                       <ThinkingIndicator label={getLiveProgressStatus(message)} />
@@ -1357,6 +1485,7 @@ export function ChatMessagesView({
                     detectWidgets={widgetRuntime.detectWidgets}
                     onMarkdownClick={handleAssistantMarkdownClick}
                     onActiveGateChange={onActiveGateChange}
+                    onApplyIntent={onApplyIntent}
                   />
                 ) : (
                   <>
@@ -1374,7 +1503,19 @@ export function ChatMessagesView({
                   </>
                 )}
                 {message.error ? (
-                  <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                  // cinatra#2825 (S9l) — same rule as the render site above: an
+                  // error ends the turn, it does not dismiss the decision the
+                  // turn is holding.
+                  <>
+                    <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                    <MessageLifecycleSlots
+                      message={message}
+                      theme={theme}
+                      detectWidgets={widgetRuntime.detectWidgets}
+                      onActiveGateChange={onActiveGateChange}
+                    />
+                    <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
+                  </>
                 ) : (message.parts && message.parts.length > 0) ? (
                   // Same rich-content adjuncts treatment as the
                   // ChatGPT-mode render site above.
@@ -1454,6 +1595,19 @@ export function ChatMessagesView({
                       isStreaming={isStreaming}
                       onEditAndResend={onEditAndResend}
                     />
+                  </>
+                ) : turnCarriesLifecycleItems(message) ? (
+                  // cinatra#2825 (S9l) — the card-only turn, in this layout too:
+                  // a `dataParts`-only turn has neither prose nor a trace and
+                  // rendered nothing before.
+                  <>
+                    <MessageLifecycleSlots
+                      message={message}
+                      theme={theme}
+                      detectWidgets={widgetRuntime.detectWidgets}
+                      onActiveGateChange={onActiveGateChange}
+                    />
+                    <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                   </>
                 ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                   <ThinkingIndicator label={getLiveProgressStatus(message)} />

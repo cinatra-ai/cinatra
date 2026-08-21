@@ -2,12 +2,14 @@ import "server-only";
 
 // ---------------------------------------------------------------------------
 // The gate's SUGGESTION CHIPS, attached to an already-authorized card state
-// (cinatra#2572, epic #2564 S6c). Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
+// (cinatra#2572, epic #2564 S6c; redrawn by cinatra#2852). Design:
+// design@60b27dfbb8a2a1594e6e88333cc5c048c244e640
 // `specs/app-lifecycle-cards.html` §VIII.
 //
-// §VIII: "A card may carry per-item suggestions. Each is a suggestion chip …
-// Accepting or dismissing one is a LOCAL MARK … The chips carry no submit of
-// their own — the review card's floor is the terminal act."
+// §VIII: "A card may carry per-item suggestions. Each one shows what it would
+// change — the current content beside the suggested content … The suggestions
+// carry no submit of their own: they ride the review card's one Approve /
+// Reject, and a reject simply records them as not taken."
 //
 // WHY THIS IS A LEAF AND NOT TWO MORE BRANCHES IN `lifecycle-card-refetch`.
 // The resolver is reachable from `lifecycle-pull-mcp`, which the app's auth
@@ -40,10 +42,17 @@ import "server-only";
 // decides with no partition, which is what a gate that never had suggestions
 // has always looked like.
 //
-// NO PATCH CONTENT EVER RIDES A CHIP. The projection carries the pointer, the
-// transform class and the producer's one-line reason — never the proposed value.
-// A chip annotates the target beside it; printing the replacement text into the
-// chip row would make the row a second, unauthorized projection of the document.
+// THE CHIP CARRIES THE CHANGE ITSELF (cinatra#2852; §VIII redrawn at
+// design@60b27dfbb8a2a1594e6e88333cc5c048c244e640). The projection carries the
+// pointer, the transform class, the producer's one-line reason AND the
+// before/after pair the suggestion would change. The earlier reading kept the
+// values off the row in case a chip disclosed more than the target beside it; it
+// cannot. `before` is a slice of the SAME disclosed projection the gate's target
+// island already renders to this reader, `after` is what the producer derived
+// from that slice, and both are read out on exactly the authorization that
+// discloses the target — the state this module is handed. Nothing here widens
+// what a reader may see; it puts two things they may already read next to each
+// other, which is what makes a suggestion decidable at all.
 // ---------------------------------------------------------------------------
 
 import {

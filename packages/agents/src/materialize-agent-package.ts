@@ -580,12 +580,16 @@ export type BackfillResult = {
  * arbitrary-named directories.
  *
  * Asymmetry vs Python (`docker/wayflow/agent_loader.py:
- * _backfill_missing_markers`): the Python side stays MISSING-ONLY
- * because the wayflow container mounts `./agents:/agents:ro` and
- * cannot write. The TS backfill runs first at boot (from
- * `src/instrumentation.node.ts`), so by the time wayflow scans, any
- * stale markers have already been repaired host-side. The two sides
- * still share the marker SCHEMA verbatim.
+ * _backfill_missing_markers`): the Python side never rewrites a marker
+ * that already sits INSIDE an agent dir — a source marker is the
+ * publisher's record, and repairing a stale one is this host-side
+ * backfill's job (it runs first at boot, from
+ * `src/instrumentation.node.ts`). What the Python side DOES own, since
+ * cinatra#2873, is deriving a marker for an agent dir that has none:
+ * it writes that into a loader-owned state dir, because the wayflow
+ * container mounts the agent sources `:ro` and a fresh install ships
+ * no markers at all. The two sides still share the marker SCHEMA
+ * verbatim, and both skip a dir carrying `.cinatra-in-progress.json`.
  */
 export async function backfillPublishedMarkers(
   agentInstallDir: string,

@@ -56,8 +56,10 @@ export function agentMarkerBackfillPhases(): BootPhase[] {
         //      the dir docker-compose.yml bind-mounts (`./extensions:/agents:ro`)
         //      into the dev wayflow container. When this phase was promoted out
         //      of the dev-only scan it kept ONLY tree (1), so a FRESH dev
-        //      environment (pinned clones ship no markers; the wayflow loader
-        //      cannot write through its ro mount) served ZERO agents: the
+        //      environment (pinned clones ship no markers, and back then the
+        //      wayflow loader could not write one through its ro mount either
+        //      — cinatra#2873 gave the loader its own writable state dir for
+        //      that case) served ZERO agents: the
         //      widget-stream relay 404'd on the agent card and the wp/drupal
         //      UAT SSE/edit scenarios failed with "(no response)" on every
         //      fresh run (cinatra#1137) while long-lived checkouts kept

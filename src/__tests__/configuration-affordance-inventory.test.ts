@@ -154,10 +154,6 @@ const INVENTORY: Record<string, Entry> = {
     why: "The /configuration/extensions catalog itself.",
     disposition: "admin-only-mount",
   },
-  "packages/extensions/src/screens/marketplace-install-form.tsx": {
-    why: "Renders under /configuration/marketplace only.",
-    disposition: "admin-only-mount",
-  },
   "packages/agents/src/screens.tsx": {
     why: "RegistryPermissionsScreen + AgentBuilderImportScreen — both mount under /configuration only.",
     disposition: "admin-only-mount",

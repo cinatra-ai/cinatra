@@ -1,0 +1,4 @@
+resolvedVersion: 0.1.2
+signature present: true
+SIGNATURE VERDICT: true
+TRUST VERDICT: {"tier":"trusted-signed","trusted":true,"reason":"verified signature from a trusted activation host (integrity + persisted decision)"}

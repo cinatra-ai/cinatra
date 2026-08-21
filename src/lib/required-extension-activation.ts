@@ -31,6 +31,22 @@ export type RequiredActivationFailure = {
 const ACTIVATED_STATUSES: ReadonlySet<string> = new Set(["registered", "bootstrapped"]);
 
 /**
+ * The most useful thing this result can say about WHY (cinatra#2762).
+ *
+ * `reason` is the loader's CLOSED machine-readable union, so a producer with a
+ * cause that union cannot express puts it in `error` instead — which is what
+ * boot reconciliation does for a stranded install it could not recover. Without
+ * this fallback the abort message printed a bare `failed` and threw away the one
+ * sentence telling an operator what to fix.
+ */
+function failureReason(result: ActivationResult): string | undefined {
+  if (result.reason) return result.reason;
+  const { error } = result;
+  if (error === undefined || error === null) return undefined;
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * Pure cross-check: every required package that declares a serverEntry must
  * have at least one activated (`registered`/`bootstrapped`) result. Exported
  * for unit testing.
@@ -57,7 +73,7 @@ export function findRequiredActivationFailures(
     const ok = rs.some((r) => ACTIVATED_STATUSES.has(r.status));
     if (!ok) {
       const worst = rs[0];
-      failures.push({ packageName: pkg, status: worst.status, reason: worst.reason });
+      failures.push({ packageName: pkg, status: worst.status, reason: failureReason(worst) });
     }
   }
   return failures;

@@ -546,11 +546,14 @@ def test_backfill_python_side_does_not_rewrite_stale_marker(
     missing required keys), guarded by the ``.cinatra-in-progress.json``
     draft marker.
 
-    The Python ``_backfill_missing_markers`` stays MISSING-ONLY because
-    the wayflow container mounts ``./agents:/agents:ro`` and cannot
-    write. The TS backfill runs first at boot (from
-    ``src/instrumentation.node.ts``) so any stale markers are already
-    repaired by the time the wayflow loader scans.
+    The Python ``_backfill_missing_markers`` never rewrites a marker that
+    already sits INSIDE an agent dir: a source marker is the publisher's
+    record, and repairing a stale one is the TS backfill's job (it runs
+    first at boot, from ``src/instrumentation.node.ts``, over a tree it
+    can write). Since cinatra#2873 the Python side DOES derive a marker
+    for a dir that has NONE — into the loader-owned state dir, never into
+    the read-only source tree; see
+    ``tests/test_loader_marker_readonly_mount.py``.
 
     This test pins the Python behavior so a future contributor who
     looks at the TS rewrite and "fixes" the Python side to match does

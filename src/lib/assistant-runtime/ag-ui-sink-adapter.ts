@@ -30,7 +30,10 @@
 //                     envelope from the allowlisted cinatra self-MCP (server,
 //                     tool) tuple additionally emits a `DATA_PART { viewType,
 //                     schemaVersion, ref }` — an opaque ref, never content
-//                     (cinatra#2565; see ./lifecycle-view-envelope).
+//                     (cinatra#2565; see ./lifecycle-view-envelope) — stamped
+//                     with the PRODUCING `toolCallId` on the event (cinatra#2827)
+//                     so the client can fold the card into the ordered trace at
+//                     that call rather than after the turn.
 //   citations       → DATA_PART { kind: "citations", citations }
 //   error           → seal open text, RUN_ERROR (terminal)
 //   done            → seal open text, RUN_FINISHED (terminal)
@@ -295,9 +298,15 @@ export function createAgUiSinkAdapter(params: {
             result: d.result,
           });
         if (lifecycleView) {
+          // SLOT IDENTITY (cinatra#2827): the producing tool call rides the
+          // EVENT, never the payload — the payload stays the strict
+          // `{ viewType, schemaVersion, ref }` a `.strict()` schema accepts, and
+          // the client folds the card into the ordered trace at this call
+          // instead of appending it after the turn.
           emit({
             type: "DATA_PART",
             data: { ...lifecycleView },
+            toolCallId: id,
             timestamp: Date.now(),
           });
         }

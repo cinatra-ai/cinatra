@@ -299,7 +299,13 @@ export function makeTestInstallPipelineDeps(
     readCurrentDependencies: async () => null,
     activateInProcess: async () => ({ activated: false, reason: "no-activator" }),
     activateUpdateWithRollback: async () => ({ activated: false, reason: "no-activator" }),
-    verifyActivatableBeforeFinalize: async () => ({ supersedes: false }),
+    // The INERT test deps admit the fixture registry and allow unsigned
+    // bootstrap: these tests exercise pipeline mechanics, not host trust policy.
+    // A test that IS about the trust gate states its own policy by overriding
+    // these two, which is exactly what the refusal tests do.
+    trustedActivationHosts: () => ["registry.cinatra.ai", "registry.example.test"],
+    allowMarketplaceBootstrapTrust: () => true,
+    verifyActivatableBeforeFinalize: async () => ({ supersedes: false, ok: true }),
     gcStoreDir: noop,
     readDependencyEdges: async () => [],
     persistDependencyEdges: noop,

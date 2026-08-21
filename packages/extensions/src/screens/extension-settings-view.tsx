@@ -20,13 +20,18 @@ import {
 import { KIND_LABEL } from "./installed-rows";
 import type { ExtensionKind } from "../canonical-types";
 import {
+  RecoveryActionForm,
   ArchiveActionForm,
   ConfirmActionButton,
   DisabledActionButton,
   ForceDeleteDialog,
 } from "./extension-settings-actions";
-import type { SettingsUpdateRow } from "./extension-settings-model";
+import type {
+  ExtensionServingState,
+  SettingsUpdateRow,
+} from "./extension-settings-model";
 import type { RemovalActionResult } from "../removal-failure";
+import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
 
 const REGISTRIES_HREF = "/configuration/environment?tab=registries";
 
@@ -40,6 +45,13 @@ export type ExtensionSettingsActions = {
   // success (a returned value always means failure).
   archive: () => void | Promise<RemovalActionResult | void>;
   activate: () => void | Promise<void>;
+  // cinatra#2762 recovery pair. Shown only for a PRODUCT install, because a
+  // package that only ships in the image has nothing to retry and nothing to
+  // roll back to. `retryActivation` re-fires the in-process activate hook after
+  // an operator fixes what refused it; `rollBackToBundled` archives the override
+  // and puts the image's own version back in service.
+  retryActivation: () => void | Promise<MarketplaceInstallActionResult | void>;
+  rollBackToBundled: () => void | Promise<MarketplaceInstallActionResult | void>;
   reinstall: () => void | Promise<void>;
   publish: () => void | Promise<void>;
   forceDelete: (formData: FormData) => void | Promise<void>;
@@ -49,6 +61,8 @@ export type ExtensionSettingsViewProps = {
   kind: ExtensionKind;
   packageName: string;
   displayName: string;
+  /** cinatra#2762: which recovery affordances this package can offer. */
+  recovery?: { showRetryActivation: boolean; showRollBackToBundled: boolean };
   vendor: string | null;
   /**
    * The §V Maintenance · Update row — the §III card update state spelled out
@@ -57,6 +71,21 @@ export type ExtensionSettingsViewProps = {
    * card carries at most the Update-available chip.
    */
   updateRow: SettingsUpdateRow;
+  /**
+   * cinatra#2762 — the INSTALLED-BUT-NOT-ACTIVE state, named.
+   *
+   * A live install can be serving nothing: its bytes are in place and its row
+   * says `active`, but activation was refused and the version bundled with the
+   * app is what answers every request. The page used to render that as
+   * "Currently on version X — up to date" with Activate greyed "Already active",
+   * so the one state the whole issue is about was the one state the surface
+   * could not express.
+   *
+   * `{ named: false }` (the overwhelmingly common case, and the default for an
+   * unseeded fixture) renders NOTHING — this row appears only when the loader
+   * has a positive, server-derived reason to say it.
+   */
+  servingState?: ExtensionServingState;
   /** Disabled-action reasons (null ⇒ enabled) — the #1036 lifecycle-ui mechanism
    *  and, since cinatra#2416, the server-derived lifecycle capability. */
   archiveDisabled: string | null;
@@ -114,8 +143,10 @@ export function ExtensionSettingsView({
   kind,
   packageName,
   displayName,
+  recovery,
   vendor,
   updateRow,
+  servingState,
   archiveDisabled,
   activateDisabled,
   reinstallDisabled,
@@ -253,6 +284,28 @@ export function ExtensionSettingsView({
         <section data-slot="settings-maintenance" className="py-5.5">
           <h2 className="mb-3.5 text-lg font-bold text-foreground">Maintenance</h2>
 
+          {/* cinatra#2762 — the installed-but-not-active state, NAMED, and first
+              in Maintenance because every other row on this page describes the
+              install on the assumption that it is the thing running. It carries
+              no action of its own: Retry activation and Roll back to bundled are
+              the affordances, and they render below with their own copy. */}
+          {servingState?.named ? (
+            <SettingsRow
+              dataSlot="settings-not-in-service"
+              title={servingState.title}
+              description={servingState.description}
+              action={
+                <span
+                  data-slot="settings-not-in-service-badge"
+                  className="flex flex-none items-center gap-1.5 rounded-control border border-line bg-surface px-2.5 py-1.5 text-sm font-medium text-muted-foreground"
+                >
+                  <TriangleAlert data-icon="inline-start" aria-hidden="true" />
+                  Not in service
+                </span>
+              }
+            />
+          ) : null}
+
           {/* §V Maintenance · Update — the update status as the row's
               description (the §III card states spelled out in words); the
               button greys out whenever there is nothing to run. The LIVE
@@ -310,7 +363,7 @@ export function ExtensionSettingsView({
           <SettingsRow
             title="Activate"
             description="Reactivate an archived extension. Available once the extension is archived."
-            last
+            last={!recovery?.showRetryActivation && !recovery?.showRollBackToBundled}
             muted={Boolean(activateDisabled)}
             action={
               activateDisabled ? (
@@ -329,6 +382,40 @@ export function ExtensionSettingsView({
               )
             }
           />
+          {/* cinatra#2762: the operator path out of an install that will not
+              serve. Rendered only for a product install (the image's own copy has
+              nothing to retry), and Roll back only when the image actually
+              carries a version to fall back to. */}
+          {recovery?.showRetryActivation ? (
+            <SettingsRow
+              title="Retry activation"
+              description="Try to start this version again in the running app. Use it after fixing what refused it, such as a missing signing key or an untrusted registry."
+              last={!recovery?.showRollBackToBundled}
+              action={
+                <RecoveryActionForm
+                  action={actions.retryActivation}
+                  label="Retry activation"
+                  pendingLabel="Retrying…"
+                  failureMessage={`Couldn't start ${displayName} in the running app. The version bundled with the app is unaffected.`}
+                />
+              }
+            />
+          ) : null}
+          {recovery?.showRollBackToBundled ? (
+            <SettingsRow
+              title="Roll back to bundled"
+              description="Archive this install and go back to the version that ships with the app. The archived install keeps its data and can be restored."
+              last
+              action={
+                <RecoveryActionForm
+                  action={actions.rollBackToBundled}
+                  label="Roll back to bundled"
+                  pendingLabel="Rolling back…"
+                  failureMessage={`Couldn't roll ${displayName} back to the bundled version. Nothing about the install changed, or the bundled version needs a restart to come back. Check the extension's settings before retrying.`}
+                />
+              }
+            />
+          ) : null}
         </section>
 
         {/* Danger zone */}
@@ -435,22 +522,27 @@ function DisabledLifecycleAction({
   );
 }
 
-/** A Maintenance row: title + description on the left, an action on the right. */
+/** A Maintenance row: title + description on the left, an action on the right.
+ *  `dataSlot` marks a row that a driver / conformance capture needs to address
+ *  by name rather than by its copy (cinatra#2762). */
 function SettingsRow({
   title,
   description,
   action,
   last = false,
   muted = false,
+  dataSlot,
 }: {
   title: string;
   description: string;
   action: ReactNode;
   last?: boolean;
   muted?: boolean;
+  dataSlot?: string;
 }) {
   return (
     <div
+      data-slot={dataSlot}
       className={[
         "flex items-center justify-between gap-4 py-3.5",
         last ? "" : "border-b border-line",

@@ -1,0 +1,8 @@
+rows for @cinatra-ai/google-appointment-schedules-connector:
+  iext_9a7fc562-049  version=0.1.0  status=active  isDefault=true  ownerLevel=platform  org=(none)  source=bundled
+  iext_unactivated_newer_2762  version=0.1.5  status=active  isDefault=true  ownerLevel=workspace  org=(none)  source=verdaccio
+live rows: 2
+after supersession: 2
+after source precedence: 1
+PROVIDER-WRITE RESOLVED INSTALL ID: iext_unactivated_newer_2762
+PROVIDER-WRITE RESOLVED VERSION: 0.1.5

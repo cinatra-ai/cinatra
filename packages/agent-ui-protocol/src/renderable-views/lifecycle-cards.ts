@@ -27,6 +27,14 @@
 import { z } from "zod";
 
 import type { RenderableViewBase } from "../renderable-views";
+// The §VI body schema, imported for the resolve-envelope registry below. This
+// module is already on every route graph that carries the barrel, so the edge
+// costs no locked route a module — which is why the envelope lands HERE rather
+// than in a new leaf of its own.
+import {
+  triggerScheduleProposalViewBodySchema,
+  type TriggerScheduleProposalViewBody,
+} from "./trigger-schedule-proposal-view";
 
 // ---------------------------------------------------------------------------
 // The interaction kinds — the registry's keys (§IX "Card" column)
@@ -177,10 +185,27 @@ export type LifecycleCardStateName = (typeof LIFECYCLE_CARD_STATES)[number];
 // exactly as they see no card at all.
 //
 // WHAT AN ITEM MAY SAY. Only what the reviewer is already reading: the pointer
-// into the reviewed document, the transform class, and the producer's own
-// one-line reason. No patch VALUE ever rides this — a chip names WHERE and WHAT
-// KIND, never the replacement text, so a chip can be drawn beside a target the
-// reader may see without becoming a second, unauthorized projection of it.
+// into the reviewed document, the transform class, the producer's own one-line
+// reason, and — since cinatra#2852 — the BEFORE/AFTER pair the suggestion would
+// change (design §VIII, redrawn: "each one shows what it would change — the
+// current content beside the suggested content — because a label alone cannot
+// tell a reader what accepting it does").
+//
+// WHY CARRYING THE VALUES IS NOT A SECOND PROJECTION. The earlier reading of
+// this rule kept the patch value off the chip in case the row disclosed more
+// than the target beside it. It cannot: `before` is a slice of the SAME
+// disclosed projection the gate's target island already renders to this reader,
+// `after` is what the producer derived from that same slice, and both are read
+// out on exactly the authorization that discloses the target itself (the state
+// is the authorization — `lifecycle-suggestion-chips`). The pair adds no field
+// the reader could not already read; it only puts the two next to each other,
+// which is the whole point of the redraw.
+//
+// BOTH ARE OPTIONAL, AND ABSENCE IS NOT A SIGNAL. A snapshot taken before this
+// slice carries no values, a `remove` has no value to show, and an `add`
+// proposes the empty string — all three surface as a chip with a label and a
+// class and NO panel, which is exactly what the card drew before the pair
+// existed.
 
 /** Ceiling on the chips one card may draw. Mirrors the producer's
  * `MAX_GATE_SUGGESTIONS`; a snapshot cannot hold more than a card can draw. */
@@ -191,11 +216,25 @@ export const LIFECYCLE_SUGGESTION_ID_MAX_LENGTH = 128;
 export const LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH = 160;
 /** The chip's one-line reason (its title / accessible description). */
 export const LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH = 300;
+/**
+ * §VIII's before/after panel is a READING, not the document: it shows a reader
+ * what the suggestion would change, at a length a card can draw without turning
+ * the chip row into a second target panel. The producer's own ceiling on a
+ * value is `MAX_SUGGESTION_VALUE_CHARS` (2 000) — this is deliberately smaller,
+ * and the projection CLAMPS to it with an ellipsis rather than dropping the
+ * panel, because "this is the start of what changes" reads truthfully while
+ * silence does not.
+ */
+export const LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH = 600;
 
 /**
  * A RECORDED per-item outcome. Present only on a gate that has already been
  * decided — a pending gate's marks are local to the reader's screen and have no
  * server-side existence until the one terminal decision carries them (S6b).
+ *
+ * The set is also the whole LIVE marking vocabulary since cinatra#2852: §VIII's
+ * marking is a two-state toggle that starts ACCEPTED, so a surfaced suggestion
+ * is always exactly one of these two and there is no unmarked state to name.
  */
 export const LIFECYCLE_SUGGESTION_MARKS = ["accepted", "dismissed"] as const;
 export type LifecycleSuggestionMark = (typeof LIFECYCLE_SUGGESTION_MARKS)[number];
@@ -232,6 +271,19 @@ export type LifecycleSuggestion = {
   op: LifecycleSuggestionOp;
   /** The producer's one-line reason. */
   message: string;
+  /**
+   * §VIII's before/after pair — the CURRENT content of the pointed-at field,
+   * captured from the same disclosed projection the suggestion was derived
+   * from. Absent when the producer had nothing to show (a `remove`, a field
+   * that did not exist yet) and on every snapshot written before cinatra#2852.
+   */
+  before?: string;
+  /**
+   * §VIII's before/after pair — the content the suggestion PROPOSES. Absent
+   * under the same three conditions as `before`, and absent (never blank) when
+   * the proposal is the empty string, so the card never draws an empty panel.
+   */
+  after?: string;
   /** The RECORDED outcome; absent on a pending gate (marks are local there). */
   mark?: LifecycleSuggestionMark;
 };
@@ -242,6 +294,11 @@ export const lifecycleSuggestionSchema: z.ZodType<LifecycleSuggestion> = z
     label: z.string().min(1).max(LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH),
     op: z.enum(LIFECYCLE_SUGGESTION_OPS),
     message: z.string().min(1).max(LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH),
+    // Bounded and NON-EMPTY: absence is the only representation of "nothing to
+    // show", so a card can decide whether to draw the panel from presence alone
+    // and never has to distinguish an empty string from a missing field.
+    before: z.string().min(1).max(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH).optional(),
+    after: z.string().min(1).max(LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH).optional(),
     mark: z.enum(LIFECYCLE_SUGGESTION_MARKS).optional(),
   })
   .strict();
@@ -281,7 +338,9 @@ export function lifecycleSuggestionLabel(fieldPath: string): string {
  * Structurally typed on the producer's row rather than importing it: this
  * package is tier-neutral and must not reach into a server lane. The fields
  * named here are the producer's public shape (`ProducedSuggestion`), pinned by a
- * drift test on the server side.
+ * drift test on the server side — including its `before` (the disclosed value)
+ * and its `value` (the proposed one), which this projection carries onto the
+ * chip as §VIII's `before`/`after` pair instead of dropping them.
  *
  * `marks` is the RECORDED partition, read from the decision ledger; it is empty
  * for a pending gate. An id with no mark simply has none — a reviewer who
@@ -299,6 +358,10 @@ export function projectLifecycleSuggestions(
     fieldPath: string;
     op: string;
     message: string;
+    /** The disclosed value the suggestion would change (cinatra#2852). */
+    before?: string;
+    /** The value the suggestion proposes — the producer's own field name. */
+    value?: string;
   }>,
   marks?: ReadonlyMap<string, LifecycleSuggestionMark>,
 ): LifecycleSuggestion[] {
@@ -310,15 +373,84 @@ export function projectLifecycleSuggestions(
       s.message.length > LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH
         ? `${s.message.slice(0, LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH - 1)}…`
         : s.message;
+    const before = panelValue(s.before);
+    const after = panelValue(s.value);
     out.push({
       id: s.id,
       label: lifecycleSuggestionLabel(s.fieldPath),
       op: s.op as LifecycleSuggestionOp,
       message,
+      // CARRIED THROUGH, not discarded (cinatra#2852). Each side stands on its
+      // own: a suggestion that adds a field has an `after` and no `before`, and
+      // a snapshot written before the pair existed has neither.
+      ...(before ? { before } : {}),
+      ...(after ? { after } : {}),
       ...(mark ? { mark } : {}),
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// The SETTLED READING — what a decided gate says about itself (cinatra#2855)
+// ---------------------------------------------------------------------------
+//
+// A settled review card used to know only that it was settled, so every one of
+// them read the generic "This review is no longer open" and carried a Refresh
+// as the escape hatch for that ambiguity (plan §4.2). The outcome and the
+// decider travel HERE, on the state, because the review kind's envelope carries
+// no body at all — its target arrives through its own island — and a settled
+// card is exactly a card with no target left to draw.
+//
+// THE SET IS CLOSED AND IT IS THE STORE'S. These three are the dispositions a
+// gate row can be RESOLVED with: `approve` and `reject` from the decision core's
+// terminal CAS, `changes_requested` from the lifecycle prompt-window path that
+// closes the base gate and opens a repair. A `comment` never resolves a gate, so
+// it is not an outcome a settled card can carry.
+//
+// BOTH ENDS FAIL CLOSED, and they fail closed DIFFERENTLY on purpose. The
+// producer refuses to project a disposition outside this set and attaches no
+// outcome at all, so the card falls back to the generic reading it has always
+// drawn. The parser refuses a state carrying a value outside it, so a card
+// cannot be talked into naming an outcome this build does not understand — a
+// refused parse leaves the card with no state, and a card with no state draws
+// nothing.
+//
+// THE DECIDER IS A DISPLAY NAME, NEVER AN IDENTIFIER. `decidedByName` is the
+// same class of value as `restricted.reason`: a surface-safe phrase, bounded,
+// meant to be read by a person. The user id that resolved the gate, the row id
+// and the address it was reached at never travel — a body carrying an
+// addressable id turns a card into a place to read one out of. A gate whose
+// decider has no displayable name carries the OUTCOME ALONE rather than a
+// stand-in, because "Approved" is true and "Approved by 4f3a…" is a leak.
+
+/** The closed set of outcomes a RESOLVED review gate can carry. */
+export const LIFECYCLE_SETTLED_OUTCOMES = [
+  "approved",
+  "rejected",
+  "changes_requested",
+] as const;
+
+export type LifecycleSettledOutcome = (typeof LIFECYCLE_SETTLED_OUTCOMES)[number];
+
+/** Ceiling on the decider's display name. Bounded like every other wire field. */
+export const LIFECYCLE_DECIDER_NAME_MAX_LENGTH = 80;
+
+/**
+ * One side of §VIII's panel, as a card may draw it.
+ *
+ * A value that is missing, empty, or nothing but whitespace becomes ABSENCE:
+ * there is no reading to show, and a blank panel would claim there is. A value
+ * longer than the panel's ceiling is CLAMPED with an ellipsis — the same
+ * treatment the message gets, for the same reason (a truncated reading is
+ * honest about being a reading; a dropped one is silent about a change).
+ */
+function panelValue(raw: string | undefined): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  if (raw.trim() === "") return undefined;
+  return raw.length > LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH
+    ? `${raw.slice(0, LIFECYCLE_SUGGESTION_VALUE_MAX_LENGTH - 1)}…`
+    : raw;
 }
 
 /**
@@ -353,7 +485,23 @@ export type LifecycleCardState =
       reason: string;
       suggestions?: LifecycleSuggestion[];
     }
-  | { state: "settled"; suggestions?: LifecycleSuggestion[] }
+  | {
+      state: "settled";
+      suggestions?: LifecycleSuggestion[];
+      /**
+       * The recorded outcome, when this build could read one. ABSENT IS LEGAL
+       * and is not a signal: a gate resolved before the outcome travelled, a
+       * disposition outside the closed set and a projection that was not asked
+       * for one all answer the same way, and the card draws its generic reading.
+       */
+      outcome?: LifecycleSettledOutcome;
+      /**
+       * The decider as a SURFACE-SAFE display name — never a user id, never an
+       * email address. Only ever present alongside an `outcome`: a name with no
+       * outcome beside it names a person for nothing.
+       */
+      decidedByName?: string;
+    }
   | { state: "advisory" }
   | { state: "absent" };
 
@@ -377,7 +525,24 @@ export const lifecycleCardStateSchema: z.ZodType<LifecycleCardState> = z.union([
       suggestions: suggestionsField,
     })
     .strict(),
-  z.object({ state: z.literal("settled"), suggestions: suggestionsField }).strict(),
+  z
+    .object({
+      state: z.literal("settled"),
+      suggestions: suggestionsField,
+      outcome: z.enum(LIFECYCLE_SETTLED_OUTCOMES).optional(),
+      decidedByName: z
+        .string()
+        .min(1)
+        .max(LIFECYCLE_DECIDER_NAME_MAX_LENGTH)
+        .optional(),
+    })
+    .strict()
+    // A decider with no outcome beside it is refused rather than trimmed: it
+    // names a person for a decision the card cannot state, and a producer that
+    // sent one is a producer whose other answers cannot be trusted either.
+    .refine((v) => v.decidedByName === undefined || v.outcome !== undefined, {
+      message: "decidedByName requires an outcome",
+    }),
   z.object({ state: z.literal("advisory") }).strict(),
   z.object({ state: z.literal("absent") }).strict(),
 ]);
@@ -495,6 +660,270 @@ export const triggerScheduleProposalViewSchema = lifecycleViewSchema(
 export type TriggerScheduleProposalView = z.infer<
   typeof triggerScheduleProposalViewSchema
 >;
+
+// ---------------------------------------------------------------------------
+// §VII — the VERIFICATION SUMMARY body (epic S9, slice S9c)
+// ---------------------------------------------------------------------------
+//
+// The verification card resolves `advisory`: it asks nothing, so it draws no
+// floor. Until this slice it also carried NOTHING to draw, and a card with no
+// body cannot be drawn at all. This is the body the resolver now returns beside
+// that state.
+//
+// IT IS THE SHIPPED CORE-ANALYSIS READING, SANITIZED. The fields below are the
+// ones the run's own "Core analysis" surface already shows the SAME reader,
+// after the SAME run-read check: the verdict, the two pinned revisions, the
+// inspected scope, and the before/after field diff. What the body deliberately
+// omits is every internal identifier that names nothing on screen — the record
+// id, the gate id, the artifact ids — because a body that carries an addressable
+// id turns a card into a place to read one out of.
+//
+// EVERY FIELD IS BOUNDED. The ceilings are part of the contract, not a
+// formatting nicety: the resolver clamps to them, so a pathological row cannot
+// turn one resolve into an unbounded response, and a body that arrives over a
+// ceiling fails to validate and draws nothing.
+
+/** Current schema version of the verification card body. */
+export const VERIFICATION_SUMMARY_VIEW_VERSION = 1 as const;
+
+/** The closed verdict set. A row carrying anything else is unreadable, and the
+ *  resolver answers `absent` for it rather than drawing an unknown verdict. */
+export const VERIFICATION_SUMMARY_OUTCOMES = ["verified", "drifted", "unmet"] as const;
+
+export type VerificationSummaryOutcome =
+  (typeof VERIFICATION_SUMMARY_OUTCOMES)[number];
+
+/** Ceiling on the diff rows one card may draw. */
+export const VERIFICATION_SUMMARY_MAX_FIELD_DIFF = 200;
+/** Ceiling on the inspected-scope paths one card may draw. */
+export const VERIFICATION_SUMMARY_MAX_SCOPE_PATHS = 200;
+/** Ceiling on one field path / scope path. */
+export const VERIFICATION_SUMMARY_PATH_MAX_LENGTH = 400;
+/** Ceiling on one before/after value. */
+export const VERIFICATION_SUMMARY_VALUE_MAX_LENGTH = 2000;
+/** Ceiling on a pinned revision identifier. */
+export const VERIFICATION_SUMMARY_REVISION_MAX_LENGTH = 128;
+
+/** One before/after row. `null` is the honest "this side had no value". */
+export const verificationSummaryFieldDiffSchema = z
+  .object({
+    field: z.string().min(1).max(VERIFICATION_SUMMARY_PATH_MAX_LENGTH),
+    before: z.string().max(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH).nullable(),
+    after: z.string().max(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH).nullable(),
+  })
+  .strict();
+
+export type VerificationSummaryFieldDiff = z.infer<
+  typeof verificationSummaryFieldDiffSchema
+>;
+
+export const verificationSummaryBodySchema = z
+  .object({
+    version: z.literal(VERIFICATION_SUMMARY_VIEW_VERSION),
+    outcome: z.enum(VERIFICATION_SUMMARY_OUTCOMES),
+    /** The reviewed (base) revision the analysis pinned. */
+    reviewedRevisionId: z
+      .string()
+      .min(1)
+      .max(VERIFICATION_SUMMARY_REVISION_MAX_LENGTH),
+    /** The repaired revision the analysis pinned. */
+    repairedRevisionId: z
+      .string()
+      .min(1)
+      .max(VERIFICATION_SUMMARY_REVISION_MAX_LENGTH),
+    /** The paths the analysis was scoped to. A diff row outside this set is the
+     *  drift the shipped surface marks "out of scope". */
+    scopePaths: z
+      .array(z.string().min(1).max(VERIFICATION_SUMMARY_PATH_MAX_LENGTH))
+      .max(VERIFICATION_SUMMARY_MAX_SCOPE_PATHS),
+    fieldDiff: z
+      .array(verificationSummaryFieldDiffSchema)
+      .max(VERIFICATION_SUMMARY_MAX_FIELD_DIFF),
+  })
+  .strict();
+
+export type VerificationSummaryBody = z.infer<typeof verificationSummaryBodySchema>;
+
+// ---------------------------------------------------------------------------
+// The per-kind RESOLVE ENVELOPE (epic S9, slice S9c)
+// ---------------------------------------------------------------------------
+//
+// The refetch used to answer with a STATE and nothing else, and the client
+// parsed exactly that. Two of the four kinds cannot be drawn from a state: the
+// schedule proposal needs its option rows, the verification card needs its
+// reading. So the answer becomes a DISCRIMINATED ENVELOPE — `{ kind, state,
+// body }` — where the kind selects the one body type that kind is authorized to
+// carry.
+//
+// WHY THE KIND RIDES THE ANSWER. The card already knows which kind it asked
+// for; carrying the kind back lets it check that it got an answer to ITS
+// question. A response whose kind is unknown, undeclared, or simply not the one
+// asked for is refused, and a refused parse leaves the card with no state — so
+// it draws nothing at all, exactly as it does before the first resolve lands.
+// That keeps the two invariants the epic travels on intact under a richer
+// answer: NO DOM BEFORE AN AUTHORIZED RESOLVE, and an `absent` that reveals
+// nothing.
+//
+// `absent` CARRIES NO BODY, EVER. It is the collapse of every denial — no
+// access, no such row, a ref that does not decode, a store that threw — so a
+// body beside it would be the one thing that could tell those apart. The parse
+// REFUSES an `absent` that arrives with a body rather than dropping the body,
+// because a producer that attached one is a producer whose other answers cannot
+// be trusted either.
+//
+// A BODY-CARRYING KIND MUST CARRY ITS BODY. Outside `absent`, the schedule and
+// verification kinds are refused when their body is missing or does not
+// validate. A half-drawn card is not a lesser card; it is a card asserting a
+// reading it does not have.
+//
+// THE RECOMMENDATION HOLD IS NOT IN HERE, and that is structural rather than an
+// omission. It is the one kind whose carriage is `interrupt` — the run is
+// blocked on it — so it never travels on this DATA_PART resolve at all; its
+// state is resolved by its own hold action. `LifecycleDataPartViewType` is what
+// keys the registry below, so the hold cannot be added here by accident, and
+// asking this parser for it fails closed.
+
+/**
+ * The body each kind is AUTHORIZED to carry. `null` means the kind draws from
+ * its state alone — the review card's target arrives through its own island, so
+ * its envelope carries no body and a body beside it is refused.
+ */
+export type LifecycleCardBodyByKind = {
+  artifact_review_gate: null;
+  verification_summary: VerificationSummaryBody;
+  trigger_schedule_proposal: TriggerScheduleProposalViewBody;
+};
+
+/**
+ * Ceiling on a server-issued island `src` (cinatra#2754). The island credential
+ * bounds its own sealed value; this leaves room for the path, the ref and the
+ * frame selectors around it and refuses anything larger, so an oversized value
+ * is a refused answer rather than a URL nobody budgeted for.
+ */
+export const LIFECYCLE_ISLAND_SRC_MAX_LENGTH = 2048;
+
+/** The discriminated answer one lifecycle resolve returns. */
+export type LifecycleResolveEnvelope = {
+  [K in LifecycleDataPartViewType]: {
+    kind: K;
+    state: LifecycleCardState;
+    body: LifecycleCardBodyByKind[K] | null;
+  };
+}[LifecycleDataPartViewType];
+
+/** The envelope for ONE kind — what the resolver produced for that kind. */
+export type LifecycleResolveEnvelopeFor<K extends LifecycleDataPartViewType> =
+  Extract<LifecycleResolveEnvelope, { kind: K }>;
+
+/**
+ * What a CARD receives: the envelope plus the island URL the SERVER minted for
+ * this reader (cinatra#2754), or `null` when the answer carried none.
+ *
+ * WHY IT IS ON THE ANSWER AND NOT ON THE ENVELOPE. The envelope is what the
+ * resolution LADDER produces — the same ladder the MCP pull runs — and that
+ * ladder authorizes, it does not mint. The island URL is minted by the one
+ * route that both consumed a widget credential and is about to answer a card,
+ * so it joins the answer there and nowhere else.
+ *
+ * WHY IT TRAVELS AT ALL. A frame load on a genuinely third-party page sends no
+ * header and no cross-site cookie, so a card cannot address an authenticated
+ * island by itself: the credential must be sealed into the URL, and only the
+ * server holds the key. It rides the resolve answer rather than the wire
+ * payload for the same reason the suggestion chips do — the persisted,
+ * model-visible DATA_PART still carries a ref and nothing else.
+ *
+ * A same-site host receives `null` here and keeps composing its own cookie URL.
+ */
+export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
+  LifecycleResolveEnvelopeFor<K> & { islandSrc: string | null };
+
+/**
+ * The closed runtime registry behind the type map above. A kind with a `null`
+ * entry carries no body; every other entry is the schema its body must satisfy.
+ * `satisfies` over the closed kind set is what keeps the two in step: a new
+ * DATA_PART kind does not compile until it declares which of the two it is.
+ */
+const LIFECYCLE_RESOLVE_BODY_SCHEMAS = {
+  artifact_review_gate: null,
+  verification_summary: verificationSummaryBodySchema,
+  trigger_schedule_proposal: triggerScheduleProposalViewBodySchema,
+} as const satisfies Record<LifecycleDataPartViewType, z.ZodType | null>;
+
+/**
+ * The server-issued island `src`, read as ONE shape: a root-relative path on
+ * this origin. `null` means the answer carried none; `undefined` means the
+ * answer carried something that is not one of ours, and REFUSES the envelope.
+ *
+ * The value ends up in an `<iframe src>`, so a protocol-relative `//host`, an
+ * absolute URL, a `javascript:` and anything carrying whitespace, a backslash
+ * or a control character are refused OUTRIGHT rather than sanitized. A producer
+ * that attached one of those is a producer whose other answers cannot be
+ * trusted either — the same posture `absent` + body already takes.
+ */
+function readIslandSrc(raw: unknown): string | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "string") return undefined;
+  if (raw.length === 0 || raw.length > LIFECYCLE_ISLAND_SRC_MAX_LENGTH) return undefined;
+  if (!raw.startsWith("/") || raw.startsWith("//")) return undefined;
+  if (/[\u0000-\u001f\u007f\s\\]/.test(raw)) return undefined;
+  return raw;
+}
+
+/**
+ * The ONE parse seam for a lifecycle resolve answer. NEVER throws: an
+ * adversarial payload, a forward version, a mismatched kind and a missing body
+ * all answer `null`, and a `null` leaves the card drawing nothing.
+ */
+export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewType>(
+  expectedKind: K,
+  raw: unknown,
+): LifecycleResolveAnswerFor<K> | null {
+  try {
+    // An undeclared kind never reaches a schema lookup. A caller can force one
+    // through an untyped edge, and the answer is the same as for a forged wire
+    // payload: nothing.
+    if (!isLifecycleDataPartViewType(expectedKind)) return null;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+    const record = raw as Record<string, unknown>;
+    // The discriminant is checked FIRST and exactly. An answer to a different
+    // question is not a weaker answer to this one.
+    if (record.kind !== expectedKind) return null;
+
+    const state = lifecycleCardStateSchema.safeParse(record.state);
+    if (!state.success) return null;
+
+    const rawBody = record.body;
+    const bodyPresent = rawBody !== undefined && rawBody !== null;
+    const islandSrc = readIslandSrc(record.islandSrc);
+    if (islandSrc === undefined) return null;
+
+    if (state.data.state === "absent") {
+      // `absent` CARRIES NOTHING BESIDE ITSELF. An island URL is addressed to a
+      // gate, so one arriving next to the collapse of every denial would be the
+      // oracle the collapse exists to close — refused exactly like a body.
+      if (bodyPresent || islandSrc !== null) return null;
+      return { kind: expectedKind, state: state.data, body: null, islandSrc: null } as
+        LifecycleResolveAnswerFor<K>;
+    }
+
+    const schema: z.ZodType | null = LIFECYCLE_RESOLVE_BODY_SCHEMAS[expectedKind];
+    if (schema === null) {
+      if (bodyPresent) return null;
+      return { kind: expectedKind, state: state.data, body: null, islandSrc } as
+        LifecycleResolveAnswerFor<K>;
+    }
+
+    if (!bodyPresent) return null;
+    const body = schema.safeParse(rawBody);
+    if (!body.success) return null;
+    return { kind: expectedKind, state: state.data, body: body.data, islandSrc } as
+      LifecycleResolveAnswerFor<K>;
+  } catch {
+    // A throwing getter is a hostile shape; it draws nothing, like every other
+    // answer this parser refuses.
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // The typed INTERRUPT discriminator (cinatra#2568, epic #2564 S4)

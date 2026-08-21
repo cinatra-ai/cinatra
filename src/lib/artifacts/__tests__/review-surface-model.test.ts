@@ -17,6 +17,7 @@ import {
   mapChangesRequestedToOutcome,
   reviewBlockedCopy,
   reviewDecideDisabledReason,
+  reviewSettledCopy,
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
   reviewRevisionMarker,
@@ -24,6 +25,7 @@ import {
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
+import { LIFECYCLE_SETTLED_OUTCOMES } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 const buildMap: ReviewTargetMount = {
   kind: "build-map",
@@ -249,5 +251,73 @@ describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§
     for (const code of ["invalid-request", "idempotency-key-reuse", "empty-feedback"]) {
       expect(mapChangesRequestedToOutcome(fail(code))).toMatchObject({ kind: "error" });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §IV — the SETTLED reading (cinatra#2855; plan §4.2)
+// ---------------------------------------------------------------------------
+
+describe("the settled copy names the outcome and its decider", () => {
+  it("is keyed on the SAME closed set the wire carries", () => {
+    // This model deliberately keeps its own local union rather than importing
+    // the wire type, so the two are pinned together HERE. A value added on one
+    // side and not the other fails this, in front of the switch that would
+    // otherwise fall through to nothing.
+    const covered = [...LIFECYCLE_SETTLED_OUTCOMES].map((outcome) =>
+      reviewSettledCopy(outcome),
+    );
+    expect(covered).toHaveLength(3);
+    for (const copy of covered) {
+      expect(copy.title.length).toBeGreaterThan(0);
+      expect(copy.body.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("names the decider when there is one to name", () => {
+    expect(reviewSettledCopy("approved", "Dana Okonkwo")).toEqual({
+      title: "Approved by Dana Okonkwo",
+      body: "The gate is resolved and the run has been released to continue.",
+    });
+    expect(reviewSettledCopy("rejected", "Dana Okonkwo").title).toBe(
+      "Rejected by Dana Okonkwo",
+    );
+    expect(reviewSettledCopy("changes_requested", "Dana Okonkwo").title).toBe(
+      "Changes requested by Dana Okonkwo",
+    );
+  });
+
+  it("reads as a finished sentence with no decider at all", () => {
+    // The resolver drops a decider it cannot name safely, so the copy must not
+    // depend on one: never "Approved by" and a dangling nothing.
+    for (const outcome of LIFECYCLE_SETTLED_OUTCOMES) {
+      const { title } = reviewSettledCopy(outcome);
+      expect(title.endsWith(" by")).toBe(false);
+      expect(title.includes(" by ")).toBe(false);
+    }
+    expect(reviewSettledCopy("approved").title).toBe("Approved");
+    expect(reviewSettledCopy("rejected").title).toBe("Rejected");
+    expect(reviewSettledCopy("changes_requested").title).toBe("Changes requested");
+  });
+
+  it("does NOT claim a live repair the way the post-press notice does", () => {
+    // The decision bar's `requested` line says "a repair is now in flight" — a
+    // fact about what the reviewer's own press started. A settled card has not
+    // read that, so it may not assert it.
+    expect(reviewSettledCopy("changes_requested").body).toBe(
+      "The gate is resolved and the reviewed work has been turned back for repair.",
+    );
+    expect(reviewSettledCopy("changes_requested").body).not.toContain("in flight");
+  });
+
+  it("is a DIFFERENT reading from the generic blocked copy it replaces", () => {
+    // The generic sentence survives — for a settled card with no outcome — and
+    // the two must not converge into one vague line.
+    const generic = reviewBlockedCopy("no-longer-pending");
+    for (const outcome of LIFECYCLE_SETTLED_OUTCOMES) {
+      expect(reviewSettledCopy(outcome).title).not.toBe(generic.title);
+      expect(reviewSettledCopy(outcome).body).not.toBe(generic.body);
+    }
+    expect(generic.title).toBe("This review is no longer open");
   });
 });

@@ -77,14 +77,30 @@ export interface RunWaitNotifier {
    * RUN VIEW, so an auto-gated run is discoverable off the run panel exactly like
    * a flow-authored gate. Keyed per (runId, reviewTaskId) so several gates on one
    * run never collide. OPTIONAL: a host that wires no auto-gate notifier (or a
-   * unit-test double) simply skips the emit. */
+   * unit-test double) simply skips the emit.
+   *
+   * cinatra#2864 — THE WRITE CONTRACT. The implementation must write the row
+   * behind `buildAutoGateNotificationFence`, in ONE statement with the gate row
+   * it names, so the insert is impossible for a gate that does not exist, does
+   * not belong to this run/task, or has already reached a terminal decision. An
+   * implementation that checks the gate BEFORE writing satisfies nothing: the
+   * check is over the moment it returns, and the resolve's clear may land in the
+   * gap. See `dispatchAutoGateOpen` below. */
   onAutoGateOpen?(input: {
     runId: string;
     reviewTaskId: string;
   }): void | Promise<void>;
   /** The auto-gate reached a terminal review decision — hard-delete the
    * `onAutoGateOpen` row by its (runId, reviewTaskId) key (idempotent; a no-op
-   * when none was minted, e.g. a flow-authored gate or an initiator-less run). */
+   * when none was minted, e.g. a flow-authored gate or an initiator-less run).
+   *
+   * cinatra#2864 — this delete no longer needs to fear an open still in flight.
+   * The caller runs it only AFTER the terminal decision has COMMITTED, and the
+   * decision's own transaction takes the gate row's lock. The open's fence takes
+   * the SAME lock. So the two orderings are the only two possible: the open
+   * committed first (and this delete finds its row), or this delete ran first
+   * (and the open's fence, re-evaluated against the resolved row, writes
+   * nothing). "Matched no row" therefore means "no row exists", not "no row yet". */
   onAutoGateResolved?(input: {
     runId: string;
     reviewTaskId: string;
@@ -206,13 +222,109 @@ export async function dispatchRunWaitTransition(args: {
 }
 
 /**
+ * The gate table an auto-gate notification is fenced against, and the status a
+ * gate holds while its review is still open. Declared HERE (pure strings, no
+ * runtime import — see the header's TRUE LEAF property) so the ONE place that
+ * composes the fence SQL never hand-spells them.
+ */
+export const AUTO_GATE_TABLE = "artifact_review_gates" as const;
+export const AUTO_GATE_PENDING_STATUS = "pending" as const;
+
+/**
+ * The fence SQL, in the shape the host's fenced writer takes: one placeholder
+ * array (the whole fence is ONE statement, so it has one parameter space) and a
+ * guard that numbers its placeholders from `$1` over it. Declared locally so this
+ * leaf keeps its zero-runtime-imports property.
+ */
+export interface AutoGateFenceSql {
+  values: unknown[];
+  guard: string;
+}
+
+/**
+ * cinatra#2864 — the TRANSACTIONAL FENCE an auto-gate-open notification must be
+ * written behind. The same discipline #2835 gave the recommendation hold
+ * (`buildHoldNotificationFence`), adapted to the gate: the SUBJECT of this
+ * notification is the gate row, so the gate row is what the write is fenced on.
+ *
+ * `guard` is a `SELECT … FOR UPDATE` that yields ONE row while — and only while —
+ * a gate exists for this (run, task) and is still `pending`. The host composes it
+ * as a CTE of the notification INSERT, and the insert is driven FROM its rows, so:
+ *
+ *   - a gate that reached a terminal decision before the open ever ran yields no
+ *     guard row and therefore writes NOTHING. The check is not "before the
+ *     write"; it IS the write, so there is no window between them to lose.
+ *   - `FOR UPDATE` takes the gate's row lock, which is the SAME lock
+ *     `commitReviewDecision` takes for its terminal `pending → resolved` CAS. The
+ *     open and the decision therefore SERIALIZE on the gate row. The decision's
+ *     clear runs only after that CAS has COMMITTED, so the two possible orderings
+ *     are: the open commits first and the clear then finds the row it must
+ *     delete; or the decision commits first and the guard, re-evaluated against
+ *     the new row version under READ COMMITTED, matches nothing. The
+ *     "clear-then-insert" interleaving — the one that left a bell entry pointing
+ *     at a review nobody can take — no longer exists.
+ *
+ * NO MARK, and no obligation column beside it. The hold needed one because the
+ * park's transition is the ONLY event that ever clears a hold row, so a clear lost
+ * to a failed dispatch had no second chance. The gate's clear is not the gate's
+ * only one: this row is keyed per (run, task) and hard-deleted by key, and a
+ * failed dispatch is a pre-existing best-effort property of every emitter on this
+ * seam, not the ordering defect #2864 names. Adding a durable obligation to the
+ * gate row is issue #2864's alternative shape 2 — a strictly larger change (a
+ * migration on `artifact_review_gates` plus a sweep to drain it) that closes a
+ * DIFFERENT failure, and is deliberately not taken here.
+ *
+ * PURE — string building only. The caller passes the resolved schema name; the
+ * host numbers the insert's own row values behind `values`.
+ */
+export function buildAutoGateNotificationFence(input: {
+  schema: string;
+  runId: string;
+  reviewTaskId: string;
+}): AutoGateFenceSql {
+  const table = `"${input.schema.replaceAll('"', '""')}"."${AUTO_GATE_TABLE}"`;
+  return {
+    values: [input.runId, input.reviewTaskId],
+    // LIMIT 1 is belt-and-braces (`artifact_review_gates_run_task_uniq` already
+    // makes (run_id, review_task_id) unique): it makes "at most one row feeds the
+    // insert" true by construction rather than by index knowledge.
+    guard:
+      `SELECT id FROM ${table} ` +
+      `WHERE run_id = $1 AND review_task_id = $2 ` +
+      `AND status = '${AUTO_GATE_PENDING_STATUS}' LIMIT 1 FOR UPDATE`,
+  };
+}
+
+/**
  * cinatra#2066 C2 — drive the wired notifier for a lifecycle AUTO-GATE opening.
  * Called by the review-orchestration store when it emits a NEW auto-gate (not an
  * idempotent re-emit). No-op when no host wired a notifier or the host wired one
  * without the optional `onAutoGateOpen`. Best-effort: a thrown port is swallowed
  * so a notification failure can NEVER fail orchestration (matching every other
  * emitter in this codebase). NOT exported from the package index — an
- * intra-package leaf the store imports directly, so it adds no public surface. */
+ * intra-package leaf the store imports directly, so it adds no public surface.
+ *
+ * cinatra#2864 — THE ONE SEAM, AND THE FENCE IS INSIDE IT. This dispatch and
+ * `dispatchAutoGateResolved` below used to be a best-effort pair with no ordering
+ * between them: a resolve that deleted while this insert was still in flight
+ * matched nothing, the insert then committed, and the row outlived the gate it
+ * announced — a bell entry pointing forever at "This review is no longer open".
+ *
+ * The fix is not in this function and deliberately not in any caller. An opening
+ * path reaches the notifier through THIS dispatch and hands it nothing but the
+ * gate's own two ids, so the ordering is closed ONCE, in the host's
+ * `onAutoGateOpen`, by writing the row behind `buildAutoGateNotificationFence`
+ * above. There is no path-by-path variant to keep in step, and a path added later
+ * inherits the fence by calling this function at all.
+ *
+ * WHICH PATHS, ON THIS BRANCH. One caller dispatches today:
+ * `orchestrateProducedEvent`, the single produced artifact. cinatra#2833
+ * (https://github.com/cinatra-ai/cinatra/pull/2838, open) adds three more —
+ * `orchestrateProducedBatch`, `submitRepairResponse`,
+ * `writeVerificationRecordAndMaybeReopen` — and each of them calls THIS function
+ * with the same `{runId, reviewTaskId}`. That is why the fix belongs here and not
+ * at a call site: the three paths that do not exist yet on this branch are fenced
+ * the moment they land, with no change to the code that adds them. */
 export async function dispatchAutoGateOpen(input: {
   runId: string;
   reviewTaskId: string;

@@ -15,6 +15,8 @@ import "server-only";
 // SAME four register-channel kinds retained per (packageName, version) for
 // non-default side-by-side serving — in lockstep, so a torn-down package stops
 // serving both its global (default) names AND its edge-bound non-default versions.
+// And it clears the SERVING-PROVENANCE record (cinatra#2762), which describes
+// which implementation put those registrations in place.
 // If a new in-memory register-channel kind is ever added, THIS closure must grow.
 // The per-kind-teardown invariant test asserts this exact function's current
 // contract — it catches a DROPPED kind; a newly-added un-wired register-channel
@@ -25,6 +27,12 @@ import {
   invalidateProvidersForPackage,
   hasCapabilityProvidersForPackage,
   clearPackageSignedActivated,
+  // cinatra#2762 — the serving-provenance record, co-located in that registry for
+  // the same reason the signed-activated marker is: its lifecycle is
+  // lockstep-coupled to the registrations this function removes, and a
+  // standalone module would add a net-new route-reachable first-party module to
+  // the baselined dev-perf route-graph.
+  clearServingRecordForPackage,
 } from "@/lib/extension-capabilities-registry";
 // Version-keyed serving retention for NON-DEFAULT side-by-side versions
 // (cinatra#1392 Gap 1). The SAME four register-channel kinds, retained per
@@ -107,6 +115,12 @@ export function teardownExtensionCapabilities(packageName: string): {
   // marker is a trust-tracking side-signal, not one of the four operator
   // control-plane register-channel kinds.
   clearPackageSignedActivated(packageName);
+  // cinatra#2762 — the serving-provenance record describes exactly the
+  // registrations being removed here, so it goes with them. Not counted toward
+  // the guarded generation bump below: it is a descriptive side-signal, not one
+  // of the operator control-plane register-channel kinds (same rationale as the
+  // signed-activated marker above).
+  clearServingRecordForPackage(packageName);
   invalidateExtensionUiForPackage(packageName);
   // Deregister the package's object types so an archived/uninstalled extension's
   // types stop resolving/listing in the running process without a restart.
