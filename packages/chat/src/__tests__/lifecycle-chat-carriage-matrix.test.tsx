@@ -76,8 +76,10 @@ vi.mock("next/navigation", () => ({
 
 /**
  * The recommendation hold's AUTHORITY, and the ONLY thing stubbed for that kind.
- * Its two decision controls stay the real `confirm-run-recommendation` /
- * `skip-run-recommendation` actions on the shipped chip row.
+ * Its decision controls stay the real ones on the shipped chip row: since the §V
+ * redraw (cinatra#2841) that is a PER-CHIP `data-skill-action` of
+ * `confirm` | `adjust` | `skip`, not the deleted card-level
+ * `confirm-run-recommendation` / `skip-run-recommendation` pair.
  */
 type HoldState =
   | { state: "none" }
@@ -714,15 +716,23 @@ describe("what cannot satisfy a row", () => {
     planted.setAttribute("data-lifecycle-card", "recommendation_hold");
     planted.setAttribute("data-lifecycle-card-host", "chat_thread");
     planted.setAttribute("data-lifecycle-card-state", "pending");
+    // The impostor carries the RATIFIED per-chip controls (cinatra#2841), which
+    // is what the carriage row actually looks for. Planting the deleted
+    // card-level `confirm-run-recommendation` / `skip-run-recommendation` pair
+    // would make this a negative control against a face nothing renders any more:
+    // the fixture would match no selector and the arm would pass for the wrong
+    // reason.
     planted.innerHTML =
-      '<button data-action="confirm-run-recommendation"></button>' +
-      '<button data-action="skip-run-recommendation"></button>';
+      '<button data-skill-action="confirm"></button>' +
+      '<button data-skill-action="adjust"></button>' +
+      '<button data-skill-action="skip"></button>';
     // FIRST HALF: planting changes NOTHING. Since S9b landed the mount this
     // kind also draws its real card at the producing slot, so the arm can no
     // longer read "no candidates" as proof — it reads "the same candidates".
-    // Captured BEFORE planting, so "the real one" is unambiguous: the card's own
-    // root is `RecommendationHoldCard`'s wrapper, which carries the three ruled
-    // anchors, with the chip row and its controls inside it.
+    // Captured BEFORE planting, so "the real one" is unambiguous: since the §V
+    // redraw the card's own root IS the chip row's outermost element — the
+    // wrapper that used to carry the three ruled anchors is gone — and the chips
+    // and their per-chip controls sit inside it.
     const real = root.querySelector<HTMLElement>('[data-lifecycle-card="recommendation_hold"]');
     const before = observeChatCarriage(root, row, producingSlot);
     runCard!.appendChild(planted);
