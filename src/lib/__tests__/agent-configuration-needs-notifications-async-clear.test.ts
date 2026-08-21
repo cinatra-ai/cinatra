@@ -17,19 +17,21 @@
 // AWAITED, and nothing is swallowed.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const listNotificationsByDedupeKeyPrefixForUser = vi.fn(
-  (_args: { userId: string; dedupeKeyPrefix: string }): unknown[] => [],
-);
-const createNotificationForRecipient = vi.fn(
-  async (
-    _recipient: { kind: string; userId: string },
-    _input: unknown,
-  ): Promise<Array<{ id: string }>> => [{ id: "notif-1" }],
-);
+// Typed via the vi.fn<Signature>() form rather than a typed implementation, so
+// the parameter types are pinned without declaring parameters no default
+// implementation reads.
+const listNotificationsByDedupeKeyPrefixForUser =
+  vi.fn<(args: { userId: string; dedupeKeyPrefix: string }) => unknown[]>();
+const createNotificationForRecipient =
+  vi.fn<
+    (
+      recipient: { kind: string; userId: string },
+      input: unknown,
+    ) => Promise<Array<{ id: string }>>
+  >();
 // ONLY the async name — see the header.
-const deleteNotificationsByDedupeKeyForUserAsync = vi.fn(
-  async (_args: { userId: string; dedupeKey: string }): Promise<void> => {},
-);
+const deleteNotificationsByDedupeKeyForUserAsync =
+  vi.fn<(args: { userId: string; dedupeKey: string }) => Promise<void>>();
 
 // Side-effect host-adapter registration — a no-op in the test.
 vi.mock("@/lib/notifications-host", () => ({}));
@@ -82,6 +84,7 @@ beforeEach(() => {
   createNotificationForRecipient.mockReset();
   createNotificationForRecipient.mockResolvedValue([{ id: "notif-1" }]);
   deleteNotificationsByDedupeKeyForUserAsync.mockReset();
+  deleteNotificationsByDedupeKeyForUserAsync.mockResolvedValue(undefined);
   // The reconciler is best-effort: it catches everything and logs. A warning
   // is therefore the signature of a swallowed regression, so every arm asserts
   // there was none.
