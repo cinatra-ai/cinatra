@@ -797,7 +797,7 @@ export async function saveChatThreadViaFetch(thread: Record<string, unknown> & {
 }
 
 /**
- * The per-thread SAVE CHAIN (cinatra#2823 S9j, review round 5).
+ * The per-thread SAVE CHAIN (cinatra#2823 S9j).
  *
  * WHY ORDER IS A CORRECTNESS PROPERTY AND NOT A PREFERENCE. Every /chat save
  * posts the WHOLE transcript, and the server reconciles it by DELETING the

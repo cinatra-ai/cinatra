@@ -173,7 +173,7 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `ALTER TABLE "${s}"."assistant_turns" ADD COLUMN IF NOT EXISTS content jsonb` },
-    // `superseded_at` (cinatra#2823 S9j, review round 3): the moment a
+    // `superseded_at` (cinatra#2823 S9j): the moment a
     // whole-transcript save DELETED the mirror rows that were showing this
     // run-bound turn — i.e. the moment the user deliberately removed it (edit and
     // resend, regenerate). NULLABLE, and NULL is the ordinary state.

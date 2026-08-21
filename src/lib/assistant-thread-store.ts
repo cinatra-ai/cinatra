@@ -2673,14 +2673,14 @@ export function reconstructThreadPayload(threadId: string): Record<string, unkno
         // so `NULLS LAST` puts them after the spine and the assembler re-sorts
         // them by `created_at` itself; the spine's own order is untouched.
         //
-        // SUPERSEDED ROWS ARE NOT READ (review round 3, blocker 2). A run-bound
+        // SUPERSEDED ROWS ARE NOT READ (cinatra#2823). A run-bound
         // turn the user deliberately removed — by editing and resending, or
         // regenerating — is tombstoned by the truncating save itself, in that
         // save's own transaction (`buildSupersedeRunBoundTurnsQuery`). The row
         // stays, because it is also the resume/authorization anchor; it simply
         // stops being a turn the transcript folds back in. THIS is the only
         // reader that filters on it.
-        // BOUNDED IN SQL, both ways (review round 3, non-blocker 1). Widening
+        // BOUNDED IN SQL, both ways (cinatra#2823). Widening
         // the read to the run-bound rows meant every thread read shipped every
         // historical raw tool RESULT the sink ever captured — the durable
         // `tool_result` part keeps the full payload for faithful reconstruction

@@ -193,7 +193,7 @@ export async function streamAgUiChatTurn(params: {
   mintResumeToken?: (runId: string) => string | null;
   /**
    * The PRODUCING assistant's user id, when the caller resolved one
-   * (cinatra#2823 review round 3, non-blocker 2).
+   * (cinatra#2823).
    *
    * Recorded on the turn ROW so the server's own record of the turn knows WHO
    * produced it — which is what a recovered turn is attributed by

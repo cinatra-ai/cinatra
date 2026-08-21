@@ -81,7 +81,7 @@ describe("fetch wrappers", () => {
 });
 
 /**
- * cinatra#2823 S9j, review round 5 — the per-thread SAVE CHAIN.
+ * cinatra#2823 S9j — the per-thread SAVE CHAIN.
  *
  * Every /chat save posts the WHOLE transcript and the server reconciles it by
  * DELETING the mirror rows the payload no longer carries. Exactly one save also

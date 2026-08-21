@@ -111,7 +111,7 @@ export type AgUiTurnDurableContent = {
   dataParts?: Array<Record<string, unknown>>;
   /**
    * The PRODUCING SLOT of each entry in `dataParts`, positionally aligned with
-   * it (cinatra#2823 S9j, review round 3) — the `toolCallId` the event carried,
+   * it (cinatra#2823 S9j) — the `toolCallId` the event carried,
    * or `null` for an entry that named no call.
    *
    * OUT OF BAND, AND THAT IS THE WHOLE POINT. The slot may not go INSIDE the

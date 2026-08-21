@@ -69,8 +69,8 @@ describe("project-scoped schema migration", () => {
   });
 
   it("T3e assistant_turns.superseded_at timestamptz (deliberate truncation tombstone)", () => {
-    // cinatra#2823 S9j review round 3, blocker 2. Additive + nullable, so a DB
-    // bootstrapped before this change gains it on the next boot with no rewrite,
+    // cinatra#2823 S9j. Additive + nullable, so a DB bootstrapped before this
+    // change gains it on the next boot with no rewrite,
     // exactly as `content` and `ordinal` did — and a fresh install is born with
     // it on the CREATE above.
     expect(
