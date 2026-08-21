@@ -103,7 +103,14 @@ describe("the widget thread write — what it accepts", () => {
     expect(thread.ownerUserId).toBe("widget-user");
     // BOTH orgs are the token's: the pin-sync scope and the set-once mirror
     // anchor the READ's org wall later compares against.
-    expect(options).toEqual({ orgId: "org-A", assistantMirrorOrgId: "org-A" });
+    // ...and the TOKEN's principal is the acting writer (cinatra#2823 S9j): the
+    // truncation tombstone authorizes against it, and the write above already
+    // proved this thread is personally owned BY that principal.
+    expect(options).toEqual({
+      orgId: "org-A",
+      assistantMirrorOrgId: "org-A",
+      actorUserId: "widget-user",
+    });
   });
 
   it("NEVER reads a session — there is no ambient fallback to fall back TO", async () => {

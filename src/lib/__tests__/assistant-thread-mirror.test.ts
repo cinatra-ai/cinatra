@@ -334,8 +334,8 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     expect(queries[0].values).toEqual(["t1", []]);
   });
 
-  // ── the supersede half (cinatra#2823 S9j, review round 3 blocker 2; re-scoped
-  //    onto an EXPLICIT truncation intent in round 4, F1) ──────────────────────
+  // ── the supersede half (cinatra#2823 S9j), scoped onto an EXPLICIT
+  //    truncation intent ──────────────────────────────────────────────────────
 
   it("a save that ASSERTS NOTHING emits NO supersede at all", () => {
     // Round 4, F1 — the whole of the first fix. "The row is in the database and
@@ -380,7 +380,33 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
       "t1",
       ["legacy:2:t1:m1", "legacy:2:t1:m2"],
       ["legacy:2:t1:m9"],
+      null,
     ]);
+  });
+
+  it("is SELF-HARM ONLY: it reaches rows only on a thread the ACTOR personally owns", () => {
+    // The reach argument the tombstone rests on — "a false assertion costs the
+    // writer the repair of its own turn" — holds only where the thread has ONE
+    // writer. A TEAM thread is writable by every member of the team's org and a
+    // legacy UNOWNED thread by anyone who can reach it, so on either, one
+    // member's edit-and-resend would permanently supersede rows belonging to
+    // turns another member is still reading. The statement authorizes itself
+    // against the thread row, inside the write's own transaction.
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+      actorUserId: "u-actor",
+    });
+    expect(supersede.text).toContain(`FROM "${SCHEMA}"."assistant_threads" th`);
+    expect(supersede.text).toContain("th.owner_user_id IS NOT NULL");
+    expect(supersede.text).toContain("th.owner_user_id = $4::text");
+    // A team-owned row is never personal, even if an owner axis is also set.
+    expect(supersede.text).toContain("th.team_id IS NULL");
+    // And a caller that derived no actor authorizes nothing at all.
+    expect(supersede.text).toContain("$4::text IS NOT NULL");
+    expect(supersede.values[3]).toBe("u-actor");
   });
 
   it("touches ONLY run-bound, un-superseded, durable-format rows", () => {
@@ -406,22 +432,23 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
       removedMessageIds: ["m9"],
     });
     // The removed MIRROR rows: the ordinary trace, the Slack-mode layout that
-    // omits it, turn-level cards, and cards folded onto their producing slot.
+    // omits it, and the cards folded onto their producing slot.
     expect(supersede.text).toContain("r.content->'parts'");
     expect(supersede.text).toContain("r.content->'thoughtGroups'");
-    expect(supersede.text).toContain("r.content->'dataParts'");
     expect(supersede.text).toContain("p->'views'");
     // The surviving RUN-BOUND row, in the durable format's own vocabulary
-    // (`type`, not `kind`).
+    // (`type`, not `kind`), and its own copy of the slot stamp.
     expect(supersede.text).toContain("dp->>'type' = 'tool_call'");
     expect(supersede.text).toContain("t.content->'dataParts'");
+    expect(supersede.text).toContain("t.content->'dataPartSlots'");
   });
 
-  it("matches PER REMOVED ROW, and fences the view-ref arm exactly as the reload does", () => {
-    // Round 4, F2. The identities were pooled thread-wide and a view-ref hit was
-    // accepted unconditionally — but a lifecycle `ref` names an ENTITY, so a
-    // later turn re-rendering the same card had its row tombstoned by the removal
-    // of an unrelated one. The discipline is now `claimsDurableTurn`'s, verbatim.
+  it("matches PER REMOVED ROW, on a view key BOUND TO THE PRODUCING CALL", () => {
+    // The identities were once pooled thread-wide and a view-ref hit accepted
+    // unconditionally — but a lifecycle `ref` names an ENTITY, so a later turn
+    // re-rendering the same card had its row tombstoned by the removal of an
+    // unrelated one. The discipline is `claimsDurableTurn`'s, verbatim: per
+    // removed row, and on a key that names a TURN rather than an entity.
     const [supersede] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
@@ -434,10 +461,17 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     expect(supersede.text).toContain("SELECT rc.token FROM removed_call rc WHERE rc.removed_id = r.id");
     expect(supersede.text).toContain("SELECT rv.token FROM removed_view rv WHERE rv.removed_id = r.id");
     expect(supersede.text).not.toContain("removed_identity");
-    // ...and the ref arm is offered ONLY to a removed row that records no tool
-    // call anywhere. One that records its calls and shares none of the durable
-    // row's is saying it is a DIFFERENT turn.
-    expect(supersede.text).toContain(
+    // The view token carries the SLOT — the tool call that produced the card —
+    // on both sides, so a bare `viewType|ref` can never match. That is what makes
+    // the arm safe to offer outright: the old "only when the removed row records
+    // no tool call at all" fence existed to keep a WEAK key away from a row that
+    // was not silent about its identity, and a slot-bound key is not weak.
+    expect(supersede.text).toContain("|| '@' || (p->>'id')");
+    expect(supersede.text).toContain(") ->> (dv.pos::int - 1)");
+    // ...and the durable slots array is only trusted when it lines up with
+    // `dataParts` one-for-one, exactly as the reload projection demands.
+    expect(supersede.text).toContain("jsonb_array_length");
+    expect(supersede.text).not.toContain(
       "NOT EXISTS (SELECT 1 FROM removed_call rc WHERE rc.removed_id = r.id)",
     );
   });

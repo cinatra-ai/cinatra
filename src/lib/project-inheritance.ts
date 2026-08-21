@@ -1,4 +1,5 @@
 import "server-only";
+import { buildSupersedeRunBoundTurnsQuery } from "@/lib/assistant-turn-supersede";
 
 /**
  * Write-time project inheritance and substrate exclusion.
@@ -475,14 +476,6 @@ ON CONFLICT (id) DO UPDATE SET
   };
 }
 
-/** A jsonb expression that is `expr` when `expr` is an array and `[]` otherwise.
- *  Every reader below walks persisted JSON written by a client, so a field that
- *  is not the shape this reader expects must degrade to "no identity here" and
- *  never to an error that fails the user's save. */
-function jsonbArrayOrEmpty(expr: string): string {
-  return `CASE WHEN jsonb_typeof(${expr}) = 'array' THEN ${expr} ELSE '[]'::jsonb END`;
-}
-
 /**
  * The message ids a save EXPLICITLY ASSERTS it removed (cinatra#2823 S9j, review
  * round 4, F1) — the truncation intent, carried by the one caller that truly
@@ -514,158 +507,6 @@ export function extractRemovedMessageIdsFromThread(
     ids.push(value);
   }
   return ids;
-}
-
-/**
- * The SQL that TOMBSTONES the run-bound turns a truncating save ASSERTS it
- * removed (cinatra#2823 S9j, review round 3 blocker 2; re-scoped in round 4).
- *
- * THE DEFECT. The reconcile DELETE below is scoped `id LIKE 'legacy:%'` so a
- * legacy write can never delete a runtime-minted row — correct, and it left an
- * edit-and-resend deleting the mirror row of a turn while the run-bound row
- * survived. The reload's fold-in then put that turn back, ABOVE the edited prompt
- * (the run-bound stamp is taken at run START, the edited message gets a fresh
- * one), and the next whole-transcript save wrote it down again. The user deleted
- * a turn and it came back, permanently.
- *
- * THE SEPARATION, STATED HONESTLY. Server time cannot tell a lost save from a
- * deliberate truncation, and neither can "the turn is absent from the payload" —
- * a lost save looks exactly like that, and repairing it is what this whole leg is
- * for. Round 3 drew the line at "the row was in the database and this payload
- * dropped it", reasoning that a save DELETING a durable message is asserting its
- * removal.
- *
- * ROUND 4 PUNCTURED THAT: the DELETE is keyed on the PAYLOAD, not on what this
- * writer ever knew. A second tab loaded before turn X existed saves its own stale
- * transcript, the reconcile drops X's mirror row because the payload omits it,
- * and X was tombstoned by a writer that NEVER OBSERVED IT — permanently blocking
- * the very repair this leg exists for, from a plain save with no edit in it.
- *
- * SO THE ASSERTION IS NOW EXPLICIT, and it is the only thing that tombstones. The
- * edit-and-resend path is the one caller that truly truncates: it knows the user
- * edited message M and dropped its successors, and it now CARRIES that intent
- * (`removedMessageIds`, `packages/chat/src/chat-page.tsx`). A plain full-payload
- * save — from any tab, stale or fresh — asserts nothing and supersedes nothing.
- * `removedIds` is that assertion, already narrowed to this thread's mirror
- * namespace, and it is INTERSECTED with the payload's own removals below: a row
- * can be tombstoned only when the writer BOTH asserts it removed the message AND
- * no longer carries it. The intent can only ever narrow what the reconcile
- * removes, never widen it.
- *
- * The reach of a false assertion is the writer's OWN thread and its worst outcome
- * is that writer losing the repair of its own turn — the same self-harm boundary
- * `findCoveringSpineIndex` states for the spine it reads.
- *
- * HOW A REMOVED MIRROR ROW IS LINKED TO A RUN-BOUND ONE. The two writers share no
- * key — the mirror row's id is built from the CLIENT's message id and the
- * run-bound row's is the turn's — so the link is the SERVER-MINTED identity both
- * copies of the turn carry, read from every shape the projection produces and
- * matched to the durable row's own: the tool-call ids (`parts[].id` in the
- * ordinary layout, `thoughtGroups[].toolCalls[].id` in Slack mode) and the
- * lifecycle cards' `viewType|ref` (turn-level `dataParts`, or folded onto a
- * `tool_call` part since S9i).
- *
- * MATCHED PER REMOVED ROW, UNDER THE SAME FENCE `claimsDurableTurn` USES (round
- * 4, F2). Round 3 pooled every removed row's identity tokens into ONE thread-wide
- * set and accepted a view-ref hit unconditionally. But a lifecycle `ref` names an
- * ENTITY, not a turn, and a later turn can legitimately re-render the same card —
- * so removing the turn that drew it last tombstoned the untouched turn that drew
- * it first. The identity discipline is therefore the reload side's, verbatim:
- *
- *   1. A SHARED TOOL-CALL ID with THIS removed row. The primary key.
- *   2. A SHARED VIEW REF, and ONLY when THIS removed row records NO tool call
- *      anywhere. A removed row that DOES record its calls and shares none of the
- *      durable row's is not silent about its identity — it is saying it is a
- *      DIFFERENT turn, so the weaker key is not offered and a durable row whose
- *      own call identity is disjoint from the removed row's is never matched.
- *
- * A tombstone is the strictly more expensive way to be wrong here: a refused one
- * costs a turn that has to be removed again, an over-eager one costs a kept turn
- * its card forever.
- *
- * ORDERED BEFORE THE DELETE, in the SAME transaction the whole mirror write runs
- * in, so it sees the rows that are about to go and cannot half-apply: the
- * truncation and the tombstone commit together or not at all.
- */
-function buildSupersedeRunBoundTurnsQuery(args: {
-  schema: string;
-  threadId: string;
-  keptIds: string[];
-  /** The asserted removals, as this thread's mirror row ids. Never empty. */
-  removedIds: string[];
-}): { text: string; values: unknown[] } {
-  const { schema } = args;
-  const parts = jsonbArrayOrEmpty("r.content->'parts'");
-  const groups = jsonbArrayOrEmpty("r.content->'thoughtGroups'");
-  const durableParts = jsonbArrayOrEmpty("t.content->'parts'");
-  const durableViews = jsonbArrayOrEmpty("t.content->'dataParts'");
-  return {
-    text: `WITH removed AS (
-  SELECT id, content FROM "${schema}"."assistant_turns"
-   WHERE thread_id = $1
-     AND id LIKE '${LEGACY_MIRROR_TURN_ID_PREFIX}%'
-     AND NOT (id = ANY($2::text[]))
-     AND id = ANY($3::text[])
-     AND content IS NOT NULL
-),
-removed_call AS (
-  -- a tool-call id in the ordinary ordered trace
-  SELECT r.id AS removed_id, 'call:' || (p->>'id') AS token
-    FROM removed r, jsonb_array_elements(${parts}) p
-   WHERE p->>'kind' = 'tool_call' AND jsonb_typeof(p->'id') = 'string'
-  UNION
-  -- ...or in the Slack-mode layout, which omits parts and keeps thoughtGroups
-  SELECT r.id, 'call:' || (tc->>'id')
-    FROM removed r, jsonb_array_elements(${groups}) g,
-         jsonb_array_elements(${jsonbArrayOrEmpty("g->'toolCalls'")}) tc
-   WHERE jsonb_typeof(tc->'id') = 'string'
-),
-removed_view AS (
-  -- a lifecycle card's own identity, at turn level
-  SELECT r.id AS removed_id, 'view:' || (d->>'viewType') || '|' || (d->>'ref') AS token
-    FROM removed r, jsonb_array_elements(${jsonbArrayOrEmpty("r.content->'dataParts'")}) d
-   WHERE jsonb_typeof(d->'viewType') = 'string' AND d->>'viewType' <> ''
-     AND jsonb_typeof(d->'ref') = 'string'
-  UNION
-  -- ...or folded onto the tool_call that produced it (S9i slots)
-  SELECT r.id, 'view:' || (v->>'viewType') || '|' || (v->>'ref')
-    FROM removed r, jsonb_array_elements(${parts}) p,
-         jsonb_array_elements(${jsonbArrayOrEmpty("p->'views'")}) v
-   WHERE p->>'kind' = 'tool_call' AND jsonb_typeof(v->'viewType') = 'string'
-     AND v->>'viewType' <> '' AND jsonb_typeof(v->'ref') = 'string'
-)
-UPDATE "${schema}"."assistant_turns" t
-   SET superseded_at = now(), updated_at = now()
- WHERE t.thread_id = $1
-   AND t.run_id IS NOT NULL
-   AND t.superseded_at IS NULL
-   AND t.content->>'format' = 'assistant-turn-v1'
-   AND EXISTS (
-     SELECT 1 FROM removed r
-      WHERE EXISTS (
-              -- (1) a SHARED tool-call id with THIS removed row
-              SELECT 1 FROM jsonb_array_elements(${durableParts}) dp
-               WHERE dp->>'type' = 'tool_call' AND jsonb_typeof(dp->'id') = 'string'
-                 AND ('call:' || (dp->>'id')) IN (
-                   SELECT rc.token FROM removed_call rc WHERE rc.removed_id = r.id
-                 )
-            )
-         OR (
-              -- (2) a SHARED view ref, and only where this removed row records no
-              --     tool call at all — so it contradicts nothing by taking it
-              NOT EXISTS (SELECT 1 FROM removed_call rc WHERE rc.removed_id = r.id)
-              AND EXISTS (
-                SELECT 1 FROM jsonb_array_elements(${durableViews}) dd
-                 WHERE jsonb_typeof(dd->'viewType') = 'string' AND dd->>'viewType' <> ''
-                   AND jsonb_typeof(dd->'ref') = 'string'
-                   AND ('view:' || (dd->>'viewType') || '|' || (dd->>'ref')) IN (
-                     SELECT rv.token FROM removed_view rv WHERE rv.removed_id = r.id
-                   )
-              )
-            )
-   )`,
-    values: [args.threadId, args.keptIds, args.removedIds],
-  };
 }
 
 /**
@@ -701,6 +542,10 @@ export function buildAssistantTurnMirrorReconcileQueries(args: {
    * write may ever touch.
    */
   removedMessageIds?: string[] | null;
+  /** The TRANSPORT-VERIFIED acting writer, threaded from the route that derived
+   *  it. The tombstone is authorized against it (self-harm only — see
+   *  `buildSupersedeRunBoundTurnsQuery`); null authorizes nothing. */
+  actorUserId?: string | null;
 }): Array<{ text: string; values: unknown[] }> {
   const schema = args.schemaName.replaceAll('"', '""');
   const ids = args.turns.map((t) => t.id);
@@ -715,6 +560,8 @@ export function buildAssistantTurnMirrorReconcileQueries(args: {
             threadId: args.threadId,
             keptIds: ids,
             removedIds: assertedRemovedIds,
+            mirrorPrefix: LEGACY_MIRROR_TURN_ID_PREFIX,
+            actorUserId: args.actorUserId ?? null,
           }),
         ]
       : []),
@@ -822,6 +669,10 @@ export function buildAssistantThreadMirrorQueries(args: {
   thread: { id: string } & Record<string, unknown>;
   /** The caller's EXPLICIT mirror-org option (null when unspecified). */
   explicitMirrorOrgId: string | null;
+  /** The TRANSPORT-VERIFIED acting writer, from the route's own session /
+   *  principal — NEVER a payload field. Only the tombstone reads it, and only
+   *  to refuse itself on a thread this actor does not personally own. */
+  actorUserId?: string | null;
 }): Array<{ text: string; values: unknown[] }> {
   const { schemaName, thread } = args;
   // Structured pause set (PR1 EXPAND): null == payload omitted the field, so
@@ -857,9 +708,12 @@ export function buildAssistantThreadMirrorQueries(args: {
       schemaName,
       threadId: thread.id,
       turns,
-      // The save's EXPLICIT truncation intent (round 4, F1). Null on every
-      // ordinary save, and null is what makes it tombstone nothing.
+      // The save's EXPLICIT truncation intent. Null on every ordinary save, and
+      // null is what makes it tombstone nothing.
       removedMessageIds: extractRemovedMessageIdsFromThread(thread),
+      // ...and WHO is asserting it, so the tombstone can refuse itself on a
+      // thread with other legitimate writers (self-harm only).
+      actorUserId: args.actorUserId ?? null,
     }),
     // Structured pause/resume write-through — only when the payload carried the
     // field (a partial write must not clear pause state it never saw).

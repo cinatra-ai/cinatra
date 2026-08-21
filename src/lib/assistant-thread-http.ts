@@ -116,7 +116,15 @@ export async function handleSaveAssistantThread(request: Request): Promise<Respo
   // (cinatra#1037 P2b) to the caller's auth-derived org — distinct from the
   // pin-sync orgId. Team-owned threads mirror with a NULL org regardless (the
   // team→org anchoring decision is flagged on #1218, set-once/repairable).
-  upsertChatThreadInDatabase(thread, { orgId, assistantMirrorOrgId: orgId });
+  // `actorUserId` is the SESSION's user, never the body — the truncation
+  // tombstone authorizes against it and would hand back its whole self-harm
+  // boundary to a spoofable field. On a team or legacy-unowned thread this
+  // caller is one writer among several, and the tombstone refuses itself there.
+  upsertChatThreadInDatabase(thread, {
+    orgId,
+    assistantMirrorOrgId: orgId,
+    actorUserId: callerId,
+  });
   return Response.json({ ok: true });
 }
 
@@ -279,6 +287,10 @@ export async function handleSaveAssistantThreadForWidget(
   upsertChatThreadInDatabase(thread, {
     orgId: principal.orgId,
     assistantMirrorOrgId: principal.orgId,
+    // The token-verified widget principal. The write already proved this thread
+    // is personally owned BY that principal (the `writable` check above), so the
+    // tombstone's own ownership predicate simply re-states what was authorized.
+    actorUserId: principal.userId,
   });
   return Response.json({ ok: true });
 }

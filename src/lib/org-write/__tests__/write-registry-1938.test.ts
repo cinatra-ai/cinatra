@@ -199,6 +199,12 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       // cinatra#2650 — the creation-seam container bind joins the chat-thread
       // family's nullable-org exemption alongside its #2642 repair sibling.
       "bindThreadContainerIfUnbound#1939",
+      // cinatra#2823 S9j — the truncation tombstone, in its own single-purpose
+      // module so the new org-axis statement registers instead of riding the
+      // broad mirror-builder file. Same chat-thread-family nullable-org
+      // exemption as the rows around it; its own authority is the thread's
+      // `owner_user_id` (the statement is self-harm-only).
+      "buildSupersedeRunBoundTurnsQuery#1939",
       "consumeAuthorizationCode#1939",
       "consumeUserWidgetToken#1939",
       "createAssistantThread#1939",
