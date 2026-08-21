@@ -20,7 +20,8 @@
  * on the blocking session), not by a client-side timer: a client-side release
  * could not fire on the frozen path, which is the very thing under test.
  *
- * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
+ * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided — EXCEPT in
+ * the dedicated lane, which refuses to skip (see the guard below). Run with:
  *   SUPABASE_DB_URL='postgresql://dev:devpass@/devdb?host=/path/to/pgsock' \
  *     pnpm test:async-notification-seam
  */
@@ -59,6 +60,32 @@ const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB =
   DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
 const describeDb = HAS_DB ? describe : describe.skip;
+
+/**
+ * REFUSE TO SKIP IN THE DEDICATED LANE (cinatra#2882).
+ *
+ * `describeDb` above is the right default everywhere else: a DB tier must not
+ * red an ordinary unit run on a machine with no Postgres. But the dedicated
+ * script exists for exactly one purpose, and a run whose only failure mode is
+ * "skipped" reports success by doing nothing — a vacuous green over a seam
+ * whose whole point is that it is provable. `vitest.integration-2882.config.ts`
+ * sets the flag below, so `pnpm test:async-notification-seam` with no database
+ * exits non-zero with a message naming the variable it wants. Set
+ * `X2882_ALLOW_SKIP=1` to opt back into skipping (a deliberate no-DB smoke of
+ * the config itself); every other config leaves the skip semantics untouched.
+ */
+const IN_DEDICATED_LANE =
+  process.env.CINATRA_ASYNC_NOTIFICATION_SEAM_REALDB === "1";
+const ALLOW_SKIP = process.env.X2882_ALLOW_SKIP === "1";
+
+if (IN_DEDICATED_LANE && !ALLOW_SKIP && !HAS_DB) {
+  throw new Error(
+    "the #2882 async notification-seam lane needs a live Postgres: set " +
+      "SUPABASE_DB_URL to a real connection string (it is unset, empty, or the " +
+      "unused:unused placeholder). Refusing to skip — a skipped proof of an " +
+      "async seam proves nothing. Pass X2882_ALLOW_SKIP=1 to skip anyway.",
+  );
+}
 
 const TEST_SCHEMA = `cinatra_x2882c_${randomUUID().slice(0, 8)}`;
 const q = (s: string) => s.replaceAll('"', '""');
