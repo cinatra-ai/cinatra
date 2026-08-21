@@ -55,7 +55,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "packages/notifications/src/service.ts": {
     class: "sync-required",
     justification:
-      "Notification fan-out/dedup is driven through host-injected synchronous adapters; recipients are resolved at write time against authz scope tables. Kept sync-required until the notifications subsystem migrates as a unit. cinatra#2379 adds one call site — markNotificationUnreadForUser, the read-state unread mutation (SET read_at = NULL, viewer-scoped) — through the SAME host-injected synchronous adapter as every other read-state write in this file; same class, same migration path.",
+      "Notification fan-out/dedup is driven through host-injected synchronous adapters; recipients are resolved at write time against authz scope tables. Kept sync-required until the notifications subsystem migrates as a unit. cinatra#2379 adds one call site — markNotificationUnreadForUser, the read-state unread mutation (SET read_at = NULL, viewer-scoped) — through the SAME host-injected synchronous adapter as every other read-state write in this file; same class, same migration path. cinatra#2835 adds one more — deleteHoldNotificationForUser, the hold-scoped hard delete (per-user dedupe key AND the park id the row carries in its metadata) — through that same adapter, alongside the delete-by-dedupe-key it narrows; same class, same migration path. Note the enter side of that pair does NOT add a call site: it reuses createNotificationForRecipient's existing writer, now able to run its insert inside a caller-supplied transactional fence.",
   },
   "packages/notifications/src/recipient-policy.ts": {
     class: "sync-required",

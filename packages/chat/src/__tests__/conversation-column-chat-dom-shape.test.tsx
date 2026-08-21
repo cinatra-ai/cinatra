@@ -212,3 +212,53 @@ describe("/chat's conversation column is byte-identical after the extraction (#2
     expect(resetIdx).toBeLessThan(scrollIdx);
   });
 });
+
+// ---------------------------------------------------------------------------
+// §I INPUT HIERARCHY — the composer is the ONE primary input (#2865).
+// ---------------------------------------------------------------------------
+// Design: `specs/app-lifecycle-cards.html` §I at
+// 60b27dfbb8a2a1594e6e88333cc5c048c244e640 — `.composer.primary { border-color:
+// var(--line-strong); }`, and the rule beneath it: exactly one primary input is
+// drawn per conversation, and it is the chat box.
+//
+// The widget arm is not a second wiring to keep in step — it is the SAME column
+// mounted under the broker host adapter, so the promotion reaches the embedded
+// conversation by construction. That is exactly what makes it worth asserting:
+// this case is what would go red if a later change moved the opt-in somewhere
+// only `/chat` passes through.
+// ---------------------------------------------------------------------------
+
+const COMPOSER = '[data-conformance-id="chat-composer-primary"]';
+
+describe("§I — the chat box is the one primary input, on every host (#2865)", () => {
+  it.each(["chat", "widget"] as const)(
+    "%s: the composer takes the line-strong edge and names itself",
+    async (surface) => {
+      const { container } = await mountSurface(surface);
+      const composer = container.querySelector<HTMLElement>(COMPOSER);
+      expect(composer, `the ${surface} composer's §I field container`).not.toBeNull();
+
+      const classes = composer!.className.split(/\s+/).filter(Boolean);
+      expect(classes, "the primary edge").toContain("border-line-strong");
+      expect(classes, "the ordinary edge must be gone").not.toContain("border-line");
+
+      // §I: the primary input KEEPS the three things a subordinate field gives
+      // up — its own box, the raised ground and the send affordance.
+      expect(classes).toContain("rounded-control");
+      expect(classes).toContain("border");
+      expect(classes).toContain("bg-surface-strong");
+      expect(
+        composer!.querySelector('[data-testid="chat-prompt-input"]'),
+        "the editor",
+      ).not.toBeNull();
+      expect(composer!.querySelector("button[aria-label]"), "the send control").not.toBeNull();
+    },
+  );
+
+  it("mounts exactly one primary input per conversation", async () => {
+    for (const surface of ["chat", "widget"] as const) {
+      const { container } = await mountSurface(surface);
+      expect(container.querySelectorAll(COMPOSER)).toHaveLength(1);
+    }
+  });
+});

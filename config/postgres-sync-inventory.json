@@ -13,7 +13,7 @@
     },
     {
       "file": "packages/notifications/src/service.ts",
-      "calls": 11
+      "calls": 12
     },
     {
       "file": "packages/objects/src/graphiti-projection-policy.ts",

@@ -34,6 +34,7 @@ import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { artifactVerificationRecords, lifecycleRepair } from "./schema";
 import { emitArtifactReviewGate, ArtifactReviewGateError } from "./artifact-review-gate-store";
+import { dispatchAutoGateOpen } from "./run-wait-notifier";
 
 import {
   computeVerificationVerdict,
@@ -221,6 +222,18 @@ async function writeVerificationRecordAndMaybeReopen(
       ],
       expiresAt: input.expiresAt ?? null,
     });
+    // cinatra#2833 — the VERIFICATION pin reopens a review, and a reopened review
+    // needs its human as much as the first one did: this gate is emitted
+    // directly, outside the orchestration sweep, so before this it opened in
+    // silence. Same seam, same "fresh emit only" posture — and that guard is not
+    // decorative here: `submitRepairResponse`'s idempotent-replay branch RE-RUNS
+    // this exact trigger, which re-emits the identical deterministic (run, task,
+    // target) and must not re-notify. Best-effort by construction (the
+    // dispatcher swallows every error), so a notification can never fail a
+    // verification whose record is already written.
+    if (!emitted.idempotent) {
+      await dispatchAutoGateOpen({ runId: input.runId, reviewTaskId: reopenTaskId });
+    }
     return { ok: true, verificationId: id, gateId: input.gateId, verdict, idempotent, reopenedGateId: emitted.gateId, escalated: false };
   } catch (err) {
     if (err instanceof ArtifactReviewGateError) {
