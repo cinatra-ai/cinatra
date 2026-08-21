@@ -276,7 +276,7 @@ describe("the evaluator's four fixtures", () => {
         cardNode({
           anchors: [
             '[data-conformance-id="run-chip-row"]',
-            '[data-action="confirm-run-recommendation"]',
+            '[data-skill-action="confirm"]',
           ],
         }),
       ],

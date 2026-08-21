@@ -26,7 +26,13 @@
 
 import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-import type { ActorRoleHints } from "./auth-policy";
+import {
+  enforceRunAccess,
+  resolveEffectivePolicy,
+  type ActorRoleHints,
+} from "./auth-policy";
+import { actorFromSession } from "@/lib/authz/build-actor-context";
+
 import {
   writeRunRejectedRecommendations,
   SKIP_RECOMMENDATION_SOURCE,
@@ -34,10 +40,15 @@ import {
 
 import {
   readRunSelectedSkillRevisions,
+  readRunRejectedRecommendations,
   hasRunRecommendationSkip,
+  decidedSkillsFromEvidence,
+  type RunRecommendationDecidedSkill,
+  type RunRejectedRecommendation,
+  type RunSelectedSkillRevision,
 } from "@/lib/run-selected-skill-revisions";
 
-import { readAgentRunById, readAgentTemplateById } from "./store";
+import { readAgentRunById, readAgentTemplateById, readRunCoOwners } from "./store";
 import { getRunRecommendations } from "./recommendation-interception";
 import {
   RECOMMENDATION_DECISION_REFUSAL,
@@ -57,6 +68,7 @@ export type RunRecommendationDecisionResult =
   | { ok: true; dispatched: boolean }
   | { ok: false; error: string; code?: string; settingsHref?: string };
 
+
 export type RunRecommendationHoldState =
   | { state: "none" }
   | {
@@ -72,9 +84,111 @@ export type RunRecommendationHoldState =
        * run-scoped behaviour rather than becoming un-decidable.
        */
       holdRef: string;
+      /**
+       * Whether THIS reader may shape the run — §V's read-only reading, which
+       * draws every chip with its three affordances DISABLED and the reason
+       * under the row.
+       *
+       * PRESENTATION ONLY, and deliberately so. The decision actions each
+       * re-authorize from the session on their own (`confirmRunSkillSelection‑
+       * Action` enforces execute tier; the skip path enforces the run's trigger
+       * ownership) and neither reads this flag, so it can neither grant nor
+       * remove any authority. It is therefore derived FAIL-OPEN: a derivation
+       * that cannot answer says `true`, because withholding the affordances from
+       * a reader who may in fact decide would be a regression on the shipped
+       * card, while showing them to a reader who may not costs one honest
+       * refusal line — exactly what ships today.
+       */
+      canDecide: boolean;
     }
-  | { state: "confirmed"; skillNames: string[] }
-  | { state: "skipped" };
+  | {
+      state: "confirmed";
+      skillNames: string[];
+      decided: RunRecommendationDecidedSkill[];
+    }
+  | { state: "skipped"; decided: RunRecommendationDecidedSkill[] };
+
+
+/**
+ * Can this session DECIDE this run's recommendation? The same execute-tier gate
+ * `confirmRunSkillSelectionAction` enforces before it writes, read here so the
+ * card can draw §V's read-only chips instead of offering a press that would only
+ * ever be refused. FAIL-OPEN by contract — see `canDecide` above.
+ */
+async function readerMayDecide(
+  run: Awaited<ReturnType<typeof readAgentRunById>>,
+  session: Parameters<typeof actorFromSession>[0] | null,
+  roleHints: ActorRoleHints,
+): Promise<boolean> {
+  if (!run || !session) return true;
+  try {
+    const runTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
+    const coOwnerUserIds = (await readRunCoOwners(run.id).catch(() => [])).map((r) => r.userId);
+    await enforceRunAccess(
+      { ...run, effectivePolicy: resolveEffectivePolicy(run, runTemplate), coOwnerUserIds },
+      actorFromSession(session),
+      "execute",
+      roleHints,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * DISPLAY NAMES FOR THE SETTLED READING (cinatra#2841).
+ *
+ * §V's chips print a skill's NAME — held and settled alike ("Enrich contacts",
+ * never `@vendor/pkg:enrich`, and never the slug `enrich-contacts`). The run's
+ * durable evidence carries ids only, so the settled row joins the names in
+ * HERE, the same way the held branch below gets them: through the shared
+ * run-actor candidate seam and the scorer, whose `displayName` is the owning
+ * extension's manifest title resolved once server-side
+ * (`buildRecommendationCandidatesForAgent`). Reading THAT field rather than
+ * the catalog `name` is what keeps the settled row and the held row identical:
+ * both take the same resolved label from the same call.
+ *
+ * NOT VIEWER-INTERSECTED, deliberately and consistently with the branch that
+ * calls it: the decided summary is the set THIS run resolved, which the run's
+ * own Skills tab already lists to every reader who clears the same run-read
+ * door. Only the LIVE candidate row is intersected.
+ *
+ * BEST-EFFORT BY CONTRACT. A failure costs labels, never the card: every id with
+ * no resolved name keeps the id as its label, which is exactly what the settled
+ * row printed before this join existed.
+ */
+async function resolveDecidedSkillNames(
+  run: NonNullable<Awaited<ReturnType<typeof readAgentRunById>>>,
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  try {
+    const template = await readAgentTemplateById(run.templateId).catch(() => null);
+    const packageName = template?.packageName;
+    if (!packageName) return names;
+    const candidateSkillIds = await resolveRecommendationCandidateSkillIds({
+      run,
+      packageName,
+    });
+    let promptText = "";
+    try {
+      promptText = JSON.stringify(run.inputParams ?? {});
+    } catch {
+      promptText = "";
+    }
+    const recs = await getRunRecommendations({
+      agentId: packageName,
+      intent: { promptText },
+      restrictToSkillIds: candidateSkillIds,
+    });
+    for (const r of recs) {
+      if (r.skillId && r.displayName) names.set(r.skillId, r.displayName);
+    }
+  } catch {
+    /* labels only — an unresolvable name never costs the settled card */
+  }
+  return names;
+}
 
 /**
  * The run-start recommendation hold state for the chat-mounted run panel
@@ -134,8 +248,29 @@ export async function getRunRecommendationHoldStateAction(input: {
     // disclosure boundary. The LIVE candidate row below is the surface this
     // change actually widens, and that one IS intersected.
     const selected = readRunSelectedSkillRevisions(input.runId);
-    if (selected.length > 0) return { state: "confirmed", skillNames: selected.map((s) => s.skillId) };
-    if (hasRunRecommendationSkip(input.runId)) return { state: "skipped" };
+    // §V's settled row states each skill's OWN outcome, so the rejected half of
+    // the same evidence is read beside the accepted half. Best-effort: a store
+    // that cannot answer costs the per-chip marks, never the settled card.
+    let rejected: RunRejectedRecommendation[] = [];
+    try {
+      rejected = readRunRejectedRecommendations(input.runId);
+    } catch {
+      rejected = [];
+    }
+    // §V's settled chips print the SAME display name the held chips print, so
+    // the ids the evidence carries are joined to names before the row is built.
+    const nameBySkillId = await resolveDecidedSkillNames(run);
+    const decided = decidedSkillsFromEvidence(selected, rejected, nameBySkillId);
+    if (selected.length > 0) {
+      return {
+        state: "confirmed",
+        // The field is `skillNames`, and now it truthfully holds names — the id
+        // survives only as the fallback for a skill nothing could name.
+        skillNames: selected.map((s) => nameBySkillId.get(s.skillId) ?? s.skillId),
+        decided,
+      };
+    }
+    if (hasRunRecommendationSkip(input.runId)) return { state: "skipped", decided };
     return { state: "none" };
   }
 
@@ -173,11 +308,15 @@ export async function getRunRecommendationHoldStateAction(input: {
     state: "held",
     agentPackageName: packageName,
     promptText,
+    canDecide: await readerMayDecide(run, session, roleHints),
     holdRef: encodeRecommendationHoldRef({ runId: input.runId, holdId: park.id }) ?? "",
     recommendations: recs.map((r) => ({
       skillId: r.skillId,
       skillRevisionId: r.skillRevisionId,
-      name: r.name,
+      // The RESOLVED display label — the same field `resolveDecidedSkillNames`
+      // reads, so the held row and the settled row cannot label a skill
+      // differently.
+      name: r.displayName,
       score: r.score,
       rank: r.rank,
       recommended: r.recommended,
@@ -254,6 +393,13 @@ export async function confirmRunRecommendationAction(input: {
   declaredProducedTypes?: string[];
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
+  /**
+   * The kept skills the reader settled through the chip's ADJUST panel
+   * (cinatra#2841). Written as `user_adjusted` selection rows, so §V's third
+   * settled mark is reachable for a skill that IS in the scored set — which is
+   * every skill the row offers.
+   */
+  adjustedSkillIds?: string[];
   /** The hold this decision was taken against (cinatra#2568) — see the CAS below. */
   holdRef?: string;
 }): Promise<RunRecommendationDecisionResult> {
@@ -277,6 +423,7 @@ export async function confirmRunRecommendationAction(input: {
     declaredProducedTypes: input.declaredProducedTypes,
     targetArtifactKind: input.targetArtifactKind,
     forcedRevisions: input.forcedRevisions,
+    adjustedSkillIds: input.adjustedSkillIds,
   });
   if (!written.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 

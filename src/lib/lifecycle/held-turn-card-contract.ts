@@ -371,11 +371,23 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     owner: "RecommendationHoldCard",
     // Read off the SHIPPED component: `RecommendationHoldCard` composes
     // `RunRecommendationChipRow`, whose root carries the conformance id and
-    // whose two decision controls carry these action names.
+    // whose decision controls carry these action names.
+    //
+    // RE-READ AFTER THE §V REDRAW (cinatra#2841). The row used to carry ONE
+    // Confirm/Skip pair for the whole card; the ratified drawing decides PER
+    // CHIP, so the shipped controls are now Confirm / Adjust / Skip on each
+    // skill and the two row-level names this list used to hold are emitted
+    // nowhere. Naming them anyway would have failed the real mount on names the
+    // component never used — the exact defect this field exists to prevent — so
+    // they are replaced by what the component really draws, not dropped.
+    // Same three the capture contract names (`decisionControls` in
+    // `scripts/ci/lib/capture-record-contract.mjs`); the capture suite asserts
+    // the two lists stay in step, so neither can drift alone.
     ownerAnchors: Object.freeze([
       '[data-conformance-id="run-chip-row"]',
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ]),
     ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
     // §V's two terminal acts, on the shipped `RunRecommendationChipRow`.
@@ -490,10 +502,21 @@ export function heldTurnMountIsOwed(kind: LifecycleCardKind): boolean {
  * and asserts the declaration is STILL missing, so the day the owning slice adds
  * it the row must be struck. Same ratchet discipline as the mount obligations:
  * an obligation is a red done-check, never a waiver.
+ *
+ * EMPTY, AND THAT IS THE RATCHET WORKING. `recommendation_hold` was the one row
+ * here, and the §V redraw (cinatra#2841) put the declaration on the chip row's
+ * own outermost element — the row IS the card — in BOTH of its states, held and
+ * decided. The obligation was therefore struck the moment the declaration
+ * landed, which is the only moment it may be struck.
+ *
+ * STRIKING IT DID NOT RETIRE THE MEASUREMENT. The transcript suite still reads
+ * the real card's root and compares what it found against this list, so the
+ * declaration disappearing puts `recommendation_hold` back into the OBSERVED
+ * set and turns that arm red against this empty list; and the arm that runs
+ * only once a row is struck reads the shipped component and requires both
+ * attributes to really be there. Both directions stay live with the list empty.
  */
-export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
-  "recommendation_hold",
-]);
+export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([]);
 
 // ---------------------------------------------------------------------------
 // The four-kind chat_thread CARRIAGE MATRIX (cinatra#2827, epic #2784 S9i)
