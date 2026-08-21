@@ -77,9 +77,11 @@ function poolNameFor(connectionString: string): string {
 // A `pool.connect()` that never resolves, or a `client.query()` that never
 // answers (a persistent table lock, a half-open TCP connection), leaves the
 // caller's promise unsettled FOREVER and never returns its client to the pool;
-// `max` such calls wedge every later caller too. The four migrated
-// notification clears swallow their errors by design, so that would have been
-// a silent, permanent leak.
+// `max` such calls wedge every later caller too. The five migrated
+// notification clears each ABSORB their own failure by design — four swallow it,
+// and #2838's hold clear turns it into a non-ack the park sweep retries — so a
+// promise that never settles would have been a silent, permanent leak in every
+// one of them.
 //
 // So the settle guarantee lives HERE, at the seam, and every caller inherits
 // it without writing anything:
@@ -106,9 +108,10 @@ function poolNameFor(connectionString: string): string {
 // into the startup packet. A PgBouncer/Supavisor-class pooler only forwards
 // startup parameters it allowlists and answers anything else with a FATAL
 // `unsupported startup parameter: statement_timeout` — so behind such a DSN
-// EVERY `pool.connect()` fails, and because the four migrated notification
-// clears swallow rejections by design, notifications would silently stop being
-// deleted. Supabase DSNs commonly route through exactly that kind of pooler.
+// EVERY `pool.connect()` fails, and because the five migrated notification
+// clears absorb rejections by design — four swallow them, and #2838's hold clear
+// reports a non-ack its sweep just retries — notifications would silently stop
+// being deleted. Supabase DSNs commonly route through exactly that kind of pooler.
 // The bound therefore must not depend on the startup packet, which is why the
 // universally-enforced one is client-side and the server-side one is issued as
 // in-transaction SQL.

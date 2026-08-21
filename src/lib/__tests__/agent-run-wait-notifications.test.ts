@@ -41,8 +41,18 @@ const deleteNotificationsByDedupeKeyForUserAsync = vi.fn(
 // cinatra#2835 — the HOLD-scoped clear: same per-run key, additionally pinned to
 // the park id the row carries. Returns whether the delete committed; that answer
 // is the sweeper's ack.
-const deleteHoldNotificationForUser = vi.fn(
-  (_args: { userId: string; dedupeKey: string; holdParkId: string }): boolean => true,
+//
+// cinatra#2882 — and it clears through the ASYNC seam too, under the SAME trap
+// as the key-scoped clear above: only the async name is exported below, so a
+// regression back to the synchronous bridge destructures `undefined` rather than
+// passing quietly. Async here also changes what a FAILURE looks like — a
+// rejection, not a throw — which is why the failure arm below rejects.
+const deleteHoldNotificationForUserAsync = vi.fn(
+  async (_args: {
+    userId: string;
+    dedupeKey: string;
+    holdParkId: string;
+  }): Promise<boolean> => true,
 );
 const resolveAgentRunHref = vi.fn(async (_jobData: unknown) => "/agents/acme/sales/R1");
 // The canonical "which gate is this run paused on" derivation. The notifier
@@ -67,7 +77,7 @@ vi.mock("@cinatra-ai/agents", () => ({ readAgentRunById, deriveRunHitlContext })
 vi.mock("@cinatra-ai/notifications/server", () => ({
   createNotificationForRecipient,
   deleteNotificationsByDedupeKeyForUserAsync,
-  deleteHoldNotificationForUser,
+  deleteHoldNotificationForUserAsync,
   resolveAgentRunHref,
   // cinatra#2838 — the real value, not a stand-in: the host hands it to the park
   // package so the `mark` can gate itself on the insert's RETURNING, and a test
@@ -92,8 +102,8 @@ beforeEach(() => {
   createNotificationForRecipient.mockReset();
   createNotificationForRecipient.mockResolvedValue([{ id: "notif-1" }]);
   deleteNotificationsByDedupeKeyForUserAsync.mockReset();
-  deleteHoldNotificationForUser.mockReset();
-  deleteHoldNotificationForUser.mockReturnValue(true);
+  deleteHoldNotificationForUserAsync.mockReset();
+  deleteHoldNotificationForUserAsync.mockResolvedValue(true);
   resolveAgentRunHref.mockReset();
   resolveAgentRunHref.mockResolvedValue("/agents/acme/sales/R1");
   findChatConversationPathForAgentRun.mockReset();
@@ -753,7 +763,7 @@ describe("runWaitNotifier.onClearRecommendationHold — the ack", () => {
     await expect(
       runWaitNotifier.onClearRecommendationHold!({ runId: "R1", parkId: "park-7" }),
     ).resolves.toBe(true);
-    expect(deleteHoldNotificationForUser).toHaveBeenCalledWith({
+    expect(deleteHoldNotificationForUserAsync).toHaveBeenCalledWith({
       userId: "user-1",
       dedupeKey: "run-awaiting-human:R1",
       // Without this the clear would delete whatever wait currently holds the
@@ -769,12 +779,46 @@ describe("runWaitNotifier.onClearRecommendationHold — the ack", () => {
 
   it("a FAILING delete reports false — the obligation stays with the park", async () => {
     readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: null, status: "pending_input" });
-    deleteHoldNotificationForUser.mockImplementation(() => {
-      throw new Error("notifications down");
-    });
+    // cinatra#2882 — a REJECTION now, where the sync twin threw. This arm carries
+    // a second load because of that: the handler has to `return await`, since a
+    // bare `return` of the seam's promise would settle this async function WITH
+    // it and route the rejection AROUND the catch. Drop the `await` and this
+    // expectation rejects instead of resolving to `false`.
+    deleteHoldNotificationForUserAsync.mockRejectedValue(new Error("notifications down"));
     await expect(
       runWaitNotifier.onClearRecommendationHold!({ runId: "R1", parkId: "park-7" }),
     ).resolves.toBe(false);
+  });
+
+  it("does not ack until the delete has actually settled", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: null, status: "pending_input" });
+    // The ack is "the statement COMMITTED", and the sweeper retires the park's
+    // obligation on it. An ack handed over while the delete is still in flight
+    // would retire an obligation that may still fail — and the retry that failure
+    // is supposed to earn would be gone. So the `true` must come from AFTER the
+    // await, never from beside it.
+    let releaseDelete: (() => void) | undefined;
+    deleteHoldNotificationForUserAsync.mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        releaseDelete = () => resolve(true);
+      }),
+    );
+    let acked: boolean | undefined;
+    // `Promise.resolve(...)` because the seam's declared return is
+    // `boolean | Promise<boolean>` — the interface still admits a synchronous
+    // host. This implementation is the async one; wrapping just types the await.
+    const pending = Promise.resolve(
+      runWaitNotifier.onClearRecommendationHold!({ runId: "R1", parkId: "park-7" }),
+    ).then((value) => {
+      acked = value;
+    });
+    // Drain everything the event loop has EXCEPT the delete itself.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteHoldNotificationForUserAsync).toHaveBeenCalledTimes(1);
+    expect(acked).toBeUndefined();
+    releaseDelete!();
+    await pending;
+    expect(acked).toBe(true);
   });
 
   it("an unreadable run retires the obligation rather than spinning on it forever", async () => {
@@ -785,6 +829,6 @@ describe("runWaitNotifier.onClearRecommendationHold — the ack", () => {
     await expect(
       runWaitNotifier.onClearRecommendationHold!({ runId: "R1", parkId: "park-7" }),
     ).resolves.toBe(true);
-    expect(deleteHoldNotificationForUser).not.toHaveBeenCalled();
+    expect(deleteHoldNotificationForUserAsync).not.toHaveBeenCalled();
   });
 });

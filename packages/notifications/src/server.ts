@@ -71,7 +71,13 @@ export { resolveAgentRunHref } from "./agent-run-href";
 // async pooled adapter instead of the synchronous `Atomics.wait` bridge. For
 // callers that already have an `await`; `./service`'s synchronous twins stay
 // exported above, unchanged, for genuinely synchronous hosts.
-export { deleteNotificationsByDedupeKeyForUserAsync } from "./service";
+export {
+  deleteNotificationsByDedupeKeyForUserAsync,
+  // cinatra#2838's hold-scoped clear, over the same seam: its one production
+  // caller (`onClearRecommendationHold`) is async, and its boolean ack keeps
+  // meaning "the statement committed".
+  deleteHoldNotificationForUserAsync,
+} from "./service";
 
 // Ergonomic-only re-export for NON-boot callers (adapter-mocking tests).
 export {

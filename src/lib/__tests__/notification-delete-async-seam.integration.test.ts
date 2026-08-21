@@ -55,6 +55,8 @@ import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import {
   deleteNotificationsByDedupeKeyForUser,
   deleteNotificationsByDedupeKeyForUserAsync,
+  deleteHoldNotificationForUser,
+  deleteHoldNotificationForUserAsync,
   setNotificationsHostAdapters,
 } from "@cinatra-ai/notifications/server";
 import type { NotificationsHostAdapters } from "@cinatra-ai/notifications/server";
@@ -130,15 +132,33 @@ function registerAdapters(opts?: { withAsyncRunner?: boolean }): void {
   setNotificationsHostAdapters(adapters);
 }
 
-type Row = { id: string; user_id: string; dedupe_key: string };
+// `hold_park_id` is written into the row's metadata under the key the hold
+// delete narrows on (`metadata -> 'runAwaitingHuman' ->> 'holdParkId'`) —
+// cinatra#2835 stamps it, and no other writer sets it. Absent here means a row
+// no hold may ever delete, which is exactly what the narrowing has to prove.
+type Row = {
+  id: string;
+  user_id: string;
+  dedupe_key: string;
+  hold_park_id?: string;
+};
 
 async function seed(rows: Row[]): Promise<void> {
   await admin.query(`DELETE FROM ${TABLE}`);
   for (const r of rows) {
     await admin.query(
-      `INSERT INTO ${TABLE} (id, user_id, dedupe_key, kind, title, body)
-       VALUES ($1, $2, $3, 'info', 'x', 'y')`,
-      [r.id, r.user_id, r.dedupe_key],
+      `INSERT INTO ${TABLE} (id, user_id, dedupe_key, kind, title, body, metadata)
+       VALUES ($1, $2, $3, 'info', 'x', 'y', $4::jsonb)`,
+      [
+        r.id,
+        r.user_id,
+        r.dedupe_key,
+        JSON.stringify(
+          r.hold_park_id
+            ? { runAwaitingHuman: { runId: "r1", holdParkId: r.hold_park_id } }
+            : { runAwaitingHuman: { runId: "r1" } },
+        ),
+      ],
     );
   }
 }
@@ -210,12 +230,6 @@ beforeAll(async () => {
   admin = new Client({ connectionString: DB_URL });
   await admin.connect();
   await admin.query(`CREATE SCHEMA IF NOT EXISTS "${q(TEST_SCHEMA)}"`);
-  // The REAL notifications DDL (table + typed columns + the partial unique
-  // dedupe index + the realtime NOTIFY trigger and the function it calls),
-  // taken from the canonical bootstrap rather than hand-written, so the delete
-  // runs against the constraints production has. Only the notification
-  // statements are needed here; the other ~170 build tables this suite never
-  // touches.
   for (const stmt of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
     if (!/notification/i.test(stmt.text)) continue;
     await admin.query(stmt.text);
@@ -296,6 +310,100 @@ describeDb("cinatra#2882 async notification-delete seam", () => {
     });
   });
 
+  // cinatra#2838 brought a SECOND production clear onto this seam: the run-start
+  // recommendation hold's, which narrows the same per-run key by the park id the
+  // row carries. It is a different statement with a different guard, so it gets
+  // its own equivalence proof rather than riding on the one above.
+  describe("equivalence with the synchronous twin — the HOLD-scoped clear", () => {
+    const KEY = "run-awaiting:r1";
+    // Same key AND same park id, different user — the per-user scope spares it,
+    // and the partial unique index permits it because that index is per-user.
+    const OTHER_USER: Row = {
+      id: "n-other-user",
+      user_id: "user-b",
+      dedupe_key: KEY,
+      hold_park_id: "park-7",
+    };
+
+    // ONE OCCUPANT AT A TIME, which is the whole reason the narrowing exists.
+    // `notifications_dedupe_key_idx` is UNIQUE on `(user_id, dedupe_key)`, so
+    // user-a holds at most one row on this run's key — the hold's own row, or
+    // whatever took the key after that hold ended. A clear retried by a later
+    // sweep cannot know which it will find, so these are separate seeds rather
+    // than one crowded fixture: each is a state the retry can genuinely arrive in.
+    const CASES: Array<{ what: string; occupant: Row; deleted: boolean }> = [
+      {
+        what: "the hold's OWN row",
+        occupant: { id: "n-hold", user_id: "user-a", dedupe_key: KEY, hold_park_id: "park-7" },
+        deleted: true,
+      },
+      {
+        what: "a LATER hold's row on the same key",
+        occupant: { id: "n-hold-8", user_id: "user-a", dedupe_key: KEY, hold_park_id: "park-8" },
+        deleted: false,
+      },
+      {
+        what: "the plain wait that took the key after this hold ended",
+        occupant: { id: "n-plain-wait", user_id: "user-a", dedupe_key: KEY },
+        deleted: false,
+      },
+    ];
+
+    for (const c of CASES) {
+      it(`leaves the same store state as the sync path — ${c.what}`, async () => {
+        const rows = [c.occupant, OTHER_USER];
+        const args = { userId: "user-a", dedupeKey: KEY, holdParkId: "park-7" };
+
+        await seed(rows);
+        expect(deleteHoldNotificationForUser(args)).toBe(true);
+        const afterSync = await snapshot();
+
+        await seed(rows);
+        await expect(deleteHoldNotificationForUserAsync(args)).resolves.toBe(true);
+        const afterAsync = await snapshot();
+
+        expect(afterAsync).toEqual(afterSync);
+        // ...and that shared state is the RIGHT one. Equality alone would also be
+        // satisfied by two paths that each deleted the whole key, or each did
+        // nothing, so name the surviving rows outright.
+        const survivors = [
+          ...(c.deleted ? [] : [`${c.occupant.id}|user-a|${KEY}`]),
+          `n-other-user|user-b|${KEY}`,
+        ].sort();
+        expect(afterSync).toEqual(survivors);
+      });
+    }
+
+    it("acks a park that names no row, on both paths, without touching the store", async () => {
+      // The ack is "the statement COMMITTED", not "a row matched" — a clear
+      // retried after its row is already gone HAS discharged its obligation, and
+      // reporting `false` there would make the sweep retry it forever.
+      await seed([CASES[0].occupant, OTHER_USER]);
+      const before = await snapshot();
+      const args = { userId: "user-a", dedupeKey: KEY, holdParkId: "park-never-existed" };
+      expect(deleteHoldNotificationForUser(args)).toBe(true);
+      await expect(deleteHoldNotificationForUserAsync(args)).resolves.toBe(true);
+      expect(await snapshot()).toEqual(before);
+    });
+
+    it("guards a missing id identically — neither issues a query, and neither acks", async () => {
+      // A NON-ack here, unlike above: nothing was asked of the database, so
+      // nothing was discharged. Both twins must agree on that, or a sweep would
+      // retire an obligation on the strength of an argument it never sent.
+      await seed([CASES[0].occupant, OTHER_USER]);
+      const before = await snapshot();
+      for (const args of [
+        { userId: "", dedupeKey: KEY, holdParkId: "park-7" },
+        { userId: "user-a", dedupeKey: "", holdParkId: "park-7" },
+        { userId: "user-a", dedupeKey: KEY, holdParkId: "" },
+      ]) {
+        expect(deleteHoldNotificationForUser(args)).toBe(false);
+        await expect(deleteHoldNotificationForUserAsync(args)).resolves.toBe(false);
+      }
+      expect(await snapshot()).toEqual(before);
+    });
+  });
+
   describe("the event loop during an in-flight slow delete", () => {
     it("ASYNC: a timer due mid-delete fires while the delete is still running", async () => {
       await seed([
@@ -370,8 +478,9 @@ describeDb("cinatra#2882 async notification-delete seam", () => {
      * `Atomics.wait` returns "timed-out" and the caller gets a throw. The first
      * cut of the async seam set no ceiling at all, so a delete behind a lock
      * nobody releases left the handler's promise pending FOREVER and never gave
-     * its client back. The four migrated clears swallow their errors by
-     * design, so that leak would have been permanent and silent.
+     * its client back. The five migrated clears each absorb their own failure
+     * by design — four swallow it, #2838's hold clear turns it into a non-ack —
+     * so that leak would have been permanent and silent in all of them.
      *
      * Here the lock is held far past the ceiling and never released on its own.
      * The delete must REJECT (ordinarily — the caller's best-effort catch takes

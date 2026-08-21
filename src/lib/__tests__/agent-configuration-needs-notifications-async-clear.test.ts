@@ -7,7 +7,7 @@
 // a user-facing path, each up to `POSTGRES_SYNC_TIMEOUT_MS` (30s) with no
 // timer, no abort listener and no microtask running anywhere in the process.
 //
-// The sibling file `agent-run-wait-notifications.test.ts` pins the other three
+// The sibling file `agent-run-wait-notifications.test.ts` pins the other four
 // migrated callers the same way, and for the same reason: the `vi.mock` factory
 // below supplies ONLY the async name. A regression to the sync call would
 // destructure `undefined`, and — because this reconciler swallows and logs its
