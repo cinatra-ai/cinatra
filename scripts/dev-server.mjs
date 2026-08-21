@@ -168,7 +168,16 @@ async function runDbPortPreflight() {
   for (const { svc, port } of down) {
     let diag;
     try {
-      diag = diagnoseDockerPortDrift({ service: svc, mainRoot, expectedHostPort: port });
+      // `skip` is passed even though this function already returned on it
+      // above: the guard belongs on the spawning function, so no call site
+      // added later can reach Docker behind the flag. Same reason the compose
+      // runner carries its own guard (scripts/lib/dev-preflight.mjs).
+      diag = diagnoseDockerPortDrift({
+        service: svc,
+        mainRoot,
+        expectedHostPort: port,
+        skip: skipPreflight,
+      });
     } catch {
       diag = { available: false };
     }
