@@ -664,3 +664,87 @@ describe("listNotificationsKeysetForUser", () => {
     expect(runQueriesMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2864 — the write-time precondition (`fence`).
+//
+// A notification whose subject can go terminal at any instant cannot be written
+// on a check that ran BEFORE the write: the check is over the moment it returns.
+// A `fence` moves the check into the write — the precondition becomes a CTE and
+// the INSERT is driven from its rows, so zero rows write nothing, and a
+// `FOR UPDATE` precondition additionally serialises the write against whoever
+// else mutates that row. The review-gate instance is
+// `buildAutoGateNotificationFence` in @cinatra-ai/agents/run-wait-notifier.
+// ---------------------------------------------------------------------------
+
+describe("createNotificationForRecipient — fenced write (cinatra#2864)", () => {
+  const FENCE = {
+    values: ["run-1", "auto-review-abc"],
+    precondition:
+      `SELECT id FROM "cinatra_test"."artifact_review_gates" ` +
+      `WHERE run_id = $1 AND review_task_id = $2 AND status = 'pending' LIMIT 1 FOR UPDATE`,
+  };
+
+  it("drives the INSERT from the precondition's rows, in ONE statement", async () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [{ id: "n-1", user_id: "u-1", recipient_kind: "user", topic: "user:u-1", kind: "info", title: "t", body: "" }] }]);
+    await createNotificationForRecipient(
+      { kind: "user", userId: "u-1" },
+      { title: "A run produced an artifact awaiting review", dedupeKey: "k" },
+      { recipientUserIds: ["u-1"], fence: FENCE },
+    );
+
+    const sql = lastSql();
+    // The precondition is a CTE of the insert, not a query before it: that is
+    // what makes the row lock it takes cover the insert it gates.
+    expect(sql).toContain("WITH notification_write_fence AS (");
+    expect(sql).toContain("FOR UPDATE");
+    // The insert's source is a SELECT over that CTE — no rows, no write.
+    expect(sql).toContain("FROM notification_write_fence");
+    expect(sql).not.toContain("VALUES ($");
+    // ONE statement, so it is atomic without needing a transaction wrapper.
+    expect(runQueriesMock.mock.calls.at(-1)![0].queries).toHaveLength(1);
+  });
+
+  it("numbers the row values BEHIND the fence's own placeholders", async () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [] }]);
+    await createNotificationForRecipient(
+      { kind: "user", userId: "u-1" },
+      { title: "t", dedupeKey: "k" },
+      { recipientUserIds: ["u-1"], fence: FENCE },
+    );
+
+    const values = lastValues();
+    // The fence owns $1..$2; the row's 13 columns start at $3.
+    expect(values.slice(0, 2)).toEqual(["run-1", "auto-review-abc"]);
+    expect(values).toHaveLength(2 + 13);
+    expect(lastSql()).toContain("$3, $4, $5");
+    // The caller never has to know how many columns the insert carries.
+    expect(lastSql()).toContain("$15");
+  });
+
+  it("returns null when the precondition matched nothing — no row was written", async () => {
+    // Zero rows out of the CTE means zero rows inserted, so the RETURNING is
+    // empty and the caller learns nothing was minted.
+    runQueriesMock.mockReturnValueOnce([{ rows: [] }]);
+    const out = await createNotificationForRecipient(
+      { kind: "user", userId: "u-1" },
+      { title: "t", dedupeKey: "k" },
+      { recipientUserIds: ["u-1"], fence: FENCE },
+    );
+    expect(out).toEqual([]);
+  });
+
+  it("keeps the UNFENCED insert byte-for-byte what it was — every other emitter is untouched", async () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [] }]);
+    await createNotificationForRecipient(
+      { kind: "user", userId: "u-1" },
+      { title: "t", dedupeKey: "k" },
+      { recipientUserIds: ["u-1"] },
+    );
+
+    const sql = lastSql();
+    expect(sql).not.toContain("notification_write_fence");
+    expect(sql).toContain("VALUES ($1, $2, $3");
+    expect(lastValues()).toHaveLength(13);
+  });
+});
