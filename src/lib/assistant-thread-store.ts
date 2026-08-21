@@ -1642,7 +1642,13 @@ export type ProjectedAssistantTurn = {
   id: string;
   role: "assistant";
   content: string;
+  /** External-author attribution (Slack mode), when the server recorded one on
+   *  the turn row. Same field, same meaning as the live projection's. */
+  authorUserId?: string;
   parts?: Array<Record<string, unknown>>;
+  /** The flat tool-round summary the legacy layout draws — and the ONLY place a
+   *  Slack-projected turn records its tool calls. */
+  thoughtGroups?: Array<Record<string, unknown>>;
   citations?: Array<Record<string, unknown>>;
   dataParts?: Array<Record<string, unknown>>;
 };
@@ -1677,6 +1683,12 @@ export function isDurableAssistantTurnContent(content: unknown): boolean {
 export function projectDurableAssistantTurn(
   turnId: string,
   content: unknown,
+  /** The turn row's `assistant_user_id` — the server's own record of WHO
+   *  produced this turn. Carried through as `authorUserId`, the field the
+   *  transcript attributes an external-author turn by; omitted when the writer
+   *  recorded none (the historical @cinatra binding records nothing, and the
+   *  renderer's own `?? "cinatra"` fallback is what covers that). */
+  authorUserId?: string | null,
 ): ProjectedAssistantTurn | null {
   if (!isDurableAssistantTurnContent(content)) return null;
   const durable = content as Record<string, unknown>;
@@ -1684,6 +1696,11 @@ export function projectDurableAssistantTurn(
   const parts: Array<Record<string, unknown>> = [];
   const citations: Array<Record<string, unknown>> = [];
   const rawParts = Array.isArray(durable.parts) ? durable.parts : [];
+  // The turn's text as the LIVE reducer would have accumulated it, separators and
+  // all (see the `text` case). `pendingRoundSeparator` mirrors the reducer's own
+  // flag: set by a tool RESULT that matched its call, consumed by the next text.
+  let contentText = "";
+  let pendingRoundSeparator = false;
 
   for (const raw of rawParts) {
     if (!isRecord(raw)) continue;
@@ -1691,7 +1708,23 @@ export function projectDurableAssistantTurn(
       case "text": {
         const text = stringOrNull(raw.text);
         if (text === null || text.length === 0) break;
-        parts.push({ kind: "text", content: text });
+        // THE REDUCER'S PARAGRAPH SEPARATOR, reconstructed (review round 3,
+        // non-blocker 2). Live, text that resumes AFTER a tool round gets a
+        // "\n\n" break — the bespoke `thinking_end` rule, keyed on TOOL_CALL_END
+        // since AG-UI (`reduceTextContent`). The sink's durable `content` is the
+        // raw concatenation of the deltas and its text parts are the raw
+        // segments, so a recovered turn used to come back with its paragraphs
+        // run together where the live turn had them separated. The ordered part
+        // trace records exactly what the rule needs — which text follows a tool
+        // RESULT — so the same condition is applied here, character for
+        // character: only after a completed round, never between ordinary
+        // chunks, and never onto text that already ends in whitespace.
+        const separator =
+          pendingRoundSeparator && contentText.length > 0 && !/\s$/.test(contentText) ? "\n\n" : "";
+        pendingRoundSeparator = false;
+        const content = separator + text;
+        contentText += content;
+        parts.push({ kind: "text", content });
         break;
       }
       case "tool_call": {
@@ -1720,6 +1753,10 @@ export function projectDurableAssistantTurn(
         target.status = "completed";
         if (typeof raw.resultLabel === "string") target.resultLabel = raw.resultLabel;
         if (typeof raw.serverLabel === "string") target.serverLabel = raw.serverLabel;
+        // A tool round just ended → the next text segment gets a paragraph
+        // break. An ORPHAN result is a no-op here exactly as it is in the
+        // reducer, which is why this sits after the `target` guard.
+        pendingRoundSeparator = true;
         break;
       }
       case "citations": {
@@ -1791,8 +1828,33 @@ export function projectDurableAssistantTurn(
     views.push(raw);
   }
 
-  const text = typeof durable.content === "string" ? durable.content : "";
+  // The reconstructed text WINS over the sink's raw `content` field, because it
+  // is the same string plus the round separators the live turn had. The raw
+  // field remains the floor for a row whose parts this reader could not read.
+  const text = contentText.length > 0
+    ? contentText
+    : typeof durable.content === "string"
+      ? durable.content
+      : "";
   if (parts.length === 0 && views.length === 0 && text.length === 0) return null;
+
+  // THE FLAT TOOL-ROUND SUMMARY (review round 3, non-blocker 2). The renderer
+  // prefers `parts` when present and falls back to `thoughtGroups` for a message
+  // persisted without one (`hydrateLegacyParts`), and the Slack layout draws
+  // `thoughtGroups` and nothing else — so a recovered turn without them is a turn
+  // that renders as bare text wherever the ordered trace is not the layout in
+  // use. Derived from the parts this projection just built, so the two can never
+  // disagree; ONE group, id "main", which is exactly what the AG-UI reducer
+  // produces (it has no thinking frames to open a second one with).
+  const toolCalls = parts
+    .filter((p) => p.kind === "tool_call")
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      status: p.status,
+      ...(p.resultLabel !== undefined ? { resultLabel: p.resultLabel } : {}),
+      ...(p.serverLabel !== undefined ? { serverLabel: p.serverLabel } : {}),
+    }));
 
   return {
     id: turnId,
@@ -1801,7 +1863,11 @@ export function projectDurableAssistantTurn(
     // Field-presence discipline, matching the live projection: a key appears
     // only once populated, so a projected turn serializes like a client-saved
     // one and a re-save cannot introduce spurious empty arrays.
+    ...(authorUserId !== null && authorUserId !== undefined && authorUserId.length > 0
+      ? { authorUserId }
+      : {}),
     ...(parts.length > 0 ? { parts } : {}),
+    ...(toolCalls.length > 0 ? { thoughtGroups: [{ id: "main", toolCalls }] } : {}),
     ...(citations.length > 0 ? { citations } : {}),
     ...(views.length > 0 ? { dataParts: views } : {}),
   };
@@ -2245,7 +2311,7 @@ function foldDurableLifecycleTurnsInto(
   // 1. MATCH — against the original spine, before anything is folded in.
   const candidates: DurableFoldCandidate[] = [];
   for (const turn of durableTurns) {
-    const projected = projectDurableAssistantTurn(turn.id, turn.content);
+    const projected = projectDurableAssistantTurn(turn.id, turn.content, turn.assistantUserId);
     if (projected === null) continue;
     if (!carriesLifecycleRenderState(projected)) continue;
     candidates.push({ turn, projected, covering: findCoveringSpineIndex(messages, projected) });
@@ -2549,13 +2615,52 @@ export function reconstructThreadPayload(threadId: string): Record<string, unkno
         // stays, because it is also the resume/authorization anchor; it simply
         // stops being a turn the transcript folds back in. THIS is the only
         // reader that filters on it.
-        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at
+        // BOUNDED IN SQL, both ways (review round 3, non-blocker 1). Widening
+        // the read to the run-bound rows meant every thread read shipped every
+        // historical raw tool RESULT the sink ever captured — the durable
+        // `tool_result` part keeps the full payload for faithful reconstruction
+        // after Redis loss, and a long thread's worth of those is megabytes the
+        // assembler then discards. Two bounds, each mirroring exactly what the
+        // JS side would have done with the rows:
+        //
+        //   * ROWS. Only a run-bound row that actually carries lifecycle render
+        //     state is selected, which is the same predicate
+        //     `carriesLifecycleRenderState` applies — for this format the ONLY
+        //     source of a renderable view or a pinned run is a non-empty
+        //     `dataParts` (a run pin is an `agent_run` DATA_PART), so a row
+        //     without one could never have participated in the fold-in.
+        //   * COLUMNS. The raw `result` is stripped from the run-bound rows that
+        //     DO come back. `projectDurableAssistantTurn` reads a tool_result's
+        //     `id`/`resultLabel`/`serverLabel` and never its `result`, and these
+        //     rows reach nothing but that projection. The SPINE's content is
+        //     never touched — those rows must round-trip losslessly.
+        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status,
+                      CASE
+                        WHEN run_id IS NULL THEN content
+                        WHEN jsonb_typeof(content->'parts') <> 'array' THEN content
+                        ELSE jsonb_set(content, '{parts}', (
+                          SELECT COALESCE(
+                                   jsonb_agg(
+                                     CASE WHEN jsonb_typeof(e.part) = 'object' THEN e.part - 'result' ELSE e.part END
+                                     ORDER BY e.ord
+                                   ),
+                                   '[]'::jsonb)
+                            FROM jsonb_array_elements(content->'parts') WITH ORDINALITY AS e(part, ord)
+                        ))
+                      END AS content,
+                      created_at, updated_at
                FROM "${schema}"."assistant_turns"
                WHERE thread_id = $1
                  AND content IS NOT NULL
                  AND (
                    (run_id IS NULL AND id LIKE '${prefix}%')
-                   OR (run_id IS NOT NULL AND superseded_at IS NULL)
+                   OR (
+                     run_id IS NOT NULL
+                     AND superseded_at IS NULL
+                     AND content->>'format' = '${DURABLE_ASSISTANT_TURN_FORMAT}'
+                     AND jsonb_typeof(content->'dataParts') = 'array'
+                     AND jsonb_array_length(content->'dataParts') > 0
+                   )
                  )
                ORDER BY ordinal NULLS LAST, created_at, id`,
         values: [threadId],

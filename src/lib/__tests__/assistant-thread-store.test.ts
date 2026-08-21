@@ -1367,6 +1367,30 @@ describe("reconstructThreadPayload (single snapshot-consistent read)", () => {
     expect(payload!.slackMode).toBe(true); // scalars read back directly
   });
 
+  it("BOUNDS the widened read in SQL — rows and columns both (round 3, non-blocker 1)", () => {
+    // The widened read (both representations in one snapshot) shipped every
+    // historical raw tool RESULT on every thread read: the durable `tool_result`
+    // part keeps the full payload for faithful reconstruction after Redis loss,
+    // and the assembler then discards it. Both bounds are in the QUERY, so the
+    // bytes never leave Postgres.
+    runPostgresQueriesSync.mockReturnValue([
+      { rows: [] },
+      { rows: [{ id: "th1", created_at: "2026-07-10T10:00:00.000Z", updated_at: "2026-07-10T11:00:00.000Z" }] },
+      { rows: [] },
+      { rows: [] },
+    ]);
+    reconstructThreadPayload("th1");
+    const turnsQuery = runPostgresQueriesSync.mock.calls[0][0].queries[2].text as string;
+    // ROWS: only a run-bound row that could actually have participated in the
+    // fold-in — the SQL twin of `carriesLifecycleRenderState` for this format.
+    expect(turnsQuery).toContain("content->>'format' = 'assistant-turn-v1'");
+    expect(turnsQuery).toContain("jsonb_array_length(content->'dataParts') > 0");
+    // COLUMNS: the unread raw result is stripped from the rows that do come back.
+    expect(turnsQuery).toContain("e.part - 'result'");
+    // ...and NEVER from the spine, whose content must round-trip losslessly.
+    expect(turnsQuery).toContain("WHEN run_id IS NULL THEN content");
+  });
+
   it("returns null when the thread row is absent", () => {
     runPostgresQueriesSync.mockReturnValue([{ rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }]);
     expect(reconstructThreadPayload("nope")).toBeNull();

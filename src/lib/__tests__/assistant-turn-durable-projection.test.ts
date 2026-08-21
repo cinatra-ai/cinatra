@@ -62,7 +62,9 @@ describe("the ordered part trace", () => {
     expect(projected).toEqual({
       id: "turn-1",
       role: "assistant",
-      content: "here it is",
+      // The reducer's paragraph break after a tool round (round 3, non-blocker
+      // 2), and the reconstructed text rather than the sink's raw concatenation.
+      content: "A\n\nB",
       parts: [
         { kind: "text", content: "A" },
         {
@@ -73,8 +75,79 @@ describe("the ordered part trace", () => {
           serverLabel: "cinatra",
           resultLabel: "0 found",
         },
-        { kind: "text", content: "B" },
+        { kind: "text", content: "\n\nB" },
       ],
+      // The flat tool-round summary, derived from the parts above so the two
+      // cannot disagree. ONE group, id "main" — what the AG-UI reducer produces.
+      thoughtGroups: [
+        {
+          id: "main",
+          toolCalls: [
+            {
+              id: "c1",
+              name: "objects_list",
+              status: "completed",
+              serverLabel: "cinatra",
+              resultLabel: "0 found",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  describe("what a recovered turn keeps (round 3, non-blocker 2)", () => {
+    it("never breaks a paragraph between ordinary chunks, only after a tool round", () => {
+      const projected = projectDurableAssistantTurn(
+        "turn-1",
+        durable({ parts: [{ type: "text", text: "A" }, { type: "text", text: "B" }] }),
+      );
+      // Providers split tokens arbitrarily and a stray space breaks markdown, so
+      // the live rule inserts nothing here. Neither does this one.
+      expect(projected!.content).toBe("AB");
+    });
+
+    it("does not double a break onto text that already ends in whitespace", () => {
+      const projected = projectDurableAssistantTurn(
+        "turn-1",
+        durable({
+          parts: [
+            { type: "text", text: "A\n" },
+            { type: "tool_call", id: "c1", name: "objects_list" },
+            { type: "tool_result", id: "c1", name: "objects_list" },
+            { type: "text", text: "B" },
+          ],
+        }),
+      );
+      expect(projected!.content).toBe("A\nB");
+    });
+
+    it("an ORPHAN tool_result arms no separator — the reducer no-ops it too", () => {
+      const projected = projectDurableAssistantTurn(
+        "turn-1",
+        durable({
+          parts: [
+            { type: "text", text: "A" },
+            { type: "tool_result", id: "no-such-call", name: "objects_list" },
+            { type: "text", text: "B" },
+          ],
+        }),
+      );
+      expect(projected!.content).toBe("AB");
+      expect(projected!.thoughtGroups).toBeUndefined();
+    });
+
+    it("carries authorUserId when the server recorded who produced the turn", () => {
+      const projected = projectDurableAssistantTurn("turn-1", durable(), "asst-9");
+      expect(projected!.authorUserId).toBe("asst-9");
+      // ...and omits the key when it did not, so the renderer's own
+      // `?? "cinatra"` fallback still decides attribution for a built-in turn.
+      expect("authorUserId" in projectDurableAssistantTurn("turn-1", durable(), null)!).toBe(false);
+      expect("authorUserId" in projectDurableAssistantTurn("turn-1", durable())!).toBe(false);
+    });
+
+    it("omits thoughtGroups for a turn with no tool round at all", () => {
+      expect(projectDurableAssistantTurn("turn-1", durable())!.thoughtGroups).toBeUndefined();
     });
   });
 

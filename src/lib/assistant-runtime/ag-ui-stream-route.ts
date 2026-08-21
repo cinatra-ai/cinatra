@@ -191,6 +191,23 @@ export async function streamAgUiChatTurn(params: {
    * widget principal); the harness only delivers the returned token as a header.
    */
   mintResumeToken?: (runId: string) => string | null;
+  /**
+   * The PRODUCING assistant's user id, when the caller resolved one
+   * (cinatra#2823 review round 3, non-blocker 2).
+   *
+   * Recorded on the turn ROW so the server's own record of the turn knows WHO
+   * produced it — which is what a recovered turn is attributed by
+   * (`projectDurableAssistantTurn` carries it through as `authorUserId`, the
+   * same field the live projection sets for an external-author turn). Absent on
+   * the historical @cinatra binding, which names no assistant principal; the
+   * transcript's own `?? "cinatra"` fallback covers that, exactly as it does for
+   * a live turn.
+   *
+   * DELIBERATELY NOT the container. The thread's home is `container` above; this
+   * is the turn's producer, and a @mention answers one turn without re-homing
+   * the conversation.
+   */
+  producerAssistantUserId?: string | null;
 }): Promise<Response> {
   const { request, threadId, mirrorOrgId, needsStructuredRow, userId, isAdmin, runProducer, container } =
     params;
@@ -261,6 +278,7 @@ export async function streamAgUiChatTurn(params: {
   const turn = appendAssistantTurn({
     threadId,
     runId,
+    assistantUserId: params.producerAssistantUserId ?? null,
     role: "assistant",
     status: "running",
   });
