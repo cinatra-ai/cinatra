@@ -85,18 +85,47 @@ function poolNameFor(connectionString: string): string {
 // it without writing anything:
 //
 //   connectionTimeoutMillis — bounds the CHECKOUT. `pool.connect()` rejects
-//     instead of waiting forever behind a stuck peer.
-//   statement_timeout — bounds each STATEMENT, server-side (sent in the
-//     startup packet). Postgres cancels the statement, including time spent
-//     waiting on a lock, and answers 57014. The connection stays healthy and
-//     goes straight back to the pool, which is why this is the bound that
-//     should normally fire.
-//   query_timeout — bounds the client's WAIT for that answer, ABOVE
-//     statement_timeout, so it only fires when no answer is coming at all.
-//     pg's protocol stream is desynced afterwards, so that client is destroyed
-//     on release rather than handed to the next caller.
+//     instead of waiting forever behind a stuck peer. Client-side; never
+//     touches the wire.
+//   query_timeout — bounds the client's WAIT for an answer, and is THE bound
+//     that makes this promise settle. Client-side too (pg arms a timer per
+//     query, `pg/lib/client.js`), so it holds against ANY DSN — direct
+//     Postgres, PgBouncer, Supavisor, anything. On expiry pg abandons the
+//     in-flight query while leaving the socket open, so the protocol stream is
+//     desynced and that client is `release(err)`-DESTROYED rather than handed
+//     to the next caller.
+//   SET LOCAL statement_timeout — the server-side cancel, and ONLY inside the
+//     `transaction: true` path (see `beginTransactionSql`). Postgres cancels
+//     the statement, lock waits included, and answers 57014; the connection
+//     stays healthy and goes straight back to the pool.
 //
-// All three surface as an ORDINARY rejection: the best-effort `catch` blocks
+// WHY THE SERVER-SIDE BOUND IS NOT A POOL-CONFIG KEY — do not "simplify" this
+// back. `pg` treats `statement_timeout` (and `lock_timeout`,
+// `idle_in_transaction_session_timeout`) in a Pool/Client config as a
+// PostgreSQL STARTUP PARAMETER: `Client.getStartupConf()` copies it straight
+// into the startup packet. A PgBouncer/Supavisor-class pooler only forwards
+// startup parameters it allowlists and answers anything else with a FATAL
+// `unsupported startup parameter: statement_timeout` — so behind such a DSN
+// EVERY `pool.connect()` fails, and because the three migrated notification
+// clears swallow rejections by design, notifications would silently stop being
+// deleted. Supabase DSNs commonly route through exactly that kind of pooler.
+// The bound therefore must not depend on the startup packet, which is why the
+// universally-enforced one is client-side and the server-side one is issued as
+// in-transaction SQL.
+//
+// WHAT THE NON-TRANSACTION PATH GIVES UP, stated honestly. `query_timeout`
+// never sends a CancelRequest — it removes the query from pg's queue and
+// reports an error, and a Postgres backend blocked on a lock does not notice
+// the client is gone until it next tries to write. So a single autocommit
+// statement that blows the ceiling keeps running server-side until it finishes
+// on its own. The CALLER is still bounded, which is the guarantee this seam
+// owes; buying the server-side cancel here too would mean session-level `SET`
+// state on a pooled connection, which under transaction-mode pooling leaks
+// onto whatever transaction lands on that server connection next. `SET LOCAL`
+// cannot leak that way — it is reverted at COMMIT/ROLLBACK — which is exactly
+// why it is safe in the transaction path and unavailable outside it.
+//
+// All of these surface as an ORDINARY rejection: the best-effort `catch` blocks
 // around the notification clears absorb them exactly as they absorbed the sync
 // bridge's throw. The bound is a settle guarantee, NOT a latency target —
 // generous on purpose at 30s, matching the sync bridge's default, so this
@@ -115,11 +144,32 @@ const DEFAULT_TIMEOUT_MS = (() => {
   return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
 })();
 
-// How much longer the CLIENT waits than the SERVER before giving up. The
-// server-side cancel must win whenever the server is reachable at all, because
-// it is the clean one; the client-side read timeout is only the backstop for a
-// connection that has stopped answering.
-const CLIENT_READ_GRACE_MS = 5_000;
+// The transaction path's server-side cancel sits BELOW the client's read
+// timeout, so that when the server is answering at all the CLEAN bound wins
+// deterministically rather than racing: Postgres cancels, answers 57014, and
+// the client is rolled back and returned to the pool intact. Losing that race
+// would only cost a destroyed connection, so the margin does not need to be
+// large — 10% of the ceiling (3s at the 30s default) is many round trips on any
+// link where the server is reachable.
+const SERVER_CANCEL_FRACTION = 0.9;
+const TRANSACTION_STATEMENT_TIMEOUT_MS = Math.max(
+  1,
+  Math.floor(DEFAULT_TIMEOUT_MS * SERVER_CANCEL_FRACTION),
+);
+
+/**
+ * `BEGIN` and the transaction-scoped server-side cancel, as ONE simple-query
+ * round trip.
+ *
+ * They are a single statement string on purpose: it makes "the `SET LOCAL`
+ * never travels outside a transaction block" structural rather than a thing a
+ * later edit has to remember. `SET` takes no bind parameters, so the value is
+ * interpolated — it is `Math.floor`ed from a `Number.isFinite`-validated env
+ * read above, never caller input.
+ */
+function beginTransactionSql(): string {
+  return `BEGIN; SET LOCAL statement_timeout = ${TRANSACTION_STATEMENT_TIMEOUT_MS}`;
+}
 
 /**
  * The pool this runner uses for `connectionString`, created on first use.
@@ -134,15 +184,19 @@ export function getPostgresAsyncPool(connectionString: string): Pool {
     connectionString: () => connectionString,
     poolConfig: {
       connectionTimeoutMillis: DEFAULT_TIMEOUT_MS,
-      statement_timeout: DEFAULT_TIMEOUT_MS,
-      query_timeout: DEFAULT_TIMEOUT_MS + CLIENT_READ_GRACE_MS,
+      // NO `statement_timeout` (nor `lock_timeout` /
+      // `idle_in_transaction_session_timeout`) — pg would put it in the STARTUP
+      // PACKET and a pooler that does not allowlist it rejects every checkout.
+      // See the ceiling comment above; `postgres-async-pool-config.test.ts`
+      // pins it.
+      query_timeout: DEFAULT_TIMEOUT_MS,
     },
   });
 }
 
 // The exact Error pg raises when `query_timeout` fires (pg/lib/client.js). It
 // means the answer never arrived, not that the server refused — so unlike a
-// statement_timeout cancel, the connection cannot be reused.
+// `SET LOCAL statement_timeout` cancel, the connection cannot be reused.
 function isClientReadTimeout(error: unknown): error is Error {
   return error instanceof Error && error.message === "Query read timeout";
 }
@@ -157,10 +211,16 @@ function isClientReadTimeout(error: unknown): error is Error {
  *
  * BOUNDED: the checkout and every statement carry the ceiling documented at
  * `DEFAULT_TIMEOUT_MS`, so this promise always settles and always gives its
- * client back. The bound is per checkout and per statement rather than one
- * wall-clock budget for the whole call, so a list of N queries settles within
- * roughly (N + 1) ceilings — a settle guarantee, which is the contract, not a
- * latency budget.
+ * client back — a settle guarantee enforced CLIENT-side, so it holds behind a
+ * connection pooler as well as against direct Postgres. The bound is per
+ * checkout and per statement rather than one wall-clock budget for the whole
+ * call, so a list of N queries settles within roughly (N + 1) ceilings — a
+ * settle guarantee, which is the contract, not a latency budget.
+ *
+ * With `transaction: true` the statements additionally carry a transaction-
+ * scoped server-side `statement_timeout` just under that ceiling, so a blocked
+ * statement is cancelled by Postgres and the client survives. See the ceiling
+ * comment for why that cancel is issued as SQL and never as pool config.
  */
 export async function runPostgresQueriesAsync(input: {
   connectionString: string;
@@ -183,11 +243,15 @@ export async function runPostgresQueriesAsync(input: {
   const transaction = input.transaction === true;
   // `release(err)` with a truthy argument DESTROYS the client instead of
   // returning it to the pool. Set only for an error that leaves the connection
-  // unusable — a statement_timeout cancel does not.
+  // unusable — a server-side statement_timeout cancel does not.
   let destroyOnRelease: Error | undefined;
   try {
     if (transaction) {
-      await client.query("BEGIN");
+      // BEGIN *and* the transaction-scoped server-side cancel, together. Never
+      // sent on the autocommit path: `SET LOCAL` outside a transaction block is
+      // a no-op warning, and the session-scoped form it would have to become
+      // is exactly the pooled-connection state leak this seam avoids.
+      await client.query(beginTransactionSql());
     }
 
     const results: QueryResult[] = [];
@@ -211,7 +275,8 @@ export async function runPostgresQueriesAsync(input: {
       // out next. Destroy it instead. Closing the socket is also what aborts an
       // open transaction here, which is why the ROLLBACK is skipped: sending it
       // would only wait out a second read timeout on a connection that has
-      // already stopped answering.
+      // already stopped answering. This is the ORDINARY expiry path on the
+      // autocommit side, where there is no server-side cancel to beat it to it.
       destroyOnRelease = error;
     } else if (transaction) {
       // Best-effort, exactly like the sync worker's rollback: a rollback that

@@ -401,9 +401,10 @@ export const runWaitNotifier: RunWaitNotifier = {
       // POSTGRES_SYNC_TIMEOUT_MS, 30s), freezing every timer, abort listener
       // and microtask in the process; this handler is already `async`, so it
       // was paying that for nothing. Same statement, same key-scoped guard, and
-      // the same settle-or-throw ceiling — the seam bounds the checkout and the
-      // statement itself (see `@/lib/postgres-async`), so a database that never
-      // answers still rejects into the best-effort catch below instead of
+      // the same settle-or-throw ceiling — the seam bounds the checkout and its
+      // own wait for an answer, client-side, so the bound holds behind a
+      // connection pooler too (see `@/lib/postgres-async`). A database that
+      // never answers still rejects into the best-effort catch below instead of
       // leaving this handler's promise pending forever.
       const { deleteNotificationsByDedupeKeyForUserAsync } = await import(
         "@cinatra-ai/notifications/server"
