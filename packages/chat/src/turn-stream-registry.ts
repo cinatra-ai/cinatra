@@ -50,6 +50,38 @@
  * that never had a mirror row matches no removed row and does nothing. Under-
  * naming loses a turn's removal forever; over-naming costs an id in a payload.
  *
+ * ── THE INSTANCE TOKEN: A TURN ID IS NOT AN IDENTITY ─────────────────────────
+ *
+ * An assistant id is REUSABLE. The page mints a fresh one per dispatch, but a
+ * retry, a replayed dispatch or a restored transcript can put the same id in
+ * flight twice, and the two are different turns with different drives. Keying
+ * `end` on the id made the second one collateral of the first:
+ *
+ *   `begin("x")` · `reset()` · `begin("x")` · `end("x")` ← the FIRST drive's
+ *   `finally`, arriving late
+ *
+ * — that `end` deleted the SECOND drive's controller (its turn silently stopped
+ * being nameable as in-flight, and the page's streaming count went out of step)
+ * and recorded "x" into a ledger the first drive has no business writing to
+ * (codex round 3, finding 1).
+ *
+ * So `begin` mints an INSTANCE TOKEN and returns it, and `end` takes that token.
+ * The drive's `finally` closes over its OWN token and never over the id. `end`
+ * acts only while that exact instance is still the registered one — a reference
+ * comparison, no lookup by the reusable id anywhere — and is otherwise a total
+ * no-op: it moves no controller, records nothing and reports `false`.
+ *
+ * THE INSTANCE *IS* THE GENERATION, which is why there is no generation counter
+ * here any more. Every `begin` mints a fresh object, so "the same id, one drive
+ * later" and "the same id, one thread later" are both simply a different token
+ * than the registered one, and so is a token from another registry entirely.
+ * That subsumes the generation check exactly, and it costs no per-id bookkeeping
+ * to maintain: the previous round carried a `beganIn` map so a late `end` could
+ * look up the generation its id started in, and a drive that never reached its
+ * `finally` left that entry behind forever, across every thread switch (codex
+ * round 3, finding 2). A token needs no such map. The registry's WHOLE footprint
+ * is now the in-flight map plus the capped ledger — see `retainedIdCount`.
+ *
  * ── THE TWO EDGES OF THE LEDGER: THE THREAD, AND THE BOUND ───────────────────
  *
  * The ledger's ids belong to the THREAD they streamed in — nothing in another
@@ -61,12 +93,6 @@
  * reveal commits, so the ledger OUTLIVES the last stream — a page that dropped it
  * only when something happened to be in flight carried it across every ordinary
  * switch (codex round 2, finding 2).
- *
- * The same reasoning binds a LATE `end`. `reset` aborts the in-flight streams,
- * but each drive unwinds on its own schedule and its `finally` calls `end`
- * afterwards, with an id belonging to the thread that was left. Every turn
- * therefore carries the GENERATION it began in, `reset` bumps that generation,
- * and an `end` from a stale one writes nothing (codex round 2, finding 1).
  *
  * And the ledger is CAPPED. Its natural size is a user's stop presses in one page
  * session, but "natural" is not a bound: an aborted turn is released by nothing,
@@ -86,22 +112,45 @@
  */
 export const MAX_ENDED_UNCOMMITTED_TURN_IDS = 256;
 
+/**
+ * THE HANDLE ON ONE REGISTERED TURN INSTANCE, minted by `begin` and consumed by
+ * `end`. Opaque on purpose: the only thing a caller may do with it is hand it
+ * back. Its IDENTITY is the whole mechanism — two `begin` calls with the same
+ * assistant id mint two different tokens, and `end` acts only for the one that
+ * is still registered — so a drive must close over its own token and must never
+ * reconstruct one from an id.
+ */
+export type TurnStreamToken = {
+  /** The turn this instance streams. Exposed for logging only: `end` never
+   *  looks anything up by it. */
+  readonly assistantId: string;
+};
+
 /** The ids of the turns in one page's registry, in the two states it tracks. */
 export type TurnStreamRegistry = {
-  /** Register an in-flight turn. Call from inside the drive's `try`, so the
-   *  matching `end` in its `finally` is guaranteed. */
-  begin(assistantId: string, controller: AbortController): void;
-  /** The turn's stream is over. Returns whether it WAS in flight, so the caller
-   *  can keep its own count in step; idempotent otherwise. The id moves to the
-   *  ledger — it is still nameable until the transcript proves it landed —
-   *  UNLESS the turn began before a `reset`, in which case it belongs to a
-   *  thread this registry has left and nothing is recorded. */
-  end(assistantId: string): boolean;
+  /** Register an in-flight turn and return its INSTANCE TOKEN. Call from inside
+   *  the drive's `try`, so the matching `end` in its `finally` is guaranteed,
+   *  and let that `finally` close over the returned token — not over the id. */
+  begin(assistantId: string, controller: AbortController): TurnStreamToken;
+  /** This turn instance's stream is over. Acts only while `token` is still the
+   *  registered instance for its id, and returns whether it was, so the caller
+   *  can keep its own count in step. The id then moves to the ledger — it is
+   *  still nameable until the transcript proves it landed. A token that has
+   *  been superseded by a later `begin`, dropped by a `reset`, already ended,
+   *  or minted by another registry does NOTHING and reports `false`. */
+  end(token: TurnStreamToken): boolean;
   /** Is this turn streaming right now? (the message list's live indicator) */
   has(assistantId: string): boolean;
   /** How many turns are in flight. Deliberately NOT a proxy for "the registry is
    *  empty": the ledger outlives every stream in it. */
   size(): number;
+  /** THE REGISTRY'S WHOLE FOOTPRINT: how many distinct ids it holds anything for
+   *  at all — in-flight instances plus ledger entries, and by construction
+   *  nothing else. This is the invariant that says the registry cannot grow
+   *  without limit: the ledger is capped, the in-flight map holds one entry per
+   *  live drive, and `reset`/`resetForThread` drop both. Read by the arms that
+   *  pin it; there is no other per-id state for them to miss. */
+  retainedIdCount(): number;
   /** Abort every in-flight turn, leaving the registry populated — each drive's
    *  own `finally` calls `end`. The composer's Stop button. */
   abortAll(): void;
@@ -111,7 +160,8 @@ export type TurnStreamRegistry = {
   reset(): void;
   /** THE THREAD BOUNDARY. Reset iff this is a different thread from the one the
    *  registry is holding, and report whether it did (the page's streaming count
-   *  follows). The FIRST thread observed is adopted rather than switched to. */
+   *  follows). The FIRST thread observed is adopted rather than switched to —
+   *  but only if the registry is EMPTY at that moment. */
   resetForThread(threadId: string | null): boolean;
   /** A COMMITTED transcript landed: every turn it carries is now nameable from
    *  the transcript itself, so the ledger releases those ids. */
@@ -121,19 +171,18 @@ export type TurnStreamRegistry = {
   removableTurnIds(): string[];
 };
 
+/** The registered instance: the token a caller holds, plus what the registry
+ *  needs while that instance is live. */
+type RegisteredTurn = { token: TurnStreamToken; controller: AbortController };
+
 export function createTurnStreamRegistry(): TurnStreamRegistry {
-  /** assistantId → AbortController, for every turn currently streaming. */
-  const inFlight = new Map<string, AbortController>();
+  /** assistantId → the ONE registered instance for it, for every turn currently
+   *  streaming. A second `begin` for the same id supersedes the first: the map
+   *  holds one instance per id, and only that instance's token can end it. */
+  const inFlight = new Map<string, RegisteredTurn>();
   /** Ended, and not yet seen in a committed transcript. Insertion-ordered, which
    *  is what makes "evict the oldest" meaningful at the cap. */
   const endedUncommitted = new Set<string>();
-  /** Bumped by every reset. A turn that BEGAN in an older generation belongs to
-   *  a thread this registry has left. */
-  let generation = 0;
-  /** assistantId → the generation it began in, for exactly those turns whose
-   *  `end` is still owed. Each entry is dropped by that `end`, so this holds one
-   *  entry per unfinished drive and no history. */
-  const beganIn = new Map<string, number>();
   /** The thread these ids belong to, once one has been observed. */
   let heldThreadId: string | null = null;
   let threadObserved = false;
@@ -161,42 +210,45 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
     endedUncommitted.add(assistantId);
   }
 
+  /** Is the registry holding anything at all? The two sets ARE its state — see
+   *  `retainedIdCount` for why there is no third one to consult. */
+  function isEmpty(): boolean {
+    return inFlight.size === 0 && endedUncommitted.size === 0;
+  }
+
   function resetAll(): void {
-    for (const controller of inFlight.values()) controller.abort();
-    inFlight.clear();
-    endedUncommitted.clear();
-    // Every turn still owing an `end` now owes it from a STALE generation: the
+    for (const registered of inFlight.values()) registered.controller.abort();
+    // Every token minted so far is now unregistered, so every late `end` that
+    // follows is inert without anything having to be remembered about it. The
     // drives keep unwinding after this returns, and their `finally` must not
     // write the thread that was left into the ledger of the thread that
     // replaced it.
-    generation += 1;
+    inFlight.clear();
+    endedUncommitted.clear();
   }
 
   return {
     begin(assistantId, controller) {
-      inFlight.set(assistantId, controller);
-      beganIn.set(assistantId, generation);
+      const token: TurnStreamToken = { assistantId };
+      inFlight.set(assistantId, { token, controller });
+      return token;
     },
-    end(assistantId) {
-      const wasInFlight = inFlight.delete(assistantId);
-      const startedIn = beganIn.get(assistantId);
-      beganIn.delete(assistantId);
-      // A LATE END FROM A THREAD THIS REGISTRY HAS LEFT. `reset` aborted the
-      // stream, but the drive unwound afterwards and this is its `finally`.
-      // Recording the id would repopulate the NEW thread's ledger with a
-      // foreign one, and the next edit over here would ASSERT it: on a
-      // collision the server tombstones a turn of this thread that nobody
-      // removed, and without one it is stale in every payload until the next
-      // switch. The turn it names is gone with its thread; nothing here can say
-      // anything true about it.
-      if (startedIn !== undefined && startedIn !== generation) return wasInFlight;
-      // Otherwise unconditional, and deliberately not gated on `wasInFlight`: an
-      // id can leave the map before its drive unwinds, and the turn whose reveal
-      // never came is exactly the one the ledger has to keep.
-      if (typeof assistantId === "string" && assistantId.length > 0) {
-        rememberEnded(assistantId);
-      }
-      return wasInFlight;
+    end(token) {
+      // THE ONE GATE, and it is reference identity. Not the id — an id is
+      // reusable, and a late `end` looked up by one reaches whatever turn
+      // happens to be wearing it now. A token that is not the registered
+      // instance names a turn this registry has already moved past: it was
+      // superseded by a later `begin` for the same id, or dropped by a `reset`
+      // (its thread was left), or it already ended. In every one of those cases
+      // the turn it names is gone and nothing here can say anything true about
+      // it — so nothing is aborted, nothing is recorded and nothing is counted.
+      const registered = token ? inFlight.get(token.assistantId) : undefined;
+      if (!registered || registered.token !== token) return false;
+      inFlight.delete(token.assistantId);
+      // Unconditional from here: this instance really was the live one, and the
+      // turn whose reveal never came is exactly the one the ledger has to keep.
+      if (token.assistantId.length > 0) rememberEnded(token.assistantId);
+      return true;
     },
     has(assistantId) {
       return inFlight.has(assistantId);
@@ -204,24 +256,44 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
     size() {
       return inFlight.size;
     },
+    retainedIdCount() {
+      let retained = inFlight.size;
+      for (const id of endedUncommitted) if (!inFlight.has(id)) retained += 1;
+      return retained;
+    },
     abortAll() {
-      // NOT a generation bump: the Stop button does not leave the thread. Each
-      // aborted turn is ended by its own drive, into this same ledger, and
-      // stays nameable — that is the whole point of stopping one.
-      for (const controller of inFlight.values()) controller.abort();
+      // NOT a reset: the Stop button does not leave the thread, so the tokens
+      // stay registered. Each aborted turn is ended by its own drive, into this
+      // same ledger, and stays nameable — that is the whole point of stopping
+      // one.
+      for (const registered of inFlight.values()) registered.controller.abort();
     },
     reset() {
       resetAll();
     },
     resetForThread(threadId) {
-      // The first observation ADOPTS: a fresh registry holds nothing, and its
-      // page mounts on whatever thread the URL named. (It also keeps React's
-      // double-invoked mount effect from aborting what the first run started.)
-      const changed = threadObserved && heldThreadId !== threadId;
+      const firstObservation = !threadObserved;
+      const switched = threadObserved && heldThreadId !== threadId;
+      // THE FIRST OBSERVATION ADOPTS ONLY AN EMPTY REGISTRY. Adoption exists for
+      // one situation — a fresh registry whose page mounts on whatever thread
+      // the URL named holds nothing, so there is nothing to be wrong about — and
+      // it is also what keeps React's double-invoked mount effect from aborting
+      // what the first run started. State present at the FIRST observation is a
+      // different situation entirely: those ids streamed before anything here
+      // named a thread, so nothing can say they belong to this one, and adopting
+      // them lets an edit on this thread assert removals about turns that ran
+      // somewhere else (codex round 3, finding 4). Reset instead — the same
+      // answer a switch gets, for the same reason.
+      //
+      // The double-mount protection is untouched by this: it is a SECOND
+      // observation of the same thread, `threadObserved` is already true, and
+      // that path still never resets however much is in flight.
+      const dirtyFirstObservation = firstObservation && !isEmpty();
       threadObserved = true;
       heldThreadId = threadId;
-      if (changed) resetAll();
-      return changed;
+      if (!switched && !dirtyFirstObservation) return false;
+      resetAll();
+      return true;
     },
     noteCommittedTranscript(messages) {
       if (endedUncommitted.size === 0) return;

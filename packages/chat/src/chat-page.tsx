@@ -62,7 +62,7 @@ import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as Threa
 import type { ChatViewComponents } from "./chat-messages-view";
 import type { ChatPageProps } from "./chat-page-props";
 import { editAndResend as runEditAndResend } from "./message-edit-flow";
-import { createTurnStreamRegistry } from "./turn-stream-registry";
+import { createTurnStreamRegistry, type TurnStreamToken } from "./turn-stream-registry";
 import {
   saveChatThreadInOrder,
   fetchThreadList,
@@ -579,16 +579,16 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     publishChatThreadTitle(title);
   }, [activeThreadId, threads]);
 
-  // Only from inside streamResponse's try, so the finally's endStream is sure.
+  // Acquired immediately before streamResponse's try, so the finally is sure.
   function beginStream(assistantId: string, controller: AbortController) {
-    streams.begin(assistantId, controller);
     setStreamingCount((n) => n + 1);
+    return streams.begin(assistantId, controller); // THIS instance's token
   }
 
-  // Idempotent — the count moves only if the turn really was in flight. The turn
-  // stays NAMEABLE by the truncation intent until its reveal commits.
-  function endStream(assistantId: string) {
-    if (streams.end(assistantId)) setStreamingCount((n) => Math.max(0, n - 1));
+  // Idempotent — the count moves only if this instance really was the live one.
+  // The turn stays NAMEABLE by the truncation intent until its reveal commits.
+  function endStream(token: TurnStreamToken) {
+    if (streams.end(token)) setStreamingCount((n) => Math.max(0, n - 1));
   }
 
   // AG-UI stream driver (cinatra#1218) — the turn drive lives headlessly in
@@ -600,8 +600,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // await — re-reading the ref would guard the WRONG thread after a mid-await switch).
     const originThreadId = threadId;
     const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
+    const token = beginStream(assistantId, abortController); // never the id
     try {
-      beginStream(assistantId, abortController);
       await driveAssistantChatTurn({
         threadId,
         assistantId,
@@ -630,7 +630,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         },
       });
     } finally {
-      endStream(assistantId);
+      endStream(token);
     }
   }
 

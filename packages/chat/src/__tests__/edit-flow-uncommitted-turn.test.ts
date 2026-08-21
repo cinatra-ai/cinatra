@@ -80,8 +80,7 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     // the turn streamed, and its drive's `finally` ended it. The reveal has not
     // committed, so nothing has released it from the ledger.
     const streams = createTurnStreamRegistry();
-    streams.begin("a-slack", new AbortController());
-    streams.end("a-slack");
+    streams.end(streams.begin("a-slack", new AbortController()));
 
     await editAndResend(
       deps({ removableTurnIds: () => streams.removableTurnIds() }),
@@ -106,9 +105,9 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     // when the run STARTS — so the turn has durable state to fold back in even
     // though no transcript ever carried its message.
     const streams = createTurnStreamRegistry();
-    streams.begin("a-aborted", new AbortController());
+    const aborted = streams.begin("a-aborted", new AbortController());
     streams.abortAll();
-    streams.end("a-aborted");
+    streams.end(aborted);
 
     await editAndResend(
       deps({ removableTurnIds: () => streams.removableTurnIds() }),
@@ -124,8 +123,7 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     // transcript slice names the turn and the ledger has nothing to add. A turn
     // ABOVE the edit point must not be asserted removed at all.
     const streams = createTurnStreamRegistry();
-    streams.begin("a1", new AbortController());
-    streams.end("a1");
+    streams.end(streams.begin("a1", new AbortController()));
     streams.noteCommittedTranscript(STALE_SNAPSHOT);
 
     await editAndResend(
