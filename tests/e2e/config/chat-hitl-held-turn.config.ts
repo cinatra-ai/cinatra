@@ -1,0 +1,123 @@
+/**
+ * The deterministic dev-runtime held-turn flow (chat-hitl S9k, cinatra#2824).
+ *
+ * MODELLED ON `wp-drupal-uat.config.ts`, because #2824 names it as the pattern
+ * that already fits and names why the two alternatives do not: `e2e-rbac` boots a
+ * PRODUCTION build, and `agents-run` assumes long-lived infrastructure with real
+ * credentials. Neither can host a `CINATRA_RUNTIME_MODE=development` proof that
+ * must run on a throwaway database with no keys.
+ *
+ * WHAT THE SHAPE BUYS:
+ *  · a DEV runtime, which is what the capture ruling labels and what the hard
+ *    pre-router path is exercised under;
+ *  · the deterministic scripted provider — offline, key-free, no model call in the
+ *    turn at all, so the dispatch is decided by the pre-router regex rather than by
+ *    whatever a model felt like doing;
+ *  · its own port and its own server, never reused, so a run can never be
+ *    attributed to a server carrying different env.
+ */
+import { defineConfig } from "@playwright/test";
+import { baseUse, desktopChrome, REPO_ROOT, repoPath, suitePath } from "./base";
+
+const PORT = Number(process.env.E2E_CHAT_HITL_PORT ?? 3126);
+const BASE_URL = process.env.E2E_CHAT_HITL_BASE_URL ?? `http://localhost:${PORT}`;
+
+/**
+ * WAYFLOW POINTED AT AN UNUSED PORT, DELIBERATELY.
+ *
+ * The `agent_run` handler runs a WayFlow preflight before it creates the run. An
+ * UNREACHABLE WayFlow answers `PREFLIGHT_UNAVAILABLE` and the handler proceeds — a
+ * REACHABLE one with this agent unregistered answers `WAYFLOW_AGENT_NOT_REGISTERED`
+ * and ABORTS the dispatch before `createAgentRunForLaunchFrame`, so no run, no hold
+ * and no card. Leaving the variable unset would let a developer's own running
+ * WayFlow decide whether this suite passes, which is the opposite of deterministic.
+ */
+const WAYFLOW_UNREACHABLE = process.env.E2E_CHAT_HITL_WAYFLOW_URL ?? "http://127.0.0.1:59999";
+
+const STORAGE_STATE = suitePath("chat-hitl-held-turn", ".auth", "state.json");
+
+export default defineConfig({
+  testDir: suitePath("chat-hitl-held-turn"),
+  outputDir: repoPath("test-results"),
+  // The flow drives two full cold turns end to end. The per-test ceiling has to
+  // clear the cold-compile budget the spec documents, or the ceiling fires before
+  // the thing being measured has happened.
+  timeout: 25 * 60_000,
+  // OUTER RUN BOUND, for the reason the wp-drupal-uat config gives: without one, a
+  // run that stops progressing is ended only by the job timeout, with no reporter
+  // summary and no failing test name. Sized under the workflow's own shell timeout.
+  globalTimeout: 40 * 60_000,
+  expect: { timeout: 30_000 },
+  // NO RETRIES, ON PURPOSE — including on CI. #2824 asks for a DETERMINISTIC proof.
+  // A retry converts an intermittent runtime defect into a green check, which is
+  // exactly the failure mode a required gate must not have. If this suite is flaky,
+  // that is a finding about the runtime and it should be read as one.
+  retries: 0,
+  fullyParallel: false,
+  workers: 1,
+
+  reporter: process.env.CI
+    ? [["github"], ["html", { open: "never", outputFolder: repoPath("playwright-report") }]]
+    : [["list"]],
+
+  use: {
+    baseURL: BASE_URL,
+    ...baseUse,
+    // Bound every action and navigation, so a step that never becomes actionable
+    // ERRORS instead of silently consuming the (large) per-test budget.
+    actionTimeout: 60_000,
+    navigationTimeout: 180_000,
+  },
+
+  webServer: {
+    // CINATRA_TEST_LLM_PROVIDER=scripted — offline + key-free.
+    // CINATRA_REQUIRE_ACTOR_CONTEXT=false — dev/test opt-out of the fail-closed
+    //   actor gate, exactly as the sibling dev-runtime config does; it never
+    //   bypasses in production.
+    // CINATRA_E2E_SETUP_BYPASS=true — clears the setup-wizard gate on a fresh
+    //   instance, which otherwise redirects every route to /setup.
+    // CINATRA_TURBOPACK_DEV_FS_CACHE=0 — the persistent dev FS cache is worthless
+    //   here (every run starts cold, the server is discarded) and its write cycle
+    //   is the marginal load that tips constrained runners into a stall.
+    // CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW=on — the hold is ON by default
+    //   (only the literal "off" deactivates it); stating it makes the suite's
+    //   precondition READABLE instead of inherited.
+    // reuseExistingServer:false — ALWAYS a fresh server carrying this env, so the
+    //   run can never be attributed to a server started with something else.
+    command:
+      `CINATRA_TEST_LLM_PROVIDER=scripted ` +
+      `CINATRA_REQUIRE_ACTOR_CONTEXT=false ` +
+      `CINATRA_E2E_SETUP_BYPASS=true ` +
+      `CINATRA_TURBOPACK_DEV_FS_CACHE=0 ` +
+      `CINATRA_LIFECYCLE_RECOMMENDATION_CHIP_ROW=on ` +
+      `CINATRA_RUNTIME_MODE=development ` +
+      `WAYFLOW_BASE_URL=${WAYFLOW_UNREACHABLE} ` +
+      `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
+    cwd: REPO_ROOT,
+    url: BASE_URL,
+    timeout: 300_000,
+    reuseExistingServer: false,
+    stdout: "pipe",
+    stderr: "pipe",
+  },
+
+  projects: [
+    {
+      name: "setup",
+      testMatch: /auth\.setup\.ts/,
+      use: { ...desktopChrome },
+    },
+    {
+      name: "held-turn",
+      testMatch: /held-turn\.spec\.ts/,
+      dependencies: ["setup"],
+      use: {
+        ...desktopChrome,
+        storageState: STORAGE_STATE,
+        // A stable, generous viewport: the provisional captures are full-page and
+        // a cramped one crops the transcript out of its own evidence.
+        viewport: { width: 1440, height: 1200 },
+      },
+    },
+  ],
+});
