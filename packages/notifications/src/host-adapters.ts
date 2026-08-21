@@ -89,6 +89,14 @@ export type NotificationsHostAdapters = {
   runPostgresQueriesSync: (input: {
     connectionString: string;
     queries: Array<{ text: string; values?: unknown[] }>;
+    /**
+     * Run every query as ONE transaction on ONE connection (cinatra#2835). The
+     * host's real `runPostgresQueriesSync` has always supported this; the adapter
+     * type simply never exposed it, so a package-side write could not be made
+     * atomic with a precondition it depends on. Omitted/false keeps the
+     * historical autocommit-per-statement behaviour.
+     */
+    transaction?: boolean;
   }) => Array<{ rows?: Array<Record<string, unknown>> }>;
   getAuthSession: () => Promise<BetterAuthSessionLike | null>;
   buildActorContext: (

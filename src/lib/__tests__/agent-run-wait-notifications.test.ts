@@ -38,6 +38,12 @@ const createNotificationForRecipient = vi.fn(
 const deleteNotificationsByDedupeKeyForUserAsync = vi.fn(
   async (_args: { userId: string; dedupeKey: string }): Promise<void> => {},
 );
+// cinatra#2835 — the HOLD-scoped clear: same per-run key, additionally pinned to
+// the park id the row carries. Returns whether the delete committed; that answer
+// is the sweeper's ack.
+const deleteHoldNotificationForUser = vi.fn(
+  (_args: { userId: string; dedupeKey: string; holdParkId: string }): boolean => true,
+);
 const resolveAgentRunHref = vi.fn(async (_jobData: unknown) => "/agents/acme/sales/R1");
 // The canonical "which gate is this run paused on" derivation. The notifier
 // reads it purely to pick INPUT-vs-APPROVAL copy; null (its default here) is
@@ -61,7 +67,12 @@ vi.mock("@cinatra-ai/agents", () => ({ readAgentRunById, deriveRunHitlContext })
 vi.mock("@cinatra-ai/notifications/server", () => ({
   createNotificationForRecipient,
   deleteNotificationsByDedupeKeyForUserAsync,
+  deleteHoldNotificationForUser,
   resolveAgentRunHref,
+  // cinatra#2838 — the real value, not a stand-in: the host hands it to the park
+  // package so the `mark` can gate itself on the insert's RETURNING, and a test
+  // double that renamed it would let a broken gate pass.
+  NOTIFICATION_WRITE_CTE: "notification_write",
 }));
 
 import {
@@ -81,6 +92,8 @@ beforeEach(() => {
   createNotificationForRecipient.mockReset();
   createNotificationForRecipient.mockResolvedValue([{ id: "notif-1" }]);
   deleteNotificationsByDedupeKeyForUserAsync.mockReset();
+  deleteHoldNotificationForUser.mockReset();
+  deleteHoldNotificationForUser.mockReturnValue(true);
   resolveAgentRunHref.mockReset();
   resolveAgentRunHref.mockResolvedValue("/agents/acme/sales/R1");
   findChatConversationPathForAgentRun.mockReset();
@@ -118,6 +131,39 @@ describe("buildRunAwaitingHumanNotificationInput — pure shape", () => {
       category: RUN_AWAITING_HUMAN_CATEGORY,
       runAwaitingHuman: { runId: "R1", reason: "pending_approval" },
     });
+  });
+
+  it("an explicit input waitKind selects the input copy for EITHER reason (cinatra#2835)", () => {
+    // The recommendation hold's case: a `pending_input` wait with no interrupt to
+    // classify, which the reason-only derivation would have called a generic
+    // continue-wait.
+    const held = buildRunAwaitingHumanNotificationInput({
+      runId: "R1",
+      reason: "pending_input",
+      runTitle: "Blog draft",
+      waitKind: "input",
+    });
+    expect(held.title).toBe('"Blog draft" needs your input');
+    // The hold lands on the skills chip row (Confirm/Skip), not on a form with
+    // fields, so it does NOT share the derived input wait's body. Interim wording —
+    // the final copy is cinatra#2838's reserved decision; what this pins is that the
+    // hold's body does not promise fields its destination has not got.
+    expect(held.body).toBe("Open the run to confirm or skip the recommended skills.");
+    expect(held.body).not.toContain("fields");
+    // Same per-run key + payload as any other human wait on this run.
+    expect(held.dedupeKey).toBe(runAwaitingHumanDedupeKey("R1"));
+    expect(held.metadata).toMatchObject({
+      runAwaitingHuman: { runId: "R1", reason: "pending_input" },
+    });
+
+    // An APPROVAL waitKind (or none) leaves the pre-existing derivation alone.
+    const approval = buildRunAwaitingHumanNotificationInput({
+      runId: "R1",
+      reason: "pending_approval",
+      runTitle: "Nightly sync",
+      waitKind: "approval",
+    });
+    expect(approval.title).toBe('"Nightly sync" is awaiting your approval');
   });
 
   it("varies copy by reason and falls back to a generic subject with no run title", () => {
@@ -321,6 +367,34 @@ describe("runWaitNotifier.onEnterHumanWait — emit-on-wait", () => {
     await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_approval" });
 
     const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
+    expect(findChatConversationPathForAgentRun).not.toHaveBeenCalled();
+    expect(input.href).toBe("/agents/acme/sales/R1");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE RECOMMENDATION HOLD IS NOT THIS SEAM (cinatra#2838)
+  //
+  // A hold used to be able to reach the copy through this seam, by handing it a
+  // `waitKind` the transition caller never had. No production caller ever did —
+  // `transitionRunStatus` is the only caller here, and it knows only that a status
+  // changed — so the field was dead and is gone. The hold enters through
+  // `onEnterRecommendationHold` (its own describe block below), which is where its
+  // classification, its conversation link and its fenced write are pinned.
+  //
+  // What stays pinned HERE is the other side of that removal: this seam DERIVES,
+  // and a `pending_input` wait it cannot derive an interrupt for keeps the generic
+  // continue-copy and the run page.
+  // -------------------------------------------------------------------------
+  it("a pending_input wait keeps its pre-existing copy and destination", async () => {
+    // The #1058 stop-run-hitl pause — the flagged `pending_input` wait — must be
+    // untouched by this slice.
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_input" });
+    findChatConversationPathForAgentRun.mockReturnValue("/chat/cinatra-ai/cinatra-assistant/t1");
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_input" });
+
+    const input = createNotificationForRecipient.mock.calls[0][1];
+    expect(input.title).toBe('"Blog draft" is waiting on you to continue');
     expect(findChatConversationPathForAgentRun).not.toHaveBeenCalled();
     expect(input.href).toBe("/agents/acme/sales/R1");
   });
@@ -586,5 +660,131 @@ describe("runWaitNotifier.onAutoGateResolved — clear on terminal decision", ()
     readAgentRunById.mockResolvedValue({ id: "R1", runBy: null, title: null, status: "completed" });
     await runWaitNotifier.onAutoGateResolved!({ runId: "R1", reviewTaskId: "t" });
     expect(deleteNotificationsByDedupeKeyForUserAsync).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2835 (Codex convergence round 3) — the recommendation-hold pair.
+//
+// The host half of the fenced write. What is pinned HERE is the COMPOSITION: the
+// park-owned fence reaches the writer intact, the row carries the park id that
+// makes the clear addressable, and the clear's ack is honest. That the fence is
+// ENFORCED is a property of Postgres, and is pinned against a real one in
+// packages/agents/src/__tests__/recommendation-hold.integration.test.ts — a mock
+// cannot fail a row lock, so nothing here pretends otherwise.
+// ---------------------------------------------------------------------------
+describe("runWaitNotifier.onEnterRecommendationHold — the fenced write", () => {
+  it("passes the park-owned FENCE through to the writer, park id and all", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: "Nightly sync", status: "pending_input" });
+    await runWaitNotifier.onEnterRecommendationHold!({ runId: "R1", parkId: "park-7" });
+
+    expect(createNotificationForRecipient).toHaveBeenCalledTimes(1);
+    // Through `unknown`: this is the one call site that passes a THIRD argument
+    // (the fence options), and the shared mock above is declared with the two
+    // parameters every other caller uses — so its `mock.calls` tuple is shorter
+    // than what this assertion reads.
+    const [recipient, input, options] = createNotificationForRecipient.mock.calls[0] as unknown as [
+      { kind: string; userId: string },
+      { title: string; href?: string; metadata?: Record<string, unknown> },
+      { recipientUserIds?: string[]; fence?: { values: unknown[]; precondition: string; after?: string[] } },
+    ];
+    expect(recipient).toEqual({ kind: "user", userId: "user-1" });
+    // The precondition names THIS park and THIS run, and takes the row lock. The
+    // host does not re-spell it — it comes from the package that owns the table.
+    expect(options.fence?.values).toEqual(["park-7", "R1", "recommendation"]);
+    expect(options.fence?.precondition).toContain("FOR UPDATE");
+    expect(options.fence?.precondition).toContain("lifecycle_continuation_park");
+    // ...and the obligation mark rides the same statement, GATED on the insert's
+    // own RETURNING (cinatra#2838) — a mark that merely followed the insert would
+    // record `live` for an insert that no-opped on the dedupe conflict.
+    expect(options.fence?.after?.[0]).toContain("hold_notification = 'live'");
+    expect(options.fence?.after?.[0]).toContain(
+      'EXISTS (SELECT 1 FROM "notification_write")',
+    );
+    // A single, already-resolved recipient: one lock, one insert.
+    expect(options.recipientUserIds).toEqual(["user-1"]);
+    // The row carries the park id, which is what makes the clear addressable.
+    expect(input.metadata?.runAwaitingHuman).toMatchObject({
+      runId: "R1",
+      reason: "pending_input",
+      holdParkId: "park-7",
+    });
+  });
+
+  it("is the INPUT wait, landing on the conversation the run was started in", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: "Nightly sync", status: "pending_input" });
+    findChatConversationPathForAgentRun.mockReturnValue("/chat/thread-9");
+    await runWaitNotifier.onEnterRecommendationHold!({ runId: "R1", parkId: "park-7" });
+    const [, input] = createNotificationForRecipient.mock.calls[0] as [unknown, { title: string; href?: string }];
+    // The #2729 ruling: a held run has no HITL interrupt to classify, so this
+    // seam states the input classification and gets the conversation link.
+    expect(input.title).toBe('"Nightly sync" needs your input');
+    expect(input.href).toBe("/chat/thread-9");
+  });
+
+  it("falls back to the run page when no conversation resolves", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: null, status: "pending_input" });
+    findChatConversationPathForAgentRun.mockImplementation(() => {
+      throw new Error("thread store down");
+    });
+    await runWaitNotifier.onEnterRecommendationHold!({ runId: "R1", parkId: "park-7" });
+    const [, input] = createNotificationForRecipient.mock.calls[0] as [unknown, { href?: string }];
+    expect(input.href).toBe("/agents/acme/sales/R1");
+  });
+
+  it("no initiator ⇒ nothing written, so the park is never marked as owing a clear", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: null, title: null, status: "pending_input" });
+    await runWaitNotifier.onEnterRecommendationHold!({ runId: "R1", parkId: "park-7" });
+    expect(createNotificationForRecipient).not.toHaveBeenCalled();
+  });
+
+  it("a write failure never throws into the hold", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: null, status: "pending_input" });
+    createNotificationForRecipient.mockRejectedValueOnce(new Error("notifications down"));
+    await expect(
+      runWaitNotifier.onEnterRecommendationHold!({ runId: "R1", parkId: "park-7" }),
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("runWaitNotifier.onClearRecommendationHold — the ack", () => {
+  it("deletes the row for THIS park under the run's key, and acks", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: null, status: "pending_input" });
+    await expect(
+      runWaitNotifier.onClearRecommendationHold!({ runId: "R1", parkId: "park-7" }),
+    ).resolves.toBe(true);
+    expect(deleteHoldNotificationForUser).toHaveBeenCalledWith({
+      userId: "user-1",
+      dedupeKey: "run-awaiting-human:R1",
+      // Without this the clear would delete whatever wait currently holds the
+      // run's key — including one this hold never wrote.
+      holdParkId: "park-7",
+    });
+    // Never the unscoped delete: that one is the status-transition path's — which
+    // since cinatra#2882 reaches it under its ASYNC name, so that is the name this
+    // arm has to watch. The assertion is #2838's unchanged: a hold clear that fell
+    // through to the per-run key would delete a wait it never wrote.
+    expect(deleteNotificationsByDedupeKeyForUserAsync).not.toHaveBeenCalled();
+  });
+
+  it("a FAILING delete reports false — the obligation stays with the park", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: null, status: "pending_input" });
+    deleteHoldNotificationForUser.mockImplementation(() => {
+      throw new Error("notifications down");
+    });
+    await expect(
+      runWaitNotifier.onClearRecommendationHold!({ runId: "R1", parkId: "park-7" }),
+    ).resolves.toBe(false);
+  });
+
+  it("an unreadable run retires the obligation rather than spinning on it forever", async () => {
+    // The enter writes only for a resolvable initiator, so a park marked `live`
+    // always had one. An unreadable run here is a purged run: the row is no longer
+    // addressable, and retrying every sweep would never make it so.
+    readAgentRunById.mockResolvedValue(null);
+    await expect(
+      runWaitNotifier.onClearRecommendationHold!({ runId: "R1", parkId: "park-7" }),
+    ).resolves.toBe(true);
+    expect(deleteHoldNotificationForUser).not.toHaveBeenCalled();
   });
 });
