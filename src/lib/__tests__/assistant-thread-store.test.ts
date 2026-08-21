@@ -779,6 +779,57 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
     };
   }
 
+  // ── PRE-SLOT (pre-cutover) ROWS: the DISCLOSED consequence ────────────────
+  // `dataPartSlots` is introduced BY this PR, so a durable row written before it
+  // carries no slots and a mirror row written before it folds no card onto a
+  // producing part. Neither side can emit a slot-bound key, so a card-only
+  // legacy mirror row and its pre-slot durable row share NO key and are not
+  // matched. That is not a regression to repair: the owner's standing ruling is
+  // NO backward compatibility for pre-cutover data before v0.2.0, and a matcher
+  // that recognised the old shape would be exactly the compat work that ruling
+  // reserves for a separate decision. This test PINS what the ruling costs, so
+  // the cost is a recorded contract rather than a surprise.
+
+  it("a PRE-SLOT card-only mirror row leaves its durable turn VISIBLE, never lost", () => {
+    // The legacy shape at issue: a Slack mirror row carrying only the card —
+    // no `parts` to fold it onto, no `thoughtGroups` to read a call id from —
+    // beside the pre-slot durable row of the same turn (`dataParts`, no
+    // `dataPartSlots`). Under the removed bare-`viewType|ref` fallback these
+    // matched and the transcript came back as ONE message.
+    const preSlotMirror = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      dataParts: [{ ...REVIEW_VIEW }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: preSlotMirror }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // THE DISCLOSED COST: two messages where a post-cutover thread returns one.
+    // The reader sees the turn twice on every reload of a pre-cutover thread.
+    expect(messages).toHaveLength(2);
+    // THE PROPERTY THAT STILL HOLDS, and the reason this is a duplicate rather
+    // than a defect worth compat work: the reader's own message is untouched...
+    expect(messages[0]).toBe(preSlotMirror);
+    // ...and the server's copy is FOLDED IN as a visible row rather than
+    // suppressed. Nothing is silently lost — the failure mode of a WRONG match
+    // (a claimed turn dropped entirely, its card gone) is the one this key
+    // change exists to remove, and it does not happen here.
+    const foldedIn = messages[1];
+    expect(foldedIn).not.toBe(preSlotMirror);
+    expect(foldedIn.role).toBe("assistant");
+    // The card comes back with it, at turn level — the pre-slot row recorded no
+    // slot, so the projection has nowhere else to put it.
+    expect(foldedIn.dataParts).toEqual([REVIEW_VIEW]);
+  });
+
   it("does NOT duplicate a SLACK-MODE turn whose save SUCCEEDED", () => {
     // The reviewer's repro: the transcript comes back with THREE messages where
     // two are right — the user's, the Slack turn that is already drawing the

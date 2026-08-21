@@ -2200,6 +2200,26 @@ function contradictsDurableTurn(
  * needs no fence. What the fence used to permit (an entity ref from a traceless
  * message) is exactly what is now refused.
  *
+ * WHAT THIS COSTS PRE-CUTOVER ROWS, disclosed rather than discovered. Both
+ * halves of the slot-bound key are introduced BY this change: a durable row
+ * written before it has no `dataPartSlots`, and a mirror row written before it
+ * folds no card onto a producing part. So for a PRE-SLOT pair — a card-only
+ * legacy mirror row (no `parts`, no `thoughtGroups`) and its pre-slot durable
+ * row — neither side emits a key, nothing matches, and the durable turn folds in
+ * BESIDE the persisted message: a visible duplicate on every reload of that
+ * thread. The removed bare-`viewType|ref` fallback used to match them.
+ *
+ * That is left standing deliberately. The owner's standing ruling is NO backward
+ * compatibility for pre-cutover data before v0.2.0, and `dataPartSlots` is this
+ * PR's own introduction, so these rows are exactly pre-cutover data; a matcher
+ * that recognised the old shape is compat work, which the ruling reserves for a
+ * separate decision rather than something to smuggle in behind a key change. The
+ * cost is bounded in the direction that matters: the turn is DUPLICATED, never
+ * suppressed — a wrong match drops a turn and loses its card for good, which is
+ * the defect this key exists to remove, and it cannot happen here. Pinned by
+ * "a PRE-SLOT card-only mirror row leaves its durable turn VISIBLE, never lost"
+ * in `src/lib/__tests__/assistant-thread-store.test.ts`.
+ *
  * The corroboration discipline on top is UNCHANGED and applies to whichever
  * claimant emerges: more than one claimant is ambiguity and refuses
  * (`findCoveringSpineIndex` (a)), and a claimant carrying a contradicting run pin
