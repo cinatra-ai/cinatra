@@ -18,7 +18,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
-const driveAssistantChatTurn = vi.fn(async () => undefined);
+/** The one field of the turn request these arms drive: the list writer the real
+ *  driver folds a turn's messages back in through. */
+type DriveRequest = {
+  ui: { updateMessages: (updater: (prev: UiMessage[]) => UiMessage[]) => void };
+};
+const driveAssistantChatTurn = vi.fn<(req?: DriveRequest) => Promise<void>>(async () => undefined);
 
 vi.mock("../ag-ui-chat-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../ag-ui-chat-client")>();
@@ -28,7 +33,10 @@ vi.mock("../ag-ui-chat-client", async (importOriginal) => {
   };
 });
 
-import { useConversationColumnTurns } from "../conversation-column";
+import {
+  MAX_PENDING_REMOVED_MESSAGE_IDS,
+  useConversationColumnTurns,
+} from "../conversation-column";
 import { buildThreadWrite } from "../conversation-services";
 import type { UiMessage } from "../types";
 
@@ -112,6 +120,65 @@ describe("the conversation column's edit carries a truncation intent", () => {
     act(() => result.current.confirmRemovedMessageIds(inFlight));
     // `u2` was truncated by the SECOND edit and no save has carried it yet.
     expect(result.current.peekRemovedMessageIds()).toEqual(["u2"]);
+  });
+
+  it("a confirm cannot clear an assertion its save never carried", async () => {
+    // CODEX ROUND 2, FINDING 4. `confirm` subtracted its ids from the CURRENT
+    // set, so it could not tell two assertions of the SAME id apart. Save A
+    // carries `a2`; while A is still open the turn that follows the edit folds
+    // `a2` back into the list, and a second edit removes it AGAIN; A then lands
+    // and its confirm cleared the assertion made after it — the removal the
+    // second edit performed was never asserted by anything, which is the
+    // silent-truncation shape this whole leg exists to remove.
+    const { result } = mountTurns();
+    // The turn that follows the edit re-delivers `a2` — the list regains it.
+    driveAssistantChatTurn.mockImplementationOnce(async (req) => {
+      req?.ui.updateMessages((prev) => [...prev, msg("a2", "assistant")]);
+    });
+    await act(async () => {
+      result.current.onEditAndResend("u2", "rewrite");
+    });
+    expect(result.current.messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "a2"]);
+
+    // SAVE A goes on the wire carrying the FIRST assertion of `a2`.
+    const saveA = result.current.peekRemovedMessageIds();
+    expect(saveA).toEqual(["a2"]);
+
+    // The reader edits again while A is still open: `a2` is present, and this
+    // edit removes it a second time. A different removal of the same id.
+    await act(async () => {
+      result.current.onEditAndResend("u2", "rewrite once more");
+    });
+    expect(result.current.peekRemovedMessageIds()).toEqual(["a2"]);
+
+    // A lands. It may only clear what it carried.
+    act(() => result.current.confirmRemovedMessageIds(saveA));
+    expect(
+      result.current.peekRemovedMessageIds(),
+      "the confirm of an older save cleared an assertion made after it",
+    ).toEqual(["a2"]);
+  });
+
+  it("BOUNDS the pending removals, evicting the oldest — the stated cost of a bound", () => {
+    // CODEX ROUND 2, FINDING 3. Every save that fails preserves its removals, so
+    // an unbounded ledger keeps every id a session ever truncated. The bound is
+    // a cap with oldest-first eviction; what an eviction costs is stated at the
+    // eviction site.
+    const overflow = 5;
+    const long: UiMessage[] = [msg("u1", "user")];
+    for (let i = 0; i < MAX_PENDING_REMOVED_MESSAGE_IDS + overflow; i += 1) {
+      long.push(msg(`m${i}`, "assistant"));
+    }
+    const { result } = mountTurns(long);
+    act(() => result.current.onEditAndResend("u1", "rewrite"));
+
+    const pending = result.current.peekRemovedMessageIds();
+    expect(pending).toHaveLength(MAX_PENDING_REMOVED_MESSAGE_IDS);
+    // The OLDEST went, and the newest — the removals a save made now is most
+    // likely to be about — are all still there.
+    expect(pending).not.toContain("m0");
+    expect(pending[0]).toBe(`m${overflow}`);
+    expect(pending).toContain(`m${MAX_PENDING_REMOVED_MESSAGE_IDS + overflow - 1}`);
   });
 
   it("an edit that removes nothing asserts nothing", () => {

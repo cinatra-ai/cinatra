@@ -510,6 +510,17 @@ export type ConversationTransport = {
 
 export type ConversationTurnStatus = "idle" | "running" | "finished" | "error";
 
+/**
+ * The pending-removals cap: how many asserted-but-unsaved message ids this
+ * column keeps at once. One entry is one MESSAGE, not one turn — a single edit
+ * asserts the whole truncated tail — so the ceiling is set well above any
+ * transcript a widget panel realistically holds, and reaching it means either a
+ * truncation of more than 512 messages in one edit or a host whose saves have
+ * been failing since the first one. The eviction site states what going over it
+ * costs.
+ */
+export const MAX_PENDING_REMOVED_MESSAGE_IDS = 512;
+
 const NO_PAUSED: string[] = [];
 const NO_TAGGED_IDS: string[] = [];
 const EMPTY_HANDLE_MAP = new Map<string, string>();
@@ -580,7 +591,23 @@ export function useConversationColumnTurns({
   // save are separate events here: the host saves when a TURN ENDS, which is one
   // or more turns after the edit that truncated. The ids wait here until a save
   // that carried them is known to have landed.
-  const removedMessageIdsRef = useRef<string[]>([]);
+  //
+  // Each id is held with the REVISION of its current assertion, and every
+  // assertion of an id mints a new one. An id can be asserted twice: the save
+  // that carried the first one may still be open when the list regains that
+  // message and a later edit removes it AGAIN, and those are two different
+  // removals. A confirm that simply subtracted its ids cleared whichever
+  // assertion happened to be standing, so the second removal ended up asserted
+  // by nothing — the silent truncation this whole leg removes (codex round 2,
+  // finding 4). Insertion order is the assertion order, which is what makes
+  // "evict the oldest" meaningful at the cap below.
+  const removedMessageIdsRef = useRef<Map<string, number>>(new Map());
+  const removalRevisionRef = useRef(0);
+  // The revisions a `peek` handed out, keyed by the ARRAY it handed them on:
+  // that array is the save's identity — the host puts this exact one on the
+  // wire and hands it back to `confirm` — and it is weakly held, so a save
+  // whose array is gone takes its snapshot with it.
+  const removalSnapshotsRef = useRef(new WeakMap<readonly string[], Map<string, number>>());
   // Remount key for mounted extension widgets — bumped when a turn ran a tool a
   // manifest declares as widget-refreshing, exactly as `/chat` bumps it.
   const [widgetRefreshKey, setWidgetRefreshKey] = useState(0);
@@ -696,7 +723,28 @@ export function useConversationColumnTurns({
       // lie about a message the payload still carries.
       const removed = buildTruncationIntent(current, idx + 1, streamingRef.current.keys());
       for (const id of removed) {
-        if (!removedMessageIdsRef.current.includes(id)) removedMessageIdsRef.current.push(id);
+        const pending = removedMessageIdsRef.current;
+        // Re-asserting an id makes it the NEWEST assertion, in revision and in
+        // order, so a confirm for the previous one can no longer clear it and
+        // an eviction reaches it last.
+        pending.delete(id);
+        if (pending.size >= MAX_PENDING_REMOVED_MESSAGE_IDS) {
+          // THE EVICTION, AND WHAT IT COSTS — stated here, at the line that
+          // drops a nameable removal, rather than left to the constant.
+          //
+          // The OLDEST assertion goes. Its removal becomes re-assertable NEVER:
+          // no later save carries it, so that turn's run-bound row can fold back
+          // in above the edited prompt on the next reload — the permanent undo
+          // this intent exists to prevent, for that one message. The bound is
+          // taken anyway because the alternative has no ceiling at all: a widget
+          // save is best-effort and silent, so a host whose saves keep failing
+          // accumulates every id it ever truncated, for the life of the panel,
+          // and posts all of them on every save that does get through.
+          const oldest = pending.keys().next().value;
+          if (typeof oldest === "string") pending.delete(oldest);
+        }
+        removalRevisionRef.current += 1;
+        pending.set(id, removalRevisionRef.current);
       }
       writeMessages(history);
       void runTurn(history);
@@ -706,12 +754,29 @@ export function useConversationColumnTurns({
 
   /** The removals this column has truncated and not yet had saved. The host
    *  puts them on its next write; they stay here until it confirms they
-   *  landed, so a save that silently failed does not lose the assertion. */
-  const peekRemovedMessageIds = useCallback(() => [...removedMessageIdsRef.current], []);
-  /** A save carrying exactly these ids came back OK — drop them. Anything the
-   *  edit added while that save was open is deliberately left standing. */
+   *  landed, so a save that silently failed does not lose the assertion. The
+   *  array handed out is the token `confirm` is matched against — see below. */
+  const peekRemovedMessageIds = useCallback(() => {
+    const ids = [...removedMessageIdsRef.current.keys()];
+    removalSnapshotsRef.current.set(ids, new Map(removedMessageIdsRef.current));
+    return ids;
+  }, []);
+  /** A save carrying exactly these ids came back OK — drop them, and ONLY those
+   *  whose assertion is still the one that save carried. An id re-asserted
+   *  since (the message came back and a later edit removed it again) has a newer
+   *  revision than the snapshot taken when this array was peeked, and survives:
+   *  its removal has not been saved by anyone yet. An array this hook did not
+   *  hand out carries no snapshot and therefore clears nothing — keeping an
+   *  assertion costs an id in one payload, dropping one loses a removal for
+   *  good, and this module takes the first every time. */
   const confirmRemovedMessageIds = useCallback((ids: string[]) => {
-    removedMessageIdsRef.current = removedMessageIdsRef.current.filter((id) => !ids.includes(id));
+    const carried = removalSnapshotsRef.current.get(ids);
+    for (const id of ids) {
+      const standing = removedMessageIdsRef.current.get(id);
+      if (standing !== undefined && carried?.get(id) === standing) {
+        removedMessageIdsRef.current.delete(id);
+      }
+    }
   }, []);
 
   const onStop = useCallback(() => {
