@@ -103,6 +103,40 @@ An `INTERRUPT` may carry an **optional** `interaction` discriminator:
   route synthesizes the CURRENT interaction from live state at stream open and
   drops log frames the live state does not confirm.
 
+### 3.2 Slot identity on `DATA_PART` (cinatra#2827)
+
+A `DATA_PART` may carry an **optional** `toolCallId` — the id of the tool call
+the part was produced by:
+
+```jsonc
+{
+  "type": "DATA_PART",
+  "toolCallId": "call_7f3a",
+  "data": { "viewType": "artifact_review_gate", "schemaVersion": 1, "ref": "<opaque>" }
+}
+```
+
+- **It is on the EVENT, not in `data`.** A renderable-view payload is validated
+  by a `.strict()` schema whose whole point is "the wire payload is a ref, never
+  content" (§5.1); a producer may not add a field to it. The slot says *where in
+  the turn the part was produced*, which is transport information about the
+  event — exactly like `partIndex` beside it — so it rides there and the payload
+  stays byte-identical to what a strict parser already accepts.
+- **What a consumer does with it.** A renderable view carrying one belongs in
+  the ordered trace **at that call's own position** rather than appended after
+  the turn, so the card a person is asked to act on sits at the step that
+  produced it. A consumer that does not know the field — or that receives an id
+  matching no tool call it holds — keeps **exactly** the previous behaviour and
+  renders the view as a turn-level adjunct. The field adds a position; it never
+  gates a render.
+- **Handshake-compatible.** Additive and optional: every previously-published
+  event stays valid, `isAgUiEvent()` accepts both shapes, and the contract
+  version does **not** move (§8).
+- **Not an authorization.** Like every other id on this wire it is an opaque
+  correlation string. Forging one buys a card drawn at the wrong step of the
+  forger's own turn and nothing more, because what a lifecycle card may show is
+  re-authorized server-side from its ref on every resolve.
+
 ## 4. Durable, resumable transport
 
 The wire is **Server-Sent Events over the durable Redis-Streams AG-UI log**. It

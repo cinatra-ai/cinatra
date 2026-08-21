@@ -41,6 +41,7 @@ import type {
   KnownCapabilityId,
   ResolvedCapabilityProvider,
 } from "./capability-contract-map";
+import type { DelegatedChatToolClass } from "./mcp-connector-contract";
 
 /**
  * Opaque scoped DB handle. Least-privilege; most extensions never need it.
@@ -331,6 +332,17 @@ export type HostMcpToolRegistration = {
   description?: string;
   inputSchema?: unknown;
   handler: (input: unknown) => unknown | Promise<unknown>;
+  /**
+   * The `ctx.mcp.registerTool` registration path's delegated-chat declaration
+   * (cinatra#2771). Optional and NARROW-ONLY: it can remove a name the host
+   * admitted, never add one the host did not — see `DelegatedChatToolClass`.
+   *
+   * Additive optional field, not a new port: the frozen author-facing ABI is
+   * unchanged for every existing registration (minimum-minor evolution, the
+   * same shape as the 2.4.0 `resolveType` addition). An extension pinned to an
+   * older minor simply never sets it, and an absent declaration is neutral.
+   */
+  delegatedChat?: DelegatedChatToolClass;
 };
 
 /** MCP tool registration + self-client + external-server registry. */

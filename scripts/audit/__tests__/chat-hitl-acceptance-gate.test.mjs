@@ -25,6 +25,13 @@
 //      (`6b4c3e887`) — and the owner had ruled on the three open questions
 //      (coordination-tracker entry 334). If a row ever goes back to MISSING or
 //      partial, this test is what turns red first.
+//
+//      AMENDED: the CLI is now RED again, and for a different reason — the
+//      manifest's chat_thread cells point at screenshots the canonical capture
+//      index never validated, and an unindexed screenshot counts as zero. The
+//      two claims are held apart below: the sixteen criteria are still each
+//      MAPPED or BUILT on their own terms, and the EVIDENCE binding is what the
+//      CLI refuses. Both must be true before READY prints again.
 
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -187,25 +194,41 @@ describe("the REAL manifest", () => {
     }
   });
 
-  it("the CLI's audit mode exits 0", () => {
-    const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
-    expect(res.stdout + res.stderr).toMatch(/manifest honest/);
-    expect(res.status).toBe(0);
+  it("the MANIFEST half of the CLI is clean — every named proof exists", () => {
+    // The manifest's own honesty is unchanged and still passes; what the CLI
+    // now also refuses is the EVIDENCE binding, asserted in the two tests below
+    // and owned by chat-hitl-capture-index.test.mjs.
+    expect(auditManifest()).toEqual([]);
   });
 
-  it("the CLI's --strict mode reports the program READY — all sixteen, none partial", () => {
-    // The honest state of #2573 at this commit. This expectation was NOT READY
-    // until the finisher round; changing it is the conscious act the previous
-    // comment demanded, and it is only correct because the two defects the
-    // acceptance round found are merged to main and the owner's rulings are
-    // cast. It stays here, inverted, for the same reason it existed before: a
-    // row that regresses to MISSING or partial fails this test immediately.
-    const res = spawnSync(process.execPath, [GATE, "--strict"], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    });
-    expect(res.stdout + res.stderr).toMatch(/READY — 16\/16 criteria proven, none partial/);
-    expect(res.status).toBe(0);
+  it("the CLI REFUSES both modes while a chat_thread cell is unbound", () => {
+    // THE FLIP, and it is deliberate. Until the capture binding existed, the
+    // gate printed READY over a manifest whose chat_thread cells pointed at
+    // screenshots nothing had ever validated — the exact false green the
+    // program's own review round caught by hand. An unindexed screenshot now
+    // counts as zero, so the honest answer on this tree is RED in both modes.
+    //
+    // This expectation was READY before, and flipping it is the conscious act
+    // the previous comment demanded. It goes back to green when the capture
+    // round indexes those cells against the shared recorder, and not before.
+    for (const args of [[], ["--strict"]]) {
+      const res = spawnSync(process.execPath, [GATE, ...args], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      });
+      expect(res.stdout + res.stderr).toMatch(/an unindexed screenshot counts as zero/);
+      expect(res.status, `mode ${args.join(" ") || "audit"}`).toBe(1);
+    }
+  });
+
+  it("the manifest itself would still report READY on its own terms", () => {
+    // Separating the two halves keeps the flip above honest: the sixteen
+    // criteria are still each MAPPED or BUILT, and a row regressing to MISSING
+    // or partial still fails here immediately.
+    const { unproven, partial, total } = strictReport();
+    expect(total).toBe(CANONICAL_CRITERIA.length);
+    expect(unproven).toEqual([]);
+    expect(partial).toEqual([]);
   });
 
   it("every row carries the ruling that moved it, wherever one did", () => {

@@ -149,6 +149,16 @@ const PUBLIC_EXACT_PATHS = [
 // a dev server; adding it here is what lets the §V surface — and the Skills
 // section's in-flight / refusal / degraded states — be driven on the
 // production-standalone harness the rest of the family already uses.
+// "/design-fixtures/run-step-rail" (cinatra#2840): the run detail's STEP RAIL
+// row-geometry fixture — the REAL RunStepRailPanel mounted against a
+// deterministic entry set so a wrapped lifecycle policy reason's row box is
+// measurable in a browser. Same static, dataless, seeded-render contract as its
+// siblings (no DB, no session, no user data). It is listed here for the SAME
+// reason the header-rule entry above is: without it guardAppRoute 307s the
+// unauthenticated harness to /sign-in under the production-standalone build,
+// and the suite's assertions then fail on a fixture that never rendered — which
+// is exactly what design-visual-verify reported at 7ba5e7fc (all 8 cases:
+// "element(s) not found" waiting for the rail's rows).
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -158,6 +168,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/agents-card",
   "/design-fixtures/header-rule",
   "/design-fixtures/extension-settings",
+  "/design-fixtures/run-step-rail",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;
@@ -370,6 +381,31 @@ function isSetupPath(pathname: string) {
 // anti-clickjacking only.
 const REVIEW_ISLAND_PATH = "/lifecycle/review-island";
 
+/** The island's own credential parameter and its ceiling — the two constants
+ *  `src/lib/lifecycle/review-island-credential.ts` owns, named here rather than
+ *  imported so the request guard stays free of the codec (and of its key). */
+const REVIEW_ISLAND_CREDENTIAL_PARAM = "ic";
+const REVIEW_ISLAND_CREDENTIAL_MAX = 1024;
+
+/**
+ * Does this island request carry its OWN credential (cinatra#2754)?
+ *
+ * SYNTAX ONLY, AND DELIBERATELY. This decides which authority answers the
+ * request, never whether the request is authorized: a credential that is
+ * forged, tampered with, expired, or bound to another gate, reader or site is
+ * refused by the island page's own ladder, which is the only thing that holds
+ * the key. Verifying here would put the codec — and the app secret — into the
+ * request guard for no gain, and would give the guard a second opinion about a
+ * question the page must own alone.
+ */
+function islandRequestPresentsCredential(request: NextRequest): boolean {
+  const raw = request.nextUrl.searchParams.get(REVIEW_ISLAND_CREDENTIAL_PARAM);
+  if (raw === null) return false;
+  return (
+    raw.length > 0 && raw.length <= REVIEW_ISLAND_CREDENTIAL_MAX && /^[A-Za-z0-9_-]+$/.test(raw)
+  );
+}
+
 /** The island's framing headers for this request. Fail-closed to first-party. */
 export function reviewIslandFramingHeaders(request: NextRequest): {
   contentSecurityPolicy: string;
@@ -459,8 +495,17 @@ export async function guardAppRoute(request: NextRequest) {
   // else's chrome (see `emptyIslandResponse`).
   if (pathname === REVIEW_ISLAND_PATH) {
     const framing = reviewIslandFramingHeaders(request);
-    const response =
-      framing.widened && !getSessionCookie(request)
+    // A request that PRESENTS AN ISLAND CREDENTIAL is answered by the page
+    // (cinatra#2754). It is the cross-site case the credential exists for: no
+    // cookie will ever ride that frame load, so both other arms here are wrong
+    // for it — the empty response would swallow a valid credential before the
+    // page could read it, and the protected route would send an interactive
+    // sign-in into chrome a third-party site controls. The page prefers the
+    // credential over any ambient cookie too, so this guard and that page
+    // agree on which branch decides, for every request.
+    const response = islandRequestPresentsCredential(request)
+      ? NextResponse.next()
+      : framing.widened && !getSessionCookie(request)
         ? emptyIslandResponse()
         : await guardProtectedRoute(request);
     return applyReviewIslandFraming(framing, response);

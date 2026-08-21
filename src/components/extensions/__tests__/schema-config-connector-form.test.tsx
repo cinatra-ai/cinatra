@@ -248,18 +248,49 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
     expect(container.querySelector('[data-testid="dynamic-select-error"]')).toBeNull();
   });
 
-  it("dynamic-select-options: renders the error state when the options action fails", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
+  // cinatra#2762: a failing options action must NOT take the field's declared
+  // guidance away, and must NOT print the raw server text into the form. Before
+  // this contract the field rendered the dispatch error in place of its own
+  // placeholder, so a connector whose actions were unreachable read as broken
+  // and lost its next step.
+  it("dynamic-select-options: an options failure KEEPS the declared placeholder and never prints the raw error", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: 'No registered UI action "listModels" for "@x/y".',
+          }),
+          { status: 404 },
+        ),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const surface = surfaceOf({
-      fields: [{ kind: "dynamic-select-options", key: "model", label: "Model", optionsAction: "listModels" }],
+      fields: [
+        {
+          kind: "dynamic-select-options",
+          key: "model",
+          label: "Model",
+          optionsAction: "listModels",
+          placeholder: "No connected models yet.",
+        },
+      ],
     });
     await renderForm({ installId: "i7", packageName: "@x/y", surface });
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(container.querySelector('[data-testid="dynamic-select-error"]')?.textContent).toContain("boom");
+    // The declared placeholder still renders.
+    expect(container.querySelector('[data-testid="dynamic-select-empty"]')?.textContent).toContain(
+      "No connected models yet.",
+    );
+    // The failure is reported, but only as bounded, non-technical copy.
+    const errorNode = container.querySelector('[data-testid="dynamic-select-error"]');
+    expect(errorNode).toBeTruthy();
+    expect(errorNode?.textContent).not.toContain("No registered UI action");
+    expect(errorNode?.textContent).not.toContain("@x/y");
+    // The whole field never leaks the raw dispatch text.
+    expect(container.textContent).not.toContain("No registered UI action");
     // The hidden input carries no value on error.
     expect(container.querySelector<HTMLInputElement>('input[name="model"]')?.value).toBe("");
   });

@@ -75,61 +75,6 @@ export class ExpectedInstalledVersionMismatchError extends Error {
 }
 
 /**
- * The STABLE, duck-typed code an activation-deferred install carries. Kept as a
- * bare string literal so a caller that cannot import this module (the host's
- * install batch, which must not close an import cycle back into this package)
- * still recognizes the outcome. It is the same no-cross-package-import contract
- * `REQUIRES_REBUILD` and `AGENT_PACKAGE_CONTRACT_VIOLATION` already use.
- */
-export const INSTALL_ACTIVATION_DEFERRED = "INSTALL_ACTIVATION_DEFERRED" as const;
-
-// ---------------------------------------------------------------------------
-// ExtensionActivationDeferredError: the THIRD install outcome.
-//
-// The real-integrity pipeline FINALIZED (real provenance recorded + journal
-// finalized), so the canonical row is committed and trusted-anchorable. But
-// in-process hot-activation did not register the package THIS call (the runtime
-// package loader refused the anchor). The package therefore loads on the next
-// boot, and the committed install is deliberately left intact.
-//
-// This is NOT a failure and NOT a plain success. Reporting it as a failure is
-// what made the install surface lie: the operator saw a generic error with a
-// support reference while the install had in fact landed. Reporting it as a
-// plain success would hide that the extension does not work until a restart.
-// The typed error carries a stable `code`. Every layer above this seam (the
-// host install batch, the marketplace server actions, the install form) can
-// route it to its own outcome: "installed; activates on the next restart".
-//
-// Thrown (not returned) on purpose: every existing caller already treats a
-// throw from this seam as "do not report a plain success", so the fail-closed
-// default is preserved for any caller that does not yet know the code.
-// ---------------------------------------------------------------------------
-export class ExtensionActivationDeferredError extends Error {
-  readonly code = INSTALL_ACTIVATION_DEFERRED;
-  constructor(
-    message: string,
-    public readonly packageName: string,
-    public readonly packageVersion?: string,
-  ) {
-    super(message);
-    this.name = "ExtensionActivationDeferredError";
-  }
-}
-
-/**
- * Duck-typed recognizer for the activation-deferred outcome. Walks the `cause`
- * chain (bounded depth) because the error crosses dynamic-import boundaries and
- * may be wrapped by an intermediate layer, so `instanceof` is not reliable here
- * (cinatra#2416 established the same duck-typing rule for lifecycle codes).
- */
-export function isActivationDeferredError(err: unknown, depth = 0): boolean {
-  if (depth > 6 || err == null || typeof err !== "object") return false;
-  const obj = err as { code?: unknown; cause?: unknown };
-  if (obj.code === INSTALL_ACTIVATION_DEFERRED) return true;
-  return "cause" in obj ? isActivationDeferredError(obj.cause, depth + 1) : false;
-}
-
-/**
  * FAIL-CLOSED resolver for the expected-version CAS: given ALL canonical rows
  * for a package and the actor's scope, return the SINGLE live installed version
  * at that scope, or `null` when the precondition cannot be proven (zero or more
@@ -1151,10 +1096,39 @@ async function rollbackNonFinalizedCanonicalRow(rowId: string): Promise<void> {
     if (!nonFinalized) return;
     await deleteNonFinalizedCanonicalRow(rowId);
   } catch (err) {
-    console.warn(
-      `[extensions] rollback of non-finalized canonical row '${rowId}' failed (left non-anchorable; a re-install re-runs the pipeline):`,
-      err instanceof Error ? err.message : err,
+    // LOUD, not best-effort. A placeholder row this attempt created and could not
+    // remove is exactly the state the shadow defect is made of: a live canonical
+    // row for a package that never committed, competing with the working bundled
+    // implementation for the same identity. Swallowing it here is what let that
+    // row survive silently. The caller re-throws it as a recovery-required
+    // failure, so the operator is told the row needs removing instead of finding
+    // out when every action starts to 404.
+    throw new CanonicalRowCompensationFailedError(rowId, err);
+  }
+}
+
+/** The stable code a failed canonical-row compensation carries. */
+export const CANONICAL_ROW_COMPENSATION_FAILED = "CANONICAL_ROW_COMPENSATION_FAILED" as const;
+
+/**
+ * The compensating removal of a placeholder canonical row FAILED. The install
+ * itself did not commit, but a live row this attempt created is still present
+ * and an operator has to remove it. Reported loudly rather than logged, because
+ * the leftover row is what makes a package unserveable.
+ */
+export class CanonicalRowCompensationFailedError extends Error {
+  readonly code = CANONICAL_ROW_COMPENSATION_FAILED;
+  constructor(
+    public readonly rowId: string,
+    public readonly cause?: unknown,
+  ) {
+    super(
+      `the install did not commit, but its placeholder install row '${rowId}' could not be ` +
+        `removed (${cause instanceof Error ? cause.message : String(cause)}). RECOVERY REQUIRED: ` +
+        `that row is live for a package that has nothing behind it and will keep the bundled ` +
+        `version from serving until it is removed.`,
     );
+    this.name = "CanonicalRowCompensationFailedError";
   }
 }
 
@@ -1242,6 +1216,73 @@ async function compensateHandlerFailureAfterFinalize(input: {
       detail: `archiving the finalized row failed (${err instanceof Error ? err.message : String(err)})`,
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// POST-COMMIT ACTIVATION COMPENSATION.
+//
+// The pipeline finalized but the package did not register in this process. The
+// row is real, but it serves nothing, and while it is live it holds the
+// package identity away from the implementation bundled in the image. Leaving
+// it is the shadow: every UI action 404s and the working bundled version is
+// unreachable through the product.
+//
+// So the row is ARCHIVED (the restorable lifecycle primitive, never a delete:
+// the payload and provenance are real and an operator may want them for
+// diagnosis) and the bundled implementation is put back in service through the
+// dedicated reactivation seam. Both steps are reported in the returned sentence
+// so the caller's error states exactly what is now true.
+//
+// Never throws: the caller is already reporting a failure and must be able to
+// surface the activation reason AND what compensation achieved.
+// ---------------------------------------------------------------------------
+async function compensatePostCommitActivationFailure(
+  packageName: string,
+  rowId: string | null,
+  actor: Actor,
+): Promise<string> {
+  const notes: string[] = [];
+  let archived = false;
+  if (rowId) {
+    try {
+      const { transitionExtensionLifecycle } = await import("./lifecycle-primitive");
+      await transitionExtensionLifecycle(rowId, "archive", {
+        actor: { source: actor.source ?? "dispatcher", userId: actor.userId },
+        reason: "install committed but could not activate in-process",
+      });
+      archived = true;
+      notes.push("The install was archived, so it no longer shadows the bundled version");
+    } catch (err) {
+      notes.push(
+        `RECOVERY REQUIRED: the committed row '${rowId}' could not be archived ` +
+          `(${err instanceof Error ? err.message : String(err)}), so it still holds the ` +
+          `package identity and must be archived by hand`,
+      );
+    }
+  }
+  // Put the bundled implementation back only once the override row is out of the
+  // way. Reactivating underneath a live override would leave two registrations
+  // racing for the same global names.
+  if (archived) {
+    try {
+      const { reactivateBundledFallbackInProcess } = await import(
+        "@/lib/static-bundle-loader"
+      );
+      const restored = await reactivateBundledFallbackInProcess(packageName);
+      notes.push(
+        restored.ok
+          ? "and the version bundled in the image is serving again"
+          : `but the bundled version could not be put back in service ` +
+            `(${restored.reason}); it returns on the next restart`,
+      );
+    } catch (err) {
+      notes.push(
+        `but restoring the bundled version threw ` +
+          `(${err instanceof Error ? err.message : String(err)}); it returns on the next restart`,
+      );
+    }
+  }
+  return notes.length > 0 ? `${notes.join(" ")}.` : "No install row was created.";
 }
 
 // The kinds that ship a HOT-LOADABLE `register(ctx)` server module, whose
@@ -1559,10 +1600,19 @@ class ExtensionRegistryImpl {
     // The anchor TIER handed to the host activate hook. Forwarded ONLY where it
     // can change WHICH row the host resolves — the org-NULL WORKSPACE anchor,
     // the one scope where two rows (a product-installed workspace row and a
-    // bundled platform anchor) share an `organization_id` and `pickSingleActiveRow`
-    // would fail closed on the ambiguity. Every other install — org-anchored, or
-    // the platform tier itself — keeps the pre-#2698 call exactly as it was, so
-    // "byte-identical to today" holds down to the hook invocation.
+    // bundled platform anchor) share an `organization_id`.
+    //
+    // `pickSingleActiveRow` no longer fails closed on THAT pair: it applies the
+    // shared source precedence, so the product install outranks the bundled
+    // fallback (cinatra#2762). The tier is still forwarded, and still preferred,
+    // because it selects the workspace row DIRECTLY by identity rather than via a
+    // policy that reads a source discriminant — so a row whose provenance is
+    // neither bundled nor marketplace (a legacy or fixture row, which precedence
+    // deliberately leaves alone) still resolves here.
+    //
+    // Every other install — org-anchored, or the platform tier itself — keeps the
+    // pre-#2698 call exactly as it was, so "byte-identical to today" holds down
+    // to the hook invocation.
     const activateAnchor =
       rowOrgId === null && rowAnchor.ownerLevel === "workspace"
         ? { ownerLevel: rowAnchor.ownerLevel }
@@ -1876,29 +1926,29 @@ class ExtensionRegistryImpl {
       );
     }
 
-    // finalized === true but NOT activated: the install COMMITTED (anchorable;
-    //   the boot loader is the durable path) but in-process hot-activation did not
-    //   register the package this call — which breaks the no-restart invariant for
-    //   a connector. Do NOT roll back the committed/finalized install (the row is
-    //   real + anchorable; an update left the previous digest intact). THROW so the
-    //   op surfaces the truthful "did not hot-activate" outcome rather than a
-    //   silent finalized-but-not-loaded success.
+    // finalized === true but NOT activated. The pipeline committed, so the row is
+    // real and anchorable, yet the package did not register in THIS process.
     //
-    //   The throw is TYPED (ExtensionActivationDeferredError, stable
-    //   `code: "INSTALL_ACTIVATION_DEFERRED"`). The message is unchanged, because
-    //   it is the operator-side truth. The code lets every caller above this seam
-    //   tell this outcome apart from a real failure. It is the THIRD install
-    //   outcome: the row is committed and anchorable, so the caller must neither
-    //   roll it back nor report a generic failure; it reports "installed,
-    //   activation deferred to the next restart".
+    // There is no such thing as an acceptable committed-but-unactivated install.
+    // Hot install is the platform contract: a marketplace install must be usable
+    // in the running process. A live row that serves nothing does not merely
+    // fail to work, it takes the identity of the package away from the version
+    // bundled in the image, so the operator loses the working implementation too.
+    //
+    // The pre-finalize probe now proves activation for fresh installs as well as
+    // updates, so reaching here means activation failed AFTER the commit. That is
+    // compensated, never described: archive the row this install created and put
+    // the bundled implementation back in service. Then report the failure, naming
+    // the exact reason the activation was refused.
     if (!result.activated) {
-      throw new ExtensionActivationDeferredError(
-        `${op} of ${ref.packageName} finalized the real-integrity pipeline but did NOT ` +
-          `hot-activate in-process (${result.reason ?? "unknown"}) — the package is anchorable ` +
-          `(it will load on the next boot) but did not load without a restart this call. The ` +
-          `committed install was left intact.`,
+      const compensation = await compensatePostCommitActivationFailure(
         ref.packageName,
-        ref.version,
+        ensure.rowId,
+        actor,
+      );
+      throw new Error(
+        `${op} of ${ref.packageName} committed but could not activate in this process ` +
+          `(${result.reason ?? "unknown"}). ${compensation}`,
       );
     }
   }

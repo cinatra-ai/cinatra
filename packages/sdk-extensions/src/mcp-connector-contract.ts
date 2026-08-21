@@ -125,6 +125,37 @@ export type ExtensionToolAnnotations = {
   openWorldHint?: boolean;
 };
 
+/**
+ * How a registration DECLARES its primitive means to be used on the delegated
+ * chat surface (cinatra#2771, owner ruling 2026-08-15).
+ *
+ * `read` / `discovery` / `dispatch` are the three chat-eligible classes — the
+ * exact posture the delegated-chat policy has always described in prose.
+ * `none` DECLINES the chat surface outright.
+ *
+ * A DECLARATION IS NEVER AUTHORIZATION. This field is a connector's own
+ * self-classification, so it may only ever NARROW what the host has already
+ * admitted:
+ *
+ *   - a chat-eligible class on a name the host has NOT admitted grants nothing;
+ *   - `none` (or a malformed value, which normalizes to `none`) removes a name
+ *     the host WOULD otherwise have admitted;
+ *   - an ABSENT declaration is neutral and changes nothing.
+ *
+ * The authoritative decision stays the host's: the hard family denies, the
+ * destructive-verb backstop, the separately-audited proposal override and the
+ * handler-level authorization boundary all remain in force regardless of what
+ * a registration declares. This is the same doctrine the site-annotation
+ * classifier states — a declaration can only ADD friction, never loosen it.
+ *
+ * The runtime normalizer/reader for this enum lives with the policy that
+ * enforces it (`@cinatra-ai/mcp-server/delegated-chat-tool-policy`), which is
+ * dependency-free and reachable from both registration paths; this SDK
+ * declaration is the author-facing TYPE only, so the contract stays type-only
+ * and adds no module to any route graph. A drift test pins the two together.
+ */
+export type DelegatedChatToolClass = "read" | "discovery" | "dispatch" | "none";
+
 export type ExtensionMcpToolConfig = {
   title?: string;
   description?: string;
@@ -132,6 +163,13 @@ export type ExtensionMcpToolConfig = {
   outputSchema?: ExtensionStandardSchema;
   annotations?: ExtensionToolAnnotations;
   _meta?: Record<string, unknown>;
+  /**
+   * The manifest-discovered registration path's delegated-chat declaration
+   * (the `(name, config, handler)` shape). Optional and narrow-only — see
+   * `DelegatedChatToolClass`. Read at the one choke point both registration
+   * paths pass through (`policedRegisterTool`).
+   */
+  delegatedChat?: DelegatedChatToolClass;
 };
 
 /**

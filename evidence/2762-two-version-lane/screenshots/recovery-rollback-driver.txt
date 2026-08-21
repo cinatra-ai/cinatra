@@ -1,0 +1,27 @@
+BEFORE rollback, not-in-service row: {"named":false,"title":null,"updateLine":"Currently on version 0.1.5 — up to date."}
+screenshot: recovery-rollback-before-settings.png
+PASS  recovery-rollback: "Roll back to bundled" is present to click
+PASS  recovery-rollback: "Roll back to bundled" is ENABLED before the click
+CLICK "Roll back to bundled"
+PASS  recovery-rollback: the click did not report a failure — no error node
+screenshot: recovery-rollback-after-settings.png
+AFTER rollback: {"named":false,"updateLine":null}
+PASS  recovery-rollback-revisit: the extension settings surface mounted
+lifecycle buttons: [{"label":"Workspace: All","disabled":false,"slot":"popover-trigger","reason":null},{"label":"Update","disabled":true,"slot":"disabled-action","reason":"Already up to date"},{"label":"Archive","disabled":true,"slot":"disabled-action","reason":"Already archived"},{"label":"Activate","disabled":false,"slot":"button","reason":null},{"label":"Reinstall latest","disabled":false,"slot":"button","reason":null},{"label":"Force-delete…","disabled":false,"slot":"button","reason":null}]
+visible capability reasons: []
+PASS  recovery-rollback-revisit: no lifecycle action is denied as "More than one install matches your scope" — no ambiguity reason rendered
+PASS  recovery-rollback: the revisit after rollback is NOT an "ambiguous target" dead end — no ambiguity reason rendered
+PASS  recovery-rollback: a way back is OFFERED on the revisit (Activate or Retry activation, enabled) — "Activate" enabled
+screenshot: recovery-rollback-wayback-offered.png
+PASS  recovery-rollback-wayback: "Activate" is present to click
+PASS  recovery-rollback-wayback: "Activate" is ENABLED before the click
+CLICK "Activate"
+PASS  recovery-rollback-wayback: the click did not report a failure — no error node
+screenshot: recovery-rollback-wayback-after.png
+PASS  recovery-rollback-restored: the extension settings surface mounted
+lifecycle buttons: [{"label":"Workspace: All","disabled":false,"slot":"popover-trigger","reason":null},{"label":"Update","disabled":true,"slot":"disabled-action","reason":"Already up to date"},{"label":"Archive","disabled":false,"slot":"button","reason":null},{"label":"Activate","disabled":true,"slot":"disabled-action","reason":"Already active"},{"label":"Retry activation","disabled":false,"slot":"recovery-action","reason":null},{"label":"Roll back to bundled","disabled":false,"slot":"recovery-action","reason":null},{"label":"Reinstall latest","disabled":false,"slot":"button","reason":null},{"label":"Force-delete…","disabled":false,"slot":"button","reason":null}]
+visible capability reasons: []
+PASS  recovery-rollback-restored: no lifecycle action is denied as "More than one install matches your scope" — no ambiguity reason rendered
+PASS  recovery-rollback: the way-back action WORKED — the install is live again — the recovery pair renders again, which only a live install does
+
+ALL CHECKS PASSED (mode=rollback-recovery, label=recovery-rollback)

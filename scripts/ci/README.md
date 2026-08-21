@@ -183,3 +183,44 @@ same harness in gate mode with candidate pins derived from the checked-out ref.
 - `uat-mask-verify.mjs` — asserts that every rendering of the UAT lane's per-run
   minted values in the finished PUBLIC job log is masked (cinatra#2131). Runs as
   its own job because a job cannot read its own log until it completes.
+
+## chat-HITL evidence gate
+
+`chat-hitl-evidence-gate.mjs` catches the two anti-patterns that passed every
+other gate on the lifecycle-card surface (cinatra#2821, epic #2784):
+
+- **the text pointer** — a parked chat dispatch answered by prose that names
+  another surface as the place to decide, with no card in the turn;
+- **the mislabeled capture** — a screenshot filed under a host it does not show,
+  because the claim lived in the filename and nothing checked it.
+
+```sh
+node scripts/ci/chat-hitl-evidence-gate.mjs            # warn-first, as CI runs it
+node scripts/ci/chat-hitl-evidence-gate.mjs --enforce  # fail on any finding
+node scripts/ci/chat-hitl-evidence-gate.mjs --json     # machine-readable
+```
+
+The rules live in `lib/decision-pointer-contract.mjs` (the prose vocabulary plus
+the structural held-turn evaluator the transcript tier calls) and
+`lib/capture-record-contract.mjs` (the record schema, the per-host anchor
+vocabulary, the URL classes and the manifest binding). Both are covered by
+fixture suites in `__tests__/`, which ride the root Vitest run;
+`.github/workflows/chat-hitl-evidence-gate.yml` is a thin caller with no logic of
+its own.
+
+`chat-hitl-capture-index.json` is the canonical capture index — the ONE of it: a
+cell name is a claim, and a claim needs a record there or it counts as zero.
+Both halves read this file, through the single `CAPTURE_INDEX_PATH` that
+`lib/capture-record-contract.mjs` exports; `scripts/audit/chat-hitl-acceptance-gate.mjs`
+used to read a second, empty index of its own that also called itself canonical,
+and `__tests__/capture-index-path.test.mjs` is what now keeps the readers on one
+path. The audit half is the stricter reader — painted counts, measured absences,
+a pinned card instance — and its extras are graded when present on a committed
+record and required of what its own driver writes, with this contract as the
+floor for every record either way.
+`chat-hitl-evidence-gate.rollout.json` is the warn-first policy — the gate
+enforces only for branches created after `gateLandedAt`, grandfathers the
+branches listed by name, and keeps the findings already on `main` as warnings
+until the slice named beside each one clears it. A record is text and text is
+forgeable: the contract catches the accidental mislabel, the anchor nobody
+measured, the drifted hash and the re-used picture, not a determined forger.

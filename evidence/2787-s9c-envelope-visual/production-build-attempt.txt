@@ -1,0 +1,7 @@
+# Production-build attempt for the S9c capture (unedited tail)
+# Command: pnpm build   (scripts/next-build.mjs)
+
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+Next.js build worker exited with code: null and signal: SIGABRT
+[ELIFECYCLE] Command failed with exit code 1.
+EXIT=1

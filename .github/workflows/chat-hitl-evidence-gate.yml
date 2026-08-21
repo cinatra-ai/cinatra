@@ -1,0 +1,55 @@
+# chat-HITL evidence gate — the two anti-fraud checks from cinatra#2821.
+#
+# This workflow is a THIN CALLER. All of the logic, and all of its fixture
+# coverage, lives in `scripts/ci/chat-hitl-evidence-gate.mjs` and the contracts
+# beside it, which also run inside the required root Vitest job. Nothing is
+# decided here that a person cannot run locally with:
+#
+#   node scripts/ci/chat-hitl-evidence-gate.mjs
+#
+# WARN-FIRST rollout. The gate enforces only on
+# branches created after it landed; branches that were in flight are
+# grandfathered by name in `scripts/ci/chat-hitl-evidence-gate.rollout.json`, and
+# the findings already on main stay warnings until the slice that owns them
+# clears the list. `fetch-depth: 0` is required for that decision: the rollout
+# reads the branch's FIRST OWN COMMIT date against origin/main, and a shallow
+# clone cannot answer it (in which case the gate warns rather than guessing).
+#
+# This context is deliberately NOT added to the branch-protection required set,
+# and not to the merge-group mirror: the gate suites it duplicates already ride
+# the required root job, and a warn-first gate must not be able to block a merge
+# while it is still warning.
+
+name: chat-HITL Evidence Gate
+
+on:
+  pull_request:
+    # Draft PRs skip this gate; it runs on push-to-main and non-draft PRs
+    # (ready_for_review re-runs it when a draft is marked ready).
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  chat-hitl-evidence-gate:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Run the chat-HITL evidence gate
+        # No install step: the gate is node-builtins only.
+        run: node scripts/ci/chat-hitl-evidence-gate.mjs --github-annotations

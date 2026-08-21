@@ -45,6 +45,8 @@ export {
   NOTIFICATION_WRITE_CTE,
 } from "./service";
 export type { CreateNotificationOptions } from "./service";
+// cinatra#2864 — the write-time precondition a caller fences an insert behind.
+// cinatra#2838 — the statement shape a fenced `after` is expressed in.
 export type { NotificationWriteFence, NotificationWriteStatement } from "./service";
 export type { AgentCreationProgressMilestone } from "./service";
 export type { NotificationsKeysetBefore } from "./service";

@@ -355,6 +355,7 @@
     { "alias": "@cinatra-ai/llm/openai-model-capabilities", "target": "./packages/llm/src/providers/openai-model-capabilities.ts" },
     { "alias": "@cinatra-ai/llm/scripted-test-provider", "target": "./packages/llm/src/scripted-test-provider.ts" },
     { "alias": "@cinatra-ai/llm/execution-plane", "target": "./packages/llm/src/execution-plane/index.ts" },
+    { "alias": "@cinatra-ai/llm/mcp-access", "target": "./packages/llm/src/mcp-access.ts" },
     { "alias": "@cinatra-ai/llm/mcp-materializer", "target": "./packages/llm/src/mcp-materializer.ts" },
     { "alias": "@cinatra-ai/llm/structured-json", "target": "./packages/llm/src/structured-json.ts" },
     { "alias": "@cinatra-ai/llm/usage-metering", "target": "./packages/llm/src/usage-metering.ts" },

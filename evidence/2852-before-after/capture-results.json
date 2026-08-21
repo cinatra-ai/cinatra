@@ -1,0 +1,446 @@
+{
+ "$comment": [
+  "The machine record beside the pixels, from the RE-SHOT round at f5ae7b401.",
+  "Every count here was observed on the screen the paired PNG shows."
+ ],
+ "results": [
+  {
+   "cell": "B1__review-card__page_gate_region__pending",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad3439044b074b6ab84204166618303667e9c9a968482d3ee99e9cec08813b",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad3439044b074b6ab84204166618303667e9c9a968482d3ee99e9cec08813b",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "pixels": {
+    "width": 1672,
+    "height": 2282
+   },
+   "sha256": "b92701b75ed185036257c0f0d2f7a41fd09cc60a7087fe473dc2321a7c30415d",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-chips\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-before-after\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-panel=\"before\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-panel=\"after\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-state=\"accepted\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-state=\"dismissed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nREPLACE\nNOW\n# Launch note\nSUGGESTED\n# Launch note\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nREPLACE\nNOW\n## Summary   \nThe connector ships this week.   \nIt replaces the manual export step.\nSUGGESTED\n## Summary\nThe connector ships this week.\nIt replaces the manual export step.\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nREPLACE\nNOW\n## Rollout\n   Enable it per organization, then remove the old export job.   \nSUGGESTED\n## Rollout\n   Enable it per organization, then remove the old export job.\nPress a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below.\n3 of 3 suggestions accepted \u2014 they ride this decision. A reject records them as not taken.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove",
+   "pageErrors": []
+  },
+  {
+   "cell": "B2__review-card__page_gate_region__pending",
+   "requestedPath": "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad3439044b074b6ab84204166618303667e9c9a968482d3ee99e9cec08813b",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad3439044b074b6ab84204166618303667e9c9a968482d3ee99e9cec08813b",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "pixels": {
+    "width": 1672,
+    "height": 2282
+   },
+   "sha256": "1e7aa38e54c0294a2b458dc871d58f3be1a6453da7028867fd54106192d22591",
+   "observed": [
+    {
+     "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-chips\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-before-after\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-panel=\"before\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-panel=\"after\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-state=\"accepted\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-suggestion-state=\"dismissed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nREPLACE\nNOW\n# Launch note\nSUGGESTED\n# Launch note\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nREPLACE\nNOW\n## Summary   \nThe connector ships this week.   \nIt replaces the manual export step.\nSUGGESTED\n## Summary\nThe connector ships this week.\nIt replaces the manual export step.\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nREPLACE\nNOW\n## Rollout\n   Enable it per organization, then remove the old export job.   \nSUGGESTED\n## Rollout\n   Enable it per organization, then remove the old export job.\nPress a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below.\n2 of 3 suggestions accepted \u2014 they ride this decision. A reject records them as not taken.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove",
+   "pageErrors": []
+  },
+  {
+   "cell": "B3__review-card__chat_thread__pending",
+   "requestedPath": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "pixels": {
+    "width": 1472,
+    "height": 2454
+   },
+   "sha256": "e37f4c9cd4716dffc99dcbb19f8dfff848b4c6a0eba7ceae894a8da1c7aa1d47",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-chips\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-before-after\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-panel=\"before\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-panel=\"after\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-state=\"accepted\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-state=\"dismissed\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+     "scope": "root",
+     "count": 0
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nREPLACE\nNOW\n# Launch note\nSUGGESTED\n# Launch note\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nREPLACE\nNOW\n## Summary   \nThe connector ships this week.   \nIt replaces the manual export step.\nSUGGESTED\n## Summary\nThe connector ships this week.\nIt replaces the manual export step.\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nREPLACE\nNOW\n## Rollout\n   Enable it per organization, then remove the old export job.   \nSUGGESTED\n## Rollout\n   Enable it per organization, then remove the old export job.\nPress a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below.\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\n3 of 3 suggestions accepted \u2014 they ride this decision. A reject records them as not taken.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove",
+   "pageErrors": []
+  },
+  {
+   "cell": "B4__review-card__chat_thread__pending",
+   "requestedPath": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
+   "httpStatus": 200,
+   "rootPresent": true,
+   "rootCount": 1,
+   "pixels": {
+    "width": 1472,
+    "height": 2454
+   },
+   "sha256": "054622e2d885a66c5dbb84d080c9fcb832928315d242223b8647cf58ab3b09d2",
+   "observed": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-chips\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-before-after\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-panel=\"before\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-panel=\"after\"]",
+     "scope": "root",
+     "count": 3
+    },
+    {
+     "selector": "[data-suggestion-state=\"accepted\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-suggestion-state=\"dismissed\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+     "scope": "root",
+     "count": 2
+    },
+    {
+     "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "root",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "frame",
+     "count": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+     "scope": "frame",
+     "count": 0
+    },
+    {
+     "selector": "[data-action=\"approve-review -> resolved\"]",
+     "scope": "root",
+     "count": 1
+    }
+   ],
+   "cardText": "Review requested\nAwaiting your decision\nExpand\nCORE ANALYSIS \u00b7 SUGGESTIONS\nartifact \u00b7 sections \u00b7 0 \u00b7 text\nREPLACE\nNOW\n# Launch note\nSUGGESTED\n# Launch note\nartifact \u00b7 sections \u00b7 1 \u00b7 text\nREPLACE\nNOW\n## Summary   \nThe connector ships this week.   \nIt replaces the manual export step.\nSUGGESTED\n## Summary\nThe connector ships this week.\nIt replaces the manual export step.\nartifact \u00b7 sections \u00b7 2 \u00b7 text\nREPLACE\nNOW\n## Rollout\n   Enable it per organization, then remove the old export job.   \nSUGGESTED\n## Rollout\n   Enable it per organization, then remove the old export job.\nPress a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below.\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\n2 of 3 suggestions accepted \u2014 they ride this decision. A reject records them as not taken.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove",
+   "pageErrors": []
+  }
+ ]
+}

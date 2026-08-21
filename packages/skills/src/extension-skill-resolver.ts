@@ -411,6 +411,53 @@ function pathExists(target: string, strict: boolean): boolean {
 }
 
 /**
+ * skillId → the owning skill extension's SELF-DECLARED `cinatra.displayName`
+ * (cinatra#2841). The map is EMPTY of any package that declares none — this
+ * function reports the declaration, it does not invent a title.
+ *
+ * WHY IT EXISTS. A skill's catalog `name` is its SKILL.md frontmatter `name`,
+ * which is the slug (`blog-post-matcher`); the human title lives one level up,
+ * on the owning extension's manifest (`"Blog Post Matcher Skill"`). Every
+ * surface that RENDERS a skill prints the second — the standing platform rule
+ * that `resolveInstalledDisplayName` encodes and the assignable-skills picker,
+ * the chosen-skills section and the marketplace card all follow. The run-start
+ * recommendation chip-row printed the first, which is the graded §V defect.
+ *
+ * SAME derivation as `buildSkillIdOwnership`: a descriptor's declared skill ids
+ * come from `deriveSkillRegistration`, so a package that impersonates the
+ * reserved chat namespace degrades only itself (skipped, never thrown) and the
+ * ids here are byte-identical to the ones ownership and assignability compute.
+ * First declaration wins, matching that function's collision rule.
+ *
+ * TIER, stated honestly. `resolveInstalledDisplayName` (`@cinatra-ai/extensions`)
+ * owns the full precedence chain — native descriptor name, registry packument
+ * title, then this manifest declaration, then the raw package name. It is not
+ * reachable from here: `@cinatra-ai/extensions` DEPENDS on this package, so a
+ * static import would be a cycle. Only the manifest tier applies to a skill
+ * anyway — `resolveAssignedSkillDisplay`, the sibling surface that labels a
+ * skill through that resolver, already passes `nativeName: null` and
+ * `registryTitle: null` — so this returns the raw declaration and leaves the
+ * LAST RESORT to the consumer, which is the honest split
+ * `assignable-skill-search.ts` already uses for the same field.
+ */
+export function buildSkillIdDisplayNames(
+  descriptors: readonly SkillExtensionDescriptor[],
+): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const ext of descriptors) {
+    if (ext.kind !== "skill") continue;
+    const declared = nonEmptyString(ext.displayName);
+    if (declared === undefined) continue;
+    for (const slug of ext.slugs) {
+      const registration = safeDeriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug);
+      if (!registration) continue;
+      if (!names.has(registration.skillId)) names.set(registration.skillId, declared);
+    }
+  }
+  return names;
+}
+
+/**
  * Walk `<root>/<vendor>/<pkg>` across all extension roots and return a
  * descriptor for every package carrying a `cinatra.kind`. Deduped by package
  * dir realpath (bundled root wins over a same-path install root). Fail-soft.
