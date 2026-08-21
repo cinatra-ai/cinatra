@@ -39,7 +39,7 @@
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided — EXCEPT in
  * the dedicated lane, which refuses to skip (see the guard below). Run with:
- *   SUPABASE_DB_URL='postgresql://dev:devpass@/devdb?host=/path/to/pgsock' \
+ *   SUPABASE_DB_URL='<your scratch-database DSN>' \
  *     pnpm test:async-notification-seam
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";

@@ -108,7 +108,7 @@ describe("cinatra#2882 async seam — the pool config", () => {
 
   it("carries NO statement_timeout — the bound must not ride the startup packet", async () => {
     const { getPostgresAsyncPool } = await seam();
-    getPostgresAsyncPool("postgres://u:p@example.invalid:5432/db");
+    getPostgresAsyncPool("postgres://stub-async-seam/db");
 
     const poolConfig = lastPoolConfig();
     // `toBeUndefined()` would also pass for an explicit `statement_timeout:
@@ -122,7 +122,7 @@ describe("cinatra#2882 async seam — the pool config", () => {
 
   it("bounds the checkout and the read client-side, at the documented ceiling", async () => {
     const { getPostgresAsyncPool } = await seam();
-    getPostgresAsyncPool("postgres://u:p@example.invalid:5432/db");
+    getPostgresAsyncPool("postgres://stub-async-seam/db");
 
     const poolConfig = lastPoolConfig();
     // Both are pg-client-local timers; neither is negotiated with the server,
@@ -134,7 +134,7 @@ describe("cinatra#2882 async seam — the pool config", () => {
 });
 
 describe("cinatra#2882 async seam — the server-side cancel", () => {
-  const CONNECTION_STRING = "postgres://u:p@example.invalid:5432/db";
+  const CONNECTION_STRING = "postgres://stub-async-seam/db";
   const QUERIES = [
     { text: "DELETE FROM notifications WHERE id = $1", values: ["a"] },
     { text: "DELETE FROM notifications WHERE id = $1", values: ["b"] },
@@ -182,7 +182,7 @@ describe("cinatra#2882 async seam — the server-side cancel", () => {
 });
 
 describe("cinatra#2882 async seam — the ceiling's upper bound", () => {
-  const CONNECTION_STRING = "postgres://u:p@example.invalid:5432/db";
+  const CONNECTION_STRING = "postgres://stub-async-seam/db";
 
   // The clamp in `postgres-async.ts`. Restated as a literal on purpose: an
   // arm that imported the constant would follow it wherever a later edit moved

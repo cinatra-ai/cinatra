@@ -16,7 +16,7 @@ import * as path from "node:path";
 // This config REFUSES to run without a real `SUPABASE_DB_URL` (see the
 // CINATRA_ASYNC_NOTIFICATION_SEAM_REALDB note on `env` below) — point it at a
 // scratch Postgres:
-//   SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5634/postgres \
+//   SUPABASE_DB_URL='<your scratch-database DSN>' \
 //     pnpm test:async-notification-seam
 // The suites themselves still self-skip without one, so any OTHER config that
 // picks them up (the root tier under CINATRA_DB_INTEGRATION_TESTS=1, say) keeps
