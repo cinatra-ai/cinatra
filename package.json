@@ -300,6 +300,7 @@
     "test:unknown-cost": "vitest run --config vitest.integration-2669.config.ts",
     "test:week-window": "vitest run --config vitest.integration-2691.config.ts",
     "test:install-semantics": "vitest run --config vitest.integration-2696.config.ts",
+    "test:async-notification-seam": "vitest run --config vitest.integration-2882.config.ts",
     "test:e2e:render-smoke": "playwright test -c tests/e2e/config/render-smoke.config.ts",
     "test:e2e:dev-hmr-smoke": "playwright test -c tests/e2e/config/dev-hmr-smoke.config.ts",
     "test:e2e:marketplace-install": "playwright test -c tests/e2e/config/marketplace-install.config.ts",
