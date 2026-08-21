@@ -68,6 +68,28 @@ async function seam() {
   return await import("@/lib/postgres-async");
 }
 
+/**
+ * The seam re-evaluated with `POSTGRES_ASYNC_TIMEOUT_MS` set to `value`.
+ *
+ * The ceiling is read ONCE at module load, so an env arm cannot just assign to
+ * `process.env` — it has to drop the module registry and re-import. Both the
+ * variable and the registry go back afterwards, so the tests above and below
+ * still see a seam built from `BOUND_MS`. Resetting the registry does not
+ * disturb `vi.mock`: the factory is re-applied on re-import and still
+ * delegates to the same `getPooledDbMock`.
+ */
+async function seamWithTimeoutEnv(value: string) {
+  const previous = process.env.POSTGRES_ASYNC_TIMEOUT_MS;
+  process.env.POSTGRES_ASYNC_TIMEOUT_MS = value;
+  vi.resetModules();
+  try {
+    return await import("@/lib/postgres-async");
+  } finally {
+    process.env.POSTGRES_ASYNC_TIMEOUT_MS = previous;
+    vi.resetModules();
+  }
+}
+
 beforeEach(() => {
   getPooledDbMock.mockReset();
   installFakePool();
@@ -156,5 +178,90 @@ describe("cinatra#2882 async seam — the server-side cancel", () => {
     // warning, and the session-scoped form it would have to become is exactly
     // the pooled-connection state leak this seam avoids.
     expect(texts.some((t) => /^BEGIN/i.test(t))).toBe(false);
+  });
+});
+
+describe("cinatra#2882 async seam — the ceiling's upper bound", () => {
+  const CONNECTION_STRING = "postgres://u:p@example.invalid:5432/db";
+
+  // The clamp in `postgres-async.ts`. Restated as a literal on purpose: an
+  // arm that imported the constant would follow it wherever a later edit moved
+  // it, and the POINT of these arms is that the number is a specific one.
+  const MAX_TIMEOUT_MS = 3_600_000;
+
+  // Postgres's `statement_timeout` GUC is a signed 32-bit integer of
+  // milliseconds; pg arms `query_timeout` / `connectionTimeoutMillis` with
+  // `setTimeout`, whose delay is the same width. Above this, the server
+  // refuses the SET and Node clamps the timer to 1ms instead.
+  const INT32_MAX = 2_147_483_647;
+
+  async function poolConfigForEnv(value: string): Promise<PoolConfig> {
+    const { getPostgresAsyncPool } = await seamWithTimeoutEnv(value);
+    getPostgresAsyncPool(CONNECTION_STRING);
+    return lastPoolConfig();
+  }
+
+  it("clamps an over-int32 env value to the ceiling instead of arming a 1ms timer", async () => {
+    // One past `INT32_MAX`: unclamped, `setTimeout` would clamp it to 1ms and
+    // EVERY query would read-timeout instantly.
+    const poolConfig = await poolConfigForEnv(String(INT32_MAX + 1));
+
+    expect(poolConfig.query_timeout).toBe(MAX_TIMEOUT_MS);
+    expect(poolConfig.connectionTimeoutMillis).toBe(MAX_TIMEOUT_MS);
+  });
+
+  it("clamps a wildly over-limit env value the same way", async () => {
+    const poolConfig = await poolConfigForEnv(String(Number.MAX_SAFE_INTEGER));
+
+    expect(poolConfig.query_timeout).toBe(MAX_TIMEOUT_MS);
+    expect(poolConfig.connectionTimeoutMillis).toBe(MAX_TIMEOUT_MS);
+  });
+
+  it("clamps a finite EXPONENT-form value — `Number.isFinite` alone lets it through", async () => {
+    // `Number("1e10")` is 10_000_000_000: finite and positive, so the shape
+    // validation passes it, and it is ~4.7x over the int32 limit.
+    const poolConfig = await poolConfigForEnv("1e10");
+
+    expect(poolConfig.query_timeout).toBe(MAX_TIMEOUT_MS);
+    expect(poolConfig.connectionTimeoutMillis).toBe(MAX_TIMEOUT_MS);
+  });
+
+  it("falls back to the default for an exponent-form value that overflows to Infinity", async () => {
+    // `Number("1e400")` is `Infinity` — rejected by the shape validation, not
+    // by the clamp, and the fallback is the documented 30s default.
+    const poolConfig = await poolConfigForEnv("1e400");
+
+    expect(poolConfig.query_timeout).toBe(30_000);
+    expect(poolConfig.connectionTimeoutMillis).toBe(30_000);
+  });
+
+  it("leaves a value UNDER the ceiling alone — the clamp is a bound, not an override", async () => {
+    // 90s is the largest ceiling this repo actually asks for anywhere (the
+    // sibling sync ceiling, under a Turbopack-starved dev server). Nothing
+    // real should ever be reshaped by the clamp.
+    const poolConfig = await poolConfigForEnv("90000");
+
+    expect(poolConfig.query_timeout).toBe(90_000);
+    expect(poolConfig.connectionTimeoutMillis).toBe(90_000);
+  });
+
+  it("keeps the clamped SET LOCAL statement_timeout inside the GUC's int32 range", async () => {
+    const { texts } = installFakePool();
+    const { runPostgresQueriesAsync } = await seamWithTimeoutEnv(
+      String(Number.MAX_SAFE_INTEGER),
+    );
+
+    await runPostgresQueriesAsync({
+      connectionString: CONNECTION_STRING,
+      queries: [{ text: "SELECT 1" }],
+      transaction: true,
+    });
+
+    // Unclamped this would be `floor(MAX_SAFE_INTEGER * 0.9)`, and Postgres
+    // would refuse the SET — failing the transaction on the round trip that
+    // carries the BEGIN, before any caller query ran.
+    const ms = Number(/statement_timeout = (\d+)/.exec(texts[0])?.[1]);
+    expect(ms).toBe(Math.floor(MAX_TIMEOUT_MS * 0.9));
+    expect(ms).toBeLessThanOrEqual(INT32_MAX);
   });
 });
