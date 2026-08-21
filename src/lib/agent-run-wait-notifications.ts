@@ -396,10 +396,15 @@ export const runWaitNotifier: RunWaitNotifier = {
       const run = await readAgentRunById(runId);
       const userId = run?.runBy;
       if (!userId) return;
-      const { deleteNotificationsByDedupeKeyForUser } = await import(
+      // cinatra#2882 — the ASYNC seam. The synchronous twin parks this thread
+      // on `Atomics.wait` for the whole round trip (up to
+      // POSTGRES_SYNC_TIMEOUT_MS, 30s), freezing every timer, abort listener
+      // and microtask in the process; this handler is already `async`, so it
+      // was paying that for nothing. Same statement, same key-scoped guard.
+      const { deleteNotificationsByDedupeKeyForUserAsync } = await import(
         "@cinatra-ai/notifications/server"
       );
-      deleteNotificationsByDedupeKeyForUser({
+      await deleteNotificationsByDedupeKeyForUserAsync({
         userId,
         dedupeKey: autoGateOpenDedupeKey(runId, reviewTaskId),
       });
@@ -427,10 +432,11 @@ export const runWaitNotifier: RunWaitNotifier = {
       // human `pending_input` from an overloaded one, so re-deriving "still
       // waiting?" here would mishandle the overload; the seam classifier already
       // owns that decision. Same primitive as the #1057 config-needs clear.
-      const { deleteNotificationsByDedupeKeyForUser } = await import(
+      // cinatra#2882 — async seam; see onAutoGateResolved above.
+      const { deleteNotificationsByDedupeKeyForUserAsync } = await import(
         "@cinatra-ai/notifications/server"
       );
-      deleteNotificationsByDedupeKeyForUser({
+      await deleteNotificationsByDedupeKeyForUserAsync({
         userId,
         dedupeKey: runAwaitingHumanDedupeKey(runId),
       });
@@ -466,7 +472,8 @@ export const runWaitNotifier: RunWaitNotifier = {
       const {
         resolveAgentRunHref,
         createNotificationForRecipient,
-        deleteNotificationsByDedupeKeyForUser,
+        // cinatra#2882 — async seam; see onAutoGateResolved above.
+        deleteNotificationsByDedupeKeyForUserAsync,
       } = await import("@cinatra-ai/notifications/server");
       // Clear the resolved (now-stale) awaiting-human row FIRST — same
       // idempotent delete-by-key primitive as onLeaveHumanWait — so a reader
@@ -474,7 +481,7 @@ export const runWaitNotifier: RunWaitNotifier = {
       // this module: an insert-then-swallowed-delete-error still leaves the
       // durable failure row behind (the awaiting-human row is a delete-only
       // key that a future onEnterHumanWait call would collide on anyway).
-      deleteNotificationsByDedupeKeyForUser({
+      await deleteNotificationsByDedupeKeyForUserAsync({
         userId,
         dedupeKey: runAwaitingHumanDedupeKey(runId),
       });

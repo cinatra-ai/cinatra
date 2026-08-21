@@ -29,8 +29,14 @@ const createNotificationForRecipient = vi.fn(
     { id: "notif-1" },
   ],
 );
-const deleteNotificationsByDedupeKeyForUser = vi.fn(
-  (_args: { userId: string; dedupeKey: string }): void => {},
+// cinatra#2882 — the notifier clears through the ASYNC seam now. Its sync twin
+// is still exported by the package (genuinely synchronous hosts keep it), but a
+// notifier that reached for it would be parking this thread on `Atomics.wait`,
+// so this mock deliberately supplies ONLY the async name: a regression back to
+// the sync call would destructure `undefined` and fail here rather than pass
+// quietly.
+const deleteNotificationsByDedupeKeyForUserAsync = vi.fn(
+  async (_args: { userId: string; dedupeKey: string }): Promise<void> => {},
 );
 const resolveAgentRunHref = vi.fn(async (_jobData: unknown) => "/agents/acme/sales/R1");
 // The canonical "which gate is this run paused on" derivation. The notifier
@@ -54,7 +60,7 @@ vi.mock("@/lib/assistant-thread-store", () => ({
 vi.mock("@cinatra-ai/agents", () => ({ readAgentRunById, deriveRunHitlContext }));
 vi.mock("@cinatra-ai/notifications/server", () => ({
   createNotificationForRecipient,
-  deleteNotificationsByDedupeKeyForUser,
+  deleteNotificationsByDedupeKeyForUserAsync,
   resolveAgentRunHref,
 }));
 
@@ -74,7 +80,7 @@ beforeEach(() => {
   deriveRunHitlContext.mockResolvedValue(null);
   createNotificationForRecipient.mockReset();
   createNotificationForRecipient.mockResolvedValue([{ id: "notif-1" }]);
-  deleteNotificationsByDedupeKeyForUser.mockReset();
+  deleteNotificationsByDedupeKeyForUserAsync.mockReset();
   resolveAgentRunHref.mockReset();
   resolveAgentRunHref.mockResolvedValue("/agents/acme/sales/R1");
   findChatConversationPathForAgentRun.mockReset();
@@ -353,7 +359,7 @@ describe("runWaitNotifier.onLeaveHumanWait — clear-on-resolve", () => {
 
     await runWaitNotifier.onLeaveHumanWait({ runId: "R1" });
 
-    expect(deleteNotificationsByDedupeKeyForUser).toHaveBeenCalledWith({
+    expect(deleteNotificationsByDedupeKeyForUserAsync).toHaveBeenCalledWith({
       userId: "U1",
       dedupeKey: "run-awaiting-human:R1",
     });
@@ -364,7 +370,7 @@ describe("runWaitNotifier.onLeaveHumanWait — clear-on-resolve", () => {
 
     await runWaitNotifier.onLeaveHumanWait({ runId: "R1" });
 
-    expect(deleteNotificationsByDedupeKeyForUser).not.toHaveBeenCalled();
+    expect(deleteNotificationsByDedupeKeyForUserAsync).not.toHaveBeenCalled();
   });
 
   it("never throws when the run lookup fails (best-effort)", async () => {
@@ -374,7 +380,7 @@ describe("runWaitNotifier.onLeaveHumanWait — clear-on-resolve", () => {
     await expect(
       runWaitNotifier.onLeaveHumanWait({ runId: "R1" }),
     ).resolves.toBeUndefined();
-    expect(deleteNotificationsByDedupeKeyForUser).not.toHaveBeenCalled();
+    expect(deleteNotificationsByDedupeKeyForUserAsync).not.toHaveBeenCalled();
   });
 });
 
@@ -428,7 +434,7 @@ describe("runWaitNotifier.onHumanWaitFailed — supersede-on-failure", () => {
     await runWaitNotifier.onHumanWaitFailed!({ runId: "R1" });
 
     // The approval row is superseded, not left dangling.
-    expect(deleteNotificationsByDedupeKeyForUser).toHaveBeenCalledWith({
+    expect(deleteNotificationsByDedupeKeyForUserAsync).toHaveBeenCalledWith({
       userId: "U1",
       dedupeKey: "run-awaiting-human:R1",
     });
@@ -448,7 +454,7 @@ describe("runWaitNotifier.onHumanWaitFailed — supersede-on-failure", () => {
 
     await runWaitNotifier.onHumanWaitFailed!({ runId: "R1" });
 
-    expect(deleteNotificationsByDedupeKeyForUser).not.toHaveBeenCalled();
+    expect(deleteNotificationsByDedupeKeyForUserAsync).not.toHaveBeenCalled();
     expect(createNotificationForRecipient).not.toHaveBeenCalled();
   });
 
@@ -465,7 +471,7 @@ describe("runWaitNotifier.onHumanWaitFailed — supersede-on-failure", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await expect(runWaitNotifier.onHumanWaitFailed!({ runId: "R1" })).resolves.toBeUndefined();
-    expect(deleteNotificationsByDedupeKeyForUser).not.toHaveBeenCalled();
+    expect(deleteNotificationsByDedupeKeyForUserAsync).not.toHaveBeenCalled();
     expect(createNotificationForRecipient).not.toHaveBeenCalled();
   });
 });
@@ -543,7 +549,7 @@ describe("runWaitNotifier.onAutoGateResolved — clear on terminal decision", ()
   it("hard-deletes the initiator's row by the per-(run, task) auto-gate key", async () => {
     readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: null, status: "completed" });
     await runWaitNotifier.onAutoGateResolved!({ runId: "R1", reviewTaskId: "auto-review-abc" });
-    expect(deleteNotificationsByDedupeKeyForUser).toHaveBeenCalledWith({
+    expect(deleteNotificationsByDedupeKeyForUserAsync).toHaveBeenCalledWith({
       userId: "user-1",
       dedupeKey: "run-awaiting-human:auto:R1:auto-review-abc",
     });
@@ -552,6 +558,6 @@ describe("runWaitNotifier.onAutoGateResolved — clear on terminal decision", ()
   it("skips the clear when the run has no initiator", async () => {
     readAgentRunById.mockResolvedValue({ id: "R1", runBy: null, title: null, status: "completed" });
     await runWaitNotifier.onAutoGateResolved!({ runId: "R1", reviewTaskId: "t" });
-    expect(deleteNotificationsByDedupeKeyForUser).not.toHaveBeenCalled();
+    expect(deleteNotificationsByDedupeKeyForUserAsync).not.toHaveBeenCalled();
   });
 });
