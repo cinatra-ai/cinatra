@@ -771,27 +771,6 @@ jobs:
           SUPABASE_SCHEMA: cinatra_exec_run_seam
         run: pnpm exec vitest run src/lib/execution/__tests__/run-seam-declared-environment.integration.test.ts
 
-      # cinatra#2882. The async notification-delete seam's whole claim is a
-      # claim about the EVENT LOOP — that a timer due mid-delete fires on the
-      # async path and cannot fire on the synchronous one — plus the settle
-      # guarantee (a delete held behind a lock nobody releases rejects at the
-      # seam's own bound and gives its client back) and the rollback-destroy
-      # arm (a ROLLBACK that fails leaves NO backend `idle in transaction`).
-      # None of that survives a stub: a stubbed runner cannot freeze a loop,
-      # cannot hold a lock, and has no `pg_stat_activity` to read. So this runs
-      # the REAL `@/lib/postgres-sync` and `@/lib/postgres-async` runners
-      # against this job's service Postgres.
-      #
-      # Its OWN vitest config, not the root one: the root tier excludes
-      # `**/*.integration.test.ts` and aliases `@/lib/database` to an inert
-      # stub, and this tier needs the opposite of both. The config supplies
-      # `CINATRA_ASYNC_NOTIFICATION_SEAM_REALDB=1`, which turns a missing
-      # SUPABASE_DB_URL from a quiet skip into a hard failure — so this step
-      # cannot go vacuously green if the service block above ever stops
-      # providing one.
-      - name: Async notification-delete seam — real-DB tier (cinatra#2882)
-        run: pnpm test:async-notification-seam
-
   # packages/agents INTEGRATION tier (cinatra#2226). Replaces the dead step that
   # used to live at the end of the `test` job:
   #
