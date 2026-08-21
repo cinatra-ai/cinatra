@@ -76,7 +76,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import React from "react";
 import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2004,14 +2004,34 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
       text
         .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
         .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
-    const surface = ["chat-page.tsx", "ag-ui-chat-client.ts", "chat-routing.ts", "actions.ts"];
-    for (const file of surface) {
-      const src = stripComments(readFileSync(path.join(process.cwd(), "packages/chat/src", file), "utf8"));
-      expect(src, `${file} carries a truncation assertion`).not.toContain("removedMessageIds");
+    //
+    // THE SURFACE IS DERIVED, NOT LISTED (codex round 3, F2). A hard-coded file
+    // list states a whole-surface property it does not check: a new writer in an
+    // unlisted module would pass it. So the set is every module in the /chat
+    // package that actually ISSUES a thread save, found by scanning for the two
+    // save entry points, minus the edit flow itself. The shared conversation
+    // column's own write builder (`conversation-services.ts`) is deliberately NOT
+    // in that set and deliberately DOES carry the field: the widget surface truly
+    // truncates too, and its route authorizes the tombstone the same way.
+    const chatSrc = path.join(process.cwd(), "packages/chat/src");
+    const savers = readdirSync(chatSrc)
+      .filter((name) => /\.tsx?$/.test(name) && name !== "message-edit-flow.ts")
+      .map((name) => ({ name, src: stripComments(readFileSync(path.join(chatSrc, name), "utf8")) }))
+      .filter(
+        ({ src }) => src.includes("saveChatThreadInOrder(") || src.includes("saveChatThreadViaFetch("),
+      );
+    // The scan must FIND the savers, or the loop below proves nothing.
+    expect(savers.map((s) => s.name).sort()).toEqual(["ag-ui-chat-client.ts", "chat-page.tsx"]);
+    // ...and the routing/dispatch modules the field must never reach either.
+    for (const name of ["chat-routing.ts", "actions.ts"]) {
+      savers.push({ name, src: stripComments(readFileSync(path.join(chatSrc, name), "utf8")) });
+    }
+    for (const { name, src } of savers) {
+      expect(src, `${name} carries a truncation assertion`).not.toContain("removedMessageIds");
       // Same statement for the STREAMING half, and it matters more there: a run
       // id needs no mirror row to reach a run-bound row, so an ordinary save that
       // carried one would tombstone a turn nobody removed.
-      expect(src, `${file} carries a run-id truncation assertion`).not.toContain("removedRunIds");
+      expect(src, `${name} carries a run-id truncation assertion`).not.toContain("removedRunIds");
     }
   });
 

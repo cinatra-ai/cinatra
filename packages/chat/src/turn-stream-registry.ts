@@ -114,6 +114,41 @@
  * because a missed removal costs a turn that folds back in and a wrong one costs
  * a kept turn its card forever.
  *
+ * ── THE RESIDUAL THIS LEAVES, STATED RATHER THAN DISCOVERED ──────────────────
+ *
+ * A turn is nameable by its run only once the wire has named that run, and the
+ * anchor is only checkable while the anchor is still in the transcript. An edit
+ * dispatched in the window BETWEEN a turn's dispatch and its `RUN_STARTED`
+ * therefore removes that turn's prompt while the turn has no run to assert; the
+ * run arrives afterwards, and by then no later edit's removed set can contain
+ * the prompt, because that prompt is gone from the transcript. EVERY turn caught
+ * in that window keeps its run-bound row — Slack dispatches turns concurrently,
+ * so one edit can catch several at once — and each of them folds back in on the
+ * next reload: the pre-cinatra#2823 behaviour, for exactly those turns.
+ *
+ * IT IS NOT CLOSED HERE, AND THE REASON IS THE TOMBSTONE'S OWN RULE. The obvious
+ * close is to CONDEMN a turn when its anchor is first seen in a removed set and
+ * offer its run whenever that run shows up. But a Slack turn's reveal can COMMIT
+ * into the transcript AFTER the truncation — its drive appends to whatever the
+ * thread holds then — so a condemned turn can be on screen, with a mirror row of
+ * its own, by the time a later edit offers its run. Tombstoning it then costs
+ * that visible turn its card permanently, and
+ * `src/lib/assistant-turn-supersede.ts` states the governing trade outright: a
+ * refused tombstone costs a turn that has to be removed again, an over-eager one
+ * costs a kept turn its card forever. Clearing the latch on
+ * `noteCommittedTranscript` narrows the window but does not remove it, and it
+ * buys that by re-introducing the exact class of over-reach the anchor exists to
+ * prevent — for a mechanism that, by construction, can only ever help a
+ * SUBSEQUENT edit.
+ *
+ * The honest close is to assert the removal at the moment the run id arrives,
+ * which is a SECOND save carrying the truncation intent — and "edit-and-resend is
+ * the only /chat save that asserts a truncation" is a pinned invariant of this
+ * leg, because an ordinary save carrying the field is how a stale tab tombstones
+ * turns it never observed. That is a change to the intent's CONTRACT. So the
+ * residual is PINNED in `__tests__/turn-stream-registry.test.ts` rather than
+ * half-closed here.
+ *
  * ── THE INSTANCE TOKEN, CONTINUED ────────────────────────────────────────────
  *
  * THE INSTANCE *IS* THE GENERATION, which is why there is no generation counter

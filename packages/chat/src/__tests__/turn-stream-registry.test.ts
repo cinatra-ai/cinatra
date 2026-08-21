@@ -382,3 +382,40 @@ describe("the run id — the identity the server shares with these turns", () =>
     expect(streams.retainedIdCount()).toBe(0);
   });
 });
+
+describe("the run-id residual: an edit inside the pre-RUN_STARTED window", () => {
+  // PINNED, not fixed. A run is assertable only once the wire names it, and an
+  // anchor is checkable only while the prompt is still in the transcript. An
+  // edit dispatched between a turn's dispatch and its `RUN_STARTED` removes the
+  // prompt while the turn has no run to offer; the run arrives afterwards, and
+  // no later edit's removed set can carry a prompt the transcript no longer has.
+  // EVERY turn caught in that window keeps its run-bound row and folds back in —
+  // Slack dispatches concurrently, so one edit can catch several at once.
+  //
+  // The tempting close — CONDEMN the turn when its anchor is first removed, and
+  // offer the run whenever it shows up — re-opens the hole the anchor exists
+  // for: a Slack reveal can COMMIT into the transcript after the truncation, so
+  // a condemned turn can be on screen, with a mirror row, when a later edit
+  // offers its run, and tombstoning it then costs that visible turn its card
+  // permanently. That is the wrong side of the trade the tombstone module states
+  // outright. Closing this honestly means asserting the removal when the run id
+  // arrives, i.e. a SECOND save carrying the intent, and "the edit is the only
+  // save that asserts a truncation" is a pinned invariant of this leg.
+
+  it("a turn whose run arrives AFTER its anchor was removed is never offered", () => {
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a-slow-start", controller(), "u2");
+    // The edit happens FIRST — the turn has no run yet, so it offers none.
+    expect(streams.removableRunIds(new Set(["u2", "a-slow-start"]))).toEqual([]);
+    // ...and RUN_STARTED lands afterwards.
+    expect(streams.noteRunId(token, "run-slow")).toBe(true);
+    // A later edit's removed set cannot contain `u2` — the transcript no longer
+    // has it — so the run stays withheld.
+    expect(
+      streams.removableRunIds(new Set(["u3", "a-slow-start"])),
+      "the residual closed itself — the registry grew a way to offer a run whose anchor is gone; re-read the residual note in turn-stream-registry.ts, because the same mechanism is what would tombstone a turn that revealed after the truncation",
+    ).toEqual([]);
+    // The turn is still NAMED by its bubble id, which is what it always was.
+    expect(streams.removableTurnIds()).toEqual(["a-slow-start"]);
+  });
+});
