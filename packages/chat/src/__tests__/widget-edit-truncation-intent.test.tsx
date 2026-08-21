@@ -15,7 +15,6 @@
  * These arms are on the hook itself, which is where the truncation happens, so
  * they state the column's own contract rather than one host's wiring of it.
  */
-import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 
