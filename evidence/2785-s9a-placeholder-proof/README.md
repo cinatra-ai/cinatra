@@ -57,7 +57,9 @@ writes nothing. The provider cannot forge a card through the sink shown here —
 the envelope is built inside the tool handler, and the recognizer accepts it only
 from the server label the runtime stamps from a dispatch it actually performed.
 The required gate re-ran after the change and its output is byte-identical to
-`required-gate-run.txt`, the copy recorded before it.
+`required-gate-run.txt`, the copy recorded before it. (That sentence describes
+S9a's own change. cinatra#2789 later drew the verification card and re-recorded
+the transcript with it — see the table below.)
 
 **One sentence in the pull-request body is now narrower than the tree.** That
 body says the product diff against the default branch is empty. It no longer is:
@@ -110,7 +112,7 @@ taken on trust.
 |---|---|---|
 | `S9a-a__chat_thread__schedule-proposal-placeholder.png` | **development** | A scheduling request typed into the real composer. The assistant calls `schedule_proposal_render`, and what draws in the assistant turn is the S1 shell: a bordered strip reading "Schedule proposal / Waiting for your decision." No option rows, no Adjust, no Confirm. The thread and the composer are in frame. |
 | `S9a-b__chat_thread__verification-placeholder.png` | **development** | The verification reading asked for by its ref, in a real conversation. The assistant calls `verification_record_render`, and what draws is the same shell: "Verification / Advisory reading." No outcome pill, no revisions, no fields. Thread and composer in frame. |
-| `required-gate-run.txt` | — | The verbatim run of the required gate, exit 1, five findings unfiltered, naming both undrawn kinds. |
+| `required-gate-run.txt` | — | The verbatim run of the required gate, exit 1, findings unfiltered. **Re-recorded by cinatra#2789 (S9e), which drew the verification card.** When S9a recorded this file it carried five findings and named both undrawn kinds; it now carries four and names one, because `verification_summary` is DRAWN. The file is not a historical quote — `chat-hitl-one-card-gate.test.mjs` asserts it is a byte-for-byte fresh run of the live gate, so it tracks the gate by design and a stale copy is a red test. The two captures above are dated evidence of the moment S9a proved and are unchanged. |
 
 `capture-a-log.txt` and `capture-b-log.txt` were printed by the two capture
 programs committed beside them — `capture-a-schedule.mjs` and
