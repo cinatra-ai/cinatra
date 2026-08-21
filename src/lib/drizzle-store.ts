@@ -16,7 +16,7 @@ import {
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-thread-schema"; // + cinatra#2240 per-turn skill-delivery record (same pure-strings leaf as its FK parent)
 import { triggerSchemaQueries } from "@/lib/trigger-schema"; // cinatra#2569 — the trigger lifecycle's DDL leaf
-import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 — the two NET-NEW proposal tables, born in their leaf
+import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 (+#2837) — the three NET-NEW proposal tables, born in their leaf
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";

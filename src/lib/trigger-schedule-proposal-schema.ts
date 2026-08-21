@@ -2,7 +2,7 @@
 // epic #2564 S5) — a pure string builder with ZERO imports (a synchronous leaf,
 // safe for `drizzle-store.ts`'s synchronous composition).
 //
-// BORN HERE, not moved here. Both tables are NET-NEW, so this leaf is purely
+// BORN HERE, not moved here. All three tables are NET-NEW, so this leaf is purely
 // additive to the bootstrap text — the same pattern as
 // `assistant-thread-schema.ts` and `extension-grant-schema.ts`, and the reason
 // matters: the schema-migration gate reads the executed DDL out of
@@ -39,11 +39,11 @@
 //     one-shot fire is lost. Full argument in
 //     `packages/agents/src/trigger-schedule-proposal-store.ts`.
 //
-// The first two cascade from `agent_runs(id)` and are keyed one row per run, so
-// deleting a run collects them and neither grows independently of the run
-// population.
+// THE CONSUME EDGE AND THE INSTALL OUTBOX cascade from `agent_runs(id)` and are
+// keyed one row per run, so deleting a run collects them and neither grows
+// independently of the run population.
 //
-// THE THIRD CANNOT, and that is a property of what it is for rather than an
+// THE RATCHET CANNOT, and that is a property of what it is for rather than an
 // oversight: the ratchet row exists precisely BEFORE any run does — a lineage
 // that is re-proposed and never confirmed has no run to hang from, and the row
 // whose whole job is to bound minting cannot be keyed on the thing minting has

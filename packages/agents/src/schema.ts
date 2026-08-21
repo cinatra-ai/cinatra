@@ -1197,12 +1197,13 @@ export const agentRunTriggers = cinatraSchema.table("agent_run_triggers", {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// The trigger schedule PROPOSAL tables (cinatra#2569, epic #2564 S5).
-// DDL twin: the two CREATE TABLE statements in buildCreateStoreSchemaQueries
+// The trigger schedule PROPOSAL tables (cinatra#2569, epic #2564 S5; the
+// lineage ratchet cinatra#2837).
+// DDL twin: the THREE CREATE TABLE statements in buildCreateStoreSchemaQueries
 // (src/lib/drizzle-store.ts), immediately after agent_run_triggers.
 //
-// Both are NEW tables — additive under migrations/README.md, so they ride the
-// idempotent bootstrap DDL and carry no numbered migration artifact.
+// All three are NEW tables — additive under migrations/README.md, so they ride
+// the idempotent bootstrap DDL and carry no numbered migration artifact.
 // ---------------------------------------------------------------------------
 
 /**
