@@ -1013,6 +1013,67 @@ describe("edit-and-resend does not resurrect the turns the user removed", () => 
     ).toEqual([editedPrompt.id]);
   });
 
+  // ── THE INTENT'S REACH IS BOUNDED BY THE MIRROR ROW ───────────────────────
+  // The tombstone links an asserted message id to a run-bound row THROUGH the
+  // removed mirror row: `buildSupersedeRunBoundTurnsQuery` selects the removed
+  // rows first and matches the run-bound row on identity read out of THEIR
+  // content (a shared tool-call id, or a slot-bound view key). A turn that never
+  // landed in a saved transcript has no mirror row, so an assertion naming it
+  // carries an id the server has never seen and nothing to match on — the
+  // statement is well-formed and simply supersedes nothing.
+  //
+  // That is exactly the shape of every turn the client names from its stream
+  // registry rather than from its transcript (`packages/chat/src/turn-stream-
+  // registry.ts`): a Slack turn still streaming, one that ENDED into a reveal the
+  // render had not committed, and an aborted one that never revealed at all.
+  // Naming them is still right and still necessary — it is what makes the
+  // removal assertable the moment a mirror row does exist, and over-naming can
+  // only ever narrow what the server removes — but it does NOT by itself make
+  // the removal stick for a turn the server only ever saw as a run.
+  //
+  // Pinned rather than left to be rediscovered. Closing it needs the client to
+  // assert something the server can actually key on for a turn with no mirror
+  // row (its run id, or the tool-call ids it watched stream), which is a change
+  // to the intent's CONTRACT and not something to smuggle into a key change.
+
+  it("an asserted turn with NO mirror row is not superseded — the reach, pinned", async () => {
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-reach-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: "Please handle it.",
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    // DELIBERATELY NO whole-transcript save carrying the assistant turn. The
+    // run-bound row exists — it is minted when the run STARTS — but the turn
+    // never entered a saved transcript, so it has no mirror row. This is the
+    // in-flight / ended-uncommitted / aborted shape.
+    const inFlightAssistantId = `a-${randomUUID()}`;
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    // The edit asserts the removal, naming the turn exactly as the registry
+    // union now lets it (round 8, F3).
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      removedMessageIds: [userMessage.id, inFlightAssistantId],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    // THE RESIDUAL: the run-bound turn still folds in, and ABOVE the edited
+    // prompt — its stamp is taken at run start, the edited prompt's is fresh.
+    expect(
+      reloaded.map((m) => m.role),
+      "an asserted turn with no mirror row was superseded — the tombstone grew a link it did not have; re-read the reach note above, this pin is now understating what the intent can do",
+    ).toEqual(["assistant", "user"]);
+    // The edited prompt is BELOW it, and the survivor is the run-bound row
+    // itself — not the id the client asserted, which the server never held.
+    expect(reloaded[1].id).toBe(editedPrompt.id);
+    expect(reloaded[0].id).not.toBe(inFlightAssistantId);
+    expect(reloaded[0].content).toBe(drive.durable.content);
+  });
+
   it("a LOST save still repairs — nothing was deleted, so nothing was superseded", () => {
     // The other side of the separation, and the reason it cannot be "the row is
     // absent from the payload". A save that never carried the assistant turn is
@@ -1719,10 +1780,11 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     );
     expect(flow).toContain("export async function editAndResend(");
     // It derives the assertion from the truncation it just performed — the edited
-    // message and every successor, plus any turn still streaming — rather than
-    // restating a list by hand.
+    // message and every successor, plus every turn the registry says is not
+    // provably in the transcript (in flight, or ended into a reveal this render
+    // has not committed) — rather than restating a list by hand.
     expect(flow).toContain(
-      "const removedMessageIds = buildTruncationIntent(messages, idx, deps.streamingAssistantIds());",
+      "const removedMessageIds = buildTruncationIntent(messages, idx, deps.removableTurnIds());",
     );
     // ...and posts it with the truncated transcript, in the same save.
     expect(flow).toContain("messages: truncated");

@@ -27,15 +27,26 @@ import type { UiMessage as Message } from "./types";
  * reload folds it back in above the edited prompt: the removed turn returns,
  * permanently, which is the exact defect this leg exists to remove.
  *
- * Every in-flight turn is a successor of the edit point (a revealed turn appends
- * to the tail, and the tail is at or below `fromIndex` once the edit truncates),
- * so the whole in-flight set is named. Ids are de-duplicated and order is the
- * transcript's, then the streams' — the server treats the intent as a SET.
+ * AND IT MUST REACH A TURN WHOSE STREAM HAS JUST ENDED. The drive's cleanup runs
+ * in a `finally`, synchronously after the reveal's `setMessages` is queued and
+ * before React commits it — so a turn can be gone from the in-flight registry
+ * while the render's `messages` snapshot still predates its reveal. Read from
+ * those two sources alone it is in NEITHER, and it goes unnamed. `removableTurnIds`
+ * is therefore the registry's OWN union of in-flight and ended-but-uncommitted
+ * turns (`./turn-stream-registry`), which releases an id only once a committed
+ * transcript carries it.
+ *
+ * Every such turn is a successor of the edit point (a revealed turn appends to
+ * the tail, and the tail is at or below `fromIndex` once the edit truncates), so
+ * the whole set is named. Ids are de-duplicated and order is the transcript's,
+ * then the registry's — the server treats the intent as a SET. Over-naming is the
+ * safe direction: the tombstone intersects the intent with the rows the payload
+ * no longer carries, so an id it cannot match simply does nothing.
  */
 export function buildTruncationIntent(
   messages: Message[],
   fromIndex: number,
-  streamingAssistantIds: Iterable<string>,
+  removableTurnIds: Iterable<string>,
 ): string[] {
   const ids: string[] = [];
   const seen = new Set<string>();
@@ -45,7 +56,7 @@ export function buildTruncationIntent(
     seen.add(message.id);
     ids.push(message.id);
   }
-  for (const id of streamingAssistantIds) {
+  for (const id of removableTurnIds) {
     if (typeof id !== "string" || id.length === 0) continue;
     if (seen.has(id)) continue;
     seen.add(id);

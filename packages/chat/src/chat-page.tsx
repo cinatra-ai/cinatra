@@ -62,6 +62,7 @@ import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as Threa
 import type { ChatViewComponents } from "./chat-messages-view";
 import type { ChatPageProps } from "./chat-page-props";
 import { editAndResend as runEditAndResend } from "./message-edit-flow";
+import { createTurnStreamRegistry } from "./turn-stream-registry";
 import {
   saveChatThreadInOrder,
   fetchThreadList,
@@ -233,8 +234,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // list has not arrived yet (#283 — the typed created_at column is immutable
   // on conflict, but readChatThreadsFromDatabase reads the payload JSON).
   const loadedThreadCreatedAtRef = useRef<string | null>(null);
-  // Map of assistantId → AbortController for every in-flight streamResponse call.
-  const streamingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  // In-flight turns + ended-but-uncommitted ones (./turn-stream-registry).
+  const streams = useMemo(() => createTurnStreamRegistry(), []);
   // Latest-value ref for messages so re-entrant senders never read a stale
   // snapshot when building the next request's context.
   const messagesRef = useRef<Message[]>([]);
@@ -349,10 +350,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     };
   }, []);
 
-  // Keep messagesRef in sync with state so re-entrant callers read the latest value.
+  // Keep messagesRef in sync so re-entrant callers read the latest value — and,
+  // on the same commit, release every ended turn this transcript provably
+  // carries. That commit is the ledger's ONLY release event, which is precisely
+  // what leaves no window in which a turn is nameable from neither source.
   useEffect(() => {
     messagesRef.current = messages;
-  }, [messages]);
+    streams.noteCommittedTranscript(messages);
+  }, [messages, streams]);
 
   // Keep activeThreadIdRef in sync so streamResponse can detect thread switches.
   // (The auto-scroll lock release that used to sit here moved into
@@ -370,14 +375,15 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
   // Load thread messages when activeThreadId changes.
   useEffect(() => {
-    // Defense in depth: eagerly abort every in-flight stream when the
-    // active thread changes. The stillOnOriginThread guard inside
-    // streamResponse also short-circuits any late setMessages chunks that arrive
-    // after this point, so even if an aborted stream's final reader.read() resolves
-    // mid-switch, it cannot mutate the new thread's messages list.
-    if (streamingAbortControllersRef.current.size > 0) {
-      for (const c of streamingAbortControllersRef.current.values()) c.abort();
-      streamingAbortControllersRef.current.clear();
+    // Defense in depth: eagerly abort every in-flight stream when the active
+    // thread changes. The stillOnOriginThread guard inside streamResponse also
+    // short-circuits any late setMessages chunks arriving after this point, so
+    // even if an aborted stream's final reader.read() resolves mid-switch it
+    // cannot mutate the new thread's messages list. `reset` drops the
+    // ended-uncommitted ledger too: those ids belong to the thread being left,
+    // and no other thread's transcript would ever release them.
+    if (streams.size() > 0) {
+      streams.reset();
       setStreamingCount(0);
     }
     if (skipNextThreadLoadRef.current) {
@@ -574,19 +580,16 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     publishChatThreadTitle(title);
   }, [activeThreadId, threads]);
 
-  // Register a stream in the registry and bump the count. Must only be called
-  // from inside streamResponse's try block so cleanup is guaranteed in finally.
+  // Only from inside streamResponse's try, so the finally's endStream is sure.
   function beginStream(assistantId: string, controller: AbortController) {
-    streamingAbortControllersRef.current.set(assistantId, controller);
+    streams.begin(assistantId, controller);
     setStreamingCount((n) => n + 1);
   }
 
-  // Remove a stream from the registry and decrement the count. Idempotent —
-  // safe to call even if the key was already deleted (returns without side effect).
+  // Idempotent — the count moves only if the turn really was in flight. The turn
+  // stays NAMEABLE by the truncation intent until its reveal commits.
   function endStream(assistantId: string) {
-    if (streamingAbortControllersRef.current.delete(assistantId)) {
-      setStreamingCount((n) => Math.max(0, n - 1));
-    }
+    if (streams.end(assistantId)) setStreamingCount((n) => Math.max(0, n - 1));
   }
 
   // AG-UI stream driver (cinatra#1218) — the turn drive lives headlessly in
@@ -720,11 +723,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // EDIT AND RESEND — the flow itself lives in ./message-edit-flow (a vertical
   // slice: the truncation intent, the intent save it waits for, the
   // origin-thread guards and the routed regeneration). This binding is the only
-  // part that belongs to the page: the state the flow reads, handed in
-  // explicitly. `streamingAssistantIds` is the registry of turns currently
-  // in flight — the intent has to be able to NAME a Slack turn that is still
-  // streaming, because Slack mode allows editing during one and reveals the turn
-  // only when it completes.
+  // part that belongs to the page. `removableTurnIds` is every turn the intent
+  // must name BESIDE its own transcript slice (./turn-stream-registry).
   async function editAndResend(messageId: string, newContent: string) {
     await runEditAndResend(
       {
@@ -732,7 +732,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         setMessages,
         isSlackMode,
         hasActiveStream,
-        streamingAssistantIds: () => streamingAbortControllersRef.current.keys(),
+        removableTurnIds: () => streams.removableTurnIds(),
         activeThreadId,
         currentThreadId: () => activeThreadIdRef.current,
         loadedThreadCreatedAt: () => loadedThreadCreatedAtRef.current,
@@ -1041,8 +1041,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
   // Stable callbacks threaded to the lazily-loaded conversation view.
   const isStreaming = useCallback(
-    (messageId: string) => streamingAbortControllersRef.current.has(messageId),
-    [],
+    (messageId: string) => streams.has(messageId),
+    [streams],
   );
   const handleTogglePause = useCallback((participantId: string, next: boolean) => {
     setPausedParticipants((prev) =>
@@ -1163,7 +1163,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         onSubmit={(value) => void sendMessage(value)}
         submitAriaLabel={hasActiveEmbed ? "Save form" : "Send message"}
         onStop={() => {
-          for (const c of streamingAbortControllersRef.current.values()) c.abort();
+          streams.abortAll();
         }}
         onAttachmentsSelected={handleAttachmentsSelected}
         autosave={autosaveProp}

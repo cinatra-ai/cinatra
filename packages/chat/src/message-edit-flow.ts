@@ -30,9 +30,10 @@ export type EditAndResendDeps = {
   setMessages: (next: Message[] | ((prev: Message[]) => Message[])) => void;
   isSlackMode: boolean;
   hasActiveStream: boolean;
-  /** The assistant ids of every turn currently streaming — the page's stream
-   *  registry keys. Empty in ChatGPT mode, where an edit cannot start here. */
-  streamingAssistantIds: () => Iterable<string>;
+  /** Every turn this edit must name BESIDE its own transcript slice: the turns
+   *  in flight AND the ones that ENDED without their reveal having committed
+   *  yet (`./turn-stream-registry`). Read LIVE, at intent-build time. */
+  removableTurnIds: () => Iterable<string>;
   activeThreadId: string | null;
   /** Latest-value read of the active thread, for the post-await guards. */
   currentThreadId: () => string | null;
@@ -95,9 +96,12 @@ export async function editAndResend(
   };
   const truncated = [...prior, editedMessage];
   // The user edited `messageId`, so it and everything below it is deliberately
-  // gone — INCLUDING a Slack turn still streaming, which has not landed in the
-  // transcript yet and would otherwise go unnamed (`buildTruncationIntent`).
-  const removedMessageIds = buildTruncationIntent(messages, idx, deps.streamingAssistantIds());
+  // gone — INCLUDING a Slack turn whose message is not in `messages`: one still
+  // streaming, and one that just ENDED into a reveal this render has not
+  // committed. `messages` is this render's snapshot and can miss both, so the
+  // registry is the second source and covers the whole gap between them
+  // (`buildTruncationIntent`, `./turn-stream-registry`).
+  const removedMessageIds = buildTruncationIntent(messages, idx, deps.removableTurnIds());
 
   // Resolve threadId — edits always happen in an existing thread.
   const threadId = deps.activeThreadId ?? deps.currentThreadId();
