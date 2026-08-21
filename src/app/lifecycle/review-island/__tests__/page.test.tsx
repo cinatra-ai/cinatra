@@ -21,6 +21,11 @@ const redirect = vi.fn((to: string) => {
 const resolveReviewActorContext = vi.fn();
 const loadReviewGateSurface = vi.fn();
 const resolveVerifiedWidgetFrameOrigin = vi.fn<(input: unknown) => string | null>(() => null);
+// cinatra#2754 — the credential path's own ladder. It carries its own suite
+// (`src/lib/lifecycle/__tests__/review-island-serving.test.ts`, which pins every
+// refusal against live rows); what this suite pins is what the PAGE does with
+// each of its two answers.
+const resolveIslandCredentialReader = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
@@ -32,6 +37,9 @@ vi.mock("@/lib/embed/frame-ancestors.server", () => ({
 }));
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
   loadReviewGateSurface: (args: unknown) => loadReviewGateSurface(args),
+}));
+vi.mock("@/lib/lifecycle/review-island-serving", () => ({
+  resolveIslandCredentialReader: (args: unknown) => resolveIslandCredentialReader(args),
 }));
 vi.mock(
   "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor",
@@ -84,6 +92,7 @@ function isEmptyIsland(el: ReactElement): boolean {
 beforeEach(() => {
   vi.clearAllMocks();
   resolveVerifiedWidgetFrameOrigin.mockReturnValue(null);
+  resolveIslandCredentialReader.mockResolvedValue(null);
   getAuthSession.mockResolvedValue({ user: { id: "u1" } });
   resolveReviewActorContext.mockResolvedValue(ACTOR);
   signInRedirectTarget.mockResolvedValue("/sign-in");
@@ -240,5 +249,87 @@ describe("a widget frame is never sent to an interactive sign-in", () => {
     resolveVerifiedWidgetFrameOrigin.mockReturnValue(null);
     getAuthSession.mockResolvedValue(null);
     await expect(renderIsland(REF, WIDGET)).rejects.toThrow(/REDIRECT:\/sign-in/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2754 — the credential the frame arrives with
+// ---------------------------------------------------------------------------
+//
+// On a genuinely third-party page the frame load carries no cookie, so the
+// credential travels in the URL. It AUTHENTICATES and nothing more: the gate
+// comes from the credential rather than a second decode of the ref, and the
+// reader's real access is still re-run through the same loader every other path
+// here uses. Every refusal — forged, tampered, expired, revoked, bound to
+// another gate — is the one empty island, never an error and never a redirect.
+
+describe("a frame that presents an island credential", () => {
+  const CREDENTIAL = "AAAA-sealed_value-BBBB";
+
+  it("paints the gate the CREDENTIAL names, through the SAME loader", async () => {
+    resolveIslandCredentialReader.mockResolvedValue({
+      actorCtx: ACTOR,
+      runId: "run-1",
+      reviewTaskId: "task-1",
+    });
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      targets: [target("a1")],
+      pinnedCapturePairs: {},
+      agentSummary: null,
+    });
+    const el = await renderIsland(REF, { ic: CREDENTIAL });
+    expect(resolveIslandCredentialReader).toHaveBeenCalledWith({
+      credential: CREDENTIAL,
+      ref: REF,
+    });
+    expect(loadReviewGateSurface).toHaveBeenCalledWith({
+      runId: "run-1",
+      reviewTaskId: "task-1",
+      actorCtx: ACTOR,
+    });
+    expect(isEmptyIsland(el)).toBe(false);
+  });
+
+  it("never consults the cookie session on this path", async () => {
+    resolveIslandCredentialReader.mockResolvedValue({
+      actorCtx: ACTOR,
+      runId: "run-1",
+      reviewTaskId: "task-1",
+    });
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      targets: [],
+      pinnedCapturePairs: {},
+      agentSummary: null,
+    });
+    await renderIsland(REF, { ic: CREDENTIAL });
+    expect(getAuthSession).not.toHaveBeenCalled();
+    expect(resolveReviewActorContext).not.toHaveBeenCalled();
+  });
+
+  it("a REFUSED credential (forged, tampered, expired, revoked) draws the empty island", async () => {
+    resolveIslandCredentialReader.mockResolvedValue(null);
+    const el = await renderIsland(REF, { ic: CREDENTIAL });
+    expect(isEmptyIsland(el)).toBe(true);
+    // It never reaches the gate loader, and it never redirects.
+    expect(loadReviewGateSurface).not.toHaveBeenCalled();
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("is byte-identical to every other denial — a refused credential is no oracle", async () => {
+    resolveIslandCredentialReader.mockResolvedValue(null);
+    const refused = await renderIsland(REF, { ic: CREDENTIAL });
+    loadReviewGateSurface.mockResolvedValue({ kind: "not-authorized" });
+    const notAuthorized = await renderIsland(REF);
+    expect(JSON.stringify(refused.props)).toBe(JSON.stringify(notAuthorized.props));
+  });
+
+  it("does NOT redirect a credentialed request that has no session", async () => {
+    getAuthSession.mockResolvedValue(null);
+    resolveIslandCredentialReader.mockResolvedValue(null);
+    const el = await renderIsland(REF, { ic: CREDENTIAL });
+    expect(isEmptyIsland(el)).toBe(true);
+    expect(redirect).not.toHaveBeenCalled();
   });
 });

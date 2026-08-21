@@ -23,6 +23,12 @@
 //
 // THE THREE RULES, and why they are the whole set:
 //
+// WHAT A SUGGESTION CARRIES (cinatra#2852). Every rule that has both sides
+// records them as a PAIR — `before`, the disclosed text as the lane was shown
+// it, and `value`, the text it proposes — frozen into the snapshot together, so
+// the surface can draw §VIII's before/after panel from one hash-bound row
+// rather than re-reading a document that may have moved since.
+//
 //   R1 `replace` — a disclosed value that is not its own canonical form (C0
 //      control characters, per-line trailing whitespace, surrounding
 //      whitespace). The proposed value is the canonicalization of the text the
@@ -107,6 +113,24 @@ export interface ProducedSuggestion {
   /** Present for replace/add; absent for remove. Always derived from the
    * disclosed projection or the empty string — never generated text. */
   value?: string;
+  /**
+   * The CURRENT content of the pointed-at field, captured from the same
+   * disclosed projection this suggestion was derived from (cinatra#2852,
+   * design §VIII: "the current content beside the suggested content").
+   *
+   * Captured at DERIVATION TIME and frozen into the snapshot, because that is
+   * the only moment the pair is provably about one revision: reconstructing the
+   * "before" later would read a document that may have moved, and would print a
+   * comparison the producer never made.
+   *
+   * ABSENT, never invented, in three cases: a `remove` (the member has no one
+   * value), an `add` (the field does not exist yet, so there is nothing it
+   * currently says), and a disclosed value longer than
+   * `MAX_SUGGESTION_VALUE_CHARS` (the same ceiling the proposal obeys — half a
+   * field is worse than no field). Absence is not a signal; it means the
+   * producer had nothing to show.
+   */
+  before?: string;
   message: string;
 }
 
@@ -449,6 +473,11 @@ function deriveSuggestions(
       fieldPath: f.pointer,
       op: "replace",
       value: canonical,
+      // §VIII's BEFORE — the disclosed text exactly as the lane was shown it,
+      // beside the canonicalization it proposes. Dropped rather than truncated
+      // past the shared ceiling; the suggestion still stands, it just shows no
+      // panel.
+      ...(f.value.length <= MAX_SUGGESTION_VALUE_CHARS ? { before: f.value } : {}),
       message: MESSAGE_REPLACE,
     });
   }
@@ -591,6 +620,13 @@ function isProducedSuggestion(v: unknown): v is ProducedSuggestion {
     .map((seg) => seg.replaceAll("~1", "/").replaceAll("~0", "~"));
   if (segments.length === 0) return false;
   if (segments.some((seg) => seg === "" || FORBIDDEN_SEGMENT.test(seg))) return false;
+  // §VIII's before (cinatra#2852) is OPTIONAL on every op — a snapshot written
+  // before the pair existed carries none, and a `remove` never carries one —
+  // but when present it obeys the same ceiling the proposal does.
+  if (s.before !== undefined) {
+    if (typeof s.before !== "string") return false;
+    if (s.before.length > MAX_SUGGESTION_VALUE_CHARS) return false;
+  }
   // replace/add carry the value the reviewer would apply; remove carries none.
   if (s.op === "remove") return s.value === undefined;
   if (typeof s.value !== "string") return false;

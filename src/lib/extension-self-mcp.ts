@@ -36,6 +36,18 @@ import { getActivationGeneration } from "@/lib/extension-activation-generation";
 
 type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
+/**
+ * The captured entry the host's primitive map now holds: the handler PLUS the
+ * typed delegated-chat declaration its registration carried (cinatra#2771).
+ * Locally mirrored (this module is deliberately import-light and loads
+ * `@/lib/mcp-server` lazily); the host's `CapturedHostPrimitive` is the
+ * authoritative shape and is structurally identical.
+ */
+type CapturedHostPrimitive = {
+  handler: CapturedMcpToolHandler;
+  delegatedChat?: "read" | "discovery" | "dispatch" | "none";
+};
+
 // GENERATION-KEYED CACHE (#310): the host's `name → handler` map is memoised, but
 // the cache is now keyed by the extension CONTROL-PLANE generation instead of an
 // ad-hoc `null`-on-transition reset. A lifecycle transition (activate / hot-update
@@ -45,10 +57,10 @@ type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>
 // disappear) on the next call without a per-site `__reset`. A Promise so concurrent
 // first-callers share one build; the `{ generation, promise }` pairing lets a
 // concurrent caller that started a build for an OLD generation be superseded.
-let cached: { generation: number; promise: Promise<Map<string, CapturedMcpToolHandler>> } | null =
+let cached: { generation: number; promise: Promise<Map<string, CapturedHostPrimitive>> } | null =
   null;
 
-async function getHandlers(): Promise<Map<string, CapturedMcpToolHandler>> {
+async function getHandlers(): Promise<Map<string, CapturedHostPrimitive>> {
   const generation = getActivationGeneration();
   if (!cached || cached.generation !== generation) {
     cached = {
@@ -94,15 +106,19 @@ export async function callHostPrimitive(
   options: CallHostPrimitiveOptions = {},
 ): Promise<unknown> {
   const handlers = await getHandlers();
-  const handler = handlers.get(primitiveName);
-  if (!handler) {
+  const captured = handlers.get(primitiveName);
+  if (!captured) {
     throw new Error(
       `[extension-self-mcp] ctx.mcp.callPrimitive("${primitiveName}") — no host primitive is ` +
         `registered under that name. Known primitives are the host's MCP tool set; check the name.`,
     );
   }
+  const handler = captured.handler;
 
   const { mcpRequestContextStorage, isDelegatedChatMcpToolAllowed } = await import("@cinatra-ai/mcp-server");
+  const { declarationPermitsDelegatedChat, resolveDelegatedChatClass } = await import(
+    "@cinatra-ai/mcp-server/delegated-chat-tool-policy"
+  );
 
   const invoke = async () => {
     const ctx = mcpRequestContextStorage.getStore();
@@ -112,6 +128,26 @@ export async function callHostPrimitive(
     if (ctx?.delegatedRestricted && !isDelegatedChatMcpToolAllowed(primitiveName)) {
       throw new Error(
         `[extension-self-mcp] "${primitiveName}" is not available to delegated chat MCP requests.`,
+      );
+    }
+    // (a2) The registration's typed delegated-chat declaration (cinatra#2771),
+    // applied on exactly the terms `policedRegisterTool` applies it — SAME
+    // composition, SAME order: AFTER admission and NARROW-ONLY. A declaration
+    // can only withdraw a primitive its own registration declined (`none`, or a
+    // value that normalized to it); it can never make an unadmitted name
+    // self-invocable, because (a) above has already refused those.
+    //
+    // An absent declaration means NONE (owner ruling), so this reads through
+    // the SAME `resolveDelegatedChatClass` the choke point uses — the interim
+    // class the legacy allowlist implies stands in until something declares.
+    // Using one resolver on both sides is what keeps the in-process
+    // self-invoker and the live transport from disagreeing about the SAME
+    // registration, which is the lossy hop the #2771 review named.
+    const effectiveClass = resolveDelegatedChatClass(primitiveName, captured.delegatedChat);
+    if (ctx?.delegatedRestricted && !declarationPermitsDelegatedChat(effectiveClass)) {
+      throw new Error(
+        `[extension-self-mcp] "${primitiveName}" declines the delegated chat surface ` +
+          `(delegatedChat: "${effectiveClass ?? "undeclared"}").`,
       );
     }
     // (b) Deny-by-default MCP boundary — identical gate to the live transport.

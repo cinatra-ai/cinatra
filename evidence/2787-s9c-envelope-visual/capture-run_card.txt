@@ -1,0 +1,14 @@
+# run_card capture — 2026-08-16T18:07:41.612Z
+# http://localhost:3058/agents/cinatra-review-fixture/marked-review-gate/683891e0-5995-4ba7-afce-43301cb2ee64
+WIRE POST /api/lifecycle-views/resolve 200
+  request : {"viewType":"artifact_review_gate","ref":"xWx4TqTUn_a7zrio8pxUW6CxtJnuhniw54GYFtBDF0Hr6z5co1lJ9D6rjGqdM2pv69I0Tp9pXxOgm6RVlrWDdxnnk0GSAOEfgA_Au4AjkdTxCEaTPfGwV8DrVHeVAr_sjjriL91cG3tHpJ3XYFih0NbyJ0ubHp9qv-RYzHWv5otbC-t_KpcgMu8wUYlw"}
+  response: {"kind":"artifact_review_gate","state":{"state":"pending","canDecide":true,"canComment":true},"body":null}
+ANCHORS pending {"host":"run_card","state":"pending","kind":"artifact_review_gate","conformance":"review-gate-card","decisionBar":true,"island":true}
+approve pressed on the card floor
+WIRE POST /api/lifecycle-views/decide 200
+  request : {"ref":"xWx4TqTUn_a7zrio8pxUW6CxtJnuhniw54GYFtBDF0Hr6z5co1lJ9D6rjGqdM2pv69I0Tp9pXxOgm6RVlrWDdxnnk0GSAOEfgA_Au4AjkdTxCEaTPfGwV8DrVHeVAr_sjjriL91cG3tHpJ3XYFih0NbyJ0ubHp9qv-RYzHWv5otbC-t_KpcgMu8wUYlw","disposition":"approve","comment":null}
+  response: {"outcome":{"kind":"decided","disposition":"approve","idempotent":false}}
+WIRE POST /api/lifecycle-views/resolve 200
+  request : {"viewType":"artifact_review_gate","ref":"xWx4TqTUn_a7zrio8pxUW6CxtJnuhniw54GYFtBDF0Hr6z5co1lJ9D6rjGqdM2pv69I0Tp9pXxOgm6RVlrWDdxnnk0GSAOEfgA_Au4AjkdTxCEaTPfGwV8DrVHeVAr_sjjriL91cG3tHpJ3XYFih0NbyJ0ubHp9qv-RYzHWv5otbC-t_KpcgMu8wUYlw"}
+  response: {"kind":"artifact_review_gate","state":{"state":"settled"},"body":null}
+ANCHORS settled {"host":"run_card","state":"settled"}

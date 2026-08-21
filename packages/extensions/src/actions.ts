@@ -9,6 +9,9 @@ import { getAgentPackage as _getAgentPackage } from "@cinatra-ai/registries";
 void _getAgentPackage;
 import { extensionRegistry } from "./index";
 import type { Actor } from "@cinatra-ai/extension-types";
+// TYPE-only: `lifecycle-target-resolver` is `server-only` and is already reached
+// through the dynamic imports below — this adds no static edge.
+import type { LifecycleRowSelector } from "./lifecycle-target-resolver";
 import type { DanglingReferences } from "./audit-log";
 import { requireAdminSession } from "@/lib/auth-session";
 // cinatra#2416: THE shared session-derived actor builders. The settings page
@@ -303,55 +306,6 @@ function classifyAndLogInstallFailure(
   return { category, reference };
 }
 
-// The THIRD install outcome's operator line (cinatra#2761). Deliberately NOT a
-// `classify-failed` line and deliberately WITHOUT a diagnostic reference: the
-// install COMMITTED, so it is not a failure and there is no support case to
-// correlate. It is logged at info level so an operator can still see that the
-// process is serving a package it has not loaded yet. Same CWE-117/CWE-134
-// discipline as the chokepoint above: constant format string, sanitized args.
-function logInstallActivationDeferredForOperator(
-  operation: string,
-  packageName: string,
-  packageVersion: string,
-): void {
-  console.info(
-    "[marketplace-install] %s committed pkg=%s version=%s activation=deferred-to-next-restart",
-    operation,
-    sanitizeForLog(packageName),
-    packageVersion ? sanitizeForLog(packageVersion) : "(none)",
-  );
-}
-
-/**
- * Whether a thrown install carries the STABLE activation-deferred code
- * (cinatra#2761). The install COMMITTED (the real-integrity pipeline finalized,
- * so the canonical row is real and anchorable) and only its in-process
- * hot-activation was refused this call.
- *
- * DUCK-TYPED over the `cause` chain rather than `instanceof`: the error crosses
- * dynamic-import boundaries and may be wrapped, so identity is unreliable here
- * (cinatra#2416 established this rule for the lifecycle codes above). Bounded
- * depth so a cyclic cause chain can never loop forever.
- */
-function isActivationDeferredError(err: unknown, depth = 0): boolean {
-  if (depth > 6 || err == null || typeof err !== "object") return false;
-  const obj = err as { code?: unknown; cause?: unknown };
-  if (obj.code === "INSTALL_ACTIVATION_DEFERRED") return true;
-  return "cause" in obj ? isActivationDeferredError(obj.cause, depth + 1) : false;
-}
-
-// Whether the dependency batch reported THIS package as committed-but-not-
-// activated. Tolerates a result without the field (the batch is reached through
-// a dynamic import). An absent list means "nothing deferred", the pre-#2761
-// meaning, so the surface degrades to plain success rather than throwing.
-function batchDeferredCarries(batch: unknown, packageName: string): boolean {
-  const list = (batch as { activationDeferred?: unknown } | null)?.activationDeferred;
-  if (!Array.isArray(list)) return false;
-  return list.some(
-    (m) => (m as { packageName?: unknown } | null)?.packageName === packageName,
-  );
-}
-
 // A missing/empty version is rejected BEFORE any install request is made
 // (cinatra#1539 AC6): the request cannot succeed, and the resulting contract
 // error would be a bad-input (`invalid_version`) that must not surface as a
@@ -437,18 +391,6 @@ export async function installExtensionPackage(
   error?: string;
   failureCategory?: MarketplaceFailureCategory;
   reference?: string;
-  /**
-   * The THIRD install outcome (cinatra#2761). `success` is true AND this is
-   * true when the real-integrity pipeline COMMITTED the install. The canonical
-   * row is real, finalized and anchorable, but in-process hot-activation was
-   * refused this call, so the package activates on the next restart.
-   *
-   * It is deliberately a flag ON a success, not a fourth failure category: the
-   * install landed, so the operator must not be told it failed, and no support
-   * reference is minted for it. The caller renders the caveat and the next step
-   * ("installed; activates on the next restart") instead of the generic error.
-   */
-  activationDeferred?: boolean;
 }> {
   "use server";
   await requireAdminSession();
@@ -476,7 +418,7 @@ export async function installExtensionPackage(
     const { installExtensionWithDependencies } = await import(
       "@/lib/extension-install-batch"
     );
-    const batch = await installExtensionWithDependencies({
+    await installExtensionWithDependencies({
       packageName,
       version: packageVersion,
       actor,
@@ -484,24 +426,8 @@ export async function installExtensionPackage(
       // the batch derives its established default (byte-identical plan).
       ...(rowOwnership ? { rowOwnership } : {}),
     });
-    // #2761: the batch kept a member that COMMITTED but did not hot-activate.
-    // Report the caveat on the success, never a failure. Read defensively: the
-    // batch crosses a dynamic-import boundary, so an older/partial result shape
-    // must degrade to "fully activated", never throw over a missing field.
-    if (batchDeferredCarries(batch, packageName)) {
-      logInstallActivationDeferredForOperator("install", packageName, packageVersion);
-      return { success: true, activationDeferred: true };
-    }
     return { success: true };
   } catch (err) {
-    // #2761: a COMMITTED install whose hot-activation was refused reaches here
-    // only on a path that bypasses the batch's own handling. It is still not a
-    // failure, because the row is finalized and anchorable, so it never reaches the
-    // failure classifier and never mints a support reference.
-    if (isActivationDeferredError(err)) {
-      logInstallActivationDeferredForOperator("install", packageName, packageVersion);
-      return { success: true, activationDeferred: true };
-    }
     // Classify from the REAL error object here, BEFORE it is stringified — this
     // is the only place that still has the `cause` chain / MarketplaceMcpError
     // `responseBody` + `httpStatus` the taxonomy classifier reads (cinatra#685).
@@ -531,8 +457,6 @@ export async function updateExtensionPackage(
   error?: string;
   failureCategory?: MarketplaceFailureCategory;
   reference?: string;
-  /** See `installExtensionPackage`. The same third outcome, for an update. */
-  activationDeferred?: boolean;
 }> {
   "use server";
   await requireAdminSession();
@@ -579,27 +503,16 @@ export async function updateExtensionPackage(
       // the root serves. `null` (no addressable row) keeps the batch's
       // actor-derived default, exactly as before this slice.
       const rootRowAnchor = await resolveRowAnchorForLifecycle(packageName, actor);
-      const batch = await installExtensionWithDependencies({
+      await installExtensionWithDependencies({
         packageName,
         version: packageVersion,
         actor,
         rootAction: "update",
         ...(rootRowAnchor ? { rowOwnership: rootRowAnchor } : {}),
       });
-      // #2761: same third outcome on the update path.
-      if (batchDeferredCarries(batch, packageName)) {
-        logInstallActivationDeferredForOperator("update", packageName, packageVersion);
-        return { success: true, activationDeferred: true };
-      }
     }
     return { success: true };
   } catch (err) {
-    // #2761: the GATEKEPT update path calls the registry directly, so a
-    // committed-but-not-activated update surfaces as the typed throw here.
-    if (isActivationDeferredError(err)) {
-      logInstallActivationDeferredForOperator("update", packageName, packageVersion);
-      return { success: true, activationDeferred: true };
-    }
     // Classify from the real error before stringification (cinatra#685); emit
     // the #1539 sanitized chokepoint diagnostics + correlating reference.
     const { category, reference } = classifyAndLogInstallFailure(
@@ -1034,7 +947,7 @@ export async function installExtensionPackageFormAction(input: {
     const outcome = await withInstallLock(
       input.packageName,
       async (): Promise<
-        MarketplaceInstallActionResult | "installed" | "installed-activation-deferred"
+        MarketplaceInstallActionResult | "installed"
       > => {
         const { readInstalledExtensionByIdentity } = await import(
           "./canonical-store"
@@ -1067,10 +980,6 @@ export async function installExtensionPackageFormAction(input: {
           // cinatra#2696: the write path installs AT the chosen anchor.
           rowOwnership,
         );
-        // #2761: the install COMMITTED but did not hot-activate this call. It is
-        // a success with a caveat, so it flows to the SAME "installed" outcome
-        // and only changes which copy the client renders.
-        const activationDeferred = result.activationDeferred === true;
         if (!result.success) {
           // cinatra#685: RETURN the classified category (see legacy path note).
           const category = result.failureCategory ?? "unrecoverable";
@@ -1109,7 +1018,7 @@ export async function installExtensionPackageFormAction(input: {
             ...(policy ? { policy } : {}),
             installedByUserId: session.user.id,
           });
-          return activationDeferred ? "installed-activation-deferred" : "installed";
+          return "installed";
         } catch (accessErr) {
           logMarketplaceFailureForOperator(
             "install-access",
@@ -1162,12 +1071,6 @@ export async function installExtensionPackageFormAction(input: {
         }
       },
     );
-    if (outcome === "installed-activation-deferred") {
-      // A committed install that activates on the next restart. Returned (not
-      // redirected) so the client can render the caveat; a plain success still
-      // redirects below.
-      return { ok: true, activation: "deferred" };
-    }
     if (outcome !== "installed") {
       return outcome;
     }
@@ -1212,7 +1115,7 @@ export async function installExtensionPackageFormAction(input: {
     const outcome = await withInstallLock(
       input.packageName,
       async (): Promise<
-        MarketplaceInstallActionResult | "installed" | "installed-activation-deferred"
+        MarketplaceInstallActionResult | "installed"
       > => {
         const {
           readInstalledExtensionByIdentity,
@@ -1251,10 +1154,6 @@ export async function installExtensionPackageFormAction(input: {
           input.packageVersion,
           actor,
         );
-        // #2761: the install COMMITTED but did not hot-activate this call. It is
-        // a success with a caveat, so it flows to the SAME "installed" outcome
-        // and only changes which copy the client renders.
-        const activationDeferred = result.activationDeferred === true;
         if (!result.success) {
           // cinatra#685: RETURN the classified category instead of throwing. A
           // thrown server-action message is masked in production (digest only) so
@@ -1317,7 +1216,7 @@ export async function installExtensionPackageFormAction(input: {
 
         if (!requiresAccessTarget) {
           // Non-access kind — legacy direct path, unchanged outcome.
-          return activationDeferred ? "installed-activation-deferred" : "installed";
+          return "installed";
         }
 
         // #1602: an access-target (or unverifiable) kind was installed with NO
@@ -1383,12 +1282,6 @@ export async function installExtensionPackageFormAction(input: {
         };
       },
     );
-    if (outcome === "installed-activation-deferred") {
-      // A committed install that activates on the next restart. Returned (not
-      // redirected) so the client can render the caveat; a plain success still
-      // redirects below.
-      return { ok: true, activation: "deferred" };
-    }
     if (outcome !== "installed") {
       return outcome;
     }
@@ -1493,6 +1386,315 @@ export async function restoreExtensionPackageFormAction(input: {
     return { ok: false, category };
   }
   // revalidatePath is unnecessary because redirect re-renders the destination.
+  redirect("/configuration/extensions");
+}
+
+/**
+ * Put the image-bundled implementation back in service after an activation
+ * attempt failed, and say what happened (cinatra#2762).
+ *
+ * Returns a SUFFIX for the operator-facing failure reason — never throws, and
+ * never turns a failed activation into a reported success. A package the image
+ * does not carry has nothing to restore, which is itself worth saying: it is the
+ * case where a failed retry really does leave the package unserved, and the
+ * operator needs to know that rather than infer it.
+ */
+async function restoreBundledAfterFailedActivation(packageName: string): Promise<string> {
+  try {
+    const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+    if (!STATIC_EXTENSION_MANIFEST[packageName]) {
+      return " (this package does not ship in the image, so nothing could be put back in service)";
+    }
+    const { reactivateBundledFallbackInProcess } = await import("@/lib/static-bundle-loader");
+    const restored = await reactivateBundledFallbackInProcess(packageName);
+    return restored.ok
+      ? " (the version bundled in the image was put back in service)"
+      : ` (RECOVERY REQUIRED: the bundled version could not be put back: ${restored.reason})`;
+  } catch (err) {
+    return ` (RECOVERY REQUIRED: restoring the bundled version threw: ${
+      err instanceof Error ? err.message : String(err)
+    })`;
+  }
+}
+
+/**
+ * RETRY ACTIVATION for an install that is live but serving nothing.
+ *
+ * The install path now refuses anything it cannot activate, so this exists for
+ * rows written before it did, and for the case a host-configuration failure
+ * created: a package whose bytes are fine but which the trust classifier would
+ * not admit until an operator configured a signing key or an activation host.
+ * Once they have, the operator needs a way to say "try again" that does not
+ * involve reinstalling or restarting.
+ *
+ * It targets the EFFECTIVE row, the same row every other lifecycle op targets.
+ *
+ * ROW-BOUND AND ACTIVATION-ONLY (cinatra#2762). It used to fire the install
+ * dispatcher's activate hook (`fireExtensionActivate` →
+ * `extension-activate-hook-wiring` → `installExtensionFromRegistry`), so "retry
+ * activation" was really "reinstall":
+ *   - it NEEDED THE REGISTRY, and the operator most in need of a retry is
+ *     exactly the one whose marketplace host will not resolve;
+ *   - it RE-RESOLVED the row from the package name, so it could act on a
+ *     different row than the one just addressed and standing-checked;
+ *   - and its unconditional capability teardown could leave NOTHING serving when
+ *     the activation then failed, with no bundled restore — recreating the very
+ *     state #2762 is about.
+ * It now drives `activateInstalledRowInProcess` — the shared loader, bound to
+ * the resolved row's own org, no registry, no install pipeline. The bytes are
+ * already materialized and finalized; only the registration is missing.
+ *
+ * AND IT RESTORES THE BUNDLE WHEN IT FAILS. The loader path tears capabilities
+ * down before it activates (a re-activate must replace, not stack), so a failed
+ * retry is exactly the moment the package can end up with nothing serving. The
+ * image's own version goes back in service through the same targeted seam the
+ * rollback and the boot reconciliation use, and the operator is told which of
+ * the two things happened.
+ */
+export async function retryExtensionActivationFormAction(input: {
+  packageName: string;
+  /**
+   * The anchor TIER of the row the settings page described (cinatra#2762 round
+   * 5). It is what lets the action address the row the operator was LOOKING AT
+   * when a package holds a bundled anchor and an install at the same org-NULL
+   * scope. Absent ⇒ the ordinary unselected addressing, unchanged.
+   *
+   * THE SETTINGS SCREEN IS THE ONLY LEGITIMATE PRODUCER — it mints this from
+   * the row `describeLifecycleCapabilities` just resolved and bakes it into a
+   * server closure. IT IS NOT, HOWEVER, A SECRET (cinatra#2762 round-5
+   * convergence). This function is EXPORTED from a `"use server"` module, so it
+   * is a client-invokable RPC endpoint and this parameter is deserialized from
+   * a payload a direct invocation controls. The type annotation declares the
+   * shape; it does not check it.
+   *
+   * WHAT IS ENFORCED, and it is enough:
+   *   1. {@link requireAdminSession} — the caller holds an admin session;
+   *   2. `validateLifecycleRowSelectorInput` below — the value is exactly
+   *      `{ ownerLevel: <known tier> }` or the action refuses, attributably;
+   *   3. `resolveLifecycleTargetRow` recomputes the addressable set from the
+   *      ACTOR and only THEN filters by the tier, so a forged-but-well-formed
+   *      selector can only NARROW among rows that admin already addresses — it
+   *      can never widen to a row they do not.
+   */
+  rowSelector?: LifecycleRowSelector | null;
+}): Promise<MarketplaceInstallActionResult | void> {
+  "use server";
+  const session = await requireAdminSession();
+  // RPC-BOUNDARY VALIDATION (cinatra#2762 round-5 convergence). `input` is
+  // deserialized from a client-controlled payload on this exported `"use
+  // server"` function; the annotation above declares the selector's shape and
+  // does not check it. Refuse anything that is not exactly a known tier, BEFORE
+  // it reaches the resolver — an unknown `ownerLevel` would otherwise match
+  // nothing and surface as `no_addressable_row`, which reads as "you may not do
+  // this" rather than "you sent nonsense".
+  const { validateLifecycleRowSelectorInput } = await import("./lifecycle-target-resolver");
+  const selector = validateLifecycleRowSelectorInput(input.rowSelector);
+  if (!selector.ok) {
+    logMarketplaceFailureForOperator(
+      "retry-activation",
+      input.packageName,
+      "unrecoverable",
+      selector.reason,
+    );
+    return { ok: false as const, category: "unrecoverable" as const };
+  }
+  const actor = await buildLifecycleActorFromSession(
+    session,
+    "activate",
+    input.packageName,
+  );
+  try {
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    // Under the package lock, the same lock every install and lifecycle op
+    // holds: resolving a row and then activating it without it would let a
+    // concurrent install replace or archive that row in between, and this would
+    // activate bytes that are no longer the package.
+    const outcome = await withInstallLock(input.packageName, async () => {
+    const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
+    // Resolving through the shared target resolver is what applies the standing
+    // check and the supersession rule, so this can never act on a superseded row
+    // or on a row the actor may not write.
+    const row = await resolveLifecycleTargetRow(
+      input.packageName,
+      actor,
+      selector.selector,
+    );
+    const { activateInstalledRowInProcess } = await import("@/lib/extension-runtime-activate");
+    // The ROW's org, never the actor's — the row the resolver addressed is the
+    // row that is retried. `expectRowId` carries the resolved row's IDENTITY
+    // with it (cinatra#2762 round 5, non-blocking): the activator re-derives its
+    // trust anchor from (packageName, orgId), and for an org-NULL row that
+    // re-enters platform-global selection, so without the id a retry could
+    // activate a row other than the one just resolved and standing-checked. The
+    // activator now refuses that drift instead of proceeding.
+    const result = await activateInstalledRowInProcess({
+      packageName: input.packageName,
+      orgId: row.organizationId ?? null,
+      expectRowId: row.id,
+    });
+    if (!result.activated) {
+      // The activation attempt already fired the capability teardown, so the
+      // package may now be serving NOTHING. Put the image's version back before
+      // reporting, exactly as the rollback and the boot reconciliation do — a
+      // failed retry must never be worse than not retrying.
+      const restored = await restoreBundledAfterFailedActivation(input.packageName);
+      logMarketplaceFailureForOperator(
+        "retry-activation",
+        input.packageName,
+        "unrecoverable",
+        `${result.reason ?? "the package did not register"}${restored}`,
+      );
+      return { ok: false as const, category: "unrecoverable" as const };
+    }
+    return undefined;
+    });
+    // A returned value is a FAILURE; success falls through to the redirect.
+    if (outcome) return outcome;
+  } catch (err) {
+    logMarketplaceFailureForOperator(
+      "retry-activation",
+      input.packageName,
+      "unrecoverable",
+      err,
+    );
+    return { ok: false, category: "unrecoverable" };
+  }
+  redirect("/configuration/extensions");
+}
+
+/**
+ * ROLL BACK to the implementation bundled in the image.
+ *
+ * The operator path out of an install that will not serve. It archives the
+ * product-installed row (the restorable primitive, never a delete: the payload
+ * and provenance are real and the operator may want them) and puts the bundled
+ * implementation back in service through the same targeted reactivation seam the
+ * post-commit compensation uses.
+ *
+ * Order matters. The row is archived FIRST so the bundled module never registers
+ * underneath a live override, which would leave two registrations competing for
+ * the same global names.
+ */
+export async function rollBackExtensionToBundledFormAction(input: {
+  packageName: string;
+  /** The anchor TIER of the row the settings page described — see
+   *  {@link retryExtensionActivationFormAction} for the RPC-boundary reality
+   *  (admin session + validation + actor-bounded resolution, not secrecy) that
+   *  actually bounds it (cinatra#2762 round 5 + convergence). */
+  rowSelector?: LifecycleRowSelector | null;
+}): Promise<MarketplaceInstallActionResult | void> {
+  "use server";
+  const session = await requireAdminSession();
+  // RPC-BOUNDARY VALIDATION (cinatra#2762 round-5 convergence). `input` is
+  // deserialized from a client-controlled payload on this exported `"use
+  // server"` function; the annotation above declares the selector's shape and
+  // does not check it. Refuse anything that is not exactly a known tier, BEFORE
+  // it reaches the resolver — an unknown `ownerLevel` would otherwise match
+  // nothing and surface as `no_addressable_row`, which reads as "you may not do
+  // this" rather than "you sent nonsense".
+  const { validateLifecycleRowSelectorInput } = await import("./lifecycle-target-resolver");
+  const selector = validateLifecycleRowSelectorInput(input.rowSelector);
+  if (!selector.ok) {
+    logMarketplaceFailureForOperator(
+      "roll-back-to-bundled",
+      input.packageName,
+      "unrecoverable",
+      selector.reason,
+    );
+    return { ok: false as const, category: "unrecoverable" as const };
+  }
+  const actor = await buildLifecycleActorFromSession(
+    session,
+    "archive",
+    input.packageName,
+  );
+  try {
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    // Archive and restore run under ONE hold of the package lock, so the pair is
+    // not interleaved by a concurrent install or lifecycle op. The reactivation
+    // seam takes the same lock re-entrantly.
+    const outcome = await withInstallLock(input.packageName, async () => {
+    const { resolveLifecycleTargetRow } = await import("./lifecycle-target-resolver");
+    const row = await resolveLifecycleTargetRow(
+      input.packageName,
+      actor,
+      selector.selector,
+    );
+    // REFUSE unless this is genuinely an override with something to fall back
+    // to. Rolling back a row that IS the bundled implementation, or an override
+    // for a package the image does not carry, would archive the only thing
+    // serving and leave nothing behind. The settings surface does not offer the
+    // affordance in those cases; a direct call must be refused all the same.
+    if (row.source?.type !== "verdaccio") {
+      logMarketplaceFailureForOperator(
+        "roll-back-to-bundled",
+        input.packageName,
+        "unrecoverable",
+        "the addressed row is not a marketplace install, so there is nothing to roll back",
+      );
+      return { ok: false as const, category: "unrecoverable" as const };
+    }
+    const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+    if (!STATIC_EXTENSION_MANIFEST[input.packageName]) {
+      logMarketplaceFailureForOperator(
+        "roll-back-to-bundled",
+        input.packageName,
+        "unrecoverable",
+        "this package does not ship in the image, so there is no bundled version to roll back to",
+      );
+      return { ok: false as const, category: "unrecoverable" as const };
+    }
+    const { transitionExtensionLifecycle } = await import("./lifecycle-primitive");
+    await transitionExtensionLifecycle(row.id, "archive", {
+      actor: { source: actor.source ?? "settings", userId: actor.userId },
+      reason: "operator rolled the install back to the bundled version",
+    });
+    const { reactivateBundledFallbackInProcess } = await import(
+      "@/lib/static-bundle-loader"
+    );
+    const restored = await reactivateBundledFallbackInProcess(input.packageName);
+    if (!restored.ok) {
+      // The bundled implementation did not come back. Archiving the override and
+      // stopping here would leave NOTHING serving the package, which is a worse
+      // state than the one the operator asked to leave. So the archive is undone
+      // and the package is returned to exactly where it started; the failure is
+      // then reported instead of a redirect that would imply it worked.
+      let restoredOverride = false;
+      try {
+        await transitionExtensionLifecycle(row.id, "activate", {
+          actor: { source: actor.source ?? "settings", userId: actor.userId },
+          reason: "roll back to bundled failed; the install was put back",
+        });
+        restoredOverride = true;
+      } catch (undoErr) {
+        logMarketplaceFailureForOperator(
+          "roll-back-to-bundled-undo",
+          input.packageName,
+          "unrecoverable",
+          undoErr,
+        );
+      }
+      logMarketplaceFailureForOperator(
+        "roll-back-to-bundled",
+        input.packageName,
+        "unrecoverable",
+        `${restored.reason}${restoredOverride ? " (the install was put back)" : " (RECOVERY REQUIRED: the install could not be put back)"}`,
+      );
+      return { ok: false as const, category: "unrecoverable" as const };
+    }
+    return undefined;
+    });
+    // A returned value is a FAILURE; success falls through to the redirect.
+    if (outcome) return outcome;
+  } catch (err) {
+    logMarketplaceFailureForOperator(
+      "roll-back-to-bundled",
+      input.packageName,
+      "unrecoverable",
+      err,
+    );
+    return { ok: false, category: "unrecoverable" };
+  }
   redirect("/configuration/extensions");
 }
 

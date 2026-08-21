@@ -406,15 +406,39 @@ export const runWaitNotifier: RunWaitNotifier = {
   // continuation park and leaves the run's status untouched), so re-deriving
   // "still waiting?" from run status would wrongly suppress the emit. Best-effort.
   //
-  // Concurrency posture matches the run-awaiting-human family above (idempotent,
-  // NOT linearized against the gate row): the open emit is AWAITED at gate
-  // creation by the orchestration sweep (before the gate is linked/processed), and
-  // a reviewer cannot resolve a gate that was born microseconds earlier and not
-  // yet surfaced — so the resolve-before-open ordering that would strand a row is
-  // practically unreachable. In that theoretical window a benign stale row could
-  // linger; fully closing it would need a durable open/resolve discriminator read
-  // here (a new cross-package gate-status export) — deliberately out of this
-  // slice's scope, exactly as the E9 header above scopes out its analogous race.
+  // THE WRITE IS FENCED (cinatra#2864). Every other emitter in this module writes
+  // on a fact that already happened and cannot un-happen (a committed status
+  // transition, a created run). An auto-gate is different: the gate it announces
+  // can reach a terminal decision at any instant, and that decision is the ONLY
+  // event that ever clears this row. A write that lands after it is stale forever
+  // — the bell keeps an entry that opens onto "This review is no longer open".
+  //
+  // Ordering the check before the write does not help: the check is over the
+  // moment it returns, and the earlier posture here (an awaited emit, on the
+  // reasoning that nobody can decide a gate born microseconds ago) was a timing
+  // argument, not an ordering one. Three of the four opening paths now reaching
+  // this seam are decided by MACHINERY — an auto-approving policy, a repair
+  // successor, a verification reopen — which does not wait to be told.
+  //
+  // So the check IS the write. `buildAutoGateNotificationFence` supplies a
+  // `SELECT … FOR UPDATE` of the gate matched on (run, task, status='pending');
+  // the insert is driven from its rows in ONE statement on one connection. That
+  // gives both directions at once:
+  //
+  //   ALREADY DECIDED — a gate that resolved before this emit ran (or never
+  //     existed, or belongs to another run) yields no guard row and therefore no
+  //     notification. Nothing upstream has to be trusted: the gate table decides.
+  //   THE RACE — `FOR UPDATE` takes the gate's row lock, the same lock
+  //     `commitReviewDecision` takes for its terminal CAS, and that CAS commits
+  //     before its clear runs. Open and resolve therefore serialise: either we
+  //     commit first and the clear finds our row, or the decision commits first
+  //     and our guard, re-evaluated against the new row version under READ
+  //     COMMITTED, matches nothing. There is no interleaving left in which the
+  //     clear precedes the write it was meant to remove.
+  //
+  // Fenced HERE, in the one host handler, and not in any of the four callers:
+  // every opening path reaches this through `dispatchAutoGateOpen` with the same
+  // two ids, so there is no path-by-path variant to keep in step.
   async onAutoGateOpen({ runId, reviewTaskId }) {
     try {
       await import("@/lib/notifications-host");
@@ -427,8 +451,19 @@ export const runWaitNotifier: RunWaitNotifier = {
       // No initiator (a system-/trigger-launched or synthetic orphan run) → no one
       // to notify.
       if (!userId) return;
+      const { buildAutoGateNotificationFence } = await import(
+        "@cinatra-ai/agents/run-wait-notifier"
+      );
       const { resolveAgentRunHref, createNotificationForRecipient } =
         await import("@cinatra-ai/notifications/server");
+      // The gate-side SQL comes from the package that OWNS the gate table; this
+      // module is only the translator that knows both vocabularies (and is the one
+      // place that can reach both tables on a single connection).
+      const gateFence = buildAutoGateNotificationFence({
+        schema: appSchemaName(),
+        runId,
+        reviewTaskId,
+      });
       // Canonical run deep-link (templateId → packageName). Undefined for an
       // unresolvable run → a still-durable but link-less notification.
       const href = await resolveAgentRunHref({ runId });
@@ -440,6 +475,17 @@ export const runWaitNotifier: RunWaitNotifier = {
           runTitle: run.title,
           href,
         }),
+        {
+          // Single, already-resolved recipient: the fence takes ONE gate row lock
+          // for ONE insert. (A fenced write with an expanded roster would take the
+          // lock once per recipient, in separate statements — correct, but not a
+          // shape any caller needs today.)
+          recipientUserIds: [userId],
+          fence: {
+            values: gateFence.values,
+            precondition: gateFence.guard,
+          },
+        },
       );
     } catch (err) {
       console.warn(

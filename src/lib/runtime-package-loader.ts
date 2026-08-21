@@ -51,7 +51,12 @@ import {
   trustedActivationHosts,
   allowMarketplaceBootstrapTrust,
 } from "@/lib/extension-trust-config";
-import { markPackageSignedActivated } from "@/lib/extension-capabilities-registry";
+import {
+  markPackageSignedActivated,
+  // cinatra#2762: which implementation is in service. Descriptive only —
+  // co-located in that registry so it costs no new route-graph module.
+  recordServingImplementation,
+} from "@/lib/extension-capabilities-registry";
 
 /**
  * Resolve the TRUSTED install anchor for a package from a source OUTSIDE the
@@ -509,6 +514,23 @@ export async function loadRuntimePackageExtensions(
   // a structural supertype of the store record, hence the `object` key type).
   const pendingSinks = new Map<object, VersionKeyedRegistrationSink>();
 
+  // cinatra#2762 (round-5 convergence): the version of the DEFAULT record whose
+  // register pass ACTUALLY SETTLED SUCCESSFULLY, captured at the settle hook
+  // from that record itself.
+  //
+  // It used to be a side lookup — a name-keyed map built by walking
+  // `orderedActivatable` before the pass, last-write-wins. With more than one
+  // default record for a package (the permitted ownership scopes can produce
+  // that), the version it reported was whichever default came LAST in discovery
+  // order, not the one whose registration succeeded — so the settings surface
+  // could name a version that never registered, which is the exact class of
+  // mis-report #2762 exists to end. Reading it off the settled record keeps the
+  // record IDENTITY: the version reported is the version that registered.
+  //
+  // Still last-write-wins ACROSS successful registrations, which is the truth:
+  // the last one to register owns the package's unversioned global names.
+  const servingVersionByPackage = new Map<string, string | null>();
+
   // PUBLISH the pre-resolved edge maps BEFORE activation (codex S8 round-0
   // #2): a dependent's `register(ctx)` may resolve capabilities during THIS
   // pass and must already see its pins (the post-activation refresh below
@@ -604,6 +626,15 @@ export async function loadRuntimePackageExtensions(
     // non-default register's retention; abort (discard) anything else. A record
     // with no pending sink is a no-op (default versions; versionless records).
     onRegisterSettled: (record, registered) => {
+      // Serving provenance, from THIS record (cinatra#2762). Defaults only: the
+      // default version is what owns the package's unversioned global names, so
+      // it is what a request reaches. This captures the register half of the
+      // default record's own outcome; the write below adds the bootstrap half
+      // (`bootstrapFailedNames`) — a register-passes/bootstrap-throws activation
+      // must not claim a half-activated version is serving.
+      if (registered && record.isDefault !== false) {
+        servingVersionByPackage.set(record.packageName, record.version ?? null);
+      }
       const sink = pendingSinks.get(record);
       if (!sink) return;
       pendingSinks.delete(record);
@@ -652,6 +683,41 @@ export async function loadRuntimePackageExtensions(
   const failedNames = new Set(
     activationResults.filter((r) => r.status === "failed").map((r) => r.packageName),
   );
+  // cinatra#2762 round-6: the DEFAULT record's OWN bootstrap outcome, which is
+  // the one part of that record's outcome the settle hook cannot see. The
+  // bootstrap pass runs for DEFAULT records only (a non-default sibling
+  // registers and stops), so a `bootstrap-threw` failure is BY CONSTRUCTION the
+  // default's own — no other record can put a name in this set.
+  const bootstrapFailedNames = new Set(
+    activationResults
+      .filter((r) => r.status === "failed" && r.reason === "bootstrap-threw")
+      .map((r) => r.packageName),
+  );
+  // cinatra#2762: the version of each INSTALL that actually registered, so a
+  // request-time surface can tell "the installed version is serving" from "the
+  // row is live but the image's copy is what serves". The version comes from
+  // `servingVersionByPackage`, captured at the per-record settle hook from the
+  // DEFAULT record whose registration succeeded — never from a name-keyed
+  // pre-pass lookup, which could attribute another default record's version to
+  // this one.
+  //
+  // Gated on THAT DEFAULT RECORD'S OWN OUTCOME, never on the package-wide
+  // `failedNames` (round-6 blocker). The package-wide set is the union of every
+  // record's outcome, so a failing NON-DEFAULT sibling suppressed the write for
+  // a default that had registered perfectly well — and because the boot path
+  // runs no capability teardown, the bundled record from the static pass then
+  // stood, and the settings surface accused a healthy install of being
+  // "Installed but not in service", greying Activate and Update. The default
+  // record is what owns the package's unversioned global names, so it alone
+  // decides whether the install is serving; a sibling that never claimed those
+  // names cannot make the install's own version untrue. Both halves of that
+  // record's outcome are still required, so the half-activated case the
+  // package-wide rule was protecting is unchanged:
+  //   - REGISTER: `servingVersionByPackage` is set at the per-record settle hook
+  //     ONLY for a default record whose own register succeeded, so a default
+  //     that failed to register leaves no entry and nothing is written;
+  //   - BOOTSTRAP: `bootstrapFailedNames` suppresses a register-passes /
+  //     bootstrap-throws default, which must not claim to be serving.
   for (const result of activationResults) {
     if (
       (result.status === "registered" || result.status === "bootstrapped") &&
@@ -659,6 +725,17 @@ export async function loadRuntimePackageExtensions(
       signedDefaultNames.has(result.packageName)
     ) {
       markPackageSignedActivated(result.packageName);
+    }
+    if (
+      (result.status === "registered" || result.status === "bootstrapped") &&
+      !bootstrapFailedNames.has(result.packageName) &&
+      servingVersionByPackage.has(result.packageName)
+    ) {
+      recordServingImplementation({
+        packageName: result.packageName,
+        origin: "install",
+        version: servingVersionByPackage.get(result.packageName) ?? null,
+      });
     }
   }
 

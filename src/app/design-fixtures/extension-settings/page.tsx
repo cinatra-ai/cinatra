@@ -49,6 +49,8 @@ async function noopSave(): Promise<{ ok: boolean; error?: string }> {
 const ACTIONS: ExtensionSettingsActions = {
   archive: noop,
   activate: noop,
+  retryActivation: noop,
+  rollBackToBundled: noop,
   reinstall: noop,
   publish: noop,
   forceDelete: noop,

@@ -174,3 +174,58 @@ export function untrustedActivationMode(
     ? "subprocess-prototype"
     : "deny";
 }
+
+// ---------------------------------------------------------------------------
+// The refusal the install pipeline raises when this classifier does not admit a
+// package. It lives beside the classifier because its whole payload is the
+// classifier's own verdict, and because the pipeline module is at its size
+// ceiling.
+// ---------------------------------------------------------------------------
+
+/**
+ * The stable code an untrusted-install refusal carries. Duck-typed by callers
+ * across dynamic-import boundaries (the same rule the lifecycle codes use), so
+ * the marketplace surface can render the EXACT trust verdict instead of the
+ * generic "anchor-refused" summary.
+ */
+export const UNTRUSTED_INSTALL_REFUSED = "UNTRUSTED_INSTALL_REFUSED" as const;
+
+/**
+ * A marketplace install refused BEFORE any durable mutation because the trust
+ * classifier did not admit the package for in-process import.
+ *
+ * It is the honest end of the install: nothing was journaled, granted, recorded
+ * or finalized, the materialized bytes are gone, and the implementation bundled
+ * in the image is still in service. `verdictReason` is the classifier's own
+ * words, carried out so the operator learns WHICH condition failed.
+ */
+export class UntrustedInstallRefusedError extends Error {
+  readonly code = UNTRUSTED_INSTALL_REFUSED;
+  constructor(
+    public readonly packageName: string,
+    public readonly packageVersion: string,
+    public readonly verdictReason: string,
+    public readonly operation: "install" | "update",
+    /** Whether the materialized store dir was actually removed. False when the
+     *  cleanup failed, or when the dir IS the live install's (a same-digest
+     *  re-install), so the message never claims a removal that did not happen. */
+    public readonly bytesRemoved: boolean = true,
+    /** The dir was KEPT deliberately because it is the live install's, not
+     *  because a cleanup failed. The two need different operator copy: one is
+     *  correct behaviour, the other is leftover state to clear. */
+    public readonly dirIsLiveInstall: boolean = false,
+  ) {
+    super(
+      `${operation} of ${packageName}@${packageVersion} was refused before anything was ` +
+        `committed: ${verdictReason}. No install-op journal, host-port grant or provenance ` +
+        `was written, ` +
+        (bytesRemoved
+          ? `the materialized bytes were removed, `
+          : dirIsLiveInstall
+            ? `the materialized dir was kept because it is the live install's, `
+            : `the materialized bytes are still on disk and need clearing, `) +
+        `and the version bundled in the image stays in service.`,
+    );
+    this.name = "UntrustedInstallRefusedError";
+  }
+}

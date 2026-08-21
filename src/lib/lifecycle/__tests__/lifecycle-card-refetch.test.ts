@@ -29,6 +29,14 @@ vi.mock("@cinatra-ai/agents/lifecycle-verification-read-store", () => ({
 }));
 
 import {
+  VERIFICATION_SUMMARY_MAX_FIELD_DIFF,
+  VERIFICATION_SUMMARY_MAX_SCOPE_PATHS,
+  VERIFICATION_SUMMARY_PATH_MAX_LENGTH,
+  VERIFICATION_SUMMARY_VALUE_MAX_LENGTH,
+  verificationSummaryBodySchema,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
+
+import {
   LIFECYCLE_RESTRICTED_REASON,
   decodeLifecycleGateRef,
   encodeLifecycleGateRef,
@@ -100,15 +108,28 @@ describe("the ref codec", () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// The per-kind ENVELOPE (epic S9, slice S9c)
+// ---------------------------------------------------------------------------
+//
+// The resolver answers `{ kind, state, body }`. The state ladder below is the
+// one S1 pinned, unchanged, assertion for assertion; what is added is the body
+// each kind is authorized to carry, and the rule that `absent` carries none.
+
 describe("artifact_review_gate — the state ladder (§IV)", () => {
   it("`absent` when the reader has no run READ access — and the gate is never read", async () => {
     accessFor([]);
-    const state = await resolveLifecycleCardState({
+    const resolved = await resolveLifecycleCardState({
       viewType: "artifact_review_gate",
       ref: REF,
       actorCtx,
     });
-    expect(state).toEqual({ state: "absent" });
+    expect(resolved).toEqual({
+      kind: "artifact_review_gate",
+      state: { state: "absent" },
+      body: null,
+    });
     // Order is the security property: gate existence is not consulted before
     // the reader is authorized to know about the run at all.
     expect(readReviewGateState).not.toHaveBeenCalled();
@@ -123,22 +144,30 @@ describe("artifact_review_gate — the state ladder (§IV)", () => {
         ref: REF,
         actorCtx,
       }),
-    ).toEqual({ state: "pending", canDecide: true, canComment: true });
+    ).toEqual({
+      kind: "artifact_review_gate",
+      state: { state: "pending", canDecide: true, canComment: true },
+      body: null,
+    });
   });
 
   it("`restricted` — may view and comment, may not decide — with a non-enumerating reason", async () => {
     accessFor(["read", "respondToHitl"]);
     readReviewGateState.mockResolvedValue({ status: "pending", targets: [] });
-    const state = await resolveLifecycleCardState({
+    const resolved = await resolveLifecycleCardState({
       viewType: "artifact_review_gate",
       ref: REF,
       actorCtx,
     });
-    expect(state).toEqual({
-      state: "restricted",
-      canDecide: false,
-      canComment: true,
-      reason: LIFECYCLE_RESTRICTED_REASON,
+    expect(resolved).toEqual({
+      kind: "artifact_review_gate",
+      state: {
+        state: "restricted",
+        canDecide: false,
+        canComment: true,
+        reason: LIFECYCLE_RESTRICTED_REASON,
+      },
+      body: null,
     });
     // The reason describes the READER's standing and names nothing about the item.
     expect(LIFECYCLE_RESTRICTED_REASON).not.toMatch(/run-1|task-1|\d/);
@@ -153,7 +182,11 @@ describe("artifact_review_gate — the state ladder (§IV)", () => {
         ref: REF,
         actorCtx,
       }),
-    ).toEqual({ state: "settled" });
+    ).toEqual({
+      kind: "artifact_review_gate",
+      state: { state: "settled" },
+      body: null,
+    });
   });
 
   it("`absent` for an unavailable gate — a replayed ref draws no DOM for nothing", async () => {
@@ -165,7 +198,11 @@ describe("artifact_review_gate — the state ladder (§IV)", () => {
         ref: REF,
         actorCtx,
       }),
-    ).toEqual({ state: "absent" });
+    ).toEqual({
+      kind: "artifact_review_gate",
+      state: { state: "absent" },
+      body: null,
+    });
   });
 
   it("`absent` for a ref that does not decode — a forged ref buys nothing", async () => {
@@ -176,7 +213,11 @@ describe("artifact_review_gate — the state ladder (§IV)", () => {
         ref: "not-a-ref!!",
         actorCtx,
       }),
-    ).toEqual({ state: "absent" });
+    ).toEqual({
+      kind: "artifact_review_gate",
+      state: { state: "absent" },
+      body: null,
+    });
     expect(enforceReviewRunAccess).not.toHaveBeenCalled();
   });
 
@@ -189,22 +230,125 @@ describe("artifact_review_gate — the state ladder (§IV)", () => {
         ref: REF,
         actorCtx,
       }),
-    ).toEqual({ state: "absent" });
+    ).toEqual({
+      kind: "artifact_review_gate",
+      state: { state: "absent" },
+      body: null,
+    });
+  });
+
+  it("carries NO body on any path — the target arrives through the island", async () => {
+    accessFor(["read", "approveHitl", "respondToHitl"]);
+    for (const status of ["pending", "resolved", "unavailable"]) {
+      readReviewGateState.mockResolvedValue({ status, targets: [] });
+      const resolved = await resolveLifecycleCardState({
+        viewType: "artifact_review_gate",
+        ref: REF,
+        actorCtx,
+      });
+      expect(resolved.body).toBeNull();
+    }
   });
 });
 
-describe("verification_summary — advisory, no floor (§VII)", () => {
-  it("`advisory` when the reader may read the run and a record exists", async () => {
+const RECORD = {
+  id: "vr-1",
+  gateId: "gate-row-1",
+  reviewedTarget: { artifactId: "art-1", representationRevisionId: "rev-base" },
+  repairedTarget: { artifactId: "art-1", representationRevisionId: "rev-fixed" },
+  scopeManifest: { paths: ["content.title"] },
+  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+  outcome: "verified",
+  createdAt: new Date(0),
+};
+
+describe("verification_summary — advisory, and now a reading to draw (§VII)", () => {
+  it("`advisory` WITH the sanitized body when the reader may read the run", async () => {
     accessFor(["read"]);
     readReviewGate.mockResolvedValue({ id: "gate-row-1" });
-    readVerificationRecordForGate.mockResolvedValue({ id: "vr-1", outcome: "verified" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
     expect(
       await resolveLifecycleCardState({
         viewType: "verification_summary",
         ref: REF,
         actorCtx,
       }),
-    ).toEqual({ state: "advisory" });
+    ).toEqual({
+      kind: "verification_summary",
+      state: { state: "advisory" },
+      body: {
+        version: 1,
+        outcome: "verified",
+        reviewedRevisionId: "rev-base",
+        repairedRevisionId: "rev-fixed",
+        scopePaths: ["content.title"],
+        fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+      },
+    });
+  });
+
+  it("the body names NO addressable identifier — not the record, gate or artifact", async () => {
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    const serialized = JSON.stringify(resolved.body);
+    expect(serialized).not.toContain("vr-1");
+    expect(serialized).not.toContain("gate-row-1");
+    expect(serialized).not.toContain("art-1");
+  });
+
+  it("clamps every field to the contract's ceilings", async () => {
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue({
+      ...RECORD,
+      scopeManifest: { paths: Array.from({ length: 500 }, () => "p".repeat(900)) },
+      fieldDiff: Array.from({ length: 500 }, (_unused, i) => ({
+        field: `f${i}`.padEnd(900, "x"),
+        before: "b".repeat(5000),
+        after: undefined,
+      })),
+    });
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    const body = resolved.body as {
+      scopePaths: string[];
+      fieldDiff: { field: string; before: string | null; after: string | null }[];
+    };
+    expect(body.scopePaths).toHaveLength(VERIFICATION_SUMMARY_MAX_SCOPE_PATHS);
+    expect(body.scopePaths[0]!.length).toBe(VERIFICATION_SUMMARY_PATH_MAX_LENGTH);
+    expect(body.fieldDiff).toHaveLength(VERIFICATION_SUMMARY_MAX_FIELD_DIFF);
+    expect(body.fieldDiff[0]!.field.length).toBe(VERIFICATION_SUMMARY_PATH_MAX_LENGTH);
+    expect(body.fieldDiff[0]!.before!.length).toBe(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH);
+    // A missing side is `null`, never the string "undefined".
+    expect(body.fieldDiff[0]!.after).toBeNull();
+    // And what it produces is what the wire contract accepts.
+    expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
+  });
+
+  it("`absent` for a verdict outside the closed set — an unreadable row draws nothing", async () => {
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue({ ...RECORD, outcome: "who-knows" });
+    expect(
+      await resolveLifecycleCardState({
+        viewType: "verification_summary",
+        ref: REF,
+        actorCtx,
+      }),
+    ).toEqual({
+      kind: "verification_summary",
+      state: { state: "absent" },
+      body: null,
+    });
   });
 
   it("`absent` without run read access — and the record is never read", async () => {
@@ -215,7 +359,11 @@ describe("verification_summary — advisory, no floor (§VII)", () => {
         ref: REF,
         actorCtx,
       }),
-    ).toEqual({ state: "absent" });
+    ).toEqual({
+      kind: "verification_summary",
+      state: { state: "absent" },
+      body: null,
+    });
     expect(readVerificationRecordForGate).not.toHaveBeenCalled();
   });
 
@@ -229,11 +377,15 @@ describe("verification_summary — advisory, no floor (§VII)", () => {
         ref: REF,
         actorCtx,
       }),
-    ).toEqual({ state: "absent" });
+    ).toEqual({
+      kind: "verification_summary",
+      state: { state: "absent" },
+      body: null,
+    });
   });
 });
 
-describe("trigger_schedule_proposal — no producer until S5", () => {
+describe("trigger_schedule_proposal — the route is the only resolver", () => {
   it("`absent`, so no floor is ever drawn without a proposal behind it", async () => {
     accessFor(["read", "approveHitl"]);
     expect(
@@ -242,6 +394,10 @@ describe("trigger_schedule_proposal — no producer until S5", () => {
         ref: REF,
         actorCtx,
       }),
-    ).toEqual({ state: "absent" });
+    ).toEqual({
+      kind: "trigger_schedule_proposal",
+      state: { state: "absent" },
+      body: null,
+    });
   });
 });

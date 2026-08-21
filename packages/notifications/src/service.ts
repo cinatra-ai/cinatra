@@ -315,22 +315,30 @@ export type CreateNotificationOptions = {
    */
   recipientUserIds?: readonly string[];
   /**
-   * cinatra#2835 — write the row TRANSACTIONALLY, behind a caller-supplied
-   * precondition.
+   * cinatra#2835, cinatra#2864 — write the row behind a caller-supplied
+   * PRECONDITION, in the same statement.
    *
    * Some notifications are only truthful while a row in ANOTHER table says so,
    * and checking that row before calling here is not enough: whatever the check
    * observed can change before the insert commits, and for a notification whose
    * only clearing event may already have passed, that window is the whole defect.
    * A `fence` closes it by moving the check INTO the write — precondition,
-   * insert and follow-ups compose into ONE statement on one connection, and the
-   * insert is driven FROM the precondition's rows, so zero rows means zero
-   * writes. A precondition that takes a row lock (`FOR UPDATE`) additionally
-   * serialises this write against whoever else mutates that row.
+   * insert and follow-ups compose as CTEs of ONE statement on one connection,
+   * and the insert is driven FROM the precondition's rows, so zero rows means
+   * zero writes. A precondition that takes a row lock (`FOR UPDATE`)
+   * additionally serialises this write against whoever else mutates that row.
    *
    * The package stays ignorant of what is being fenced: the caller owns the SQL
-   * and the table it names. See `buildHoldNotificationFence` in
-   * `@cinatra-ai/agents/run-wait-notifier` for the run-hold instance.
+   * and the table it names. See `buildHoldNotificationFence` (the run-hold
+   * instance) and `buildAutoGateNotificationFence` (the review-gate instance) in
+   * `@cinatra-ai/agents/run-wait-notifier`.
+   *
+   * TRUSTED SQL, INTERNAL CALLERS ONLY. `precondition` is composed into the
+   * statement verbatim — it is CODE, not data. It must come from a
+   * build-the-SQL-here helper that parameterises every value it carries (the two
+   * helpers that exist do), and no part of it may ever be derived from a request,
+   * a user field, or anything else outside this repository. The same holds for
+   * every `after` statement.
    */
   fence?: NotificationWriteFence;
 };
@@ -486,11 +494,15 @@ function insertNotificationRowForUser(args: {
   ];
   const returning = `id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at`;
 
-  // FENCED (cinatra#2835) vs plain. The two differ only in where the row values
-  // come from: a bare `VALUES` list, or a `SELECT` over the precondition's rows so
-  // an unmet precondition inserts nothing. The fence's own placeholders occupy
-  // `$1..$n`, so the row values shift behind them — that offset is the only
-  // reason this is not a single template.
+  // FENCED (cinatra#2835, cinatra#2864) vs plain. The two differ only in where
+  // the row values come from: a bare `VALUES` list, or a `SELECT` over the
+  // precondition's rows so an unmet precondition inserts NOTHING. The fence's own
+  // placeholders occupy `$1..$n`, so the row values shift behind them — that
+  // offset is the only reason this is not a single template.
+  //
+  // ONE STATEMENT, which is what makes it atomic. The precondition is a CTE of
+  // the INSERT, not a query before it, so the row lock a `FOR UPDATE`
+  // precondition takes is held for the insert it gates and released with it.
   const fence = args.options.fence;
   const offset = fence ? fence.values.length : 0;
   const rowPlaceholders = rowValues.map((_, i) => `$${offset + i + 1}`).join(", ");

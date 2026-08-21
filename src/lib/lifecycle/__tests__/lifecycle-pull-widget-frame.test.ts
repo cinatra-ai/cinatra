@@ -137,6 +137,20 @@ function mintedPart(res: ToolResult, toolName: string) {
 
 const REF = encodeLifecycleGateRef({ runId: "run-1", reviewTaskId: "task-1" }) as string;
 
+/** A readable verification record — the resolver projects §VII's body from it,
+ *  and a row it cannot read resolves `absent`, so the fixture must be whole. */
+const VERIFICATION_RECORD = {
+  id: "vr-1",
+  gateId: "gate-row-1",
+  reviewedTarget: { artifactId: "art-1", representationRevisionId: "rev-base" },
+  repairedTarget: { artifactId: "art-1", representationRevisionId: "rev-fixed" },
+  scopeManifest: { paths: ["content.title"] },
+  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+  outcome: "verified",
+  createdAt: new Date(0),
+};
+
+
 beforeEach(() => {
   vi.clearAllMocks();
   resolveWidgetLifecycleActorForFrame.mockResolvedValue({ ok: true, actorCtx: ACTOR_CTX });
@@ -150,7 +164,7 @@ beforeEach(() => {
     reviewTaskId: "task-1",
     status: "pending",
   });
-  readVerificationRecordForGate.mockResolvedValue({ verdict: "pass" });
+  readVerificationRecordForGate.mockResolvedValue(VERIFICATION_RECORD);
 });
 
 describe("a CONSENTED widget reader with access", () => {
