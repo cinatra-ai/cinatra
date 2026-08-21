@@ -575,14 +575,35 @@ export function deleteNotificationsByDedupeKeyForUser(args: {
   host.ensurePostgresSchema();
   host.runPostgresQueriesSync({
     connectionString: host.getPostgresConnectionString(),
-    queries: [
-      {
-        text: `DELETE FROM ${schemaQualified("notifications")}
-          WHERE user_id = $1 AND dedupe_key = $2`,
-        values: [args.userId, args.dedupeKey],
-      },
-    ],
+    queries: [buildDeleteNotificationsByDedupeKeyQuery(args)],
   });
+}
+
+/**
+ * cinatra#2882 — the ONE definition of the keyed-delete statement, shared by
+ * the synchronous bridge caller above and the async seam
+ * `deleteNotificationsByDedupeKeyForUserAsync` in `./service-async`.
+ *
+ * The guard semantics live here and only here: the statement is scoped to the
+ * exact `(user_id, dedupe_key)` pair, so neither driver can ever touch an
+ * unrelated notification, and neither can drift from the other into a wider
+ * or narrower predicate. `schemaQualified()` is read at CALL time (the schema
+ * comes from the host adapter, which the real-database suites repoint), which
+ * is why this is a function and not a template constant.
+ *
+ * INTERNAL: exported for `./service-async` only, deliberately NOT re-exported
+ * from the `/server` barrel — callers use one of the two drivers, never the
+ * statement.
+ */
+export function buildDeleteNotificationsByDedupeKeyQuery(args: {
+  userId: string;
+  dedupeKey: string;
+}): { text: string; values: unknown[] } {
+  return {
+    text: `DELETE FROM ${schemaQualified("notifications")}
+          WHERE user_id = $1 AND dedupe_key = $2`,
+    values: [args.userId, args.dedupeKey],
+  };
 }
 
 export function markAllNotificationsReadForUser(userId: string): void {
