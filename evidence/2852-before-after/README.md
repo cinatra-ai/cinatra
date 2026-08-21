@@ -124,17 +124,21 @@ records are registered in `scripts/ci/chat-hitl-capture-index.json`, the file
 | the RECORDED partition on a settled card (`recorded` chip mode, including the `unrecorded` reading) | **Not attempted in this round.** It needs a terminal decision carrying a partition, which is S6b's path (#2571) rather than #2852's drawing, and this lane's brief is the two LIVE states. The `recorded` and `unrecorded` readings are covered by the branch's own card suite. Recorded here rather than implied by the four cells above. |
 | a `remove` or `add` suggestion with no panel (the "absence draws nothing" arm) | **Not produced.** R2 (`remove`) is disarmed under partial disclosure and this projector names `excludedFields`, and R3 (`add`) needs a collection member missing a sibling key, which the flattened body has none of. The arm is unit-covered; no picture is claimed for it. |
 
-## A finding on the capture-record contract itself
+## A finding on the capture-record contract itself — FIXED (cinatra#2791)
 
-`scripts/ci/lib/capture-record-contract.mjs` maps `page_gate_region` to the
+`scripts/ci/lib/capture-record-contract.mjs` mapped `page_gate_region` to the
 `review_page` URL class `/^\/agents\/reviews/`. That path is the org's open-review
 QUEUE (`src/app/agents/reviews/page.tsx`), which mounts no lifecycle card; the
 surface that declares `host="page_gate_region"` is
 `/agents/<vendor>/<package>/<runId>/review/<taskId>`. No truthful
-`page_gate_region` record can satisfy the class as written. B1/B2 are kept in
-`capture-records.json` with the contract's verdict printed on them rather than
-edited to pass, and are not registered in the canonical index. Worth its own
-issue against #2821.
+`page_gate_region` record could satisfy the class as written.
+
+The class now matches the shipped route, and **B1/B2 are registered in the
+canonical index** (`scripts/ci/chat-hitl-capture-index.json`) exactly as this
+directory defines them — same bytes, same hashes, no assertion touched. They are
+still kept here with the contract's verdict of the day printed on them, because
+that verdict is a true record of what the contract said when this lane ran; the
+index twins carry no verdict, as every index record does.
 
 ## Layout
 
