@@ -357,16 +357,18 @@ export { VersionHistoryPage } from "./version-history-page";
 export { VersionDiffView } from "./version-diff-view";
 export { RollbackButton } from "./rollback-button";
 
-// `RegistryPermissionsScreen`, `RegistryEntryDetailSections`, the instance
-// screens and `agentPluginScreens` are NOT re-exported here (cinatra#2861,
-// route-graph ratchet): they are the one edge that put `./screens` and
-// `./instance-screens` — and through them `verification-summary-card.tsx` —
-// on every route that imports anything from this bare barrel, whether or not
-// it wanted the screens. Every real consumer already reaches them through the
-// `@cinatra-ai/agents/screens` subpath (`plugins-registry.tsx`,
-// `configuration/marketplace/[scope]/[name]/page.tsx`); these four names had
-// no consumer left importing them from the bare specifier, so the re-export
-// was pure graph weight with nothing depending on it.
+// FIVE names are NOT re-exported here (cinatra#2861, route-graph ratchet):
+// `RegistryPermissionsScreen`, `RegistryEntryDetailSections`,
+// `agentPluginScreens`, `AgentBuilderInstanceSetupScreen` and
+// `AgentBuilderInstancePermissionsScreen`. They are the one edge that put
+// `./screens` and `./instance-screens` — and through them
+// `verification-summary-card.tsx` — on every route that imports anything from
+// this bare barrel, whether or not it wanted the screens. Every real consumer
+// already reaches them through the `@cinatra-ai/agents/screens` subpath
+// (`plugins-registry.tsx`,
+// `configuration/marketplace/[scope]/[name]/page.tsx`); none of the five had a
+// consumer left importing it from the bare specifier, so the re-export was
+// pure graph weight with nothing depending on it.
 export { PublishModal } from "./publish-modal";
 export {
   ASSISTANT_A2A_PUBLICATION_ERROR,

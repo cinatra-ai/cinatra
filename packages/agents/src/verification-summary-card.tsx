@@ -149,7 +149,7 @@ const OUTCOME_COPY: Record<
     scope:
       "This audit checks the repaired revision against what the review authorized — " +
       "the accepted findings and the scope manifest they produced. The before / after " +
-      "below is the fields that were inspected — nothing more; an authorized field the " +
+      "below shows exactly the fields that were inspected — nothing more; an authorized field the " +
       "repair left untouched carries no row here, and none of the rows below fell " +
       "outside that authorization.",
   },
