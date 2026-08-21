@@ -19,10 +19,12 @@
  *                   The contrast is the evidence; both halves run here.
  *
  *   THE CEILING    — a delete held behind a lock nobody releases REJECTS at the
- *                   seam's own bound and gives its client back to the pool.
- *                   The sync bridge always settled (`Atomics.wait` times out);
- *                   an async seam with no ceiling would be strictly weaker —
- *                   a promise pending forever and a checkout never returned.
+ *                   seam's own bound and leaves the pool serviceable. The sync
+ *                   bridge always settled (`Atomics.wait` times out); an async
+ *                   seam with no ceiling would be strictly weaker — a promise
+ *                   pending forever and a checkout never returned. The bound
+ *                   that fires here is the CLIENT-side `query_timeout`, which
+ *                   is the one that holds behind a connection pooler too.
  *
  *   NO SILENT FALLBACK
  *                 — a host that wires no async runner makes the seam THROW a
@@ -358,16 +360,43 @@ describeDb("cinatra#2882 async notification-delete seam", () => {
      *
      * Here the lock is held far past the ceiling and never released on its own.
      * The delete must REJECT (ordinarily — the caller's best-effort catch takes
-     * it), at roughly the ceiling, and the client must be back in the pool and
-     * still usable.
+     * it), at roughly the ceiling, and the pool must come out serviceable.
+     *
+     * WHICH BOUND FIRES, and why the assertion names it. The migrated clear is
+     * a single autocommit statement (no `transaction: true`), so the only bound
+     * on it is the CLIENT-side `query_timeout` — deliberately so: the
+     * server-side `statement_timeout` was removed from the pool config because
+     * pg sends that as a STARTUP PARAMETER, which a PgBouncer/Supavisor-class
+     * pooler rejects outright (see `postgres-async-pool-config.test.ts`). The
+     * expected message is therefore pg's own `Query read timeout`, asserted
+     * exactly rather than as an alternation — accepting a `statement timeout`
+     * message here would let the startup-parameter form pass this pin.
+     *
+     * That path DESTROYS the client rather than returning it (pg's stream is
+     * desynced once it abandons a query), which is why the pool assertions
+     * below are about a pool that is EMPTY of checkouts and still usable, not
+     * about the same connection coming home.
      */
-    it("a delete blocked past the bound rejects, and gives its client back", async () => {
+    it("a delete blocked past the bound rejects, and leaves the pool serviceable", async () => {
       await seed([{ id: "n-bounded", user_id: "user-a", dedupe_key: "bounded" }]);
+      const pool = getPostgresAsyncPool(DB_URL);
+      // Put the pool in a KNOWN state — one warm idle client, nothing checked
+      // out — immediately before the measurement, so "the timed-out client was
+      // destroyed, not returned" is a deterministic reading rather than a
+      // guess about what earlier tests left behind (pg reaps idle clients after
+      // `idleTimeoutMillis`, so this must be fresh).
+      await runPostgresQueriesAsync({
+        connectionString: DB_URL,
+        queries: [{ text: "SELECT 1" }],
+      });
+      const idleBefore = pool.idleCount;
+      const checkedOutBefore = pool.totalCount - pool.idleCount;
+      expect(idleBefore).toBeGreaterThan(0);
+      expect(checkedOutBefore).toBe(0);
+
       // Ten ceilings of hold: long enough that nothing here can be explained by
       // the lock lapsing, short enough to be a safety net if this test throws.
       const blocker = await holdTableLock(BOUND_MS * 10);
-      const pool = getPostgresAsyncPool(DB_URL);
-      const checkedOutBefore = pool.totalCount - pool.idleCount;
 
       const t0 = performance.now();
       // Raced against a watchdog ON PURPOSE: with the ceiling removed this must
@@ -392,25 +421,102 @@ describeDb("cinatra#2882 async notification-delete seam", () => {
       expect(outcome).not.toBe("never-settled");
       // ...as an ordinary rejection, not a silent success.
       expect(outcome).toBeInstanceOf(Error);
-      expect((outcome as Error).message).toMatch(
-        /statement timeout|Query read timeout/i,
-      );
+      // pg's own message for an expired `query_timeout`. Named exactly: the
+      // startup-parameter form this seam must never go back to would fail here
+      // with "canceling statement due to statement timeout" instead.
+      expect((outcome as Error).message).toBe("Query read timeout");
       // It really did wait for the ceiling rather than failing fast for an
       // unrelated reason, and it did not wait appreciably past it.
       expect(elapsedMs).toBeGreaterThan(BOUND_MS * 0.5);
       expect(elapsedMs).toBeLessThan(BOUND_MS * 3);
 
-      // THE LEAK PIN: the checked-out client came back. An unbounded call holds
-      // its checkout for the life of the process, so `max` of them wedge every
-      // later caller of this pool.
+      // THE LEAK PIN: the checkout was given back. An unbounded call holds it
+      // for the life of the process, so `max` of them wedge every later caller
+      // of this pool.
       expect(pool.totalCount - pool.idleCount).toBe(checkedOutBefore);
       expect(pool.waitingCount).toBe(0);
+      // ...and given back by being DESTROYED, not returned to the idle set: a
+      // client whose query pg abandoned has a desynced protocol stream, and the
+      // reply to that abandoned statement would land on whoever checked it out
+      // next. A clean release would have left `idleCount` unchanged.
+      expect(pool.idleCount).toBe(idleBefore - 1);
 
       // And the pool is still serviceable: the same seam, same key, now that
       // the lock is gone.
       await deleteNotificationsByDedupeKeyForUserAsync({
         userId: "user-a",
         dedupeKey: "bounded",
+      });
+      expect(await snapshot()).toEqual([]);
+    }, 120_000);
+
+    /**
+     * THE OTHER HALF OF THE CEILING: the transaction path's server-side cancel.
+     *
+     * `SET LOCAL statement_timeout`, issued with the BEGIN, is the pooler-SAFE
+     * form of the bound the pool config must not carry — transaction-scoped, so
+     * it is reverted at COMMIT/ROLLBACK and can never become session state on a
+     * pooled server connection. This pin is what makes keeping it worth the
+     * extra statement: unlike the client-side read timeout, Postgres actually
+     * CANCELS the blocked statement (57014) instead of abandoning it while the
+     * backend keeps waiting on the lock, and the connection survives to be
+     * reused rather than being destroyed.
+     */
+    it("TRANSACTION path: the server cancels the statement, and the client survives", async () => {
+      await seed([{ id: "n-txn", user_id: "user-a", dedupe_key: "txn" }]);
+      const pool = getPostgresAsyncPool(DB_URL);
+      // Same known-pool-state setup as above, for the same reason.
+      await runPostgresQueriesAsync({
+        connectionString: DB_URL,
+        queries: [{ text: "SELECT 1" }],
+      });
+      const idleBefore = pool.idleCount;
+      expect(idleBefore).toBeGreaterThan(0);
+
+      const blocker = await holdTableLock(BOUND_MS * 10);
+      const t0 = performance.now();
+      const outcome = await Promise.race([
+        runPostgresQueriesAsync({
+          connectionString: DB_URL,
+          transaction: true,
+          queries: [
+            {
+              text: `DELETE FROM ${TABLE} WHERE user_id = $1 AND dedupe_key = $2`,
+              values: ["user-a", "txn"],
+            },
+          ],
+        })
+          .then(() => "resolved-without-waiting" as const)
+          .catch((error: unknown) => error),
+        new Promise<"never-settled">((resolve) =>
+          setTimeout(() => resolve("never-settled"), BOUND_MS * 3),
+        ),
+      ]);
+      const elapsedMs = performance.now() - t0;
+      await releaseBlocker(blocker);
+
+      expect(outcome).not.toBe("never-settled");
+      expect(outcome).toBeInstanceOf(Error);
+      // Postgres cancelled it — NOT pg abandoning the read. This is the whole
+      // difference the transaction path buys.
+      expect((outcome as { code?: string }).code).toBe("57014");
+      expect((outcome as Error).message).toMatch(/statement timeout/i);
+      // It fired at the server-side bound, which sits strictly UNDER the
+      // client-side read timeout so the clean cancel wins the race.
+      expect(elapsedMs).toBeGreaterThan(BOUND_MS * 0.5);
+      expect(elapsedMs).toBeLessThan(BOUND_MS);
+
+      // The client came back ALIVE: rolled back and returned to the idle set,
+      // not destroyed. (The read-timeout path above decrements `idleCount`.)
+      expect(pool.totalCount - pool.idleCount).toBe(0);
+      expect(pool.idleCount).toBe(idleBefore);
+      expect(pool.waitingCount).toBe(0);
+
+      // Rolled back, so the row is still there — and the pool still works.
+      expect(await snapshot()).toEqual(["n-txn|user-a|txn"]);
+      await deleteNotificationsByDedupeKeyForUserAsync({
+        userId: "user-a",
+        dedupeKey: "txn",
       });
       expect(await snapshot()).toEqual([]);
     }, 120_000);
