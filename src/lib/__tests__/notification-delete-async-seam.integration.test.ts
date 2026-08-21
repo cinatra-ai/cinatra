@@ -370,7 +370,7 @@ describeDb("cinatra#2882 async notification-delete seam", () => {
      * `Atomics.wait` returns "timed-out" and the caller gets a throw. The first
      * cut of the async seam set no ceiling at all, so a delete behind a lock
      * nobody releases left the handler's promise pending FOREVER and never gave
-     * its client back. The three migrated clears swallow their errors by
+     * its client back. The four migrated clears swallow their errors by
      * design, so that leak would have been permanent and silent.
      *
      * Here the lock is held far past the ceiling and never released on its own.

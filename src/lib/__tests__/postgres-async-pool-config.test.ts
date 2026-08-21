@@ -8,7 +8,7 @@
  * A PgBouncer/Supavisor-class pooler forwards only the startup parameters it
  * allowlists and answers anything else with a FATAL
  * `unsupported startup parameter: statement_timeout`, so behind such a DSN
- * EVERY `pool.connect()` fails. The three migrated notification clears swallow
+ * EVERY `pool.connect()` fails. The four migrated notification clears swallow
  * rejections by design, so the symptom would be notifications silently no
  * longer being deleted — with a green dedicated suite, because that suite runs
  * against direct Postgres where the parameter is accepted.
