@@ -136,6 +136,13 @@ const HOST_STANDARD_IDS = new Set([
   // conformance (outcome named, decider named, no Refresh) is pinned in the
   // card suite.
   "review-gate-settled",
+  // cinatra#2865 — the §I input hierarchy, annotated in the SAME newer ratified
+  // spec (section I): the subordinate note field the decision bar draws, and
+  // the primary composer the conversation column carries. Listed here for the
+  // same reason as the S2 anchors: this suite's closed set is the older
+  // spec's. Their own conformance is pinned in the decision-bar and
+  // conversation-column suites.
+  "review-note-field-subordinate",
   // Two host-standard lines the row owns rather than the drawing: the truth owed
   // to a reader whose marks were dropped when the surfaced set changed, and the
   // count of what the decision below is about to carry.
