@@ -1111,6 +1111,79 @@ describe("a save can only tombstone a turn it ASSERTS the removal of", () => {
     ]);
   });
 
+  it("a truncation does not tombstone a KEPT turn that re-renders the same lifecycle entity", async () => {
+    // F2. A lifecycle `ref` names an ENTITY, not a turn, so a later turn can
+    // legitimately re-render the same card. Round 3 pooled every removed row's
+    // view refs thread-wide and accepted a ref match on the durable side
+    // unconditionally — so removing the turn that drew the card LAST tombstoned
+    // the untouched turn that drew it FIRST.
+    const viewType = CARRIAGES[0].kind as LifecycleViewType;
+    const sharedRef = refFor(viewType);
+    const sharedEntity: Carriage = {
+      ...CARRIAGES[0],
+      build: () => {
+        const result = buildLifecycleViewEnvelope({ viewType, ref: sharedRef });
+        if (result === null) {
+          throw new Error(`the producer refused the shared ${viewType} ref — this arm cannot be driven`);
+        }
+        return { result, identity: sharedRef };
+      },
+    };
+    const threadId = `thr-2823-sharedref-${randomUUID()}`;
+
+    // Y — the EARLIER turn, and the one the user KEEPS.
+    const driveY = await driveTheRealSink(sharedEntity, threadId);
+    const { userMessage: userY } = persistThroughTheRealStore({
+      threadId,
+      userText: "Put the first draft up for review.",
+      runId: driveY.runId,
+      durable: driveY.durable,
+    });
+    const assistantY = savedAssistantMessageFor(driveY, sharedEntity);
+    saveWholeTranscript({ threadId, messages: [userY, assistantY] });
+
+    // X — a LATER turn re-rendering the SAME entity through its OWN tool call.
+    const userX = {
+      id: `u-${randomUUID()}`,
+      role: "user" as const,
+      content: "show me that review gate again",
+    };
+    saveWholeTranscript({ threadId, messages: [userY, assistantY, userX] });
+    const driveX = await driveTheRealSink(sharedEntity, threadId);
+    persistAnotherRunBoundTurn({ threadId, runId: driveX.runId, durable: driveX.durable });
+    // X's own save lands carrying the card it drew. THIS is the row whose view ref
+    // the thread-wide pool used to reach Y with.
+    const assistantXId = `a-${randomUUID()}`;
+    const assistantX: Record<string, unknown> = {
+      ...savedAssistantMessageFor(driveX, sharedEntity),
+      id: assistantXId,
+      dataParts: [{ viewType, schemaVersion: 1, ref: sharedRef }],
+    };
+    saveWholeTranscript({ threadId, messages: [userY, assistantY, userX, assistantX] });
+
+    // THE TRUNCATION: the user edits `userX`, so X and its turn go. Y is untouched
+    // and is not even adjacent to the edit point.
+    const editedPrompt = {
+      id: `u-${randomUUID()}`,
+      role: "user" as const,
+      content: "actually, never mind",
+    };
+    saveWholeTranscript({
+      threadId,
+      messages: [userY, assistantY, editedPrompt],
+      removedMessageIds: [userX.id, assistantXId],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(
+      reloaded.map((m) => m.id),
+      "the removed turn came back, or the kept one did not — the truncation did not land as asserted",
+    ).toEqual([userY.id, assistantY.id, editedPrompt.id]);
+    expect(
+      viewsCarriedBy(reloaded[1]).atSlot(driveY.toolCallId),
+      "truncating a LATER turn tombstoned an UNTOUCHED earlier one, on a shared lifecycle ref alone",
+    ).toEqual([{ viewType, schemaVersion: 1, ref: sharedRef }]);
+  });
 });
 
 describe("a reloaded card lands at its slot, and a pre-slot row still lands at turn level", () => {

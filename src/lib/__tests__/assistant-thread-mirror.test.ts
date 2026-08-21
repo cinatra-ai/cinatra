@@ -417,6 +417,30 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     expect(supersede.text).toContain("t.content->'dataParts'");
   });
 
+  it("matches PER REMOVED ROW, and fences the view-ref arm exactly as the reload does", () => {
+    // Round 4, F2. The identities were pooled thread-wide and a view-ref hit was
+    // accepted unconditionally — but a lifecycle `ref` names an ENTITY, so a
+    // later turn re-rendering the same card had its row tombstoned by the removal
+    // of an unrelated one. The discipline is now `claimsDurableTurn`'s, verbatim.
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+    });
+    // Every identity token is keyed to the removed row that carried it — there is
+    // no thread-wide union to match against.
+    expect(supersede.text).toContain("r.id AS removed_id");
+    expect(supersede.text).toContain("SELECT rc.token FROM removed_call rc WHERE rc.removed_id = r.id");
+    expect(supersede.text).toContain("SELECT rv.token FROM removed_view rv WHERE rv.removed_id = r.id");
+    expect(supersede.text).not.toContain("removed_identity");
+    // ...and the ref arm is offered ONLY to a removed row that records no tool
+    // call anywhere. One that records its calls and shares none of the durable
+    // row's is saying it is a DIFFERENT turn.
+    expect(supersede.text).toContain(
+      "NOT EXISTS (SELECT 1 FROM removed_call rc WHERE rc.removed_id = r.id)",
+    );
+  });
 });
 
 describe("extractRemovedMessageIdsFromThread", () => {

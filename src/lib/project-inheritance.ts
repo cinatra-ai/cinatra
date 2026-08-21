@@ -565,8 +565,23 @@ export function extractRemovedMessageIdsFromThread(
  * lifecycle cards' `viewType|ref` (turn-level `dataParts`, or folded onto a
  * `tool_call` part since S9i).
  *
- * One identity discipline, the same one `claimsDurableTurn` reads on the reload
- * side.
+ * MATCHED PER REMOVED ROW, UNDER THE SAME FENCE `claimsDurableTurn` USES (round
+ * 4, F2). Round 3 pooled every removed row's identity tokens into ONE thread-wide
+ * set and accepted a view-ref hit unconditionally. But a lifecycle `ref` names an
+ * ENTITY, not a turn, and a later turn can legitimately re-render the same card —
+ * so removing the turn that drew it last tombstoned the untouched turn that drew
+ * it first. The identity discipline is therefore the reload side's, verbatim:
+ *
+ *   1. A SHARED TOOL-CALL ID with THIS removed row. The primary key.
+ *   2. A SHARED VIEW REF, and ONLY when THIS removed row records NO tool call
+ *      anywhere. A removed row that DOES record its calls and shares none of the
+ *      durable row's is not silent about its identity — it is saying it is a
+ *      DIFFERENT turn, so the weaker key is not offered and a durable row whose
+ *      own call identity is disjoint from the removed row's is never matched.
+ *
+ * A tombstone is the strictly more expensive way to be wrong here: a refused one
+ * costs a turn that has to be removed again, an over-eager one costs a kept turn
+ * its card forever.
  *
  * ORDERED BEFORE THE DELETE, in the SAME transaction the whole mirror write runs
  * in, so it sees the rows that are about to go and cannot half-apply: the
@@ -586,33 +601,34 @@ function buildSupersedeRunBoundTurnsQuery(args: {
   const durableViews = jsonbArrayOrEmpty("t.content->'dataParts'");
   return {
     text: `WITH removed AS (
-  SELECT content FROM "${schema}"."assistant_turns"
+  SELECT id, content FROM "${schema}"."assistant_turns"
    WHERE thread_id = $1
      AND id LIKE '${LEGACY_MIRROR_TURN_ID_PREFIX}%'
      AND NOT (id = ANY($2::text[]))
      AND id = ANY($3::text[])
      AND content IS NOT NULL
 ),
-removed_identity AS (
+removed_call AS (
   -- a tool-call id in the ordinary ordered trace
-  SELECT 'call:' || (p->>'id') AS token
+  SELECT r.id AS removed_id, 'call:' || (p->>'id') AS token
     FROM removed r, jsonb_array_elements(${parts}) p
    WHERE p->>'kind' = 'tool_call' AND jsonb_typeof(p->'id') = 'string'
   UNION
   -- ...or in the Slack-mode layout, which omits parts and keeps thoughtGroups
-  SELECT 'call:' || (tc->>'id')
+  SELECT r.id, 'call:' || (tc->>'id')
     FROM removed r, jsonb_array_elements(${groups}) g,
          jsonb_array_elements(${jsonbArrayOrEmpty("g->'toolCalls'")}) tc
    WHERE jsonb_typeof(tc->'id') = 'string'
-  UNION
+),
+removed_view AS (
   -- a lifecycle card's own identity, at turn level
-  SELECT 'view:' || (d->>'viewType') || '|' || (d->>'ref')
+  SELECT r.id AS removed_id, 'view:' || (d->>'viewType') || '|' || (d->>'ref') AS token
     FROM removed r, jsonb_array_elements(${jsonbArrayOrEmpty("r.content->'dataParts'")}) d
    WHERE jsonb_typeof(d->'viewType') = 'string' AND d->>'viewType' <> ''
      AND jsonb_typeof(d->'ref') = 'string'
   UNION
   -- ...or folded onto the tool_call that produced it (S9i slots)
-  SELECT 'view:' || (v->>'viewType') || '|' || (v->>'ref')
+  SELECT r.id, 'view:' || (v->>'viewType') || '|' || (v->>'ref')
     FROM removed r, jsonb_array_elements(${parts}) p,
          jsonb_array_elements(${jsonbArrayOrEmpty("p->'views'")}) v
    WHERE p->>'kind' = 'tool_call' AND jsonb_typeof(v->'viewType') = 'string'
@@ -624,18 +640,29 @@ UPDATE "${schema}"."assistant_turns" t
    AND t.run_id IS NOT NULL
    AND t.superseded_at IS NULL
    AND t.content->>'format' = 'assistant-turn-v1'
-   AND (
-     EXISTS (
-       SELECT 1 FROM jsonb_array_elements(${durableParts}) dp
-        WHERE dp->>'type' = 'tool_call' AND jsonb_typeof(dp->'id') = 'string'
-          AND ('call:' || (dp->>'id')) IN (SELECT token FROM removed_identity)
-     )
-     OR EXISTS (
-       SELECT 1 FROM jsonb_array_elements(${durableViews}) dd
-        WHERE jsonb_typeof(dd->'viewType') = 'string' AND dd->>'viewType' <> ''
-          AND jsonb_typeof(dd->'ref') = 'string'
-          AND ('view:' || (dd->>'viewType') || '|' || (dd->>'ref')) IN (SELECT token FROM removed_identity)
-     )
+   AND EXISTS (
+     SELECT 1 FROM removed r
+      WHERE EXISTS (
+              -- (1) a SHARED tool-call id with THIS removed row
+              SELECT 1 FROM jsonb_array_elements(${durableParts}) dp
+               WHERE dp->>'type' = 'tool_call' AND jsonb_typeof(dp->'id') = 'string'
+                 AND ('call:' || (dp->>'id')) IN (
+                   SELECT rc.token FROM removed_call rc WHERE rc.removed_id = r.id
+                 )
+            )
+         OR (
+              -- (2) a SHARED view ref, and only where this removed row records no
+              --     tool call at all — so it contradicts nothing by taking it
+              NOT EXISTS (SELECT 1 FROM removed_call rc WHERE rc.removed_id = r.id)
+              AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(${durableViews}) dd
+                 WHERE jsonb_typeof(dd->'viewType') = 'string' AND dd->>'viewType' <> ''
+                   AND jsonb_typeof(dd->'ref') = 'string'
+                   AND ('view:' || (dd->>'viewType') || '|' || (dd->>'ref')) IN (
+                     SELECT rv.token FROM removed_view rv WHERE rv.removed_id = r.id
+                   )
+              )
+            )
    )`,
     values: [args.threadId, args.keptIds, args.removedIds],
   };
