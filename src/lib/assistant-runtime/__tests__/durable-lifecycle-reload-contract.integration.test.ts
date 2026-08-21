@@ -2016,13 +2016,14 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     // AND THAT IS ALL IT IS: A LEXICAL TRIPWIRE OVER THE WHOLE PACKAGE, not a
     // dataflow proof. No text scan can be one. A future saver could forward an
     // object built by an allow-listed module and never name a field itself, and
-    // this arm would not see it. What actually BOUNDS the damage is server-side
+    // this arm would not see it, and neither would a new use added INSIDE a module
+    // that is already on the list. What actually BOUNDS the damage is server-side
     // and is driven for real on a database in this file: the tombstone authorizes
     // itself against the thread's ownership, it can only ever narrow what the
     // reconcile removes, and the stale-tab arm proves an ordinary save asserting
-    // nothing supersedes nothing. This arm's job is to make a NEW carrier a
-    // deliberate act — an allow-list edit, with a reviewer on it — rather than a
-    // line nobody notices.
+    // nothing supersedes nothing. What this arm buys is exactly one thing: a NEW
+    // MODULE that names a field cannot appear without an allow-list edit, and an
+    // allow-list edit has a reviewer on it.
     const chatSrc = path.join(process.cwd(), "packages/chat/src");
     const walk = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
