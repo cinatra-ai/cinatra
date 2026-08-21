@@ -608,8 +608,12 @@ export function chatCarriageRootAnchorsFor(
  *
  *   · `trigger_schedule_proposal` — the registry still dispatches it to the S1
  *     shell; S9d (#2788) draws `ScheduleProposalCard` and strikes it.
- *   · `verification_summary` — same shell; S9e (#2789) draws
- *     `VerificationSummaryCard` and strikes it.
+ *
+ * `verification_summary` WAS here for the same reason and is STRUCK by S9e
+ * (cinatra#2789): the registry now dispatches it to `VerificationSummaryCard`,
+ * so the shell no longer owns its chat root. The list is a red done-check in
+ * both directions — leaving the row standing after the owner lands turns the
+ * matrix red, which is exactly how the seam was found.
  *
  * `recommendation_hold` is deliberately NOT repeated here. Its chat mount is
  * owed for its own reason (S9b, #2786) and already ratcheted by
@@ -619,7 +623,6 @@ export function chatCarriageRootAnchorsFor(
  */
 export const SHELL_OWNED_CHAT_KINDS: readonly LifecycleCardKind[] = Object.freeze([
   "trigger_schedule_proposal",
-  "verification_summary",
 ]);
 
 /**

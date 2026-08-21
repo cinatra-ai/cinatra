@@ -372,12 +372,24 @@ export async function sweepParks(input: SweepParksInput = {}): Promise<SweepPark
  *     `select` — drizzle exposes no signal on execute, so aborting it means
  *     bypassing drizzle for that read, holding the raw pool client, and cancelling
  *     its backend from a SECOND connection. The second is
- *     `deleteHoldNotificationForUser`, which is SYNCHRONOUS: it runs its query in
- *     a worker thread and blocks the main thread on `Atomics.wait`. No signal can
- *     interrupt that — while it blocks, no timer, no abort listener and no
- *     microtask runs at all, including the bound's own. It is un-abortable by
- *     construction rather than by omission, and it carries its own 30s ceiling
- *     (`POSTGRES_SYNC_TIMEOUT_MS`), which is the only thing bounding that window.
+ *     `deleteHoldNotificationForUserAsync` (cinatra#2882): a pooled `await`, so
+ *     it takes no `AbortSignal` and is un-abortable by omission, but it does
+ *     carry its own settle ceiling (`POSTGRES_ASYNC_TIMEOUT_MS`, 30s by
+ *     default), which rejects the call rather than leaving it pending.
+ *
+ *     ONE CLAIM OF THIS DOCBLOCK WAS REPAIRED BY THAT MIGRATION, and it is the
+ *     load-bearing one. That half used to be the SYNCHRONOUS
+ *     `deleteHoldNotificationForUser`, which ran its query in a worker thread
+ *     and blocked the main thread on `Atomics.wait`: while it blocked, no timer,
+ *     no abort listener and no microtask ran at all — INCLUDING THE BOUND'S OWN.
+ *     The per-dispatch bound above could therefore not expire while the delete
+ *     was in flight against the production host, and only the sync runner's own
+ *     30s `POSTGRES_SYNC_TIMEOUT_MS` ceiling bounded that window. On the async
+ *     twin the bound's timer fires on schedule, so `HOLD_NOTIFY_DISPATCH_TIMEOUT_MS`
+ *     is now the real bound on this seam and everything derived from it (the
+ *     expiry breaker, E + C - 1 = 7, the (E + 1) x BOUND budget below) holds for
+ *     the production driver, not just for a host whose port already yields.
+ *     Cancellation is still the missing piece, and is still tracked as #2896.
  *
  * THE BUDGET, AND THE TWO DIFFERENT CEILINGS IT CARRIES. The page is the sweep's
  * `limit`: 100 for BOTH production drivers (gate maintenance passes its own

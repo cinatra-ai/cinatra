@@ -78,6 +78,8 @@
    "verification_summary": {
     "hosts": {
      "chat_thread": "transcript",
+     "page_gate_region": "composition",
+     "run_card": "composition",
      "site_widget": "transcript"
     },
     "owed": []

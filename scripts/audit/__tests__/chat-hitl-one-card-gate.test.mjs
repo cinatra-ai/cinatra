@@ -38,13 +38,14 @@ import {
   CARD_OWNERS,
   cardDefinitionPattern,
   RETIRED_PARALLELS,
+  VERIFICATION_CORE_ANCHORS,
   REGISTRY_MODULE,
   REGISTRY_KINDS,
   HOST_PROVIDED_BY_PARENT,
+  collectFiles,
   LIFECYCLE_CARD_CONTRACTS,
   LIFECYCLE_CARD_KINDS,
   LIFECYCLE_CARD_HOSTS,
-  PENDING_RETIREMENT,
   auditContracts,
   collectContractViolations,
   collectViolations,
@@ -117,7 +118,8 @@ describe("R2 — each retired parallel renderer is banned by name", () => {
         "review-redirect-card": "return <ArtifactReviewRedirectCard gate={g} />;",
         "direct-chip-row-mount": "return <RunRecommendationChipRow runId={id} />;",
         "page-direct-decision-composition": "return <ReviewDecisionBar action={a} />;",
-        "verification-page-view": "return <VerificationView record={r} />;",
+        "page-direct-verification-composition":
+          'return <div data-verification-chrome="Core analysis">Core analysis</div>;',
       }[parallel.id];
       expect(sample, `no fixture for '${parallel.id}'`).toBeTypeOf("string");
       const hits = scanModule("src/app/new-surface/page.tsx", sample);
@@ -187,6 +189,209 @@ describe("R4 — one registry row per data-part kind", () => {
     expect(scanRegistry(read(REGISTRY_MODULE))).toEqual([]);
     // …and the interrupt-carried kind is deliberately NOT there.
     expect(REGISTRY_KINDS).not.toContain("recommendation_hold");
+  });
+
+  it("flags a row that still counts as ONE but dispatches to the wrong component", () => {
+    // cinatra#2861: counting `kind:` occurrences left the rule half-blind.
+    // Reverting the drawn verification card to the S1 shell keeps the count at
+    // exactly one and used to sail through — silently un-retiring the shell for
+    // a kind the epic has DRAWN. The right-hand side is checked against
+    // CARD_OWNERS, the same table R1 enforces ownership with.
+    const hits = scanRegistry(
+      [
+        "const M = {",
+        "  artifact_review_gate: ReviewGateCard,",
+        "  verification_summary: LifecycleCard,",
+        "  trigger_schedule_proposal: LifecycleCard,",
+        "};",
+      ].join("\n"),
+    );
+    expect(hits.map((h) => h.rule)).toEqual(["R4"]);
+    expect(hits[0].detail).toMatch(/dispatches 'verification_summary' to 'LifecycleCard'/);
+    expect(hits[0].detail).toContain(CARD_OWNERS.verification_summary.component);
+  });
+
+  it("flags a right-hand side it cannot read rather than trusting it", () => {
+    // Fail-closed: an expression in the dispatch slot is not a bare owner
+    // identifier, so the gate reports it instead of letting it through.
+    const hits = scanRegistry(
+      [
+        "const M = {",
+        "  artifact_review_gate: ReviewGateCard,",
+        "  verification_summary: pick(kind),",
+        "  trigger_schedule_proposal: LifecycleCard,",
+        "};",
+      ].join("\n"),
+    );
+    expect(hits.map((h) => h.rule)).toEqual(["R4"]);
+    expect(hits[0].detail).toMatch(/verification_summary/);
+  });
+
+  // REGRESSION (cinatra#2861, both cuts found by this reconciliation's Codex
+  // rounds). The rule shipped two fail-OPENS of the same shape: it read only the
+  // FRONT of the value, and the expected component name was sitting there.
+  //   · cut 1 captured a LEADING identifier, so `Owner(kind)` passed.
+  //   · cut 2 ended the capture at a NEWLINE, so the same call split across two
+  //     lines passed — a newline does not end a JavaScript value.
+  // `pick(kind)` above caught neither, because `pick` is not the owner's name:
+  // the fail-closed claim had never been tested against an expression that
+  // STARTS with the right word. Every shape below does.
+  it("fails CLOSED on an expression that merely BEGINS with the owner's name", () => {
+    const owner = CARD_OWNERS.verification_summary.component;
+    const shapes = [
+      `${owner}(kind)`,
+      // The multiline continuation — cut 2's bypass, pinned by fixture.
+      `${owner}\n    (kind)`,
+      `${owner}\n    .Inner`,
+      `x.${owner}`,
+      `() => ${owner}`,
+      `cond ? ${owner} : Other`,
+    ];
+    for (const rhs of shapes) {
+      const hits = scanRegistry(
+        [
+          "const M = {",
+          "  artifact_review_gate: ReviewGateCard,",
+          `  verification_summary: ${rhs},`,
+          "  trigger_schedule_proposal: LifecycleCard,",
+          "};",
+        ].join("\n"),
+      );
+      expect(hits.map((h) => h.rule), JSON.stringify(rhs)).toEqual(["R4"]);
+      expect(hits[0].detail, JSON.stringify(rhs)).toMatch(/an expression this gate cannot read/);
+    }
+  });
+
+  it("still accepts the one legal shape — a bare imported identifier", () => {
+    const hits = scanRegistry(
+      [
+        "const M = {",
+        "  artifact_review_gate: ReviewGateCard,",
+        `  verification_summary: ${CARD_OWNERS.verification_summary.component},`,
+        "  trigger_schedule_proposal: LifecycleCard,",
+        "};",
+      ].join("\n"),
+    );
+    expect(hits).toEqual([]);
+  });
+});
+
+/**
+ * §VII's ONE RENDERER, as a structural property of the tree (cinatra#2789,
+ * epic #2784 S9e).
+ *
+ * R1 keys on a component NAME, which a look-alike can simply not use. The
+ * verification card is therefore ALSO pinned by its drawing: the anchors §VII's
+ * core carries may be emitted by exactly one module, that module must emit all
+ * of them, and the review page — the one surface that used to draw them itself
+ * — must mount the card instead of re-emitting any.
+ */
+describe("§VII — one renderer, pinned on the drawing's own anchors", () => {
+  const OWNER = CARD_OWNERS.verification_summary.owner;
+  const VERIFICATION_VIEW = [
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review",
+    "[reviewTaskId]/verification-view.tsx",
+  ].join("/");
+
+  // The anchor list is PINNED as a set, not just iterated. Every other
+  // assertion in this block loops over `VERIFICATION_CORE_ANCHORS`, so dropping
+  // an entry would silently shrink what they check rather than fail anything —
+  // which is how `revisions` sat outside the ban until cinatra#2861 restored
+  // it. This is the one assertion a deletion cannot pass through.
+  //
+  // `authorized-scope` is NOT among them, and that is the other direction of
+  // the same discipline (cinatra#2861): §VII draws five regions, and the plan's
+  // binding correction puts the authorization in the card's copy and its
+  // before/after columns rather than in a region of its own. An anchor for a
+  // region the spec does not draw would make the ban certify a drawing outside
+  // the closed set.
+  it("pins §VII's core to FIVE anchors — dropping one is a hole, adding one is a region", () => {
+    expect([...VERIFICATION_CORE_ANCHORS].sort()).toEqual([
+      "advisory",
+      "chrome",
+      "field-diff",
+      "outcome",
+      "revisions",
+    ]);
+    expect(VERIFICATION_CORE_ANCHORS).not.toContain("authorized-scope");
+  });
+
+  it("NO module in the tree draws an authorized-scope region — §VII has none", () => {
+    // The region the round asked to be removed, pinned as absent from the whole
+    // first-party tree rather than just from the card: it is not a parallel
+    // drawing to be banned, it is a region the spec does not have.
+    const emitters = collectFiles().filter((rel) =>
+      read(rel).includes("data-verification-authorized-scope"),
+    );
+    expect(emitters).toEqual([]);
+  });
+
+  it("the owner module emits EVERY §VII anchor — the ban is not vacuous", () => {
+    const src = read(OWNER);
+    for (const anchor of VERIFICATION_CORE_ANCHORS) {
+      expect(
+        src.includes(`data-verification-${anchor}`),
+        `${OWNER} no longer emits data-verification-${anchor}`,
+      ).toBe(true);
+    }
+  });
+
+  it("NO other module in the tree emits a §VII anchor", () => {
+    const emitters = collectFiles()
+      .filter((rel) =>
+        VERIFICATION_CORE_ANCHORS.some((a) => read(rel).includes(`data-verification-${a}`)),
+      );
+    expect(emitters).toEqual([OWNER]);
+  });
+
+  it("the review page MOUNTS the card and draws none of the core itself", () => {
+    const src = read(VERIFICATION_VIEW);
+    // It composes the one renderer…
+    expect(src).toMatch(/<\s*VerificationSummaryCard\b/);
+    // …under its own host declaration (R3's per-file rule)…
+    expect(src).toMatch(/<\s*LifecycleCardSurfaceProvider\b/);
+    // …and emits no §VII anchor of its own.
+    for (const anchor of VERIFICATION_CORE_ANCHORS) {
+      expect(src.includes(`data-verification-${anchor}`)).toBe(false);
+    }
+    // The page-only ADJUNCT survives — deleting it was never the ask.
+    expect(src).toMatch(/<\s*ReviewPinnedCapture\b/);
+    // …but the "Back to the review gate" link does NOT: plan §8.3(5) and §8.4
+    // say it exists only because the reading lived on its own page, so it goes
+    // when the card lands (cinatra#2861). Pinned here as well as in the view's
+    // own suite, because this is the file the gate reads.
+    expect(src).not.toContain("data-verification-back-to-gate");
+    expect(src).not.toContain("Back to the review gate");
+  });
+
+  it("a second §VII drawing anywhere is an R2 violation, whatever it is called", () => {
+    for (const anchor of VERIFICATION_CORE_ANCHORS) {
+      const hits = scanModule(
+        "src/app/some/new/surface.tsx",
+        `return <div data-verification-${anchor}="">x</div>;`,
+      );
+      expect(hits.map((h) => h.rule), anchor).toContain("R2");
+    }
+  });
+
+  // Named explicitly, NOT via the loop above, so this mutation check survives
+  // the anchor being dropped from the list again: the revision pins are §VII
+  // core (the page's own ruling now names exactly ONE adjunct, the pinned
+  // VISUAL pair), so a second module drawing them must fail R2.
+  it("a second emitter of the REVISION PINS fails R2 — they are core, not an adjunct", () => {
+    const hits = scanModule(
+      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/revision-pins.tsx",
+      'return <div data-verification-revisions="">{a} → {b}</div>;',
+    );
+    expect(hits.map((h) => h.rule)).toContain("R2");
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/page-direct-verification-composition/);
+  });
+
+  it("the pinned VISUAL pair is NOT an anchor — the page may keep its one adjunct", () => {
+    // The adjunct that stayed. It is not part of §VII's drawing, so composing
+    // it around the card must not read as a second renderer.
+    const hits = scanModule(VERIFICATION_VIEW, "return <ReviewPinnedCapture pair={pair} />;");
+    expect(hits).toEqual([]);
   });
 });
 
@@ -694,33 +899,69 @@ describe("R8 — one declared mount set per host", () => {
   });
 });
 
-describe("R9 — the parallel core renderer is banned, and its exception expires", () => {
-  it("flags a NEW module drawing the retired verification view", () => {
-    const hits = scanModule("src/app/somewhere/else/page.tsx", "return <VerificationView record={r} />;");
-    expect(hits.map((h) => h.rule)).toContain("R2");
-  });
+// R9's RETIREMENT COMPLETED (cinatra#2789, reconciled onto S9a by cinatra#2861).
+//
+// S9a shipped R9 as a PENDING retirement: `VerificationView` banned by name, the
+// two route modules allowlisted while the kind was a placeholder, and an expiry
+// check that fired the moment the kind went DRAWN. The kind is now DRAWN, so the
+// record and its expiry check are gone — that IS the mechanism working, not the
+// rule being dropped.
+//
+// What replaced them is checked below: the ban now identifies the retired
+// DRAWING by §VII's five region anchors instead of by an identifier, because
+// `VerificationView` legitimately survives as the page's adjunct composition. So
+// these tests pin the two properties that matter and that a name ban could never
+// have proven — the route modules draw NONE of §VII any more, and the ban is not
+// vacuous because the owner really emits every anchor it forbids elsewhere.
+describe("R9 — the parallel core renderer is retired, and the ban outlived the record", () => {
+  const ROUTE_MODULES = [
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+  ];
 
-  it("flags a second DEFINITION of it anywhere", () => {
-    const hits = scanModule("packages/agents/src/x.tsx", "export function CompactVerificationView() { return null; }");
-    expect(hits.map((h) => h.rule)).toContain("R2");
-  });
-
-  it("does NOT flag the unrelated identifiers that merely start the same way", () => {
-    const src = "const isVerificationView = sp.view === 'verification';\nexport interface VerificationViewProps { a: 1 }";
-    expect(scanModule("src/app/x/page.tsx", src)).toEqual([]);
-  });
-
-  it("the recorded modules really carry it — the exception is not vacuous", () => {
-    for (const rel of PENDING_RETIREMENT.modules) {
-      expect(read(rel), rel).toMatch(/VerificationView/);
+  it("flags a NEW module drawing any §VII region, whatever it calls itself", () => {
+    for (const anchor of VERIFICATION_CORE_ANCHORS) {
+      const hits = scanModule(
+        "src/app/somewhere/else/page.tsx",
+        `return <div data-verification-${anchor}="">x</div>;`,
+      );
+      expect(hits.map((h) => h.rule), anchor).toContain("R2");
     }
   });
 
-  it("the exception EXPIRES the moment the verification kind is drawn", () => {
-    const drawn = { ...PROPER_CONTRACT, component: "VerificationSummaryCard" };
-    const hits = auditContracts({ verification_summary: drawn });
-    expect(hits.map((h) => h.rule)).toContain("R9");
-    expect(hits.find((h) => h.rule === "R9").detail).toMatch(/must be gone/);
+  it("the RETIREMENT really happened — neither route module draws a §VII region", () => {
+    for (const rel of ROUTE_MODULES) {
+      const src = read(rel);
+      expect(src, rel).toBeTypeOf("string");
+      expect(scanModule(rel, src), rel).toEqual([]);
+      for (const anchor of VERIFICATION_CORE_ANCHORS) {
+        expect(src.includes(`data-verification-${anchor}`), `${rel} still draws ${anchor}`).toBe(
+          false,
+        );
+      }
+    }
+  });
+
+  it("the route-module ALLOWLIST is empty — neither module is excepted any more", () => {
+    const entry = RETIRED_PARALLELS.find((p) => p.id === "page-direct-verification-composition");
+    expect(entry, "the §VII ban is gone entirely").toBeTypeOf("object");
+    for (const rel of ROUTE_MODULES) expect(entry.allow, rel).not.toContain(rel);
+    // What remains is the owner's own definition module, exactly as every other
+    // entry in this table allows the module that defines the shipped thing.
+    expect(entry.allow).toEqual([CARD_OWNERS.verification_summary.owner]);
+  });
+
+  it("the ban is NOT vacuous — the one owner really emits every anchor it forbids elsewhere", () => {
+    const owner = read(CARD_OWNERS.verification_summary.owner);
+    for (const anchor of VERIFICATION_CORE_ANCHORS) {
+      expect(owner, anchor).toMatch(new RegExp(`data-verification-${anchor}\\b`));
+    }
+  });
+
+  it("the page still mounts the ONE card — the retirement did not delete the reading", () => {
+    const view = read(ROUTE_MODULES[0]);
+    expect(view).toMatch(/<\s*VerificationSummaryCard\b/);
+    expect(view).toMatch(/host="page_gate_region"/);
   });
 });
 
@@ -759,7 +1000,30 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
       '[data-action="cancel-trigger-schedule"]',
       '[data-action="release-trigger-now"]',
     ],
-    verification_summary: ["verification-in-thread"],
+    // CORRECTED when the card landed (cinatra#2789, reconciled by
+    // cinatra#2861), and the contract row says at length what may be corrected
+    // and on whose authority — read it there. In short, and keeping the two
+    // halves apart:
+    //   · the REQUIREMENT is the drawing's. §VII names five regions in one
+    //     sentence — "the Core analysis heading with its outcome pill, the scope
+    //     sentence, the two revision pins, and the field-by-field before / after
+    //     … It closes with Advisory comments." Five is checkable against
+    //     design@92c1be7c §VII by anybody; the scope sentence is deliberately
+    //     not among them, because §VII draws it as copy inside the chrome.
+    //   · the NAMES are the repository's convention, because §VII gives those
+    //     regions no ids of its own. They are NOT checkable against the drawing
+    //     and this list does not claim they are.
+    // What the placeholder pinned — `["verification-in-thread"]` — is neither:
+    // it is the ARTBOARD id marking §VII's in-a-turn specimen, the same class of
+    // id as `state-loading` and `review-target-in-thread`, neither of which this
+    // table ratifies for the review card either.
+    verification_summary: [
+      "[data-verification-chrome]",
+      "[data-verification-outcome]",
+      "[data-verification-revisions]",
+      "[data-verification-field-diff]",
+      "[data-verification-advisory]",
+    ],
   };
 
   for (const [kind, anchors] of Object.entries(RATIFIED)) {
@@ -768,12 +1032,25 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
     });
   }
 
-  it("the verification outcome pill is a one-of group, and all three are reachable", () => {
-    expect(LIFECYCLE_CARD_CONTRACTS.verification_summary.anchorsOneOf.of).toEqual([
-      "verification-verified",
-      "verification-drift",
-      "verification-findings-not-met",
-    ]);
+  it("the ratified §VII set and the R2 ban read ONE list, from both ends", () => {
+    expect(LIFECYCLE_CARD_CONTRACTS.verification_summary.anchors).toEqual(
+      VERIFICATION_CORE_ANCHORS.map((a) => `[data-verification-${a}]`),
+    );
+  });
+
+  // §VII's three outcomes are still required; they moved from three ids to the
+  // VALUE of one anchor, because that is how the drawn card carries them —
+  // `data-verification-outcome={body.outcome}` over a closed enum. "Exactly one
+  // at a time" is then structural rather than a rule about three ids, and the
+  // rendered suite drives all three. So there is no `anchorsOneOf` group left to
+  // pin, and this test pins its ABSENCE so the removal cannot be silent.
+  it("the outcome is one valued anchor, not a three-id one-of group", () => {
+    expect(LIFECYCLE_CARD_CONTRACTS.verification_summary.anchorsOneOf).toBeUndefined();
+    expect(LIFECYCLE_CARD_CONTRACTS.verification_summary.anchors).toContain(
+      "[data-verification-outcome]",
+    );
+    const card = read(CARD_OWNERS.verification_summary.owner);
+    expect(card).toMatch(/data-verification-outcome=\{body\.outcome\}/);
   });
 
   it("every owner root must carry its host and its state", () => {
@@ -1017,18 +1294,30 @@ describe("the contract mirrors the epic table's shape", () => {
 });
 
 describe("the two modes on the real tree", () => {
-  it("names the two kinds that are still placeholders", () => {
+  // ONE kind, not two, since cinatra#2789 drew the verification card. The
+  // count is pinned rather than the mere presence of a placeholder, so a kind
+  // quietly slipping BACK to placeholder is as visible as one being drawn.
+  it("names the ONE kind that is still a placeholder", () => {
     expect(placeholderKinds().map((p) => p.kind).sort()).toEqual([
       "trigger_schedule_proposal",
-      "verification_summary",
     ]);
+  });
+
+  it("the verification kind is DRAWN, with a real owner and a rendered proof", () => {
+    const c = LIFECYCLE_CARD_CONTRACTS.verification_summary;
+    expect(c.status).toBe("DRAWN");
+    expect(c.owner).toBe("packages/agents/src/verification-summary-card.tsx");
+    expect(c.gap).toBeUndefined();
+    expect(c.renderedProof.file).toBeTypeOf("string");
+    // §IX: every card appears on every host. This one now does.
+    for (const host of LIFECYCLE_CARD_HOSTS) expect(c.hosts[host], host).not.toBeNull();
   });
 
   it("default mode is clean: no false claim, and the placeholders are recorded", () => {
     expect(collectContractViolations()).toEqual([]);
   });
 
-  it("the REQUIRED gate — no flag at all — FAILS today and NAMES both undrawn kinds", () => {
+  it("the REQUIRED gate — no flag at all — FAILS today and NAMES the undrawn kind", () => {
     // The ordinary run is the done-check. This is the claim "the gate fails on
     // main": it has to be true of the run somebody actually makes, not of an
     // opt-in flag nobody passes.
@@ -1036,7 +1325,10 @@ describe("the two modes on the real tree", () => {
     const out = res.stdout + res.stderr;
     expect(res.status).toBe(1);
     expect(out).toMatch(/'trigger_schedule_proposal' has no card of its own/);
-    expect(out).toMatch(/'verification_summary' has no card of its own/);
+    // …and it no longer names the kind cinatra#2789 drew. A done-check that
+    // kept reporting a drawn card as missing would be the mirror image of the
+    // dishonesty this gate exists to end.
+    expect(out).not.toMatch(/'verification_summary' has no card of its own/);
   });
 
   it("the lenient read is the one that needs a flag, and says so", () => {
