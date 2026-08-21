@@ -15,11 +15,13 @@
 // WHAT THE READING IS OF (plan course correction, 2026-08-19). The core checks
 // the landed change against WHAT THE REVIEW AUTHORIZED — the accepted findings
 // and the scope manifest they produced. That is the sentence the card leads
-// with, that is what the AUTHORIZED SCOPE region lists, and that is what the
-// before / after table is measured against: a row whose field is outside the
-// manifest is out-of-scope DRIFT and is marked in place. The card never
-// presents the agent's SKILLS as the thing verified, and it has nothing in its
-// body it could build such a list from.
+// with, and that is what each before/after row's `inScope` mark answers: a row
+// whose field is outside the manifest is out-of-scope DRIFT and is marked in
+// place. THE TABLE ITSELF IS ONLY THE FIELDS THAT WERE INSPECTED — an
+// authorized field the repair left untouched carries no row at all, because
+// the diff only ever carries changed paths. The card never presents the
+// agent's SKILLS as the thing verified, and it has nothing in its body it
+// could build such a list from.
 //
 // ONE RENDERER, EVERY HOST. The same component draws the reading in a chat
 // transcript, on the run card, in the review page's verification region and on
@@ -27,9 +29,12 @@
 // the only place §VII is composed: the registry dispatches `verification_summary`
 // here, the run screen mounts it under `host="run_card"`, and the review page's
 // `VerificationView` mounts it under `host="page_gate_region"` — keeping only
-// the adjuncts that are genuinely the PAGE's (the pinned visual pair, the
-// navigation back to the gate) composed AROUND it. The host supplies a frame;
-// it never supplies a second drawing.
+// the ONE adjunct that is genuinely the PAGE's (the pinned visual pair)
+// composed AROUND it. The "back to the review gate" link that used to sit
+// beside it is gone (plan §8.3(5), §8.4; cinatra#2789): the drawn card has no
+// link and no buttons at all, so the reader reaches the gate the way they
+// reached this reading — the run's step rail, and the browser's own back. The
+// host supplies a frame; it never supplies a second drawing.
 //
 // IT CARRIES NO FLOOR AT ALL. §VII: "it asks nothing, so it draws nothing to
 // press". There is no decision bar, no comment path, no composer binding and no
@@ -39,12 +44,15 @@
 //
 // THE READING ARRIVES IN THE BODY; NOTHING IS RE-DERIVED (epic S9, slice S9c).
 // The resolver returns `{ kind, state, body }` and the body IS §VII's sanitized
-// reading — verdict, the two pinned revisions, the authorized scope, the field
-// diff and the advisory comments. This card computes no verdict, re-reads no
-// store and infers nothing the server did not authorize. The one thing it
-// derives is presentational and total: whether each diff row's field is inside
-// the authorized scope, which is a set membership over two fields of the same
-// body.
+// reading — verdict, the two pinned revisions, the field diff (each row
+// carrying its own authorization mark) and the advisory comments. This card
+// computes no verdict, re-reads no store and infers nothing the server did not
+// authorize — INCLUDING each row's `inScope` mark itself (cinatra#2861): it
+// arrives decided, against the review's whole scope manifest, and the card
+// only reads it. It used to be re-derived here by testing the row against a
+// clamped `scopePaths` projection; that membership test moved to the server,
+// where the manifest is whole and unclamped, so an authorized path past the
+// old projection's ceiling can no longer be mismarked as drift.
 //
 // TWO STATES DRAW, AND ONLY TWO. §VII's card resolves `advisory` — the reading
 // — or `absent`, which draws NO DOM AT ALL (§IV: a reader who may not read the
@@ -314,7 +322,7 @@ function FieldDiffTable({
                   <td className="px-3 py-2 font-mono text-foreground">
                     {row.field}
                     {inScope ? null : (
-                      <span className="ms-1.5 rounded-chip border border-warning/40 bg-warning/15 px-1.5 py-0.5 font-mono text-badge-2xs uppercase tracking-wide text-warning">
+                      <span className="ms-1.5 whitespace-nowrap rounded-chip border border-warning/40 bg-warning/15 px-1.5 py-0.5 font-mono text-badge-2xs uppercase tracking-wide text-warning">
                         out of scope
                       </span>
                     )}

@@ -324,6 +324,19 @@ describe("§VII — the reading", () => {
     expect(drifted.textContent).toContain("legal@evil.test");
   });
 
+  it("keeps the OUT OF SCOPE chip on one line — it must not break mid-phrase on a narrow frame", async () => {
+    mockResolve({ state: "advisory" });
+    const { container } = renderOn("site_widget");
+    await waitFor(() =>
+      expect(container.querySelector("[data-diff-field]")).not.toBeNull(),
+    );
+    const chip = [
+      ...container.querySelectorAll<HTMLElement>('[data-diff-field="bcc"] span'),
+    ].find((el) => el.textContent === "out of scope");
+    expect(chip).toBeDefined();
+    expect(chip!.className).toContain("whitespace-nowrap");
+  });
+
   it("draws an empty diff as a sentence, not as an empty table", async () => {
     mockResolve({ state: "advisory" }, { ...BODY, fieldDiff: [] });
     const { container } = renderOn("chat_thread");

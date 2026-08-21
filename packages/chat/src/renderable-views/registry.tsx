@@ -65,8 +65,9 @@ const RENDERABLE_VIEW_COMPONENTS: {
   artifact_review_gate: ReviewGateCard,
   // S9e (#2789) swapped the verification line the same way: `verification_summary`
   // now dispatches to the DRAWN `VerificationSummaryCard` — §VII's Core-analysis
-  // chrome, outcome pill, revision pins, authorized scope, before/after table and
-  // advisory comments — and the S1 shell is RETIRED for this kind.
+  // chrome, outcome pill, revision pins, before/after table (each row carrying
+  // its own authorization mark) and advisory comments — and the S1 shell is
+  // RETIRED for this kind.
   verification_summary: VerificationSummaryCard,
   trigger_schedule_proposal: LifecycleCard,
 };
