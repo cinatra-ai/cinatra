@@ -23,6 +23,7 @@ import "server-only";
 
 import {
   mintTriggerScheduleProposalToken,
+  verifyTriggerScheduleProposalToken,
   type ProposalSchedule,
 } from "@/lib/trigger-schedule-proposal-token";
 import { readAgentTemplateById } from "./store";
@@ -65,7 +66,8 @@ export async function proposeTriggerSchedule(
  * The shared body of PROPOSE, ADJUST and RE-PROPOSE. `lineageNonce` is the only
  * thing that differs between them, and it differs in exactly one direction:
  * supplied, the minted proposal INHERITS an existing consume identity instead of
- * opening a new one. See `reproposeTriggerScheduleInLineage`.
+ * opening a new one. See `adjustTriggerSchedule` and
+ * `reproposeTriggerScheduleInLineage`.
  */
 async function mintProposal(
   input: ProposeScheduleInput,
@@ -101,17 +103,27 @@ async function mintProposal(
   return { ok: true, token: minted.token, expiresAt: minted.expiresAt };
 }
 
+/** What ADJUST needs: the ref the card was drawn with, and the new rows. */
+export type AdjustScheduleInput = {
+  /** The proposal being adjusted — the card's OWN ref, not a template id. */
+  priorToken: string;
+  userId: string;
+  orgId: string;
+  schedule: ProposalSchedule;
+};
+
 /**
  * RE-PROPOSE an expired proposal IN ITS OWN LINEAGE — same checks as PROPOSE,
  * but the replacement inherits `lineageNonce` as its consume identity rather
  * than opening a second one.
  *
- * Distinct from `adjustTriggerSchedule` because the two are answering different
- * questions. The drawn form's Adjust is a reader CHOOSING NEW ROWS: a genuinely
- * different schedule, and therefore a different question, which is why it mints
- * a different identity. Re-proposing an expired card re-asks the SAME question
- * off the same ref, so it must not become a second answerable copy of it. One
- * identity per lineage means one run per lineage, whatever the timing.
+ * Distinct from `adjustTriggerSchedule` in the question it asks, not in the
+ * identity it mints. The drawn form's Adjust is a reader CHOOSING NEW ROWS: a
+ * genuinely different schedule, and therefore a different question.
+ * Re-proposing an expired card re-asks the SAME question off the same ref, so
+ * it must not become a second answerable copy of it. Since cinatra#2859 BOTH
+ * paths inherit the original's consume identity, so a family that grew either
+ * way holds ONE identity: one run per lineage, whatever the timing.
  */
 export async function reproposeTriggerScheduleInLineage(
   input: ProposeScheduleInput & { lineageNonce: string },
@@ -124,25 +136,67 @@ export async function reproposeTriggerScheduleInLineage(
  * ADJUST. A distinct name for the same act, because §VI draws it as a distinct
  * affordance and the distinction is the safety property: "Adjust opens the same
  * option rows in place; Confirm settles them." Adjusting a proposal RE-PROPOSES
- * — a new token with a new consume identity — rather than editing the old one,
- * so the previous proposal simply stops being confirmable and no partially
- * changed schedule can ever exist.
+ * rather than editing the old one, so no partially changed schedule can ever
+ * exist.
  *
- * The superseded token is deliberately NOT revoked. It has no server record to
- * revoke, and it does not need one: the two tokens carry DIFFERENT consume
- * identities, so confirming the stale one still creates exactly one run — the
- * one it describes. Revocation would buy nothing and cost a table.
+ * THE REPLACEMENT INHERITS THE ORIGINAL'S CONSUME IDENTITY (cinatra#2859).
  *
- * That reasoning holds because this Adjust is a reader EDITING the rows: the
- * stale card and the adjusted one describe different schedules, so each getting
- * its own answer is the honest outcome. It does NOT transfer to re-proposing an
- * expired card, which re-asks the SAME question and therefore must stay ONE
- * answerable question — see `reproposeTriggerScheduleInLineage`.
+ * It did not, and that was the defect. A fresh identity left the adjusted-away
+ * token SPENDABLE for the rest of its TTL: the two tokens addressed different
+ * rows in `trigger_schedule_proposal_consumes`, whose uniqueness is per
+ * `consume_key` only, so a stale tab or a replayed turn could Confirm the old
+ * card and the reader could Confirm the new one and BOTH would land — two runs,
+ * one of them on the schedule the reader had just corrected.
+ *
+ * The old rationale — "each answer is its own, because the reader is asking a
+ * different question" — is true about the QUESTION and false about the ANSWER.
+ * Adjust exists to REPLACE a proposal, so at most one member of the family may
+ * ever become a run, and which schedule the reader ends up with must not depend
+ * on which tab was still open.
+ *
+ * So the replacement is minted with the ORIGINAL's nonce. `proposalConsumeKey`
+ * derives the single-use edge from the nonce, so old and new are ONE row under
+ * that table's PRIMARY KEY: the second spender's INSERT raises a unique
+ * violation inside its own run-creation transaction, unwinds it, and the caller
+ * is answered with the FIRST run. "Both confirmed" is not a race the
+ * application has to win; it is a state the database cannot hold. No lock, no
+ * claim row, no new table, no migration — and PROPOSE-PURITY IS UNTOUCHED,
+ * because inheriting an identity writes nothing.
+ *
+ * This is the SAME mechanism #2837 gives the expired card's re-propose, and the
+ * two compose: whether a family grew by re-proposing an expired card, by
+ * adjusting a live one, or by both, every member shares one consume key and
+ * exactly one Confirm in it can ever produce a run.
+ *
+ * THE PRIOR REF IS THE INPUT, not a template id. The nonce can only come from a
+ * token this server minted and authenticated, so a consume identity cannot be
+ * chosen without forging the token that carries it — and reading the template
+ * out of the verified ref means Adjust can never be re-pointed at an agent the
+ * reader was never proposed. A ref that does not verify against this reader is
+ * refused before anything is minted.
  */
 export async function adjustTriggerSchedule(
-  input: ProposeScheduleInput,
+  input: AdjustScheduleInput,
 ): Promise<ProposeScheduleResult> {
-  return proposeTriggerSchedule(input);
+  const prior = verifyTriggerScheduleProposalToken({
+    token: input.priorToken,
+    expectedUserId: input.userId,
+    expectedOrgId: input.orgId,
+  });
+  // One answer for a forged ref, a foreign one, and one whose window has
+  // closed. An expired proposal is re-proposed through the EXPIRED path, which
+  // is the reading Confirm may not act on; this one adjusts a LIVE card.
+  if (!prior) return { ok: false };
+
+  return mintProposal(
+    {
+      templateId: prior.templateId,
+      userId: input.userId,
+      orgId: input.orgId,
+      schedule: input.schedule,
+    },
+    prior.nonce,
+  );
 }
 
 /**

@@ -63,7 +63,7 @@ import {
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
 import { markProducedEventProcessed } from "./lifecycle-produced-outbox-store";
-import { dispatchAutoGateOpen } from "./run-wait-notifier";
+import { dispatchAutoGateOpen, dispatchAutoGateResolved } from "./run-wait-notifier";
 import { resolveOrgPolicyRule } from "./lifecycle-policy-store";
 import { maybeParkCheckpoint, sweepParks } from "./lifecycle-continuation-park-store";
 
@@ -1572,7 +1572,29 @@ async function resolveExpiredAutoGates(limit: number, summary: GateMaintenanceSu
       })
       .where(and(eq(artifactReviewGates.id, gate.id), eq(artifactReviewGates.status, "pending")))
       .returning({ id: artifactReviewGates.id });
-    if (resolved.length === 1) summary.optionalExpired += 1;
+    if (resolved.length === 1) {
+      summary.optionalExpired += 1;
+      // cinatra#2864 — an EXPIRY is a terminal resolution like any other, so the
+      // gate's open notification goes with it. Without this the bell kept an entry
+      // for every optional review that simply timed out: the row was minted while
+      // the gate was pending, and the only path that cleared it was
+      // `commitReviewDecision`, which an expired gate never reaches. The fence on
+      // the open side cannot help — that row was written truthfully, and it is
+      // this transition that makes it stale.
+      //
+      // The ordering is the same one the decision commit has: the CAS above is a
+      // single statement, so it holds the gate's row lock to completion, and this
+      // clear runs only after it committed. An open racing this expiry therefore
+      // either committed first (and this clear finds its row) or re-evaluates its
+      // guard against the `resolved` row and writes nothing.
+      //
+      // Best-effort, like every other emitter on this seam: a notification can
+      // never fail the maintenance drain that just released a held effect.
+      await dispatchAutoGateResolved({
+        runId: gate.runId,
+        reviewTaskId: gate.reviewTaskId,
+      });
+    }
   }
 }
 

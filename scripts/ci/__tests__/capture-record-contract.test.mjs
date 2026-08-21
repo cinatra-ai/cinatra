@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  RECORDER_ID,
   bindEvidenceCells,
   parseCellName,
   requiredAssertionsFor,
@@ -45,7 +46,7 @@ afterAll(() => {
 function honestChatPending(overrides = {}) {
   return {
     cell: "C1__review-card__chat_thread__pending",
-    recorder: "chat-hitl-capture-recorder@1",
+    recorder: RECORDER_ID,
     declaredHost: "chat_thread",
     declaredKind: "artifact_review_gate",
     declaredState: "pending",
@@ -126,8 +127,11 @@ describe("requiredAssertionsFor", () => {
       state: "decided",
     });
     expect(forbidden.map((f) => f.selector)).toContain(
-      '[data-action="confirm-run-recommendation"]',
+      '[data-skill-action="confirm"]',
     );
+    // …and the other two the §V redraw put on every chip (cinatra#2841).
+    expect(forbidden.map((f) => f.selector)).toContain('[data-skill-action="adjust"]');
+    expect(forbidden.map((f) => f.selector)).toContain('[data-skill-action="skip"]');
   });
 });
 

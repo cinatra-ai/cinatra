@@ -15,6 +15,14 @@ import {
 import type { RunStepRailEntry } from "./run-step-rail";
 import { RailExtraEntry } from "./run-step-rail-extra-entry";
 
+// The panel's own entry type, re-exported so a caller mounting this component
+// through the `./run-step-rail-panel` subpath can TYPE the entries it passes
+// without the package having to open a SECOND subpath onto the rail's domain
+// module (`./run-step-rail`, which also carries `buildRunStepRail` and the
+// whole builder input surface). One export per mountable component; the
+// builder stays internal (cinatra#2840, codex advisory).
+export type { RunStepRailEntry } from "./run-step-rail";
+
 /**
  * The canonical run view's LEFT STEP RAIL (cinatra#2066, C1; owner ruling
  * 2026-07-25). ONE vertical rail for BOTH template classes — orchestrator-template

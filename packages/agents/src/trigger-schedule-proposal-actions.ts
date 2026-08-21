@@ -61,13 +61,20 @@ export async function confirmScheduleProposal(args: {
  * Adjust a proposal — i.e. RE-PROPOSE it.
  *
  * §VI draws Adjust as re-opening the same option rows in place, and this action
- * is what settles them back into a proposal: a NEW token with a NEW consume
- * identity. It mutates nothing, because there is nothing to mutate, so an
- * abandoned adjustment leaves no trace and a stale token confirmed afterwards
- * still creates exactly the one run it describes.
+ * is what settles them back into a proposal: a new token that INHERITS the
+ * adjusted-away proposal's consume identity. It still mutates nothing, because
+ * there is nothing to mutate, so an abandoned adjustment leaves no trace — but
+ * the stale card is no longer separately spendable, because it and the
+ * replacement are ONE row in the consume table (cinatra#2859).
+ *
+ * TAKES THE CARD'S OWN REF, not a template id. Two things follow, and both are
+ * why the argument changed: the consume identity to inherit can only be read
+ * out of a token this server minted, and the template is read from that
+ * verified ref — so Adjust can never be re-pointed at an agent the reader was
+ * never proposed.
  */
 export async function adjustScheduleProposal(args: {
-  templateId: string;
+  ref: string;
   schedule: ProposalSchedule;
 }): Promise<
   { ok: true; token: string; expiresAt: number } | { ok: false; error: string }
@@ -82,7 +89,7 @@ export async function adjustScheduleProposal(args: {
     "./trigger-schedule-proposal-service"
   );
   const proposed = await adjustTriggerSchedule({
-    templateId: args.templateId,
+    priorToken: args.ref,
     userId,
     orgId,
     schedule: args.schedule,

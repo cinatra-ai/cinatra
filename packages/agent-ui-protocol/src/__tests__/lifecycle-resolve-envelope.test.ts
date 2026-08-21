@@ -78,7 +78,9 @@ describe("each kind round-trips the body it is authorized to carry", () => {
       body: null,
     };
     const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", wire);
-    expect(parsed).toEqual(wire);
+    // The answer adds the one field the envelope itself does not carry: the
+    // server-minted island URL (cinatra#2754), `null` when none was sent.
+    expect(parsed).toEqual({ ...wire, islandSrc: null });
     // The type map says so too: a review body is `null`, not a shape.
     const declared: LifecycleCardBodyByKind["artifact_review_gate"] = null;
     expect(declared).toBeNull();
@@ -100,7 +102,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
         "verification_summary",
         JSON.parse(JSON.stringify(wire)),
       ),
-    ).toEqual(wire);
+    ).toEqual({ ...wire, islandSrc: null });
   });
 
   it("trigger_schedule_proposal round-trips both §VI phases", () => {
@@ -114,7 +116,7 @@ describe("each kind round-trips the body it is authorized to carry", () => {
           "trigger_schedule_proposal",
           JSON.parse(JSON.stringify(wire)),
         ),
-      ).toEqual(wire);
+      ).toEqual({ ...wire, islandSrc: null });
     }
   });
 
@@ -315,12 +317,17 @@ describe("`absent` reveals nothing about the target", () => {
         state: { state: "absent" },
         body: null,
       });
-      expect(parsed, kind).toEqual({ kind, state: { state: "absent" }, body: null });
+      expect(parsed, kind).toEqual({
+        kind,
+        state: { state: "absent" },
+        body: null,
+        islandSrc: null,
+      });
       // The body key may also be omitted entirely — same answer, byte for byte.
       expect(
         parseLifecycleResolveEnvelope(kind, { kind, state: { state: "absent" } }),
         kind,
-      ).toEqual({ kind, state: { state: "absent" }, body: null });
+      ).toEqual({ kind, state: { state: "absent" }, body: null, islandSrc: null });
     }
   });
 
@@ -448,5 +455,124 @@ describe("the recommendation hold stays outside the DATA_PART envelope", () => {
       "verification_summary",
     ]);
     expect(declared).not.toContain("recommendation_hold");
+  });
+});
+
+describe("the settled reading survives the parse seam (cinatra#2855)", () => {
+  it("carries an outcome and a decider through, on the kind that has no body", () => {
+    const state = {
+      state: "settled",
+      outcome: "approved",
+      decidedByName: "Dana Okonkwo",
+    };
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state,
+        body: null,
+      }),
+    ).toEqual({ kind: "artifact_review_gate", state, body: null, islandSrc: null });
+  });
+
+  it("REFUSES an outcome this build cannot read, rather than dropping it", () => {
+    // A refused parse leaves the card with no state, so it draws nothing. A
+    // parser that silently dropped the unknown field would instead hand the card
+    // a bare `settled` and let it claim the pre-#2855 reading for a gate whose
+    // real outcome it could not understand.
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "settled", outcome: "withdrawn" },
+        body: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("still refuses a BODY beside the settled reading", () => {
+    // The review kind draws its target through its own island; the outcome
+    // riding the STATE does not buy the kind a body.
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "settled", outcome: "approved" },
+        body: { anything: true },
+      }),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2754 — the server-minted island URL on the answer
+// ---------------------------------------------------------------------------
+//
+// The island URL is the one thing on this answer that ends up in an
+// `<iframe src>`, so the parse reads it as ONE shape — a root-relative path on
+// this origin — and refuses the whole answer for anything else. `absent` may
+// not carry one at all: it is the collapse of every denial, and a URL addressed
+// to a gate beside it would be the oracle the collapse exists to close.
+
+describe("the island URL rides the answer", () => {
+  const pending = (islandSrc: unknown) => ({
+    kind: "artifact_review_gate",
+    state: { state: "pending", canDecide: true, canComment: true },
+    body: null,
+    islandSrc,
+  });
+
+  it("round-trips a root-relative island path", () => {
+    const parsed = parseLifecycleResolveEnvelope(
+      "artifact_review_gate",
+      pending("/lifecycle/review-island?ref=r&ic=sealed"),
+    );
+    expect(parsed?.islandSrc).toBe("/lifecycle/review-island?ref=r&ic=sealed");
+  });
+
+  it("is `null` when the answer carried none — the same-site hosts' answer", () => {
+    const parsed = parseLifecycleResolveEnvelope("artifact_review_gate", {
+      kind: "artifact_review_gate",
+      state: { state: "pending", canDecide: true, canComment: true },
+      body: null,
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.islandSrc).toBeNull();
+  });
+
+  it("REFUSES the whole answer for anything that is not a root-relative path", () => {
+    for (const bad of [
+      "https://evil.example/lifecycle/review-island?ic=x",
+      "//evil.example/lifecycle/review-island",
+      "javascript:alert(1)",
+      "lifecycle/review-island",
+      "/lifecycle/review island",
+      "/lifecycle/review-island\u0000",
+      "/lifecycle/review-island\\x",
+      42,
+      { href: "/lifecycle/review-island" },
+      `/${"a".repeat(4096)}`,
+    ]) {
+      expect(parseLifecycleResolveEnvelope("artifact_review_gate", pending(bad))).toBeNull();
+    }
+  });
+
+  it("REFUSES an `absent` that arrives with one — a denial addresses nothing", () => {
+    expect(
+      parseLifecycleResolveEnvelope("artifact_review_gate", {
+        kind: "artifact_review_gate",
+        state: { state: "absent" },
+        body: null,
+        islandSrc: "/lifecycle/review-island?ref=r&ic=sealed",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps carrying it beside a body-carrying kind's body", () => {
+    const parsed = parseLifecycleResolveEnvelope("verification_summary", {
+      kind: "verification_summary",
+      state: { state: "advisory" },
+      body: VERIFICATION_BODY,
+      islandSrc: null,
+    });
+    expect(parsed?.body).toEqual(VERIFICATION_BODY);
+    expect(parsed?.islandSrc).toBeNull();
   });
 });

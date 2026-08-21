@@ -71,6 +71,87 @@ describe("canonicalFieldValue", () => {
   });
 });
 
+describe("§VIII's before/after pair (cinatra#2852)", () => {
+  it("R1 captures the DISCLOSED text beside the canonicalization it proposes", () => {
+    // The fixture's before differs from its after on every axis the rule
+    // touches: a stray control character, per-line trailing whitespace, and
+    // surrounding whitespace.
+    const disclosed = "  Re-connecting on Q3\u0001 priorities   \n second line   ";
+    const { suggestions } = build({ subject: disclosed });
+    expect(suggestions).toHaveLength(1);
+    const [s] = suggestions;
+    expect(s.op).toBe("replace");
+    expect(s.before).toBe(disclosed);
+    expect(s.value).toBe(canonicalFieldValue(disclosed));
+    expect(s.before).not.toBe(s.value);
+  });
+
+  it("the pair is FROZEN into the snapshot, and the snapshot still hash-verifies", () => {
+    const { payload } = build({ subject: "  trailing  " });
+    expect(payload.suggestions[0].before).toBe("  trailing  ");
+    expect(verifyGateSuggestionSnapshotPayload(payload)).not.toBeNull();
+  });
+
+  it("a rule with nothing to show carries NO before — never an invented one", () => {
+    // R2 removes a whole member (no single current value) and R3 adds a field
+    // that does not exist yet (nothing it currently says).
+    const { suggestions } = build({
+      "items.0.title": "First",
+      "items.0.subtitle": "with a subtitle",
+      "items.1.title": "Second",
+      "items.2.title": "   ",
+      "items.2.subtitle": "",
+    });
+    for (const s of suggestions.filter((x) => x.op !== "replace")) {
+      expect(s.before).toBeUndefined();
+    }
+    expect(suggestions.some((s) => s.op === "add")).toBe(true);
+    expect(suggestions.some((s) => s.op === "remove")).toBe(true);
+  });
+
+  it("a disclosed value past the shared ceiling is SUGGESTED without a before, not truncated", () => {
+    // The canonicalization fits; the disclosed text does not. Half a field is
+    // worse than no field, so the panel is dropped and the suggestion stands.
+    const disclosed = `${"x".repeat(MAX_SUGGESTION_VALUE_CHARS)}   `;
+    const { suggestions } = build({ body: disclosed });
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0].value).toBe("x".repeat(MAX_SUGGESTION_VALUE_CHARS));
+    expect(suggestions[0].before).toBeUndefined();
+  });
+
+  it("a stored payload whose before is past the ceiling reads as UNREADABLE", () => {
+    const { payload } = build({ subject: "  trailing  " });
+    const tampered = {
+      ...payload,
+      suggestions: [{ ...payload.suggestions[0], before: "y".repeat(MAX_SUGGESTION_VALUE_CHARS + 1) }],
+    };
+    expect(verifyGateSuggestionSnapshotPayload(tampered)).toBeNull();
+  });
+
+  it("a pre-#2852 snapshot (no before anywhere) still verifies — absence is legal", () => {
+    const { payload } = build({ subject: "  trailing  " });
+    const legacy = {
+      ...payload,
+      suggestions: payload.suggestions.map((s) => {
+        const rest = { ...s };
+        delete rest.before;
+        return rest;
+      }),
+    };
+    const rehashed = { ...legacy, snapshotHash: gateSuggestionSnapshotHash({
+      schemaVersion: legacy.schemaVersion,
+      laneId: legacy.laneId,
+      target: legacy.target,
+      provenance: legacy.provenance,
+      suggestions: legacy.suggestions,
+      truncated: legacy.truncated,
+    }) };
+    const verified = verifyGateSuggestionSnapshotPayload(rehashed);
+    expect(verified).not.toBeNull();
+    expect(verified!.suggestions[0].before).toBeUndefined();
+  });
+});
+
 describe("disclosure", () => {
   it("proposes nothing when the host denied disclosure — and still records the denial", () => {
     const out = build({ title: "  needs trimming  " }, { authzDecision: "denied" });

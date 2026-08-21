@@ -421,15 +421,19 @@ function decodeSchedule(value: unknown): ProposalSchedule | null {
  * A producer that cannot mint REFUSES; it never emits a proposal the wire would
  * silently mutilate.
  *
- * `opts.nonce` INHERITS a consume identity instead of minting a fresh one, and
- * it exists for exactly one caller: re-proposing an expired card off its own ref
- * (`reproposeTriggerScheduleInLineage`). The nonce IS the proposal's identity —
- * `proposalConsumeKey` derives the single-use DB edge from it — so passing the
- * original's nonce makes the replacement and the proposal it replaces ONE
- * identity in the consume table's primary key. That is what makes "confirm the
- * old one AND the new one" unexpressible rather than merely unlikely; see the
- * lineage note on `reproposeExpiredScheduleProposal`. Everything else about the
- * replacement is fresh: a fresh IV, a fresh ciphertext, a fresh `iat`/`exp`.
+ * `opts.nonce` INHERITS a consume identity instead of minting a fresh one. The
+ * nonce IS the proposal's identity — `proposalConsumeKey` derives the single-use
+ * DB edge from it — so passing an existing proposal's nonce makes the
+ * replacement and the proposal it replaces ONE identity in the consume table's
+ * primary key, and "confirm the old one AND the new one" stops being a race the
+ * application has to win and becomes a state the database cannot hold.
+ * Everything else about the replacement is fresh: a fresh IV, a fresh
+ * ciphertext, a fresh `iat`/`exp`.
+ *
+ * Two callers inherit a nonce: Adjust, which supersedes the proposal it
+ * replaces so an adjust family shares ONE consume key, and the expired-card
+ * re-propose off its own ref (`reproposeTriggerScheduleInLineage`); see the
+ * lineage note on `reproposeExpiredScheduleProposal`.
  *
  * The nonce is NEVER caller-supplied from the wire. It is read back out of a
  * token this server minted and authenticated, which is why re-using it cannot

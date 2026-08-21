@@ -18,7 +18,10 @@ function rec(over: Partial<RankedRecommendation>): RankedRecommendation {
   return {
     skillId: "s1",
     skillRevisionId: "s1@rev1",
-    name: "Skill One",
+    name: "skill-one",
+    // The resolved label a surface prints (cinatra#2841) — distinct from the
+    // catalog `name`, so a fixture can never make the two look interchangeable.
+    displayName: "Skill One",
     score: 0.9,
     rank: 1,
     recommended: true,
@@ -112,6 +115,64 @@ describe("deriveConfirmedSelection", () => {
   it("dedups repeated confirmed ids", () => {
     const out = deriveConfirmedSelection({ recommendations: recs, confirmedSkillIds: ["a", "a"] });
     expect(out).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // IN-SET ADJUSTMENT (cinatra#2841) — §V's third settled mark, made reachable
+  // -------------------------------------------------------------------------
+
+  it("stamps an IN-SET adjusted skill user_adjusted, on its recommended revision", () => {
+    // The defect this closes: the chip row offers exactly the scored set, and
+    // every id in that set was stamped `recommended_confirmed` however the
+    // reader settled it — so a chip settled through ADJUST read back
+    // `Confirmed` and §V's `Adjusted` mark could never appear.
+    const out = deriveConfirmedSelection({
+      recommendations: recs,
+      confirmedSkillIds: ["a", "b"],
+      adjustedSkillIds: ["b"],
+    });
+    expect(out).toEqual([
+      { skillId: "a", skillRevisionId: "a@rev", selectionSource: SELECTION_SOURCES.recommendedConfirmed },
+      // The revision is untouched — an in-set adjustment relabels how the
+      // selection was reached, never WHICH revision the run pins.
+      { skillId: "b", skillRevisionId: "b@rev", selectionSource: SELECTION_SOURCES.userAdjusted },
+    ]);
+  });
+
+  it("leaves a NON-recommended adjusted skill as user_forced — forcing it on IS its adjustment", () => {
+    // Re-labelling it would lose the one fact `user_forced` asserts: the scorer
+    // did not recommend this skill. Both sources read as §V's `adjusted` mark.
+    const out = deriveConfirmedSelection({
+      recommendations: recs,
+      confirmedSkillIds: ["x"],
+      forcedRevisions: { x: "x@rev" },
+      adjustedSkillIds: ["x"],
+    });
+    expect(out).toEqual([
+      { skillId: "x", skillRevisionId: "x@rev", selectionSource: SELECTION_SOURCES.userForced },
+    ]);
+  });
+
+  it("NEGATIVE CONTROL: naming no adjusted skill leaves every confirm recommended_confirmed", () => {
+    const out = deriveConfirmedSelection({
+      recommendations: recs,
+      confirmedSkillIds: ["a", "b"],
+      adjustedSkillIds: [],
+    });
+    expect(out.map((s) => s.selectionSource)).toEqual([
+      SELECTION_SOURCES.recommendedConfirmed,
+      SELECTION_SOURCES.recommendedConfirmed,
+    ]);
+  });
+
+  it("an adjusted id that was never confirmed is not selected at all", () => {
+    // `adjustedSkillIds` is a LABEL on the kept set, never a way into it.
+    const out = deriveConfirmedSelection({
+      recommendations: recs,
+      confirmedSkillIds: ["a"],
+      adjustedSkillIds: ["b"],
+    });
+    expect(out.map((s) => s.skillId)).toEqual(["a"]);
   });
 });
 
