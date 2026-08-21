@@ -720,10 +720,16 @@ function installResolveStub(): void {
       const kind = String(asked.viewType ?? "artifact_review_gate");
       return json({
         kind,
-        // `pending` for every kind: the card is open, so it draws. An `absent`
-        // answer draws no DOM at all (§IV) and would make the mount assertion
-        // measure the stub instead of the carriage.
-        state: { state: "pending", canDecide: true, canComment: true },
+        // The OPEN state each kind actually draws on, because a state the card
+        // does not draw on draws no DOM at all (§IV) and would make the mount
+        // assertion measure the stub instead of the carriage. `pending` is the
+        // decidable kinds' open state; §VII's verification card ASKS NOTHING, so
+        // its open state is `advisory` and `pending` renders nothing (cinatra#2861
+        // drew that card — before it, the S1 shell drew on anything).
+        state:
+          kind === "verification_summary"
+            ? { state: "advisory" }
+            : { state: "pending", canDecide: true, canComment: true },
         // Each kind gets the body IT is authorized to carry, because the shared
         // parse refuses anything else outright: the review kind draws from its
         // island and a body beside it is refused, while the other two fail closed
@@ -745,13 +751,20 @@ function installResolveStub(): void {
  */
 const RESOLVE_BODIES: Record<string, unknown> = {
   // §VII — the verification kind fails closed without a reading.
+  // The body is the SHIPPED zod schema's, and that schema is `.strict()`:
+  // cinatra#2861 drew the card and moved the authorization from a `scopePaths`
+  // list nobody drew onto each diff row's own `inScope` mark, and made
+  // `advisoryComments` REQUIRED (null means "the comment store could not be
+  // read", which is a different fact from an empty reading). A body carrying the
+  // retired field, or missing the new one, is refused outright — and a refused
+  // parse draws no DOM, which the mount arm would read as a carriage gap.
   verification_summary: {
     version: 1,
     outcome: "verified",
     reviewedRevisionId: "rev-base",
     repairedRevisionId: "rev-fixed",
-    scopePaths: ["content.title"],
-    fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+    fieldDiff: [{ field: "content.title", before: "old", after: "new", inScope: true }],
+    advisoryComments: [{ authorKind: "service", body: "the reading came from the repair run" }],
   },
   // §VI — the proposal card's pending body: the chosen option row, the duration
   // line and the Confirm floor.
