@@ -102,6 +102,29 @@ export type NotificationsHostAdapters = {
   buildActorContext: (
     session: BetterAuthSessionLike,
   ) => Promise<ActorContext>;
+  /**
+   * ASYNC counterpart of `runPostgresQueriesSync` — the host's
+   * `@/lib/postgres-async` symbol (cinatra#2882).
+   *
+   * `runPostgresQueriesSync` reaches Postgres by parking the MAIN thread on
+   * `Atomics.wait` until a worker thread answers or the 30s
+   * `POSTGRES_SYNC_TIMEOUT_MS` ceiling fires. For that whole window no timer,
+   * no abort listener and no microtask runs anywhere in the process. Every
+   * caller of the notification delete is already `async`, so they were paying
+   * that freeze for nothing.
+   *
+   * OPTIONAL on this type on purpose: the adapter-mocking tests construct this
+   * object by hand, and a required field would break every one of them for a
+   * seam they do not exercise. The real host (src/lib/notifications-host.ts)
+   * always supplies it; the async seam in `./service` throws a named
+   * error rather than silently falling back to the sync bridge when it is
+   * missing, so a half-wired host is loud instead of quietly re-freezing the
+   * event loop.
+   */
+  runPostgresQueriesAsync?: (input: {
+    connectionString: string;
+    queries: Array<{ text: string; values?: unknown[] }>;
+  }) => Promise<Array<{ rows?: Array<Record<string, unknown>> }>>;
 };
 
 let adapters: NotificationsHostAdapters | undefined;

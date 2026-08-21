@@ -138,13 +138,36 @@ export function resolveMainRepoRoot(cwd = process.cwd()) {
 // the MAIN compose project. Best-effort — any Docker unavailability / missing
 // container / parse failure returns { available: false } (never throws), so the
 // guard degrades to the generic "service down" message.
-export function diagnoseDockerPortDrift({ service, mainRoot, expectedHostPort, projectName }) {
-  // Read-only, but it must look at the SAME compose project the writes go to:
-  // an unpinned `ps` inspects the basename-derived project while the preflight's
-  // `up` targets the lane's, so a lane could be told its healthy container had
-  // drifted. Built from dev-preflight's `buildComposeArgs` rather than a second
-  // hand-written argv, so the project pin and the compose-file list cannot fork
-  // between the two call sites (cinatra#2839).
+//
+// This is the SECOND Docker-touching path in the dev preflight (the first is the
+// compose runner in scripts/lib/dev-preflight.mjs). It is read-only — `ps -aq`
+// and `inspect` create nothing — but CINATRA_SKIP_DEV_PREFLIGHT promises the
+// preflight does NOT touch Docker at all, so the guard sits HERE too, on the
+// function that spawns, and not only on the launcher's entry check: `skip`
+// short-circuits before any spawn. (cinatra#2845 review, round 1: the "single
+// chokepoint" claim was overstated precisely because this path spawned docker
+// on its own.)
+//
+// The compose argv comes from the SHARED builder so the file list cannot drift
+// between the two paths. The project is pinned to whatever the caller resolved:
+// this diagnosis must look at the SAME compose project the writes go to, and an
+// unpinned `ps` would inspect the basename-derived project while the preflight's
+// `up` targets the lane's — so a lane could be told its healthy container had
+// drifted. Pinning is what keeps the two in step (cinatra#2839). An UNSCOPED
+// checkout resolves no project name, `buildComposeArgs` then omits `-p`
+// entirely, and the diagnosis inspects the main checkout's shared stack under
+// compose's own basename-derived project exactly as before — see
+// resolveMainRepoRoot above.
+//
+// @param {{ service: object, mainRoot: string, expectedHostPort: number|string, projectName?: string, skip?: boolean }} input
+export function diagnoseDockerPortDrift({
+  service,
+  mainRoot,
+  expectedHostPort,
+  projectName,
+  skip = false,
+}) {
+  if (skip) return { available: false, skipped: true };
   const compose = (args) =>
     spawnSync("docker", buildComposeArgs({ projectName, args }), {
       cwd: mainRoot,

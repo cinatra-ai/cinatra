@@ -56,7 +56,11 @@ import {
   shouldSkipDevPreflight,
   unmanagedComposeServices,
 } from "../lib/dev-preflight.mjs";
-import { formatDriftRemedy, parseHostPort } from "../lib/docker-port-drift.mjs";
+import {
+  diagnoseDockerPortDrift,
+  formatDriftRemedy,
+  parseHostPort,
+} from "../lib/docker-port-drift.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -1595,6 +1599,133 @@ describe("readEnvFileValue", () => {
   it("treats a value that is nothing but a comment as unset", () => {
     expect(readEnvFileValue(path.join(dir, ".env.local"), "ONLY_COMMENT")).toBeUndefined();
   });
+
+  // Round-1 non-blocking item 3: this reader is shared, so the inline-comment
+  // rule also changes how PORT and the service DSNs are read
+  // (scripts/dev-server.mjs). That widening is deliberate — pin BOTH halves of
+  // it at the consumer contract, `parseHostPort(readEnvFileValue(...))`, which
+  // is exactly how dev-server.mjs's envHostPort() resolves a bundled service.
+  it("hands the DSN consumer a value it can parse, comment or no comment", () => {
+    const file = path.join(dir, "dsn.env");
+    writeFileSync(
+      file,
+      [
+        // Annotated: previously parsed to no host port at all, so the drift
+        // guard silently compared against the bundled default instead.
+        "ANNOTATED=redis://127.0.0.1:16379 # the lane cache",
+        // A `#` that is part of the value: must survive untouched, or the
+        // launcher would probe the wrong port and mis-report drift.
+        "PW_HASH=postgresql://postgres:pa%23ssword@127.0.0.1:15434/postgres",
+        "PW_RAW_HASH=postgresql://postgres:pa#ssword@127.0.0.1:15434/postgres",
+        "PORT_ANNOTATED=13839 # lane port",
+      ].join("\n"),
+    );
+    const fallback = { host: "127.0.0.1", port: 6379 };
+
+    expect(parseHostPort(readEnvFileValue(file, "ANNOTATED"), fallback)).toEqual({
+      host: "127.0.0.1",
+      port: 16379,
+    });
+    expect(parseHostPort(readEnvFileValue(file, "PW_HASH"), fallback)).toEqual({
+      host: "127.0.0.1",
+      port: 15434,
+    });
+    // A RAW `#` in a password is not valid DSN syntax — WHATWG reads it as the
+    // start of a fragment, so parseHostPort falls back, exactly as it does on
+    // `main`. What matters for this reader is that the value reaches the parser
+    // WHOLE: the truncation the comment rule could have caused does not happen.
+    expect(readEnvFileValue(file, "PW_RAW_HASH")).toBe(
+      "postgresql://postgres:pa#ssword@127.0.0.1:15434/postgres",
+    );
+    // PORT is handed to Next.js verbatim, so it must come out as a bare number.
+    expect(readEnvFileValue(file, "PORT_ANNOTATED")).toBe("13839");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. The OTHER door to Docker: the read-only drift diagnosis
+// ---------------------------------------------------------------------------
+
+// Round-1 non-blocking item 2: the "single chokepoint" claim was overstated —
+// diagnoseDockerPortDrift spawns `docker` itself and never passes through
+// createComposeRunner. It now carries the same guard on its own spawning
+// function, and builds its compose argv from the shared builder.
+describe("diagnoseDockerPortDrift guard", () => {
+  let dir;
+  let dockerLog;
+  let originalPath;
+
+  const SERVICE = {
+    composeService: "redis",
+    label: "Redis",
+    containerPort: 6379,
+    defaultHostPort: 6379,
+    envVar: "REDIS_URL",
+  };
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "cinatra-2839-drift-"));
+    dockerLog = path.join(dir, "docker-calls.log");
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      path.join(bin, "docker-recorder.cjs"),
+      [
+        'const { appendFileSync } = require("node:fs");',
+        "appendFileSync(",
+        "  process.env.CINATRA_TEST_DOCKER_LOG,",
+        '  JSON.stringify({ argv: process.argv.slice(2) }) + "\\n",',
+        ");",
+        "process.exit(1);",
+        "",
+      ].join("\n"),
+    );
+    const shim = path.join(bin, "docker");
+    writeFileSync(
+      shim,
+      `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$(dirname "$0")/docker-recorder.cjs" "$@"\n`,
+    );
+    chmodSync(shim, 0o755);
+
+    originalPath = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${originalPath}`;
+    process.env.CINATRA_TEST_DOCKER_LOG = dockerLog;
+  });
+
+  afterAll(() => {
+    process.env.PATH = originalPath;
+    delete process.env.CINATRA_TEST_DOCKER_LOG;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const calls = () =>
+    existsSync(dockerLog)
+      ? readFileSync(dockerLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+
+  it("spawns NOTHING when the skip flag is set", () => {
+    rmSync(dockerLog, { force: true });
+    const result = diagnoseDockerPortDrift({
+      service: SERVICE,
+      mainRoot: dir,
+      expectedHostPort: 6379,
+      skip: true,
+    });
+    expect(result).toEqual({ available: false, skipped: true });
+    expect(calls()).toEqual([]);
+  });
+
+  it("without the flag, builds its compose argv from the shared builder", () => {
+    rmSync(dockerLog, { force: true });
+    diagnoseDockerPortDrift({ service: SERVICE, mainRoot: dir, expectedHostPort: 6379 });
+    const [first] = calls();
+    expect(first, "the drift diagnosis should have shelled out").toBeDefined();
+    expect(first.argv).toEqual(buildComposeArgs({ args: ["ps", "-aq", "redis"] }));
+    // No `-p`: drift diagnosis inspects the MAIN checkout's shared stack, which
+    // is compose's own basename-derived project — pinning a lane project here
+    // would diagnose the wrong containers.
+    expect(first.argv).not.toContain("-p");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1693,6 +1824,9 @@ describe("dev-server.mjs preflight (end-to-end, fake docker)", () => {
     // Whatever the ambient shell carries, each case states its own inputs.
     delete env.CINATRA_SKIP_DEV_PREFLIGHT;
     delete env.COMPOSE_PROJECT_NAME;
+    // A shell PORT outranks `.env.local` by design, so an ambient one would
+    // hide what each case states in its own file.
+    delete env.PORT;
     for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
     Object.assign(env, extraEnv);
 
@@ -1746,6 +1880,32 @@ describe("dev-server.mjs preflight (end-to-end, fake docker)", () => {
     );
     expectCleanRun(result);
     expect(result.calls).toEqual([]);
+  });
+
+  // The drift diagnosis is the launcher's OTHER door to Docker, and it only
+  // opens when a service sits on its bundled DEFAULT host port (anything else
+  // reads as "not our stack" and is skipped before any shell-out). Every other
+  // case here pins lane ports, so this one states the defaults deliberately:
+  // the configuration in which the read-only path WOULD spawn `docker`, still
+  // zero calls behind the flag.
+  it("makes zero docker calls on the drift path too, at the bundled default ports", () => {
+    const result = runLauncher("PORT=13839\nCINATRA_SKIP_DEV_PREFLIGHT=1\n", {
+      SUPABASE_DB_URL: "postgresql://postgres:postgres@127.0.0.1:5434/postgres",
+      REDIS_URL: "redis://127.0.0.1:6379",
+    });
+    expectCleanRun(result);
+    expect(result.calls).toEqual([]);
+  });
+
+  // Round-1 non-blocking item 3, end to end: the shared reader's inline-comment
+  // rule also governs PORT. An annotated lane port must reach Next.js as a bare
+  // number, not as `13839 # lane port`.
+  it("resolves an annotated .env.local PORT to the bare port", () => {
+    const result = runLauncher(
+      ["PORT=13839 # lane port", "CINATRA_SKIP_DEV_PREFLIGHT=1", ""].join("\n"),
+    );
+    expectCleanRun(result);
+    expect(result.stdout).toContain("[dev-server] PORT=13839 ");
   });
 
   it("makes zero docker calls when the quoted .env.local flag carries an inline comment", () => {

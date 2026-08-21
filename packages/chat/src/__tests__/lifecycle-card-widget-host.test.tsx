@@ -87,8 +87,12 @@ const VERIFICATION_BODY = {
   outcome: "verified",
   reviewedRevisionId: "rev-base",
   repairedRevisionId: "rev-fixed",
-  scopePaths: ["content.title"],
-  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+  fieldDiff: [{ field: "content.title", before: "old", after: "new", inScope: true }],
+  // §VII's advisory comments (epic S9, slice S9e). The field is REQUIRED, not
+  // optional: a body that omits it cannot be told apart from one whose producer
+  // dropped the reading's provenance, so the parse refuses it and the card
+  // draws nothing at all.
+  advisoryComments: [{ authorKind: "service", body: "Core analysis of 1 disclosed field(s)." }],
 };
 
 function mockResolve(state: LifecycleCardState) {

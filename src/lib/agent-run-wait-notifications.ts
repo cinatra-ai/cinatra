@@ -504,10 +504,20 @@ export const runWaitNotifier: RunWaitNotifier = {
       const run = await readAgentRunById(runId);
       const userId = run?.runBy;
       if (!userId) return;
-      const { deleteNotificationsByDedupeKeyForUser } = await import(
+      // cinatra#2882 — the ASYNC seam. The synchronous twin parks this thread
+      // on `Atomics.wait` for the whole round trip (up to
+      // POSTGRES_SYNC_TIMEOUT_MS, 30s), freezing every timer, abort listener
+      // and microtask in the process; this handler is already `async`, so it
+      // was paying that for nothing. Same statement, same key-scoped guard, and
+      // the same settle-or-throw ceiling — the seam bounds the checkout and its
+      // own wait for an answer, client-side, so the bound holds behind a
+      // connection pooler too (see `@/lib/postgres-async`). A database that
+      // never answers still rejects into the best-effort catch below instead of
+      // leaving this handler's promise pending forever.
+      const { deleteNotificationsByDedupeKeyForUserAsync } = await import(
         "@cinatra-ai/notifications/server"
       );
-      deleteNotificationsByDedupeKeyForUser({
+      await deleteNotificationsByDedupeKeyForUserAsync({
         userId,
         dedupeKey: autoGateOpenDedupeKey(runId, reviewTaskId),
       });
@@ -652,10 +662,26 @@ export const runWaitNotifier: RunWaitNotifier = {
       // is a purged run, and retrying forever would never find it, so the
       // obligation is retired rather than left to spin.
       if (!userId) return true;
-      const { deleteHoldNotificationForUser } = await import(
+      // cinatra#2882 — the ASYNC seam, same as the three status-transition
+      // clears above. The synchronous twin parks this thread on `Atomics.wait`
+      // for the whole round trip (up to POSTGRES_SYNC_TIMEOUT_MS, 30s), freezing
+      // every timer, abort listener and microtask in the process; this handler is
+      // already `async`, and it runs on the park SWEEP — a loop over held parks,
+      // so the freeze was once per obligation in a batch. Same statement, same
+      // park-id narrowing, and the seam's own settle-or-throw ceiling, so a
+      // database that never answers rejects into the catch below instead of
+      // leaving the sweeper's promise pending forever.
+      const { deleteHoldNotificationForUserAsync } = await import(
         "@cinatra-ai/notifications/server"
       );
-      return deleteHoldNotificationForUser({
+      // `return await`, NOT a bare `return` of the promise. Returning it
+      // unawaited would settle this async function WITH that promise, and a
+      // rejection would then bypass the `catch` below entirely — the sweeper
+      // would get a rejected promise where the contract says it gets `false`,
+      // and the obligation this park is owed would surface as a throw out of a
+      // best-effort notifier. Awaiting keeps the failure inside the handler that
+      // is supposed to absorb it and turn it into "not acked, sweep again".
+      return await deleteHoldNotificationForUserAsync({
         userId,
         dedupeKey: runAwaitingHumanDedupeKey(runId),
         holdParkId: parkId,
@@ -685,10 +711,11 @@ export const runWaitNotifier: RunWaitNotifier = {
       // human `pending_input` from an overloaded one, so re-deriving "still
       // waiting?" here would mishandle the overload; the seam classifier already
       // owns that decision. Same primitive as the #1057 config-needs clear.
-      const { deleteNotificationsByDedupeKeyForUser } = await import(
+      // cinatra#2882 — async seam; see onAutoGateResolved above.
+      const { deleteNotificationsByDedupeKeyForUserAsync } = await import(
         "@cinatra-ai/notifications/server"
       );
-      deleteNotificationsByDedupeKeyForUser({
+      await deleteNotificationsByDedupeKeyForUserAsync({
         userId,
         dedupeKey: runAwaitingHumanDedupeKey(runId),
       });
@@ -724,7 +751,8 @@ export const runWaitNotifier: RunWaitNotifier = {
       const {
         resolveAgentRunHref,
         createNotificationForRecipient,
-        deleteNotificationsByDedupeKeyForUser,
+        // cinatra#2882 — async seam; see onAutoGateResolved above.
+        deleteNotificationsByDedupeKeyForUserAsync,
       } = await import("@cinatra-ai/notifications/server");
       // Clear the resolved (now-stale) awaiting-human row FIRST — same
       // idempotent delete-by-key primitive as onLeaveHumanWait — so a reader
@@ -732,7 +760,7 @@ export const runWaitNotifier: RunWaitNotifier = {
       // this module: an insert-then-swallowed-delete-error still leaves the
       // durable failure row behind (the awaiting-human row is a delete-only
       // key that a future onEnterHumanWait call would collide on anyway).
-      deleteNotificationsByDedupeKeyForUser({
+      await deleteNotificationsByDedupeKeyForUserAsync({
         userId,
         dedupeKey: runAwaitingHumanDedupeKey(runId),
       });

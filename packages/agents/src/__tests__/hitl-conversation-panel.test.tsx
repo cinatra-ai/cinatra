@@ -21,6 +21,9 @@ const onSubmitMock = vi.fn(async (_p: string, _a?: unknown) => {});
 type PromptFieldPropsCapture = {
   onSubmit: (s: string) => Promise<void>;
   onAttachmentsSelected?: (files: File[]) => void;
+  /** §I (#2865) — the opt-in primary variant. Must never be set here. */
+  primary?: boolean;
+  fieldClassName?: string;
 };
 let lastPromptFieldProps: PromptFieldPropsCapture | null = null;
 
@@ -208,6 +211,31 @@ describe("HitlConversationPanel paperclip + attachments", () => {
     );
     expect(lastPromptFieldProps).not.toBeNull();
     expect(lastPromptFieldProps?.onAttachmentsSelected).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // §I INPUT HIERARCHY (#2865) — the run panel's field-assist input is NOT the
+  // conversation's chat box, and the §I drawing does not promote it. The
+  // primary variant `PromptField` gained for the chat composer is OPT-IN
+  // precisely so this surface keeps the edge it always had; this asserts the
+  // opt-in did not leak, at the prop the panel actually passes.
+  // -------------------------------------------------------------------------
+  it("§I — the field-assist input is NOT promoted to primary (#2865)", () => {
+    render(
+      <HitlConversationPanel
+        portalTarget={document.body}
+        visible={true}
+        conversation={[]}
+        promptPending={false}
+        storageKey="k"
+        onSubmit={onSubmitMock}
+      />,
+    );
+    expect(lastPromptFieldProps).not.toBeNull();
+    expect(lastPromptFieldProps?.primary).toBeUndefined();
+    expect(Object.keys(lastPromptFieldProps!)).not.toContain("primary");
+    // …and its ordinary `line` edge is exactly what it was.
+    expect(lastPromptFieldProps?.fieldClassName).toBe("border-line shadow-lg");
   });
 
   it("`enableAttachments: true` → onAttachmentsSelected IS passed", () => {

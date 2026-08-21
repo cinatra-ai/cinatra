@@ -1,0 +1,41 @@
+# Throwaway capture stack for the S9a placeholder proofs.
+# Project name: s9aproofcap. Own ports, own volumes, own network.
+# The operator's cinatra_cinatra project is never referenced here.
+name: s9aproofcap
+
+services:
+  postgres:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    ports:
+      - "127.0.0.1:55432:5432"
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - s9aproofcap-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005
+    ports:
+      - "127.0.0.1:56379:6379"
+    volumes:
+      - s9aproofcap-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  s9aproofcap-postgres:
+  s9aproofcap-redis:
+
+networks:
+  default:
+    name: s9aproofcap-net

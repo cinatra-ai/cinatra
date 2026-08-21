@@ -76,8 +76,12 @@ vi.mock("next/navigation", () => ({
 
 /**
  * The recommendation hold's AUTHORITY, and the ONLY thing stubbed for that kind.
- * Its two decision controls stay the real `confirm-run-recommendation` /
- * `skip-run-recommendation` actions on the shipped chip row.
+ * Its decision controls are NOT stubbed: they stay whatever the shipped chip row
+ * draws, which since the §V redraw (cinatra#2841) is Confirm / Adjust / Skip PER
+ * CHIP (`[data-skill-action]`). The row-level `confirm-run-recommendation` /
+ * `skip-run-recommendation` pair this note used to name is drawn by nothing — it
+ * survives in this file only as the deliberately mislabeled plant further down,
+ * which the carriage observation must refuse to see.
  */
 type HoldState =
   | { state: "none" }
@@ -329,8 +333,13 @@ const RESOLVE_ANSWERS: Record<string, unknown> = {
       outcome: "verified",
       reviewedRevisionId: "rev-base",
       repairedRevisionId: "rev-repaired",
-      scopePaths: ["/title"],
-      fieldDiff: [{ field: "/title", before: "Old", after: "New" }],
+      // The authorization travels as each ROW's own mark, decided server-side
+      // against the whole manifest (cinatra#2861) — never as a `scopePaths`
+      // list. The body schema is `.strict()`, so a stub still sending the
+      // retired list, or omitting `inScope`, is rejected and the card fails
+      // closed: this arm would then prove nothing.
+      fieldDiff: [{ field: "/title", before: "Old", after: "New", inScope: true }],
+      advisoryComments: [],
     },
   },
 };

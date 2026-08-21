@@ -132,6 +132,23 @@ function parseEnvValue(rawValue) {
  * `parseEnvValue`. Returns undefined when the file is absent or the key is
  * unset/empty.
  *
+ * The inline-comment handling is DELIBERATELY not scoped to the skip flag. This
+ * is the launcher's one `.env.local` reader, so widening it also widens how
+ * PORT, SUPABASE_DB_URL, REDIS_URL and NANGO_SERVER_URL are read
+ * (scripts/dev-server.mjs). That is the intent, not a side effect: an annotated
+ * `PORT=13839 # lane port` previously resolved to the literal `13839 # lane
+ * port`, which Next.js does not parse as a port, and an annotated DSN parsed to
+ * no host port at all and fell back to the bundled default. One rule for one
+ * file beats a per-key exception nobody can predict. The narrowness of the
+ * comment rule is what keeps the widening safe: a `#` is a comment only when it
+ * begins the value or follows whitespace, so a DSN password (`pa#ssword`) and a
+ * URL fragment survive untouched. Both are pinned at the reader in
+ * scripts/__tests__/dev-preflight.test.mjs; the DSN cases are pinned once more
+ * through `parseHostPort`, which is how dev-server.mjs actually consumes them.
+ * (A RAW `#` in a password is not valid DSN syntax and never parsed — the point
+ * of that case is that the reader hands the parser the value WHOLE, unchanged
+ * from `main`.)
+ *
  * @param {string} filePath
  * @param {string} key
  * @returns {string | undefined}
@@ -1078,11 +1095,14 @@ export function formatGuardedComposeCommand({ args = [], requireManageable = fal
  *
  * Precisely: this is the only path that can CREATE anything. It is not the only
  * `docker` spawn in the preflight — the read-only drift diagnosis in
- * scripts/lib/docker-port-drift.mjs shells out on its own (`ps -aq`, `inspect`)
- * and is gated by the launcher's own `skipPreflight` check rather than by this
- * runner. An earlier revision of this comment called it "the single chokepoint
- * every compose call must pass through", which overstated it. The two do share
- * `buildComposeArgs`, so the project pin and compose-file list cannot fork.
+ * scripts/lib/docker-port-drift.mjs shells out on its own (`ps -aq`, `inspect`),
+ * so it carries the SAME guard on ITS own spawning function rather than relying
+ * on the launcher's entry check. Two spawning functions, two guards — that is
+ * what makes the flag's promise hold, rather than one runner every path happens
+ * to use today. An earlier revision of this comment called this "the single
+ * chokepoint every compose call must pass through", which overstated it. The two
+ * do share `buildComposeArgs`, so the project pin and compose-file list cannot
+ * fork.
  *
  * Resolves `{ available }` — false when Docker is not installed/usable — and
  * `{ ok }` from the exit code. Never throws; output is suppressed (the launcher

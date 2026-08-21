@@ -2,7 +2,7 @@
  "note": "THE ANCHOR CONTRACT (cinatra#2826, epic #2784 S9m) \u2014 the drift alarm between the design pin, the executable DOM expectations and the anchors a capture is graded against. `digest` is a sha256 over exactly three inputs: the acceptance manifest's `specCommit` (read from the manifest, never from here \u2014 the copy below is a readable mirror), the `domExpectations` recorded below, and the capture requirement anchors recomputed live from scripts/audit/lib/chat-hitl-capture-recorder.mjs. Moving the design pin therefore invalidates the digest by itself, and so does renaming an anchor, adding a host cell, weakening an observation or changing what a capture must observe. The only way back is an explicit re-ratification: re-examine the anchors against the drawing at the new pin and record the new digest by hand. `node scripts/audit/chat-hitl-acceptance-gate.mjs --print-anchor-digest` prints the recomputed value; nothing writes it, because a digest a script refreshes on its own alarms about nothing. The other half of the binding is src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts, which asserts these `domExpectations` deep-equal the executable ones \u2014 so the code cannot move without this file, and this file cannot move without the digest.",
  "issue": 2826,
  "epic": 2784,
- "specCommit": "design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html",
+ "specCommit": "design@92c1be7c6f864dec6382a9ef01e7b2e1c38aa871 specs/app-lifecycle-cards.html",
  "domExpectations": {
   "carriage": {
    "artifact_review_gate": {
@@ -78,11 +78,13 @@
    "verification_summary": {
     "hosts": {
      "chat_thread": "transcript",
+     "page_gate_region": "composition",
+     "run_card": "composition",
      "site_widget": "transcript"
     },
     "owed": []
    }
   }
  },
- "digest": "110b8027589e55e7053c37caeb7ead3a1c05c7addeade91ed752c41798a1f7b6"
+ "digest": "3c5fd4eb17ad15f15b579b2870f7527444c81bdbeb1d49f75887f8948e39fbe2"
 }
