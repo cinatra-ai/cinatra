@@ -192,11 +192,23 @@ export type HostParityRatchetRow = {
  * The two shell kinds reach the conversation hosts and nothing else — no run-card
  * or gate-region composition mounts them, so those cells are not targets.
  *
- * `recommendation_hold` is the mirror image: it is composed on the run card
- * today, and its two conversation cells are owed by named slices — the chat
- * thread by S9b (#2786) and the widget by S9f (#2790), which is also why this
- * slice consumes the widget row as an observation rather than asserting a card
- * that no branch has landed.
+ * `recommendation_hold` gained two cells in S9f (cinatra#2790):
+ *
+ *   · `site_widget`, by TRANSCRIPT. The card's read and its two decisions became
+ *     broker-aware, the in-code credential guard that withheld it went with them,
+ *     and the shared conversation column now mounts it at the `agent_run` slot on
+ *     a host whose run card cannot carry it. The row that owed this cell is
+ *     struck HERE, in the same change that made the observation flip — which is
+ *     the only moment it may be struck.
+ *   · `page_gate_region`, by COMPOSITION. The review route's gate region composes
+ *     `RecommendationHoldCard` above the review card, keyed by the run (plan §9).
+ *
+ * `chat_thread` STAYS OWED, and the obligation is honest rather than pending
+ * paperwork: a run started from a conversation is created without the
+ * "a person is present" mark and never parks, and the ruled cookie-host mount —
+ * relabelling the run panel's copy as the conversation's own — belongs to S9b
+ * (#2786). Until that lands the `/chat` transcript really does not draw this
+ * card, and this row says so.
  */
 export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
   Record<LifecycleCardKind, HostParityRatchetRow>
@@ -219,10 +231,13 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
     owed: Object.freeze([]),
   },
   recommendation_hold: {
-    hosts: Object.freeze({ run_card: "composition" }),
+    hosts: Object.freeze({
+      run_card: "composition",
+      page_gate_region: "composition",
+      site_widget: "transcript",
+    }),
     owed: Object.freeze([
       { host: "chat_thread" as LifecycleCardHost, tracking: "cinatra#2786 (S9b)" },
-      { host: "site_widget" as LifecycleCardHost, tracking: "cinatra#2790 (S9f)" },
     ]),
   },
 });

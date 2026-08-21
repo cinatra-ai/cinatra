@@ -53,6 +53,8 @@ import { AppRouteLink } from "./app-route-link";
 import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
+import { useCookieSessionSurface } from "@cinatra-ai/agents/lifecycle-card-runtime";
+import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-chip-row";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -185,6 +187,41 @@ function ThoughtGroupSection({ group, isLive }: { group: UiThoughtGroup; isLive:
 }
 
 // ---------------------------------------------------------------------------
+// The held run's card, on a conversation host whose run card cannot carry it
+// (cinatra#2790, epic #2784 S9f).
+// ---------------------------------------------------------------------------
+//
+// WHY THIS IS CONDITIONAL, AND WHY THE CONDITION IS THE CREDENTIAL.
+//
+// The `agent_run` slot already carries `InlineAgentRunCard` — the AG-UI run
+// panel — and that panel mounts `RecommendationHoldCard` under its own
+// `run_card` host. On a COOKIE conversation surface that works: the panel seeds
+// itself with a same-origin `GET /api/agents/runs/<id>` and drives its gates
+// from the ambient session. Drawing a second copy of the same card beside it
+// there would put two instances of one kind on one screen, which the one-card
+// gate forbids; relabelling the panel's copy as the conversation's own mount is
+// the ruled S9b change (cinatra#2786), not this slice's.
+//
+// On a CREDENTIAL-DECLARING conversation surface — the site widget — the panel
+// carries nothing at all: every path it seeds and drives itself with is
+// cookie-bound, and the embed frame is same-origin to the app, so those requests
+// would answer as whoever else is signed in on that browser rather than as the
+// widget's reader. The slot is therefore empty of any card, and the column
+// mounts the broker-aware one itself. Exactly one card, on exactly the host that
+// has no other way to draw it.
+//
+// `useCookieSessionSurface()` is the ruled way to ask this. It is TRUE only for
+// a well-formed cookie-host declaration, and FALSE for no provider at all, for a
+// refused declaration and for any credential-bearing host — so a mis-wired mount
+// draws nothing rather than guessing, and this component can never put a
+// cookie-bound affordance on a surface that has none.
+function BrokerHostRecommendationHold({ runId }: { runId: string }): ReactNode {
+  const cookieSurface = useCookieSessionSurface();
+  if (cookieSurface) return null;
+  return <RecommendationHoldCard runId={runId} />;
+}
+
+// ---------------------------------------------------------------------------
 // Ordered parts renderer (chronologically interleaved text + tool badges)
 // ---------------------------------------------------------------------------
 
@@ -268,6 +305,12 @@ function OrderedPartsSection({
         if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
           return (
             <div key={`agent-run-${part.runId}`} data-transcript-slot={idx}>
+              {/* THE RUN-START SKILLS QUESTION, in the conversation that started
+                  the run (cinatra#2790, epic #2784 S9f). A SIBLING of the run
+                  card, never a child: the run card is a `run_card` host of its
+                  own, and a conversation card drawn inside that subtree would be
+                  another host's mount wearing this one's name. */}
+              <BrokerHostRecommendationHold runId={part.runId} />
               <InlineAgentRunCard
                 runId={part.runId}
                 onActiveGateChange={onActiveGateChange}

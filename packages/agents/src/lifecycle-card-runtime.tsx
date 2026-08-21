@@ -56,6 +56,22 @@ import {
 /** The server route that re-authorizes a ref and answers with the card envelope. */
 export const LIFECYCLE_VIEW_RESOLVE_PATH = "/api/lifecycle-views/resolve";
 
+/**
+ * The BROKER read of the recommendation hold (cinatra#2790, epic #2784 S9f).
+ *
+ * The hold is the one lifecycle kind carried as a typed INTERRUPT rather than a
+ * DATA_PART, so it has no view ref to post at the resolve route above and is
+ * addressed by its run instead. A card on a COOKIE host never uses this path —
+ * it keeps its server action; a card on a credential-declaring host uses it and
+ * nothing else, because a server action cannot carry a host credential and would
+ * ride the ambient cookie of a same-origin frame.
+ */
+export const LIFECYCLE_RECOMMENDATION_HOLD_PATH = "/api/lifecycle-views/recommendation-hold";
+
+/** The broker CONFIRM / ADJUST / SKIP for that hold. Same rule as the read. */
+export const LIFECYCLE_RECOMMENDATION_DECIDE_PATH =
+  "/api/lifecycle-views/recommendation-hold/decide";
+
 // ---------------------------------------------------------------------------
 // Host declaration — absent means "no host", which means no card.
 // ---------------------------------------------------------------------------

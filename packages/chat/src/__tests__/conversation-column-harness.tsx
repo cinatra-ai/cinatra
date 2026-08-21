@@ -33,6 +33,10 @@ import {
 import { createChatWidgetRuntime, EMPTY_WIDGETS, EMPTY_WIDGET_MANIFESTS } from "../widget-runtime";
 import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card";
 import {
+  LIFECYCLE_RECOMMENDATION_DECIDE_PATH,
+  LIFECYCLE_RECOMMENDATION_HOLD_PATH,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
+import {
   LIFECYCLE_VIEW_SCHEMA_VERSION,
   TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
   VERIFICATION_SUMMARY_VIEW_VERSION,
@@ -375,6 +379,22 @@ export type WidgetServiceStubOptions = {
    * not a transport failure.
    */
   lifecycle?: (viewType: string) => unknown | null;
+  /**
+   * The BROKER READ of a recommendation hold (cinatra#2790, epic #2784 S9f).
+   *
+   * The hold is the one lifecycle kind carried as a typed INTERRUPT, so it has
+   * no view ref to post at the resolve route and is addressed by its run. On a
+   * credential-declaring host the card reads it HERE rather than through the
+   * cookie-bound server action, so the widget's server has to answer this too —
+   * otherwise a card would draw nothing for want of a stub and a suite could
+   * read that silence as a surface that carries no card.
+   *
+   * `null` means "this reader gets nothing", which is the 404 the route's
+   * refusal produces, not a state.
+   */
+  recommendationHold?: (runId: string) => unknown | Promise<unknown> | null;
+  /** The BROKER DECISION on that hold. Answers the route's `{ outcome }` shape. */
+  recommendationDecide?: (body: Record<string, unknown>) => unknown | Promise<unknown> | null;
 };
 
 /**
@@ -406,6 +426,35 @@ export function installWidgetServiceStub(options: WidgetServiceStubOptions = {})
       })();
       const answer = options.lifecycle(requested);
       return answer === null ? json({ error: "Not available to you." }, 404) : json(answer);
+    }
+    if (url === LIFECYCLE_RECOMMENDATION_HOLD_PATH) {
+      if (!options.recommendationHold) return json({ error: "no hold stub" }, 404);
+      const runId = (() => {
+        try {
+          return String(JSON.parse(String(init?.body ?? "{}")).runId ?? "");
+        } catch {
+          return "";
+        }
+      })();
+      const answer = await options.recommendationHold(runId);
+      return answer === null || answer === undefined
+        ? json({ error: "Not available to you." }, 404)
+        : json(answer);
+    }
+    if (url === LIFECYCLE_RECOMMENDATION_DECIDE_PATH) {
+      const body = (() => {
+        try {
+          return JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        } catch {
+          return {} as Record<string, unknown>;
+        }
+      })();
+      const answer = options.recommendationDecide
+        ? await options.recommendationDecide(body)
+        : { ok: true, dispatched: true };
+      return answer === null || answer === undefined
+        ? json({ error: "Not available to you." }, 404)
+        : json({ outcome: answer });
     }
     if (url.startsWith("/api/assistants/list")) {
       return json({ assistants: options.mentionables ?? [] });

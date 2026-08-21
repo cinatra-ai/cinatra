@@ -1,36 +1,36 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
-  "routes": {
-    "/sign-in": 218,
-    "/api/mcp": 1714,
-    "/chat": 1793,
-    "/api/a2a": 1719,
-    "/api/llm-bridge": 1729
+ "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+ "routes": {
+  "/sign-in": 218,
+  "/api/mcp": 1715,
+  "/chat": 1794,
+  "/api/a2a": 1720,
+  "/api/llm-bridge": 1730
+ },
+ "absorbs": {
+  "/api/a2a": {
+   "from": 1719,
+   "to": 1720,
+   "pr": 2790,
+   "reason": "cinatra#2790 (epic #2784 S9f): the recommendation card's read and its two decisions become BROKER-AWARE, so the ladder they share moves out of the cookie-bound `\"use server\"` module that could only ever run for a session and into ONE actor-parameterized core — packages/agents/src/run-recommendation-core.ts. It is a separate module for a structural reason, not a stylistic one: the session entry and the widget's broker routes must reach the SAME functions, and a core living inside `recommendation-hold.ts` would call that module's park, ref and wire primitives INTRA-MODULE, where the security suites that pin those seams cannot observe or replace them. One module, +1 on every locked route that already reaches run-recommendation-actions.ts; /sign-in unchanged. Measured with the pinned extension tree."
   },
-  "absorbs": {
-    "/api/a2a": {
-      "from": 1718,
-      "to": 1719,
-      "pr": 2834,
-      "reason": "cinatra#2771 (PR #2834 carries this record; the reason names the issue): the chat turn's per-turn input prefix gains ONE pure module, and it sits on the assistant-runtime graph, so it is reachable from every locked route that mounts it: +1 on these four routes, /sign-in unchanged. src/lib/assistant-runtime/chat-system-prefix.ts — the pure system-string composer that orders stable fragments ahead of volatile ones. It is a separate module precisely so the byte-stability property is unit-assertable without loading the server-only runtime graph; inlining it into runtime.ts was rejected because the test would then have to mock the entire turn producer to exercise four lines of concatenation. (The round's earlier +2 also counted a question-driven exposure resolver; the owner ruling of 2026-08-17 removed that mechanism, so this raise is one module, not two.) Measured with the pinned extension tree."
-    },
-    "/api/llm-bridge": {
-      "from": 1728,
-      "to": 1729,
-      "pr": 2834,
-      "reason": "cinatra#2771 (PR #2834 carries this record; the reason names the issue): the chat turn's per-turn input prefix gains ONE pure module, and it sits on the assistant-runtime graph, so it is reachable from every locked route that mounts it: +1 on these four routes, /sign-in unchanged. src/lib/assistant-runtime/chat-system-prefix.ts — the pure system-string composer that orders stable fragments ahead of volatile ones. It is a separate module precisely so the byte-stability property is unit-assertable without loading the server-only runtime graph; inlining it into runtime.ts was rejected because the test would then have to mock the entire turn producer to exercise four lines of concatenation. (The round's earlier +2 also counted a question-driven exposure resolver; the owner ruling of 2026-08-17 removed that mechanism, so this raise is one module, not two.) Measured with the pinned extension tree."
-    },
-    "/api/mcp": {
-      "from": 1713,
-      "to": 1714,
-      "pr": 2834,
-      "reason": "cinatra#2771 (PR #2834 carries this record; the reason names the issue): the chat turn's per-turn input prefix gains ONE pure module, and it sits on the assistant-runtime graph, so it is reachable from every locked route that mounts it: +1 on these four routes, /sign-in unchanged. src/lib/assistant-runtime/chat-system-prefix.ts — the pure system-string composer that orders stable fragments ahead of volatile ones. It is a separate module precisely so the byte-stability property is unit-assertable without loading the server-only runtime graph; inlining it into runtime.ts was rejected because the test would then have to mock the entire turn producer to exercise four lines of concatenation. (The round's earlier +2 also counted a question-driven exposure resolver; the owner ruling of 2026-08-17 removed that mechanism, so this raise is one module, not two.) Measured with the pinned extension tree."
-    },
-    "/chat": {
-      "from": 1792,
-      "to": 1793,
-      "pr": 2834,
-      "reason": "cinatra#2771 (PR #2834 carries this record; the reason names the issue): the chat turn's per-turn input prefix gains ONE pure module, and it sits on the assistant-runtime graph, so it is reachable from every locked route that mounts it: +1 on these four routes, /sign-in unchanged. src/lib/assistant-runtime/chat-system-prefix.ts — the pure system-string composer that orders stable fragments ahead of volatile ones. It is a separate module precisely so the byte-stability property is unit-assertable without loading the server-only runtime graph; inlining it into runtime.ts was rejected because the test would then have to mock the entire turn producer to exercise four lines of concatenation. (The round's earlier +2 also counted a question-driven exposure resolver; the owner ruling of 2026-08-17 removed that mechanism, so this raise is one module, not two.) Measured with the pinned extension tree."
-    }
+  "/api/llm-bridge": {
+   "from": 1729,
+   "to": 1730,
+   "pr": 2790,
+   "reason": "cinatra#2790 (epic #2784 S9f): the recommendation card's read and its two decisions become BROKER-AWARE, so the ladder they share moves out of the cookie-bound `\"use server\"` module that could only ever run for a session and into ONE actor-parameterized core — packages/agents/src/run-recommendation-core.ts. It is a separate module for a structural reason, not a stylistic one: the session entry and the widget's broker routes must reach the SAME functions, and a core living inside `recommendation-hold.ts` would call that module's park, ref and wire primitives INTRA-MODULE, where the security suites that pin those seams cannot observe or replace them. One module, +1 on every locked route that already reaches run-recommendation-actions.ts; /sign-in unchanged. Measured with the pinned extension tree."
+  },
+  "/api/mcp": {
+   "from": 1714,
+   "to": 1715,
+   "pr": 2790,
+   "reason": "cinatra#2790 (epic #2784 S9f): the recommendation card's read and its two decisions become BROKER-AWARE, so the ladder they share moves out of the cookie-bound `\"use server\"` module that could only ever run for a session and into ONE actor-parameterized core — packages/agents/src/run-recommendation-core.ts. It is a separate module for a structural reason, not a stylistic one: the session entry and the widget's broker routes must reach the SAME functions, and a core living inside `recommendation-hold.ts` would call that module's park, ref and wire primitives INTRA-MODULE, where the security suites that pin those seams cannot observe or replace them. One module, +1 on every locked route that already reaches run-recommendation-actions.ts; /sign-in unchanged. Measured with the pinned extension tree."
+  },
+  "/chat": {
+   "from": 1793,
+   "to": 1794,
+   "pr": 2790,
+   "reason": "cinatra#2790 (epic #2784 S9f): the recommendation card's read and its two decisions become BROKER-AWARE, so the ladder they share moves out of the cookie-bound `\"use server\"` module that could only ever run for a session and into ONE actor-parameterized core — packages/agents/src/run-recommendation-core.ts. It is a separate module for a structural reason, not a stylistic one: the session entry and the widget's broker routes must reach the SAME functions, and a core living inside `recommendation-hold.ts` would call that module's park, ref and wire primitives INTRA-MODULE, where the security suites that pin those seams cannot observe or replace them. One module, +1 on every locked route that already reaches run-recommendation-actions.ts; /sign-in unchanged. Measured with the pinned extension tree."
   }
+ }
 }

@@ -166,6 +166,11 @@ let stub: ReturnType<typeof installWidgetServiceStub> | null = null;
 function installResolve() {
   stub = installWidgetServiceStub({
     lifecycle: (viewType) => LIFECYCLE_RESOLVE_ANSWERS.pending(viewType),
+    // The widget arm reads the hold through the BROKER endpoint (cinatra#2790),
+    // never the cookie-bound action, so the widget's server has to answer it —
+    // from the SAME mock the cookie arm resolves, so neither arm is fed a
+    // different truth.
+    recommendationHold: () => holdStateMock(),
   });
   return stub;
 }
@@ -446,19 +451,37 @@ describe("the ratchet goes red in every direction it claims to", () => {
   });
 
   it("an OWED cell that starts drawing fails, so the row must be struck", () => {
+    // The one cell still owed is `chat_thread` (S9b, cinatra#2786): a run started
+    // from a conversation does not park yet, and the ruled cookie-host mount is
+    // that slice's. S9f (cinatra#2790) struck the `site_widget` row in the same
+    // change that made its observation flip — the only moment a row may be
+    // struck — so the red direction is demonstrated on what is still owed.
     const landed: ObservedHostParity = {
       ...OBSERVED,
       recommendation_hold: {
         ...(OBSERVED.recommendation_hold ?? {}),
-        site_widget: "transcript",
+        chat_thread: "transcript",
       },
     };
     const violations = evaluateHostParity({ observed: landed });
-    expect(violations.some((v) => v.code === "owed-cell-observed" && v.host === "site_widget")).toBe(
+    expect(violations.some((v) => v.code === "owed-cell-observed" && v.host === "chat_thread")).toBe(
       true,
     );
     // …and it names the slice that owed it, so the striker knows what landed.
-    expect(violations.find((v) => v.code === "owed-cell-observed")?.detail).toContain("2790");
+    expect(violations.find((v) => v.code === "owed-cell-observed")?.detail).toContain("2786");
+  });
+
+  it("the STRUCK widget row is backed by a render, not by an edit", () => {
+    // The other half of striking a row: the cell must now be OBSERVED, by the
+    // method it was recorded with. Deleting the mount turns this red before the
+    // ratchet's own `host-lost` arm runs, and re-adding the owed row while the
+    // card still draws turns `owed-cell-observed` red. So the row could not have
+    // been struck early, and cannot survive the card being taken away.
+    expect(OBSERVED.recommendation_hold?.site_widget).toBe("transcript");
+    expect(OBSERVED.recommendation_hold?.page_gate_region).toBe("composition");
+    expect(
+      LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.owed.map((cell) => cell.host),
+    ).toEqual(["chat_thread"]);
   });
 
   it("a kind with NO conversation cell at all fails the mandatory-host rule", () => {
@@ -500,7 +523,7 @@ describe("the ratchet's recorded shape", () => {
   it("serialises every kind with sorted hosts and owed cells", () => {
     const expectations = hostParityExpectations();
     expect(Object.keys(expectations).sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
-    expect(expectations.recommendation_hold.owed).toEqual(["chat_thread", "site_widget"]);
+    expect(expectations.recommendation_hold.owed).toEqual(["chat_thread"]);
     expect(expectations.artifact_review_gate.hosts.page_gate_region).toBe("composition");
   });
 });

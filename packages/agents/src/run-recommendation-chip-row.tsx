@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useTransition,
@@ -21,8 +22,11 @@ import {
 } from "@/components/ui/sheet";
 
 import {
+  LIFECYCLE_RECOMMENDATION_DECIDE_PATH,
+  LIFECYCLE_RECOMMENDATION_HOLD_PATH,
   useLifecycleCardAuth,
   useLifecycleCardHost,
+  type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import type { RecommendedSkillForChip } from "./server-actions";
 import { getRunRecommendedSkillsAction } from "./server-actions";
@@ -30,6 +34,7 @@ import {
   confirmRunRecommendationAction,
   getRunRecommendationHoldStateAction,
   skipRunRecommendationAction,
+  type RunRecommendationDecisionResult,
   type RunRecommendationHoldState,
 } from "./run-recommendation-actions";
 import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
@@ -135,6 +140,96 @@ export type RunRecommendationDecision =
 /** One chip's live (pre-release) state: what was pressed, and what it means. */
 type ChipDecision = { mark: RunRecommendationChipMark; keep: boolean };
 
+/**
+ * The row's decision transport (cinatra#2790, epic #2784 S9f) — the two terminal
+ * acts, with the SAME answer shape the shipped server actions return, so the
+ * row's error handling is one code path whichever host it is drawn on.
+ */
+export type RunRecommendationSubmit = {
+  confirm: (input: {
+    runId: string;
+    agentPackageName: string;
+    confirmedSkillIds: string[];
+    promptText?: string;
+    forcedRevisions?: Record<string, string>;
+    adjustedSkillIds?: string[];
+    holdRef?: string;
+  }) => Promise<RunRecommendationDecisionResult>;
+  skip: (input: { runId: string; holdRef?: string }) => Promise<RunRecommendationDecisionResult>;
+};
+
+/**
+ * THE BROKER TRANSPORT for a host that declares a credential (the site widget).
+ *
+ * Built at the moment of the call from the host's own declaration, exactly like
+ * the review card's decision POST: the token never enters React state, a prop, a
+ * log or the DOM — only the request being built. `credentials` comes from the
+ * declaration too, and the provider refuses to mount a non-cookie host that does
+ * not say `omit`, so this can never send an ambient cookie.
+ *
+ * A transport failure answers with the row's own fixed refusal rather than
+ * throwing: an unreachable endpoint must read as "nothing was decided", never as
+ * a decided run.
+ */
+export function brokerRecommendationSubmit(auth: LifecycleCardAuth): RunRecommendationSubmit {
+  const post = async (path: string, body: unknown): Promise<unknown | null> => {
+    try {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...auth.headers() },
+        body: JSON.stringify(body),
+        credentials: auth.credentials,
+      });
+      if (!response.ok) return null;
+      return (await response.json()) as unknown;
+    } catch {
+      return null;
+    }
+  };
+  const readOutcome = (payload: unknown): RunRecommendationDecisionResult => {
+    const outcome = (payload as { outcome?: unknown } | null)?.outcome;
+    if (outcome && typeof outcome === "object" && "ok" in outcome) {
+      return outcome as RunRecommendationDecisionResult;
+    }
+    return { ok: false, error: RECOMMENDATION_ROW_REFUSAL };
+  };
+  return {
+    confirm: async (input) =>
+      readOutcome(
+        await post(LIFECYCLE_RECOMMENDATION_DECIDE_PATH, {
+          runId: input.runId,
+          decision: "confirm",
+          confirmedSkillIds: input.confirmedSkillIds,
+          ...(input.promptText !== undefined ? { promptText: input.promptText } : {}),
+          ...(input.forcedRevisions ? { forcedRevisions: input.forcedRevisions } : {}),
+          ...(input.adjustedSkillIds ? { adjustedSkillIds: input.adjustedSkillIds } : {}),
+          ...(input.holdRef ? { holdRef: input.holdRef } : {}),
+        }),
+      ),
+    skip: async (input) =>
+      readOutcome(
+        await post(LIFECYCLE_RECOMMENDATION_DECIDE_PATH, {
+          runId: input.runId,
+          decision: "skip",
+          ...(input.holdRef ? { holdRef: input.holdRef } : {}),
+        }),
+      ),
+  };
+}
+
+/** The row's own fixed refusal — one string, whichever transport failed. */
+const RECOMMENDATION_ROW_REFUSAL = "Could not record that decision.";
+
+/**
+ * The SESSION transport: the shipped cookie-bound server actions, unchanged.
+ * The default, so a cookie host that passes nothing behaves byte-for-byte as it
+ * did before this slice.
+ */
+const SESSION_SUBMIT: RunRecommendationSubmit = {
+  confirm: (input) => confirmRunRecommendationAction(input),
+  skip: (input) => skipRunRecommendationAction(input),
+};
+
 type Props = {
   runId: string;
   agentPackageName: string;
@@ -162,6 +257,20 @@ type Props = {
   canDecide?: boolean;
   /** Compact styling for the inline chat mount. */
   variant?: "panel" | "inline";
+  /**
+   * HOW THIS ROW SUBMITS ITS DECISION (cinatra#2790, epic #2784 S9f).
+   *
+   * The row draws §V and decides §V; WHO the decision is recorded as is the
+   * host's question, not the drawing's. A cookie host passes nothing and the row
+   * keeps its shipped server actions. A credential-declaring host — the site
+   * widget — passes a submitter that posts to the broker endpoint with the
+   * host's own proof and cookies OMITTED, because a server action cannot carry a
+   * credential and would ride the ambient cookie of a same-origin frame.
+   *
+   * ONE ROW, TWO TRANSPORTS, NEVER TWO ROWS: the affordances, the marks, the
+   * whole-row release and the refusal line below are identical on both.
+   */
+  submit?: RunRecommendationSubmit;
   /**
    * Fired after a confirm/skip SUCCEEDS (cinatra#2568 AC-1). The card host
    * re-reads the authoritative hold state so the row settles into its decided
@@ -232,6 +341,7 @@ export function RunRecommendationChipRow({
   decision,
   canDecide = true,
   variant = "panel",
+  submit = SESSION_SUBMIT,
   onDecided,
 }: Props) {
   const router = useRouter();
@@ -330,7 +440,7 @@ export function RunRecommendationChipRow({
     const kept = recs.filter((r) => next[r.skillId]?.keep === true);
     if (kept.length === 0) {
       startTransition(async () => {
-        const res = await skipRunRecommendationAction({
+        const res = await submit.skip({
           runId,
           ...(holdRef ? { holdRef } : {}),
         });
@@ -359,7 +469,7 @@ export function RunRecommendationChipRow({
       .filter((r) => next[r.skillId]?.mark === "adjusted")
       .map((r) => r.skillId);
     startTransition(async () => {
-      const res = await confirmRunRecommendationAction({
+      const res = await submit.confirm({
         runId,
         agentPackageName,
         confirmedSkillIds: kept.map((r) => r.skillId),
@@ -612,11 +722,14 @@ export function RunRecommendationChipRow({
 //     reader is the same person with the same rights as inside Cinatra, so the
 //     "a widget visitor never shapes a run's skills" row is gone).
 //
-//  2. NOTHING WITHOUT AN AUTHORIZED RESOLVE. `getRunRecommendationHoldStateAction`
-//     is the authority, not the wire. It runs the run-access door and intersects
-//     the candidate set against the VIEWER (cinatra#2148). Until it answers,
-//     this renders nothing — not a skeleton. The wire only ever says "something
-//     changed"; it never says what this reader may see.
+//  2. NOTHING WITHOUT AN AUTHORIZED RESOLVE. The RESOLVE is the authority, not
+//     the wire: it runs the run-access door and intersects the candidate set
+//     against the VIEWER (cinatra#2148). Until it answers, this renders nothing
+//     — not a skeleton. The wire only ever says "something changed"; it never
+//     says what this reader may see. Since cinatra#2790 the resolve has two
+//     transports and ONE authority: a cookie host calls the server action, a
+//     credential-declaring host posts to the broker endpoint with its own proof,
+//     and both land in `resolveRecommendationHoldStateForActor`.
 //
 //  3. NO TIMER, AT ALL. The card re-resolves on exactly the events that can
 //     change the answer: mount, a change in the typed hold interrupt on the wire
@@ -642,6 +755,47 @@ export function RunRecommendationChipRow({
  * wire says something new.
  */
 const RESOLVE_RETRY_DELAYS_MS = [400, 1_500, 4_000] as const;
+
+/**
+ * The BROKER READ of one run's hold state (cinatra#2790, epic #2784 S9f).
+ *
+ * `null` means the read did not complete — a transport failure, a refused
+ * credential, or an answer that does not parse as a state. It is deliberately
+ * distinguishable from `{ state: "none" }`, which is a real answer meaning "this
+ * reader gets no row here": the first arms the card's bounded retry, the second
+ * settles it silently. Collapsing the two would either hide a dead endpoint
+ * behind an empty card or retry forever against an honest refusal.
+ *
+ * The answer is validated to a known `state` before it is believed, so a
+ * mis-routed or truncated response can never paint a card.
+ */
+async function readHoldStateThroughBroker(
+  runId: string,
+  auth: LifecycleCardAuth,
+): Promise<RunRecommendationHoldState | null> {
+  try {
+    const response = await fetch(LIFECYCLE_RECOMMENDATION_HOLD_PATH, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...auth.headers() },
+      body: JSON.stringify({ runId }),
+      credentials: auth.credentials,
+    });
+    if (!response.ok) return null;
+    const payload: unknown = await response.json();
+    const state = (payload as { state?: unknown } | null)?.state;
+    if (
+      state === "none" ||
+      state === "held" ||
+      state === "confirmed" ||
+      state === "skipped"
+    ) {
+      return payload as RunRecommendationHoldState;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Resolve the authoritative hold state for one run.
@@ -678,8 +832,22 @@ function useRecommendationHoldState(params: {
   runId: string;
   wireRef: string | null;
   reloadToken: number;
+  /**
+   * THE HOST'S CREDENTIAL, or `null` on a cookie surface (cinatra#2790).
+   *
+   * It selects the READ transport and nothing else. A cookie host keeps the
+   * server action, which resolves the ambient session — correct there, and the
+   * only thing available to a server action. A credential-declaring host posts
+   * to the broker endpoint with its own proof and cookies OMITTED, so the
+   * authority answering is the widget's own reader rather than whoever else is
+   * signed in on that browser.
+   *
+   * Both transports answer the SAME `RunRecommendationHoldState`, resolved by
+   * the SAME core, so nothing below this line knows which one ran.
+   */
+  auth: LifecycleCardAuth | null;
 }): RunRecommendationHoldState | null {
-  const { runId, wireRef, reloadToken } = params;
+  const { runId, wireRef, reloadToken, auth } = params;
   const [resolved, setResolved] = useState<{
     runId: string;
     state: RunRecommendationHoldState;
@@ -703,7 +871,12 @@ function useRecommendationHoldState(params: {
     // time it lands.
     const requestRunId = runId;
     try {
-      const state = await getRunRecommendationHoldStateAction({ runId: requestRunId });
+      const state = auth
+        ? await readHoldStateThroughBroker(requestRunId, auth)
+        : await getRunRecommendationHoldStateAction({ runId: requestRunId });
+      // A broker read that could not be completed is a FAILURE, not a state: it
+      // arms the bounded retry below rather than settling the card on silence.
+      if (state === null) return false;
       // Superseded: a newer trigger owns the answer now. Not a failure — and it
       // must NOT arm a retry, or a burst of wire changes would fan out into a
       // pile of competing retry chains.
@@ -717,7 +890,7 @@ function useRecommendationHoldState(params: {
       // optimistic.
       return false;
     }
-  }, [runId]);
+  }, [runId, auth]);
 
   useEffect(() => {
     if (!runId) return;
@@ -823,23 +996,24 @@ export function RecommendationHoldCard({
   // Fail-closed: no declared host ⇒ no card DOM at all. A declared host draws
   // it — the per-surface matrix that withheld this card from the widget is gone.
   const host = useLifecycleCardHost();
-  // …with ONE credential-keyed exception, and it is not a surface rule (codex
-  // round 0, finding 4). This card does not resolve or decide through the
-  // lifecycle endpoints: it calls COOKIE-BOUND server actions
-  // (`getRunRecommendationHoldStateAction`, and Confirm/Skip), which resolve
-  // their identity from the ambient session and cannot carry a host credential.
-  // On a host that declares one — a broker surface, same-origin to the app — a
-  // drawn card would therefore read, and act, as whoever else is signed in on
-  // that browser. That is exactly the ambient-session fallback the contract
-  // forbids, so the card draws NOTHING until its actions are broker-aware.
+  // …and so is the credential-keyed exception that stood here (cinatra#2790,
+  // epic #2784 S9f). Until this slice the card refused to draw under a host that
+  // declared a credential, because it resolved and decided through COOKIE-BOUND
+  // server actions: on a broker surface that is same-origin to the app, a drawn
+  // card would have read, and acted, as whoever else was signed in on that
+  // browser. Its own comment called that "a shortfall, not a design", and named
+  // the condition for deleting it — "when the broker-aware entry lands, this
+  // guard is what gets deleted". It has landed: the host's declaration now
+  // selects the transport (`readHoldStateThroughBroker` for the read,
+  // `brokerRecommendationSubmit` for the two decisions), the authority behind
+  // both is built fresh from that host's own credential at the moment of the
+  // call, and neither one can fall back to an ambient session.
   //
-  // Stated plainly because it is a shortfall, not a design: this is the one
-  // lifecycle card whose widget parity is not yet complete end to end. It is
-  // ALSO unreachable there today — a lifecycle interrupt is dropped by the chat
-  // reducer and the embed mounts no run panel — so nothing regresses; when the
-  // broker-aware entry lands, this guard is what gets deleted.
+  // WHAT DID NOT CHANGE, and must not: the host DECLARATION is still the only
+  // gate. A surface that has not opted in has no host, and no host is still no
+  // DOM at all.
   const auth = useLifecycleCardAuth();
-  const present = host !== null && auth === null;
+  const present = host !== null;
 
   // A decision taken IN the row is the one state change the wire cannot be
   // relied on to announce first (the RESUME is published after the action
@@ -855,7 +1029,17 @@ export function RecommendationHoldCard({
     runId: present ? runId : "",
     wireRef: wireRef ?? null,
     reloadToken,
+    auth,
   });
+
+  // The row's decision transport, keyed by the SAME declaration the read is —
+  // "a surface that proves itself one way to read and another way to decide is a
+  // surface where the two can disagree". Memoized on the declaration so a
+  // re-render does not hand the row a new submitter every frame.
+  const submit = useMemo(
+    () => (auth ? brokerRecommendationSubmit(auth) : SESSION_SUBMIT),
+    [auth],
+  );
 
   if (!present) return null;
   if (state === null || state.state === "none") return null;
@@ -878,6 +1062,7 @@ export function RecommendationHoldCard({
             : { kind: "skipped", decided: state.decided }
       }
       variant="inline"
+      submit={submit}
       onDecided={onDecided}
     />
   );

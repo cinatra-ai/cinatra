@@ -58,6 +58,18 @@ import {
   type ParkRow,
 } from "./lifecycle-continuation-park-store";
 import type { AgentRunRecord, AgentTemplateRecord } from "./store";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
+
+/**
+ * The verified caller a hold-core call runs as (cinatra#2790, epic #2784 S9f).
+ * Never a claim — always resolved, by whichever entry verified it: the cookie
+ * session, or the widget's own `cwu_`.
+ */
+export type RecommendationHoldActor = {
+  actor: PrimitiveActorContext;
+  roleHints: ActorRoleHints;
+};
 
 /** The lifecycle checkpoint the run-start chip-row hold parks on. */
 export const RECOMMENDATION_CHECKPOINT = "recommendation" as const;

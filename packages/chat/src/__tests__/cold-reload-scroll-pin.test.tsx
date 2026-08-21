@@ -41,6 +41,24 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 // panel. Replaced here for the reasons set out in
 // `conversation-column-inventory.test.tsx`; none of them is part of the scroll
 // behaviour this file measures.
+// The recommendation card's own graph (cinatra#2790, epic #2784 S9f). The
+// shared column now names that card at the `agent_run` slot — it draws it only
+// on a credential-declaring host, and these suites mount the COOKIE arm, so it
+// never renders here. Its MODULE is still evaluated, and it reaches the server
+// runtime, so it is replaced exactly as the sibling lifecycle suites replace it
+// and for their stated reason: without this the column does not mount at all,
+// and an empty column would look like a passing negative arm.
+vi.mock("../../../agents/src/run-recommendation-actions", () => ({
+  getRunRecommendationHoldStateAction: async () => ({ state: "none" }),
+  confirmRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
+  skipRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
+}));
+vi.mock("../../../agents/src/server-actions", () => ({
+  getRunRecommendedSkillsAction: async () => [],
+  getSkillsForAgentAction: async () => [],
+  getFieldRendererContextForAgentBuilderAction: async () => ({}),
+  confirmRunSkillSelectionAction: async () => ({ ok: true }),
+}));
 vi.mock("../pending-call-actions", () => ({
   listPendingToolConfirmations: async () => ({ rows: [] }),
   decidePendingToolCall: async () => ({ ok: true }),

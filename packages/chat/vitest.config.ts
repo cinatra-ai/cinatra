@@ -72,6 +72,17 @@ export default defineConfig({
         root,
         "packages/agents/src/lifecycle-card-runtime.tsx",
       ),
+      // cinatra#2790 (epic #2784 S9f) — the recommendation card, mounted at the
+      // `agent_run` slot by the shared conversation column on a host whose run
+      // card cannot carry it. Subpath keys precede the bare package key below.
+      "@cinatra-ai/agents/run-recommendation-chip-row": path.join(
+        root,
+        "packages/agents/src/run-recommendation-chip-row.tsx",
+      ),
+      "@cinatra-ai/agents/recommendation-hold": path.join(
+        root,
+        "packages/agents/src/recommendation-hold.ts",
+      ),
       "@cinatra-ai/agents/review-gate-card": path.join(
         root,
         "packages/agents/src/review-gate-card.tsx",

@@ -19,8 +19,9 @@
     "owner": "RecommendationHoldCard",
     "ownerAnchors": [
      "[data-conformance-id=\"run-chip-row\"]",
-     "[data-action=\"confirm-run-recommendation\"]",
-     "[data-action=\"skip-run-recommendation\"]"
+     "[data-skill-action=\"confirm\"]",
+     "[data-skill-action=\"adjust\"]",
+     "[data-skill-action=\"skip\"]"
     ],
     "ruledRootAnchors": [
      "[data-lifecycle-card=\"recommendation_hold\"]",
@@ -60,11 +61,12 @@
    },
    "recommendation_hold": {
     "hosts": {
-     "run_card": "composition"
+     "page_gate_region": "composition",
+     "run_card": "composition",
+     "site_widget": "transcript"
     },
     "owed": [
-     "chat_thread",
-     "site_widget"
+     "chat_thread"
     ]
    },
    "trigger_schedule_proposal": {
@@ -83,5 +85,5 @@
    }
   }
  },
- "digest": "87260ce65c8bfcdb573ffb6f30e5f24f11580d212d0e0ff5b2b4467dd94f3d59"
+ "digest": "03cf35aa128df35f4b17db4e73ed4d110881617b15ed24076a83ab178530ac14"
 }

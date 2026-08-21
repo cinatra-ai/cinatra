@@ -102,6 +102,40 @@ export const WIDGET_LIFECYCLE_DECIDE_SCOPE = "lifecycle.decide";
  */
 export const WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH = "/api/lifecycle-views/decide";
 
+/**
+ * The audience a widget RECOMMENDATION-HOLD read is served at (cinatra#2790,
+ * epic #2784 S9f).
+ *
+ * WHY IT IS A SECOND AUDIENCE UNDER THE SAME `lifecycle.read` GRANT. The
+ * recommendation hold is not a DATA_PART: it is the one lifecycle kind whose
+ * carriage is a typed INTERRUPT, so it has no `{viewType, ref}` envelope to post
+ * at the resolve route and S9c ruled it stays outside that per-kind envelope. It
+ * therefore needs a surface of its own — but it is the SAME capability the grant
+ * already names: "show you work items that are waiting on you". A run parked on
+ * its skills question is exactly such an item, so it joins the grant that
+ * governs every widget lifecycle read rather than minting a parallel scope
+ * nobody re-checks.
+ *
+ * A token minted before this slice carries the scope WITHOUT this audience and
+ * is refused here, which is AC-1 working: an already-minted token never acquires
+ * a grant, and the person sees the card after their next sign-in.
+ */
+export const WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH =
+  "/api/lifecycle-views/recommendation-hold";
+
+/**
+ * Where a widget CONFIRM / ADJUST / SKIP on a recommendation hold is submitted
+ * (cinatra#2790, epic #2784 S9f) — the broker branch of the run-start decision.
+ *
+ * The same reasoning as the read audience above, and the same limit: it is not a
+ * wider capability than `lifecycle.decide` already names, it is that capability
+ * reaching the second kind whose decision a reader can take. The decision itself
+ * is authorized by the run's own execute-tier gate, taken against the reader's
+ * live standing — this audience only admits the surface.
+ */
+export const WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH =
+  "/api/lifecycle-views/recommendation-hold/decide";
+
 // ---------------------------------------------------------------------------
 // The CONVERSATION grants (cinatra#2683, epic #2564 S8f).
 // ---------------------------------------------------------------------------
@@ -539,7 +573,14 @@ export function displayedScopesAgree(
  */
 export const WIDGET_EXTENSION_SCOPES = {
   [WIDGET_LIFECYCLE_READ_SCOPE]: {
-    audiences: [WIDGET_LIFECYCLE_READ_ROUTE_PATH] as readonly string[],
+    audiences: [
+      WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+      // cinatra#2790 (epic #2784 S9f) — the recommendation hold's own read
+      // surface. Added WITH the sentence below that admits to it, because a
+      // grant may not gain an audience without its copy changing in the same
+      // edit.
+      WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH,
+    ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant. It states
      * what is read and by whose permission — the grant carries the USER's
@@ -551,10 +592,16 @@ export const WIDGET_EXTENSION_SCOPES = {
      * grant cannot join the set without gaining a sentence at the same time.
      */
     consentCopy:
-      "Show you work items that are waiting on you — reviews and their outcomes — using the same permissions you have in Cinatra.",
+      "Show you work items that are waiting on you — reviews and their outcomes, and the skills an agent wants to use before a run you started begins — using the same permissions you have in Cinatra.",
   },
   [WIDGET_LIFECYCLE_DECIDE_SCOPE]: {
-    audiences: [WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH] as readonly string[],
+    audiences: [
+      WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
+      // cinatra#2790 (epic #2784 S9f) — the run-start decision, same rule as
+      // the read audience above: the surface joins the grant, and the sentence
+      // below admits to it in the same edit.
+      WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH,
+    ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant.
      *
@@ -563,7 +610,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * there is none.
      */
     consentCopy:
-      "Let you approve, reject or comment on those work items from this site — the same decision, with the same permissions, as inside Cinatra.",
+      "Let you approve, reject or comment on those work items from this site, and confirm, adjust or skip the skills a run was about to use — the same decisions, with the same permissions, as inside Cinatra.",
   },
   [WIDGET_CONVERSATION_READ_SCOPE]: {
     audiences: [

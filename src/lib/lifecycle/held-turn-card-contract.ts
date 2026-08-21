@@ -390,10 +390,20 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
       '[data-skill-action="skip"]',
     ]),
     ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
-    // §V's two terminal acts, on the shipped `RunRecommendationChipRow`.
+    // §V's terminal acts, on the shipped `RunRecommendationChipRow`.
+    //
+    // RE-READ AFTER THE §V REDRAW (cinatra#2841, corrected here by cinatra#2790).
+    // These used to name the row-level `confirm-run-recommendation` /
+    // `skip-run-recommendation` pair. The ratified drawing decides PER CHIP, the
+    // redraw emits neither name anywhere, and the field's own contract is that it
+    // names what the component REALLY draws — so a matrix arm that reads the
+    // shipped source for these was asserting selectors that had stopped existing.
+    // The `ownerAnchors` above were corrected in the redraw and these were
+    // missed; they are the same three, and the capture contract names them too.
     decisionControls: Object.freeze([
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "held-turn-card-contract",
