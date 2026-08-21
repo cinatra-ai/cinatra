@@ -18,7 +18,7 @@
 // and an impure wrapper (`diagnoseDockerPortDrift`) that shells out to Docker.
 
 import { spawnSync } from "node:child_process";
-import { buildComposeArgs } from "./dev-preflight.mjs";
+import { buildComposeArgs, formatGuardedComposeCommand } from "./dev-preflight.mjs";
 import path from "node:path";
 
 // The bundled local DB/cache services whose host ports come from the dev override.
@@ -182,6 +182,13 @@ export function diagnoseDockerPortDrift({ service, mainRoot, expectedHostPort, p
 }
 
 // The single actionable remedy message shared by both consumers.
+//
+// The raw alternative is the GUARDED chain, not a bare `docker compose up`
+// (cinatra#2839). A pasted bring-up that skips scripts/dev-compose-env.mjs is
+// unpinned — the step is what exports COMPOSE_PROJECT_NAME, which Docker never
+// reads from `.env.local` — and unguarded, so it publishes the very shared
+// defaults every real entry point now refuses to publish for a lane. Built from
+// `formatGuardedComposeCommand` so this line cannot drift from those recipes.
 export function formatDriftRemedy(driftedServiceLabels) {
   const which = driftedServiceLabels.join(", ");
   return [
@@ -191,7 +198,7 @@ export function formatDriftRemedy(driftedServiceLabels) {
     "docker-compose.dev.yml. Re-create the services WITH the dev override (data is preserved):",
     "",
     "    pnpm services",
-    "    # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d",
+    `    # or: ${formatGuardedComposeCommand({ args: ["up", "-d"], requireManageable: true })}`,
     "",
   ].join("\n");
 }

@@ -44,7 +44,9 @@ import {
   createComposeRunner,
   explicitLoopbackPort,
   formatComposeCommand,
+  formatGuardedComposeCommand,
   formatUnmanagedServices,
+  isLinkedWorktree,
   normalizeComposeProjectName,
   normalizeSkipFlag,
   planMessages,
@@ -54,11 +56,40 @@ import {
   shouldSkipDevPreflight,
   unmanagedComposeServices,
 } from "../lib/dev-preflight.mjs";
-import { parseHostPort } from "../lib/docker-port-drift.mjs";
+import { formatDriftRemedy, parseHostPort } from "../lib/docker-port-drift.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const DEV_SERVER = path.join(REPO_ROOT, "scripts", "dev-server.mjs");
+const DEV_COMPOSE_ENV = path.join(REPO_ROOT, "scripts", "dev-compose-env.mjs");
+
+/**
+ * Is `dir` a LINKED git worktree — according to GIT, not according to the module
+ * under test?
+ *
+ * The suite runs both from the main checkout (CI, a plain clone) and from a
+ * linked worktree (any lane), and `laneScope` now tells those two apart, so the
+ * entry-point cases below have two correct outcomes and must know which host
+ * they are on. Asking `isLinkedWorktree` would make the expectation the
+ * implementation restated, so the precondition comes from git itself: the
+ * per-worktree gitdir differs from the shared common dir in a linked worktree
+ * and is the same path in the main checkout. `isLinkedWorktree` is then pinned
+ * AGAINST this answer in its own test, which is what keeps the branch honest.
+ *
+ * Returns false when git cannot answer (no git on PATH, a source export) —
+ * matching the module's own conservative fallback.
+ */
+const gitSaysLinkedWorktree = (dir) => {
+  const ask = (flag) => spawnSync("git", ["-C", dir, "rev-parse", flag], { encoding: "utf8" });
+  const own = ask("--git-dir");
+  const shared = ask("--git-common-dir");
+  if (own.status !== 0 || shared.status !== 0) return false;
+  return path.resolve(dir, own.stdout.trim()) !== path.resolve(dir, shared.stdout.trim());
+};
+
+// Fixed once: every case below reads the same answer for the checkout the suite
+// is running in.
+const REPO_IS_LINKED_WORKTREE = gitSaysLinkedWorktree(REPO_ROOT);
 
 // ---------------------------------------------------------------------------
 // 1. Pure policy
@@ -719,6 +750,50 @@ describe("resolveComposeHostPortPlan — companion-port overflow is refused, not
     expect(message).toContain("at most 65529"); // the actionable ceiling
   });
 
+  // The UNSCOPED half of the same rule, which the refusal used to swallow: this
+  // branch's own immunity says nothing may refuse the operator's single stack,
+  // and the explicit override is honored on an unscoped checkout, so the
+  // overflow band was reachable there and took `make dev` away. There is also no
+  // second stack for the fallback to collide with, so the historical default is
+  // the right answer. Found in Codex convergence on this round's diff.
+  it("warns and publishes the default instead of refusing the unscoped checkout", () => {
+    const result = resolveComposeHostPortPlan({
+      processEnv: { CINATRA_NANGO_SERVER_HOST_PORT: "65530" },
+    });
+    expect(result.laneScope).toBe("unscoped");
+    expect(result.refusals).toEqual([]);
+    expect(result.warnings.map((w) => w.reason)).toEqual(["companion-port-overflow"]);
+    expect(result.portEnv.CINATRA_NANGO_SERVER_HOST_PORT).toBe("65530");
+    expect(result.portEnv.CINATRA_NANGO_CONNECT_HOST_PORT).toBe("3009");
+    // It says only what this step can know. Whether some other stack on the host
+    // already holds 3009 is a bind-time answer, and the message does not claim
+    // to have it. (Codex round 7.)
+    const [warning] = planMessages(result.warnings);
+    expect(warning).toContain("the port it would have published anyway");
+    expect(warning).toContain("a bind-time answer this step cannot give");
+  });
+
+  // …and the fallback port is itself just another claim: if something else in the
+  // plan already holds it, the finished-plan uniqueness check says so, and the
+  // overflow warning must not have promised otherwise. (Codex round 2.)
+  it("does not promise the fallback is free when the plan itself claims it", () => {
+    const result = resolveComposeHostPortPlan({
+      processEnv: {
+        CINATRA_NANGO_SERVER_HOST_PORT: "65530", // companion overflows → falls back to 3009
+        CINATRA_REDIS_HOST_PORT: "3009", // …which this already claims
+      },
+    });
+    expect(result.refusals).toEqual([]);
+    expect(result.warnings.map((w) => w.reason)).toEqual([
+      "companion-port-overflow",
+      "duplicate-host-port",
+    ]);
+    const [overflow, duplicate] = planMessages(result.warnings);
+    expect(overflow).not.toContain("collides with nothing");
+    expect(overflow).toContain("reported by the uniqueness check");
+    expect(duplicate).toContain("host port 3009 is claimed twice");
+  });
+
   // Same band reached through the explicit override rather than the URL.
   it("refuses an overflowing companion behind an explicit server-port override", () => {
     const result = resolveComposeHostPortPlan({
@@ -818,6 +893,397 @@ describe("resolveComposeHostPortPlan — a rejected ambient override is replaced
   });
 });
 
+// Round-3 non-blocking item: a worktree naming its project after its own
+// directory classified as `checkout`, so a missing URL only warned and then
+// published the shared default — into the operator's stack. The residual the
+// review said "needs a main-worktree probe". This is that probe.
+describe("isLinkedWorktree — the main-checkout probe", () => {
+  let root;
+  beforeAll(() => {
+    root = mkdtempSync(path.join(tmpdir(), "cinatra-2839-wt-"));
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const fixture = (name, build) => {
+    const dir = path.join(root, name);
+    mkdirSync(dir, { recursive: true });
+    build(dir);
+    return dir;
+  };
+
+  it("reads a `.git` DIRECTORY as the main checkout", () => {
+    const dir = fixture("main", (d) => mkdirSync(path.join(d, ".git")));
+    expect(isLinkedWorktree(dir)).toBe(false);
+  });
+
+  it("reads a `.git` FILE pointing at a worktree admin dir as a linked worktree", () => {
+    const dir = fixture("linked", (d) => {
+      // The shape `git worktree add` really writes: a pointer file, and an admin
+      // directory carrying `commondir` (and `gitdir`) back to the shared repo.
+      const admin = path.join(root, "repo.git", "worktrees", "lane");
+      mkdirSync(admin, { recursive: true });
+      writeFileSync(path.join(admin, "commondir"), "../..\n");
+      writeFileSync(path.join(d, ".git"), `gitdir: ${admin}\n`);
+    });
+    expect(isLinkedWorktree(dir)).toBe(true);
+  });
+
+  // `git clone --separate-git-dir` writes a `.git` FILE in a MAIN checkout too.
+  // Stopping at "is it a file?" called the operator's own single checkout a
+  // second stack and applied the lane refusals to it. (Codex round 4.)
+  it("reads a --separate-git-dir MAIN checkout as the main checkout", () => {
+    const dir = fixture("separate", (d) => {
+      const repo = path.join(root, "elsewhere.git");
+      mkdirSync(repo, { recursive: true });
+      writeFileSync(path.join(repo, "HEAD"), "ref: refs/heads/main\n"); // no commondir
+      writeFileSync(path.join(d, ".git"), `gitdir: ${repo}\n`);
+    });
+    expect(isLinkedWorktree(dir)).toBe(false);
+  });
+
+  it("resolves a RELATIVE gitdir against the checkout, as git may write it", () => {
+    const dir = fixture("relative", (d) => {
+      const admin = path.join(d, "..", "rel.git", "worktrees", "lane");
+      mkdirSync(admin, { recursive: true });
+      writeFileSync(path.join(admin, "commondir"), "../..\n");
+      writeFileSync(path.join(d, ".git"), "gitdir: ../rel.git/worktrees/lane\n");
+    });
+    expect(isLinkedWorktree(dir)).toBe(true);
+  });
+
+  it("is conservative about anything that is not demonstrably a second checkout", () => {
+    const dir = fixture("bare", () => {});
+    expect(isLinkedWorktree(dir)).toBe(false);
+    // A `.git` file that names nothing, or names a path that is not there.
+    const junk = fixture("junk", (d) => writeFileSync(path.join(d, ".git"), "not a pointer\n"));
+    expect(isLinkedWorktree(junk)).toBe(false);
+    const dangling = fixture("dangling", (d) =>
+      writeFileSync(path.join(d, ".git"), "gitdir: /nowhere/.git/worktrees/gone\n"),
+    );
+    expect(isLinkedWorktree(dangling)).toBe(false);
+    // A gitfile is `gitdir: <path>` and nothing else, space mandatory — a note
+    // above it, junk below it, or a missing space is not a pointer git would
+    // read either. (Codex rounds 5 and 6.)
+    const withAdmin = (name, body) =>
+      fixture(name, (d) => {
+        const admin = path.join(root, `${name}.git`, "worktrees", "lane");
+        mkdirSync(admin, { recursive: true });
+        writeFileSync(path.join(admin, "commondir"), "../..\n");
+        writeFileSync(path.join(d, ".git"), body(admin));
+      });
+    expect(isLinkedWorktree(withAdmin("buried", (a) => `# a stray note\ngitdir: ${a}\n`))).toBe(
+      false,
+    );
+    expect(isLinkedWorktree(withAdmin("trailing", (a) => `gitdir: ${a}\n# junk below\n`))).toBe(
+      false,
+    );
+    expect(isLinkedWorktree(withAdmin("nospace", (a) => `gitdir:${a}\n`))).toBe(false);
+    // Two spaces: git keeps the second one as part of the path, so it names a
+    // directory that is not there. Eating it here would have this probe and git
+    // disagree about which directory was named. (Codex round 8.)
+    expect(isLinkedWorktree(withAdmin("twospace", (a) => `gitdir:  ${a}\n`))).toBe(false);
+    // A trailing SPACE is part of the path, not padding to strip: stripping it
+    // would read a directory git does not name. Stricter than git here is fine —
+    // it lands on "the main checkout", which changes nothing. (Codex round 9.)
+    expect(isLinkedWorktree(withAdmin("trailspace", (a) => `gitdir: ${a} \n`))).toBe(false);
+    // CRLF is a line ending, not path content.
+    expect(isLinkedWorktree(withAdmin("crlf", (a) => `gitdir: ${a}\r\n`))).toBe(true);
+    // …and the well-formed one, built the same way, still reads as linked.
+    expect(isLinkedWorktree(withAdmin("wellformed", (a) => `gitdir: ${a}\n`))).toBe(true);
+    // …and `commondir` must be a regular FILE, not merely a name on disk.
+    const dirCommon = fixture("dircommon", (d) => {
+      const admin = path.join(root, "dircommon.git", "worktrees", "lane");
+      mkdirSync(path.join(admin, "commondir"), { recursive: true });
+      writeFileSync(path.join(d, ".git"), `gitdir: ${admin}\n`);
+    });
+    expect(isLinkedWorktree(dirCommon)).toBe(false);
+    expect(isLinkedWorktree(path.join(root, "does-not-exist"))).toBe(false);
+    expect(isLinkedWorktree("")).toBe(false);
+    expect(isLinkedWorktree(undefined)).toBe(false);
+  });
+
+  // The one that keeps the entry-point branch below from being a tautology: the
+  // cheap stat probe must agree with git's own answer for the checkout this
+  // suite is running in, whichever kind that is.
+  it("agrees with git's own answer for this checkout", () => {
+    expect(isLinkedWorktree(REPO_ROOT)).toBe(REPO_IS_LINKED_WORKTREE);
+  });
+});
+
+describe("resolveComposeHostPortPlan — a linked worktree is never the operator's checkout", () => {
+  // The worktree's own basename, pinned as its project name: canonical, and
+  // exactly what compose would derive here anyway.
+  const WORKTREE = "/Users/dev/cinatra-worktrees/x2839";
+  const pinnedToOwnBasename = (linkedWorktree) =>
+    resolveComposeHostPortPlan({
+      envFileLookup: () => undefined, // no service URL stated — the leaky case
+      projectName: "x2839",
+      defaultProjectName: WORKTREE,
+      linkedWorktree,
+    });
+
+  it("warns and publishes the defaults when it IS the main checkout", () => {
+    const plan = pinnedToOwnBasename(false);
+    expect(plan.laneScope).toBe("checkout");
+    expect(plan.refusals).toEqual([]);
+    expect(plan.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6379");
+    expect(planMessages(plan.warnings).join("\n")).toContain("collide on 6379");
+  });
+
+  it("refuses the same pin from a linked worktree instead of warning", () => {
+    const plan = pinnedToOwnBasename(true);
+    expect(plan.laneScope).toBe("lane");
+    expect(plan.warnings).toEqual([]);
+    expect(plan.refusals.map((r) => r.reason)).toEqual([
+      "missing-service-url",
+      "missing-service-url",
+      "missing-service-url",
+    ]);
+    // Nothing is handed the shared default behind that refusal.
+    expect(plan.portEnv.CINATRA_REDIS_HOST_PORT).toBeUndefined();
+    expect(planMessages(plan.refusals).join("\n")).toContain("REDIS_URL is not stated");
+  });
+
+  it("still resolves a worktree that states its ports, refusing nothing", () => {
+    const plan = resolveComposeHostPortPlan({
+      envFileLookup: (key) =>
+        ({
+          NANGO_SERVER_URL: "http://127.0.0.1:13003",
+          NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+          REDIS_URL: "redis://127.0.0.1:16379",
+        })[key],
+      projectName: "x2839",
+      defaultProjectName: WORKTREE,
+      linkedWorktree: true,
+    });
+    expect(plan.refusals).toEqual([]);
+    expect(plan.portEnv).toEqual({
+      CINATRA_NANGO_SERVER_HOST_PORT: "13003",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "13009",
+      CINATRA_NANGO_DB_HOST_PORT: "15435",
+      CINATRA_REDIS_HOST_PORT: "16379",
+    });
+  });
+
+  // The immunity that outranks everything here: the unscoped single-stack flow
+  // is not refusable, and the probe must not become a back door into refusing it.
+  it("leaves the UNSCOPED checkout untouched even inside a linked worktree", () => {
+    const plan = resolveComposeHostPortPlan({
+      defaultProjectName: WORKTREE,
+      linkedWorktree: true,
+    });
+    expect(plan.laneScope).toBe("unscoped");
+    expect(plan.refusals).toEqual([]);
+    expect(plan.warnings).toEqual([]);
+    expect(plan.portEnv).toEqual({
+      CINATRA_NANGO_SERVER_HOST_PORT: "3003",
+      CINATRA_NANGO_CONNECT_HOST_PORT: "3009",
+      CINATRA_NANGO_DB_HOST_PORT: "5435",
+      CINATRA_REDIS_HOST_PORT: "6379",
+    });
+  });
+
+  it("defaults to the main checkout, so an unprobed caller behaves as before", () => {
+    const plan = resolveComposeHostPortPlan({
+      envFileLookup: () => undefined,
+      projectName: "x2839",
+      defaultProjectName: WORKTREE,
+    });
+    expect(plan.laneScope).toBe("checkout");
+  });
+});
+
+// Round-3 non-blocking item: every rule decides ONE service in isolation, so a
+// plan could be individually correct and collectively impossible. The reviewer's
+// own case is the first test here.
+describe("resolveComposeHostPortPlan — the finished plan claims each host port once", () => {
+  it("refuses the lane whose derived companion lands on another scoped port", () => {
+    const plan = resolveComposeHostPortPlan({
+      envFileLookup: (key) =>
+        ({
+          // 16373 + 6 = 16379, which is the very port REDIS_URL claims.
+          NANGO_SERVER_URL: "http://127.0.0.1:16373",
+          NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+          REDIS_URL: "redis://127.0.0.1:16379",
+        })[key],
+      projectName: "p2839",
+    });
+    const duplicate = plan.refusals.filter((r) => r.reason === "duplicate-host-port");
+    expect(duplicate).toHaveLength(1);
+    const message = duplicate[0].message;
+    expect(message).toContain("host port 16379 is claimed twice");
+    expect(message).toContain("CINATRA_NANGO_CONNECT_HOST_PORT");
+    expect(message).toContain("CINATRA_REDIS_HOST_PORT");
+    // It names the DECIDING source of each claim: one port nobody typed, one read
+    // off the URL that did.
+    expect(message).toContain(
+      "the nango-server container publishes it alongside CINATRA_NANGO_SERVER_HOST_PORT=16373, " +
+        "so it follows that port by +6",
+    );
+    expect(message).toContain("read from REDIS_URL=redis://127.0.0.1:16379");
+  });
+
+  it("says nothing about a lane whose four ports are already distinct", () => {
+    const plan = resolveComposeHostPortPlan({
+      envFileLookup: (key) =>
+        ({
+          NANGO_SERVER_URL: "http://127.0.0.1:13003",
+          NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+          REDIS_URL: "redis://127.0.0.1:16379",
+        })[key],
+      projectName: "p2839",
+    });
+    expect(plan.refusals).toEqual([]);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it("leaves the bundled defaults alone — they collide with nothing", () => {
+    const plan = resolveComposeHostPortPlan({});
+    expect(plan.refusals).toEqual([]);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it("catches two explicit overrides that claim the same port", () => {
+    const plan = resolveComposeHostPortPlan({
+      processEnv: {
+        CINATRA_NANGO_DB_HOST_PORT: "15435",
+        CINATRA_REDIS_HOST_PORT: "15435",
+      },
+      envFileLookup: (key) =>
+        ({
+          NANGO_SERVER_URL: "http://127.0.0.1:13003",
+        })[key],
+      projectName: "p2839",
+    });
+    const duplicate = plan.refusals.filter((r) => r.reason === "duplicate-host-port");
+    expect(duplicate).toHaveLength(1);
+    expect(duplicate[0].message).toContain("stated directly as CINATRA_NANGO_DB_HOST_PORT=15435");
+    expect(duplicate[0].message).toContain("stated directly as CINATRA_REDIS_HOST_PORT=15435");
+  });
+
+  // The unscoped checkout is reachable too — the companion derives there as
+  // well — and it is the one scope nothing may refuse. It gets the warning.
+  it("warns, never refuses, on the unscoped checkout", () => {
+    const plan = resolveComposeHostPortPlan({
+      // 6373 + 6 = 6379, the redis default this checkout also publishes.
+      processEnv: { CINATRA_NANGO_SERVER_HOST_PORT: "6373" },
+    });
+    expect(plan.laneScope).toBe("unscoped");
+    expect(plan.refusals).toEqual([]);
+    const duplicate = plan.warnings.filter((w) => w.reason === "duplicate-host-port");
+    expect(duplicate).toHaveLength(1);
+    expect(duplicate[0].message).toContain("host port 6379 is claimed twice");
+    // The claims still stand exactly as resolved; nothing is quietly rewritten.
+    expect(plan.portEnv.CINATRA_NANGO_CONNECT_HOST_PORT).toBe("6379");
+    expect(plan.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6379");
+  });
+
+  // A service that stood down claims no port at all, so it cannot collide with
+  // one — the check must read the finished plan, not the service list.
+  it("ignores a service this checkout does not publish", () => {
+    const plan = resolveComposeHostPortPlan({
+      envFileLookup: (key) =>
+        ({
+          NANGO_SERVER_URL: "http://127.0.0.1:16373",
+          NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+          // Configured elsewhere → no claim on 16379, so the companion's 16379
+          // is the only claim on it.
+          REDIS_URL: "rediss://cache.example.com:16379",
+        })[key],
+      projectName: "p2839",
+    });
+    expect(plan.refusals).toEqual([]);
+    expect(plan.portEnv.CINATRA_NANGO_CONNECT_HOST_PORT).toBe("16379");
+    expect(plan.portEnv.CINATRA_REDIS_HOST_PORT).toBeUndefined();
+  });
+});
+
+// The branch's own stated immunity, asserted as ONE invariant rather than
+// re-derived per rule. Every refusal reason this module can produce is reached
+// from a named lane below; none of them may reach the unscoped checkout, which
+// is the operator's single `make dev` stack. A rule added later that forgets its
+// unscoped half fails here.
+describe("resolveComposeHostPortPlan — the unscoped checkout is never refused", () => {
+  const CASES = {
+    "missing service URL": { envFileLookup: () => undefined },
+    "an unusable explicit override": {
+      processEnv: { CINATRA_REDIS_HOST_PORT: "not-a-port" },
+    },
+    "a companion port that overflows": {
+      processEnv: { CINATRA_NANGO_SERVER_HOST_PORT: "65530" },
+    },
+    "one host port claimed twice": {
+      processEnv: { CINATRA_NANGO_SERVER_HOST_PORT: "6373" },
+    },
+    "a service configured somewhere else": {
+      envFileLookup: (key) => (key === "REDIS_URL" ? "rediss://cache.example.com:6380" : undefined),
+    },
+  };
+
+  for (const [what, input] of Object.entries(CASES)) {
+    it(`refuses a named lane on ${what}, and never the unscoped checkout`, () => {
+      const lane = resolveComposeHostPortPlan({ ...input, projectName: "p2839" });
+      const unscoped = resolveComposeHostPortPlan(input);
+
+      expect(unscoped.laneScope).toBe("unscoped");
+      expect(unscoped.refusals).toEqual([]);
+      // …and it is still handed a complete, publishable plan.
+      for (const spec of PREFLIGHT_HOST_PORTS) {
+        expect(Object.keys(unscoped.portEnv)).toContain(spec.envVar);
+      }
+
+      // The same input on a lane is a refusal or a stand-down — proof that the
+      // case really is one the module acts on, not an inert input.
+      expect(lane.refusals.length + lane.unmanaged.length).toBeGreaterThan(0);
+    });
+  }
+});
+
+// The line between the two tests, recorded so it is a choice and not an
+// accident (Codex round 3 asked which one governs the `checkout` scope). It
+// divides on what the checkout STATED, not on how big the blast radius is.
+describe("resolveComposeHostPortPlan — the operator's own pin: stated vs omitted", () => {
+  const OWN = { projectName: "cinatra", defaultProjectName: "/Users/dev/src/cinatra" };
+
+  it("only WARNS about what the checkout merely omits", () => {
+    const plan = resolveComposeHostPortPlan({ ...OWN, envFileLookup: () => undefined });
+    expect(plan.laneScope).toBe("checkout");
+    expect(plan.refusals).toEqual([]);
+    expect(plan.warnings.map((w) => w.reason)).toContain("shared-default-on-named-checkout");
+    expect(plan.portEnv.CINATRA_REDIS_HOST_PORT).toBe("6379");
+  });
+
+  // …and REFUSES what it states and cannot publish. Compose fails on each of
+  // these anyway, so failing here — naming the variable and the rule — is
+  // strictly earlier and clearer than failing at bind time.
+  const STATED = {
+    "an unusable explicit override": {
+      processEnv: { CINATRA_REDIS_HOST_PORT: "not-a-port" },
+      reason: "invalid-host-port-override",
+    },
+    "a companion port that overflows": {
+      processEnv: { CINATRA_NANGO_SERVER_HOST_PORT: "65530" },
+      reason: "companion-port-overflow",
+    },
+    "two URLs that claim one port": {
+      envFileLookup: (key) =>
+        ({
+          NANGO_SERVER_URL: "http://127.0.0.1:16373",
+          REDIS_URL: "redis://127.0.0.1:16379",
+        })[key],
+      reason: "duplicate-host-port",
+    },
+  };
+
+  for (const [what, { reason, ...input }] of Object.entries(STATED)) {
+    it(`refuses ${what}, pin or no pin`, () => {
+      const plan = resolveComposeHostPortPlan({ ...OWN, ...input });
+      expect(plan.laneScope).toBe("checkout");
+      expect(plan.refusals.map((r) => r.reason)).toContain(reason);
+    });
+  }
+});
+
 describe("formatUnmanagedServices / unmanagedComposeServices", () => {
   it("names the configured URL that made the preflight stand down", () => {
     expect(
@@ -857,6 +1323,105 @@ describe("buildComposeArgs / formatComposeCommand", () => {
     expect(formatComposeCommand({ projectName: "p2839", args: ["logs", "nango-server"] })).toBe(
       `docker compose -p p2839 -f ${COMPOSE_FILES[0]} -f ${COMPOSE_FILES[1]} logs nango-server`,
     );
+  });
+});
+
+// Round-3 non-blocking item: two diagnostics still PRINTED a bare bring-up that
+// diverged from every guarded entry point. A pasted `docker compose up` is
+// unpinned (the step is what exports COMPOSE_PROJECT_NAME, which Docker never
+// reads from `.env.local`) and unguarded (it skips every refusal).
+describe("printed bring-ups are the guarded chain, not a bare compose up", () => {
+  const guarded = formatGuardedComposeCommand({ args: ["up", "-d"], requireManageable: true });
+
+  it("assigns the step's output, evals it, and only then runs compose", () => {
+    expect(guarded).toBe(
+      `CINATRA_COMPOSE_ENV="$(node scripts/dev-compose-env.mjs --require-manageable)" && ` +
+        `eval "$CINATRA_COMPOSE_ENV" && ` +
+        `docker compose -f ${COMPOSE_FILES[0]} -f ${COMPOSE_FILES[1]} up -d`,
+    );
+  });
+
+  // ASSIGN-then-eval, not `eval "$(…)"` — the exit status of a command
+  // substitution inside `eval` is discarded, so a refusal would not stop the up.
+  // The same shape the Makefile / package.json / setup.sh recipes use.
+  it("never evals the step's output directly, so a refusal stops the chain", () => {
+    expect(guarded).not.toMatch(/eval\s+"\$\(/);
+    expect(guarded.indexOf("CINATRA_COMPOSE_ENV=\"$(")).toBeLessThan(guarded.indexOf("eval "));
+  });
+
+  it("drops --require-manageable for a bring-up that is not whole-stack", () => {
+    expect(formatGuardedComposeCommand({ args: ["up", "-d", "graphiti"] })).not.toContain(
+      "--require-manageable",
+    );
+  });
+
+  // No `-p`: the eval puts COMPOSE_PROJECT_NAME into the shell compose inherits,
+  // exactly as the real recipes do. Pinning here as well would print a command
+  // no entry point runs, naming a project resolved somewhere other than the step
+  // the ports came from.
+  // No `-p`: the step's own `export COMPOSE_PROJECT_NAME` is what pins the
+  // project, and the eval puts it in the shell compose inherits. Pinning here
+  // as well would print a command no entry point runs, naming a project resolved
+  // somewhere other than the step the ports came from.
+  it("leaves the project pin to the step's own export", () => {
+    expect(guarded).not.toContain(" -p ");
+    // A COMPLETE lane, stated in the environment so the repo's own `.env.local`
+    // (present on a dev machine, absent in CI) cannot change what this observes.
+    const env = { ...process.env };
+    for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
+    Object.assign(env, {
+      COMPOSE_PROJECT_NAME: "p2839",
+      NANGO_SERVER_URL: "http://127.0.0.1:13003",
+      NANGO_DATABASE_URL: "postgresql://nango:nango@127.0.0.1:15435/nango",
+      REDIS_URL: "redis://127.0.0.1:16379",
+    });
+    const step = spawnSync(process.execPath, [DEV_COMPOSE_ENV], {
+      encoding: "utf8",
+      cwd: REPO_ROOT,
+      env,
+    });
+    expect(step.status).toBe(0);
+    expect(step.stdout).toContain("export COMPOSE_PROJECT_NAME='p2839'");
+  });
+
+  it("is what the drift remedy prints", () => {
+    const remedy = formatDriftRemedy(["Redis"]);
+    expect(remedy).toContain(guarded);
+    // …and the pre-fix line is gone: every COMMAND line the remedy offers (the
+    // indented ones — prose about the cause is not a command) goes through the
+    // step. The bare bring-up it used to print does not appear.
+    const commands = remedy.split("\n").filter((line) => /^\s{4}\S/.test(line));
+    expect(commands.length).toBeGreaterThan(0);
+    for (const line of commands) {
+      if (!line.includes("docker compose")) continue;
+      expect(line).toContain("dev-compose-env.mjs");
+    }
+    expect(remedy).not.toContain(
+      "# or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d",
+    );
+  });
+
+  it("is what check-services.mjs prints", () => {
+    const source = readFileSync(path.join(REPO_ROOT, "scripts", "check-services.mjs"), "utf8");
+    expect(source).toContain("formatGuardedComposeCommand");
+    // The pre-fix literal, byte for byte, is gone from the file.
+    expect(source).not.toContain(
+      "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d",
+    );
+  });
+
+  // The remedy and the real recipe are one builder, so they cannot fork. Read
+  // off the Makefile so a future edit to either side has to break this.
+  it("prints the same guard shape the Makefile actually runs", () => {
+    const makefile = readFileSync(path.join(REPO_ROOT, "Makefile"), "utf8");
+    const recipe = makefile
+      .split("\n")
+      .find((line) => line.includes("CINATRA_COMPOSE_ENV") && line.includes("docker compose"));
+    expect(recipe, "the Makefile dev target should carry the guarded chain").toBeDefined();
+    // `make` doubles the `$` for its own expansion; compare the shell text.
+    const shell = recipe.trim().replace(/\$\$/g, "$");
+    expect(shell.startsWith('CINATRA_COMPOSE_ENV="$(node scripts/dev-compose-env.mjs')).toBe(true);
+    expect(shell).toContain('&& eval "$CINATRA_COMPOSE_ENV" && docker compose');
   });
 });
 
@@ -1240,6 +1805,23 @@ describe("dev-server.mjs preflight (end-to-end, fake docker)", () => {
     expect(up.ports.CINATRA_REDIS_HOST_PORT).toBeUndefined();
     expect(Object.values(up.ports)).not.toContain("6379");
     expect(result.stderr).toContain("REDIS_URL=rediss://cache.example.com:6380");
+
+    // Round-3 non-blocking item: `--no-deps` buys the stand-down, but it does
+    // NOT re-point the container — nango-server reaches redis by the
+    // project-internal name fixed in docker-compose.yml, so a genuinely external
+    // one degrades to an unhealthy container. The launcher now says that up
+    // front instead of leaving the operator to discover it after the poll.
+    expect(result.stderr).toContain("does not re-point the container");
+    expect(result.stderr).toContain("project-internal name fixed in docker-compose.yml");
+    // …and it says RUNNING and reachable, not merely "exists": a stopped
+    // container in the project resolves to nothing and is the same failure.
+    expect(result.stderr).toContain("is RUNNING and reachable on this compose project's network");
+    expect(result.stderr).toContain("start and stay");
+    // The terminal "still not healthy" line also names the stranded dependency,
+    // but it is not reachable here: the recording shim exits non-zero, so the
+    // launcher takes the `compose up failed` branch and never reaches the
+    // 60-second health poll. Asserted on the up-front warning, which is the line
+    // an operator reads BEFORE the wait.
   });
 
   // A loopback URL that states NO port is the same "not ours" case: the scheme
@@ -1637,11 +2219,21 @@ describe("whole-stack entry points — the guard the Makefile and package.json a
   });
 
   // HARD CAUTION at the entry point: pinning the very name compose derives from
-  // this checkout is a no-op, not a second lane, and `make dev` must survive it.
+  // this checkout is a no-op, not a second lane, and `make dev` must survive it
+  // — from the MAIN checkout. From a linked worktree the same pin is a second
+  // stack (round-3 non-blocking item), so the step refuses instead. Both are one
+  // rule; which one this host sees comes from git, not from the module under
+  // test. See `gitSaysLinkedWorktree`.
   it("warns but still runs when the pinned name is this checkout's compose default", () => {
     const result = runGuard(MAKE_DEV_GUARD(), {
       extraEnv: { COMPOSE_PROJECT_NAME: composeDefaultProjectName(REPO_ROOT) },
     });
+    if (REPO_IS_LINKED_WORKTREE) {
+      expect(result.status).not.toBe(0);
+      expect(result.reached).toBe(false);
+      expect(result.stderr).toContain("REDIS_URL is not stated");
+      return;
+    }
     expect(result.status).toBe(0);
     expect(result.reached).toBe(true);
     expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");
@@ -1928,10 +2520,19 @@ describe("scripts/setup.sh — the fifth guarded whole-stack entry point", () =>
 
   // A pin of this checkout's own compose default is a no-op, not a lane —
   // `make setup` must survive it, same as `make dev`.
+  // Same one rule as the `make dev` case above, at setup's own guard: the no-op
+  // pin survives from the MAIN checkout, and is a second stack — so a refusal —
+  // from a linked worktree. The precondition comes from git, not from the module
+  // under test.
   it("warns but still proceeds when the pinned name is this checkout's compose default", () => {
     const result = runSetupGuard({
       extraEnv: { COMPOSE_PROJECT_NAME: composeDefaultProjectName(REPO_ROOT) },
     });
+    if (REPO_IS_LINKED_WORKTREE) {
+      expect(result.status).not.toBe(0);
+      expect(result.reached).toBe(false);
+      return;
+    }
     expect(result.status).toBe(0);
     expect(result.reached).toBe(true);
     expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");

@@ -57,6 +57,7 @@ import {
   COMPOSE_PROJECT_ENV_VAR,
   formatStandDownRefusal,
   formatUnmanagedServices,
+  isLinkedWorktree,
   planMessages,
   readEnvFileValue,
   resolveComposeHostPortPlan,
@@ -92,6 +93,11 @@ const plan = resolveComposeHostPortPlan({
   // is the project name it would derive on its own — the operator's own stack.
   // Naming THAT project is a no-op pin, not a second lane; see `laneScope`.
   defaultProjectName: repoRoot,
+  // …but only from the MAIN checkout. A linked worktree named after its own
+  // basename passed that test too, so it took the operator's leniency and
+  // published the shared defaults; it is a second stack by construction. Probed
+  // here — the same input the launcher passes, so the two plans stay identical.
+  linkedWorktree: isLinkedWorktree(repoRoot),
 });
 
 const fail = (lines) => {

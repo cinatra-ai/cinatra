@@ -34,6 +34,7 @@ import {
   createComposeRunner,
   formatComposeCommand,
   formatUnmanagedServices,
+  isLinkedWorktree,
   planMessages,
   readEnvFileValue,
   resolveComposeHostPortPlan,
@@ -120,6 +121,11 @@ const composeHostPortPlan = resolveComposeHostPortPlan({
   // that merely PINS that same name has not made itself a second lane, so the
   // refusals below cannot reach it — see `laneScope` in dev-preflight.mjs.
   defaultProjectName: repoRoot,
+  // …unless this IS a second checkout. A linked worktree pinning its own
+  // basename matched that test and inherited the operator's leniency, so a
+  // missing service URL only warned and then published the shared defaults into
+  // the operator's stack. See `isLinkedWorktree`.
+  linkedWorktree: isLinkedWorktree(repoRoot),
 });
 
 // A plan with a hole in it — a named lane with no host port for a scoped
@@ -314,8 +320,28 @@ async function runNangoHealthPreflight() {
   //   - nango-server IS ours but a DEPENDENCY is configured elsewhere: heal
   //     nango-server alone with `--no-deps`, and leave the service that is not
   //     ours untouched instead of publishing a local copy of it on the global
-  //     port. If that dependency is genuinely unreachable the heal fails, which
-  //     is the honest outcome — it is not this checkout's to start.
+  //     port.
+  //
+  // WHAT `--no-deps` DOES AND DOES NOT BUY, stated exactly. It buys the
+  // stand-down: no local copy of somebody else's service is started on the
+  // global port. It does NOT re-point nango-server at that service, and it
+  // cannot: the container's dependency addresses are FIXED in docker-compose.yml
+  // as project-internal DNS names (`NANGO_DB_HOST: nango-db`,
+  // `NANGO_REDIS_URL: redis://redis:6379`, `RECORDS_DATABASE_URL:
+  // …@nango-db:5432/nango`). The stand-down is read off a HOST-side URL
+  // (REDIS_URL / NANGO_DATABASE_URL), which says where the APP connects — it
+  // never reaches inside the container.
+  //
+  // So the heal has two real outcomes, and an earlier revision of this comment
+  // claimed only the second: if a container for that service is still RUNNING
+  // and attached to THIS compose project's network (a previous whole-stack
+  // `up`), `--no-deps` starts nango-server against it and it becomes healthy.
+  // Existing is not enough — a stopped container resolves to nothing. Otherwise
+  // the heal SUCCEEDS and the container comes up unable to reach its dependency, then
+  // fails /health for the whole poll budget — it does not "fail honestly", it
+  // degrades to an unhealthy container. The operator is told that up front
+  // below, and the terminal message names the stranded dependency as the first
+  // thing to check rather than sending them to the logs unprepared.
   const standDown = new Set(unmanagedComposeServices(composeHostPortPlan.unmanaged));
   if (standDown.has("nango-server")) {
     console.warn(
@@ -329,9 +355,17 @@ async function runNangoHealthPreflight() {
   const upArgs = strandedDeps.length
     ? ["up", "-d", "--no-deps", "nango-server"]
     : ["up", "-d", "nango-server"];
+  const strandedServices = unmanagedComposeServices(strandedDeps);
   if (strandedDeps.length) {
     console.warn(
       `[dev-server] ⚠ Healing nango-server alone (--no-deps): ${formatUnmanagedServices(strandedDeps)} — configured elsewhere, so this checkout claims no host port for it and will not start a local copy.`,
+    );
+    console.warn(
+      `[dev-server] ⚠ That URL is where the APP connects; it does not re-point the container. nango-server reaches ` +
+        `${strandedServices.join(", ")} by the project-internal name fixed in docker-compose.yml, so it becomes healthy only if a ` +
+        `${strandedServices.join("/")} container is RUNNING and reachable on this compose project's network — a stopped or ` +
+        `absent one is the same failure. Otherwise it will start and stay unhealthy: bring that service up in this project, ` +
+        `or point the URL back at a 127.0.0.1 port this checkout publishes.`,
     );
   }
 
@@ -372,8 +406,17 @@ async function runNangoHealthPreflight() {
     return;
   }
 
+  // A stranded dependency is the LIKELIEST cause of reaching this line, and the
+  // one the logs state least obviously (a DNS failure for `nango-db` / `redis`
+  // deep in Nango's own startup output). Name it before the log command.
   console.warn(
-    `[dev-server] ⚠ Nango connector service is not healthy — connectors will fail. Inspect: ${formatComposeCommand({ projectName: composeProjectName, args: ["logs", "--tail=80", "nango-server"] })}`,
+    `[dev-server] ⚠ Nango connector service is not healthy — connectors will fail.${
+      strandedDeps.length
+        ? ` This run healed with --no-deps, so ${strandedServices.join(", ")} was NOT started here: if no ${strandedServices.join(
+            "/",
+          )} container is running and reachable in this compose project, that is the cause, and no amount of restarting nango-server fixes it.`
+        : ""
+    } Inspect: ${formatComposeCommand({ projectName: composeProjectName, args: ["logs", "--tail=80", "nango-server"] })}`,
   );
 }
 

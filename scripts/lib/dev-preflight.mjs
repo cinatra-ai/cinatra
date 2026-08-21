@@ -67,7 +67,7 @@
 // dependency-injected, so the decisions are asserted in
 // scripts/__tests__/dev-preflight.test.mjs without Docker on the box.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 /** The documented dev-preflight bypass switch. */
@@ -287,6 +287,84 @@ export function composeDefaultProjectName(projectDir) {
 }
 
 /**
+ * Is this checkout a LINKED git worktree rather than the main checkout?
+ *
+ * The one probe that separates "the operator's single stack" from "a second
+ * checkout of the same repo on the same host". Git states it structurally, and
+ * the test is deliberately two steps rather than one:
+ *
+ *   1. `.git` must be a FILE whose ENTIRE content is `gitdir: <path>` plus line
+ *      endings, the single space mandatory. A main worktree holds `.git` as a
+ *      directory instead.
+ *   2. …and the path it names must be a linked worktree's ADMIN DIRECTORY,
+ *      recognized by a `commondir` regular file inside it, which is what git
+ *      writes there and does not write into a plain repository directory.
+ *
+ * Both steps are structural, not authoritative: this is a cheap read of the
+ * layout git maintains, not `git rev-parse`. It is pinned against git's own
+ * answer for the running checkout in scripts/__tests__/dev-preflight.test.mjs.
+ * It fails toward "the main checkout" — the answer that changes nothing — so a
+ * checkout it cannot read stays exactly as lenient as it was before this probe
+ * existed.
+ *
+ * Step 2 is not decoration. `git clone --separate-git-dir` (and `git init` with
+ * the same flag) writes a `.git` FILE in a MAIN checkout too, pointing at a
+ * repository directory that has no `commondir`. Stopping at step 1 called that
+ * operator's own single checkout a second stack and applied the lane refusals to
+ * it — taking `make dev` away from exactly the person this scope protects. Two
+ * stats, still no `git` subprocess.
+ *
+ * It matters because `composeDefaultProjectName` alone cannot tell the two
+ * apart. A worktree at `…/cinatra-worktrees/x2839` that states
+ * `COMPOSE_PROJECT_NAME=x2839` names exactly the project compose would derive
+ * from its own basename, so the pin looked like the no-op `checkout` pin and a
+ * missing service URL only WARNED — and then published the shared 3003/5435/6379
+ * straight into the operator's stack. That is the collision the scoping exists
+ * to kill, reintroduced by the leniency meant for the operator alone.
+ *
+ * The leniency is not about the pin being a no-op; it is about WHOSE stack it
+ * is. `scripts/setup.sh` and `make dev` create the operator's stack on the
+ * historical defaults from the main checkout, and nothing may take `make dev`
+ * away from them. A linked worktree is by construction a SECOND stack on that
+ * same host, so its basename-named project is a lane and the refusals apply.
+ *
+ * Absent or unreadable `.git` (a source export, a tarball) reads as "not a
+ * linked worktree" — the conservative answer, which keeps the historical
+ * behavior for anything that is not demonstrably a second checkout.
+ *
+ * @param {string} projectDir  The checkout root.
+ * @returns {boolean}
+ */
+export function isLinkedWorktree(projectDir) {
+  const dir = String(projectDir ?? "");
+  if (!dir) return false;
+  try {
+    const dotGit = path.join(dir, ".git");
+    if (!statSync(dotGit).isFile()) return false; // a directory → the main worktree
+    // Matched against the WHOLE file, not a first line split off it, and with
+    // EXACTLY the prefix git itself skips: `"gitdir: "`, one space, then the
+    // path, then line endings only. Reading only line one would accept a valid
+    // pointer with junk under it; ` *` would accept `gitdir:/path`, which git
+    // rejects; ` +` would eat a second space that git keeps as part of the path.
+    //
+    // Only `\r` and `\n` are stripped, never a trailing space or tab, so the
+    // path this reads is never LONGER than the one git reads and this probe is
+    // never looser than git. Where it ends up stricter, it simply finds no
+    // `commondir` and answers "the main checkout" — which changes nothing.
+    const pointer = /^gitdir: (.+?)[\r\n]*$/.exec(readFileSync(dotGit, "utf8"));
+    if (!pointer) return false;
+    // Resolved against the checkout, because git may write a relative gitdir.
+    // A linked worktree's admin directory carries `commondir` as a regular FILE;
+    // a `--separate-git-dir` main checkout points at a plain repository, which
+    // has none, and must keep the operator's `checkout` leniency. Requiring a
+    // file (not merely a name on disk) keeps a stray directory from deciding it.
+    return statSync(path.join(path.resolve(dir, pointer[1]), "commondir")).isFile();
+  } catch {
+    return false; // no .git, unreadable → not demonstrably a second checkout
+  }
+}
+
+/**
  * The host ports the preflight can cause to be published, and where a lane
  * already states each one.
  *
@@ -462,12 +540,18 @@ export function classifyServiceUrl(urlValue) {
  *     name left after trimming": a whitespace-only `COMPOSE_PROJECT_NAME` WAS
  *     stated, and letting it trim its way into this scope handed the operator's
  *     leniency to a value compose will reject — see below.
- *   - `"checkout"` — a name is stated, it is ALREADY CANONICAL, and it is the one
+ *   - `"checkout"` — a name is stated, it is ALREADY CANONICAL, it is the one
  *     compose would have derived from this directory anyway
- *     (`composeDefaultProjectName`). A no-op pin is not a second lane, so a
- *     missing URL is a loud WARNING here, not a refusal: an operator who merely
- *     pinned their own project name must not have `make dev` taken away from
- *     them. Canonicality is required because the comparison's two sides are not
+ *     (`composeDefaultProjectName`), AND this directory is the MAIN checkout
+ *     rather than a linked git worktree (`linkedWorktree`). A no-op pin on the
+ *     operator's own checkout is not a second lane, so a missing URL is a loud
+ *     WARNING here, not a refusal: an operator who merely pinned their own
+ *     project name must not have `make dev` taken away from them. The worktree
+ *     probe is what makes that test mean what it says — see `isLinkedWorktree`.
+ *     Without it, a worktree at `…/x2839` stating `COMPOSE_PROJECT_NAME=x2839`
+ *     matched its OWN basename, inherited the operator's leniency, and published
+ *     the shared defaults into the operator's stack: the exact collision the
+ *     scoping exists to kill. Canonicality is required because the comparison's two sides are not
  *     symmetric — compose normalizes a DERIVED name but only validates an
  *     EXPLICIT one — so a stated `Cinatra!` is refused by compose, never folded
  *     into `cinatra`. Such a name is refused here instead (see below), earlier
@@ -478,9 +562,40 @@ export function classifyServiceUrl(urlValue) {
  *     directory's. That is a second stack on one host, which is precisely the
  *     situation where a shared default is a collision. Refusals apply.
  *
- * An INVALID explicit `CINATRA_*_HOST_PORT` is refused on any scoped checkout
- * and replaced by the historical default (with a warning) on an unscoped one.
- * It must never simply be dropped: the plan's keys are spread OVER the ambient
+ * THE UNSCOPED IMMUNITY IS ABSOLUTE, and every rule below states its unscoped
+ * half explicitly rather than leaving it to fall out. An INVALID explicit
+ * `CINATRA_*_HOST_PORT`, a companion port that OVERFLOWS the port space, and a
+ * host port CLAIMED TWICE are each a refusal on a SCOPED checkout and a WARNING
+ * on the unscoped one. A checkout that states no project name at all is the
+ * operator's single stack by definition, and `make dev` is never taken away from
+ * it: the plan is completed with the historical default and the problem is said
+ * out loud instead.
+ *
+ * TWO DIFFERENT TESTS, ON PURPOSE — `scoped` above, `strict` below. They divide
+ * on what the checkout STATED, not on how big the blast radius is:
+ *
+ *   - What a scoped checkout STATES and cannot publish is refused whether it is
+ *     a distinct lane or the operator's own no-op pin (`checkout`). NOTE this
+ *     really does mean the `checkout` scope: it is not the unscoped immunity,
+ *     and the reason is NOT that a second stack exists. The reason is per case,
+ *     and none of the three is a value any bring-up can honor:
+ *       · an unusable `CINATRA_*_HOST_PORT` — the operator named a published
+ *         port and named a non-port;
+ *       · a doubly-claimed host port — compose cannot bind one host port twice,
+ *         so this one really does fail at bring-up;
+ *       · an overflowing companion — this one would NOT fail: the plan simply
+ *         emits no key and compose publishes the file's `${…:-3009}` default.
+ *         That is precisely why it is refused. Silently falling back means the
+ *         companion no longer follows its container's port, on a project that
+ *         named itself, which is the collision the scoping exists to kill.
+ *     Refusing here names the variable and the rule, ahead of a bind-time error
+ *     or a silent wrong port.
+ *   - What a scoped checkout merely OMITS is governed by `strict`, and only a
+ *     distinct `lane` is refused for it. A missing service URL is not an
+ *     unusable statement, it is no statement, and on the operator's own checkout
+ *     the historical default is the right answer with a warning.
+ *
+ * An invalid explicit value must never simply be dropped either: the plan's keys are spread OVER the ambient
  * environment (`createComposeRunner`) and an omitted key cannot unset a shell
  * variable an `eval` already inherited, so a rejected value that produces no
  * replacement reaches compose anyway.
@@ -490,6 +605,7 @@ export function classifyServiceUrl(urlValue) {
  *   envFileLookup?: (key: string) => string | undefined,
  *   projectName?: string,
  *   defaultProjectName?: string,
+ *   linkedWorktree?: boolean,
  * }} input
  * @returns {{
  *   portEnv: Record<string, string>,
@@ -504,6 +620,7 @@ export function resolveComposeHostPortPlan({
   envFileLookup = () => undefined,
   projectName,
   defaultProjectName,
+  linkedWorktree = false,
 } = {}) {
   const read = (key) => {
     const fromShell = String(processEnv[key] ?? "").trim();
@@ -537,12 +654,17 @@ export function resolveComposeHostPortPlan({
   // defect renders as an invisible one in an unquoted message. Quoted only when
   // it differs from its trim, so every name that was already legible stays so.
   const shownName = rawName === rawName.trim() ? rawName : JSON.stringify(rawName);
+  // A linked worktree is a SECOND checkout of this repo on this host, so the
+  // project named after its own basename is a second stack — never the
+  // operator's single one. It gets no `checkout` leniency, whatever it is named.
   const laneScope = !scoped
     ? "unscoped"
-    : canonical && named === composeDefaultProjectName(defaultProjectName)
+    : canonical && !linkedWorktree && named === composeDefaultProjectName(defaultProjectName)
       ? "checkout"
       : "lane";
-  // Only a distinct lane is refused; see the `laneScope` note above.
+  // Only a distinct lane is refused for what it merely OMITS. What a scoped
+  // checkout STATES and cannot publish is refused either way, `checkout` scope
+  // included — see the two-tests note in the docblock above.
   const strict = laneScope === "lane";
 
   const portEnv = {};
@@ -573,6 +695,12 @@ export function resolveComposeHostPortPlan({
   const note = (list, spec, reason, message) =>
     list.push({ service: spec.service, envVar: spec.envVar, reason, message });
 
+  // How each claim in `portEnv` was decided, kept so the uniqueness check below
+  // can name the DECIDING source of a collision instead of only the variable.
+  // "state a different port" is useless advice when the operator never wrote the
+  // variable the message names — a derived companion is the whole reason this
+  // check exists.
+  const origin = {};
   const byVar = new Map(PREFLIGHT_HOST_PORTS.map((spec) => [spec.envVar, spec]));
   // Two passes: a `derivedFrom` port can only be resolved once the entry it
   // follows has been.
@@ -588,6 +716,7 @@ export function resolveComposeHostPortPlan({
         const explicit = Number(stated);
         if (isUsablePort(explicit)) {
           portEnv[spec.envVar] = String(explicit); // an operator's direct claim wins
+          origin[spec.envVar] = `stated directly as ${spec.envVar}=${explicit}`;
           continue;
         }
         // Stated, but not a port. Emitting NOTHING here is the leak: the value
@@ -611,6 +740,7 @@ export function resolveComposeHostPortPlan({
           `${what} — ignoring it and publishing the historical default ${spec.defaultHostPort} for ${spec.service}.`,
         );
         portEnv[spec.envVar] = String(spec.defaultHostPort);
+        origin[spec.envVar] = `the historical default ${spec.defaultHostPort}`;
         continue;
       }
 
@@ -629,23 +759,54 @@ export function resolveComposeHostPortPlan({
         const sourcePort = Number(portEnv[spec.derivedFrom]);
         const derived = sourcePort + offset;
         if (!isUsablePort(derived)) {
-          // The overflow band (a source port above 65535 - offset). Falling back
-          // to the global ${spec.defaultHostPort} here broke BOTH properties at
-          // once: the companion no longer follows its container's port, and two
-          // lanes in this band both land on the shared default.
+          // The overflow band (a source port above 65535 - offset).
+          const what =
+            `${spec.envVar}: the companion port published by the ${spec.service} container follows ` +
+            `${spec.derivedFrom}=${sourcePort} by +${offset}, but ${sourcePort} + ${offset} = ${derived} ` +
+            `is not a usable host port`;
+          if (scoped) {
+            // A STATED value that cannot be published, so it is refused on any
+            // scoped checkout — the operator's own pin included. Falling back to
+            // the global ${spec.defaultHostPort} broke both properties at once:
+            // the companion no longer follows its container's port, and two
+            // lanes in this band would both land on the shared default.
+            note(
+              refusals,
+              spec,
+              "companion-port-overflow",
+              `${what}. There is no safe fallback — the shared default ${spec.defaultHostPort} would ` +
+                `collide with every other stack. Pick a ${spec.derivedFrom} of at most ${65535 - offset}, or set ` +
+                `${spec.envVar} explicitly.`,
+            );
+            continue;
+          }
+          // The UNSCOPED checkout is the one scope nothing here may refuse: it
+          // states no project name at all, so it is the operator's single stack
+          // by definition and `make dev` is never taken away from it. The
+          // argument against the fallback does not apply either. That argument
+          // is "a named project must not silently land on the shared default",
+          // and this checkout has no name: the default is the port it publishes
+          // anyway, so the fallback moves nothing. Warn and publish, exactly as
+          // an unusable override is handled above.
           note(
-            refusals,
+            warnings,
             spec,
             "companion-port-overflow",
-            `${spec.envVar}: the companion port published by the ${spec.service} container follows ` +
-              `${spec.derivedFrom}=${sourcePort} by +${offset}, but ${sourcePort} + ${offset} = ${derived} ` +
-              `is not a usable host port. There is no safe fallback — the shared default ${spec.defaultHostPort} would ` +
-              `collide with every other stack. Pick a ${spec.derivedFrom} of at most ${65535 - offset}, or set ` +
-              `${spec.envVar} explicitly.`,
+            `${what} — ignoring the derivation and publishing the historical default ${spec.defaultHostPort} for ` +
+              `${spec.service}. This checkout names no compose project, so ${spec.defaultHostPort} is the port it ` +
+              `would have published anyway: the fallback puts nothing there that was not already going there. ` +
+              `Whether some OTHER stack on this host already holds it is a bind-time answer this step cannot give; ` +
+              `a second claim inside this plan is reported by the uniqueness check. Set ${spec.envVar} explicitly ` +
+              `to publish it elsewhere.`,
           );
+          portEnv[spec.envVar] = String(spec.defaultHostPort);
+          origin[spec.envVar] = `the historical default ${spec.defaultHostPort}`;
           continue;
         }
         portEnv[spec.envVar] = String(derived);
+        origin[spec.envVar] =
+          `derived: the ${spec.service} container publishes it alongside ${spec.derivedFrom}=${sourcePort}, ` +
+          `so it follows that port by +${offset}`;
         continue;
       }
 
@@ -663,6 +824,7 @@ export function resolveComposeHostPortPlan({
       }
       if (configured.state === "ours") {
         portEnv[spec.envVar] = String(configured.port);
+        origin[spec.envVar] = `read from ${spec.urlVar}=${configured.url}`;
         continue;
       }
 
@@ -693,8 +855,72 @@ export function resolveComposeHostPortPlan({
         );
       }
       portEnv[spec.envVar] = String(spec.defaultHostPort);
+      origin[spec.envVar] = `the historical default ${spec.defaultHostPort}`;
     }
   }
+
+  // UNIQUENESS OVER THE FINISHED PLAN. Every rule above decides ONE service in
+  // isolation, so each claim can be individually correct and the plan as a whole
+  // still impossible: a lane on `NANGO_SERVER_URL=…:16373` gets a companion at
+  // 16373 + 6 = 16379, and a `REDIS_URL=…:16379` in the same file claims that
+  // very port. Both claims are honored, compose publishes the first mapping and
+  // fails to bind the second, and the lane comes up half-started — with nothing
+  // in the plan having said a word, because no single rule can see the other's
+  // result. The derived companion is what makes this reachable without an
+  // operator typo: its port is one nobody typed.
+  //
+  // Checked here, on the finished set, for the same reason the other guards sit
+  // before the `up`: a collision this step can see is one compose must never be
+  // asked to discover at bind time.
+  const claimedBy = new Map();
+  for (const spec of PREFLIGHT_HOST_PORTS) {
+    const port = portEnv[spec.envVar];
+    if (port === undefined) continue; // stood down or refused — no claim to collide
+    if (!claimedBy.has(port)) claimedBy.set(port, []);
+    claimedBy.get(port).push(spec);
+  }
+  for (const [port, specs] of claimedBy) {
+    if (specs.length < 2) continue;
+    const services = [...new Set(specs.map((spec) => spec.service))];
+    // One container publishing the same host port twice is the same bind
+    // failure, so services are NOT what makes this a collision — two claims are.
+    const claims = specs
+      .map((spec) => `${spec.envVar} (${origin[spec.envVar]})`)
+      .join(" and ");
+    // ONE container publishing a host port twice cannot start at all; two
+    // services means one starts and the other does not. Both are a bind failure,
+    // and they are not the same outcome — say which.
+    const outcome =
+      services.length === 1
+        ? `the ${services[0]} container cannot start at all`
+        : `whichever of ${services.join(" / ")} binds second fails to start, leaving the stack half up`;
+    const what =
+      `host port ${port} is claimed twice by this plan — ${claims}. Docker binds one host port once, so ${outcome}`;
+    // Attributed to the LAST claimant: the first one is the port's incumbent, and
+    // naming the newcomer is what makes the message point at something to move.
+    const spec = specs[specs.length - 1];
+    if (scoped) {
+      note(
+        refusals,
+        spec,
+        "duplicate-host-port",
+        `${what}. Refusing before anything is published: give each service its own host port. A port nobody typed ` +
+          `is still a claim — a companion port follows its container's port by a fixed offset, so moving the ` +
+          `port it follows moves it too.`,
+      );
+      continue;
+    }
+    note(
+      warnings,
+      spec,
+      "duplicate-host-port",
+      `${what}. This checkout states no ${COMPOSE_PROJECT_ENV_VAR}, so nothing here refuses it — the historical ` +
+        `single-stack flow is never taken away by this step — and the claims stand exactly as resolved. Compose ` +
+        `will still fail to bind the second one. Give each service its own host port; a companion port follows its ` +
+        `container's port by a fixed offset, so moving the port it follows moves it too.`,
+    );
+  }
+
   return { portEnv, unmanaged, refusals, warnings, laneScope };
 }
 
@@ -795,6 +1021,49 @@ export function buildComposeArgs({ projectName, args = [] } = {}) {
  */
 export function formatComposeCommand({ projectName, args = [] } = {}) {
   return `docker ${buildComposeArgs({ projectName, args }).join(" ")}`;
+}
+
+/** The ONE derivation step every entry point runs before it starts the stack. */
+export const DEV_COMPOSE_ENV_STEP = "node scripts/dev-compose-env.mjs";
+
+/**
+ * A bring-up line an operator may safely paste: the SAME guarded chain the real
+ * entry points run, not a bare `docker compose up`.
+ *
+ * Every entry point that starts this stack — the `Makefile` `dev` target,
+ * package.json `services`, scripts/setup.sh — now assigns the derivation step's
+ * output, evals it, and only then runs compose. A printed command that skips
+ * that chain diverges from every one of them in both ways that matter:
+ *
+ *   - UNPINNED. The step is what exports COMPOSE_PROJECT_NAME (Docker reads it
+ *     from its own env, never from `.env.local`, which is where a lane records
+ *     it), so a bare `docker compose up` pasted from a diagnostic starts a
+ *     SECOND, basename-derived project the lane cannot see — the original
+ *     cinatra#2839 defect, handed to the operator in a remedy line.
+ *   - UNGUARDED. It also skips every refusal: a lane with no host port for a
+ *     scoped service, an unusable override, a companion port that collides. The
+ *     pasted line publishes the shared defaults that the guarded path exists to
+ *     refuse.
+ *
+ * No `-p` is emitted, deliberately: the `eval` puts COMPOSE_PROJECT_NAME into
+ * the shell compose inherits, exactly as the real recipes do. Pinning it here
+ * as well would print a command that no entry point actually runs, and would
+ * state a project name resolved somewhere other than the step whose plan the
+ * ports come from.
+ *
+ * `--require-manageable` belongs on a WHOLE-STACK `up` (see
+ * `formatStandDownRefusal`): that is the shape that cannot honor a stand-down,
+ * so the step must refuse for it.
+ *
+ * @param {{ args?: string[], requireManageable?: boolean }} input
+ * @returns {string}
+ */
+export function formatGuardedComposeCommand({ args = [], requireManageable = false } = {}) {
+  const step = requireManageable ? `${DEV_COMPOSE_ENV_STEP} --require-manageable` : DEV_COMPOSE_ENV_STEP;
+  return (
+    `CINATRA_COMPOSE_ENV="$(${step})" && eval "$CINATRA_COMPOSE_ENV" && ` +
+    formatComposeCommand({ args })
+  );
 }
 
 /**
