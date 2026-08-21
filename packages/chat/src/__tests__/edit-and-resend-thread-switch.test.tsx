@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 /**
- * THE MID-AWAIT THREAD SWITCH IN `editAndResend` (cinatra#2823 S9j, review
- * round 6).
+ * THE MID-AWAIT THREAD SWITCH IN `editAndResend` (cinatra#2823 S9j).
  *
- * Round 5 made the edit flow AWAIT its truncation-intent save before it
- * truncates anything. That was right, and it added a suspension point the code
- * did not have before. Everything after the await used to be reached
+ * The edit flow now AWAITs its truncation-intent save before it truncates
+ * anything. That is right, and it added a suspension point the code did not
+ * have before. Everything after the await used to be reached
  * synchronously from the click; now the user can select another thread while
  * the POST (or its in-slot retry) is still open, and the continuation resumes
  * against WHATEVER thread is active then.

@@ -309,6 +309,21 @@ export async function handleSaveAssistantThreadForWidget(
           ),
         }
       : {}),
+    // ...and the STREAMING half of the same intent: the run ids of turns this
+    // reader removed while they were still streaming, or after they ended
+    // without their reveal ever landing in a saved transcript. Those turns have
+    // no mirror row for the tombstone to read an identity out of, so the run id
+    // is the only identity they carry on both sides. Allow-listed and
+    // shape-validated on exactly the same terms — the tombstone still authorizes
+    // itself against the thread's ownership, which the `writable` gate above has
+    // already proved for this principal.
+    ...(Array.isArray(body.removedRunIds)
+      ? {
+          removedRunIds: body.removedRunIds.filter(
+            (runId): runId is string => typeof runId === "string" && runId.length > 0,
+          ),
+        }
+      : {}),
   };
 
   // BOTH orgs are the TOKEN's org: the pin-sync scope and the structured

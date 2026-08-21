@@ -64,3 +64,38 @@ export function buildTruncationIntent(
   }
   return ids;
 }
+
+/**
+ * THE STREAMING HALF OF THE SAME INTENT: the RUN IDS this edit asserts it
+ * removed.
+ *
+ * NAMING A TURN IS NOT THE SAME AS THE SERVER BEING ABLE TO ACT ON THE NAME.
+ * Every id above is minted in the page, and the server's link from such an id to
+ * the run-bound row that survives a truncation runs THROUGH the turn's mirror
+ * row — the row a whole-transcript save writes. A turn that never reached a saved
+ * transcript never had one, which is precisely the turn shape `removableTurnIds`
+ * exists to name: one still streaming, one whose reveal has not committed, one
+ * aborted. For those the message id asserts a name the server has never seen, and
+ * the removed turn folds back in above the edited prompt anyway.
+ *
+ * The identity those turns really do share with the server is the RUN ID, minted
+ * by the turn route and delivered on the wire. So the registry keeps it beside
+ * the id under the same release rule (`./turn-stream-registry`), and this is what
+ * the save carries as `removedRunIds`.
+ *
+ * The transcript slice contributes NOTHING here on purpose: a turn the transcript
+ * carries is removed through its mirror row, which is the narrower, payload-
+ * intersected path. This assertion is only ever about the turns that have no such
+ * row. Deduplicated; the server treats it as a SET.
+ */
+export function buildRemovedRunIntent(removableRunIds: Iterable<string>): string[] {
+  const runIds: string[] = [];
+  const seen = new Set<string>();
+  for (const runId of removableRunIds) {
+    if (typeof runId !== "string" || runId.length === 0) continue;
+    if (seen.has(runId)) continue;
+    seen.add(runId);
+    runIds.push(runId);
+  }
+  return runIds;
+}

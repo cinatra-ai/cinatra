@@ -57,6 +57,7 @@ function deps(over: Partial<EditAndResendDeps> = {}): EditAndResendDeps {
     isSlackMode: true,
     hasActiveStream: false,
     removableTurnIds: () => [],
+    removableRunIds: () => [],
     activeThreadId: "th1",
     currentThreadId: () => "th1",
     loadedThreadCreatedAt: () => "2026-08-01T00:00:00.000Z",
@@ -83,7 +84,10 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     streams.end(streams.begin("a-slack", new AbortController()));
 
     await editAndResend(
-      deps({ removableTurnIds: () => streams.removableTurnIds() }),
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: () => streams.removableRunIds(),
+      }),
       "u2",
       "edited",
     );
@@ -110,7 +114,10 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     streams.end(aborted);
 
     await editAndResend(
-      deps({ removableTurnIds: () => streams.removableTurnIds() }),
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: () => streams.removableRunIds(),
+      }),
       "u2",
       "edited",
     );
@@ -127,11 +134,82 @@ describe("editAndResend names a turn that is in NEITHER source", () => {
     streams.noteCommittedTranscript(STALE_SNAPSHOT);
 
     await editAndResend(
-      deps({ removableTurnIds: () => streams.removableTurnIds() }),
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: () => streams.removableRunIds(),
+      }),
       "u2",
       "edited",
     );
 
     expect(saved[0].removedMessageIds as string[]).toEqual(["u2"]);
+    // ...and nothing streaming is nameable either, so the STREAMING half of the
+    // assertion is absent rather than empty. An assertion about nothing is no
+    // assertion, and the server emits no tombstone for it at all.
+    expect(saved[0].removedRunIds).toBeUndefined();
+  });
+});
+
+describe("editAndResend carries the SERVER's name for a turn with no mirror row", () => {
+  // The bubble id alone reaches nothing on the server for these turns: they have
+  // no mirror row, and every message-id key is read out of one. The run id is the
+  // identity both sides hold, so the flow has to post it.
+
+  it("posts the run id of the ended-but-uncommitted turn beside its bubble id", async () => {
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a-slack", new AbortController());
+    streams.noteRunId(token, "run-slack-1"); // RUN_STARTED arrived on the wire
+    streams.end(token);
+
+    await editAndResend(
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: () => streams.removableRunIds(),
+      }),
+      "u2",
+      "edited",
+    );
+
+    expect(saved[0].removedMessageIds as string[]).toContain("a-slack");
+    expect(saved[0].removedRunIds as string[]).toEqual(["run-slack-1"]);
+  });
+
+  it("posts the run of a turn that is STILL streaming", async () => {
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a-live", new AbortController());
+    streams.noteRunId(token, "run-live-1");
+
+    await editAndResend(
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: () => streams.removableRunIds(),
+      }),
+      "u2",
+      "edited",
+    );
+
+    expect(saved[0].removedRunIds as string[]).toEqual(["run-live-1"]);
+  });
+
+  it("omits the run of a turn the committed transcript already carries", async () => {
+    // The release rule, read for the other identity: the run id leaves exactly
+    // when its turn's id does, so a turn the transcript names is removed through
+    // its mirror row and asserts no run at all.
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a1", new AbortController());
+    streams.noteRunId(token, "run-a1");
+    streams.end(token);
+    streams.noteCommittedTranscript(STALE_SNAPSHOT);
+
+    await editAndResend(
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: () => streams.removableRunIds(),
+      }),
+      "u2",
+      "edited",
+    );
+
+    expect(saved[0].removedRunIds).toBeUndefined();
   });
 });

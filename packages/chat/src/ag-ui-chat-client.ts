@@ -540,6 +540,19 @@ export type AssistantChatTurnUiPort = {
   /** Widget-refresh parity: the bespoke wire keyed on tool_result's name. */
   isWidgetRefreshTool: (toolName: string) => boolean;
   onWidgetRefresh: () => void;
+  /**
+   * THE SERVER'S OWN NAME FOR THIS TURN (cinatra#2823 S9j), reported as soon as
+   * the wire carries it and on every fold after that — the port implementation
+   * is expected to be idempotent about it.
+   *
+   * The bubble id above is minted in the page, so a turn that never reaches a
+   * saved transcript leaves NO server-side row carrying any name this page knows.
+   * The run id is the one identity both sides hold, and a truncation that removes
+   * a still-streaming or just-ended turn can only be acted on through it
+   * (`packages/chat/src/turn-stream-registry.ts`). OPTIONAL: a surface that never
+   * truncates has nothing to do with it.
+   */
+  noteRunId?: (runId: string) => void;
 };
 
 export type DriveAssistantChatTurnOptions = {
@@ -658,6 +671,13 @@ export async function driveAssistantChatTurn(
           );
         },
         onEvent: (event, state) => {
+          // THE SERVER'S OWN NAME FOR THIS TURN, as soon as the wire carries it
+          // (cinatra#2823 S9j). Reported for EVERY mode — Slack above all, since
+          // Slack is the mode that lets a user edit while a turn streams, and a
+          // turn removed mid-stream has no other identity the server can act on.
+          // `onEvent` fires on the same fold as `onState` (see `emit`), so this
+          // is live rather than end-of-turn; the port is idempotent about it.
+          if (state.runId) ui.noteRunId?.(state.runId);
           // TOOL_CALL_END carries only the id; the name resolves from the
           // folded state (TOOL_CALL_START recorded it).
           if (event.type === "TOOL_CALL_END" && !widgetRefreshFired.has(event.toolCallId)) {
@@ -776,8 +796,8 @@ export function extractAgentName(text: string): string | null {
 /**
  * POST one whole-transcript thread save.
  *
- * A NON-OK RESPONSE IS A FAILURE, and it says so (cinatra#2823 S9j, review round
- * 5). It used to resolve on any response at all, so "the save landed" and "the
+ * A NON-OK RESPONSE IS A FAILURE, and it says so (cinatra#2823 S9j).
+ * It used to resolve on any response at all, so "the save landed" and "the
  * server rejected it" were the same value to every caller. That is tolerable for
  * a best-effort save whose caller only logs, and it is NOT tolerable for the
  * TRUNCATION INTENT (`removedMessageIds`), which is the one save whose success

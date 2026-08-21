@@ -625,6 +625,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
               else m.delete(assistantId);
               return m;
             }),
+          noteRunId: (runId) => { streams.noteRunId(token, runId); }, // the server's own name for THIS instance
           isWidgetRefreshTool: (name) => widgetRuntime.isWidgetRefreshTool(name),
           onWidgetRefresh: () => setWidgetRefreshKey((k) => k + 1),
         },
@@ -719,11 +720,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     await streamResponse(updatedMessages);
   }
 
-  // EDIT AND RESEND — the flow itself lives in ./message-edit-flow (a vertical
-  // slice: the truncation intent, the intent save it waits for, the
-  // origin-thread guards and the routed regeneration). This binding is the only
-  // part that belongs to the page. `removableTurnIds` is every turn the intent
-  // must name BESIDE its own transcript slice (./turn-stream-registry).
+  // EDIT AND RESEND — the flow lives in ./message-edit-flow (the truncation
+  // intent, the intent save it waits for, the origin-thread guards, the routed
+  // regeneration); this binding is the page's half (./turn-stream-registry).
   async function editAndResend(messageId: string, newContent: string) {
     await runEditAndResend(
       {
@@ -732,6 +731,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         isSlackMode,
         hasActiveStream,
         removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: () => streams.removableRunIds(),
         activeThreadId,
         currentThreadId: () => activeThreadIdRef.current,
         loadedThreadCreatedAt: () => loadedThreadCreatedAtRef.current,

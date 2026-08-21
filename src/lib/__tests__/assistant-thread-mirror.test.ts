@@ -29,6 +29,7 @@ import {
   buildAssistantThreadMirrorUpsertQuery,
   buildAssistantTurnMirrorReconcileQueries,
   extractRemovedMessageIdsFromThread,
+  extractRemovedRunIdsFromThread,
   buildAssistantPauseStateReconcileQueries,
   buildAssistantThreadMirrorQueries,
   buildAssistantThreadMirrorDeleteQuery,
@@ -343,15 +344,18 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     // transcript predates a turn omits it without ever having had it, and its
     // ordinary save would otherwise have tombstoned that turn permanently.
     for (const removedMessageIds of [undefined, null, []]) {
-      const queries = buildAssistantTurnMirrorReconcileQueries({
-        schemaName: SCHEMA,
-        threadId: "t1",
-        turns,
-        removedMessageIds,
-      });
-      expect(queries).toHaveLength(2); // delete + insert, and nothing else
-      for (const q of queries) {
-        expect(q.text).not.toContain("superseded_at = now()");
+      for (const removedRunIds of [undefined, null, []]) {
+        const queries = buildAssistantTurnMirrorReconcileQueries({
+          schemaName: SCHEMA,
+          threadId: "t1",
+          turns,
+          removedMessageIds,
+          removedRunIds,
+        });
+        expect(queries).toHaveLength(2); // delete + insert, and nothing else
+        for (const q of queries) {
+          expect(q.text).not.toContain("superseded_at = now()");
+        }
       }
     }
   });
@@ -381,7 +385,62 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
       ["legacy:2:t1:m1", "legacy:2:t1:m2"],
       ["legacy:2:t1:m9"],
       null,
+      [], // no streaming half asserted here
     ]);
+  });
+
+  // ── the STREAMING half: a turn that never had a mirror row ────────────────
+
+  it("SUPERSEDES on an asserted RUN ID, with no mirror row to link through", () => {
+    // Every key above is read out of the REMOVED MIRROR ROW, so none of them
+    // reaches a turn that was still streaming, ended into a reveal no committed
+    // transcript carries, or was aborted. Those turns have a run-bound row and no
+    // mirror row ever, so the intent carries the identity they DO share with the
+    // server: the run id, matched against the run-bound row's own column.
+    const [supersede, del] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedRunIds: ["run-7"],
+    });
+    expect(supersede.text).toContain("SET superseded_at = now()");
+    expect(supersede.text).toContain("t.run_id = ANY($5::text[])");
+    expect(del.text).toContain(`DELETE FROM "${SCHEMA}"."assistant_turns"`);
+    // NOT namespaced: a run id is the row's own column, not a mirror id.
+    expect(supersede.values[4]).toEqual(["run-7"]);
+    expect(supersede.values[2]).toEqual([]);
+  });
+
+  it("the run-id arm carries the SAME fences as every other arm", () => {
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedRunIds: ["run-7"],
+      actorUserId: "u-actor",
+    });
+    // Thread-scoped, so an edit in one thread can never reach another's turn.
+    expect(supersede.text).toContain("WHERE t.thread_id = $1");
+    // Self-harm only — the same ownership predicate, in the same statement.
+    expect(supersede.text).toContain("th.owner_user_id = $4::text");
+    expect(supersede.text).toContain("$4::text IS NOT NULL");
+    // ...and the same "could this row even fold in" predicates.
+    expect(supersede.text).toContain("t.run_id IS NOT NULL");
+    expect(supersede.text).toContain("t.superseded_at IS NULL");
+    expect(supersede.text).toContain("t.content->>'format' = 'assistant-turn-v1'");
+  });
+
+  it("both halves ride ONE statement — the truncation and the tombstone commit together", () => {
+    const queries = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+      removedRunIds: ["run-7"],
+    });
+    expect(queries).toHaveLength(3); // supersede + delete + insert
+    expect(queries[0].values[2]).toEqual(["legacy:2:t1:m9"]);
+    expect(queries[0].values[4]).toEqual(["run-7"]);
   });
 
   it("is SELF-HARM ONLY: it reaches rows only on a thread the ACTOR personally owns", () => {
@@ -498,6 +557,28 @@ describe("extractRemovedMessageIdsFromThread", () => {
 
   it("an empty assertion is still an assertion of nothing", () => {
     expect(extractRemovedMessageIdsFromThread({ removedMessageIds: [] })).toEqual([]);
+  });
+});
+
+describe("extractRemovedRunIdsFromThread", () => {
+  // The STREAMING half's reader, defensive on exactly the same terms.
+  it("null when the field is absent or not an array — the ordinary save", () => {
+    expect(extractRemovedRunIdsFromThread({ id: "t1" })).toBeNull();
+    expect(extractRemovedRunIdsFromThread({ removedRunIds: "run-1" })).toBeNull();
+    expect(extractRemovedRunIdsFromThread({ removedRunIds: 7 })).toBeNull();
+    expect(extractRemovedRunIdsFromThread({ removedRunIds: null })).toBeNull();
+  });
+
+  it("keeps the asserted runs, drops non-strings and duplicates", () => {
+    expect(
+      extractRemovedRunIdsFromThread({
+        removedRunIds: ["run-1", "", "run-2", 3, null, "run-1", { id: "run-4" }],
+      }),
+    ).toEqual(["run-1", "run-2"]);
+  });
+
+  it("an empty assertion is still an assertion of nothing", () => {
+    expect(extractRemovedRunIdsFromThread({ removedRunIds: [] })).toEqual([]);
   });
 });
 

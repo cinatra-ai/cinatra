@@ -71,6 +71,31 @@
  * comparison, no lookup by the reusable id anywhere — and is otherwise a total
  * no-op: it moves no controller, records nothing and reports `false`.
  *
+ * ── THE RUN ID: THE ONLY IDENTITY THE SERVER SHARES WITH THESE TURNS ─────────
+ *
+ * Naming a turn is not the same as the server being able to ACT on the name. An
+ * assistant id is minted HERE, in the page, and a turn that never entered a saved
+ * transcript left no row anywhere carrying it — so an edit that asserts the
+ * removal of such a turn asserts a name the server has never seen, and the
+ * run-bound row the reload folds back in is untouched by it. That is the residual
+ * the ledger alone cannot close.
+ *
+ * The identity both sides genuinely hold is the RUN ID: minted by the turn route,
+ * delivered to this page on the wire (`RUN_STARTED`), and the run-bound row's own
+ * column. So the registry records it per turn instance (`noteRunId`) and offers
+ * it beside the ids (`removableRunIds`), under exactly the release discipline the
+ * ids get — a run id leaves when its turn's id does, i.e. when a committed
+ * transcript proves the turn landed and the ordinary mirror-row key takes over.
+ * `noteRunId` is gated on the INSTANCE TOKEN for the same reason `end` is: a late
+ * drive must never stamp its run onto the turn that is wearing its id now.
+ *
+ * A turn whose run id never arrived (aborted before `RUN_STARTED`, or a wire that
+ * carried none) simply contributes no run id. It is still named by its id, and
+ * the server still has nothing to key on for it — the honest residual, and a
+ * strictly smaller one than before.
+ *
+ * ── THE INSTANCE TOKEN, CONTINUED ────────────────────────────────────────────
+ *
  * THE INSTANCE *IS* THE GENERATION, which is why there is no generation counter
  * here any more. Every `begin` mints a fresh object, so "the same id, one drive
  * later" and "the same id, one thread later" are both simply a different token
@@ -139,6 +164,13 @@ export type TurnStreamRegistry = {
    *  been superseded by a later `begin`, dropped by a `reset`, already ended,
    *  or minted by another registry does NOTHING and reports `false`. */
   end(token: TurnStreamToken): boolean;
+  /** THE SERVER'S OWN NAME FOR THIS TURN, learned from the wire. Acts only while
+   *  `token` is still the registered instance for its id — a late drive must not
+   *  stamp its run onto whatever turn is wearing that id now — and returns
+   *  whether it did. Recording the same run id twice is a no-op; the FIRST run
+   *  observed for an instance is kept, because a resumed drive re-reports the run
+   *  it is resuming and a retry that mints a second run is a second instance. */
+  noteRunId(token: TurnStreamToken, runId: string): boolean;
   /** Is this turn streaming right now? (the message list's live indicator) */
   has(assistantId: string): boolean;
   /** How many turns are in flight. Deliberately NOT a proxy for "the registry is
@@ -169,26 +201,37 @@ export type TurnStreamRegistry = {
   /** Every turn an edit must name BESIDE the ones in its own transcript slice:
    *  the in-flight turns and the ended-but-uncommitted ones. */
   removableTurnIds(): string[];
+  /** The RUN IDS of exactly those turns — the identity the server can act on for
+   *  a turn no saved transcript ever carried. A turn whose run id never arrived
+   *  contributes nothing. Deduplicated; the caller treats it as a SET. */
+  removableRunIds(): string[];
 };
 
 /** The registered instance: the token a caller holds, plus what the registry
  *  needs while that instance is live. */
-type RegisteredTurn = { token: TurnStreamToken; controller: AbortController };
+type RegisteredTurn = {
+  token: TurnStreamToken;
+  controller: AbortController;
+  /** The server's run for THIS instance, once the wire named one. */
+  runId: string | null;
+};
 
 export function createTurnStreamRegistry(): TurnStreamRegistry {
   /** assistantId → the ONE registered instance for it, for every turn currently
    *  streaming. A second `begin` for the same id supersedes the first: the map
    *  holds one instance per id, and only that instance's token can end it. */
   const inFlight = new Map<string, RegisteredTurn>();
-  /** Ended, and not yet seen in a committed transcript. Insertion-ordered, which
-   *  is what makes "evict the oldest" meaningful at the cap. */
-  const endedUncommitted = new Set<string>();
+  /** Ended, and not yet seen in a committed transcript: assistantId → the run the
+   *  turn streamed under, or null when the wire never named one. Insertion-
+   *  ordered, which is what makes "evict the oldest" meaningful at the cap. */
+  const endedUncommitted = new Map<string, string | null>();
   /** The thread these ids belong to, once one has been observed. */
   let heldThreadId: string | null = null;
   let threadObserved = false;
 
-  /** Record an ended turn under the ledger's cap. */
-  function rememberEnded(assistantId: string): void {
+  /** Record an ended turn — and the run it streamed under — under the ledger's
+   *  cap. */
+  function rememberEnded(assistantId: string, runId: string | null): void {
     if (!endedUncommitted.has(assistantId) && endedUncommitted.size >= MAX_ENDED_UNCOMMITTED_TURN_IDS) {
       // THE EVICTION, AND WHAT IT COSTS — stated here, at the line that actually
       // drops a nameable removal, rather than left to the constant.
@@ -204,10 +247,10 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       // first, because an edit made now is a statement about the turns nearest
       // it, and the oldest id is the one whose reveal has been outstanding
       // longest — the least likely to still be about the transcript on screen.
-      const oldest = endedUncommitted.values().next().value;
+      const oldest = endedUncommitted.keys().next().value;
       if (typeof oldest === "string") endedUncommitted.delete(oldest);
     }
-    endedUncommitted.add(assistantId);
+    endedUncommitted.set(assistantId, runId);
   }
 
   /** Is the registry holding anything at all? The two sets ARE its state — see
@@ -230,8 +273,24 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
   return {
     begin(assistantId, controller) {
       const token: TurnStreamToken = { assistantId };
-      inFlight.set(assistantId, { token, controller });
+      inFlight.set(assistantId, { token, controller, runId: null });
       return token;
+    },
+    noteRunId(token, runId) {
+      // THE SAME ONE GATE `end` uses, and for the same reason: a drive whose
+      // instance has been superseded, reset or already ended names a turn this
+      // registry has moved past, and stamping its run onto the id's CURRENT
+      // occupant would hand a later edit a run that belongs to another turn.
+      const registered = token ? inFlight.get(token.assistantId) : undefined;
+      if (!registered || registered.token !== token) return false;
+      if (typeof runId !== "string" || runId.length === 0) return false;
+      // FIRST RUN WINS. The drive reports the reduced state after every folded
+      // event, so this is called many times per turn with the same value; a
+      // resumed drive re-reports the run it resumed. Keeping the first observed
+      // run makes those idempotent without the caller having to be careful.
+      if (registered.runId !== null) return false;
+      registered.runId = runId;
+      return true;
     },
     end(token) {
       // THE ONE GATE, and it is reference identity. Not the id — an id is
@@ -247,7 +306,7 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       inFlight.delete(token.assistantId);
       // Unconditional from here: this instance really was the live one, and the
       // turn whose reveal never came is exactly the one the ledger has to keep.
-      if (token.assistantId.length > 0) rememberEnded(token.assistantId);
+      if (token.assistantId.length > 0) rememberEnded(token.assistantId, registered.runId);
       return true;
     },
     has(assistantId) {
@@ -258,7 +317,7 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
     },
     retainedIdCount() {
       let retained = inFlight.size;
-      for (const id of endedUncommitted) if (!inFlight.has(id)) retained += 1;
+      for (const id of endedUncommitted.keys()) if (!inFlight.has(id)) retained += 1;
       return retained;
     },
     abortAll() {
@@ -305,8 +364,24 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
     removableTurnIds() {
       const ids: string[] = [];
       for (const id of inFlight.keys()) ids.push(id);
-      for (const id of endedUncommitted) if (!inFlight.has(id)) ids.push(id);
+      for (const id of endedUncommitted.keys()) if (!inFlight.has(id)) ids.push(id);
       return ids;
+    },
+    removableRunIds() {
+      // EXACTLY the turns `removableTurnIds` names, read for the other identity.
+      // The in-flight instance's own run wins over a ledger entry under the same
+      // id, for the same reason `removableTurnIds` skips the ledger entry there:
+      // the live instance is the turn that id currently means.
+      const runIds: string[] = [];
+      const seen = new Set<string>();
+      const offer = (runId: string | null) => {
+        if (typeof runId !== "string" || runId.length === 0 || seen.has(runId)) return;
+        seen.add(runId);
+        runIds.push(runId);
+      };
+      for (const registered of inFlight.values()) offer(registered.runId);
+      for (const [id, runId] of endedUncommitted) if (!inFlight.has(id)) offer(runId);
+      return runIds;
     },
   };
 }

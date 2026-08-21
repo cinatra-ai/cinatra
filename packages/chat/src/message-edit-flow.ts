@@ -18,7 +18,7 @@
 import { saveChatThreadInOrder, generateId, deriveThreadTitle } from "./ag-ui-chat-client";
 import { resolveMessageRouting } from "./actions";
 import { applyExternalMentionsToMessages } from "./chat-routing";
-import { buildTruncationIntent } from "./truncation-intent";
+import { buildTruncationIntent, buildRemovedRunIntent } from "./truncation-intent";
 import type { UiMessage as Message, UiThreadSummary as ThreadSummary, Mention } from "./types";
 
 /** Everything the flow reads from the page, handed in explicitly so the slice
@@ -34,6 +34,9 @@ export type EditAndResendDeps = {
    *  in flight AND the ones that ENDED without their reveal having committed
    *  yet (`./turn-stream-registry`). Read LIVE, at intent-build time. */
   removableTurnIds: () => Iterable<string>;
+  /** The RUN IDS of exactly those turns — the only identity the server can act on
+   *  for a turn no saved transcript ever carried. Read LIVE, beside the ids. */
+  removableRunIds: () => Iterable<string>;
   activeThreadId: string | null;
   /** Latest-value read of the active thread, for the post-await guards. */
   currentThreadId: () => string | null;
@@ -102,6 +105,11 @@ export async function editAndResend(
   // registry is the second source and covers the whole gap between them
   // (`buildTruncationIntent`, `./turn-stream-registry`).
   const removedMessageIds = buildTruncationIntent(messages, idx, deps.removableTurnIds());
+  // ...and the SERVER'S name for the ones the transcript could not name. Naming
+  // them by bubble id alone asserts something the server has never seen: those
+  // turns have no mirror row, and the mirror row is what every other key is read
+  // out of (`buildRemovedRunIntent`, `./truncation-intent`).
+  const removedRunIds = buildRemovedRunIntent(deps.removableRunIds());
 
   // Resolve threadId — edits always happen in an existing thread.
   const threadId = deps.activeThreadId ?? deps.currentThreadId();
@@ -139,7 +147,7 @@ export async function editAndResend(
     try {
       // Retried once INSIDE the chain slot: a re-enqueued retry could land
       // behind a save issued after it, which is the losing position again.
-      await saveChatThreadInOrder({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId, removedMessageIds } as Record<string, unknown> & { id: string }, { attempts: 2 });
+      await saveChatThreadInOrder({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId, ...(removedRunIds.length > 0 ? { removedRunIds } : {}), removedMessageIds } as Record<string, unknown> & { id: string }, { attempts: 2 });
     } catch (err) {
       console.error("[chat] saveChatThread failed (edit):", err);
       // The failure belongs to the thread the edit was made in. If the user

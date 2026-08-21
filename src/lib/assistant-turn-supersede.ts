@@ -127,6 +127,47 @@ function jsonbArrayOrEmpty(expr: string): string {
  * was not silent about its identity; a slot-bound key IS an identity claim about
  * one server-minted call, so it contradicts nothing and can be offered outright.
  *
+ * ── THE STREAMING HALF: A TURN THAT NEVER HAD A MIRROR ROW ───────────────────
+ *
+ * Both keys above are read out of the REMOVED MIRROR ROW, so both are silent
+ * about the turn shape the truncation intent was extended to reach: one still
+ * STREAMING, one that ENDED into a reveal no committed transcript carries yet,
+ * and one that was ABORTED and never revealed at all. Such a turn has a
+ * run-bound row — minted when the run STARTED — and no mirror row has ever
+ * existed for it, so `removed` holds nothing to key on and the asserted message
+ * id is a client-minted name the server has never seen. The reconcile then
+ * truncates the transcript while the run-bound row survives, and the reload
+ * folds the removed turn back in ABOVE the edited prompt: exactly the permanent
+ * undo this leg exists to remove, arriving through the one turn shape the
+ * transcript could not name.
+ *
+ * So the intent carries a SECOND assertion for precisely those turns — the RUN
+ * IDS the page watched stream (`removedRunIds`) — and it is the SAME KEY
+ * DISCIPLINE as (1) and (2), not a parallel mechanism:
+ *
+ *   * the token is SERVER-MINTED. A run id is minted by the turn route and
+ *     delivered on the wire (`RUN_STARTED`); the client can only hold one by
+ *     having watched that run stream, in this thread, in this page session.
+ *   * it names a TURN, never an entity. `assistant_turns.run_id` is the
+ *     run-bound row's own column, so the match is the row's identity and not a
+ *     property some other turn may legitimately share — the failure mode (2)
+ *     had to carry a slot to avoid.
+ *   * it is matched EXACTLY, against the same thread, under the same self-harm
+ *     ownership fence and the same "would this row even fold in" predicates as
+ *     every other arm. A run id from another thread matches nothing.
+ *
+ * WHAT IT COSTS TO BE WRONG, stated as honestly as the rest. This arm is NOT
+ * intersected with the payload the way (1) and (2) are: there is no removed
+ * mirror row to intersect WITH, which is the whole point of it. Its narrowing
+ * comes from the client instead — the registry releases a turn id the moment a
+ * committed transcript carries it (`packages/chat/src/turn-stream-registry.ts`),
+ * so only a turn the transcript cannot name is ever asserted, and every such
+ * turn is a successor of the edit point (a revealed turn appends to the tail).
+ * The blast radius of an assertion that is nonetheless wrong is one run of the
+ * actor's OWN, on a thread the actor personally owns: the same self-harm bound
+ * the message-id half is argued from, and the reason the ownership fence below
+ * governs this arm too.
+ *
  * A tombstone is the strictly more expensive way to be wrong here: a refused one
  * costs a turn that has to be removed again, an over-eager one costs a kept turn
  * its card forever.
@@ -139,8 +180,12 @@ export function buildSupersedeRunBoundTurnsQuery(args: {
   schema: string;
   threadId: string;
   keptIds: string[];
-  /** The asserted removals, as this thread's mirror row ids. Never empty. */
+  /** The asserted removals, as this thread's mirror row ids. May be empty when
+   *  the save asserts only run ids (a turn that never had a mirror row). */
   removedIds: string[];
+  /** The asserted removals of turns that never entered a saved transcript, as
+   *  the SERVER-MINTED run ids the page watched stream. May be empty. */
+  removedRunIds: string[];
   /** The mirror namespace prefix the removed rows live in. */
   mirrorPrefix: string;
   /** The TRANSPORT-VERIFIED acting writer, or null when the caller derived none
@@ -203,7 +248,11 @@ UPDATE "${schema}"."assistant_turns" t
         AND th.owner_user_id = $4::text
         AND th.team_id IS NULL
    )
-   AND EXISTS (
+   AND (
+   -- (3) THE STREAMING HALF: a run this save ASSERTS it removed. The only key a
+   --     turn with no mirror row has, and the row's own column.
+   t.run_id = ANY($5::text[])
+   OR EXISTS (
      SELECT 1 FROM removed r
       WHERE EXISTS (
               -- (1) a SHARED tool-call id with THIS removed row
@@ -232,7 +281,7 @@ UPDATE "${schema}"."assistant_turns" t
                    SELECT rv.token FROM removed_view rv WHERE rv.removed_id = r.id
                  )
             )
-   )`,
-    values: [args.threadId, args.keptIds, args.removedIds, args.actorUserId],
+   ))`,
+    values: [args.threadId, args.keptIds, args.removedIds, args.actorUserId, args.removedRunIds],
   };
 }

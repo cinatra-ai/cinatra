@@ -1,5 +1,10 @@
 import "server-only";
-import { buildSupersedeRunBoundTurnsQuery } from "@/lib/assistant-turn-supersede";
+// RELATIVE on purpose. This module is aliased into the
+// `@cinatra-ai/objects` package's vitest resolver by an EXPLICIT per-path alias
+// map; a `@/lib/...` specifier added here does not resolve there and takes that
+// whole suite down at load, and the same bare alias breaks the image build.
+// A sibling relative path resolves everywhere this module is loaded from.
+import { buildSupersedeRunBoundTurnsQuery } from "./assistant-turn-supersede";
 
 /**
  * Write-time project inheritance and substrate exclusion.
@@ -477,9 +482,8 @@ ON CONFLICT (id) DO UPDATE SET
 }
 
 /**
- * The message ids a save EXPLICITLY ASSERTS it removed (cinatra#2823 S9j, review
- * round 4, F1) — the truncation intent, carried by the one caller that truly
- * truncates.
+ * The message ids a save EXPLICITLY ASSERTS it removed (cinatra#2823 S9j) — the
+ * truncation intent, carried by the one caller that truly truncates.
  *
  * ABSENT (`null`) IS THE ORDINARY STATE and it means the save asserts NOTHING.
  * A whole-transcript save is silent about every message it does not carry,
@@ -510,14 +514,47 @@ export function extractRemovedMessageIdsFromThread(
 }
 
 /**
+ * The RUN IDS a save EXPLICITLY ASSERTS it removed (cinatra#2823 S9j) — the
+ * streaming half of the same truncation intent.
+ *
+ * A turn that never entered a saved transcript has NO mirror row, so naming its
+ * message id asserts something the server has never seen: the id is client-minted
+ * and nothing links it to the run-bound row the reload would fold back in. The
+ * run id is the identity that turn genuinely has on BOTH sides — server-minted by
+ * the turn route, delivered on the wire, and the run-bound row's own column — so
+ * it is what the page asserts for the turns its transcript cannot name
+ * (`packages/chat/src/turn-stream-registry.ts`).
+ *
+ * ABSENT (`null`) IS THE ORDINARY STATE, exactly as above: every save but an
+ * edit-and-resend asserts nothing, and this reader is defensive about the shape
+ * for the same reason the message-id reader is.
+ */
+export function extractRemovedRunIdsFromThread(
+  thread: Record<string, unknown>,
+): string[] | null {
+  const raw = thread.removedRunIds;
+  if (!Array.isArray(raw)) return null;
+  const runIds: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    if (typeof value !== "string" || value.length === 0) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    runIds.push(value);
+  }
+  return runIds;
+}
+
+/**
  * Build the assistant_turns mirror reconcile queries for one thread write:
  *   0. SUPERSEDE the run-bound turns this save ASSERTS it removed — the rows the
  *      DELETE cannot touch and the reload would otherwise fold back in
  *      (`buildSupersedeRunBoundTurnsQuery`). Ordered FIRST because it reads the
  *      rows the DELETE removes. EMITTED ONLY when the caller carried an explicit
- *      truncation intent (`removedMessageIds`): an ordinary whole-transcript save
- *      asserts nothing about what it does not carry, so it emits no supersede at
- *      all and this is the [delete] / [delete, insert] pair it always was.
+ *      truncation intent — the removed message ids, the removed RUN ids, or
+ *      both: an ordinary whole-transcript save asserts nothing about what it does
+ *      not carry, so it emits no supersede at all and this is the [delete] /
+ *      [delete, insert] pair it always was.
  *   1. DELETE mirror-namespace rows for messages no longer in the payload
  *      (edit/regenerate truncation). Scoped by `id LIKE 'legacy:%'` so a
  *      legacy write can NEVER delete a runtime-minted turn row.
@@ -542,6 +579,13 @@ export function buildAssistantTurnMirrorReconcileQueries(args: {
    * write may ever touch.
    */
   removedMessageIds?: string[] | null;
+  /**
+   * The RUN IDS this save ASSERTS it removed, for the turns its transcript could
+   * never name — one still streaming, one whose reveal has not committed, one
+   * aborted. NOT namespaced: a run id is the run-bound row's OWN column, minted
+   * by the turn route, and it is matched against that column directly.
+   */
+  removedRunIds?: string[] | null;
   /** The TRANSPORT-VERIFIED acting writer, threaded from the route that derived
    *  it. The tombstone is authorized against it (self-harm only — see
    *  `buildSupersedeRunBoundTurnsQuery`); null authorizes nothing. */
@@ -552,14 +596,16 @@ export function buildAssistantTurnMirrorReconcileQueries(args: {
   const assertedRemovedIds = (args.removedMessageIds ?? []).map((messageId) =>
     buildLegacyMirrorTurnId(args.threadId, messageId),
   );
+  const assertedRemovedRunIds = args.removedRunIds ?? [];
   const queries: Array<{ text: string; values: unknown[] }> = [
-    ...(assertedRemovedIds.length > 0
+    ...(assertedRemovedIds.length > 0 || assertedRemovedRunIds.length > 0
       ? [
           buildSupersedeRunBoundTurnsQuery({
             schema,
             threadId: args.threadId,
             keptIds: ids,
             removedIds: assertedRemovedIds,
+            removedRunIds: assertedRemovedRunIds,
             mirrorPrefix: LEGACY_MIRROR_TURN_ID_PREFIX,
             actorUserId: args.actorUserId ?? null,
           }),
@@ -711,6 +757,9 @@ export function buildAssistantThreadMirrorQueries(args: {
       // The save's EXPLICIT truncation intent. Null on every ordinary save, and
       // null is what makes it tombstone nothing.
       removedMessageIds: extractRemovedMessageIdsFromThread(thread),
+      // ...and its STREAMING half: the runs whose turns never reached a saved
+      // transcript, so no mirror row of theirs could ever carry the link.
+      removedRunIds: extractRemovedRunIdsFromThread(thread),
       // ...and WHO is asserting it, so the tombstone can refuse itself on a
       // thread with other legitimate writers (self-harm only).
       actorUserId: args.actorUserId ?? null,

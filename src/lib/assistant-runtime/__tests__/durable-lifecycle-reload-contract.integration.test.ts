@@ -493,6 +493,13 @@ function saveWholeTranscript(args: {
    */
   removedMessageIds?: string[];
   /**
+   * The STREAMING half of that assertion (cinatra#2823): the SERVER-MINTED run
+   * ids of the turns this writer removed while they had no mirror row at all —
+   * still streaming, ended into a reveal no committed transcript carries, or
+   * aborted. Omitted by every ordinary save for the same reason as above.
+   */
+  removedRunIds?: string[];
+  /**
    * The TRANSPORT-VERIFIED writer the route derived. Defaults to the thread's
    * OWNER, which is what the save route derives for a personal thread — the only
    * shape where an assertion is self-harm. An arm naming someone else is naming
@@ -519,6 +526,7 @@ function saveWholeTranscript(args: {
         ...(ownerUserId ? { ownerUserId } : {}),
         ...(args.ownership?.teamId ? { teamId: args.ownership.teamId } : {}),
         ...(args.removedMessageIds ? { removedMessageIds: args.removedMessageIds } : {}),
+        ...(args.removedRunIds ? { removedRunIds: args.removedRunIds } : {}),
       },
       explicitMirrorOrgId: ORG_ID,
       actorUserId: args.actorUserId ?? OWNER_ID,
@@ -1110,30 +1118,29 @@ describe("edit-and-resend does not resurrect the turns the user removed", () => 
     expect(reloaded[1].id).toBe(editedPrompt.id);
   });
 
-  // ── THE INTENT'S REACH IS BOUNDED BY THE MIRROR ROW ───────────────────────
-  // The tombstone links an asserted message id to a run-bound row THROUGH the
-  // removed mirror row: `buildSupersedeRunBoundTurnsQuery` selects the removed
-  // rows first and matches the run-bound row on identity read out of THEIR
-  // content (a shared tool-call id, or a slot-bound view key). A turn that never
-  // landed in a saved transcript has no mirror row, so an assertion naming it
-  // carries an id the server has never seen and nothing to match on — the
-  // statement is well-formed and simply supersedes nothing.
+  // ── THE STREAMING HALF: A TURN THAT NEVER HAD A MIRROR ROW ────────────────
+  // The tombstone's message-id keys link an asserted id to a run-bound row
+  // THROUGH the removed mirror row: `buildSupersedeRunBoundTurnsQuery` selects
+  // the removed rows first and matches on identity read out of THEIR content (a
+  // shared tool-call id, or a slot-bound view key). A turn that never landed in a
+  // saved transcript has no mirror row, so a message id naming it is a
+  // client-minted name the server has never seen, with nothing to match on.
   //
   // That is exactly the shape of every turn the client names from its stream
   // registry rather than from its transcript (`packages/chat/src/turn-stream-
   // registry.ts`): a Slack turn still streaming, one that ENDED into a reveal the
-  // render had not committed, and an aborted one that never revealed at all.
-  // Naming them is still right and still necessary — it is what makes the
-  // removal assertable the moment a mirror row does exist, and over-naming can
-  // only ever narrow what the server removes — but it does NOT by itself make
-  // the removal stick for a turn the server only ever saw as a run.
+  // render had not committed, and an aborted one that never revealed at all. So
+  // the intent carries a SECOND assertion for them — the SERVER-MINTED run ids
+  // the page watched stream — and the tombstone matches those against
+  // `assistant_turns.run_id`, the run-bound row's own column, under the same
+  // thread scope, the same self-harm ownership fence and the same
+  // "would this row even fold in" predicates as every other arm.
   //
-  // Pinned rather than left to be rediscovered. Closing it needs the client to
-  // assert something the server can actually key on for a turn with no mirror
-  // row (its run id, or the tool-call ids it watched stream), which is a change
-  // to the intent's CONTRACT and not something to smuggle into a key change.
+  // The two arms below are the whole claim: the removal STICKS when the run is
+  // asserted, and the message id alone still reaches nothing — which is what
+  // keeps the run-id assertion load-bearing rather than decorative.
 
-  it("an asserted turn with NO mirror row is not superseded — the reach, pinned", async () => {
+  it("an asserted turn with NO mirror row IS superseded — through its run id", async () => {
     const carriage = CARRIAGES[0];
     const threadId = `thr-2823-reach-${randomUUID()}`;
     const drive = await driveTheRealSink(carriage, threadId);
@@ -1149,8 +1156,40 @@ describe("edit-and-resend does not resurrect the turns the user removed", () => 
     // in-flight / ended-uncommitted / aborted shape.
     const inFlightAssistantId = `a-${randomUUID()}`;
     const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
-    // The edit asserts the removal, naming the turn exactly as the registry
-    // union now lets it (round 8, F3).
+    // The edit asserts the removal BOTH ways: by bubble id, as the registry union
+    // lets it, and by the RUN the page watched that turn stream under.
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      removedMessageIds: [userMessage.id, inFlightAssistantId],
+      removedRunIds: [drive.runId],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    // THE REMOVAL STICKS: the run-bound turn does not come back above the edited
+    // prompt, and the edited prompt is the only thing left.
+    expect(
+      reloaded.map((m) => m.role),
+      "the removed in-flight turn came back — the run-id assertion no longer reaches a turn with no mirror row, and every edit made while a turn streams is undone again on reload",
+    ).toEqual(["user"]);
+    expect(reloaded[0].id).toBe(editedPrompt.id);
+  });
+
+  it("...and the bubble id ALONE still reaches nothing — the run id is what closes it", async () => {
+    // The same setup with the run id withheld. This is the state the streaming
+    // half was in before it was closed, and it is pinned so the run-id arm above
+    // cannot be satisfied by some other link growing quietly underneath it.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-reach-idonly-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: "Please handle it.",
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    const inFlightAssistantId = `a-${randomUUID()}`;
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
     saveWholeTranscript({
       threadId,
       messages: [editedPrompt],
@@ -1158,17 +1197,77 @@ describe("edit-and-resend does not resurrect the turns the user removed", () => 
     });
 
     const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
-    // THE RESIDUAL: the run-bound turn still folds in, and ABOVE the edited
-    // prompt — its stamp is taken at run start, the edited prompt's is fresh.
-    expect(
-      reloaded.map((m) => m.role),
-      "an asserted turn with no mirror row was superseded — the tombstone grew a link it did not have; re-read the reach note above, this pin is now understating what the intent can do",
-    ).toEqual(["assistant", "user"]);
-    // The edited prompt is BELOW it, and the survivor is the run-bound row
-    // itself — not the id the client asserted, which the server never held.
+    // The run-bound turn still folds in, and ABOVE the edited prompt — its stamp
+    // is taken at run start, the edited prompt's is fresh.
+    expect(reloaded.map((m) => m.role)).toEqual(["assistant", "user"]);
     expect(reloaded[1].id).toBe(editedPrompt.id);
     expect(reloaded[0].id).not.toBe(inFlightAssistantId);
     expect(reloaded[0].content).toBe(drive.durable.content);
+  });
+
+  it("a run id from ANOTHER thread supersedes nothing", async () => {
+    // The run-id arm is thread-scoped like every other arm: the UPDATE is bounded
+    // to `t.thread_id = $1`. An edit made in one thread cannot reach a turn that
+    // streamed in another, however the assertion got there.
+    const carriage = CARRIAGES[0];
+    const bystanderThreadId = `thr-2823-bystander-${randomUUID()}`;
+    const bystander = await driveTheRealSink(carriage, bystanderThreadId);
+    const { userMessage: bystanderUser } = persistThroughTheRealStore({
+      threadId: bystanderThreadId,
+      userText: "Please handle it over here.",
+      runId: bystander.runId,
+      durable: bystander.durable,
+    });
+    saveWholeTranscript({ threadId: bystanderThreadId, messages: [bystanderUser] });
+
+    const editedThreadId = `thr-2823-elsewhere-${randomUUID()}`;
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    saveWholeTranscript({
+      threadId: editedThreadId,
+      messages: [editedPrompt],
+      removedMessageIds: [`a-${randomUUID()}`],
+      removedRunIds: [bystander.runId],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(bystanderThreadId);
+    expect(
+      reloaded.map((m) => m.role),
+      "an edit in one thread tombstoned a turn in another — the run-id arm lost its thread scope",
+    ).toEqual(["user", "assistant"]);
+    expect(viewsCarriedBy(reloaded[1]).atSlot(bystander.toolCallId)).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: bystander.identity },
+    ]);
+  });
+
+  it("a run-id assertion from a NON-OWNER refuses, exactly as the message-id half does", async () => {
+    // The self-harm fence governs this arm too: it is the same ownership
+    // predicate, in the same statement, and a second writer's assertion reaches
+    // nothing on a thread they do not personally own.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-runid-nonowner-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: "Please handle it.",
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    saveWholeTranscript({ threadId, messages: [userMessage] });
+
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      removedMessageIds: [userMessage.id],
+      removedRunIds: [drive.runId],
+      actorUserId: `someone-else-${randomUUID()}`,
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(
+      reloaded.map((m) => m.role),
+      "a writer who does not own this thread tombstoned a run-bound row through a run id — the self-harm fence does not govern the run-id arm",
+    ).toEqual(["assistant", "user"]);
   });
 
   it("a LOST save still repairs — nothing was deleted, so nothing was superseded", () => {
@@ -1883,9 +1982,15 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     expect(flow).toContain(
       "const removedMessageIds = buildTruncationIntent(messages, idx, deps.removableTurnIds());",
     );
-    // ...and posts it with the truncated transcript, in the same save.
+    // ...and derives the STREAMING half from the registry's run ids — the only
+    // identity a turn with no mirror row shares with the server.
+    expect(flow).toContain(
+      "const removedRunIds = buildRemovedRunIntent(deps.removableRunIds());",
+    );
+    // ...and posts both with the truncated transcript, in the same save.
     expect(flow).toContain("messages: truncated");
     expect(flow).toContain("removedMessageIds }");
+    expect(flow).toContain("{ removedRunIds }");
     // NO OTHER /chat SAVE MENTIONS IT. If an ordinary whole-transcript save ever
     // carried this field, every stale tab would be asserting removals again and
     // the defect would be back with a different first line. Comments are stripped
@@ -1899,6 +2004,10 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     for (const file of surface) {
       const src = stripComments(readFileSync(path.join(process.cwd(), "packages/chat/src", file), "utf8"));
       expect(src, `${file} carries a truncation assertion`).not.toContain("removedMessageIds");
+      // Same statement for the STREAMING half, and it matters more there: a run
+      // id needs no mirror row to reach a run-bound row, so an ordinary save that
+      // carried one would tombstone a turn nobody removed.
+      expect(src, `${file} carries a run-id truncation assertion`).not.toContain("removedRunIds");
     }
   });
 
