@@ -2260,12 +2260,18 @@ describe("whole-stack entry points — the guard the Makefile and package.json a
   const runGuard = (guard, { envLocal = "", extraEnv = {} } = {}) => {
     const dir = mkdtempSync(path.join(tmpdir(), "cinatra-2839-entry-"));
     writeFileSync(path.join(dir, ".env.local"), envLocal);
+    // The step's absolute path is handed over through the ENVIRONMENT, never
+    // interpolated into the shell text: `JSON.stringify` is JSON quoting, not
+    // shell quoting, so a checkout path containing `$` or a backtick would still
+    // expand inside the double quotes it produces (CodeQL
+    // js/shell-command-injection-from-environment). `"$CINATRA_TEST_SHARED_STEP"`
+    // is expanded by the shell itself, which never re-parses the value.
     const script = `${guard.replace(
       "node scripts/dev-compose-env.mjs",
-      `node ${JSON.stringify(SHARED_STEP)}`,
+      'node "$CINATRA_TEST_SHARED_STEP"',
     )} && echo ${MARKER} && env`;
 
-    const env = { ...process.env };
+    const env = { ...process.env, CINATRA_TEST_SHARED_STEP: SHARED_STEP };
     delete env.COMPOSE_PROJECT_NAME;
     for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
     for (const key of ["NANGO_SERVER_URL", "NANGO_DATABASE_URL", "REDIS_URL"]) delete env[key];
@@ -2569,17 +2575,20 @@ describe("scripts/setup.sh — the fifth guarded whole-stack entry point", () =>
   const runSetupGuard = ({ envLocal = "", extraEnv = {} } = {}) => {
     const dir = mkdtempSync(path.join(tmpdir(), "cinatra-2839-setup-"));
     writeFileSync(path.join(dir, ".env.local"), envLocal);
+    // Same reason as runGuard above: the absolute path travels in the
+    // environment, so no path text is ever parsed as shell (CodeQL
+    // js/shell-command-injection-from-environment).
     const script = [
       setupPreamble(),
       setupGuard().replace(
         "node scripts/dev-compose-env.mjs",
-        `node ${JSON.stringify(SHARED_STEP)}`,
+        'node "$CINATRA_TEST_SHARED_STEP"',
       ),
       `echo ${MARKER}`,
       "env",
     ].join("\n");
 
-    const env = { ...process.env };
+    const env = { ...process.env, CINATRA_TEST_SHARED_STEP: SHARED_STEP };
     delete env.COMPOSE_PROJECT_NAME;
     for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
     for (const key of ["NANGO_SERVER_URL", "NANGO_DATABASE_URL", "REDIS_URL"]) delete env[key];
