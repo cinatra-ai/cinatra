@@ -773,12 +773,86 @@ export function extractAgentName(text: string): string | null {
   return name && name.length > 0 ? name : null;
 }
 
+/**
+ * POST one whole-transcript thread save.
+ *
+ * A NON-OK RESPONSE IS A FAILURE, and it says so (cinatra#2823 S9j, review round
+ * 5). It used to resolve on any response at all, so "the save landed" and "the
+ * server rejected it" were the same value to every caller. That is tolerable for
+ * a best-effort save whose caller only logs, and it is NOT tolerable for the
+ * TRUNCATION INTENT (`removedMessageIds`), which is the one save whose success
+ * the edit path has to be able to wait on before it does anything irreversible.
+ * Every pre-existing caller already `.catch()`es this, so the only behaviour
+ * change is that a rejected save is now visible to a caller that wants to look.
+ */
 export async function saveChatThreadViaFetch(thread: Record<string, unknown> & { id: string }): Promise<void> {
-  await fetch("/api/assistants/threads", {
+  const res = await fetch("/api/assistants/threads", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(thread),
   });
+  if (!res.ok) {
+    throw new Error(`saveChatThread: POST /api/assistants/threads returned ${res.status}`);
+  }
+}
+
+/**
+ * The per-thread SAVE CHAIN (cinatra#2823 S9j, review round 5).
+ *
+ * WHY ORDER IS A CORRECTNESS PROPERTY AND NOT A PREFERENCE. Every /chat save
+ * posts the WHOLE transcript, and the server reconciles it by DELETING the
+ * mirror rows the payload no longer carries. Exactly one save also carries an
+ * explicit TRUNCATION INTENT — `editAndResend`'s `removedMessageIds` — and the
+ * server reads the removed turns' identity OUT OF THE VERY ROWS that DELETE
+ * removes. So a plain save from the same tab, carrying the same truncated
+ * transcript and asserting nothing, DESTROYS the evidence the intent needs: if
+ * it commits first, the intent arrives to an empty `removed` set, tombstones
+ * nothing, and the turn the user deliberately edited away folds back in on the
+ * next reload. Permanently.
+ *
+ * Concurrent `fetch`es have no order, so "issued first" did not mean "committed
+ * first". Chaining them per thread makes it mean that: a save is not POSTed until
+ * the previous save to that thread has settled, so same-tab saves commit in the
+ * order the surface issued them.
+ *
+ * KEYED PER THREAD, not globally — two threads have no reconcile in common and
+ * serialising them would only add latency. The chain entry is dropped once its
+ * tail settles, so the map holds only threads with saves in flight.
+ *
+ * `attempts` retries INSIDE the chained slot rather than by re-enqueuing, so a
+ * retry cannot end up behind a save that was issued after it — which for the
+ * truncation intent would put it back in exactly the losing position.
+ *
+ * The returned promise REJECTS when the save ultimately failed (see above). The
+ * chain itself never rejects, so one failed save cannot poison the thread's
+ * later ones.
+ */
+const chatThreadSaveChains = new Map<string, Promise<void>>();
+
+export function saveChatThreadInOrder(
+  thread: Record<string, unknown> & { id: string },
+  options?: { attempts?: number },
+): Promise<void> {
+  const attempts = Math.max(1, options?.attempts ?? 1);
+  const prior = chatThreadSaveChains.get(thread.id) ?? Promise.resolve();
+  const result = prior.then(async () => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await saveChatThreadViaFetch(thread);
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError;
+  });
+  const forget = () => {
+    if (chatThreadSaveChains.get(thread.id) === tail) chatThreadSaveChains.delete(thread.id);
+  };
+  const tail: Promise<void> = result.then(forget, forget);
+  chatThreadSaveChains.set(thread.id, tail);
+  return result;
 }
 
 export async function fetchThreadByIdViaFetch(threadId: string): Promise<Record<string, unknown> | null> {
