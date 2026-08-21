@@ -53,6 +53,7 @@ import {
   ensureInstalledSkillsRegistered,
   scanSkillExtensions,
   filterRetiredSkillExtensions,
+  buildSkillIdDisplayNames,
 } from "./extension-skill-resolver";
 
 let tmpDir: string;
@@ -967,5 +968,75 @@ describe("declared skill edge — ROLE selection", () => {
       await resolveDeclaredSkillEdgeForPackage("@cinatra-ai/nope-artifact", "matcher"),
     ).toBeNull();
     expect(await resolveDeclaredSkillEdgeForPackage("", "matcher")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSkillIdDisplayNames (cinatra#2841) — skillId → the owning extension's
+// self-declared `cinatra.displayName`. It REPORTS a declaration; it never
+// invents a title, and it derives ids through the same `deriveSkillRegistration`
+// the ownership map uses, so its keys can never drift from theirs.
+// ---------------------------------------------------------------------------
+describe("buildSkillIdDisplayNames", () => {
+  const ext = (over: Record<string, unknown> = {}) =>
+    ({
+      pkgDir: "/x",
+      pkgName: "@cinatra-ai/blog-post-matcher-skill",
+      pkgDirName: "blog-post-matcher-skill",
+      kind: "skill",
+      displayName: "Blog Post Matcher Skill",
+      dependencies: [],
+      capabilities: {},
+      slugs: ["blog-post-matcher"],
+      ...over,
+    }) as Parameters<typeof buildSkillIdDisplayNames>[0][number];
+
+  it("maps every co-located slug's derived skill id to the declared title", () => {
+    const map = buildSkillIdDisplayNames([ext({ slugs: ["blog-post-matcher", "second"] })]);
+    expect([...map]).toEqual([
+      ["@cinatra-ai/blog-post-matcher-skill:blog-post-matcher", "Blog Post Matcher Skill"],
+      ["@cinatra-ai/blog-post-matcher-skill:second", "Blog Post Matcher Skill"],
+    ]);
+  });
+
+  it("OMITS a package that declares no title — absent, never an invented one", () => {
+    expect(buildSkillIdDisplayNames([ext({ displayName: undefined })]).size).toBe(0);
+    expect(buildSkillIdDisplayNames([ext({ displayName: "   " })]).size).toBe(0);
+    expect(buildSkillIdDisplayNames([ext({ displayName: "" })]).size).toBe(0);
+  });
+
+  it("ignores non-skill extension kinds", () => {
+    expect(buildSkillIdDisplayNames([ext({ kind: "agent" })]).size).toBe(0);
+  });
+
+  it("derives the chat-namespace id for an allowlisted successor package", () => {
+    const map = buildSkillIdDisplayNames([
+      ext({
+        pkgName: "@cinatra-ai/blog-content-skill",
+        pkgDirName: "blog-content-skill",
+        displayName: "Blog Content Skill",
+        slugs: ["blog-content"],
+      }),
+    ]);
+    // The SAME id `deriveSkillRegistration` mints for the carve-out.
+    expect(map.get("@cinatra-ai/chat:blog-content")).toBe("Blog Content Skill");
+  });
+
+  it("a package impersonating the reserved namespace degrades only itself", () => {
+    const map = buildSkillIdDisplayNames([
+      ext({ pkgName: "@cinatra-ai/chat", pkgDirName: "impostor", displayName: "Impostor", slugs: ["x"] }),
+      ext(),
+    ]);
+    expect(map.size).toBe(1);
+    expect(map.get("@cinatra-ai/blog-post-matcher-skill:blog-post-matcher")).toBe(
+      "Blog Post Matcher Skill",
+    );
+  });
+
+  it("first declaration wins on a colliding id — same rule the ownership map uses", () => {
+    const map = buildSkillIdDisplayNames([ext(), ext({ displayName: "Second Declaration" })]);
+    expect(map.get("@cinatra-ai/blog-post-matcher-skill:blog-post-matcher")).toBe(
+      "Blog Post Matcher Skill",
+    );
   });
 });
