@@ -60,6 +60,10 @@ import {
 // non-OK turn response so a rejection BEFORE the stream reads identically to one
 // raised inside it (cinatra#2094 F10).
 import { extractErrorMessage } from "./renderer/stream-normalizers";
+// cinatra#2825 (S9l) — the ONE definition of "a lifecycle slot", shared with
+// the renderer so the projection and the view cannot drift about which parts a
+// layout mode may not suppress.
+import { lifecycleSlotParts, turnCarriesLifecycleItems } from "./assistant-parts";
 import type { UiMessage, UiThread, UiThreadSummary } from "./types";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
@@ -496,6 +500,13 @@ export function projectConversationMessage(
     ...(state.interrupt ? { interrupt: state.interrupt } : {}),
   };
   if (opts.slackMode) {
+    // cinatra#2825 (S9l) — the lifecycle SLOTS of the trace, and only those.
+    // The pinned Slack layout still omits the ordered `parts` below; what it may
+    // not omit is the anchor a held or actionable card mounts at, because a
+    // presentation mode must never be able to hide a decision the reader owes.
+    // Same field-presence discipline as every other optional key: absent unless
+    // this turn actually carries one.
+    const lifecycleParts = lifecycleSlotParts(m.parts);
     return {
       id: opts.assistantId,
       role: "assistant",
@@ -503,6 +514,7 @@ export function projectConversationMessage(
       ...(opts.authorUserId ? { authorUserId: opts.authorUserId } : {}),
       // Slack layout parity: thoughtGroups + flat content, never `parts`.
       ...(m.thoughtGroups.length > 0 ? { thoughtGroups: m.thoughtGroups } : {}),
+      ...(lifecycleParts.length > 0 ? { lifecycleParts } : {}),
       ...(m.citations.length > 0 ? { citations: m.citations } : {}),
       // Carried in Slack mode too: a renderable view is an ADJUNCT (like
       // citations, which Slack already reveals), not part of the pinned
@@ -598,6 +610,14 @@ export async function driveAssistantChatTurn(
 ): Promise<void> {
   const { assistantId, authorUserId, slack, signal, ui } = options;
   let caughtError = "";
+  // The last state the reducer folded — declared HERE, beside `caughtError`,
+  // because the `finally` below is the only reader and it sits outside the try
+  // (cinatra#2825, S9l). Slack reveals nothing until the turn ends, so a
+  // transport failure used to append a bare error bubble and throw the reduced
+  // turn away, including a lifecycle card the run had already produced. The
+  // ChatGPT branch never had that hole: its error is written ONTO the projected
+  // bubble, which already carries the items.
+  let lastState: ConversationViewState | undefined;
   try {
     if (slack) {
       ui.setTypingIndicator(true);
@@ -648,6 +668,7 @@ export async function driveAssistantChatTurn(
         signal,
         onState: (state) => {
           anyEventSeen = true;
+          lastState = state;
           if (slack) return; // whole-turn atomic reveal below
           ui.updateMessages((prev) =>
             prev.map((msg) =>
@@ -694,10 +715,15 @@ export async function driveAssistantChatTurn(
         authorUserId,
         slackMode: true,
       });
+      // A turn is revealed when it has anything to show. Text, a thought group
+      // and an error were the whole test until cinatra#2825 (S9l): a turn whose
+      // ONLY content is a lifecycle card passed all three and was dropped, so
+      // the reader never saw a decision that was waiting for them.
       if (
         revealed.content.length > 0 ||
         (revealed.thoughtGroups?.length ?? 0) > 0 ||
-        revealed.error
+        revealed.error ||
+        turnCarriesLifecycleItems(revealed)
       ) {
         ui.updateMessages((prev) => [...prev, revealed]);
       }
@@ -724,12 +750,37 @@ export async function driveAssistantChatTurn(
     if (slack) {
       ui.setTypingIndicator(false);
       if (caughtError) {
+        // The error bubble keeps this turn's LIFECYCLE ITEMS (cinatra#2825,
+        // S9l). The pinned error shape is otherwise unchanged — no text, no
+        // thought groups — because a stream that failed has nothing to say; what
+        // it may still be holding is a decision, and an unrelated transport
+        // failure must not be what hides it. A turn that produced none (the
+        // failure-before-any-event case) serializes exactly as before.
+        const carried = lastState
+          ? projectConversationMessage(lastState, {
+              assistantId,
+              ...(authorUserId ? { authorUserId } : {}),
+              slackMode: true,
+            })
+          : null;
+        const lifecycleItems = carried
+          ? {
+              ...(carried.dataParts ? { dataParts: carried.dataParts } : {}),
+              ...(carried.lifecycleParts ? { lifecycleParts: carried.lifecycleParts } : {}),
+            }
+          : {};
         ui.updateMessages((prev) => {
           const alreadyInserted = prev.some((m) => m.id === assistantId);
           if (alreadyInserted) return prev;
           return [
             ...prev,
-            { id: assistantId, role: "assistant" as const, content: "", error: caughtError },
+            {
+              id: assistantId,
+              role: "assistant" as const,
+              content: "",
+              ...lifecycleItems,
+              error: caughtError,
+            },
           ];
         });
       }
