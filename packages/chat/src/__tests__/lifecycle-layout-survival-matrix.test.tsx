@@ -583,17 +583,48 @@ describe("the matrix is not satisfied by drawing a card unconditionally", () => 
 // the REAL held card in the REAL surviving slot and drives its decision. It is
 // NOT production carriage and claims none — production carriage is the owed
 // mount the S9h contract measures.
+//
+// THE CONTROLS THIS DRIVES ARE THE SHIPPED ONES, not names the card once used.
+// §V's redraw moved the decision OFF the row and ONTO EACH CHIP:
+// `packages/agents/src/run-recommendation-chip-row.tsx` draws Confirm, Adjust
+// and Skip per skill, and the two contracts that identify this card name the
+// same three `[data-skill-action]` values —
+// `scripts/ci/lib/capture-record-contract.mjs` and
+// `src/lib/lifecycle/held-turn-card-contract.ts`. The row-level
+// `confirm-run-recommendation` / `skip-run-recommendation` pair this block was
+// first written against is drawn by NOTHING now, so asserting it would measure
+// a card that no longer exists. All three are asserted, each scoped to the
+// offered skill's OWN chip, and each checked for operability exactly as the
+// review arm above checks its own three.
+
+/** The one skill the held fixture offers — the chip these controls belong to. */
+const HELD_SKILL_ID = "skill-a";
+
+/** The card's own decision controls, as the SHIPPED §V chip-row draws them. */
+const CHIP_ACTIONS = ["confirm", "adjust", "skip"] as const;
+
+/** That skill's chip control for one of the three affordances. */
+function chipControl(row: HTMLElement, action: string): HTMLButtonElement | null {
+  return row.querySelector<HTMLButtonElement>(
+    `[data-skill-action="${action}"][data-skill-id="${HELD_SKILL_ID}"]`,
+  );
+}
 
 describe("the slot that survives is one the real held card can be operated in", () => {
   for (const layout of LAYOUTS) {
     for (const outcome of OUTCOMES) {
-      it(`recommendation_hold · ${layout} · ${outcome}: Confirm and Skip are live in the surviving slot`, async () => {
+      it(`recommendation_hold · ${layout} · ${outcome}: the chip's Confirm, Adjust and Skip are live in the surviving slot`, async () => {
         holdStateMock.mockImplementation(async () => ({
           state: "held",
           agentPackageName: "@cinatra-ai/proof-agent",
           promptText: "{}",
           recommendations: [
-            { skillId: "skill-a", skillRevisionId: "rev-a", recommended: true, name: "Skill A" },
+            {
+              skillId: HELD_SKILL_ID,
+              skillRevisionId: "rev-a",
+              recommended: true,
+              name: "Skill A",
+            },
           ],
           holdRef: "hold-ref-2825",
         }));
@@ -626,13 +657,20 @@ describe("the slot that survives is one the real held card can be operated in", 
           expect(el).not.toBeNull();
           return el!;
         });
-        const confirm = row.querySelector<HTMLButtonElement>(
-          '[data-action="confirm-run-recommendation"]',
-        );
-        const skip = row.querySelector<HTMLButtonElement>('[data-action="skip-run-recommendation"]');
-        expect(confirm).not.toBeNull();
-        expect(skip).not.toBeNull();
-        fireEvent.click(confirm!);
+        const cell = `recommendation_hold · ${layout} · ${outcome}`;
+        for (const action of CHIP_ACTIONS) {
+          const control = chipControl(row, action);
+          expect(
+            control,
+            `${cell}: no ${action} control on the offered skill's chip`,
+          ).not.toBeNull();
+          expect(control!.disabled, `${cell}: ${action} is present but not operable`).toBe(false);
+        }
+        // Driving the row's OWN release. The shipped row releases once EVERY
+        // chip is decided (the whole-row release deviation named in the chip
+        // row) — the fixture offers one skill, so confirming its chip is the
+        // whole row, and the hold is released exactly once.
+        fireEvent.click(chipControl(row, "confirm")!);
         await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1));
       });
     }
