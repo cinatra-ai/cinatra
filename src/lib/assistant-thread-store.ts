@@ -2209,9 +2209,9 @@ function contradictsDurableTurn(
  * BESIDE the persisted message: a visible duplicate on every reload of that
  * thread. The removed bare-`viewType|ref` fallback used to match them.
  *
- * That is left standing deliberately. The owner's standing ruling is NO backward
- * compatibility for pre-cutover data before v0.2.0, and `dataPartSlots` is this
- * PR's own introduction, so these rows are exactly pre-cutover data; a matcher
+ * That is left standing deliberately. The standing ruling is NO backward
+ * compatibility for data written before the cutover, and `dataPartSlots` is this
+ * PR's own introduction, so these rows are exactly that; a matcher
  * that recognised the old shape is compat work, which the ruling reserves for a
  * separate decision rather than something to smuggle in behind a key change. The
  * cost is bounded in the direction that matters: the turn is DUPLICATED, never

@@ -784,8 +784,8 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
   // carries no slots and a mirror row written before it folds no card onto a
   // producing part. Neither side can emit a slot-bound key, so a card-only
   // legacy mirror row and its pre-slot durable row share NO key and are not
-  // matched. That is not a regression to repair: the owner's standing ruling is
-  // NO backward compatibility for pre-cutover data before v0.2.0, and a matcher
+  // matched. That is not a regression to repair: the standing ruling is NO
+  // backward compatibility for data written before the cutover, and a matcher
   // that recognised the old shape would be exactly the compat work that ruling
   // reserves for a separate decision. This test PINS what the ruling costs, so
   // the cost is a recorded contract rather than a surprise.
