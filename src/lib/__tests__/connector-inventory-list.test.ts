@@ -160,14 +160,21 @@ describe("connector_inventory_list — delegated-chat allowlist", () => {
 });
 
 describe("connector_inventory_list — field allowlist (snapshot)", () => {
-  it("the row allowlist is exactly these four fields", () => {
+  it("the row allowlist is exactly these five fields", () => {
     // A literal, not a re-export: adding a field to the projector without
     // adding it here — or here without a reviewer — fails.
+    //
+    // `mcpPrimitivePrefixes` (cinatra#2771) is build-time CATALOG data: it
+    // says which primitive names a connector gates, never who may use it. It
+    // is on the row because the row is the one carrier from the catalog to the
+    // chat-catalog derivation, which cannot map `gmail_aliases_list` onto the
+    // `gmail-connector` slug without it.
     expect([...CONNECTOR_INVENTORY_ROW_FIELDS]).toEqual([
       "connectorKey",
       "displayName",
       "hasAuthorizedConnection",
       "authorizedConnectionIds",
+      "mcpPrimitivePrefixes",
     ]);
     expect([...CONNECTOR_INVENTORY_RESULT_FIELDS]).toEqual(["connectors"]);
   });
@@ -177,8 +184,30 @@ describe("connector_inventory_list — field allowlist (snapshot)", () => {
       connectorKey: "openai-connector",
       displayName: "OpenAI",
       authorizedConnectionIds: ["conn-1"],
+      mcpPrimitivePrefixes: ["openai_"],
     });
     expect(Object.keys(row).sort()).toEqual([...CONNECTOR_INVENTORY_ROW_FIELDS].sort());
+  });
+
+  it("a connector with no declared prefixes still emits the field, as empty", () => {
+    const row = projectConnectorInventoryRow({
+      connectorKey: "tailscale-connector",
+      displayName: "Tailscale",
+      authorizedConnectionIds: [],
+    });
+    expect(row.mcpPrimitivePrefixes).toEqual([]);
+  });
+
+  it("the emitted prefixes cannot mutate the catalog array behind them", () => {
+    const catalogPrefixes = ["gmail_"];
+    const row = projectConnectorInventoryRow({
+      connectorKey: "gmail-connector",
+      displayName: "Gmail",
+      authorizedConnectionIds: [],
+      mcpPrimitivePrefixes: catalogPrefixes,
+    });
+    row.mcpPrimitivePrefixes.push("hacked_");
+    expect(catalogPrefixes).toEqual(["gmail_"]);
   });
 
   it("a built result emits exactly the allowlisted keys at both levels", async () => {
@@ -261,6 +290,10 @@ describe("connector_inventory_list — per-row authorization", () => {
       displayName: "Tailscale",
       hasAuthorizedConnection: false,
       authorizedConnectionIds: [],
+      // Catalog data, unconditioned on authorization — it is the same for an
+      // actor who may use the connector and one who may not, which is exactly
+      // why it leaks nothing about the withheld row.
+      mcpPrimitivePrefixes: [],
     });
   });
 

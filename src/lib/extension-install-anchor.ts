@@ -2,6 +2,7 @@ import "server-only";
 
 import type { ExtensionKind } from "@cinatra-ai/extensions/canonical-types";
 import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/canonical-types";
+import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
 
 // The TRUSTED install-record resolver — closes the runtime-loader loop.
 //
@@ -161,14 +162,88 @@ export function selectActiveDigest(input: {
  *     version row is INVISIBLE to single-row runtime surfaces until the
  *     versioned-activation slice (S4); resolving one here would prematurely
  *     promote it.
+ *
+ * SUPERSESSION FIRST (cinatra#2698 S4), the same order the sibling seams apply
+ * — `pickSingleLiveRowAcrossOrgs` below, `pickActiveInstall`, the installed-rows
+ * model and the provider-connection writer. A live WORKSPACE install is the one
+ * row in force and supersedes every organization row of the package, so those
+ * rows are dropped BEFORE the scope filter and before precedence. Without it
+ * this picker disagrees with every other seam about which row is the package:
+ * `runInstallAnchorClaimBackstop`
+ * (`src/lib/objects/artifact-claim-install-anchor.ts`) loops EVERY live org
+ * scope and calls this picker once per scope, so a superseded organization row
+ * resolved — and the backstop then activated a claim against a row the rest of
+ * the system had already replaced. Scoping is what makes the omission invisible
+ * here: the superseding workspace row lives at a DIFFERENT `orgId` than the row
+ * it supersedes, so the exact-scope filter alone can never see the pair.
+ *
+ * SOURCE PRECEDENCE (the shared policy) runs over what supersession leaves, for
+ * the same reason it runs in `pickSingleLiveRowAcrossOrgs`. A package that ships
+ * in the image AND holds a product install has two live default rows in one
+ * scope, and this picker is what the install pipeline's canonical-row deps
+ * resolve through — so without the policy that pair reads as cross-owner
+ * ambiguity and the install FAILS CLOSED at its own provenance write, rolling
+ * back the very install that created the second row. The override wins; the
+ * bundled row stays the fallback underneath it. Rows that are genuinely peers
+ * still fail closed.
  */
 export function pickSingleActiveRow<
-  T extends { status: string; organizationId: string | null; isDefault?: boolean },
+  T extends {
+    status: string;
+    organizationId: string | null;
+    ownerLevel?: string;
+    ownerId?: string | null;
+    isDefault?: boolean;
+    source?: { type?: string } | null;
+  },
+>(rows: readonly T[], orgId: string | null): T | null {
+  const live = rows.filter((r) => r.status === "active" || r.status === "locked");
+  // Mirrors `effectiveInstallRows` rather than re-deriving it: with a live
+  // workspace row present only the org-NULL rows remain candidates, so asking
+  // this picker for a superseded organization scope now correctly resolves
+  // NOTHING. A row set with no live workspace row is passed through untouched,
+  // so every pre-S4 call is byte-identical.
+  const effective = live.some((r) =>
+    isWorkspaceAnchoredRow({
+      ownerLevel: r.ownerLevel ?? "",
+      ownerId: r.ownerId ?? null,
+      organizationId: r.organizationId ?? null,
+    }),
+  )
+    ? live.filter((r) => (r.organizationId ?? null) === null)
+    : live;
+  return pickExactOrgActiveRow(effective, orgId);
+}
+
+/**
+ * THIS ORGANIZATION'S OWN live row — the pre-supersession pick, kept as its own
+ * named function because one seam asks that question deliberately.
+ *
+ * `makeDefaultInstallAnchorResolver`'s `"exact-org"` arm binds the row the
+ * install actor's org actually holds, and the owner's ruling of 2026-08-16 kept
+ * that arm unchanged when the `org-then-workspace` arm was inverted to
+ * workspace-first: the two arms answer different questions, and the install path
+ * relies on the exact-scope one to bind the row its own pipeline just finalized.
+ * `pickSingleActiveRow` (the EFFECTIVE-row pick, supersession applied) is what
+ * every other caller wants; this is the narrow one, named for its question so
+ * the distinction is legible instead of implicit.
+ *
+ * Everything else — scope equality, source precedence, the exactly-one-default
+ * rule — is identical, because it is the same body.
+ */
+export function pickExactOrgActiveRow<
+  T extends {
+    status: string;
+    organizationId: string | null;
+    isDefault?: boolean;
+    source?: { type?: string } | null;
+  },
 >(rows: readonly T[], orgId: string | null): T | null {
   const matching = rows.filter(
     (r) => (r.status === "active" || r.status === "locked") && (r.organizationId ?? null) === orgId,
   );
-  const defaults = matching.filter((r) => r.isDefault !== false);
+  const ranked = applyInstallRowPrecedence(matching);
+  const defaults = ranked.filter((r) => r.isDefault !== false);
   return defaults.length === 1 ? defaults[0] : null;
 }
 
@@ -186,13 +261,49 @@ export function pickSingleActiveRow<
  * (>1 live row across orgs) — the trust gate must resolve exactly one row.
  */
 export function pickSingleLiveRowAcrossOrgs<
-  T extends { status: string; organizationId: string | null; isDefault?: boolean },
+  T extends {
+    status: string;
+    organizationId: string | null;
+    ownerLevel?: string;
+    ownerId?: string | null;
+    isDefault?: boolean;
+    source?: { type?: string } | null;
+  },
 >(rows: readonly T[]): T | null {
-  const matching = rows.filter((r) => r.status === "active" || r.status === "locked");
+  const live = rows.filter((r) => r.status === "active" || r.status === "locked");
+  // SUPERSESSION FIRST (cinatra#2698 S4). A live workspace install is the one row
+  // in force and supersedes every organization row of the package, so those rows
+  // are dropped before anything else looks at them. This mirrors
+  // `effectiveInstallRows` rather than re-deriving it.
+  //
+  // It is load-bearing at BOOT, not only in theory. The install path archives the
+  // superseded organization rows AFTER the workspace install finalizes, and it
+  // deliberately SKIPS a locked one, so a live organization row can stand beside
+  // the live workspace row both transiently (a reader inside that window) and
+  // durably (the locked row). Without this filter the pair reaches precedence as
+  // two product-installed peers, precedence refuses to guess, and boot resolves
+  // no anchor at all.
+  const matching = live.some((r) =>
+    isWorkspaceAnchoredRow({
+      ownerLevel: r.ownerLevel ?? "",
+      ownerId: r.ownerId ?? null,
+      organizationId: r.organizationId ?? null,
+    }),
+  )
+    ? live.filter((r) => (r.organizationId ?? null) === null)
+    : live;
+  // SOURCE PRECEDENCE (the shared policy) runs over what supersession leaves: a
+  // package that ships in the image AND has a product install holds two live
+  // default rows at once. That pair used to read as ambiguity and return null, so
+  // the boot loader resolved no anchor, logged "no trusted install record", and
+  // NEITHER version activated. The product install is the override and wins; the
+  // bundled row remains the fallback underneath it. Rows that are genuinely peers
+  // still fail closed.
+  const ranked = applyInstallRowPrecedence(matching);
   // Same exact-one-default rule as pickSingleActiveRow (cinatra#1040 S3): a
   // non-default side-by-side version row must not un-anchor (or replace) the
   // default at boot; zero live defaults stays fail-closed.
-  const defaults = matching.filter((r) => r.isDefault !== false);
+  const defaults = ranked.filter((r) => r.isDefault !== false);
   return defaults.length === 1 ? defaults[0] : null;
 }
 
@@ -208,12 +319,14 @@ export function pickSingleLiveRowAcrossOrgs<
  *
  * It is deliberately NARROWER than `pickSingleActiveRow(rows, null)`, which
  * would also match `owner_level='platform'` bundled/system anchors at the same
- * org-NULL scope — and, where a platform anchor and a workspace row coexist for
- * one package (the DB's org-NULL identity index keys on `owner_level`, so it
- * permits that), would fail closed on the ambiguity instead of resolving the
- * workspace row. Bundled/system rows keep their existing path; this pick sees
- * only the product-installed workspace tier. Same exact-one-default rule as the
- * other picks.
+ * org-NULL scope (the DB's org-NULL identity index keys on `owner_level`, so a
+ * platform anchor and a workspace row may coexist for one package). That pair
+ * no longer fails closed there — the shared source-precedence policy resolves
+ * it to the product install — but this pick reaches the workspace row by
+ * IDENTITY rather than by source discriminant, so it also resolves a row whose
+ * provenance the policy deliberately leaves alone. Bundled/system rows keep
+ * their existing path; this pick sees only the product-installed workspace
+ * tier. Same exact-one-default rule as the other picks.
  */
 export function pickSingleWorkspaceAnchoredActiveRow<
   T extends {
@@ -436,9 +549,14 @@ export async function makeDefaultInstallAnchorResolver(
         // platform-global mode `oid` is the DERIVED org of the single live row, so
         // this still resolves exactly that one row. Under an ENGAGED #2697
         // workspace fallback the pick is narrowed to the workspace anchor.
+        // `pickExactOrgActiveRow`, NOT the effective-row pick: this arm binds
+        // THIS org's own row, and the owner's 2026-08-16 ruling kept it that way
+        // when the `org-then-workspace` arm was inverted to workspace-first. The
+        // supersession that `pickSingleActiveRow` now applies belongs to the
+        // question every OTHER caller asks ("the row in force"), not to this one.
         const active = workspaceFallback
           ? pickSingleWorkspaceAnchoredActiveRow(rows)
-          : pickSingleActiveRow(rows, oid);
+          : pickExactOrgActiveRow(rows, oid);
         return active
           ? {
               id: active.id,

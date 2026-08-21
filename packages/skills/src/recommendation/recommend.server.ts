@@ -18,6 +18,7 @@ import "server-only";
 import { readSkillMatchesByAgent } from "../llm-matching/skill-matches-store";
 import type { SkillMatchRow } from "../llm-matching/types";
 import { listInstalledSkills, type SkillManifest } from "../skills-registry";
+import { buildSkillIdDisplayNames, scanSkillExtensions } from "../extension-skill-resolver";
 import { readSkillActiveRevisionFromDatabase } from "@/lib/skill-lifecycle-store";
 import {
   scoreSkillRecommendations,
@@ -66,9 +67,21 @@ function resolvePinnedRevision(skillId: string): string {
 export async function buildRecommendationCandidatesForAgent(
   input: RecommendSkillsForAgentInput,
 ): Promise<RecommendationCandidate[]> {
-  const [matches, skills] = await Promise.all([
+  const [matches, skills, declaredDisplayNames] = await Promise.all([
     readSkillMatchesByAgent(input.agentId).catch((): SkillMatchRow[] => []),
     listInstalledSkills().catch((): SkillManifest[] => []),
+    // THE LABEL EVERY SURFACE PRINTS (cinatra#2841). A catalog row's `name` is
+    // the SKILL.md frontmatter name — the slug — while the human title is the
+    // owning extension's manifest `cinatra.displayName`. It is resolved HERE,
+    // once, server-side, beside the rest of the candidate's metadata, so the
+    // chip-row, its ADJUST panel, the settled row and the read-only reading all
+    // print one resolved label and no client ever re-derives one.
+    //
+    // BEST-EFFORT: a failed scan costs LABELS, never candidates. Every skill
+    // then falls back to its catalog name, which is exactly what shipped before.
+    scanSkillExtensions()
+      .then(buildSkillIdDisplayNames)
+      .catch((): Map<string, string> => new Map()),
   ]);
 
   const matchBySkill = new Map<string, SkillMatchRow>(
@@ -94,6 +107,10 @@ export async function buildRecommendationCandidatesForAgent(
       skillId: skill.id,
       skillRevisionId: resolvePinnedRevision(skill.id),
       name: skill.name,
+      // Undefined when the owning extension declares no title (or owns no
+      // manifest at all — a user-authored custom skill): the scorer's own
+      // fallback then keeps `name` as the label. Never a guess, never a map.
+      displayName: declaredDisplayNames.get(skill.id),
       description: skill.description ?? "",
       cueText: (skill.content ?? "").slice(0, CUE_CHARS),
       level: skill.level as string | undefined,

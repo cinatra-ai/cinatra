@@ -1,0 +1,46 @@
+[
+  {
+    "label": "lifecycle-resolve",
+    "method": "POST",
+    "path": "/api/lifecycle-views/resolve",
+    "resourceType": "fetch",
+    "cookie": "absent",
+    "widgetUserToken": "present (cwu_)",
+    "widgetOrigin": "http://127.0.0.1:5591",
+    "secFetchSite": null,
+    "secFetchDest": null
+  },
+  {
+    "label": "lifecycle-resolve",
+    "method": "POST",
+    "path": "/api/lifecycle-views/resolve",
+    "resourceType": "fetch",
+    "cookie": "absent",
+    "widgetUserToken": "present (cwu_)",
+    "widgetOrigin": "http://127.0.0.1:5591",
+    "secFetchSite": null,
+    "secFetchDest": null
+  },
+  {
+    "label": "island-document",
+    "method": "GET",
+    "path": "/lifecycle/review-island",
+    "resourceType": "document",
+    "cookie": "absent",
+    "widgetUserToken": "absent",
+    "widgetOrigin": null,
+    "secFetchSite": null,
+    "secFetchDest": null
+  },
+  {
+    "label": "island-document",
+    "method": "GET",
+    "path": "/lifecycle/review-island",
+    "resourceType": "document",
+    "cookie": "absent",
+    "widgetUserToken": "absent",
+    "widgetOrigin": null,
+    "secFetchSite": null,
+    "secFetchDest": null
+  }
+]

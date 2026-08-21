@@ -328,26 +328,17 @@ export async function resolveWidgetLifecycleActorContext(input: {
  * `null` when the credential cannot be expressed (a missing signing key, an
  * out-of-bounds id): the caller renders no island rather than a broken frame.
  *
- * IT STILL HAS NO CALLER, AND THE REASON CHANGED AT THE 2026-08-13 REBASE ONTO
- * S8D + S8F — so it is restated rather than left reading as though it were still
- * true (codex round 0, finding 1 raised the absence originally).
+ * THE ONE CALLER IS THE LIFECYCLE RESOLVE ROUTE'S WIDGET BRANCH (cinatra#2754),
+ * which is the only place that holds all three things a credential needs at
+ * once: a `cwu_` it has just consumed, a gate the reader was authorized for on
+ * that same request, and an answer on its way to the card that will frame the
+ * island. The card cannot mint one — a client has no key — and the two public
+ * frame disambiguators it adds to the URL (`reviewTargetIslandSrc` in
+ * `packages/agents/src/review-gate-card.tsx`) are selectors, never authority.
  *
- * When S8e was written the consumer did not exist: it was S8d's (cinatra#2577,
- * PR #2668), which that branch deliberately did not merge in. S8d HAS SINCE
- * LANDED (8a83cf090), and with it the card's own island addressing — but that
- * addressing composes the `src` CLIENT-SIDE from the ref plus the frame's two
- * public disambiguators (`reviewTargetIslandSrc` in
- * `packages/agents/src/review-gate-card.tsx`). It carries no credential, because
- * a client cannot mint one. So the seam is still unwired, for a NEW reason: the
- * resolve route would have to hand the card a server-minted island URL and the
- * card would have to prefer it, which is a change to the resolve contract and
- * not part of this rebase.
- *
- * WHAT THAT MEANS TODAY, stated plainly: S8e ships the credential, its
- * verification and the island's ACCEPTANCE of it, and the island paints on a
- * true third-party site once a caller hands it one. Until then island parity
- * holds on same-site and subdomain deployments — where the cookie path reaches
- * it — exactly as the issue comment recorded.
+ * A SAME-SITE HOST IS NOT GIVEN ONE. Where the island is reachable by the
+ * reader's own cookie, the cookie stays the wire: the credential is additive,
+ * for the cross-site case that has no other way to prove who is asking.
  */
 export function mintWidgetReviewIslandUrl(input: {
   claims: UserTokenClaims;

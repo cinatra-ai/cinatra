@@ -37,9 +37,41 @@ const REVIEW_VIEW = {
   ref: "ref-abc",
 };
 
+/**
+ * The resolve answer, in the per-kind envelope the card parses (epic S9, S9c).
+ * The kind is ECHOED from the request the card issued, so a test that renders a
+ * different viewType still gets an answer to its own question.
+ */
+function lifecycleEnvelope(state: LifecycleCardState, init?: RequestInit): unknown {
+  let kind = "artifact_review_gate";
+  try {
+    kind = JSON.parse(String(init?.body ?? "{}")).viewType ?? kind;
+  } catch {
+    // A test that issued no body keeps the review kind.
+  }
+  return {
+    kind,
+    state,
+    body: kind === "verification_summary" && state.state !== "absent"
+      ? VERIFICATION_BODY
+      : null,
+  };
+}
+
+/** A §VII reading — the verification kind carries one on every drawn state, and
+ *  a card that receives none fails closed rather than half-drawing. */
+const VERIFICATION_BODY = {
+  version: 1,
+  outcome: "verified",
+  reviewedRevisionId: "rev-base",
+  repairedRevisionId: "rev-fixed",
+  scopePaths: ["content.title"],
+  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+};
+
 function mockResolve(state: LifecycleCardState) {
-  const fetchMock = vi.fn(async () =>
-    new Response(JSON.stringify({ state }), {
+  const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) =>
+    new Response(JSON.stringify(lifecycleEnvelope(state, init)), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     }),
@@ -174,7 +206,7 @@ describe("a changed ref is a DIFFERENT card", () => {
       if (answered) return new Promise<Response>(() => {}); // never settles
       answered = true;
       return new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(lifecycleEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
@@ -223,7 +255,7 @@ describe("a changed ref is a DIFFERENT card", () => {
     );
     releaseFirst(
       new Response(
-        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        JSON.stringify(lifecycleEnvelope({ state: "pending", canDecide: true, canComment: true })),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
     );

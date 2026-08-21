@@ -193,6 +193,37 @@ export type DataPartEvent = BaseAgUiEvent & {
   data: Record<string, unknown>;
   /** Zero-based index of the part within its source artifact. Optional — the bridge emits it for ordering. */
   partIndex?: number;
+  /**
+   * SLOT IDENTITY — the id of the tool call this part was PRODUCED BY
+   * (cinatra#2827, epic #2784 S9i). Optional, and absent on every part that has
+   * no producing call (a citations part, an A2A artifact part, a bridge part).
+   *
+   * WHY IT IS ON THE EVENT AND NOT IN `data`. A renderable-view payload is
+   * validated by a `.strict()` schema whose whole point is "the wire payload is
+   * a ref, never content" — a producer may not attach a field to it, and the
+   * lifecycle kinds refuse one that tries. The slot is not part of the payload:
+   * it says WHERE in the turn the part was produced, which is transport
+   * information about the event, exactly like `partIndex` beside it. Putting it
+   * here keeps the payload byte-identical to what a strict parser already
+   * accepts, and lets a consumer read the slot WITHOUT parsing the payload.
+   *
+   * WHAT A CONSUMER DOES WITH IT. A renderable view carrying one belongs in the
+   * ordered trace at that call's own position rather than appended after it, so
+   * the card the person is asked to act on sits at the step that produced it. A
+   * consumer that does not know this field, or receives an id matching no tool
+   * call it holds, keeps EXACTLY the previous behaviour (the view is carried as
+   * a turn-level adjunct) — the field adds a position, it never gates a render.
+   *
+   * Handshake-compatible: additive and optional, so every already-published
+   * event stays valid, `isAgUiEvent` accepts both shapes, and the contract
+   * version does not move (CONTRACT.md §8).
+   *
+   * NOT AN AUTHORIZATION. Like every other id on this wire it is an opaque
+   * correlation string; forging one buys a card drawn at the wrong step of the
+   * forger's own turn and nothing else, because what the card may show is
+   * re-authorized server-side from its ref on every resolve.
+   */
+  toolCallId?: string;
 };
 
 export type AgUiEvent =

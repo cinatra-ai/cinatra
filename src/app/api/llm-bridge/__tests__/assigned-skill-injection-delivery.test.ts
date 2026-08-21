@@ -666,7 +666,11 @@ describe("selected-revision parity — ASSERTED, not changed (scope item 5)", ()
         {
           skillId: "headless-picked-skill",
           skillRevisionId: "rev-9",
-          name: "Headless Picked",
+          // The catalog name (an extension skill's slug) and the label a surface
+          // prints are separate fields (cinatra#2841); delivery keys on neither,
+          // so both are carried only to satisfy the ranked-row contract.
+          name: "headless-picked-skill",
+          displayName: "Headless Picked",
           score: 0.9,
           rank: 1,
           recommended: true,

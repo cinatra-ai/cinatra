@@ -1,0 +1,29 @@
+BEFORE not-in-service row: {"named":true,"title":"Installed but not in service Version 0.1.5 is installed and its files are in place, but it did not start in the running app, so nothing it provides is being used. Version 0.1.0, the version bundled with the app, is serving it instead. Retry activation to try starting it again, or roll back to the bundled version to archive this install. Not in service","updateLine":"Version 0.1.5 is installed but not in service (version 0.1.0 is serving) — no newer version to install."}
+PASS  recovery-retry: the "Installed but not in service" state is named BEFORE the click — named
+PASS  recovery-retry-before: the extension settings surface mounted
+lifecycle buttons: [{"label":"Workspace: All","disabled":false,"slot":"popover-trigger","reason":null},{"label":"Update","disabled":true,"slot":"disabled-action","reason":"Installed version isn't in service"},{"label":"Archive","disabled":false,"slot":"button","reason":null},{"label":"Activate","disabled":true,"slot":"disabled-action","reason":"Installed but not in service — use Retry activation"},{"label":"Retry activation","disabled":false,"slot":"recovery-action","reason":null},{"label":"Roll back to bundled","disabled":false,"slot":"recovery-action","reason":null},{"label":"Reinstall latest","disabled":false,"slot":"button","reason":null},{"label":"Force-delete…","disabled":false,"slot":"button","reason":null}]
+visible capability reasons: []
+PASS  recovery-retry-before: no lifecycle action is denied as "More than one install matches your scope" — no ambiguity reason rendered
+screenshot: recovery-retry-before-settings.png
+PASS  recovery-retry: "Retry activation" is present to click
+PASS  recovery-retry: "Retry activation" is ENABLED before the click
+CLICK "Retry activation"
+PASS  recovery-retry: the click did not report a failure — no error node
+screenshot: recovery-retry-after-settings.png
+AFTER not-in-service row: {"named":false,"title":null,"updateLine":"Currently on version 0.1.5 — up to date."}
+PASS  recovery-retry: the "Installed but not in service" row CLEARED after Retry activation — row no longer rendered
+PASS  recovery-retry-after: the extension settings surface mounted
+lifecycle buttons: [{"label":"Workspace: All","disabled":false,"slot":"popover-trigger","reason":null},{"label":"Update","disabled":true,"slot":"disabled-action","reason":"Already up to date"},{"label":"Archive","disabled":false,"slot":"button","reason":null},{"label":"Activate","disabled":true,"slot":"disabled-action","reason":"Already active"},{"label":"Retry activation","disabled":false,"slot":"recovery-action","reason":null},{"label":"Roll back to bundled","disabled":false,"slot":"recovery-action","reason":null},{"label":"Reinstall latest","disabled":false,"slot":"button","reason":null},{"label":"Force-delete…","disabled":false,"slot":"button","reason":null}]
+visible capability reasons: []
+PASS  recovery-retry-after: no lifecycle action is denied as "More than one install matches your scope" — no ambiguity reason rendered
+PASS  recovery-retry-after: setup page responds 200 — status 200
+PASS  recovery-retry-after: setup renders the connector's schema-config form
+PASS  recovery-retry-after: setup form is bound to the connector package — data-package=@cinatra-ai/google-appointment-schedules-connector
+PASS  recovery-retry-after: the dynamic-select empty slot renders
+PASS  recovery-retry-after: the DECLARED placeholder renders (not the "No options available." fallback) — rendered: "[lane registry build 0.1.5] No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
+setup surface is rendering the REGISTRY manifest (build 0.1.5)
+PASS  recovery-retry-after: the setup surface renders the manifest of the SERVING version 0.1.5 — rendered "[lane registry build 0.1.5] No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
+screenshot: recovery-retry-after-connector-setup.png
+PASS  recovery-retry: the SETUP surface now renders the retried version's manifest, so the retry actually put it in service — registry manifest is serving
+
+ALL CHECKS PASSED (mode=retry-recovery, label=recovery-retry)

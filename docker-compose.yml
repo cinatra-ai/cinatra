@@ -615,6 +615,14 @@ services:
       # Multi-tenant loader auto-discovers all agents/<vendor>/<slug>/cinatra/oas.json.
       # No per-agent pinning env var is needed.
     volumes:
+      # Agent SOURCES stay READ-ONLY on purpose: the runtime never mutates an
+      # operator's agent checkouts, and `cinatra-cli`'s dev repo sync deletes a
+      # `.cinatra-published.json` found inside one as tool-generated debris.
+      # The loader therefore keeps the publish markers it must DERIVE for a
+      # fresh install (agent sources ship none) in its OWN writable state dir
+      # — `CINATRA_AGENT_STATE_DIR`, default `/agents-state`. That state is
+      # re-derived from the on-disk OAS at every boot and every reload, so it
+      # needs no volume and no env here. cinatra#2873.
       - ./extensions:/agents:ro
     profiles:
       - wayflow

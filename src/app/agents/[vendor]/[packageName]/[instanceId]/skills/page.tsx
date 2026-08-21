@@ -17,6 +17,10 @@ const SELECTION_LABEL: Record<string, { text: string; variant: "default" | "seco
   recommended_confirmed: { text: "Confirmed", variant: "default" },
   recommended_auto_applied: { text: "Auto-applied", variant: "secondary" },
   user_forced: { text: "Forced", variant: "outline" },
+  // cinatra#2841 — the reader opened ADJUST on a skill the scorer DID recommend
+  // and settled it there. Distinct from "Forced", which asserts the scorer never
+  // recommended it, and from "Confirmed", which asserts it was taken as scored.
+  user_adjusted: { text: "Adjusted", variant: "outline" },
 };
 
 type Props = {

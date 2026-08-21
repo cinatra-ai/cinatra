@@ -22,7 +22,7 @@ export {
   LifecycleCard,
   LifecycleCardSurfaceProvider,
   useLifecycleCardHost,
-  useLifecycleCardState,
+  useLifecycleCardResolve,
   LIFECYCLE_VIEW_RESOLVE_PATH,
 } from "./lifecycle-card";
 

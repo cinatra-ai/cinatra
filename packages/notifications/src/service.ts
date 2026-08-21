@@ -314,6 +314,87 @@ export type CreateNotificationOptions = {
    * result. Empty array ⇒ no rows written (same as an empty expansion).
    */
   recipientUserIds?: readonly string[];
+  /**
+   * cinatra#2835, cinatra#2864 — write the row behind a caller-supplied
+   * PRECONDITION, in the same statement.
+   *
+   * Some notifications are only truthful while a row in ANOTHER table says so,
+   * and checking that row before calling here is not enough: whatever the check
+   * observed can change before the insert commits, and for a notification whose
+   * only clearing event may already have passed, that window is the whole defect.
+   * A `fence` closes it by moving the check INTO the write — precondition,
+   * insert and follow-ups compose as CTEs of ONE statement on one connection,
+   * and the insert is driven FROM the precondition's rows, so zero rows means
+   * zero writes. A precondition that takes a row lock (`FOR UPDATE`)
+   * additionally serialises this write against whoever else mutates that row.
+   *
+   * The package stays ignorant of what is being fenced: the caller owns the SQL
+   * and the table it names. See `buildHoldNotificationFence` (the run-hold
+   * instance) and `buildAutoGateNotificationFence` (the review-gate instance) in
+   * `@cinatra-ai/agents/run-wait-notifier`.
+   *
+   * TRUSTED SQL, INTERNAL CALLERS ONLY. `precondition` is composed into the
+   * statement verbatim — it is CODE, not data. It must come from a
+   * build-the-SQL-here helper that parameterises every value it carries (the two
+   * helpers that exist do), and no part of it may ever be derived from a request,
+   * a user field, or anything else outside this repository. The same holds for
+   * every `after` statement.
+   */
+  fence?: NotificationWriteFence;
+};
+
+/** A single statement, in the shape the host query runner takes. */
+export type NotificationWriteStatement = {
+  text: string;
+  values: unknown[];
+};
+
+/**
+ * cinatra#2838 — the CTE the fenced INSERT's `RETURNING` output is bound to.
+ *
+ * The name is part of the fence CONTRACT, not an implementation detail: an
+ * `after` statement is only run for a row that was ACTUALLY written, and the only
+ * way for it to know that is to correlate against this CTE (`EXISTS (SELECT 1
+ * FROM notification_write)`). Exported so the caller composing the `after` SQL
+ * never hand-spells it.
+ */
+export const NOTIFICATION_WRITE_CTE = "notification_write" as const;
+
+/** See `CreateNotificationOptions.fence`. */
+export type NotificationWriteFence = {
+  /**
+   * Placeholder values SHARED by `precondition` and every `after` statement:
+   * each of them numbers its own placeholders from `$1` over THIS array, and the
+   * insert's row values are numbered after them, so the caller never has to know
+   * how many columns the insert carries. One array because the whole fence is one
+   * statement, and one statement has one parameter space.
+   */
+  values: readonly unknown[];
+  /**
+   * SQL for a SELECT that GATES the insert: its rows feed the INSERT's source, so
+   * zero rows write nothing.
+   *
+   * It is composed as a CTE, so it may carry `FOR UPDATE` / `LIMIT`, and it MUST
+   * be a plain SELECT (a data-modifying precondition is not supported and would
+   * run even when the insert does not).
+   */
+  precondition: string;
+  /**
+   * SQL for statements that record that a row now exists. They are composed as
+   * data-modifying CTEs of the SAME statement as the insert, so each MUST be an
+   * INSERT/UPDATE/DELETE (a plain SELECT CTE nothing references is never
+   * executed).
+   *
+   * cinatra#2838 — they are NOT unconditional. `ON CONFLICT … DO NOTHING` can
+   * make the insert write nothing even when the precondition held, and a
+   * follow-up that ran anyway would record a row that does not exist. So each
+   * `after` statement MUST gate itself on the insert's own `RETURNING` output —
+   * `EXISTS (SELECT 1 FROM ${NOTIFICATION_WRITE_CTE})` — which is why they are
+   * CTEs of one statement rather than separate queries: a sibling CTE can read
+   * that output, a later statement in a transaction cannot without re-reading the
+   * table. Each still carries its own copy of whatever the precondition asserted.
+   */
+  after?: readonly string[];
 };
 
 /**
@@ -396,37 +477,128 @@ function insertNotificationRowForUser(args: {
             WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL
             DO NOTHING`;
 
+  const rowValues = [
+    id,
+    args.userId,
+    recipientKind,
+    recipientId,
+    args.topic,
+    kind,
+    args.input.title,
+    args.input.body ?? "",
+    args.input.href ?? null,
+    args.input.metadata ? JSON.stringify(args.input.metadata) : null,
+    args.input.sourceJobId ?? null,
+    args.input.sourceJobName ?? null,
+    dedupeKey,
+  ];
+  const returning = `id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at`;
+
+  // FENCED (cinatra#2835, cinatra#2864) vs plain. The two differ only in where
+  // the row values come from: a bare `VALUES` list, or a `SELECT` over the
+  // precondition's rows so an unmet precondition inserts NOTHING. The fence's own
+  // placeholders occupy `$1..$n`, so the row values shift behind them — that
+  // offset is the only reason this is not a single template.
+  //
+  // ONE STATEMENT, which is what makes it atomic. The precondition is a CTE of
+  // the INSERT, not a query before it, so the row lock a `FOR UPDATE`
+  // precondition takes is held for the insert it gates and released with it.
+  const fence = args.options.fence;
+  const offset = fence ? fence.values.length : 0;
+  const rowPlaceholders = rowValues.map((_, i) => `$${offset + i + 1}`).join(", ");
+  const source = fence
+    ? `SELECT ${rowPlaceholders}, now(), ${readAtSql} FROM notification_write_fence`
+    : `VALUES (${rowPlaceholders}, now(), ${readAtSql})`;
+  const insertSql = `INSERT INTO ${schemaQualified("notifications")}
+          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at)
+          ${source}
+          ${conflictSql}
+          RETURNING ${returning}`;
+
+  // cinatra#2838 — ONE STATEMENT, and the follow-ups hang off the insert's
+  // RETURNING.
+  //
+  // The fence used to be three queries in a transaction: precondition+insert, then
+  // the `after` statements, run unconditionally. That is wrong for an insert that
+  // can no-op: `ON CONFLICT … DO NOTHING` writes nothing when the user already
+  // holds a row on this dedupe key, and a follow-up that ran anyway recorded a row
+  // that does not exist (for the hold: it marked the park's notification `live`
+  // while no row carried that hold's park id, so the park-scoped clear later
+  // matched nothing and reported the obligation discharged — the hold was never
+  // announced).
+  //
+  // So the insert is bound to a named CTE and the `after` statements become
+  // data-modifying CTEs beside it, each gating itself on `EXISTS (SELECT 1 FROM
+  // notification_write)`. Only a sibling CTE can read a data-modifying CTE's
+  // RETURNING output — that reference is also what orders them, and it is why
+  // these cannot stay separate statements. Postgres runs every data-modifying CTE
+  // exactly once and to completion whether or not the primary query reads it, so
+  // the follow-ups still run; they just no longer run for a row that was not
+  // written. One statement is atomic by itself, and the transaction wrapper keeps
+  // the precondition's row lock held across the whole chain.
+  const afterSql = fence?.after ?? [];
+  const fencedText = `WITH notification_write_fence AS (${fence?.precondition ?? ""}),
+          ${NOTIFICATION_WRITE_CTE} AS (
+          ${insertSql}
+          )${afterSql
+            .map((text, i) => `,\n          notification_write_after_${i} AS (\n          ${text}\n          )`)
+            .join("")}
+          SELECT ${returning} FROM ${NOTIFICATION_WRITE_CTE}`;
+  const insert = {
+    text: fence ? fencedText : insertSql,
+    values: fence ? [...fence.values, ...rowValues] : rowValues,
+  };
+
   const host = getNotificationsHostAdapters();
-  const [result] = host.runPostgresQueriesSync({
+  const results = host.runPostgresQueriesSync({
+    connectionString: host.getPostgresConnectionString(),
+    // ONE transaction on ONE connection: the precondition's row lock, the insert
+    // it gates, and the follow-ups that record it either all land or none do.
+    transaction: fence !== undefined,
+    queries: [insert],
+  });
+  const rows = (results[0]?.rows ?? []) as Array<Record<string, unknown>>;
+  const row = rows[0];
+  return row ? rowToRecord(row) : null;
+}
+
+/**
+ * cinatra#2835 — hard-delete an awaiting-human row that belongs to ONE hold.
+ *
+ * `deleteNotificationsByDedupeKeyForUser` clears whatever currently occupies the
+ * run's per-run key. For a HOLD that is too wide: the hold's clear can arrive long
+ * after the fact (an obligation retried by a later sweep), and by then the key may
+ * legitimately be held by a DIFFERENT wait on the same run — a real approval gate
+ * the run reached afterwards. So this delete additionally requires the row to
+ * carry the park id the hold wrote into its metadata, which no other writer sets.
+ * A hold can only ever delete its own row.
+ *
+ * Returns whether the statement COMMITTED (not whether it matched): the caller
+ * uses that as its ack, and "no row to delete" is a discharged obligation just as
+ * much as "row deleted" is. The `(user_id, dedupe_key)` predicate leads so the
+ * partial unique index does the seeking; the metadata test only narrows.
+ */
+export function deleteHoldNotificationForUser(args: {
+  userId: string;
+  dedupeKey: string;
+  holdParkId: string;
+}): boolean {
+  if (!args.userId || !args.dedupeKey || !args.holdParkId) return false;
+  const host = getNotificationsHostAdapters();
+  host.ensurePostgresSchema();
+  host.runPostgresQueriesSync({
     connectionString: host.getPostgresConnectionString(),
     queries: [
       {
-        text: `INSERT INTO ${schemaQualified("notifications")}
-          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), ${readAtSql})
-          ${conflictSql}
-          RETURNING id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at`,
-        values: [
-          id,
-          args.userId,
-          recipientKind,
-          recipientId,
-          args.topic,
-          kind,
-          args.input.title,
-          args.input.body ?? "",
-          args.input.href ?? null,
-          args.input.metadata ? JSON.stringify(args.input.metadata) : null,
-          args.input.sourceJobId ?? null,
-          args.input.sourceJobName ?? null,
-          dedupeKey,
-        ],
+        text: `DELETE FROM ${schemaQualified("notifications")}
+          WHERE user_id = $1
+            AND dedupe_key = $2
+            AND metadata -> 'runAwaitingHuman' ->> 'holdParkId' = $3`,
+        values: [args.userId, args.dedupeKey, args.holdParkId],
       },
     ],
   });
-  const rows = (result?.rows ?? []) as Array<Record<string, unknown>>;
-  const row = rows[0];
-  return row ? rowToRecord(row) : null;
+  return true;
 }
 
 // ---------------------------------------------------------------------------

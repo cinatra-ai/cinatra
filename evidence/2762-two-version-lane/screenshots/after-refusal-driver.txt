@@ -1,0 +1,27 @@
+PASS  after-refusal: setup page responds 200 — status 200
+PASS  after-refusal: setup renders the connector's schema-config form
+PASS  after-refusal: setup form is bound to the connector package — data-package=@cinatra-ai/google-appointment-schedules-connector
+PASS  after-refusal: the dynamic-select empty slot renders
+PASS  after-refusal: the DECLARED placeholder renders (not the "No options available." fallback) — rendered: "No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
+setup surface is rendering the BUNDLED manifest
+PASS  after-refusal: the setup surface renders the manifest of the SERVING version 0.1.0 — rendered "No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here."
+screenshot: after-refusal-connector-setup.png
+setup surface dispatched: [{"installId":"iext_4b38afe2-5fa","actionId":"bookingPageGuideReady","status":200},{"installId":"iext_4b38afe2-5fa","actionId":"listCalendars","status":200},{"installId":"iext_4b38afe2-5fa","actionId":"listAppointmentSchedules","status":200}]
+PASS  after-refusal: the setup surface actually dispatched a UI action — 3 dispatch(es)
+PASS  after-refusal: no UI action from the setup surface answered 404 — bookingPageGuideReady=200, listCalendars=200, listAppointmentSchedules=200
+PASS  after-refusal: the setup surface resolved exactly one install row — ids: iext_4b38afe2-5fa
+PASS  after-refusal: the settings page renders for the connector — landed on http://127.0.0.1:3477/configuration/extensions/settings/connector/@cinatra-ai/google-appointment-schedules-connector
+screenshot: after-refusal-extension-settings.png
+settings surface renders version: 0.1.0
+PASS  after-refusal: the settings surface resolved the expected version — rendered 0.1.0, expected 0.1.0
+PASS  after-refusal: the extension settings surface mounted
+lifecycle buttons: [{"label":"Workspace: All","disabled":false,"slot":"popover-trigger","reason":null},{"label":"Update","disabled":true,"slot":"disabled-action","reason":"Already up to date"},{"label":"Archive","disabled":false,"slot":"button","reason":null},{"label":"Activate","disabled":true,"slot":"disabled-action","reason":"Already active"},{"label":"Reinstall latest","disabled":false,"slot":"button","reason":null},{"label":"Force-delete…","disabled":false,"slot":"button","reason":null}]
+visible capability reasons: []
+PASS  after-refusal: no lifecycle action is denied as "More than one install matches your scope" — no ambiguity reason rendered
+PASS  after-refusal: "Archive" is rendered and ENABLED — disabled=false reason=none
+PASS  after-refusal: "Reinstall latest" is rendered and ENABLED — disabled=false reason=none
+screenshot: after-refusal-lifecycle-actions.png
+PASS  after-refusal: UI action "listAppointmentSchedules" is not a 404 — status 200 {"result":{"items":[]}}
+RESOLVED-INSTALL-ID iext_4b38afe2-5fa
+
+ALL CHECKS PASSED (mode=assert, label=after-refusal)

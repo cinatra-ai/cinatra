@@ -59,6 +59,13 @@ export interface RecommendationCandidate {
   skillId: string;
   skillRevisionId: string;
   name: string;
+  /**
+   * The owning extension's manifest `cinatra.displayName` (cinatra#2841), when
+   * it declares one. PRESENTATION ONLY: it is carried to `RankedRecommendation`
+   * untouched and is deliberately NOT tokenized into the candidate's token set,
+   * so adding it cannot move a single score. Absent ⇒ `name` is the label.
+   */
+  displayName?: string;
   description: string;
   /** Optional short cue text (e.g. the SKILL.md `match_when` block or the first
    * lines of content) used only to widen the token surface the intent is
@@ -124,7 +131,17 @@ export interface ScoredFeature {
 export interface RankedRecommendation {
   skillId: string;
   skillRevisionId: string;
+  /** The candidate's own catalog name — the SKILL.md frontmatter `name`, which
+   * for an extension-owned skill is its slug. This is the identity name the
+   * token surface was built from; it is NOT what a surface prints. */
   name: string;
+  /**
+   * THE LABEL A SURFACE PRINTS (cinatra#2841). The owning extension's manifest
+   * `cinatra.displayName` when it declares one, else `name` — resolved here, so
+   * every consumer prints the same label and no client re-derives one. Always
+   * non-empty.
+   */
+  displayName: string;
   /** Deterministic final score in [0,1], rounded to 4dp. */
   score: number;
   /** 1-based rank (1 = best); ties broken by `skillId` ascending. */
@@ -283,6 +300,10 @@ export function scoreSkillRecommendations(
       skillId: candidate.skillId,
       skillRevisionId: candidate.skillRevisionId,
       name: candidate.name,
+      // Carried, never scored — see `RecommendationCandidate.displayName`. The
+      // fallback is the candidate's own name, which is exactly the label this
+      // row carried before the manifest title was resolved.
+      displayName: candidate.displayName ?? candidate.name,
       score,
       recommended: score >= weights.recommendThreshold,
       scoredFeatures: features,

@@ -310,8 +310,17 @@ export {
   buildLlmMcpServerToolForAgentRun,
   buildLlmMcpServerToolForWidget,
   checkPublicMcpReachability,
+  // State-derived self-MCP catalog for the chat surface (cinatra#2771).
+  resolveChatMcpAllowedTools,
+  // Canonical cacheable-prefix projection (cinatra#2771).
+  projectCacheablePrefix,
+  serializeCacheablePrefixProjection,
 } from "./mcp-access";
 export type {
+  DelegatedChatToolClass,
+  ServableChatPrimitive,
+  ChatMcpCatalogState,
+  CacheablePrefixProjection,
   ChatMcpActor,
   ChatMcpActorTokenIssuer,
   AgentRunMcpActor,
