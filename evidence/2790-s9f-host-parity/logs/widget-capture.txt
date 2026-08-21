@@ -1,0 +1,19 @@
+# cinatra#2790 S9f widget capture — 2026-08-21T16:38:00.151Z
+# top-level page (NOT the Cinatra app): /host-page.html
+embed frame appeared after ~2s
+embed frame url path: /embed/assistant
+embed frame drew after ~0s
+frame is anonymous — running the frame's own hosted PKCE sign-in
+popup opened on path: /widget-auth
+popup closed: true
+frame left the anonymous state after ~2s
+COOKIE JAR after sign-in: [{"name":"better-auth.session_token","domain":"localhost","sameSite":"Lax","httpOnly":true,"secure":false}]
+turn sent through the widget's OWN composer (scripted provider, no LLM call)
+WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+WIRE {"label":"recommendation-resolve","method":"POST","path":"/api/lifecycle-views/recommendation-hold","resourceType":"fetch","cookie":"absent","widgetUserToken":"present (cwu_)","widgetOrigin":"present","widgetAssistant":"present"}
+CHIPS []
+THE CARD DID NOT MOUNT — recording the diagnostic instead of a cell
+DIAG recorded: ["page::.cw-frame=1","frame::[data-embed-assistant][data-phase=\"active\"]=1","frame::[data-conversation-list]=1","frame::[data-lifecycle-card-host=\"site_widget\"]=0","frame::[data-lifecycle-card=\"recommendation_hold\"]=0","frame::[data-lifecycle-card=\"artifact_review_gate\"]=0","root::[data-lifecycle-card-state]=0","root::[data-skill-action=\"confirm\"]=0","root::[data-skill-action=\"adjust\"]=0","root::[data-skill-action=\"skip\"]=0","root::[data-recommendation-chip]=0","frame::[data-conformance-id=\"run-chip-row\"]=0"]

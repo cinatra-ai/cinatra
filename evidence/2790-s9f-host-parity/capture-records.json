@@ -1,0 +1,486 @@
+[
+  {
+    "cell": "R1__recommendation-card__page_gate_region__held",
+    "declaredHost": "page_gate_region",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "pending",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/2ec2637c-1b0d-4855-b168-aa1e0ee6f77b/review/lifecycle-review%3Af1674c254eef7cd076fe7a720c14e85d294f1479432eb5e47ddfb9d7beeee40a",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R1__recommendation-card__page_gate_region__held.png",
+    "sha256": "41610030904894310783919745cc65e02be016742818a4468b595c70ce654b73",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-gate-card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-conformance-id=\"run-chip-row\"]",
+        "scope": "frame",
+        "count": 1
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-21T16:22:25.634Z",
+    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+    "note": "The recommendation card HELD on the run review page, framed on the card root. One chip per skill, each carrying its own Confirm / Adjust / Skip and printing the owning extension's manifest displayName. The host declaration on the region root is what makes this a page_gate_region mount, per the anchor contract.",
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "held",
+      "data-lifecycle-card-host": "page_gate_region",
+      "data-variant": "inline",
+      "data-can-decide": "true"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Brand Voice Matcher Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Web Research Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      }
+    ],
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 191,
+      "gateTop": 275,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    },
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "card-root",
+    "clip": {
+      "x": 376,
+      "y": 191,
+      "width": 1048,
+      "height": 68
+    },
+    "pageErrors": []
+  },
+  {
+    "cell": "R2__recommendation-card__page_gate_region__held__above-gate",
+    "declaredHost": "page_gate_region",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "pending",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/2ec2637c-1b0d-4855-b168-aa1e0ee6f77b/review/lifecycle-review%3Af1674c254eef7cd076fe7a720c14e85d294f1479432eb5e47ddfb9d7beeee40a",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R2__recommendation-card__page_gate_region__held__above-gate.png",
+    "sha256": "2f90d2a1ff4aae49930f4b20c4a69e4eaca04a9f6e62614b579da9bbd34e13de",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-gate-card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-conformance-id=\"run-chip-row\"]",
+        "scope": "frame",
+        "count": 1
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-21T16:22:25.833Z",
+    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+    "note": "The SAME held card IN ITS PAGE, uncropped and full-length, with the REVIEW GATE CARD beneath it — the ordering plan section 6.4 asks for: the run-start decision above the after-the-fact one, so reading down the gate region is reading the run in order. The measured order is carried in this record's `order`.",
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "held",
+      "data-lifecycle-card-host": "page_gate_region",
+      "data-variant": "inline",
+      "data-can-decide": "true"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Brand Voice Matcher Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Web Research Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      }
+    ],
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 191,
+      "gateTop": 275,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    },
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "page",
+    "clip": null,
+    "pageErrors": []
+  },
+  {
+    "cell": "R3__recommendation-card__page_gate_region__held__dark",
+    "declaredHost": "page_gate_region",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "pending",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/2ec2637c-1b0d-4855-b168-aa1e0ee6f77b/review/lifecycle-review%3Af1674c254eef7cd076fe7a720c14e85d294f1479432eb5e47ddfb9d7beeee40a",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R3__recommendation-card__page_gate_region__held__dark.png",
+    "sha256": "e72814b63aa49d7fda1e55b0e7e9115f2a792a2a21224cd191e6feee97c13a59",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+        "scope": "frame",
+        "count": 2
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"review-gate-card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-conformance-id=\"run-chip-row\"]",
+        "scope": "frame",
+        "count": 1
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-21T16:22:26.766Z",
+    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+    "note": "The SAME held card, same run, same framing selector, in the dark palette — the class next-themes writes when the shipped theme control is pressed. Nothing else changed.",
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "held",
+      "data-lifecycle-card-host": "page_gate_region",
+      "data-variant": "inline",
+      "data-can-decide": "true"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "undecided",
+        "forced": false,
+        "label": "Brand Voice Matcher Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Web Research Skill",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      }
+    ],
+    "order": {
+      "card": true,
+      "gate": true,
+      "cardTop": 191,
+      "gateTop": 275,
+      "cardAboveGate": true,
+      "domOrder": "card-then-gate"
+    },
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+    "framing": "card-root",
+    "clip": {
+      "x": 376,
+      "y": 191,
+      "width": 1048,
+      "height": 68
+    },
+    "pageErrors": []
+  },
+  {
+    "cell": "DIAG__site-widget-column__card-absent",
+    "isDiagnostic": true,
+    "declaredHost": "site_widget",
+    "declaredKind": null,
+    "declaredState": null,
+    "finalUrl": "/host-page.html",
+    "frameUrl": "/embed/assistant?<frame disambiguators>",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/DIAG__site-widget-column__card-absent.png",
+    "sha256": "926dece4c4b300179240b14eb61430d92cc3ef9df6c13e5f8e9c62fd45508bca",
+    "assertions": [
+      {
+        "selector": ".cw-frame",
+        "scope": "page",
+        "count": 1
+      },
+      {
+        "selector": "[data-embed-assistant][data-phase=\"active\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conversation-list]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-conformance-id=\"run-chip-row\"]",
+        "scope": "frame",
+        "count": 0
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-21T16:41:14.478Z",
+    "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
+    "note": "DIAGNOSTIC, NOT A CELL. The embedded cross-site widget column with the run named in the turn — and NO recommendation card on it. The transcript slot is there; the card is not, because every broker read was answered with a 307 to /sign-in before the route handler ran (see `wire` and `wireResponses`). Filed as a diagnostic so nothing here claims a card that is not on screen.",
+    "columnText": "You\nMe\nShow me the run 34fe61e1-c924-48f6-a2f1-0fabf5182fa1 please.\nCinatra\nCINATRA_UAT_OK: deterministic test reply for WordPress. You said: \"Show me the run 34fe61e1-c924-48f6-a2f1-0fabf5182fa1 please.\".\nCould not load agent run 34fe61e1 — please try again."
+  }
+]

@@ -1,0 +1,12 @@
+# cinatra#2790 S9f review-page capture — 2026-08-21T16:22:07.377Z
+after sign-in: /chat/cinatra-ai/cinatra-assistant
+review page: /agents/cinatra-ai/blog-draft-writer-agent/2ec2637c-1b0d-4855-b168-aa1e0ee6f77b/review/lifecycle-review%3Af1674c254eef7cd076fe7a720c14e85d294f1479432eb5e47ddfb9d7beeee40a
+recommendation card appeared after ~4s
+CHIPS [{"skillId":"@cinatra-ai/blog-post-matcher-skill:blog-post-matcher","mark":"undecided","forced":false,"label":"Blog Post Matcher Skill","actions":["confirm","adjust","skip"]},{"skillId":"@cinatra-ai/blog-writing-skill:blog-writing","mark":"undecided","forced":false,"label":"Blog Writing Skill","actions":["confirm","adjust","skip"]},{"skillId":"@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher","mark":"undecided","forced":false,"label":"Brand Voice Matcher Skill","actions":["confirm","adjust","skip"]},{"skillId":"@cinatra-ai/web-research-skill:web-research","mark":"undecided","forced":true,"label":"Web Research Skill","actions":["confirm","adjust","skip"]}]
+ORDER {"card":true,"gate":true,"cardTop":191,"gateTop":275,"cardAboveGate":true,"domOrder":"card-then-gate"}
+SHARED CLIP {"x":376,"y":191,"width":1048,"height":68}
+CAP R1__recommendation-card__page_gate_region__held 2096x136 chips=4 order={"card":true,"gate":true,"cardTop":191,"gateTop":275,"cardAboveGate":true,"domOrder":"card-then-gate"} theme="inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+CAP R2__recommendation-card__page_gate_region__held__above-gate 2880x3540 chips=4 order={"card":true,"gate":true,"cardTop":191,"gateTop":275,"cardAboveGate":true,"domOrder":"card-then-gate"} theme="inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+CAP R3__recommendation-card__page_gate_region__held__dark 2096x136 chips=4 order={"card":true,"gate":true,"cardTop":191,"gateTop":275,"cardAboveGate":true,"domOrder":"card-then-gate"} theme="inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+pageErrors: []
+CAPTURE OK
