@@ -521,6 +521,38 @@ export type ConversationTurnStatus = "idle" | "running" | "finished" | "error";
  */
 export const MAX_PENDING_REMOVED_MESSAGE_IDS = 512;
 
+/**
+ * THE SAVE TOKEN: which assertions one save carried, stated explicitly.
+ *
+ * The ids alone cannot say it. An id can be asserted TWICE — the save carrying
+ * the first assertion may still be open when the turn that follows folds that
+ * message back into the list and a later edit removes it again — and those are
+ * two different removals, so a confirm that simply subtracted its ids cleared
+ * whichever assertion happened to be standing. The fix is a REVISION per
+ * assertion, and the token is the snapshot of the revisions the peek handed out.
+ *
+ * It is DATA, not an identity. The previous round keyed that snapshot on the
+ * ids array object itself, held in a `WeakMap` — so any host that copied,
+ * rebuilt or serialized the array between the peek and the confirm handed back
+ * an array the hook had never seen, whose snapshot was therefore absent, and the
+ * confirm silently cleared NOTHING. A confirmed removal that never clears is
+ * re-asserted in every later save and, at the cap, evicts newer assertions to
+ * make room for itself, forever (codex round 3, finding 3). So the token carries
+ * what the confirm needs, in plain pairs that survive anything a host does to
+ * them that preserves JSON, and the array object means nothing at all.
+ */
+export type RemovedMessageIdsSaveToken = {
+  /** `[id, revision]` for every assertion standing when the peek was taken. */
+  readonly revisions: ReadonlyArray<readonly [string, number]>;
+};
+
+/** What `peekRemovedMessageIds` hands a host: the ids to put on the wire, and
+ *  the token to hand back to `confirmRemovedMessageIds` once they land. */
+export type PeekedRemovedMessageIds = {
+  ids: string[];
+  saveToken: RemovedMessageIdsSaveToken;
+};
+
 const NO_PAUSED: string[] = [];
 const NO_TAGGED_IDS: string[] = [];
 const EMPTY_HANDLE_MAP = new Map<string, string>();
@@ -599,15 +631,12 @@ export function useConversationColumnTurns({
   // removals. A confirm that simply subtracted its ids cleared whichever
   // assertion happened to be standing, so the second removal ended up asserted
   // by nothing — the silent truncation this whole leg removes (codex round 2,
-  // finding 4). Insertion order is the assertion order, which is what makes
-  // "evict the oldest" meaningful at the cap below.
+  // finding 4). WHICH revisions a save carried is stated by the SAVE TOKEN the
+  // peek hands out (`RemovedMessageIdsSaveToken`), never inferred from the ids
+  // array's object identity. Insertion order is the assertion order, which is
+  // what makes "evict the oldest" meaningful at the cap below.
   const removedMessageIdsRef = useRef<Map<string, number>>(new Map());
   const removalRevisionRef = useRef(0);
-  // The revisions a `peek` handed out, keyed by the ARRAY it handed them on:
-  // that array is the save's identity — the host puts this exact one on the
-  // wire and hands it back to `confirm` — and it is weakly held, so a save
-  // whose array is gone takes its snapshot with it.
-  const removalSnapshotsRef = useRef(new WeakMap<readonly string[], Map<string, number>>());
   // Remount key for mounted extension widgets — bumped when a turn ran a tool a
   // manifest declares as widget-refreshing, exactly as `/chat` bumps it.
   const [widgetRefreshKey, setWidgetRefreshKey] = useState(0);
@@ -752,30 +781,27 @@ export function useConversationColumnTurns({
     [hasActiveStream, runTurn, writeMessages],
   );
 
-  /** The removals this column has truncated and not yet had saved. The host
-   *  puts them on its next write; they stay here until it confirms they
-   *  landed, so a save that silently failed does not lose the assertion. The
-   *  array handed out is the token `confirm` is matched against — see below. */
-  const peekRemovedMessageIds = useCallback(() => {
-    const ids = [...removedMessageIdsRef.current.keys()];
-    removalSnapshotsRef.current.set(ids, new Map(removedMessageIdsRef.current));
-    return ids;
+  /** The removals this column has truncated and not yet had saved: the `ids` to
+   *  put on the write, and the SAVE TOKEN naming the assertions those ids stand
+   *  for. They stay here until the host confirms they landed, so a save that
+   *  silently failed does not lose the assertion. Peeking does not consume, and
+   *  the host may do anything JSON-preserving to either half — nothing here is
+   *  keyed on an object's identity (`RemovedMessageIdsSaveToken`). */
+  const peekRemovedMessageIds = useCallback((): PeekedRemovedMessageIds => {
+    const pending = removedMessageIdsRef.current;
+    return { ids: [...pending.keys()], saveToken: { revisions: [...pending] } };
   }, []);
-  /** A save carrying exactly these ids came back OK — drop them, and ONLY those
-   *  whose assertion is still the one that save carried. An id re-asserted
-   *  since (the message came back and a later edit removed it again) has a newer
-   *  revision than the snapshot taken when this array was peeked, and survives:
-   *  its removal has not been saved by anyone yet. An array this hook did not
-   *  hand out carries no snapshot and therefore clears nothing — keeping an
-   *  assertion costs an id in one payload, dropping one loses a removal for
-   *  good, and this module takes the first every time. */
-  const confirmRemovedMessageIds = useCallback((ids: string[]) => {
-    const carried = removalSnapshotsRef.current.get(ids);
-    for (const id of ids) {
-      const standing = removedMessageIdsRef.current.get(id);
-      if (standing !== undefined && carried?.get(id) === standing) {
-        removedMessageIdsRef.current.delete(id);
-      }
+  /** The save that carried this token came back OK — drop the assertions it
+   *  actually carried, and only those. An id re-asserted since (the message came
+   *  back and a later edit removed it again) has a newer revision standing than
+   *  the token records, and survives: its removal has not been saved by anyone
+   *  yet. A token from no peek of this column names no standing revision and so
+   *  clears nothing — keeping an assertion costs an id in one payload, dropping
+   *  one loses a removal for good, and this module takes the first every time. */
+  const confirmRemovedMessageIds = useCallback((saveToken: RemovedMessageIdsSaveToken) => {
+    const pending = removedMessageIdsRef.current;
+    for (const [id, carried] of saveToken?.revisions ?? []) {
+      if (pending.get(id) === carried) pending.delete(id);
     }
   }, []);
 

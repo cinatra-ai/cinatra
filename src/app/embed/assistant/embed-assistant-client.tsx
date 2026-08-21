@@ -674,7 +674,12 @@ function EmbedConversation({
     // edit comes undone on the next reload. It is CONFIRMED rather than drained
     // — a widget save is best-effort and silent, so an assertion dropped on a
     // save that failed would be an assertion lost for good.
-    const removedMessageIds = turns.peekRemovedMessageIds();
+    // The ids go on the wire; the SAVE TOKEN says which assertions they stand
+    // for and is what the confirm is matched on. Not the array — this host
+    // hands `removedMessageIds` to a payload builder, and a contract that read
+    // the array's object identity would silently confirm nothing the moment it
+    // did (codex round 3, finding 3).
+    const { ids: removedMessageIds, saveToken } = turns.peekRemovedMessageIds();
     void saveThreadTranscript(
       buildThreadWrite({
         threadId: session.threadId,
@@ -690,7 +695,7 @@ function EmbedConversation({
       // this browser.
       serviceTransport,
     ).then((landed) => {
-      if (landed && removedMessageIds.length > 0) turns.confirmRemovedMessageIds(removedMessageIds);
+      if (landed && removedMessageIds.length > 0) turns.confirmRemovedMessageIds(saveToken);
     });
   }, [localTurnStatus, messages, serviceTransport, session.threadId, session.assistant, turns]);
   const host = useMemo(

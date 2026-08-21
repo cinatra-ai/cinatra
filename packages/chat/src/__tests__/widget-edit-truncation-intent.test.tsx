@@ -57,6 +57,12 @@ function mountTurns(initialMessages: UiMessage[] = SEEDED) {
   );
 }
 
+/** The ids half of a peek. `peekRemovedMessageIds` returns `{ ids, saveToken }`
+ *  — the token is what a confirm is matched on, and the arm below that is about
+ *  the token says so itself. */
+const peekIds = (r: { current: { peekRemovedMessageIds: () => { ids: string[] } } }) =>
+  r.current.peekRemovedMessageIds().ids;
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -64,7 +70,7 @@ beforeEach(() => {
 describe("the conversation column's edit carries a truncation intent", () => {
   it("names every message the edit dropped, and NOT the one it rewrote", () => {
     const { result } = mountTurns();
-    expect(result.current.peekRemovedMessageIds()).toEqual([]);
+    expect(peekIds(result)).toEqual([]);
 
     act(() => {
       result.current.onEditAndResend("u2", "actually, never mind");
@@ -73,7 +79,7 @@ describe("the conversation column's edit carries a truncation intent", () => {
     // `a2` is gone. `u2` is NOT named: this column rewrites the edited message
     // IN PLACE, keeping its id, so the payload still carries it — asserting its
     // removal would be a lie about a message the save is keeping.
-    expect(result.current.peekRemovedMessageIds()).toEqual(["a2"]);
+    expect(peekIds(result)).toEqual(["a2"]);
     expect(result.current.messages.map((m) => m.id)).toEqual(["u1", "a1", "u2"]);
   });
 
@@ -89,7 +95,7 @@ describe("the conversation column's edit carries a truncation intent", () => {
     await act(async () => {
       result.current.onEditAndResend("a1", "second rewrite");
     });
-    expect(result.current.peekRemovedMessageIds()).toEqual(["a2", "u2"]);
+    expect(peekIds(result)).toEqual(["a2", "u2"]);
   });
 
   it("keeps the intent until a save CONFIRMS it, because a widget save is silent", () => {
@@ -99,12 +105,12 @@ describe("the conversation column's edit carries a truncation intent", () => {
     // with nothing asserted, which is precisely the silent-truncation shape.
     const { result } = mountTurns();
     act(() => result.current.onEditAndResend("u2", "rewrite"));
-    const pending = result.current.peekRemovedMessageIds();
-    expect(pending).toEqual(["a2"]);
+    const save = result.current.peekRemovedMessageIds();
+    expect(save.ids).toEqual(["a2"]);
     // Peeking twice does not consume it.
-    expect(result.current.peekRemovedMessageIds()).toEqual(["a2"]);
-    act(() => result.current.confirmRemovedMessageIds(pending));
-    expect(result.current.peekRemovedMessageIds()).toEqual([]);
+    expect(peekIds(result)).toEqual(["a2"]);
+    act(() => result.current.confirmRemovedMessageIds(save.saveToken));
+    expect(peekIds(result)).toEqual([]);
   });
 
   it("a confirm only clears what it carried — an edit during the save survives", async () => {
@@ -112,14 +118,14 @@ describe("the conversation column's edit carries a truncation intent", () => {
     await act(async () => {
       result.current.onEditAndResend("u2", "rewrite");
     });
-    const inFlight = result.current.peekRemovedMessageIds(); // ["a2"]
+    const inFlight = result.current.peekRemovedMessageIds(); // ids: ["a2"]
     // The save is still open; the reader edits again.
     await act(async () => {
       result.current.onEditAndResend("a1", "rewrite again");
     });
-    act(() => result.current.confirmRemovedMessageIds(inFlight));
+    act(() => result.current.confirmRemovedMessageIds(inFlight.saveToken));
     // `u2` was truncated by the SECOND edit and no save has carried it yet.
-    expect(result.current.peekRemovedMessageIds()).toEqual(["u2"]);
+    expect(peekIds(result)).toEqual(["u2"]);
   });
 
   it("a confirm cannot clear an assertion its save never carried", async () => {
@@ -142,21 +148,69 @@ describe("the conversation column's edit carries a truncation intent", () => {
 
     // SAVE A goes on the wire carrying the FIRST assertion of `a2`.
     const saveA = result.current.peekRemovedMessageIds();
-    expect(saveA).toEqual(["a2"]);
+    expect(saveA.ids).toEqual(["a2"]);
 
     // The reader edits again while A is still open: `a2` is present, and this
     // edit removes it a second time. A different removal of the same id.
     await act(async () => {
       result.current.onEditAndResend("u2", "rewrite once more");
     });
-    expect(result.current.peekRemovedMessageIds()).toEqual(["a2"]);
+    expect(peekIds(result)).toEqual(["a2"]);
 
     // A lands. It may only clear what it carried.
-    act(() => result.current.confirmRemovedMessageIds(saveA));
+    act(() => result.current.confirmRemovedMessageIds(saveA.saveToken));
     expect(
-      result.current.peekRemovedMessageIds(),
+      peekIds(result),
       "the confirm of an older save cleared an assertion made after it",
     ).toEqual(["a2"]);
+  });
+
+  it("confirms a save whose ids array was COPIED — the TOKEN is what a save is", async () => {
+    // CODEX ROUND 3, FINDING 3. The confirm used to be keyed on the identity of
+    // the ids ARRAY the peek returned, held in a WeakMap. Every host that does
+    // anything ordinary with those ids between the peek and the confirm — posts
+    // them as JSON, spreads them into a payload builder, hands back what the
+    // response echoed — gives back a DIFFERENT array object, whose snapshot the
+    // WeakMap has never seen, and the confirm cleared NOTHING while reporting
+    // nothing wrong. A confirmed removal that never clears is re-asserted in
+    // every later save forever and, at the cap, evicts newer assertions to make
+    // room for itself. So the contract says it outright: the peek hands out a
+    // SAVE TOKEN, and the token is plain data.
+    const { result } = mountTurns();
+    // The turn that follows the edit re-delivers `a2`, so the second half of
+    // this arm has a message to remove a SECOND time.
+    driveAssistantChatTurn.mockImplementationOnce(async (req) => {
+      req?.ui.updateMessages((prev) => [...prev, msg("a2", "assistant")]);
+    });
+    await act(async () => {
+      result.current.onEditAndResend("u2", "rewrite");
+    });
+    const peeked = result.current.peekRemovedMessageIds();
+
+    // The whole peek goes through the most destructive thing a host can do to
+    // it and still be carrying the same statement: a JSON round trip. Every
+    // object identity here is now different from the one the hook handed out.
+    const wire: typeof peeked = JSON.parse(JSON.stringify(peeked));
+    expect(wire.ids).toEqual(["a2"]);
+    expect(wire.saveToken).not.toBe(peeked.saveToken);
+
+    act(() => result.current.confirmRemovedMessageIds(wire.saveToken));
+    expect(
+      peekIds(result),
+      "a confirmed removal stayed pending — every later save re-asserts it",
+    ).toEqual([]);
+
+    // And the revision check the token exists to carry is untouched by the
+    // round trip: `a2` is back in the list, a second edit removes it AGAIN, and
+    // the token of the save that carried the FIRST assertion does not clear the
+    // second one.
+    expect(result.current.messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "a2"]);
+    await act(async () => {
+      result.current.onEditAndResend("u2", "rewrite once more");
+    });
+    expect(peekIds(result)).toEqual(["a2"]);
+    act(() => result.current.confirmRemovedMessageIds(wire.saveToken));
+    expect(peekIds(result), "a stale token cleared a newer assertion").toEqual(["a2"]);
   });
 
   it("BOUNDS the pending removals, evicting the oldest — the stated cost of a bound", () => {
@@ -172,7 +226,7 @@ describe("the conversation column's edit carries a truncation intent", () => {
     const { result } = mountTurns(long);
     act(() => result.current.onEditAndResend("u1", "rewrite"));
 
-    const pending = result.current.peekRemovedMessageIds();
+    const pending = peekIds(result);
     expect(pending).toHaveLength(MAX_PENDING_REMOVED_MESSAGE_IDS);
     // The OLDEST went, and the newest — the removals a save made now is most
     // likely to be about — are all still there.
@@ -184,7 +238,7 @@ describe("the conversation column's edit carries a truncation intent", () => {
   it("an edit that removes nothing asserts nothing", () => {
     const { result } = mountTurns();
     act(() => result.current.onEditAndResend("a2", "edit the tail"));
-    expect(result.current.peekRemovedMessageIds()).toEqual([]);
+    expect(peekIds(result)).toEqual([]);
   });
 });
 
