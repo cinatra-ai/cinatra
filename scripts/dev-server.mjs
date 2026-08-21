@@ -11,7 +11,7 @@
 
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -28,6 +28,15 @@ import {
   resolveNangoBaseUrl,
   probeHttpHealth,
 } from "./lib/nango-health.mjs";
+import {
+  COMPOSE_PROJECT_ENV_VAR,
+  SKIP_PREFLIGHT_ENV_VAR,
+  createComposeRunner,
+  formatComposeCommand,
+  readEnvFileValue,
+  resolveComposeProjectName,
+  shouldSkipDevPreflight,
+} from "./lib/dev-preflight.mjs";
 
 // Repo root (the dir holding docker-compose*.yml), resolved from THIS script's
 // location so the best-effort Nango heal targets the right compose files no
@@ -48,35 +57,54 @@ const repoEnvPath = path.join(repoRoot, ".env.local");
 // and never touch another worktree or the main checkout.
 const pidFilePath = path.join(process.cwd(), ".next", "dev-server.json");
 
-function readEnvPort(filePath) {
-  if (!existsSync(filePath)) return undefined;
-  for (const raw of readFileSync(filePath, "utf8").split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const m = /^(?:export\s+)?PORT\s*=\s*(.*)$/.exec(line);
-    if (!m) continue;
-    let value = m[1].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    return value.trim() || undefined;
-  }
-  return undefined;
-}
-
 // A PORT explicitly set in the real shell environment always wins.
 if (!process.env.PORT) {
-  const envPort = readEnvPort(envPath);
+  const envPort = readEnvFileValue(envPath, "PORT");
   if (envPort) {
     process.env.PORT = envPort;
     console.log(`[dev-server] PORT=${envPort} (from ${path.relative(process.cwd(), envPath) || ".env.local"})`);
   }
 }
 
-// Narrow Docker DB-port preflight (CINATRA_SKIP_DEV_PREFLIGHT=1 to skip).
+// Every `.env.local` this launcher may consult: the one in the cwd it was
+// launched from, then the repo root's (identical when `pnpm dev` runs from the
+// checkout root, different when it does not). First stated value wins.
+const ENV_FILES = [envPath, ...(repoEnvPath === envPath ? [] : [repoEnvPath])];
+
+// Look one key up across those files (cwd first).
+function lookupEnvFiles(key) {
+  for (const file of ENV_FILES) {
+    const value = readEnvFileValue(file, key);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+// cinatra#2839: the bypass switch is resolved ONCE, from the real shell
+// environment AND from `.env.local` — a worktree lane records its configuration
+// in `.env.local` (that is where it states PORT and its service URLs), so a lane
+// that opts out there must be honored exactly as a shell export is. Reading the
+// process env alone meant the flag's documented promise — that `pnpm dev`
+// starts NOTHING via Docker — silently did not hold for the lanes that need it
+// most.
+const skipPreflight = shouldSkipDevPreflight({
+  processEnv: process.env,
+  envFileValues: ENV_FILES.map((file) => readEnvFileValue(file, SKIP_PREFLIGHT_ENV_VAR)),
+});
+
+// The compose project this preflight is allowed to act on, resolved from the
+// SAME per-worktree switch the rest of the stack uses (COMPOSE_PROJECT_NAME),
+// read from the shell env AND `.env.local` because Docker itself only reads the
+// former. Unset = the historical main-checkout behavior: compose derives the
+// project from the directory basename.
+const composeProjectName = resolveComposeProjectName({
+  processEnv: process.env,
+  envFileValues: [lookupEnvFiles(COMPOSE_PROJECT_ENV_VAR)],
+});
+
+// Narrow Docker DB-port preflight (CINATRA_SKIP_DEV_PREFLIGHT=1 to skip, from
+// the shell env or `.env.local`). Read-only: it inspects containers, never
+// creates them.
 //
 // `next dev` against a host where the bundled Postgres/Redis containers run but
 // publish no host port (a base-only `docker compose up` without
@@ -85,27 +113,8 @@ if (!process.env.PORT) {
 // yet" stays a non-blocking warning (start docker, the app reconnects); only the
 // positively-diagnosed drift — running container, unpublished port — is fatal,
 // because it is a definitively-broken state with a known fix.
-function readEnvValue(filePath, key) {
-  if (!existsSync(filePath)) return undefined;
-  for (const raw of readFileSync(filePath, "utf8").split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const m = new RegExp(`^(?:export\\s+)?${key}\\s*=\\s*(.*)$`).exec(line);
-    if (!m) continue;
-    let value = m[1].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    return value.trim() || undefined;
-  }
-  return undefined;
-}
-
 function envHostPort(filePath, key, fallback) {
-  const value = process.env[key] || readEnvValue(filePath, key);
+  const value = process.env[key] || readEnvFileValue(filePath, key);
   // parseHostPort applies explicit-port > scheme-default > fallback precedence, so
   // a no-port loopback URL (e.g. postgresql://…@localhost/db = :5432) is NOT
   // mis-read as the bundled host port and never triggers a false drift exit.
@@ -131,7 +140,7 @@ function probeTcp(host, port, timeoutMs = 1500) {
 }
 
 async function runDbPortPreflight() {
-  if (process.env.CINATRA_SKIP_DEV_PREFLIGHT === "1") return;
+  if (skipPreflight) return;
   // Only the two REQUIRED services gate boot; neo4j (recommended) is skipped to
   // keep healthy boots fast.
   const targets = BUNDLED_DB_SERVICES.filter((s) =>
@@ -159,7 +168,16 @@ async function runDbPortPreflight() {
   for (const { svc, port } of down) {
     let diag;
     try {
-      diag = diagnoseDockerPortDrift({ service: svc, mainRoot, expectedHostPort: port });
+      // `skip` is passed even though this function already returned on it
+      // above: the guard belongs on the spawning function, so no call site
+      // added later can reach Docker behind the flag. Same reason the compose
+      // runner carries its own guard (scripts/lib/dev-preflight.mjs).
+      diag = diagnoseDockerPortDrift({
+        service: svc,
+        mainRoot,
+        expectedHostPort: port,
+        skip: skipPreflight,
+      });
     } catch {
       diag = { available: false };
     }
@@ -182,40 +200,15 @@ async function runDbPortPreflight() {
 await runDbPortPreflight();
 
 // Run a docker compose subcommand against the bundled dev stack (base +
-// loopback-publish override, exactly as `make dev` does). Resolves
-// { available } — false when Docker is not installed/usable — and { ok } from
-// the exit code. Never throws; output is suppressed (we print our own lines).
-function runCompose(args, { timeoutMs = 120_000 } = {}) {
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawn(
-        "docker",
-        [
-          "compose",
-          "-f",
-          "docker-compose.yml",
-          "-f",
-          "docker-compose.dev.yml",
-          ...args,
-        ],
-        { cwd: repoRoot, stdio: "ignore" },
-      );
-    } catch {
-      resolve({ available: false });
-      return;
-    }
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolve({ available: false }); // e.g. ENOENT — docker not on PATH
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      resolve({ available: true, ok: code === 0 });
-    });
-  });
-}
+// loopback-publish override, exactly as `make dev` does), pinned to THIS
+// worktree's compose project and hard-gated on the skip flag — see
+// scripts/lib/dev-preflight.mjs for both decisions and their tests.
+const runCompose = createComposeRunner({
+  spawnFn: spawn,
+  skip: skipPreflight,
+  projectName: composeProjectName,
+  cwd: repoRoot,
+});
 
 // Poll the /health URL up to `tries` times (spaced `intervalMs` apart). Returns
 // true on the first healthy response, false once the budget is exhausted.
@@ -227,8 +220,15 @@ async function waitForNangoHealth(healthUrl, { tries, intervalMs }) {
   return false;
 }
 
-// Nango connector-service preflight (CINATRA_SKIP_DEV_PREFLIGHT=1 to skip, same
-// switch the DB preflight honors).
+// Nango connector-service preflight (CINATRA_SKIP_DEV_PREFLIGHT=1 to skip —
+// honored from the shell env OR `.env.local`, the same switch the DB preflight
+// reads; see `skipPreflight` above and scripts/lib/dev-preflight.mjs).
+//
+// This is the ONLY preflight that WRITES to Docker, so it is the one the skip
+// flag exists for. Its `up -d nango-server` also starts nango-server's
+// `depends_on` (nango-db, redis) — three containers, their volumes and the
+// project network — which is why it is pinned to this worktree's compose
+// project rather than a basename-derived one (cinatra#2839).
 //
 // The connector OAuth gateway (`cinatra-nango-server-1`) runs the upstream
 // amd64-only image under qemu on arm64 dev hosts and can segfault. The compose
@@ -242,9 +242,9 @@ async function waitForNangoHealth(healthUrl, { tries, intervalMs }) {
 // Never fatal: the app boots without connectors and reconnects when Nango
 // returns, so this only warns — it must not block dev on the connector backend.
 async function runNangoHealthPreflight() {
-  if (process.env.CINATRA_SKIP_DEV_PREFLIGHT === "1") return;
+  if (skipPreflight) return;
   const rawUrl =
-    process.env.NANGO_SERVER_URL || readEnvValue(repoEnvPath, "NANGO_SERVER_URL");
+    process.env.NANGO_SERVER_URL || readEnvFileValue(repoEnvPath, "NANGO_SERVER_URL");
   const healthUrl = nangoHealthUrl(rawUrl);
 
   if ((await probeHttpHealth(healthUrl, 4000)).ok) return; // healthy → silent
@@ -265,7 +265,7 @@ async function runNangoHealthPreflight() {
   const up = await runCompose(["up", "-d", "nango-server"], { timeoutMs: 120_000 });
   if (!up.available) {
     console.warn(
-      "[dev-server] ⚠ Nango connector service is not healthy and Docker is unavailable. Start Docker, then `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d nango-server` and re-run `pnpm dev`.",
+      `[dev-server] ⚠ Nango connector service is not healthy and Docker is unavailable. Start Docker, then \`${formatComposeCommand({ projectName: composeProjectName, args: ["up", "-d", "nango-server"] })}\` and re-run \`pnpm dev\`.`,
     );
     return;
   }
@@ -275,7 +275,7 @@ async function runNangoHealthPreflight() {
     // restarting would just burn ~60s and end on a misleading "inspect logs"
     // line, so surface the actionable failure path directly and stop here.
     console.warn(
-      "[dev-server] ⚠ `docker compose up -d nango-server` failed — connectors will be unavailable. Check Docker is running, then inspect: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs --tail=80 nango-server",
+      `[dev-server] ⚠ \`${formatComposeCommand({ projectName: composeProjectName, args: ["up", "-d", "nango-server"] })}\` failed — connectors will be unavailable. Check Docker is running, then inspect: ${formatComposeCommand({ projectName: composeProjectName, args: ["logs", "--tail=80", "nango-server"] })}`,
     );
     return;
   }
@@ -295,7 +295,7 @@ async function runNangoHealthPreflight() {
   }
 
   console.warn(
-    "[dev-server] ⚠ Nango connector service is not healthy — connectors will fail. Inspect: docker compose logs --tail=80 nango-server",
+    `[dev-server] ⚠ Nango connector service is not healthy — connectors will fail. Inspect: ${formatComposeCommand({ projectName: composeProjectName, args: ["logs", "--tail=80", "nango-server"] })}`,
   );
 }
 

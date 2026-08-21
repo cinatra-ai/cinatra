@@ -537,6 +537,38 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     ).not.toBeNull();
   });
 
+  // The RUNTIME instance contract for this kind on its declared host, asserted
+  // on real DOM rather than on source text: ONE row draws, and it carries the
+  // decision affordances the ratified set names. The count is the point —
+  // a second adapter drawing beside this one would make it two.
+  // The affordances named here are the REDRAWN per-chip set (cinatra#2841), the
+  // set scripts/audit/chat-hitl-anchor-contract.json ratifies for this owner.
+  // The row-level confirm/skip pair this assertion used to name is not emitted
+  // on any host any more, so asserting it would test a retired drawing.
+  it("host run_card draws EXACTLY ONE chip row, carrying the ratified decisions", async () => {
+    holdStateMock.mockImplementation(async () => HELD);
+    const { container } = await mountCard({ wireRef: "hold-ref-1", host: "run_card" });
+    await waitFor(() =>
+      expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull(),
+    );
+    expect(container.querySelectorAll("[data-run-recommendation-chip-row]")).toHaveLength(1);
+    const root = container.querySelector("[data-run-recommendation-chip-row]")!;
+    // The card's IDENTITY, read off the root it mounted rather than assumed. The
+    // owner emits these since cinatra#2841 closed the root-identity obligation,
+    // so the instance proof can now name which card, on which host, in which
+    // state it photographed — the thing the recorded obligation said it could not.
+    expect(container.querySelector('[data-lifecycle-card="recommendation_hold"]')).not.toBeNull();
+    expect(container.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull();
+    expect(root.getAttribute("data-lifecycle-card-host")).toBe("run_card");
+    expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
+    expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+    expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+    expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+    // Every value above came from the VALIDATED hold state, not from a literal:
+    // drop the skills the state carried and the row draws nothing to press.
+    expect(root.textContent).toContain("Skill A");
+  });
+
   it("draws nothing at all for a run that was never held", async () => {
     holdStateMock.mockImplementation(async () => ({ state: "none" }));
     const { container } = await mountCard({ wireRef: null });

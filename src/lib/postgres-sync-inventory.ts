@@ -92,6 +92,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "cinatra#2674 (epic #2564 S8e, the 2026-08-12 scope addition): the jti-keyed LIVE re-check behind a review-island credential. An <iframe> load on a third-party CMS page carries no bearer and no cookie, so the URL seals the cwu_ token's jti and this read is the revocation edge for it — the same security-critical instant decision widget-user-auth.ts makes, keyed on jti because there is no raw token to hash. It is the exact sibling of widget-capture-principal.ts (same table, same jti key, same revocation role), differing only in requiring the LIFECYCLE grant, and it is deliberately its own leaf for the same reason that one is: widget-user-auth.ts's verifier is raw-token-keyed and cannot express this read. NOT on the async pooled/drizzle layer: widget_user_tokens has no drizzle mapping. ONE read-only SELECT, no writes. Migrates with widget-user-auth.ts, serialized with it.",
   },
+  "src/lib/lifecycle/review-island-grant-store.ts": {
+    class: "sync-required",
+    justification:
+      "cinatra#2754 (the 2026-08-21 hardening ruling): the SINGLE-USE ledger behind a review-island credential. The consume is one atomic DELETE...RETURNING keyed by sha256(credential) — the exact idiom redeemUserAuthCode uses on widget_auth_codes, and security-critical for the same reason: whether an address may still paint must be decided in one statement, with no TOCTOU window between deciding and spending, or two concurrent presentations of the same URL would both paint. It is deliberately its own leaf beside review-island-serving.ts (which is classified here for the same family) rather than an addition to widget-user-auth.ts, whose verifier is raw-token-keyed and cannot express this write. NOT on the async pooled/drizzle layer: review_island_grants has no drizzle mapping, and it lives and migrates with the widget_user_tokens family it is bound to. TWO call sites: the mint-time record (sweep + insert, one bridge call) and the serve-time consume.",
+  },
   "src/lib/lifecycle/widget-capture-principal.ts": {
     class: "sync-required",
     justification:

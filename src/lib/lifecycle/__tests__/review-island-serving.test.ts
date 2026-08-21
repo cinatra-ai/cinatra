@@ -35,6 +35,16 @@ vi.mock("@/lib/better-auth-db", () => ({
   readUserIsPlatformAdmin: (...a: unknown[]) => readUserIsPlatformAdmin(...a),
 }));
 vi.mock("@/lib/widget-auth-audit", () => ({ emitWidgetAuthAudit: vi.fn() }));
+// cinatra#2754 — the single-use ledger, held OPEN here on purpose. These cases
+// are about the four rungs ABOVE the consume; the consume itself, and the fact
+// that it is the LAST rung (a refusal never burns a grant, a success always
+// does), are proven in review-island-single-use.test.ts against a ledger that
+// behaves like the real table.
+vi.mock("@/lib/lifecycle/review-island-grant-store", () => ({
+  consumeIslandCredentialGrant: () => true,
+  recordIslandCredentialGrant: () => true,
+  islandCredentialHash: (v: string) => v,
+}));
 // cinatra#2684 — the parent-session leaf. Mocked as a data switch, exactly as
 // the capture probe's suite mocks it, so a SIGN-OUT is expressible here as what
 // it is: the session simply stops being live.
@@ -193,8 +203,9 @@ describe("LIVE PRINCIPAL — the token row is the revocation handle", () => {
   // cinatra#2684, adopted here at the 2026-08-13 rebase. THIS IS THE CASE THE
   // ORIGINAL SLICE DISCLOSED AND COULD NOT CLOSE: an ordinary Cinatra sign-out
   // did not touch the `cwu_` row, so a copied island URL kept painting for the
-  // rest of its 120 seconds. The binding landed separately; the island consults
-  // it, so the sign-out now stops the very next paint.
+  // rest of its life. The binding landed separately; the island consults
+  // it, so the sign-out now stops the very next paint. (The window is one minute
+  // since cinatra#2754; it was two when the residual was written down.)
   it("REFUSES once the PARENT SIGN-IN is gone — a copied URL dies with the session", async () => {
     widgetAuthSessionIsLive.mockReturnValue(false); // the sign-out
     expect(

@@ -76,10 +76,12 @@ vi.mock("next/navigation", () => ({
 
 /**
  * The recommendation hold's AUTHORITY, and the ONLY thing stubbed for that kind.
- * Its decision controls stay the real ones on the shipped chip row: since the §V
- * redraw (cinatra#2841) that is a PER-CHIP `data-skill-action` of
- * `confirm` | `adjust` | `skip`, not the deleted card-level
- * `confirm-run-recommendation` / `skip-run-recommendation` pair.
+ * Its decision controls are NOT stubbed: they stay whatever the shipped chip row
+ * draws, which since the §V redraw (cinatra#2841) is Confirm / Adjust / Skip PER
+ * CHIP (`[data-skill-action]`). The row-level `confirm-run-recommendation` /
+ * `skip-run-recommendation` pair this note used to name is drawn by nothing — it
+ * survives in this file only as the deliberately mislabeled plant further down,
+ * which the carriage observation must refuse to see.
  */
 type HoldState =
   | { state: "none" }

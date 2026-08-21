@@ -20,6 +20,8 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
+import { buildComposeArgs } from "./dev-preflight.mjs";
+
 // The bundled local DB/cache services whose host ports come from the dev override.
 // `containerPort` is the in-container listen port; `defaultHostPort` is the
 // loopback port the override publishes (and what the host app connects to).
@@ -137,13 +139,26 @@ export function resolveMainRepoRoot(cwd = process.cwd()) {
 // the MAIN compose project. Best-effort — any Docker unavailability / missing
 // container / parse failure returns { available: false } (never throws), so the
 // guard degrades to the generic "service down" message.
-export function diagnoseDockerPortDrift({ service, mainRoot, expectedHostPort }) {
+//
+// This is the SECOND Docker-touching path in the dev preflight (the first is the
+// compose runner in scripts/lib/dev-preflight.mjs). It is read-only — `ps -aq`
+// and `inspect` create nothing — but CINATRA_SKIP_DEV_PREFLIGHT promises the
+// preflight does NOT touch Docker at all, so the guard sits HERE too, on the
+// function that spawns, and not only on the launcher's entry check: `skip`
+// short-circuits before any spawn. (cinatra#2845 review, round 1: the "single
+// chokepoint" claim was overstated precisely because this path spawned docker
+// on its own.)
+//
+// The compose argv comes from the SHARED builder so the file list cannot drift
+// between the two paths. No project is pinned: drift diagnosis deliberately
+// inspects the main checkout's shared stack, which is compose's own
+// basename-derived project — see resolveMainRepoRoot above.
+//
+// @param {{ service: object, mainRoot: string, expectedHostPort: number|string, skip?: boolean }} input
+export function diagnoseDockerPortDrift({ service, mainRoot, expectedHostPort, skip = false }) {
+  if (skip) return { available: false, skipped: true };
   const compose = (args) =>
-    spawnSync(
-      "docker",
-      ["compose", "-f", "docker-compose.yml", "-f", "docker-compose.dev.yml", ...args],
-      { cwd: mainRoot, encoding: "utf8" },
-    );
+    spawnSync("docker", buildComposeArgs({ args }), { cwd: mainRoot, encoding: "utf8" });
 
   // `ps -q <service>` (all states) → the container id in THIS project for the
   // service, regardless of which compose files started it (project+service

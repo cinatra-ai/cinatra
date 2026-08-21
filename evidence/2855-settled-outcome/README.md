@@ -72,17 +72,21 @@ file `scripts/ci/chat-hitl-evidence-gate.mjs` reads.
 | the settled card on `page_gate_region` | **NOT PHOTOGRAPHABLE on this host, and the reason is a shipped route decision.** Approve was pressed on the page's own floor on a fourth real gate; the decision's server action revalidates the route, and `loadReviewGateSurface` answers a RESOLVED gate with `kind: "blocked"` **before the card mounts**, so the route replaces the whole card with its own `ReviewGateBlocked` panel. The recorder waited for either panel and photographed what was there: `evidence/2855-settled-outcome/captures/A2__review-page-after-approve__route-blocked-panel.png`, a full-page shot with `data-lifecycle-card-host` count **0**. It is named for what it shows and carries no host token, so nothing indexes it as a settled-card cell. The settled card IS proven on `chat_thread` (A4/A5), where the card owns its own re-resolve. |
 | the OUTCOME-LESS settled card (the old reading, with its Refresh) | **NOT REACHABLE against a current-schema database, and the schema is why.** `attachLifecycleSettledOutcome` drops the outcome only for a disposition outside `{approve, reject, changes_requested}`, a gate that stopped being `resolved` between the two reads, or a store throw. The live table forbids the first outright — `artifact_review_gates_disposition_check CHECK (disposition = ANY (ARRAY['approve','reject','changes_requested']))` and `artifact_review_gates_resolved_chk` together make a resolved gate with an unmapped (or absent) disposition **unrepresentable**, so every gate a shipped writer can resolve carries a mapped outcome. The other two arms are a race and a fault, and neither can be induced honestly. The arm is covered by the branch's own suites (`src/lib/lifecycle/__tests__/lifecycle-settled-outcome.test.ts`, `packages/agents/src/__tests__/review-gate-card.test.tsx`); it is recorded here as UNPHOTOGRAPHED rather than rounded up. |
 
-## A finding on the capture-record contract itself
+## A finding on the capture-record contract itself — FIXED (cinatra#2791)
 
-`scripts/ci/lib/capture-record-contract.mjs` maps `page_gate_region` to the
+`scripts/ci/lib/capture-record-contract.mjs` mapped `page_gate_region` to the
 `review_page` URL class `/^\/agents\/reviews/`. That path is the org's open-review
 QUEUE (`src/app/agents/reviews/page.tsx`), which mounts no lifecycle card at all;
 the surface that DOES declare `host="page_gate_region"` is
 `/agents/<vendor>/<package>/<runId>/review/<taskId>`. So no truthful
-`page_gate_region` record can satisfy the class as written. A1 is kept in
-`capture-records.json` with the contract's verdict printed on it rather than
-edited to pass, and is not registered in the canonical index. Worth its own issue
-against #2821.
+`page_gate_region` record could satisfy the class as written.
+
+The class now matches the shipped route, and **A1 is registered in the canonical
+index** (`scripts/ci/chat-hitl-capture-index.json`) exactly as this directory
+defines it — same bytes, same hash, no assertion touched. A1 is still kept here
+with the contract's verdict of the day printed on it, because that verdict is a
+true record of what the contract said when this lane ran; the index twin carries
+no verdict, as every index record does.
 
 ## Layout
 
