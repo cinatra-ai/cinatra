@@ -1739,7 +1739,16 @@ export function projectDurableAssistantTurn(
   // The DATA_PART triage, mirroring the reducer's precedence exactly.
   const views: Array<Record<string, unknown>> = [];
   const rawDataParts = Array.isArray(durable.dataParts) ? durable.dataParts : [];
-  for (const raw of rawDataParts) {
+  // THE PRODUCING SLOTS, read positionally (cinatra#2823 review round 3). The
+  // sink writes `dataPartSlots` alongside `dataParts`, one entry each, so a view
+  // can be put back where the LIVE render draws it — inside its producing step —
+  // instead of after the turn. A length mismatch is a writer this reader does not
+  // understand: the whole array is ignored and every view folds in at turn level,
+  // which is exactly the pre-slot behaviour and never a card placed on a guess.
+  const rawSlots = Array.isArray(durable.dataPartSlots) ? durable.dataPartSlots : [];
+  const slots = rawSlots.length === rawDataParts.length ? rawSlots : [];
+  for (let i = 0; i < rawDataParts.length; i += 1) {
+    const raw = rawDataParts[i];
     if (!isRecord(raw)) continue;
     // A renderable view is classified by `viewType` and that classification WINS
     // over any structural `kind` beside it — the reducer's rule, restated here so
@@ -1761,6 +1770,23 @@ export function projectDurableAssistantTurn(
       // mints them here, but a payload written by an older/other producer must
       // not turn into a renderable view the registry cannot draw.
       continue;
+    }
+    // SLOTTED: fold the view onto the `tool_call` that produced it, which is the
+    // shape the S9i reducer produces live (`attachViewToToolCall`) and the shape
+    // the ordered-parts renderer draws inside that step's own container. A view
+    // placed here is deliberately ABSENT from the turn-level list — the two
+    // mounts partition the turn's views so a card is drawn once, never twice.
+    const slot = stringOrNull(slots[i]);
+    if (slot !== null && slot.length > 0) {
+      const target = parts.find((p) => p.kind === "tool_call" && p.id === slot);
+      if (target) {
+        const attached = Array.isArray(target.views) ? (target.views as unknown[]) : [];
+        target.views = [...attached, raw];
+        continue;
+      }
+      // The slot names a call this trace does not have. The card still owes the
+      // reader a render, so it falls through to the turn-level list — the same
+      // resolution the reducer makes for an unplaceable stamp.
     }
     views.push(raw);
   }
@@ -1791,7 +1817,15 @@ export function projectDurableAssistantTurn(
 export function carriesLifecycleRenderState(turn: ProjectedAssistantTurn): boolean {
   if ((turn.dataParts?.length ?? 0) > 0) return true;
   return (turn.parts ?? []).some(
-    (p) => p.kind === "tool_call" && typeof p.runId === "string" && p.runId.length > 0,
+    (p) =>
+      p.kind === "tool_call" &&
+      ((typeof p.runId === "string" && p.runId.length > 0) ||
+        // A SLOTTED card is render state too (cinatra#2823 review round 3). Since
+        // the projection places a stamped view on its producing part, a turn
+        // whose only card is slotted has no turn-level list at all — reading
+        // `dataParts` alone would call that turn inert and drop it from the
+        // fold-in, which is the whole card lost rather than merely misplaced.
+        (Array.isArray(p.views) && p.views.length > 0)),
   );
 }
 
@@ -1888,6 +1922,39 @@ function allLifecycleViewRefsOf(message: Record<string, unknown>): Set<string> {
   return refs;
 }
 
+/** One renderable view the DURABLE row carries, with the slot it belongs at
+ *  (`null` == no slot was recorded, so it belongs at turn level). */
+type DurableView = { view: Record<string, unknown>; slot: string | null };
+
+/**
+ * Every renderable view a PROJECTED durable turn carries, each with its slot.
+ *
+ * The projection has already decided placement (`projectDurableAssistantTurn`):
+ * a view whose `dataPartSlots` entry named a call in this trace sits on that
+ * `tool_call` part, everything else sits in the turn-level list. This reader
+ * puts the two mounts back into one list WITHOUT losing which is which, because
+ * the repair below has to restore each one where it belongs — a card repaired
+ * into the turn-level list when the reader's own trace has the producing step is
+ * the "keeps its content, loses its position" defect, just arrived by the repair
+ * path instead of the fold-in path.
+ */
+function durableViewsWithSlots(projected: ProjectedAssistantTurn): DurableView[] {
+  const out: DurableView[] = [];
+  for (const part of projected.parts ?? []) {
+    if (part.kind !== "tool_call") continue;
+    const slot = stringOrNull(part.id);
+    if (slot === null) continue;
+    if (!Array.isArray(part.views)) continue;
+    for (const view of part.views) {
+      if (isRecord(view)) out.push({ view, slot });
+    }
+  }
+  for (const view of projected.dataParts ?? []) {
+    if (isRecord(view)) out.push({ view, slot: null });
+  }
+  return out;
+}
+
 /**
  * Does the spine ALREADY DRAW this durable view at one of its slots?
  *
@@ -1965,7 +2032,9 @@ function contradictsDurableTurn(
   // would have been accepted as this turn.
   const spineRefs = allLifecycleViewRefsOf(spine);
   if (spineRefs.size === 0) return false;
-  const durableRefs = lifecycleViewRefsOf(projected.dataParts);
+  // BOTH places on the durable side too, since the projection now slots a
+  // stamped card onto its producing part exactly as the reducer does.
+  const durableRefs = allLifecycleViewRefsOf(projected as unknown as Record<string, unknown>);
   if (durableRefs.size === 0) return false;
   for (const ref of durableRefs) {
     if (spineRefs.has(ref)) return false;
@@ -2064,7 +2133,7 @@ function findCoveringSpineIndex(
   // one always carries the call it came from. A durable turn with no call at all
   // therefore has no shared key, and is treated as one the spine does not have.
   if (durableIds.size === 0) return -1;
-  const durableRefs = lifecycleViewRefsOf(projected.dataParts);
+  const durableRefs = allLifecycleViewRefsOf(projected as unknown as Record<string, unknown>);
   let claimant = -1;
   for (let i = 0; i < messages.length; i += 1) {
     if (messages[i].role !== "assistant") continue;
@@ -2250,10 +2319,11 @@ function repairedSpineMessage(
   // either.
   const slotted = slottedViewsOf(spine.parts);
   const slottedRefs = lifecycleViewRefsOf(slotted);
-  const owedViews = carriesOwnViews
+  const owed = carriesOwnViews
     ? []
-    : (projected.dataParts ?? []).filter((view) => !slotAlreadyDraws(view, slotted, slottedRefs));
-  const owesViews = owedViews.length > 0;
+    : durableViewsWithSlots(projected).filter(
+        ({ view }) => !slotAlreadyDraws(view, slotted, slottedRefs),
+      );
 
   const runIdByCall = new Map<string, string>();
   for (const durablePart of projected.parts ?? []) {
@@ -2263,25 +2333,62 @@ function repairedSpineMessage(
     if (typeof id !== "string" || typeof runId !== "string" || runId.length === 0) continue;
     runIdByCall.set(id, runId);
   }
+  // EACH OWED CARD GOES BACK WHERE IT BELONGS (cinatra#2823 review round 3). A
+  // card the server recorded a slot for is restored ONTO the reader's own
+  // `tool_call` part when the reader's trace has that step — the mount the live
+  // render uses — and only a card with no slot, or one whose step this reader
+  // never received, falls back to the turn-level list. Repairing every card into
+  // the turn-level list would give the reader back its content and not its
+  // position, which is the same defect the fold-in half of this round closes.
+  const owedBySlot = new Map<string, Array<Record<string, unknown>>>();
+  const owedAtTurnLevel: Array<Record<string, unknown>> = [];
   const spineParts = Array.isArray(spine.parts) ? spine.parts : [];
+  const spineCallIds = new Set<string>();
+  for (const raw of spineParts) {
+    if (!isRecord(raw) || raw.kind !== "tool_call") continue;
+    const id = stringOrNull(raw.id);
+    if (id !== null) spineCallIds.add(id);
+  }
+  for (const { view, slot } of owed) {
+    if (slot !== null && spineCallIds.has(slot)) {
+      const at = owedBySlot.get(slot) ?? [];
+      at.push(view);
+      owedBySlot.set(slot, at);
+      continue;
+    }
+    owedAtTurnLevel.push(view);
+  }
+  const owesViews = owedAtTurnLevel.length > 0;
+
   let owesRun = false;
+  let owesSlottedView = false;
   const repairedParts = spineParts.map((raw) => {
     if (typeof raw !== "object" || raw === null) return raw;
     const part = raw as Record<string, unknown>;
     if (part.kind !== "tool_call") return raw;
-    if (typeof part.runId === "string" && part.runId.length > 0) return raw;
     const id = typeof part.id === "string" ? part.id : null;
-    const runId = id === null ? undefined : runIdByCall.get(id);
-    if (runId === undefined) return raw;
-    owesRun = true;
-    return { ...part, runId };
+    const owedHere = id === null ? undefined : owedBySlot.get(id);
+    const hasRun = typeof part.runId === "string" && part.runId.length > 0;
+    const runId = hasRun || id === null ? undefined : runIdByCall.get(id);
+    if (runId === undefined && owedHere === undefined) return raw;
+    const next: Record<string, unknown> = { ...part };
+    if (runId !== undefined) {
+      next.runId = runId;
+      owesRun = true;
+    }
+    if (owedHere !== undefined) {
+      const existing = Array.isArray(part.views) ? (part.views as unknown[]) : [];
+      next.views = [...existing, ...owedHere];
+      owesSlottedView = true;
+    }
+    return next;
   });
 
-  if (!owesViews && !owesRun) return spine;
+  if (!owesViews && !owesRun && !owesSlottedView) return spine;
   return {
     ...spine,
-    ...(owesViews ? { dataParts: owedViews } : {}),
-    ...(owesRun ? { parts: repairedParts } : {}),
+    ...(owesViews ? { dataParts: owedAtTurnLevel } : {}),
+    ...(owesRun || owesSlottedView ? { parts: repairedParts } : {}),
   };
 }
 

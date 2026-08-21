@@ -612,6 +612,136 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
     expect(spineAssistant).toEqual(before);
   });
 
+  // ── the PRODUCING SLOT the reload re-attaches to (round 3, sequencing) ─────
+  // #2879's named follow-up: the live render draws a stamped card INSIDE its
+  // producing step and, until this round, the reload drew it after the turn — a
+  // reloaded card that kept its content and lost its position.
+
+  /** The durable row as the sink writes it once the view was STAMPED. */
+  function slottedDurableTurn(): Record<string, unknown> {
+    return durableTurnContent({ dataParts: [REVIEW_VIEW], dataPartSlots: ["call-1"] });
+  }
+
+  it("folds a SLOTTED durable turn in at its slot, not at turn level", () => {
+    const legacyMsg = { id: "m1", role: "user", content: "hi" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: slottedDurableTurn() }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: legacyMsg }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(2);
+    const assistant = messages[1];
+    expect(assistant.dataParts).toBeUndefined();
+    const call = (assistant.parts as Record<string, unknown>[]).find((p) => p.kind === "tool_call");
+    expect(call!.views).toEqual([REVIEW_VIEW]);
+  });
+
+  it("REPAIRS a dropped card onto the reader's OWN producing part when it has one", () => {
+    // The reader's save landed with the trace but without the card. The card is
+    // owed — and it is owed AT THE STEP, because that is where the reader would
+    // have seen it live. Putting it in the turn-level list would hand back the
+    // content and not the position.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: slottedDurableTurn() }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].dataParts).toBeUndefined();
+    expect((messages[0].parts as Record<string, unknown>[])[0].views).toEqual([REVIEW_VIEW]);
+    // Copy-on-write, as everywhere on this path.
+    expect(spineAssistant.parts[0]).not.toHaveProperty("views");
+  });
+
+  it("repairs a slotted card at TURN LEVEL when the reader's trace lacks that step", () => {
+    // The reader never received the tool round — a Slack-mode turn, or a save
+    // that landed thinner than the server's record. There is no step to draw the
+    // card inside, so it falls back to the turn-level list rather than vanishing.
+    const slackTurn = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      thoughtGroups: [{ id: "main", toolCalls: [{ id: "call-1", name: "x", status: "completed" }] }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: slottedDurableTurn() }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].dataParts).toEqual([REVIEW_VIEW]);
+  });
+
+  it("a PRE-SLOT durable row still folds in at turn level, exactly as before", () => {
+    // Every row written before `dataPartSlots` existed. This is the arm that
+    // says the new placement is opt-in on the writer, not a re-interpretation of
+    // what is already in the table.
+    const legacyMsg = { id: "m1", role: "user", content: "hi" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: legacyMsg }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages[1].dataParts).toEqual([REVIEW_VIEW]);
+    expect((messages[1].parts as Record<string, unknown>[])[1].views).toBeUndefined();
+  });
+
+  it("does NOT re-add a slotted card the reader already draws at that very slot", () => {
+    // The S9i "once, never twice" invariant, now that BOTH sides can slot.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        {
+          kind: "tool_call",
+          id: "call-1",
+          name: "artifact_review_gate_render",
+          status: "completed",
+          views: [{ ...REVIEW_VIEW }],
+        },
+      ],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: slottedDurableTurn() }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toBe(spineAssistant);
+  });
+
   // ── the SLACK-MODE projection (cinatra#2823, review round 3, blocker 1) ────
   // `projectConversationMessage(state, { slackMode: true })` builds a turn with
   // NO `parts` — Slack's layout is a whole-turn atomic reveal — while keeping

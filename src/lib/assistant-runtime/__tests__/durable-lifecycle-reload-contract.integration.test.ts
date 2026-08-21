@@ -332,6 +332,32 @@ async function driveTheRealSink(carriage: Carriage, threadId: string): Promise<S
   return { runId, toolCallId, identity, events, durable };
 }
 
+/**
+ * The renderable views a reloaded turn carries, split by WHERE it carries them.
+ *
+ * Position is now part of the contract (cinatra#2823 review round 3): a card the
+ * sink stamped with its producing call must come back ON that `tool_call` part —
+ * the mount the live render uses — and must be ABSENT from the turn-level list,
+ * because the two mounts partition the turn's views so a card is drawn once.
+ * Asserting "the ref is somewhere on the message" would pass for a card that
+ * kept its content and lost its position, which is the defect this closes.
+ */
+function viewsCarriedBy(message: UiMessage): {
+  turnLevel: Array<Record<string, unknown>>;
+  atSlot: (toolCallId: string) => Array<Record<string, unknown>>;
+} {
+  return {
+    turnLevel: (message.dataParts ?? []) as Array<Record<string, unknown>>,
+    atSlot: (toolCallId: string) => {
+      const part = (message.parts ?? []).find(
+        (p) => p.kind === "tool_call" && p.id === toolCallId,
+      );
+      if (!part || part.kind !== "tool_call") return [];
+      return (part.views ?? []) as Array<Record<string, unknown>>;
+    },
+  };
+}
+
 /** The DATA_PART payloads the wire carried, in order. */
 function dataPartsOnTheWire(drive: SinkDrive): Array<Record<string, unknown>> {
   return drive.events
@@ -846,10 +872,81 @@ describe("a stale save cannot push a turn out of its place in time", () => {
     const assistant = reloadedAssistantTurn(reloaded);
     expect(assistant, "the reload brought back no assistant turn at all").not.toBeNull();
     expect(reloaded.map((m) => m.id)).toEqual([userMessage.id, assistant!.id, laterMessageId]);
-    // ...and the card it came back in the middle WITH is still the sink's own.
-    expect(assistant!.dataParts ?? []).toEqual([
+    // ...and the card it came back in the middle WITH is still the sink's own,
+    // still at the step that produced it.
+    expect(viewsCarriedBy(assistant!).atSlot(drive.toolCallId)).toEqual([
       { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
     ]);
+  });
+});
+
+describe("a reloaded card lands at its slot, and a pre-slot row still lands at turn level", () => {
+  // The sequencing directive (cinatra#2823 review round 3; #2879's named
+  // follow-up). The merge-forward gave the SLOT an event-level argument so the
+  // live render draws a card inside its producing step. The durable row now
+  // records that same stamp OUT OF BAND — `dataPartSlots`, a sibling array,
+  // never inside the strict payload, which a reload would re-emit as payload and
+  // the parser would reject — and the reload projection re-attaches the card to
+  // its producing part. Live and reload stop diverging.
+  it("carries the slot from the sink's own drive through Postgres to the part", async () => {
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-slot-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    // The stamp the SINK recorded, out of band, on the row the route persists.
+    expect(drive.durable.dataPartSlots).toEqual([drive.toolCallId]);
+    // ...and the payload it sits beside is untouched — still the strict object.
+    expect(drive.durable.dataParts).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+    ]);
+
+    persistThroughTheRealStore({
+      threadId,
+      userText: `Please handle the ${carriage.kind} case.`,
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    const assistant = reloadedAssistantTurn(reloaded)!;
+    const views = viewsCarriedBy(assistant);
+    expect(views.atSlot(drive.toolCallId)).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+    ]);
+    expect(views.turnLevel).toEqual([]);
+  });
+
+  it("a PRE-SLOT durable row still folds in at TURN LEVEL, exactly as today", async () => {
+    // Every row already in the table, written before this field existed. The new
+    // placement is opt-in on the WRITER, never a re-interpretation of what is
+    // already persisted — so the row is written here with the slot array struck,
+    // which is byte-for-byte what the previous sink produced.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-preslot-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const preSlot = { ...drive.durable };
+    delete preSlot.dataPartSlots;
+
+    persistThroughTheRealStore({
+      threadId,
+      userText: `Please handle the ${carriage.kind} case.`,
+      runId: drive.runId,
+      durable: preSlot,
+    });
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    const assistant = reloadedAssistantTurn(reloaded)!;
+    const views = viewsCarriedBy(assistant);
+    expect(views.turnLevel).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+    ]);
+    expect(views.atSlot(drive.toolCallId)).toEqual([]);
+    // ...and it still mounts: the pre-slot placement is a position change, never
+    // a card lost.
+    const root = await mountReloadedChat(reloaded);
+    expect(
+      projectsOwnerCard(
+        projectionFromReloadedDom(root, carriageRowFor(carriage.kind), reloaded, drive, carriage),
+        carriageRowFor(carriage.kind),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -922,7 +1019,7 @@ describe("a SLACK-MODE turn whose save SUCCEEDED is not folded in twice", () => 
       const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
       expect(reloaded.map((m) => m.role)).toEqual(["user", "assistant"]);
       expect(reloaded[0].id).toBe(userMessage.id);
-      expect(reloaded[1].dataParts ?? []).toEqual([
+      expect(viewsCarriedBy(reloaded[1]).atSlot(drive.toolCallId)).toEqual([
         { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
       ]);
     });
@@ -1002,11 +1099,21 @@ describe.each(CARRIAGES.map((c) => [c.kind, c] as const))(
         expect(runIdOf(durableToolResultOf(drive.durable, drive.toolCallId))).toBe(drive.identity);
         return;
       }
-      const views = assistant.dataParts ?? [];
+      // AT ITS PRODUCING SLOT, and only there. The sink stamped the card with the
+      // call that minted it; the durable row records that stamp out of band
+      // (`dataPartSlots`) and the reload projection puts the card back on that
+      // part — the same mount the live render uses. A reloaded card that landed
+      // in the turn-level list instead would keep its content and lose its
+      // position, which is what #2879's follow-up named.
+      const views = viewsCarriedBy(assistant);
       expect(
-        views,
-        `the reloaded ${carriage.kind} turn carries no renderable view — the card cannot be redrawn`,
+        views.atSlot(drive.toolCallId),
+        `the reloaded ${carriage.kind} turn draws no card at the call that produced it — the card lost its position`,
       ).toEqual([{ viewType: carriage.kind, schemaVersion: 1, ref: drive.identity }]);
+      expect(
+        views.turnLevel,
+        "the card is ALSO in the turn-level list — the two mounts must partition, or it draws twice",
+      ).toEqual([]);
     });
 
     it("the real chat view projects the owner root under the turn's own slot", async () => {

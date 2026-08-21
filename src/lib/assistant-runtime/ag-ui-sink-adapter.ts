@@ -109,6 +109,29 @@ export type AgUiTurnDurableContent = {
    * to what it serialized before this field existed.
    */
   dataParts?: Array<Record<string, unknown>>;
+  /**
+   * The PRODUCING SLOT of each entry in `dataParts`, positionally aligned with
+   * it (cinatra#2823 S9j, review round 3) — the `toolCallId` the event carried,
+   * or `null` for an entry that named no call.
+   *
+   * OUT OF BAND, AND THAT IS THE WHOLE POINT. The slot may not go INSIDE the
+   * view payload: `dataParts[i]` has to stay the byte-identical strict
+   * `{ viewType, schemaVersion, ref }` object a `.strict()` parser accepts on
+   * re-read, and a slot written into it would be re-emitted AS PAYLOAD on reload
+   * and rejected there. So it rides a sibling array, which the reload projection
+   * consumes and never re-emits — the same separation the live wire already
+   * makes, where the stamp rides the EVENT and never `data`
+   * (`DataPartEvent.toolCallId`).
+   *
+   * Without it a reloaded card kept its content and lost its position: the live
+   * render draws it inside its producing step (S9i, #2879) and the reload drew it
+   * after the turn. #2879 named that follow-up; this field is its durable half.
+   *
+   * OMITTED unless at least one entry is stamped, so a turn whose DATA_PARTs
+   * named no call persists byte-identically to what it persisted before this
+   * field existed.
+   */
+  dataPartSlots?: Array<string | null>;
 };
 
 export type AgUiSinkAdapter = {
@@ -183,6 +206,8 @@ export function createAgUiSinkAdapter(params: {
   // `AgUiTurnDurableContent.dataParts` for why the durable row needs them and
   // why `citations` is not one of them.
   const contentDataParts: Array<Record<string, unknown>> = [];
+  /** Positionally aligned with `contentDataParts` — see `dataPartSlots`. */
+  const contentDataPartSlots: Array<string | null> = [];
   let openContentTextPart: { type: "text"; text: string } | null = null;
   // Separate broken flag: a thrown `null`/`undefined` must still trip the
   // sentinel (never keyed on the error VALUE).
@@ -221,17 +246,19 @@ export function createAgUiSinkAdapter(params: {
    * payload has to stay the byte-identical strict `{ viewType, schemaVersion,
    * ref }` object a `.strict()` parser accepts on re-read — a slot written into
    * the payload would be re-emitted as payload on reload and rejected there.
-   * A reloaded card therefore keeps its content and, until the store-side
-   * projection carries a slot of its own, falls back to the turn-level list
-   * exactly as a consumer that never saw the field would (the named #2879
-   * follow-up). Omitted when absent, so an unstamped emit is byte-identical to
-   * what it was before the field existed.
+   * The DURABLE half of the same separation is `dataPartSlots` — a sibling array
+   * on the persisted content, positionally aligned with `dataParts`, which this
+   * function keeps in step with `contentDataParts` so the wire's stamp and the
+   * row's stamp cannot drift (#2879's named follow-up, closed here). Omitted when
+   * absent, so an unstamped emit is byte-identical to what it was before the
+   * field existed.
    */
   function emitDurableDataPart(
     data: Record<string, unknown>,
     producingToolCallId?: string,
   ): void {
     contentDataParts.push(data);
+    contentDataPartSlots.push(producingToolCallId ?? null);
     emit({
       type: "DATA_PART",
       data,
@@ -446,6 +473,11 @@ export function createAgUiSinkAdapter(params: {
         // minted no DATA_PART persists exactly the object it persisted before
         // this field existed.
         ...(contentDataParts.length > 0 ? { dataParts: contentDataParts } : {}),
+        // The slot array rides ALONGSIDE, never inside a payload, and only when
+        // something was actually stamped (see `dataPartSlots`).
+        ...(contentDataPartSlots.some((slot) => slot !== null)
+          ? { dataPartSlots: contentDataPartSlots }
+          : {}),
       };
     },
   };
