@@ -452,6 +452,18 @@ describe("§VII — the reading", () => {
     await waitFor(() => expect(screen.queryByText(/what the review authorized/)).not.toBeNull());
     expect(screen.getByText(/accepted findings and the scope manifest/)).toBeTruthy();
   });
+
+  it("the verified copy claims INSPECTED fields, never the whole authorized scope", async () => {
+    // groganz-bot round-2 review (blocker 2): the diff only ever carries
+    // CHANGED paths, so an authorized field the repair left untouched never
+    // appears as a row — the before/after can never "cover exactly" the
+    // authorized scope, only the fields it inspected. The copy must say that,
+    // not the stronger (false) completeness claim.
+    mockResolve({ state: "advisory" }, { ...BODY, outcome: "verified" });
+    renderOn("chat_thread");
+    await waitFor(() => expect(screen.queryByText(/fields that were inspected/)).not.toBeNull());
+    expect(screen.queryByText(/covers exactly that authorized scope/)).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
