@@ -978,6 +978,40 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
   }
 
   /**
+   * The retry cursor as POSTGRES stores it, full microsecond precision. A JS
+   * `Date` truncates to milliseconds, so `attemptedAt` above cannot tell a stamp
+   * from a copy of it that round-tripped through JS — and telling those two apart
+   * is exactly what the restore's CAS has to do.
+   */
+  async function attemptedAtText(parkId: string): Promise<string | null> {
+    return withClient(async (c) => {
+      const { rows } = await c.query(
+        `SELECT hold_notify_attempted_at::text AS t
+           FROM "${q(TEST_SCHEMA)}"."lifecycle_continuation_park" WHERE id = $1`,
+        [parkId],
+      );
+      return (rows[0]?.t ?? null) as string | null;
+    });
+  }
+
+  /**
+   * Stand in for a CONCURRENT sweep's claim: stamp the row with a cursor of its
+   * own, exactly as sweep B's claim would, and hand back the stamp as Postgres
+   * stored it.
+   */
+  async function restampAsConcurrentSweep(parkId: string): Promise<string> {
+    return withClient(async (c) => {
+      const { rows } = await c.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."lifecycle_continuation_park"
+            SET hold_notify_attempted_at = now() WHERE id = $1
+          RETURNING hold_notify_attempted_at::text AS t`,
+        [parkId],
+      );
+      return rows[0].t as string;
+    });
+  }
+
+  /**
    * The production host writer, with the clear POISONED for a named set of parks
    * and RECORDING every park it was asked to clear, in order. A poisoned park
    * throws — the same shape as a notifier that is up but can never satisfy this
@@ -1114,5 +1148,476 @@ describe.skipIf(!HAS_DB)("cinatra#2835 — the hold notification against a real 
     await parkStore.strandPark(parkId);
     expect(await parkState(parkId)).toBeUndefined();
     expect(await notificationRows(runId)).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE BOUNDED DISPATCH (cinatra#2868). The drain's `await` on the notifier used
+  // to be unbounded. `dispatchRecommendationHoldCleared` swallows a THROWN port —
+  // that is the failure the cases above exercise — but a promise that never
+  // SETTLES is not a throw, and nothing in the loop could ever come back from
+  // one. No obligation was lost (the page is stamped at claim, so its rows rotate
+  // and a later sweep recovers them); the SWEEPER was what hung, and it has two
+  // callers that cannot afford it: the ~60s gate-maintenance job, whose slot
+  // stalls, and `releaseRecommendationParkForRun`, which awaits `sweepParks`
+  // synchronously on a human's confirm/skip.
+  //
+  // These cases run against the real store with a real wedged port and real wall
+  // clock — a fake-timer double could not fail them, because the property under
+  // test is "this call returns", not "this code calls setTimeout".
+  //
+  // The bound is `HOLD_NOTIFY_DISPATCH_TIMEOUT_MS` = 500ms at concurrency
+  // `HOLD_NOTIFY_DISPATCH_CONCURRENCY` = 4, with the pass giving up after
+  // `HOLD_NOTIFY_EXPIRY_BREAKER` = 4 expiries; all three are module-private, so
+  // the numbers below name them rather than import them.
+  //
+  // The breaker is the second half of the fix and has its own case below: the
+  // bound abandons a wedged operation rather than cancelling it, so capping the
+  // WAIT is not the same as capping how much a wedged page leaves running.
+  // -------------------------------------------------------------------------
+
+  const BOUND_MS = 500; // == HOLD_NOTIFY_DISPATCH_TIMEOUT_MS
+  const WAVE = 4; // == HOLD_NOTIFY_DISPATCH_CONCURRENCY
+  const BREAKER = 4; // == HOLD_NOTIFY_EXPIRY_BREAKER
+
+  /**
+   * The production host writer with the clear WEDGED for a named set of parks: it
+   * hands back a promise nothing will ever settle, which is exactly the shape the
+   * dispatcher cannot report. Every other park clears for real, through the real
+   * service, so a wedged row and a healthy one can share one page.
+   */
+  async function wedgedNotifier(wedged: ReadonlySet<string>, seen: string[]) {
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    const real = hostNotifier.runWaitNotifier;
+    setRunWaitNotifier({
+      ...real,
+      onClearRecommendationHold: async (input: { runId: string; parkId: string }) => {
+        seen.push(input.parkId);
+        if (wedged.has(input.parkId)) return new Promise<boolean>(() => {});
+        return (await real.onClearRecommendationHold?.(input)) ?? false;
+      },
+    } as RunWaitNotifier);
+  }
+
+  it("A NEVER-SETTLING NOTIFIER DOES NOT PARK THE DRAIN: the sweep comes back", async () => {
+    await clearOutstandingObligations();
+    const wedgedA = await heldRun();
+    const wedgedB = await heldRun();
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set([wedgedA.parkId, wedgedB.parkId]), seen);
+
+    const startedAt = Date.now();
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: [wedgedA.parkId, wedgedB.parkId],
+      limit: 2,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    // THE PIN, and it is the plainest one in this file: the call RETURNED.
+    // Unbounded, this `await` never resolves and the case dies on the timeout.
+    expect(swept.released).toBe(2);
+    expect(swept.holdNotificationsCleared).toBe(0);
+    expect([...seen].sort()).toEqual([wedgedA.parkId, wedgedB.parkId].sort());
+
+    // Bounded by the budget rather than by luck: both dispatches fit inside one
+    // concurrency wave, so the page costs about ONE bound, not two.
+    expect(elapsed).toBeGreaterThanOrEqual(BOUND_MS - 100);
+    expect(elapsed).toBeLessThan(BOUND_MS * 6);
+
+    // ...and an EXPIRY is exactly a `false`. The obligation stands, its bell is
+    // untouched, and the claim's cursor moved, so the page rotates as always.
+    for (const w of [wedgedA, wedgedB]) {
+      expect(await parkState(w.parkId)).toMatchObject({
+        status: "released",
+        hold_notification: "live",
+      });
+      expect(await notificationRows(w.runId)).toHaveLength(1);
+      expect(await attemptedAt(w.parkId)).not.toBeNull();
+    }
+  });
+
+  it("an EXPIRED obligation is RETRIED: a later sweep discharges it for real", async () => {
+    await clearOutstandingObligations();
+    const wedged = await heldRun();
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set([wedged.parkId]), seen);
+
+    const first = await parkStore.sweepParks({ releasedParkIds: [wedged.parkId], limit: 1 });
+    expect(first.holdNotificationsCleared).toBe(0);
+    expect(await parkState(wedged.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(wedged.runId)).toHaveLength(1);
+
+    // Nothing on the row says "timed out", and that is the design: an expiry is
+    // not a state, it is the ABSENCE of an ack — so the ordinary retry path, the
+    // one a throwing port already used, applies unchanged.
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier(hostNotifier.runWaitNotifier satisfies RunWaitNotifier);
+
+    const second = await parkStore.sweepParks({ limit: 1 });
+    expect(second.holdNotificationsCleared).toBe(1);
+    expect(await parkState(wedged.parkId)).toMatchObject({ hold_notification: "cleared" });
+    expect(await notificationRows(wedged.runId)).toHaveLength(0);
+  });
+
+  it("a HEALTHY page pays NOTHING for the bound — it is a ceiling, never a floor", async () => {
+    await clearOutstandingObligations();
+    const runs: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < WAVE * 2; i++) runs.push(await heldRun());
+
+    const startedAt = Date.now();
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: runs.map((r) => r.parkId),
+      limit: runs.length,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    expect(swept.holdNotificationsCleared).toBe(runs.length);
+    for (const r of runs) {
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "cleared" });
+      expect(await notificationRows(r.runId)).toHaveLength(0);
+    }
+    // TWO full waves of settled dispatches. Each one clears its timer the instant
+    // it settles, so the page never waits for the bound — a floor would have cost
+    // 2 x 500ms here and this assertion is what would catch it.
+    expect(elapsed).toBeLessThan(BOUND_MS * 2);
+  });
+
+  it("the bound does not LEAK ACROSS dispatches: a healthy row on a wedged page clears", async () => {
+    await clearOutstandingObligations();
+    const wedged = await heldRun();
+    const healthy = await heldRun();
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set([wedged.parkId]), seen);
+
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: [wedged.parkId, healthy.parkId],
+      limit: 2,
+    });
+
+    // The wedged row costs itself one bound and costs its page-mate nothing.
+    expect(swept.holdNotificationsCleared).toBe(1);
+    expect(await parkState(healthy.parkId)).toMatchObject({ hold_notification: "cleared" });
+    expect(await notificationRows(healthy.runId)).toHaveLength(0);
+    expect(await parkState(wedged.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(wedged.runId)).toHaveLength(1);
+  });
+
+  it("A WEDGED PAGE STOPS LAUNCHING: the breaker caps how many operations one pass abandons", async () => {
+    // THE FINDING THIS PINS. The per-dispatch bound bounds the WAIT, not the
+    // OPERATION: on expiry the drain walks away and the dispatch it started keeps
+    // running. Without a breaker the wave simply refills, so a page of N wedged
+    // rows leaves N live in-flight operations behind it — not `WAVE` of them —
+    // and each one can hold a connection of the agents pool (pg default max 10)
+    // for as long as it stays wedged. The cap has to be on how many the pass ever
+    // LAUNCHES, because nothing here can reclaim one it already has.
+    await clearOutstandingObligations();
+
+    // A page comfortably larger than E + WAVE, so "stopped early" and "ran the
+    // whole page" are different numbers and the assertion can tell them apart.
+    const PAGE = 12;
+    const runs: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < PAGE; i++) runs.push(await heldRun());
+    // DISTINCT, DESCENDING cursors: the oldest obligation is the one written LAST,
+    // so the claim's order is the exact REVERSE of the order these rows were
+    // written in. That is what makes the "which seven" assertion below mean
+    // something — a drain that dispatches in arrival order rather than in the
+    // claim's order picks the seven NEWEST here, a disjoint set.
+    for (let i = 0; i < PAGE; i++) await ageParkBy(runs[i].parkId, i + 1);
+    const byCursor = [...runs].reverse();
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set(runs.map((r) => r.parkId)), seen);
+
+    const startedAt = Date.now();
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: runs.map((r) => r.parkId),
+      limit: PAGE,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    expect(swept.released).toBe(PAGE);
+    expect(swept.holdNotificationsCleared).toBe(0);
+
+    // THE PIN — and `seen` is the honest instrument for it, because it counts what
+    // the port was actually ASKED to do, which is exactly the set of operations
+    // left running. The ceiling is E + WAVE - 1 = 7, and a fully wedged page
+    // really does reach it: the wave expires in unison, so the first WAVE - 1
+    // workers each read a count still under budget and pull one more row before
+    // the last one trips the breaker.
+    expect(seen.length).toBeLessThanOrEqual(BREAKER + WAVE - 1);
+    expect(seen.length).toBeLessThan(PAGE); // the mutation-discriminating half
+    // ...and the budget goes on the RIGHT rows: the ones that have been waiting
+    // longest. These twelve are aged so the claim's order is the exact REVERSE of
+    // the order they were written in, so "the oldest seven" and "the first seven
+    // that happened to arrive" are disjoint sets here. What this guards is that a
+    // pass which stops early still stops at the FAIR place — today both the claim's
+    // sort and the drain's own sort deliver that, and it stays true if either one
+    // is ever the only one left. (The SET is the assertion, not the sequence — the
+    // four workers of a wave all pull in the same tick.)
+    expect([...seen].sort()).toEqual(
+      byCursor.slice(0, seen.length).map((r) => r.parkId).sort(),
+    );
+    // Every park the breaker skipped is untouched and still owed. The CURSOR is
+    // where that shows: a row this pass dispatched carries the claim's stamp, and a
+    // row it declined to dispatch has had its pre-claim cursor PUT BACK — never
+    // attempted, so still null. That restore is what stops the breaker starving
+    // what it skips; the case below pins the consequence.
+    const dispatched = new Set(seen);
+    for (const r of runs) {
+      expect(await parkState(r.parkId)).toMatchObject({
+        status: "released",
+        hold_notification: "live",
+      });
+      expect(await notificationRows(r.runId)).toHaveLength(1);
+      if (dispatched.has(r.parkId)) expect(await attemptedAt(r.parkId)).not.toBeNull();
+      else expect(await attemptedAt(r.parkId)).toBeNull();
+    }
+
+    // The wall clock follows from the same property: the timeout contribution no
+    // longer scales with the page. This page pays ceil((E + WAVE - 1) / WAVE) = 2
+    // waves and would pay ceil(12 / 4) = 3 without the breaker — and the gap only
+    // widens with the page, which is the point: at the 500-row cap the breaker
+    // still pays 2 waves and the unbroken drain pays 125.
+    expect(elapsed).toBeLessThan(BOUND_MS * 3);
+
+    // AND THE SKIPPED ROWS ARE NOT LOST. With the notifier healthy again the very
+    // next sweep discharges the entire page — including every obligation this pass
+    // deliberately declined to dispatch.
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier(hostNotifier.runWaitNotifier satisfies RunWaitNotifier);
+    const second = await parkStore.sweepParks({ limit: PAGE });
+    expect(second.holdNotificationsCleared).toBe(PAGE);
+    for (const r of runs) {
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "cleared" });
+      expect(await notificationRows(r.runId)).toHaveLength(0);
+    }
+  });
+
+  it("THE BREAKER DOES NOT STARVE WHAT IT SKIPS: its leftovers lead the NEXT pass", async () => {
+    // THE FINDING THIS PINS. The claim stamps the ENTIRE page, undispatched rows
+    // included, so a row the breaker skipped and a row it dispatched come out
+    // cursor-IDENTICAL and the stamp cannot order one ahead of the other. Once the
+    // outstanding set FITS inside `limit` — the ordinary steady state, not a corner
+    // — every sweep claims the same rows on the same key, and which of them the
+    // breaker serves falls to whatever order `RETURNING` produces: undefined,
+    // unobserved by this module, and in practice STABLE. Measured on this store
+    // with the rotation reverted, a page of 7 wedged rows in front of 9 healthy
+    // ones left between 1 and 4 healthy obligations unattempted on every one of ten
+    // consecutive sweeps — starved, not delayed. With the rotation in place the
+    // same page clears all 9 on the very next sweep, every run.
+    //
+    // The fix is two-part and this case needs both: the queue is ordered by the
+    // retry cursor rather than by `RETURNING`, and a row the breaker skips gets its
+    // pre-claim cursor RESTORED, so it sorts ahead of everything this pass actually
+    // dispatched.
+    await clearOutstandingObligations();
+
+    // Exactly what one pass can launch (E + C - 1 = 7) wedged, so pass 1 spends its
+    // whole budget on the wedge and reaches none of the healthy rows behind it...
+    const WEDGED = BREAKER + WAVE - 1;
+    const HEALTHY = 3;
+    const wedgedRuns: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < WEDGED; i++) wedgedRuns.push(await heldRun());
+    const healthyRuns: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < HEALTHY; i++) healthyRuns.push(await heldRun());
+    // ...and the wedge is FORCED to the front of the claim's order, which is the
+    // arrangement the starvation needs: age it older than the rows behind it.
+    for (const r of wedgedRuns) await ageParkBy(r.parkId, 30);
+    for (const r of healthyRuns) await ageParkBy(r.parkId, 10);
+    // The whole outstanding set fits in one page, so every sweep claims all of it.
+    const PAGE = WEDGED + HEALTHY;
+
+    const seen: string[] = [];
+    await wedgedNotifier(new Set(wedgedRuns.map((r) => r.parkId)), seen);
+
+    // PASS 1 — the budget goes entirely on the wedge.
+    const first = await parkStore.sweepParks({
+      releasedParkIds: [...wedgedRuns, ...healthyRuns].map((r) => r.parkId),
+      limit: PAGE,
+    });
+    expect(first.released).toBe(PAGE);
+    expect(first.holdNotificationsCleared).toBe(0);
+    expect([...seen].sort()).toEqual(wedgedRuns.map((r) => r.parkId).sort());
+
+    // The healthy rows were claimed and then declined — and their cursor says so.
+    // Restored to "never attempted", which is the truth and also the front of the
+    // queue. Without the restore they carry the claim's stamp like everything else
+    // and the next pass cannot tell them apart from the wedge.
+    for (const r of healthyRuns) {
+      expect(await attemptedAt(r.parkId)).toBeNull();
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "live" });
+    }
+    for (const r of wedgedRuns) expect(await attemptedAt(r.parkId)).not.toBeNull();
+
+    // PASS 2 — THE PIN, and the notifier is STILL WEDGED. Nothing has recovered;
+    // the only thing that changed is where the skipped rows sit in the queue.
+    seen.length = 0;
+    const second = await parkStore.sweepParks({ limit: PAGE });
+
+    // They lead: every healthy row is dispatched in the pass's FIRST WAVE, before
+    // the wedge gets a single worker back. (Within one wave the four workers all
+    // pull in the same tick, so the SET is the property, not the sequence.)
+    expect(seen.slice(0, WAVE)).toEqual(
+      expect.arrayContaining(healthyRuns.map((r) => r.parkId)),
+    );
+    // ...and they CLEAR. This is the number the starvation makes 0, pass after pass.
+    expect(second.holdNotificationsCleared).toBe(HEALTHY);
+    for (const r of healthyRuns) {
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "cleared" });
+      expect(await notificationRows(r.runId)).toHaveLength(0);
+    }
+
+    // The wedge is still a wedge — nothing was bought by abandoning it. Every wedged
+    // obligation still stands, still `live`, bell intact, and still being retried.
+    for (const r of wedgedRuns) {
+      expect(await parkState(r.parkId)).toMatchObject({
+        status: "released",
+        hold_notification: "live",
+      });
+      expect(await notificationRows(r.runId)).toHaveLength(1);
+    }
+    // And the breaker still did its job on pass 2: it did not launch the whole page.
+    expect(seen.length).toBeLessThanOrEqual(HEALTHY + BREAKER + WAVE - 1);
+  });
+
+  it("THE RESTORE IS A CAS: a row a CONCURRENT sweep re-stamped keeps ITS stamp", async () => {
+    // THE FINDING THIS PINS. Sweeps overlap by design — the ~60s gate-maintenance
+    // loop is not the only driver, `releaseRecommendationParkForRun` sweeps
+    // synchronously on a human's confirm/skip, and a deployment runs more than one
+    // host. Sweep A's claim COMMITS (its locks are released and its rows carry A's
+    // `now()`) and only then does A dispatch, for up to ~2s, before restoring the
+    // rows its breaker skipped. That window is wide open: sweep B can claim one of
+    // A's skipped rows — they sort last, but once the outstanding set fits inside
+    // `limit` B reaches them — dispatch it, and have it fail or expire. The row is
+    // then `live` carrying B's NEWER stamp, honestly recording B's attempt.
+    //
+    // A restore guarded only on `hold_notification = 'live'` cannot see any of
+    // that. It overwrites B's stamp with the cursor the row carried before A
+    // claimed it — here NULL — so a row that WAS dispatched and DID fail acquires
+    // never-attempted priority and B's real attempt is erased from the record.
+    // The restore is therefore a CAS: it puts the cursor back only where the row
+    // still carries THIS pass's claim stamp.
+    await clearOutstandingObligations();
+
+    // The same arrangement as the starvation case above: exactly what one pass can
+    // launch (E + C - 1 = 7) wedged and aged to the front, so the breaker spends
+    // its whole budget there and leaves the healthy rows behind it CLAIMED but
+    // undispatched — which is the set the restore acts on.
+    const WEDGED = BREAKER + WAVE - 1;
+    const HEALTHY = 3;
+    const wedgedRuns: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < WEDGED; i++) wedgedRuns.push(await heldRun());
+    const healthyRuns: Array<Awaited<ReturnType<typeof heldRun>>> = [];
+    for (let i = 0; i < HEALTHY; i++) healthyRuns.push(await heldRun());
+    for (const r of wedgedRuns) await ageParkBy(r.parkId, 30);
+    for (const r of healthyRuns) await ageParkBy(r.parkId, 10);
+    const PAGE = WEDGED + HEALTHY;
+
+    // ONE of the skipped rows is the victim: B claims and attempts it while A is
+    // still dispatching. Its two page-mates are the control — nobody touches them,
+    // so A must still restore those.
+    const victim = healthyRuns[0];
+    const untouched = healthyRuns.slice(1);
+    // Every one of them arrives never-attempted, so a NULL cursor afterwards is
+    // unambiguously A's restore having fired and not a leftover.
+    for (const r of healthyRuns) expect(await attemptedAt(r.parkId)).toBeNull();
+
+    // B's re-stamp is fired from inside A's dispatch window, which is the interleave
+    // stated as code: the notifier is only ever reached AFTER A's claim committed,
+    // and A restores only after every worker has finished, so a stamp written from
+    // the first dispatch lands squarely between A's claim and A's restore.
+    const seen: string[] = [];
+    let restamped = false;
+    let bStamp = "";
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    const real = hostNotifier.runWaitNotifier;
+    const wedgedIds = new Set(wedgedRuns.map((r) => r.parkId));
+    setRunWaitNotifier({
+      ...real,
+      onClearRecommendationHold: async (input: { runId: string; parkId: string }) => {
+        seen.push(input.parkId);
+        // The flag is set SYNCHRONOUSLY, before the await: four workers reach this
+        // in the same tick and exactly one of them may re-stamp.
+        if (!restamped) {
+          restamped = true;
+          bStamp = await restampAsConcurrentSweep(victim.parkId);
+        }
+        if (wedgedIds.has(input.parkId)) return new Promise<boolean>(() => {});
+        return (await real.onClearRecommendationHold?.(input)) ?? false;
+      },
+    } as RunWaitNotifier);
+
+    const swept = await parkStore.sweepParks({
+      releasedParkIds: [...wedgedRuns, ...healthyRuns].map((r) => r.parkId),
+      limit: PAGE,
+    });
+    expect(swept.released).toBe(PAGE);
+    // The breaker did trip on the wedge, so the healthy rows really were skipped —
+    // without that this case would be pinning nothing.
+    expect(swept.holdNotificationsCleared).toBe(0);
+    expect([...seen].sort()).toEqual(wedgedRuns.map((r) => r.parkId).sort());
+    expect(bStamp).not.toBe("");
+
+    // THE PIN. B's stamp survives A's restore, to the microsecond. Guarded only on
+    // `live`, A overwrites it with NULL and B's attempt is gone.
+    expect(await attemptedAtText(victim.parkId)).toBe(bStamp);
+    expect(await attemptedAt(victim.parkId)).not.toBeNull();
+    // And the row still owes what it owed — leaving the stamp alone is the ONLY
+    // difference; the obligation is untouched and a later sweep still retries it.
+    expect(await parkState(victim.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(victim.runId)).toHaveLength(1);
+
+    // The CAS is SURGICAL, not a blanket refusal to restore: the two rows nobody
+    // else touched still carry A's claim stamp, so A still puts their cursor back
+    // and they still lead the next sweep. A CAS that never matches — one comparing
+    // a JS-truncated MILLISECOND copy against the microseconds Postgres stored —
+    // fails exactly here, and reddens the starvation pin above with it.
+    for (const r of untouched) {
+      expect(await attemptedAt(r.parkId)).toBeNull();
+      expect(await parkState(r.parkId)).toMatchObject({ hold_notification: "live" });
+    }
+  });
+
+  it("the ABANDONED dispatch settling LATE is consumed: no unhandled rejection", async () => {
+    await clearOutstandingObligations();
+    const late = await heldRun();
+
+    const hostNotifier = await import("@/lib/agent-run-wait-notifications");
+    setRunWaitNotifier({
+      ...hostNotifier.runWaitNotifier,
+      // Settles long after the drain has walked away, and settles by REJECTING —
+      // the shape that leaks when a losing promise is left with no handler on it.
+      // (The shipped dispatcher turns this into a late `false`; what is pinned is
+      // that the promise the drain abandoned is CONSUMED however it ends, and that
+      // its late settle changes nothing it no longer owns.)
+      onClearRecommendationHold: () =>
+        new Promise<boolean>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("late port failure")), BOUND_MS * 3);
+        }),
+    } as RunWaitNotifier);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const swept = await parkStore.sweepParks({ releasedParkIds: [late.parkId], limit: 1 });
+      expect(swept.holdNotificationsCleared).toBe(0);
+      // Outlive the loser, then give the loop a full turn — Node reports an
+      // unhandled rejection a tick AFTER the rejection nobody handled.
+      await new Promise((r) => setTimeout(r, BOUND_MS * 5));
+      await new Promise((r) => setTimeout(r, 0));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    expect(unhandled).toEqual([]);
+    // The late settle retires nothing: it lost, so it cannot ack an obligation the
+    // drain already declined to ack, and the next sweep still owns the retry.
+    expect(await parkState(late.parkId)).toMatchObject({ hold_notification: "live" });
+    expect(await notificationRows(late.runId)).toHaveLength(1);
   });
 });

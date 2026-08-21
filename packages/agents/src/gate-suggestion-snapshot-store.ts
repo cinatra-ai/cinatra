@@ -19,7 +19,11 @@ import "server-only";
 // because nothing ever wrote a row; the moment this slice starts writing them,
 // an unverified read would hand the run-detail surface whatever is in the
 // column. Verification has to sit at EVERY read boundary or "hash-bound" is a
-// slogan. Its one consumer (`run-detail-aggregate`) now imports it from here.
+// slogan — which is why it is a property of the READER here, not of a caller.
+// The batch reader has no production consumer today: the run-detail aggregate
+// that used to be its one caller was unreachable and has been deleted
+// (cinatra#2791). The per-gate `readVerifiedSuggestionSnapshotForGate` below is
+// the live one (`suggestion-decision-store`).
 //
 // THE GUARANTEES, and why the later slices need each one. S6b validates
 // `accepted ⊆ surfaced` against "the pinned snapshot" (singular) and S6c renders
@@ -198,11 +202,16 @@ export interface GateSuggestionSnapshotRow {
 }
 
 /**
- * Batch-read the VERIFIED suggestion snapshots for a set of gates (the
- * run-scoped fan-out `listReviewGatesForRun` feeds). Moved here from
- * `artifact-review-gate-store` so it goes through the same hash check as every
- * other read: a row that does not verify is DROPPED, so a tampered payload
- * disappears from the surface instead of rendering as a wider set.
+ * Batch-read the VERIFIED suggestion snapshots for a set of gates. Moved here
+ * from `artifact-review-gate-store` so it goes through the same hash check as
+ * every other read: a row that does not verify is DROPPED, so a tampered
+ * payload disappears from the surface instead of rendering as a wider set.
+ *
+ * NO PRODUCTION CALLER TODAY. The run-scoped fan-out this was written for — the
+ * run-detail aggregate fed by `listReviewGatesForRun` — was unreachable and has
+ * been deleted (cinatra#2791). The reader is kept, not removed with it: it is
+ * store surface with its own suite, and retiring it is a decision for the slice
+ * that owns this table, not a side effect of deleting an aggregate.
  */
 export async function readSuggestionSnapshotsForGates(
   gateIds: readonly string[],

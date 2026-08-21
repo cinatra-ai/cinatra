@@ -248,11 +248,15 @@ describe("the two absences are distinct", () => {
 });
 
 // ---------------------------------------------------------------------------
-// §IX — one renderer, three first-party hosts, host-specific frame only
+// §IX — one renderer, four first-party hosts, host-specific frame only
 // ---------------------------------------------------------------------------
 
-describe("one renderer, three first-party hosts", () => {
-  const HOSTS = ["chat_thread", "run_card", "page_gate_region"] as const;
+describe("one renderer, four first-party hosts", () => {
+  // The site widget is DECLARED with the same production surface as the other
+  // three (owner ruling 2026-08-11: it is not a reduced surface), and it is
+  // served by the registry rather than by a JSX mount — which is exactly why it
+  // has to be driven here by name. A host nothing drives has no counted proof.
+  const HOSTS = ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const;
 
   it("draws the SAME card on every first-party host, differing only in the frame", async () => {
     const drawn: Record<string, string> = {};
@@ -275,6 +279,64 @@ describe("one renderer, three first-party hosts", () => {
     }
     expect(drawn.run_card).toBe(drawn.chat_thread);
     expect(drawn.page_gate_region).toBe(drawn.chat_thread);
+    expect(drawn.site_widget).toBe(drawn.chat_thread);
+  });
+
+  // The ratified root contract, asserted on real DOM: the card's own identity,
+  // the host it drew on, and the state it drew in. A capture that cannot say
+  // which host and which state it photographed is not evidence of a cell, and a
+  // card that does not name its kind cannot be addressed on a host at all. Each
+  // value comes from a VALIDATED body field or the host declaration, never from
+  // a literal in the markup.
+  it("the root carries its lifecycle-card identity, its host and its state", async () => {
+    // The hosts are named as literals, one per line, because this test IS the
+    // record of which hosts were actually driven.
+    for (const host of ["chat_thread", "run_card", "page_gate_region", "site_widget"] as const) {
+      mockResolve({ state: "pending", canDecide: true, canComment: true });
+      const { container, unmount } = renderOn(host);
+      await waitFor(() =>
+        expect(container.querySelector('[data-lifecycle-card="artifact_review_gate"]')).not.toBeNull(),
+      );
+      // EXACTLY ONE instance on this host. A second adapter drawing beside this
+      // one is the failure the whole one-card rule exists to prevent, and it is
+      // only visible as a COUNT on rendered DOM.
+      expect(container.querySelectorAll('[data-lifecycle-card="artifact_review_gate"]')).toHaveLength(1);
+      const root = container.querySelector('[data-conformance-id="review-gate-card"]')!;
+      expect(root.getAttribute("data-lifecycle-card")).toBe("artifact_review_gate");
+      expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
+      expect(root.getAttribute("data-lifecycle-card-state")).toBe("pending");
+      expect(root.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull();
+      unmount();
+      cleanup();
+    }
+
+    // The RESTRICTED marker, off the same root: a reader who may see the gate
+    // and not decide it gets the disabled floor, never a withheld card.
+    mockResolve({ state: "restricted", canDecide: false, canComment: false, reason: "not yours" });
+    const restricted = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        restricted.container.querySelector('[data-conformance-id="review-decision-disabled"]'),
+      ).not.toBeNull(),
+    );
+    expect(
+      restricted.container
+        .querySelector('[data-conformance-id="review-gate-card"]')!
+        .getAttribute("data-lifecycle-card-state"),
+    ).toBe("restricted");
+    restricted.unmount();
+    cleanup();
+
+    // …and the state really tracks the resolve rather than a constant.
+    mockResolve({ state: "settled" });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(
+        container
+          .querySelector('[data-conformance-id="review-gate-card"]')
+          ?.getAttribute("data-lifecycle-card-state"),
+      ).toBe("settled"),
+    );
   });
 
   it("every host addresses the same island with the same ref", async () => {

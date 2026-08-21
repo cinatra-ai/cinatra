@@ -19,7 +19,7 @@ import { triggerSchemaQueries } from "@/lib/trigger-schema"; // cinatra#2569 —
 import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 (+#2837) — the three NET-NEW proposal tables, born in their leaf
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
-import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
+import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema"; import { reviewIslandGrantSchemaQueries } from "@/lib/review-island-grant-schema"; // cinatra#2754 — the island credential's NET-NEW single-use ledger, born in its leaf; the import RIDES this line because the file-size ratchet's ceiling may only shrink
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries, agentAssignedSkillsSchemaQueries, skillMatchRunContextDdl } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
@@ -1386,7 +1386,7 @@ END $$`,
     // spread keeps them executed core-store DDL, so the schema-migration gate
     // still reads them; cinatra#2648 taught its classifier this exact shape.
     ...triggerSchemaQueries(schemaName),
-    ...triggerScheduleProposalSchemaQueries(schemaName),
+    ...triggerScheduleProposalSchemaQueries(schemaName), ...reviewIslandGrantSchemaQueries(schemaName), // cinatra#2754 — one row per minted island address, spent once; rides this line for the same ratchet reason as the import
     // project_dispatch_attempts + project_leases: the dynamic-dispatch
     // primitive's dispatch-attempt ledger + project-level lease (cinatra#1032
     // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
