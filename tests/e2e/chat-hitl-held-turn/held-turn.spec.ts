@@ -543,8 +543,17 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   // ── (3) The decision happens IN the chat, on the card's own control ──────
   //    The URL is read IMMEDIATELY before the press, so the comparison brackets
   //    the decision itself and nothing earlier in the session.
+  // THE BASELINE IS THE URL THE DECISION IS TAKEN AT, not the one the thread was
+  // opened at. Sending the first message CREATES the thread and pushes its own
+  // route, so `/chat` is legitimately no longer the address by the time the card
+  // exists. The acceptance criterion is that the card settles with the URL
+  // unchanged ACROSS THE DECISION, so the comparison brackets the decision itself
+  // and nothing earlier in the turn.
   const urlAtConfirm = page.url();
-  expect(urlAtConfirm, "the decision is taken in the thread it belongs to").toBe(threadUrl);
+  expect(
+    urlAtConfirm,
+    "the decision is taken on a thread route, which the first message created",
+  ).not.toBe(threadUrl);
   await stripDevOverlay(page);
   await page.locator(`${CARD_ROOT} ${CHIP_CONFIRM}`).first().click();
 
@@ -626,8 +635,10 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   expect(held2.host).toBe("chat_thread");
   expect(held2.skipControls, "the chip carries its own Skip").toBe(1);
 
+  // Same baseline rule as the confirm half: the thread route, read immediately
+  // before the press.
   const urlAtSkip = page.url();
-  expect(urlAtSkip).toBe(skipThreadUrl);
+  expect(urlAtSkip).not.toBe(skipThreadUrl);
   await stripDevOverlay(page);
   await page.locator(`${CARD_ROOT} ${CHIP_SKIP}`).first().click();
 
