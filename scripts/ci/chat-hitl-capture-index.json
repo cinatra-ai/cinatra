@@ -603,7 +603,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:21.024Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out — they are sealed bearer strings — so each is reported by length, url-safe shape and a truncated digest."
+      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out \u2014 they are sealed bearer strings \u2014 so each is reported by length, url-safe shape and a truncated digest."
     },
     {
       "cell": "C3__review-card__site_widget__pending",
@@ -669,7 +669,1267 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:29.104Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL — the single empty-island element every denial draws, which is why the framed region is blank — and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
+      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL \u2014 the single empty-island element every denial draws, which is why the framed region is blank \u2014 and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
+    },
+    {
+      "cell": "V1__recommendation-card__run_card__held",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+      "screenshot": "evidence/2841-v-redraw/captures/V1__recommendation-card__run_card__held.png",
+      "sha256": "6357b228aa6f5248bb730d7d460478586f68d35505682dc8fd4c0aca34e74d4e",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 12
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:56:52.794Z",
+      "runtime": "dev-runtime",
+      "note": "§V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
+    },
+    {
+      "cell": "V2__recommendation-card__run_card__held__dark",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+      "screenshot": "evidence/2841-v-redraw/captures/V2__recommendation-card__run_card__held__dark.png",
+      "sha256": "a73f28de395a783289eeb05656c3dbded3396a118602e6acede4b93224a46e56",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 12
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:57:02.608Z",
+      "runtime": "dev-runtime",
+      "note": "The same held row after pressing the shipped Toggle theme control. Same run, same frame selector as V1."
+    },
+    {
+      "cell": "V3__recommendation-card__run_card__held__mid-decision",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/df5efd82-bd28-4805-8816-934085f3982b",
+      "screenshot": "evidence/2841-v-redraw/captures/V3__recommendation-card__run_card__held__mid-decision.png",
+      "sha256": "e54e170a76ffd8e857288ffe569634b63ab1ce4e4f83daff34e087a2f54406db",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 12
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:57:15.084Z",
+      "runtime": "dev-runtime",
+      "note": "§V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
+    },
+    {
+      "cell": "V4__recommendation-card__run_card__held__adjust-panel",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+      "screenshot": "evidence/2841-v-redraw/captures/V4__recommendation-card__run_card__held__adjust-panel.png",
+      "sha256": "e4e9db6065674db1d47ab0cb92aabed440fece0ade8635f427094551d4c47f1a",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 12
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:57:24.723Z",
+      "runtime": "dev-runtime",
+      "note": "What ADJUST opens. It is a portalled Sheet OUTSIDE the card root, so this cell is full page; the row itself is untouched underneath."
+    },
+    {
+      "cell": "V5__recommendation-card__run_card__settled",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
+      "screenshot": "evidence/2841-v-redraw/captures/V5__recommendation-card__run_card__settled.png",
+      "sha256": "6fa953ea0421db932ce6d11dcc4dc5ca4d7f335732b304632fc3539d438d54ba",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:57:59.190Z",
+      "runtime": "dev-runtime",
+      "note": "§V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
+    },
+    {
+      "cell": "V6__recommendation-card__run_card__settled__dark",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
+      "screenshot": "evidence/2841-v-redraw/captures/V6__recommendation-card__run_card__settled__dark.png",
+      "sha256": "f6b8161902c15637a8d017e0a914cdf6e6e628b7dfe540f3da5900cbc79ccebf",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:58:09.383Z",
+      "runtime": "dev-runtime",
+      "note": "The same settled row after pressing the shipped Toggle theme control. Same run, same frame selector as V5."
+    },
+    {
+      "cell": "V7__recommendation-card__run_card__held__read-only",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/ba58dfad-52f4-4b6c-9080-3c95ba514558",
+      "screenshot": "evidence/2841-v-redraw/captures/V7__recommendation-card__run_card__held__read-only.png",
+      "sha256": "f0bd880b0322c0de9a0250616306ce07ef2b77befca9bf3069b53fd9128f9cfa",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 12
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:58:17.869Z",
+      "runtime": "dev-runtime",
+      "note": "§V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
+    },
+    {
+      "cell": "V8__recommendation-card__run_card__held__trigger-position",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a8488bf-0071-455e-8238-54bcc67b2256",
+      "screenshot": "evidence/2841-v-redraw/captures/V8__recommendation-card__run_card__held__trigger-position.png",
+      "sha256": "524dc562232a0b9bc0ca2c6eaf331b08da22bb2199d003e9421b49d1330704a3",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 12
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:58:25.799Z",
+      "runtime": "dev-runtime",
+      "note": "§6.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
+    },
+    {
+      "cell": "V9__recommendation-card__run_card__decided__page",
+      "declaredHost": "run_card",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/352f7837-f939-48fd-b7b6-d567e59248a0",
+      "screenshot": "evidence/2841-v-redraw/captures/V9__recommendation-card__run_card__decided__page.png",
+      "sha256": "8e11cd071d5f2b68147c983c444c4ed0cd233b13adedfbd0edd0c250df76a5d2",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"held\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card-state=\"decided\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"undecided\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-chip-mark=\"confirmed\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-chip-mark=\"adjusted\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-chip-mark=\"skipped\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-settled=\"true\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-restricted]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-can-decide=\"false\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-forced=\"true\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "h1,h2,h3,h4,h5,h6",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "button",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-keep\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust-drop\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-20T19:58:33.351Z",
+      "runtime": "dev-runtime",
+      "note": "The settled row in its page: nothing is summarised above it and there is nothing left to press."
     }
   ]
 }

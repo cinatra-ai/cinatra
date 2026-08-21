@@ -234,6 +234,15 @@ export async function getSkillsForAgentAction(
 export type RecommendedSkillForChip = {
   skillId: string;
   skillRevisionId: string;
+  /**
+   * THE LABEL THE CHIP PRINTS (cinatra#2841) — the owning extension's manifest
+   * `cinatra.displayName`, resolved server-side by
+   * `buildRecommendationCandidatesForAgent`, falling back to the skill's own
+   * catalog name where no manifest declares one. ONE label crosses this
+   * boundary on purpose: a second field would let the held chip, the ADJUST
+   * panel and the settled row drift apart. The package-qualified id stays on
+   * `skillId`, which is what the chip's `data-skill-id` carries.
+   */
   name: string;
   score: number;
   rank: number;
@@ -264,7 +273,8 @@ export async function getRunRecommendedSkillsAction(input: {
     return recs.map((r) => ({
       skillId: r.skillId,
       skillRevisionId: r.skillRevisionId,
-      name: r.name,
+      // The RESOLVED display label, not the scored identity name — see the type.
+      name: r.displayName,
       score: r.score,
       rank: r.rank,
       recommended: r.recommended,
@@ -289,6 +299,12 @@ export async function confirmRunSkillSelectionAction(input: {
   declaredProducedTypes?: string[];
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
+  /**
+   * The kept skills the reader settled through ADJUST (cinatra#2841). Bounded by
+   * the SAME assigned-set filter as `forcedRevisions` below — it only ever
+   * relabels a row this caller could already write, never admits one.
+   */
+  adjustedSkillIds?: string[];
   restrictToSkillIds?: string[];
 }): Promise<ConfirmRunSkillSelectionActionResult> {
   const empty: ConfirmRunSkillSelectionActionResult = {
@@ -365,6 +381,9 @@ export async function confirmRunSkillSelectionAction(input: {
           Object.entries(input.forcedRevisions).filter(([skillId]) => allowed.has(skillId)),
         )
       : undefined;
+    // Same bound, same reason: an id outside the agent's assigned deliverable
+    // set cannot influence what the run records, not even its label.
+    const adjustedSkillIds = input.adjustedSkillIds?.filter((skillId) => allowed.has(skillId));
 
     const result = await confirmRunSkillSelection({
       runId: input.runId,
@@ -376,6 +395,7 @@ export async function confirmRunSkillSelectionAction(input: {
       },
       confirmedSkillIds: input.confirmedSkillIds,
       forcedRevisions,
+      adjustedSkillIds,
       // A true restriction (candidates ⊆ the assigned deliverable set).
       restrictToSkillIds: assignedIds,
     });

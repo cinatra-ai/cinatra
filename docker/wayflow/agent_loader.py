@@ -65,6 +65,7 @@ import inspect
 import json
 import os
 import re
+import tempfile
 import time
 import urllib.parse as _urlparse
 from pathlib import Path
@@ -2237,13 +2238,148 @@ def _has_in_progress_marker(slug_dir: Path) -> bool:
     return (slug_dir / _IN_PROGRESS_MARKER_FILENAME).exists()
 
 
-def _inspect_published_marker(
-    slug_dir: Path,
+# ---------------------------------------------------------------------------
+# Loader-owned marker STATE dir (cinatra#2873 "D7").
+#
+# The agent SOURCE tree is mounted READ-ONLY (`./extensions:/agents:ro` in
+# docker-compose.yml and in the per-clone template) — a deliberate security
+# posture, not an accident: the runtime must never mutate an operator's agent
+# sources. It also must not try: `cinatra-cli`'s dev repo sync treats a
+# `.cinatra-published.json` inside a companion checkout as TOOL-GENERATED
+# DEBRIS and deletes it on the pinned-sync path.
+#
+# But the loader GATES every mount on that marker, and a fresh install ships
+# none of them (the marker is not committed in the agent source repos), so the
+# migration backfill below had nowhere to write: every write failed on the
+# `ro` mount, every agent was skipped, and a fresh install served ZERO agents.
+#
+# Fix: the backfill writes the marker it DERIVES into a writable dir the
+# LOADER owns, mirroring the source tree shape:
+#
+#     <state root>/<vendor>/<slug>/.cinatra-published.json
+#
+# and the marker gate consults it ONLY when the source dir carries no marker
+# of its own. The precedence is absolute — a marker inside the source tree
+# always wins, whatever its status — so the draft/published separation is
+# untouched: a post-publish source edit still invalidates its published marker
+# by hash, and the agent still gates.
+#
+# The state root holds DERIVED state, never a source of truth: it is rebuilt
+# from the on-disk OAS bytes at every boot and every reload, so the fix needs
+# no volume and no compose change to work. Mounting a volume at the state root
+# only saves the (microsecond) re-derivation.
+# ---------------------------------------------------------------------------
+
+#: Operator override for the state root. Optional — the default works.
+_MARKER_STATE_DIR_ENV = "CINATRA_AGENT_STATE_DIR"
+
+#: Default state root inside the container image. Sibling of `/agents` so an
+#: operator who WANTS persistence has an obvious path to mount a volume at.
+_DEFAULT_MARKER_STATE_DIR = "/agents-state"
+
+#: Sentinel for "resolve the loader-owned state root for me". An explicit
+#: `None` DISABLES the state dir (source-tree markers only) — used by tests
+#: that pin the pre-#2873 behavior.
+_AUTO_STATE_ROOT: Any = object()
+
+
+def _marker_state_fallback_root(agents_dir: Path) -> Path:
+    """Per-tree fallback state root under the system temp dir.
+
+    Keyed by the agents dir so two trees in one process (and two test runs)
+    never share derived markers, while the SAME tree resolves the SAME root on
+    every boot.
+    """
+    try:
+        key_src = str(agents_dir.resolve())
+    except OSError:
+        key_src = str(agents_dir)
+    digest = hashlib.sha256(key_src.encode("utf-8")).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"cinatra-agent-state-{digest}"
+
+
+def _state_root_usable(root: Path, *, create: bool) -> bool:
+    """True iff `root` is a directory this process can write into.
+
+    The writability PROBE runs in both modes so `create=True` (backfill) and
+    `create=False` (discovery) always select the SAME candidate — otherwise a
+    present-but-unwritable `/agents-state` would split the two apart and the
+    gate would look for markers the backfill never wrote there.
+    """
+    if create:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return False
+    if not root.is_dir():
+        return False
+    probe = root / f".cinatra-state-probe-{os.getpid()}"
+    try:
+        probe.write_text("", encoding="utf-8")
+    except OSError:
+        return False
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+    return True
+
+
+def resolve_marker_state_root(
+    agents_dir: Path, *, create: bool
+) -> Optional[Path]:
+    """Resolve the writable state root for derived publish markers.
+
+    Order: `$CINATRA_AGENT_STATE_DIR` (when set) → `/agents-state` → a
+    per-tree dir under the system temp dir. Returns None only when NONE of
+    them is writable, in which case the loader behaves exactly as it did
+    before #2873 (source-tree markers only).
+    """
+    configured = (os.environ.get(_MARKER_STATE_DIR_ENV) or "").strip()
+    candidates: List[Path] = []
+    if configured:
+        candidates.append(Path(configured))
+    else:
+        candidates.append(Path(_DEFAULT_MARKER_STATE_DIR))
+    candidates.append(_marker_state_fallback_root(agents_dir))
+    for index, candidate in enumerate(candidates):
+        if _state_root_usable(candidate, create=create):
+            if index > 0 and configured and create:
+                print(
+                    f"[agent_loader] WARNING: {_MARKER_STATE_DIR_ENV}="
+                    f"{configured} is not writable — deriving publish markers "
+                    f"under {candidate} instead"
+                )
+            return candidate
+    return None
+
+
+def _sidecar_marker_dir(
+    state_root: Optional[Path], agents_dir: Path, slug_dir: Path
+) -> Optional[Path]:
+    """`<state root>/<vendor>/<slug>` for a slug dir inside `agents_dir`.
+
+    Keyed off the RESOLVED relative path so the backfill (which walks raw
+    entries) and the marker gate (which walks resolved dirs) always agree on
+    one path per agent.
+    """
+    if state_root is None:
+        return None
+    try:
+        rel = slug_dir.resolve().relative_to(agents_dir.resolve())
+    except (OSError, ValueError):
+        return None
+    return state_root / rel
+
+
+def _inspect_marker_file(
+    marker_path: Path,
     oas_path: Path,
     *,
     precomputed_oas_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Inspect the marker for `slug_dir`; return structured outcome.
+    """Inspect ONE marker file; return the structured outcome.
 
     Outcome shapes:
       { "status": "valid",        "marker": <parsed dict> }
@@ -2264,7 +2400,6 @@ def _inspect_published_marker(
     means the marker validates against EXACTLY the bytes the caller is about to
     use.
     """
-    marker_path = slug_dir / _PUBLISHED_MARKER_FILENAME
     if not marker_path.exists():
         return {"status": "missing"}
     try:
@@ -2316,8 +2451,49 @@ def _inspect_published_marker(
     return {"status": "valid", "marker": parsed}
 
 
+def _inspect_published_marker(
+    slug_dir: Path,
+    oas_path: Path,
+    *,
+    precomputed_oas_sha256: Optional[str] = None,
+    sidecar_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Inspect the effective marker for `slug_dir`; return structured outcome.
+
+    Outcome shapes are `_inspect_marker_file`'s, plus `"marker_source":
+    "state-dir"` on an outcome that came from the loader-owned state dir.
+
+    PRECEDENCE (cinatra#2873): a marker INSIDE the source dir always wins,
+    whatever its status. The state-dir marker is consulted only when the
+    source dir carries no marker at all, i.e. exactly the fresh-install case
+    the source mount is read-only for. That ordering is what keeps the
+    draft/published separation intact: an agent that WAS published carries a
+    source marker, so a later source edit still resolves to `hash_mismatch`
+    and still gates — a derived state-dir marker can never un-gate it.
+    """
+    source_outcome = _inspect_marker_file(
+        slug_dir / _PUBLISHED_MARKER_FILENAME,
+        oas_path,
+        precomputed_oas_sha256=precomputed_oas_sha256,
+    )
+    if source_outcome["status"] != "missing" or sidecar_dir is None:
+        return source_outcome
+    state_outcome = _inspect_marker_file(
+        sidecar_dir / _PUBLISHED_MARKER_FILENAME,
+        oas_path,
+        precomputed_oas_sha256=precomputed_oas_sha256,
+    )
+    if state_outcome["status"] == "missing":
+        return source_outcome
+    state_outcome["marker_source"] = "state-dir"
+    return state_outcome
+
+
 def _read_published_marker(
-    slug_dir: Path, oas_path: Path
+    slug_dir: Path,
+    oas_path: Path,
+    *,
+    sidecar_dir: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """Convenience wrapper for `_inspect_published_marker` — returns the
     parsed marker dict if status is "valid", None otherwise.
@@ -2329,7 +2505,9 @@ def _read_published_marker(
     `marker_in_progress_draft` override when `.cinatra-in-progress.json`
     is present).
     """
-    inspect = _inspect_published_marker(slug_dir, oas_path)
+    inspect = _inspect_published_marker(
+        slug_dir, oas_path, sidecar_dir=sidecar_dir
+    )
     return inspect["marker"] if inspect["status"] == "valid" else None
 
 
@@ -2361,21 +2539,52 @@ def _resolve_package_version_for_backfill(
     return "0.0.0-backfill"
 
 
-def _backfill_missing_markers(agents_dir: Path) -> int:
-    """Walk the agents tree and write markers for any dir lacking one.
+def _backfill_missing_markers(
+    agents_dir: Path,
+    *,
+    marker_state_root: Any = _AUTO_STATE_ROOT,
+) -> int:
+    """Derive a publish marker for every agent dir that lacks one.
 
-    Idempotent: dirs that already have a marker are left untouched (even if
-    the marker is stale — the loader's hash-mismatch path handles that).
+    Writes the marker INTO the agent dir when that dir is writable, and into
+    the loader-owned state root (`<state>/<vendor>/<slug>/`) when it is not —
+    which is the normal case, because the agent SOURCE tree is mounted `:ro`
+    (cinatra#2873). Before that fallback existed, every write failed on a
+    fresh install and the loader served zero agents.
 
-    Runs in `build_parent_app(agents_dir)`, NOT at module import — test
-    fixtures that construct `discover_agents` directly are NOT affected by
-    backfill unless they go through `build_parent_app`.
+    Per-agent outcomes:
+      - `.cinatra-in-progress.json` present  → skipped entirely. The
+        chat-authoring flow is mid-draft; minting a marker for it would
+        "publish" a draft that never went through `agent_source_publish`.
+        (Mirrors the TS `backfillPublishedMarkers` guard.)
+      - marker already in the SOURCE dir     → left untouched, even when
+        stale. The source marker is the operator's/publisher's record; the
+        loader's hash-mismatch path gates it, and the host-side TS backfill
+        owns repairing it. Unchanged from before #2873.
+      - marker in the state dir, matching the current OAS hash → no write.
+      - otherwise → write (or re-derive) the marker, source dir first.
 
-    Returns the count of markers written. Logs each backfill.
+    Idempotent: a second run over an unchanged tree writes nothing. The state
+    dir is derived state and is re-derived whenever the source OAS changes, so
+    an operator who updates the sources under a read-only mount keeps serving
+    them — a stale derived marker must never re-gate an agent that has no
+    published marker of its own.
+
+    Runs in `build_parent_app(agents_dir)` and at the head of every reload,
+    NOT at module import — test fixtures that call `discover_agents` directly
+    are unaffected unless they run the backfill themselves.
+
+    Returns the count of markers written. Logs each one.
     """
     if not agents_dir.exists():
         return 0
+    state_root = (
+        resolve_marker_state_root(agents_dir, create=True)
+        if marker_state_root is _AUTO_STATE_ROOT
+        else marker_state_root
+    )
     written = 0
+    announced_readonly = False
     for vendor_entry in sorted(agents_dir.iterdir()):
         if vendor_entry.name.startswith(".") or not vendor_entry.is_dir():
             continue
@@ -2384,6 +2593,9 @@ def _backfill_missing_markers(agents_dir: Path) -> int:
                 continue
             oas_path = slug_entry / "cinatra" / "oas.json"
             if not oas_path.exists():
+                continue
+            # In-progress draft guard — never promote a mid-draft dir.
+            if _has_in_progress_marker(slug_entry):
                 continue
             marker_path = slug_entry / _PUBLISHED_MARKER_FILENAME
             if marker_path.exists():
@@ -2398,6 +2610,18 @@ def _backfill_missing_markers(agents_dir: Path) -> int:
                     f"({type(exc).__name__}: {exc})"
                 )
                 continue
+            state_dir = _sidecar_marker_dir(state_root, agents_dir, slug_entry)
+            state_marker_path = (
+                state_dir / _PUBLISHED_MARKER_FILENAME
+                if state_dir is not None
+                else None
+            )
+            if state_marker_path is not None:
+                already = _inspect_marker_file(
+                    state_marker_path, oas_path, precomputed_oas_sha256=oas_sha
+                )
+                if already["status"] == "valid":
+                    continue  # derived marker still matches these bytes
             meta_cinatra = (
                 parsed_oas.get("metadata") or {}
             ).get("cinatra") or {} if isinstance(parsed_oas, dict) else {}
@@ -2421,20 +2645,48 @@ def _backfill_missing_markers(agents_dir: Path) -> int:
                 "oasSha256": oas_sha,
                 "publishedAt": published_at,
             }
+            payload = json.dumps(marker, indent=2) + "\n"
+            label = f"{vendor_entry.name}/{slug_entry.name}"
             try:
-                marker_path.write_text(
-                    json.dumps(marker, indent=2) + "\n", encoding="utf-8"
-                )
+                marker_path.write_text(payload, encoding="utf-8")
+            except OSError as source_exc:
+                if state_marker_path is None:
+                    print(
+                        f"[agent_loader] backfill: failed to write "
+                        f"{marker_path} ({type(source_exc).__name__}: "
+                        f"{source_exc}) and no writable state dir is "
+                        f"available — {label} stays gated"
+                    )
+                    continue
+                if not announced_readonly:
+                    announced_readonly = True
+                    print(
+                        f"[agent_loader] backfill: {agents_dir} is not "
+                        f"writable (expected — the agent sources mount "
+                        f"read-only); deriving publish markers under "
+                        f"{state_root}"
+                    )
+                try:
+                    state_marker_path.parent.mkdir(parents=True, exist_ok=True)
+                    state_marker_path.write_text(payload, encoding="utf-8")
+                except OSError as state_exc:
+                    print(
+                        f"[agent_loader] backfill: failed to write "
+                        f"{state_marker_path} ({type(state_exc).__name__}: "
+                        f"{state_exc}) — {label} stays gated"
+                    )
+                    continue
                 written += 1
                 print(
-                    f"[agent_loader] backfill marker {vendor_entry.name}/{slug_entry.name} "
+                    f"[agent_loader] backfill marker {label} in state dir "
                     f"(oasSha256={oas_sha[:12]} version={pkg_version})"
                 )
-            except OSError as exc:
-                print(
-                    f"[agent_loader] backfill: failed to write {marker_path} "
-                    f"({type(exc).__name__}: {exc})"
-                )
+                continue
+            written += 1
+            print(
+                f"[agent_loader] backfill marker {label} "
+                f"(oasSha256={oas_sha[:12]} version={pkg_version})"
+            )
     return written
 
 
@@ -2472,7 +2724,11 @@ def extract_vendor_slug(oas_path: Path) -> Tuple[str, str]:
     return vendor, slug
 
 
-def discover_agents(agents_dir: Path) -> List[Tuple[str, str, Path, str]]:
+def discover_agents(
+    agents_dir: Path,
+    *,
+    marker_state_root: Any = _AUTO_STATE_ROOT,
+) -> List[Tuple[str, str, Path, str]]:
     """Two-level scan: agents_dir/<vendor>/<slug>/cinatra/oas.json.
 
     Returns a list of (vendor, slug, oas_path, oas_sha256) tuples. The SAME
@@ -2498,6 +2754,14 @@ def discover_agents(agents_dir: Path) -> List[Tuple[str, str, Path, str]]:
     if not agents_dir.exists():
         return []
     agents_base = agents_dir.resolve()
+    # Loader-owned markers for agents whose (read-only) source dir has none.
+    # Read-only resolution: discovery never CREATES the state root — the
+    # backfill that owns it does.
+    state_root = (
+        resolve_marker_state_root(agents_dir, create=False)
+        if marker_state_root is _AUTO_STATE_ROOT
+        else marker_state_root
+    )
 
     def _safe_resolve(p: Path) -> "Path | None":
         if p.name.startswith("."):
@@ -2565,7 +2829,12 @@ def discover_agents(agents_dir: Path) -> List[Tuple[str, str, Path, str]]:
                 )
             # Gate on hash-signed marker, pinned to the bytes we just hashed.
             marker_inspect = _inspect_published_marker(
-                slug_dir, oas_path, precomputed_oas_sha256=oas_sha256
+                slug_dir,
+                oas_path,
+                precomputed_oas_sha256=oas_sha256,
+                sidecar_dir=_sidecar_marker_dir(
+                    state_root, agents_dir, slug_dir
+                ),
             )
             if marker_inspect["status"] != "valid":
                 print(
@@ -2686,6 +2955,8 @@ def _discover_a2a_asgi_app(server: Any, label: str) -> Any:
 
 def discover_agents_for_reload(
     agents_dir: Path,
+    *,
+    marker_state_root: Any = _AUTO_STATE_ROOT,
 ) -> Tuple[
     List[Tuple[str, str, Path, str]],  # valid: (vendor, slug, oas_path, fingerprint)
     List[Tuple[str, str, Path, str, Optional[str]]],  # parse_failed: (vendor, slug, oas_path, error, kind_hint)
@@ -2727,12 +2998,18 @@ def discover_agents_for_reload(
     skips. To preserve a no-knowledge mode (tests calling this function
     directly without a caller), we accept an optional argument.
     """
-    return _discover_agents_for_reload_inner(agents_dir, currently_mounted=frozenset())
+    return _discover_agents_for_reload_inner(
+        agents_dir,
+        currently_mounted=frozenset(),
+        marker_state_root=marker_state_root,
+    )
 
 
 def _discover_agents_for_reload_inner(
     agents_dir: Path,
     currently_mounted: "frozenset[str]",
+    *,
+    marker_state_root: Any = _AUTO_STATE_ROOT,
 ) -> Tuple[
     List[Tuple[str, str, Path, str]],
     List[Tuple[str, str, Path, str, Optional[str]]],
@@ -2748,6 +3025,11 @@ def _discover_agents_for_reload_inner(
     if not agents_dir.exists():
         return valid, parse_failed
     agents_base = agents_dir.resolve()
+    state_root = (
+        resolve_marker_state_root(agents_dir, create=False)
+        if marker_state_root is _AUTO_STATE_ROOT
+        else marker_state_root
+    )
 
     def _safe_resolve(p: Path) -> "Path | None":
         if p.name.startswith("."):
@@ -2852,7 +3134,12 @@ def _discover_agents_for_reload_inner(
             # the FOUR failure modes so the caller can tell a benign draft
             # override from real corruption.
             marker_inspect = _inspect_published_marker(
-                slug_dir, oas_path, precomputed_oas_sha256=fingerprint
+                slug_dir,
+                oas_path,
+                precomputed_oas_sha256=fingerprint,
+                sidecar_dir=_sidecar_marker_dir(
+                    state_root, agents_dir, slug_dir
+                ),
             )
             marker_status = marker_inspect["status"]
             if marker_status != "valid":
@@ -3425,9 +3712,11 @@ class MountedAgentRegistry:
         agents_dir: Path,
         base_url: str,
         loader: Any,
+        marker_state_root: Any = _AUTO_STATE_ROOT,
     ) -> None:
         self._parent_app = parent_app
         self._agents_dir = agents_dir
+        self._marker_state_root = marker_state_root
         self._base_url = base_url
         self._loader = loader
         # Agents that came in via build_parent_app (sync mount) but whose
@@ -3505,12 +3794,24 @@ class MountedAgentRegistry:
             }
         """
         async with self._lock:
+            # Re-derive publish markers for any agent dir that lacks one
+            # BEFORE re-discovering (cinatra#2873). A reload against a
+            # freshly-cloned, markerless source tree would otherwise
+            # rediscover every agent and gate every one of them — returning
+            # 200 while changing nothing, which is exactly what the fresh
+            # install matrix measured. Idempotent and write-free once the
+            # markers are in place.
+            _backfill_missing_markers(
+                self._agents_dir, marker_state_root=self._marker_state_root
+            )
             # Pass the currently-mounted label set so the discovery can
             # surface `draft_overrides_published` only for labels we'd
             # otherwise unmount. New labels with no marker stay silent.
             currently_mounted = frozenset(self._active.keys())
             valid, parse_failed = _discover_agents_for_reload_inner(
-                self._agents_dir, currently_mounted
+                self._agents_dir,
+                currently_mounted,
+                marker_state_root=self._marker_state_root,
             )
             valid_by_label = {
                 f"{v}/{s}": (v, s, p, fp) for (v, s, p, fp) in valid
@@ -3805,11 +4106,24 @@ def build_parent_app(agents_dir: Path) -> Starlette:
     # Construct the parent app first with placeholder routes; the registry
     # mutates app.router.routes in-place (and during reload).
     parent_app = Starlette()
+    # Resolve the writable root for loader-derived publish markers ONCE, and
+    # hand the SAME root to the backfill, the initial discovery and every
+    # later reload — the three must never disagree about where the markers
+    # the loader owns live (cinatra#2873).
+    marker_state_root = resolve_marker_state_root(agents_dir, create=True)
+    state_label = (
+        str(marker_state_root)
+        if marker_state_root is not None
+        else "NONE — no writable location; agents without a marker of their "
+        "own will stay gated"
+    )
+    print(f"[agent_loader] publish-marker state dir: {state_label}")
     registry = MountedAgentRegistry(
         parent_app=parent_app,
         agents_dir=agents_dir,
         base_url=base_url,
         loader=loader,
+        marker_state_root=marker_state_root,
     )
 
     # Backfill markers for any agent dir on disk that lacks
@@ -3817,7 +4131,9 @@ def build_parent_app(agents_dir: Path) -> Starlette:
     # untouched. Runs ONCE per process boot; rolling out a new wayflow image
     # against an existing volume of agents marks them all as "published" by
     # treating their current oas.json hash as the source of truth.
-    backfilled = _backfill_missing_markers(agents_dir)
+    backfilled = _backfill_missing_markers(
+        agents_dir, marker_state_root=marker_state_root
+    )
     if backfilled > 0:
         print(
             f"[agent_loader] marker backfill complete: "
@@ -3828,7 +4144,9 @@ def build_parent_app(agents_dir: Path) -> Starlette:
     # returns the validated fingerprint alongside each tuple so the same bytes
     # used to validate the marker are the bytes mounted. `_mount_one_sync`
     # re-verifies as defense-in-depth.
-    for vendor, slug, oas_path, fingerprint in discover_agents(agents_dir):
+    for vendor, slug, oas_path, fingerprint in discover_agents(
+        agents_dir, marker_state_root=marker_state_root
+    ):
         label = f"{vendor}/{slug}"
         try:
             agent = _mount_one_sync(
