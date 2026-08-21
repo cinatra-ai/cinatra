@@ -2938,6 +2938,188 @@ jobs:
           fi
           echo "RBAC e2e passed"
 
+  chat-hitl-held-turn-e2e:
+    name: Chat-HITL held-turn dev-runtime e2e
+    needs: detect
+    if: ${{ always() }}
+    # Same opt-in larger-runner lever the sibling e2e jobs use. Unset keeps
+    # `ubuntu-latest`. This job runs the DEV runtime rather than a production
+    # build, so it never pays `pnpm build`'s memory peak — but Turbopack compiles
+    # each route cold on first hit, which is why the budgets below are generous.
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # The flow drives two full held turns. The FIRST `POST /api/chat` compiles the
+    # chat route graph cold before the pre-router dispatches at all — minutes on a
+    # contended runner, with nothing in `agent_runs` while it happens. 50 minutes
+    # leaves headroom over the suite's own 40-minute globalTimeout and the 45-minute
+    # shell timeout below.
+    timeout-minutes: 50
+    services:
+      # Conditional images, the required-check idiom this workflow already uses:
+      # a docs-only run must reach its green stub without provisioning sidecars.
+      postgres:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:18' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:8' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SUPABASE_SCHEMA: cinatra
+      REDIS_URL: redis://127.0.0.1:6379
+      # A queue of this job's own, so "exactly one job names this run" is measured
+      # on a queue nothing else writes to.
+      BULLMQ_QUEUE_NAME: cinatra-chat-hitl-s9k-jobs
+      BETTER_AUTH_SECRET: chat-hitl-s9k-secret-do-not-use-in-prod-xxxxxxxxxxxxxxxxxxx
+      BETTER_AUTH_URL: http://localhost:3126
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3126
+      NEXT_PUBLIC_APP_URL: http://localhost:3126
+      NEXT_PUBLIC_SITE_URL: http://localhost:3126
+      # A PRESENCE placeholder, and nothing more. Generation is served by the
+      # scripted provider (set by the suite's own webServer command); no live key,
+      # no network, no real credential anywhere in this job.
+      OPENAI_API_KEY: sk-test-placeholder
+      # Sealing keys for the at-rest codec the fixtures' shipped writers use.
+      # Throwaway, generated nowhere and secret from nobody: this database is
+      # destroyed with the runner.
+      CINATRA_ENCRYPTION_KEY: 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
+      CINATRA_CONTEXT_ATTEST_KEY: ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100
+      CINATRA_RUNTIME_MODE: development
+      A2A_DEV_BYPASS: "true"
+      CINATRA_E2E_SETUP_BYPASS: "true"
+    steps:
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
+      - name: Docs-only stub
+        if: ${{ needs.detect.outputs.skip == 'true' }}
+        run: echo "Docs-only or draft PR — reporting the chat-HITL held-turn e2e as a green stub (the real flow runs on code/mixed PRs)."
+
+      - if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Set up Node.js
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      # REQUIRED, not optional: the agent this flow dispatches
+      # (`@cinatra-ai/blog-draft-writer-agent`) and the skill it assigns
+      # (`@cinatra-ai/chat:blog-content`) are registered at boot from the companion
+      # extension repos. Without them boot registers neither, the recommendation
+      # scorer offers no candidate, and the run dispatches UNHELD — a red with a
+      # misleading cause.
+      - name: Clone companion extension repos
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Provision Better Auth tables (public schema)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # The `cinatra` schema is owned by `ensurePostgresSchema` (first server
+        # query); Better Auth's `public.*` tables are not, and without them the
+        # instrumentation hook fails with `relation "public.user" does not exist`.
+        # The committed idempotent snapshot is used rather than the better-auth
+        # migrate CLI for the reason the sibling jobs document: the CLI bundles
+        # auth.ts's whole import graph and statically refuses the transitive
+        # `import "server-only"`.
+        run: node scripts/apply-public-schema.mjs
+
+      # NO PRODUCTION BUILD, and this is the point of the job rather than an
+      # omission. #2824 asks for a DEV-RUNTIME proof, because that is the runtime
+      # the 2026-08-13 capture ruling labels and the runtime the hard pre-router
+      # path ships under. The suite's own `webServer` boots `pnpm dev` with the
+      # scripted provider, so there is nothing to build and nothing to start here.
+      - name: Run the chat-HITL held-turn Playwright flow
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        id: e2e
+        env:
+          E2E_CHAT_HITL_PORT: "3126"
+          E2E_CHAT_HITL_BASE_URL: http://localhost:3126
+        # SIGTERM at 45m, SIGKILL 60s later, and the step ALWAYS exits 0 so the
+        # artifact uploads below run as ordinary steps — a job-level cancellation
+        # skips even `always()` cleanup, which is how earlier rounds lost their
+        # diagnostics. The captured code is asserted at the end.
+        run: |
+          set +e
+          timeout --kill-after=60 2700 pnpm test:e2e:chat-hitl-held-turn
+          code=$?
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "playwright exited with ${code}"
+          exit 0
+
+      - name: Upload Playwright report
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chat-hitl-held-turn-playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+      # The PROVISIONAL dev-runtime capture records and their screenshots, as an
+      # artifact rather than a commit. S9g alone adopts and canonicalizes AC-15
+      # records; this job produces runtime evidence and hands it over, it does not
+      # promote it.
+      - name: Upload provisional dev-runtime capture evidence
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: chat-hitl-held-turn-provisional-captures
+          path: evidence/2824-s9k
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Assert the chat-HITL held-turn flow passed
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: |
+          code="${{ steps.e2e.outputs.code }}"
+          if [ "$code" != "0" ]; then
+            echo "::error::chat-HITL held-turn e2e failed or timed out (exit ${code})"
+            exit 1
+          fi
+          echo "chat-HITL held-turn e2e passed"
+
   build:
     # Gate the image build on the test job so a failing typecheck or unit-test
     # run blocks publishing the image, including the `latest` tag on main.
@@ -2955,7 +3137,7 @@ jobs:
     # packages — packages/llm, packages/chat, packages/objects,
     # packages/registries and the rest — which until this change executed in no
     # workflow at all.
-    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate]
+    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, chat-hitl-held-turn-e2e]
     # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`/`package-unit-suites`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
@@ -2987,10 +3169,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites + hosted-mcp-wire-gate)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' || needs['hosted-mcp-wire-gate'].result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites + hosted-mcp-wire-gate + chat-hitl-held-turn-e2e)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' || needs['hosted-mcp-wire-gate'].result != 'success' || needs['chat-hitl-held-turn-e2e'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }} hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }} hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }} chat-hitl-held-turn-e2e=${{ needs['chat-hitl-held-turn-e2e'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
