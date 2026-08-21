@@ -150,13 +150,54 @@ async function releaseBlocker(blocker: Client): Promise<void> {
   }
 }
 
+/**
+ * The statements from the canonical bootstrap that build the NOTIFICATIONS
+ * table — its typed columns, its partial unique dedupe index, and the realtime
+ * NOTIFY trigger plus the function it calls. Taken from the bootstrap rather
+ * than hand-written, so this suite runs against the constraints production has;
+ * the other ~170 statements build tables it never touches.
+ *
+ * SELECTED BY OBJECT, NOT BY THE WORD "notification" (cinatra#2882 + #2838).
+ * The original filter was `/notification/i` over the statement text, which is a
+ * different question from "does this statement build the notifications table"
+ * and stopped agreeing with it the moment another table grew a column with
+ * `notification` in its name. #2838 added exactly that — three statements over
+ * `lifecycle_continuation_park` for its `hold_notification` state — and because
+ * they ALTER a table this schema deliberately never creates, the whole
+ * `beforeAll` died on "relation ... does not exist" and every arm reported as
+ * skipped. (A fourth false positive, `agent_creation_request`, had been matching
+ * all along; it is a self-contained CREATE TABLE, so it merely built a table
+ * nobody wanted, silently.)
+ *
+ * So match the OBJECTS: the schema-qualified table, and the trigger function by
+ * name (its CREATE mentions no table). Anything that only talks ABOUT
+ * notifications is not part of this schema.
+ */
+function notificationSchemaQueries(schema: string): Array<{ text: string }> {
+  const needle = new RegExp(
+    `"${schema.replaceAll('"', '""')}"\\."notifications"|fn_notify_notification_insert`,
+  );
+  const queries = buildCreateStoreSchemaQueries(schema).filter((s) =>
+    needle.test(s.text),
+  );
+  // A silent empty selection would leave an empty schema and turn every arm into
+  // a confusing "relation does not exist" far from the cause. Fail at the cause.
+  if (!queries.some((s) => /CREATE TABLE[^;]*"notifications"/i.test(s.text))) {
+    throw new Error(
+      "the notifications DDL was not found in buildCreateStoreSchemaQueries() — " +
+        "the table or the trigger function was probably renamed. Update the " +
+        "object names this suite selects on.",
+    );
+  }
+  return queries;
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   admin = new Client({ connectionString: DB_URL });
   await admin.connect();
   await admin.query(`CREATE SCHEMA IF NOT EXISTS "${q(TEST_SCHEMA)}"`);
-  for (const stmt of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    if (!/notification/i.test(stmt.text)) continue;
+  for (const stmt of notificationSchemaQueries(TEST_SCHEMA)) {
     await admin.query(stmt.text);
   }
   registerAdapters();
