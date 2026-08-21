@@ -75,6 +75,7 @@ import {
   CHIP_SKIP,
   CONVERSATION_LIST,
   DECISION_ATTR,
+  HELD_TURN_AGENT_PACKAGE,
   HELD_TURN_MESSAGE,
   HELD_TURN_PAUSED_TEXT,
   HELD_TURN_RUNNING_TEXT,
@@ -84,8 +85,8 @@ import {
   TRANSCRIPT_SLOT,
 } from "./constants";
 import {
+  assertRunIsForPackage,
   jobsNamingRun,
-  newestRunId,
   readRecommendationParkStatus,
   readRejectedRecommendations,
   readRunFacts,
@@ -270,6 +271,101 @@ const TURN_REFUSALS = [
   "I tried to dispatch",
 ] as const;
 
+/**
+ * THE RUN ID, TAKEN FROM THE BROWSER — never from the database.
+ *
+ * The dispatch boundary prints the run id into the very turn that carries the card
+ * (`Dispatched … (runId: …, status: pending_input)`), so the transcript is the one
+ * place that says WHICH run the card on screen belongs to. Reading it from there
+ * makes attribution flow browser → database.
+ *
+ * The tempting alternative — "the newest row in `agent_runs`" — is not the run on
+ * screen. It is whatever was written last, by anyone. A concurrent run, or a
+ * leftover from an earlier attempt, would satisfy every status, park and queue
+ * assertion in this file while the card being measured belonged to something else:
+ * a vacuous pass of exactly the DOM↔runtime pairing the suite exists to establish.
+ */
+async function runIdFromTranscript(page: Page): Promise<string> {
+  const transcript = await page.locator(CONVERSATION_LIST).innerText();
+  const match = transcript.match(
+    /runId:\s*`?([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`?/,
+  );
+  if (!match) {
+    throw new Error(
+      "the transcript does not name a runId — the dispatch boundary prints one into the " +
+        "held turn, so its absence means no dispatch happened in this turn",
+    );
+  }
+  return match[1]!;
+}
+
+/**
+ * THE HELD INVARIANT, OBSERVED ALL AT ONCE.
+ *
+ * Four facts, polled TOGETHER until they hold in the same observation rather than
+ * read once each. The card's own state becomes visible through a server action,
+ * while these are read over a separate database connection, so a single-shot read
+ * taken the instant the card appears can catch the runtime mid-write and fail on
+ * timing rather than on truth. Under `retries: 0` that is not a flake to be
+ * absorbed later — it is a red build, so the wait belongs here.
+ *
+ * They are also polled together rather than in sequence because the four are only
+ * meaningful as one statement: "this run is parked, with nothing queued behind it".
+ * Three of them holding at different moments does not say that.
+ */
+async function expectHeldInvariant(runId: string): Promise<void> {
+  let last = "";
+  await waitFor(
+    `the held invariant for ${runId} (pending_input + human_present + park parked + 0 jobs)`,
+    async () => {
+      const facts = await readRunFacts(runId);
+      const park = await readRecommendationParkStatus(runId);
+      const jobs = await jobsNamingRun(runId);
+      last = `status=${facts.status} human_present=${facts.humanPresent} park=${park} jobs=${jobs}`;
+      return (
+        facts.status === "pending_input" &&
+        facts.humanPresent === true &&
+        park === "parked" &&
+        jobs === 0
+      );
+    },
+    { timeoutMs: DECISION_MS },
+  ).catch((err) => {
+    throw new Error(`${String(err)} — last observation: ${last}`);
+  });
+}
+
+/**
+ * THE RELEASED INVARIANT, likewise observed all at once: the park is released, the
+ * run has LEFT `pending_input`, and exactly one queue job names it.
+ *
+ * The "left `pending_input`" clause is the one that is easy to omit and expensive
+ * to omit: a build that released the park and enqueued the job while leaving the
+ * run's authoritative status stuck in the held state would satisfy the other two
+ * and still not have advanced the run. The next status itself is deliberately NOT
+ * pinned — that belongs to the run's own lifecycle, not to this decision — so the
+ * assertion is that it moved, and the value it moved to is reported.
+ */
+async function expectReleasedInvariant(runId: string): Promise<string> {
+  let last = "";
+  let finalStatus = "";
+  await waitFor(
+    `the released invariant for ${runId} (park released + run left pending_input + exactly 1 job)`,
+    async () => {
+      const facts = await readRunFacts(runId);
+      const park = await readRecommendationParkStatus(runId);
+      const jobs = await jobsNamingRun(runId);
+      last = `status=${facts.status} park=${park} jobs=${jobs}`;
+      finalStatus = facts.status;
+      return park === "released" && facts.status !== "pending_input" && jobs === 1;
+    },
+    { timeoutMs: DECISION_MS },
+  ).catch((err) => {
+    throw new Error(`${String(err)} — last observation: ${last}`);
+  });
+  return finalStatus;
+}
+
 /** Wait until a HELD card is on screen, then return the anchors it published. */
 async function waitForHeldCard(page: Page, timeoutMs: number): Promise<CardAnchors> {
   let last: CardAnchors | null = null;
@@ -398,22 +494,14 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   await sendDrivingMessage(page);
 
   const held = await waitForHeldCard(page, FIRST_TURN_MS);
-  const runId = await newestRunId();
-  expect(runId, "the dispatch created a run").not.toBeNull();
 
-  // ── (1) A REAL held run, behind the card ────────────────────────────────
-  const heldFacts = await readRunFacts(runId!);
-  expect(heldFacts.status, "the run is parked, not queued").toBe("pending_input");
-  expect(heldFacts.humanPresent, "the runtime recorded a present human").toBe(true);
-  expect(
-    await readRecommendationParkStatus(runId!),
-    "the recommendation checkpoint actually parked this run",
-  ).toBe("parked");
-  expect(
-    await jobsNamingRun(runId!),
-    "NOTHING is queued behind a held run — this is what separates a real hold " +
-      "from a card drawn over a run that was dispatched anyway",
-  ).toBe(0);
+  // ── (1) A REAL held run, behind THIS card ───────────────────────────────
+  //    The id comes from the transcript, and is then checked to belong to the
+  //    package the flow dispatched, so every probe below measures the run the
+  //    browser is showing rather than whatever row was written most recently.
+  const runId = await runIdFromTranscript(page);
+  await assertRunIsForPackage(runId, HELD_TURN_AGENT_PACKAGE);
+  await expectHeldInvariant(runId);
 
   // ── (2) The card, at the `agent_run` producing slot, on the chat host ────
   expect(held.roots, "exactly one recommendation_hold card in the turn").toBe(1);
@@ -481,22 +569,10 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   expect(page.url(), "settling the card NAVIGATED NOWHERE").toBe(urlAtConfirm);
 
   // ── (5) The run advanced — exactly one job ───────────────────────────────
-  await waitFor(
-    "the recommendation park to be released by the decision",
-    async () => (await readRecommendationParkStatus(runId!)) === "released",
-    { timeoutMs: DECISION_MS },
-  );
-  await waitFor(
-    "exactly one queue job to name the released run",
-    async () => (await jobsNamingRun(runId!)) === 1,
-    { timeoutMs: DECISION_MS },
-  );
+  const confirmedStatus = await expectReleasedInvariant(runId);
+  console.log(`[S9k] confirm released run ${runId}: pending_input -> ${confirmedStatus}`);
   expect(
-    await jobsNamingRun(runId!),
-    "the decision enqueued the run EXACTLY once",
-  ).toBe(1);
-  expect(
-    await readSelectedSkillRevisions(runId!),
+    await readSelectedSkillRevisions(runId),
     "the confirmed selection is durable",
   ).toContain(HELD_TURN_SKILL_ID);
 
@@ -538,15 +614,13 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   await sendDrivingMessage(page);
 
   const held2 = await waitForHeldCard(page, WARM_TURN_MS);
-  const runId2 = await newestRunId();
-  expect(runId2, "the second dispatch created its own run").not.toBeNull();
-  expect(runId2, "and it is a DIFFERENT run from the confirmed one").not.toBe(runId);
-
-  const held2Facts = await readRunFacts(runId2!);
-  expect(held2Facts.status).toBe("pending_input");
-  expect(held2Facts.humanPresent).toBe(true);
-  expect(await readRecommendationParkStatus(runId2!)).toBe("parked");
-  expect(await jobsNamingRun(runId2!), "nothing queued behind the second hold").toBe(0);
+  const runId2 = await runIdFromTranscript(page);
+  expect(
+    runId2,
+    "the Skip half is a SECOND, SEPARATELY held run — one hold cannot be both decisions",
+  ).not.toBe(runId);
+  await assertRunIsForPackage(runId2, HELD_TURN_AGENT_PACKAGE);
+  await expectHeldInvariant(runId2);
   expect(held2.roots).toBe(1);
   expect(held2.state).toBe("held");
   expect(held2.host).toBe("chat_thread");
@@ -575,19 +649,10 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   expect(skipped.chipMarks, "and marks it skipped").toEqual(["skipped"]);
   expect(page.url(), "SKIP settled the card without navigating").toBe(urlAtSkip);
 
-  await waitFor(
-    "the second park to be released by the skip",
-    async () => (await readRecommendationParkStatus(runId2!)) === "released",
-    { timeoutMs: DECISION_MS },
-  );
-  await waitFor(
-    "exactly one queue job to name the skipped-then-released run",
-    async () => (await jobsNamingRun(runId2!)) === 1,
-    { timeoutMs: DECISION_MS },
-  );
-  expect(await jobsNamingRun(runId2!), "the skip advanced the run exactly once").toBe(1);
+  const skippedStatus = await expectReleasedInvariant(runId2);
+  console.log(`[S9k] skip released run ${runId2}: pending_input -> ${skippedStatus}`);
   expect(
-    await readRejectedRecommendations(runId2!),
+    await readRejectedRecommendations(runId2),
     "the skip wrote its per-skill rejection evidence",
   ).toContain(`${HELD_TURN_SKILL_ID}:user_skipped`);
 

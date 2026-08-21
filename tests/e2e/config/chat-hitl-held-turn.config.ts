@@ -95,7 +95,15 @@ export default defineConfig({
       `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
     cwd: REPO_ROOT,
     url: BASE_URL,
-    timeout: 300_000,
+    // TEN MINUTES, sized to a FRESH database rather than a warm one. This suite's
+    // whole premise is a throwaway instance, so its boot is never the cheap case:
+    // it creates the `cinatra` schema, activates the extension closure, registers
+    // the agent templates and rebuilds the skills catalog before it answers at all.
+    // Measured at 5-7 minutes on a contended machine, which walked straight into
+    // the 5-minute ceiling the sibling configs use for warm instances — and a
+    // webServer timeout reports as an infrastructure failure with no test name,
+    // which is the least diagnosable red available.
+    timeout: 600_000,
     reuseExistingServer: false,
     stdout: "pipe",
     stderr: "pipe",

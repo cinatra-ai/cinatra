@@ -33,15 +33,41 @@ function readEnvLocal(): Record<string, string> {
 
 const ENV_LOCAL = readEnvLocal();
 
-export const DATABASE_URL =
-  process.env.SUPABASE_DB_URL ??
-  ENV_LOCAL.SUPABASE_DB_URL ??
-  "postgresql://postgres:postgres@127.0.0.1:5432/postgres";
+/**
+ * NO PRODUCTION-SHAPED DEFAULTS, DELIBERATELY.
+ *
+ * The sibling e2e suites fall back to `…@127.0.0.1:5432/postgres` and
+ * `cinatra-background-jobs` when a variable is missing. For those suites that is a
+ * convenience; for this one it is a correctness hole. This flow counts rows and
+ * queue jobs, so a silent fallback would point it at whatever database and queue
+ * happen to be on the machine — a developer's own stack, or another lane's — and
+ * every count it takes would then describe someone else's runtime while reporting
+ * on this one.
+ *
+ * So a missing variable is a REFUSAL, naming the variable. An unset environment
+ * fails immediately and legibly instead of measuring the wrong world.
+ */
+function required(name: string): string {
+  const value = process.env[name] ?? ENV_LOCAL[name];
+  if (!value || !value.trim()) {
+    throw new Error(
+      `${name} is required by the chat-HITL held-turn suite and is not set (checked the ` +
+        "environment and .env.local). This suite counts runs and queue jobs, so it refuses " +
+        "to fall back to a shared default and measure a database or queue it does not own.",
+    );
+  }
+  return value.trim();
+}
+
+export const DATABASE_URL = required("SUPABASE_DB_URL");
+export const REDIS_URL = required("REDIS_URL");
+/**
+ * ITS OWN QUEUE, REQUIRED RATHER THAN DEFAULTED. "Exactly one job names this run"
+ * is the load-bearing measurement, and it is only unambiguous on a queue nothing
+ * else writes to.
+ */
+export const QUEUE_NAME = required("BULLMQ_QUEUE_NAME");
 export const SCHEMA = process.env.SUPABASE_SCHEMA ?? ENV_LOCAL.SUPABASE_SCHEMA ?? "cinatra";
-export const REDIS_URL =
-  process.env.REDIS_URL ?? ENV_LOCAL.REDIS_URL ?? "redis://127.0.0.1:6379";
-export const QUEUE_NAME =
-  process.env.BULLMQ_QUEUE_NAME ?? ENV_LOCAL.BULLMQ_QUEUE_NAME ?? "cinatra-background-jobs";
 
 async function withClient<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   const c = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5_000 });
@@ -93,21 +119,46 @@ export async function readRecommendationParkStatus(runId: string): Promise<strin
   });
 }
 
-/** The newest run, used to name the run the browser just caused. */
-export async function newestRunId(): Promise<string | null> {
-  return withClient(async (c) => {
-    const r = await c.query<{ id: string }>(
-      `SELECT id FROM "${SCHEMA}"."agent_runs" ORDER BY created_at DESC LIMIT 1`,
-    );
-    return r.rowCount ? r.rows[0]!.id : null;
-  });
-}
-
 export async function countRuns(): Promise<number> {
   return withClient(async (c) => {
     const r = await c.query<{ n: string }>(`SELECT count(*)::text AS n FROM "${SCHEMA}"."agent_runs"`);
     return Number(r.rows[0]?.n ?? 0);
   });
+}
+
+/**
+ * Confirm the run the BROWSER named is the run this database has, and that it is
+ * the run the flow dispatched.
+ *
+ * There is no `newestRunId()` here on purpose. "The newest row in the table" is not
+ * the run on screen — it is whatever was written last, by anyone — so a concurrent
+ * or leftover run could satisfy every status, park and queue assertion in the flow
+ * while the card being photographed belonged to something else entirely. That is a
+ * VACUOUS PASS of precisely the DOM↔runtime pairing this suite exists to establish.
+ *
+ * The run id therefore comes from the transcript (the dispatch boundary prints it
+ * into the very turn that carries the card), and this function checks the id the
+ * browser gave against the template the flow meant to dispatch. Attribution flows
+ * browser → database, never database → browser.
+ */
+export async function assertRunIsForPackage(runId: string, packageName: string): Promise<void> {
+  const actual = await withClient(async (c) => {
+    const r = await c.query<{ package_name: string | null }>(
+      `SELECT t.package_name
+         FROM "${SCHEMA}"."agent_runs" r
+         JOIN "${SCHEMA}"."agent_templates" t ON t.id = r.template_id
+        WHERE r.id = $1`,
+      [runId],
+    );
+    if (!r.rowCount) throw new Error(`no agent_runs row for the run the transcript named: ${runId}`);
+    return r.rows[0]!.package_name;
+  });
+  if (actual !== packageName) {
+    throw new Error(
+      `the run the transcript named (${runId}) belongs to ${actual}, not ${packageName} — ` +
+        "the flow is measuring a different run from the one it dispatched",
+    );
+  }
 }
 
 /** The per-skill rejection evidence a Skip writes. */
