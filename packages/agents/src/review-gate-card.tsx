@@ -638,6 +638,20 @@ export function ReviewGateCard({
   // The server-minted island URL, when this answer carried one (cinatra#2754).
   // Only the widget arm ever does; the cookie hosts resolve `null` here and the
   // composed `src` below is byte-identical to the one they composed before.
+  //
+  // IT KEEPS LIVING IN THE RESOLVE'S STATE, AND THAT IS THE DECIDED ANSWER. The
+  // hardening round asked whether the card could drop the credential after the
+  // first paint. It cannot, not without redesigning the island's retry machine:
+  // `ReviewTargetIsland` keys its iframe (and resets its load-state bag) on the
+  // `src` STRING, so a `src` that loses its credential after the paint is a
+  // DIFFERENT src — the frame remounts on an uncredentialed address and the
+  // island goes blank in front of the reader. The timeout retry depends on the
+  // same identity: it re-resolves precisely so a FRESH credentialed src arrives
+  // and remounts the frame by itself. The ruling ordered three hardenings and
+  // explicitly not a redesign, so what closes the exposure instead is single
+  // use: the held copy is spent the moment the island paints from it, which
+  // makes the copy in this state — and every other copy of the address — inert
+  // rather than merely short-lived.
   const serverIslandSrc = resolved?.islandSrc ?? null;
   const body = renderState({
     state,

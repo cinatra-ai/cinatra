@@ -21,6 +21,13 @@
 // We therefore key off the app's own `CINATRA_RUNTIME_MODE`/`APP_RUNTIME_MODE`
 // (`getAppRuntimeMode()`) AND skip `NEXT_PHASE === "phase-production-build"`.
 //
+// IT ALSO CARRIES THE MEASURED DEPLOYMENT REQUIREMENTS (cinatra#2754). Not every
+// deployment requirement is an environment variable: some are properties of the
+// shipped code that a deployment must be able to rely on. Those live in
+// `@/lib/boot/deployment-invariants`, are MEASURED (executed, never declared) in
+// the same pass as the vars, and abort a prod boot exactly as a missing hard var
+// does.
+//
 // Two severities:
 //   - HARD: a missing var THROWS (aborts boot). The app genuinely cannot serve
 //     without it. SUPABASE_DB_URL, BETTER_AUTH_SECRET, CINATRA_ENCRYPTION_KEY.
@@ -34,6 +41,17 @@
 // Deliberately NOT importing "server-only": vitest unit tests import this module.
 
 import { getAppRuntimeMode } from "@/lib/runtime-mode";
+// cinatra#2754 — the MEASURED deployment requirements. A missing env var and an
+// unmet security requirement are the same class of problem at boot: the
+// deployment is not configured the way the app requires, and it must say so
+// loudly here rather than serve as if it were.
+import {
+  checkDeploymentInvariants,
+  DEPLOYMENT_INVARIANTS,
+  formatDeploymentInvariantFailureMessage,
+  type DeploymentInvariant,
+  type DeploymentInvariantFailure,
+} from "@/lib/boot/deployment-invariants";
 
 /** A hard-required var whose absence (or malformed value) aborts a prod boot. */
 type HardVar = {
@@ -91,6 +109,12 @@ export type EnvPreflightReport = {
   hardFailures: { name: string; reason: string }[];
   /** Soft vars that are missing (warn-only). */
   softMissing: { name: string; why: string }[];
+  /**
+   * MEASURED deployment requirements that did not hold (cinatra#2754). Same
+   * severity as a hard var: a prod boot aborts. Absent (empty) when the
+   * preflight no-ops outside app-runtime production.
+   */
+  invariantFailures: DeploymentInvariantFailure[];
 };
 
 /** A read-only env bag: a supertype of NodeJS.ProcessEnv for the reads we do here. */
@@ -100,7 +124,10 @@ export type EnvBag = Record<string, string | undefined>;
  * PURE check (no env mutation, no throw). Given an env bag, classify hard/soft
  * required-var problems. Exported for unit testing.
  */
-export function checkRequiredEnv(env: EnvBag): EnvPreflightReport {
+export function checkRequiredEnv(
+  env: EnvBag,
+  invariants: readonly DeploymentInvariant[] = DEPLOYMENT_INVARIANTS,
+): EnvPreflightReport {
   const hardFailures: { name: string; reason: string }[] = [];
   for (const v of HARD_REQUIRED_ENV) {
     const raw = env[v.name];
@@ -120,7 +147,15 @@ export function checkRequiredEnv(env: EnvBag): EnvPreflightReport {
     const value = typeof raw === "string" ? raw.trim() : "";
     if (!value) softMissing.push({ name: v.name, why: v.why });
   }
-  return { hardFailures, softMissing };
+  // The MEASURED requirements run in the same pass (cinatra#2754). They read no
+  // env — they execute the shipped code and check what it actually does — so
+  // they are reported here beside the vars rather than in a second place an
+  // operator would have to know to look at.
+  return {
+    hardFailures,
+    softMissing,
+    invariantFailures: checkDeploymentInvariants(invariants),
+  };
 }
 
 /** Build the loud multi-line abort message for the hard failures. */
@@ -142,6 +177,9 @@ export type RunPreflightDeps = {
   isBuildPhase?: () => boolean;
   logWarn?: (msg: string) => void;
   logInfo?: (msg: string) => void;
+  /** The measured deployment requirements. Injectable so a test can prove the
+   *  abort path without having to break the shipped redactor to do it. */
+  invariants?: readonly DeploymentInvariant[];
 };
 
 /**
@@ -159,17 +197,32 @@ export function runRequiredEnvPreflight(deps: RunPreflightDeps = {}): EnvPreflig
     isBuildPhase = () => env.NEXT_PHASE === "phase-production-build",
     logWarn = (msg) => console.warn(msg),
     logInfo = (msg) => console.info(msg),
+    invariants = DEPLOYMENT_INVARIANTS,
   } = deps;
 
-  const empty: EnvPreflightReport = { hardFailures: [], softMissing: [] };
+  const empty: EnvPreflightReport = {
+    hardFailures: [],
+    softMissing: [],
+    invariantFailures: [],
+  };
 
   // Only enforce for the app's PRODUCTION RUNTIME, never during the image build.
   if (isBuildPhase() || !isProd()) return empty;
 
-  const report = checkRequiredEnv(env);
+  const report = checkRequiredEnv(env, invariants);
 
   if (report.hardFailures.length > 0) {
     throw new Error(formatHardFailureMessage(report.hardFailures));
+  }
+
+  // A MEASURED deployment requirement that does not hold aborts the boot too
+  // (cinatra#2754). It is reported AFTER the env set so an operator who is
+  // missing both sees the vars first — those are the ones they can fix by
+  // provisioning — but it is just as fatal: the alternative is an instance
+  // serving traffic while a security requirement it claims to meet does not
+  // hold.
+  if (report.invariantFailures.length > 0) {
+    throw new Error(formatDeploymentInvariantFailureMessage(report.invariantFailures));
   }
 
   for (const s of report.softMissing) {
