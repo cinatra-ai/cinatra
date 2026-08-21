@@ -475,8 +475,127 @@ ON CONFLICT (id) DO UPDATE SET
   };
 }
 
+/** A jsonb expression that is `expr` when `expr` is an array and `[]` otherwise.
+ *  Every reader below walks persisted JSON written by a client, so a field that
+ *  is not the shape this reader expects must degrade to "no identity here" and
+ *  never to an error that fails the user's save. */
+function jsonbArrayOrEmpty(expr: string): string {
+  return `CASE WHEN jsonb_typeof(${expr}) = 'array' THEN ${expr} ELSE '[]'::jsonb END`;
+}
+
 /**
- * Build the assistant_turns mirror reconcile pair for one thread write:
+ * The SQL that TOMBSTONES the run-bound turns a truncating save removes
+ * (cinatra#2823 S9j, review round 3, blocker 2).
+ *
+ * THE DEFECT. The reconcile DELETE below is scoped `id LIKE 'legacy:%'` so a
+ * legacy write can never delete a runtime-minted row — correct, and it left an
+ * edit-and-resend deleting the mirror row of a turn while the run-bound row
+ * survived. The reload's fold-in then put that turn back, ABOVE the edited prompt
+ * (the run-bound stamp is taken at run START, the edited message gets a fresh
+ * one), and the next whole-transcript save wrote it down again. The user deleted
+ * a turn and it came back, permanently.
+ *
+ * THE SEPARATION, STATED HONESTLY. Server time cannot tell a lost save from a
+ * deliberate truncation, and neither can "the turn is absent from the payload" —
+ * a lost save looks exactly like that, and repairing it is what this whole leg is
+ * for. What CAN tell them apart is whether this save REMOVED something that was
+ * showing the turn:
+ *
+ *   * a save that DELETES a durable message is ASSERTING its removal. It had the
+ *     row, it no longer carries it, and the removal is a state transition the
+ *     server itself recorded — not a claim about a message the client never had.
+ *   * a save that simply never carried the turn is SILENT about it, and silence
+ *     is the dropped save the fold-in repairs.
+ *
+ * That is the same discipline the fold-in's own refusals follow (a side that is
+ * merely silent contradicts nothing) applied to the write side.
+ *
+ * HOW A REMOVED MIRROR ROW IS LINKED TO A RUN-BOUND ONE. The two writers share no
+ * key — the mirror row's id is built from the CLIENT's message id and the
+ * run-bound row's is the turn's — so the link is the SERVER-MINTED identity both
+ * copies of the turn carry, read from every shape the projection produces and
+ * matched to the durable row's own: the tool-call ids (`parts[].id` in the
+ * ordinary layout, `thoughtGroups[].toolCalls[].id` in Slack mode) and the
+ * lifecycle cards' `viewType|ref` (turn-level `dataParts`, or folded onto a
+ * `tool_call` part since S9i). One identity discipline, the same one
+ * `claimsDurableTurn` reads on the reload side.
+ *
+ * ORDERED BEFORE THE DELETE, in the SAME transaction the whole mirror write runs
+ * in, so it sees the rows that are about to go and cannot half-apply: the
+ * truncation and the tombstone commit together or not at all.
+ */
+function buildSupersedeRunBoundTurnsQuery(args: {
+  schema: string;
+  threadId: string;
+  keptIds: string[];
+}): { text: string; values: unknown[] } {
+  const { schema } = args;
+  const parts = jsonbArrayOrEmpty("r.content->'parts'");
+  const groups = jsonbArrayOrEmpty("r.content->'thoughtGroups'");
+  const durableParts = jsonbArrayOrEmpty("t.content->'parts'");
+  const durableViews = jsonbArrayOrEmpty("t.content->'dataParts'");
+  return {
+    text: `WITH removed AS (
+  SELECT content FROM "${schema}"."assistant_turns"
+   WHERE thread_id = $1
+     AND id LIKE '${LEGACY_MIRROR_TURN_ID_PREFIX}%'
+     AND NOT (id = ANY($2::text[]))
+     AND content IS NOT NULL
+),
+removed_identity AS (
+  -- a tool-call id in the ordinary ordered trace
+  SELECT 'call:' || (p->>'id') AS token
+    FROM removed r, jsonb_array_elements(${parts}) p
+   WHERE p->>'kind' = 'tool_call' AND jsonb_typeof(p->'id') = 'string'
+  UNION
+  -- ...or in the Slack-mode layout, which omits parts and keeps thoughtGroups
+  SELECT 'call:' || (tc->>'id')
+    FROM removed r, jsonb_array_elements(${groups}) g,
+         jsonb_array_elements(${jsonbArrayOrEmpty("g->'toolCalls'")}) tc
+   WHERE jsonb_typeof(tc->'id') = 'string'
+  UNION
+  -- a lifecycle card's own identity, at turn level
+  SELECT 'view:' || (d->>'viewType') || '|' || (d->>'ref')
+    FROM removed r, jsonb_array_elements(${jsonbArrayOrEmpty("r.content->'dataParts'")}) d
+   WHERE jsonb_typeof(d->'viewType') = 'string' AND d->>'viewType' <> ''
+     AND jsonb_typeof(d->'ref') = 'string'
+  UNION
+  -- ...or folded onto the tool_call that produced it (S9i slots)
+  SELECT 'view:' || (v->>'viewType') || '|' || (v->>'ref')
+    FROM removed r, jsonb_array_elements(${parts}) p,
+         jsonb_array_elements(${jsonbArrayOrEmpty("p->'views'")}) v
+   WHERE p->>'kind' = 'tool_call' AND jsonb_typeof(v->'viewType') = 'string'
+     AND v->>'viewType' <> '' AND jsonb_typeof(v->'ref') = 'string'
+)
+UPDATE "${schema}"."assistant_turns" t
+   SET superseded_at = now(), updated_at = now()
+ WHERE t.thread_id = $1
+   AND t.run_id IS NOT NULL
+   AND t.superseded_at IS NULL
+   AND t.content->>'format' = 'assistant-turn-v1'
+   AND (
+     EXISTS (
+       SELECT 1 FROM jsonb_array_elements(${durableParts}) dp
+        WHERE dp->>'type' = 'tool_call' AND jsonb_typeof(dp->'id') = 'string'
+          AND ('call:' || (dp->>'id')) IN (SELECT token FROM removed_identity)
+     )
+     OR EXISTS (
+       SELECT 1 FROM jsonb_array_elements(${durableViews}) dd
+        WHERE jsonb_typeof(dd->'viewType') = 'string' AND dd->>'viewType' <> ''
+          AND jsonb_typeof(dd->'ref') = 'string'
+          AND ('view:' || (dd->>'viewType') || '|' || (dd->>'ref')) IN (SELECT token FROM removed_identity)
+     )
+   )`,
+    values: [args.threadId, args.keptIds],
+  };
+}
+
+/**
+ * Build the assistant_turns mirror reconcile queries for one thread write:
+ *   0. SUPERSEDE the run-bound turns the truncation below is about to remove —
+ *      the rows the DELETE cannot touch and the reload would otherwise fold back
+ *      in (`buildSupersedeRunBoundTurnsQuery`). Ordered FIRST because it reads
+ *      the rows the DELETE removes.
  *   1. DELETE mirror-namespace rows for messages no longer in the payload
  *      (edit/regenerate truncation). Scoped by `id LIKE 'legacy:%'` so a
  *      legacy write can NEVER delete a runtime-minted turn row.
@@ -487,7 +606,7 @@ ON CONFLICT (id) DO UPDATE SET
  *      re-written message (edit/regenerate reusing the same id) refreshes its
  *      durable content; the identity metadata (role/created_at/attribution) is
  *      immutable and left as first inserted.
- * Returns [delete] when there are no rows, else [delete, insert].
+ * Returns [supersede, delete] when there are no rows, else [supersede, delete, insert].
  */
 export function buildAssistantTurnMirrorReconcileQueries(args: {
   schemaName: string;
@@ -497,6 +616,7 @@ export function buildAssistantTurnMirrorReconcileQueries(args: {
   const schema = args.schemaName.replaceAll('"', '""');
   const ids = args.turns.map((t) => t.id);
   const queries: Array<{ text: string; values: unknown[] }> = [
+    buildSupersedeRunBoundTurnsQuery({ schema, threadId: args.threadId, keptIds: ids }),
     {
       text: `DELETE FROM "${schema}"."assistant_turns"
 WHERE thread_id = $1

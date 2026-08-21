@@ -168,10 +168,27 @@ export function assistantThreadSchemaQueries(schemaName: string): { text: string
       status text NOT NULL DEFAULT 'running',
       content jsonb,
       ordinal integer,
+      superseded_at timestamptz,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `ALTER TABLE "${s}"."assistant_turns" ADD COLUMN IF NOT EXISTS content jsonb` },
+    // `superseded_at` (cinatra#2823 S9j, review round 3): the moment a
+    // whole-transcript save DELETED the mirror rows that were showing this
+    // run-bound turn — i.e. the moment the user deliberately removed it (edit and
+    // resend, regenerate). NULLABLE, and NULL is the ordinary state.
+    //
+    // WHY A COLUMN AND NOT A DELETE. The truncating save must be able to say "the
+    // user removed this turn" without destroying the server's only record of it:
+    // that row is also the resume/authorization anchor (`findAssistantTurnByRunId`
+    // → turn → thread → policy), so deleting it would break a reconnect to a run
+    // still in flight. Only `reconstructThreadPayload` reads this column; every
+    // other reader of assistant_turns is deliberately unaffected.
+    //
+    // Additive and nullable, so a DB bootstrapped before this change gains it via
+    // the ADD COLUMN IF NOT EXISTS (bootstrap-upgrade parity, exactly as `content`
+    // and `ordinal` did) with no rewrite of existing rows.
+    { text: `ALTER TABLE "${s}"."assistant_turns" ADD COLUMN IF NOT EXISTS superseded_at timestamptz` },
     // `ordinal` (cinatra#1037 P5.6 drop-history PR2 CUTOVER): the legacy-mirror
     // turn's position in payload.messages[]. The structured read reconstruction
     // is now authoritative, so message ORDER must be faithful; created_at/id

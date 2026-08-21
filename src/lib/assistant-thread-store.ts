@@ -2541,13 +2541,21 @@ export function reconstructThreadPayload(threadId: string): Record<string, unkno
         // carry an `ordinal` and MUST come back in it. Run-bound rows have none,
         // so `NULLS LAST` puts them after the spine and the assembler re-sorts
         // them by `created_at` itself; the spine's own order is untouched.
+        //
+        // SUPERSEDED ROWS ARE NOT READ (review round 3, blocker 2). A run-bound
+        // turn the user deliberately removed — by editing and resending, or
+        // regenerating — is tombstoned by the truncating save itself, in that
+        // save's own transaction (`buildSupersedeRunBoundTurnsQuery`). The row
+        // stays, because it is also the resume/authorization anchor; it simply
+        // stops being a turn the transcript folds back in. THIS is the only
+        // reader that filters on it.
         text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at
                FROM "${schema}"."assistant_turns"
                WHERE thread_id = $1
                  AND content IS NOT NULL
                  AND (
                    (run_id IS NULL AND id LIKE '${prefix}%')
-                   OR run_id IS NOT NULL
+                   OR (run_id IS NOT NULL AND superseded_at IS NULL)
                  )
                ORDER BY ordinal NULLS LAST, created_at, id`,
         values: [threadId],

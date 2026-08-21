@@ -273,7 +273,7 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
   ];
 
   it("emits reconcile DELETE scoped to the mirror namespace, then one INSERT", () => {
-    const [del, ins] = buildAssistantTurnMirrorReconcileQueries({
+    const [, del, ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
@@ -299,7 +299,7 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
   });
 
   it("run_id is NULL (never fabricated), status 'completed', ordinal projected", () => {
-    const [, ins] = buildAssistantTurnMirrorReconcileQueries({
+    const [, , ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
@@ -308,7 +308,7 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
   });
 
   it("writes durable content + ordinal (PR1/PR2) and refreshes them on conflict", () => {
-    const [, ins] = buildAssistantTurnMirrorReconcileQueries({
+    const [, , ins] = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns,
@@ -323,14 +323,69 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     }
   });
 
-  it("an empty message list emits ONLY the reconcile delete (full truncation)", () => {
+  it("an empty message list emits ONLY the supersede + reconcile delete (full truncation)", () => {
     const queries = buildAssistantTurnMirrorReconcileQueries({
       schemaName: SCHEMA,
       threadId: "t1",
       turns: [],
     });
-    expect(queries).toHaveLength(1);
+    expect(queries).toHaveLength(2);
+    // Both are keyed on the same (thread, kept-ids) pair, which is what makes
+    // the tombstone and the truncation one decision rather than two.
     expect(queries[0].values).toEqual(["t1", []]);
+    expect(queries[1].values).toEqual(["t1", []]);
+  });
+
+  // ── the supersede half (cinatra#2823 S9j, review round 3, blocker 2) ────────
+
+  it("SUPERSEDES the run-bound turns the truncation removes, BEFORE the delete", () => {
+    const [supersede, del] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+    });
+    // Ordered FIRST, because it reads the very rows the DELETE is about to take.
+    expect(supersede.text).toContain(`UPDATE "${SCHEMA}"."assistant_turns" t`);
+    expect(supersede.text).toContain("SET superseded_at = now()");
+    expect(del.text).toContain(`DELETE FROM "${SCHEMA}"."assistant_turns"`);
+    // Its `removed` set is EXACTLY the DELETE's predicate — the rows this save
+    // takes away, and nothing else. A save that removes nothing supersedes
+    // nothing, which is what keeps a LOST save repairable.
+    expect(supersede.text).toContain(`id LIKE '${LEGACY_MIRROR_TURN_ID_PREFIX}%'`);
+    expect(supersede.text).toContain("NOT (id = ANY($2::text[]))");
+    expect(supersede.values).toEqual(["t1", ["legacy:2:t1:m1", "legacy:2:t1:m2"]]);
+  });
+
+  it("touches ONLY run-bound, un-superseded, durable-format rows", () => {
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+    });
+    expect(supersede.text).toContain("t.run_id IS NOT NULL");
+    expect(supersede.text).toContain("t.superseded_at IS NULL");
+    expect(supersede.text).toContain("t.content->>'format' = 'assistant-turn-v1'");
+    // It never DELETES: the run-bound row is also the resume/authorization
+    // anchor, so removing it would break a reconnect to a run still in flight.
+    expect(supersede.text).not.toContain("DELETE");
+  });
+
+  it("links the two writers by SERVER-MINTED identity, in every shape it is recorded in", () => {
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+    });
+    // The removed MIRROR rows: the ordinary trace, the Slack-mode layout that
+    // omits it, turn-level cards, and cards folded onto their producing slot.
+    expect(supersede.text).toContain("r.content->'parts'");
+    expect(supersede.text).toContain("r.content->'thoughtGroups'");
+    expect(supersede.text).toContain("r.content->'dataParts'");
+    expect(supersede.text).toContain("p->'views'");
+    // The surviving RUN-BOUND row, in the durable format's own vocabulary
+    // (`type`, not `kind`).
+    expect(supersede.text).toContain("dp->>'type' = 'tool_call'");
+    expect(supersede.text).toContain("t.content->'dataParts'");
   });
 });
 

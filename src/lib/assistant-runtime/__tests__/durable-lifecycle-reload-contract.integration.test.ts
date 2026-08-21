@@ -880,6 +880,125 @@ describe("a stale save cannot push a turn out of its place in time", () => {
   });
 });
 
+describe("edit-and-resend does not resurrect the turns the user removed", () => {
+  // cinatra#2823 review round 3, blocker 2, reproduced for BOTH kinds the
+  // reviewer reproduced it for.
+  //
+  // The truncating save deletes MIRROR rows only — the reconcile DELETE is
+  // scoped `id LIKE 'legacy:%'` so a legacy write can never delete a
+  // runtime-minted row. The run-bound row therefore survives a truncation, and
+  // the fold-in puts it back: ABOVE the edited prompt, because the run-bound
+  // stamp is taken at run START while the edited message gets a fresh one. The
+  // next whole-transcript save then writes it back down as a mirror row and the
+  // resurrection is permanent.
+  //
+  // Every message here is written through the shipped mirror projection, so the
+  // truncation is the real one: the same DELETE, the same predicate, the same
+  // transaction production runs.
+  it.each([
+    ["the lifecycle-view carriage", 0],
+    ["the agent_run pin carriage", 3],
+  ])("the removed turn stays removed — %s", async (_label, index) => {
+    const carriage = CARRIAGES[index];
+    const threadId = `thr-2823-edit-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: `Please handle the ${carriage.kind} case.`,
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    // The client's save LANDS, carrying the assistant turn — so the turn really
+    // is in the transcript the user is about to edit.
+    const assistantMessage = {
+      id: `a-${randomUUID()}`,
+      role: "assistant" as const,
+      content: drive.durable.content,
+      parts: [
+        {
+          kind: "tool_call",
+          id: drive.toolCallId,
+          name: carriage.toolName,
+          status: "completed",
+        },
+      ],
+    };
+    saveWholeTranscript({ threadId, messages: [userMessage, assistantMessage] });
+    expect(reloadWithNoRedisAndNoClientMemory(threadId).map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+
+    // EDIT AND RESEND: the user rewrites their prompt. The transcript from the
+    // edit point down is gone, and the edited prompt is a NEW message with a
+    // fresh stamp — later than the run-bound turn's, which is why the survivor
+    // used to reappear ABOVE it.
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "actually, never mind" };
+    saveWholeTranscript({ threadId, messages: [editedPrompt] });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(
+      reloaded.map((m) => m.id),
+      "a turn the user deleted by editing and resending came back — the truncating save removed the mirror row and left the run-bound row to fold in again",
+    ).toEqual([editedPrompt.id]);
+  });
+
+  it("a LOST save still repairs — nothing was deleted, so nothing was superseded", () => {
+    // The other side of the separation, and the reason it cannot be "the row is
+    // absent from the payload". A save that never carried the assistant turn is
+    // SILENT about it: it deletes nothing, so it asserts nothing, and the repair
+    // this whole leg exists for still happens.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-lost-${randomUUID()}`;
+    return driveTheRealSink(carriage, threadId).then((drive) => {
+      const { userMessage } = persistThroughTheRealStore({
+        threadId,
+        userText: `Please handle the ${carriage.kind} case.`,
+        runId: drive.runId,
+        durable: drive.durable,
+      });
+      // A LATER save that carries a new user message and STILL does not carry the
+      // assistant turn — it never had it. It deletes nothing that was showing the
+      // turn, so it supersedes nothing.
+      const later = { id: `u-${randomUUID()}`, role: "user" as const, content: "and another thing" };
+      saveWholeTranscript({ threadId, messages: [userMessage, later] });
+
+      const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+      expect(reloaded.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+      expect(viewsCarriedBy(reloaded[1]).atSlot(drive.toolCallId)).toEqual([
+        { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+      ]);
+    });
+  });
+
+  it("truncating a DIFFERENT message does not supersede an untouched turn", () => {
+    // The tombstone is keyed on the identity the REMOVED rows carried, not on
+    // "a truncation happened". A save that drops an unrelated message must leave
+    // every other turn's repair exactly where it was.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-othertrunc-${randomUUID()}`;
+    return driveTheRealSink(carriage, threadId).then((drive) => {
+      const { userMessage } = persistThroughTheRealStore({
+        threadId,
+        userText: `Please handle the ${carriage.kind} case.`,
+        runId: drive.runId,
+        durable: drive.durable,
+      });
+      const chatter = { id: `u-${randomUUID()}`, role: "user" as const, content: "ignore this one" };
+      saveWholeTranscript({ threadId, messages: [userMessage, chatter] });
+      // ...and now the user removes `chatter` alone. A real DELETE runs, and it
+      // removes a row that never carried the assistant turn's identity.
+      saveWholeTranscript({ threadId, messages: [userMessage] });
+
+      const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+      expect(reloaded.map((m) => m.role)).toEqual(["user", "assistant"]);
+      expect(viewsCarriedBy(reloaded[1]).atSlot(drive.toolCallId)).toEqual([
+        { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+      ]);
+    });
+  });
+});
+
 describe("a reloaded card lands at its slot, and a pre-slot row still lands at turn level", () => {
   // The sequencing directive (cinatra#2823 review round 3; #2879's named
   // follow-up). The merge-forward gave the SLOT an event-level argument so the
