@@ -226,6 +226,54 @@ describe("R4 — one registry row per data-part kind", () => {
     expect(hits.map((h) => h.rule)).toEqual(["R4"]);
     expect(hits[0].detail).toMatch(/verification_summary/);
   });
+
+  // REGRESSION (cinatra#2861, both cuts found by this reconciliation's Codex
+  // rounds). The rule shipped two fail-OPENS of the same shape: it read only the
+  // FRONT of the value, and the expected component name was sitting there.
+  //   · cut 1 captured a LEADING identifier, so `Owner(kind)` passed.
+  //   · cut 2 ended the capture at a NEWLINE, so the same call split across two
+  //     lines passed — a newline does not end a JavaScript value.
+  // `pick(kind)` above caught neither, because `pick` is not the owner's name:
+  // the fail-closed claim had never been tested against an expression that
+  // STARTS with the right word. Every shape below does.
+  it("fails CLOSED on an expression that merely BEGINS with the owner's name", () => {
+    const owner = CARD_OWNERS.verification_summary.component;
+    const shapes = [
+      `${owner}(kind)`,
+      // The multiline continuation — cut 2's bypass, pinned by fixture.
+      `${owner}\n    (kind)`,
+      `${owner}\n    .Inner`,
+      `x.${owner}`,
+      `() => ${owner}`,
+      `cond ? ${owner} : Other`,
+    ];
+    for (const rhs of shapes) {
+      const hits = scanRegistry(
+        [
+          "const M = {",
+          "  artifact_review_gate: ReviewGateCard,",
+          `  verification_summary: ${rhs},`,
+          "  trigger_schedule_proposal: LifecycleCard,",
+          "};",
+        ].join("\n"),
+      );
+      expect(hits.map((h) => h.rule), JSON.stringify(rhs)).toEqual(["R4"]);
+      expect(hits[0].detail, JSON.stringify(rhs)).toMatch(/an expression this gate cannot read/);
+    }
+  });
+
+  it("still accepts the one legal shape — a bare imported identifier", () => {
+    const hits = scanRegistry(
+      [
+        "const M = {",
+        "  artifact_review_gate: ReviewGateCard,",
+        `  verification_summary: ${CARD_OWNERS.verification_summary.component},`,
+        "  trigger_schedule_proposal: LifecycleCard,",
+        "};",
+      ].join("\n"),
+    );
+    expect(hits).toEqual([]);
+  });
 });
 
 /**
@@ -952,16 +1000,23 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
       '[data-action="cancel-trigger-schedule"]',
       '[data-action="release-trigger-now"]',
     ],
-    // RE-RATIFIED against the drawing at design@92c1be7c when the card landed
-    // (cinatra#2789, reconciled by cinatra#2861). The placeholder pinned
-    // `["verification-in-thread"]`, which is the ARTBOARD id marking §VII's
-    // in-a-turn specimen — the same class of id as `state-loading` and
-    // `review-target-in-thread`, neither of which this table ratifies for the
-    // review card either. The set below is §VII's five NAMED REGIONS, read off
-    // the drawing: "the Core analysis heading with its outcome pill, the scope
-    // sentence, the two revision pins, and the field-by-field before / after …
-    // It closes with Advisory comments." The scope sentence gets no anchor
-    // because §VII draws it as copy inside the chrome, not as a region.
+    // CORRECTED when the card landed (cinatra#2789, reconciled by
+    // cinatra#2861), and the contract row says at length what may be corrected
+    // and on whose authority — read it there. In short, and keeping the two
+    // halves apart:
+    //   · the REQUIREMENT is the drawing's. §VII names five regions in one
+    //     sentence — "the Core analysis heading with its outcome pill, the scope
+    //     sentence, the two revision pins, and the field-by-field before / after
+    //     … It closes with Advisory comments." Five is checkable against
+    //     design@92c1be7c §VII by anybody; the scope sentence is deliberately
+    //     not among them, because §VII draws it as copy inside the chrome.
+    //   · the NAMES are the repository's convention, because §VII gives those
+    //     regions no ids of its own. They are NOT checkable against the drawing
+    //     and this list does not claim they are.
+    // What the placeholder pinned — `["verification-in-thread"]` — is neither:
+    // it is the ARTBOARD id marking §VII's in-a-turn specimen, the same class of
+    // id as `state-loading` and `review-target-in-thread`, neither of which this
+    // table ratifies for the review card either.
     verification_summary: [
       "[data-verification-chrome]",
       "[data-verification-outcome]",

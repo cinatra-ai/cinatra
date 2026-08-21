@@ -128,6 +128,24 @@
  * filled in, because filling them in is exactly the implementer choice a closed
  * set forbids, and the done-check stays red until they are named.
  *
+ * A PLACEHOLDER'S ANCHOR LIST IS NOT A RATIFICATION, and the difference matters
+ * enough to state (cinatra#2861). A PLACEHOLDER row is written by a slice that
+ * has not drawn the card: it records what the drawing OWES, in whatever words
+ * were available before the body and the DOM existed. That is an obligation, and
+ * an obligation can be WRONG about the drawing in a way a ratification cannot —
+ * it can paraphrase a body field, or mistake an ARTBOARD id (a marker the design
+ * page puts around an example specimen, like `state-loading`) for an anchor the
+ * card is supposed to emit. So the slice that draws a placeholder kind re-reads
+ * the row against the DRAWING AT THE PIN and records each correction where it
+ * occurs, with the drawing sentence it rests on. It is still not free to choose
+ * WHICH regions are required — those come from the drawing — only to name a
+ * region the drawing ratifies in PROSE and gives no id of its own, in the tree's
+ * existing convention. That naming is not new here either: the schedule-proposal
+ * row below names two controls on exactly that footing ("ratified in prose and
+ * are now named, in the existing verb-object convention"). What stays forbidden
+ * is the thing this paragraph opened with — drawing first and calling the result
+ * the requirement afterwards.
+ *
  * AND WHERE THE TABLE SHAPE COMES FROM. The host-ownership table carries a
  * component-owner column and a wire-carriage column, and each row below carries
  * the same two fields. That is a HAND-KEPT correspondence, and it is stated as
@@ -515,11 +533,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
   },
 
   // DRAWN by S9e (cinatra#2789), which is why this row no longer reads as a
-  // placeholder. Everything below is MEASURED off the shipped card rather than
-  // carried over from the obligation the placeholder wrote, and the three places
-  // the two disagree are called out where they occur — because a row that keeps
-  // a guess after the drawing lands is the same dishonesty as a placeholder that
-  // keeps a name after the card lands.
+  // placeholder. Its PLACEHOLDER obligation was re-read against the drawing at
+  // the pin (design@92c1be7c §VII) rather than transcribed, per the header's
+  // "a placeholder's anchor list is not a ratification"; the three places the
+  // obligation and the drawing disagreed are corrected where they occur, each
+  // with the drawing sentence it rests on. A row that keeps a guess after the
+  // drawing lands is the same dishonesty as a placeholder that keeps a name
+  // after the card lands.
   verification_summary: {
     status: "DRAWN",
     design: "§VII (the verification card) — advisory, no floor",
@@ -535,8 +555,9 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // and the shipped card really calls it, so this line is unchanged.
       validator: "useLifecycleCardResolve",
       params: ["view"],
-      // MEASURED, and the placeholder's guess is corrected here (1 of 3). The
-      // obligation read `["state", "outcome", "revisions", "fields", "comments"]`
+      // The placeholder's guess is corrected here (1 of 3), against the SERVER
+      // rather than against the card. The obligation read
+      // `["state", "outcome", "revisions", "fields", "comments"]`
       // — a paraphrase of §VII's regions, written before the body existed. The
       // AUTHORIZED body is `verificationSummaryBodySchema`
       // (packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts),
@@ -552,27 +573,42 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "advisoryComments",
       ],
     },
-    // THE RATIFIED SET, CLOSED — the five regions §VII names, in the drawn
-    // card's own vocabulary, and the placeholder's guess is corrected here
-    // (2 of 3).
+    // THE RATIFIED SET, CLOSED — and the placeholder's guess is corrected here
+    // (2 of 3). Read the header's "a placeholder's anchor list is not a
+    // ratification" first: the requirement below comes from the DRAWING, and
+    // only the NAMES come from the tree's convention.
     //
-    // The obligation ratified `["verification-in-thread"]`. That is an ARTBOARD
-    // id: in the drawing at design@92c1be7c it marks the specimen slot in §VII's
-    // "the verification card in the assistant turn" figure, the same way
-    // `state-loading` and `review-target-in-thread` mark theirs — and this gate
-    // ratifies neither of those for the review card either. The executable
-    // conformance id for this card is `verification-card`, which is what
-    // scripts/audit/lib/chat-hitl-capture-recorder.mjs has graded a capture
-    // against since before either slice, and what the shipped card emits.
+    // WHAT WAS WRONG. The obligation PINNED `["verification-in-thread"]` — it
+    // recorded that name, which is not the same act as ratifying it. That
+    // is an ARTBOARD id: in the drawing at design@92c1be7c it wraps the specimen
+    // slot inside §VII's "the verification card in the assistant turn" figure,
+    // exactly as `state-loading` wraps §IV's and `review-target-in-thread` wraps
+    // §II's — and this table ratifies neither of those for the review card. An
+    // artboard marker is how the design page labels its own examples; it is not
+    // something a shipped card emits. The corroboration is independent of this
+    // slice: scripts/audit/lib/chat-hitl-capture-recorder.mjs has graded a
+    // capture of this kind against the conformance id `verification-card` since
+    // before either S9a or S9e, and `verification-in-thread` appears nowhere in
+    // this repository's executable expectations.
     //
-    // What IS ratified here are §VII's five named regions, read off the drawing
-    // sentence by sentence: "the **Core analysis** heading with its outcome
-    // pill, the scope sentence, the two revision pins, and the field-by-field
-    // before / after of exactly what was inspected … It closes with **Advisory
-    // comments**." Chrome, outcome, revisions, field-diff, advisory. The scope
-    // sentence gets no anchor of its own because §VII draws it as copy inside
-    // the chrome, not as a region — and an anchor nobody drew is exactly the
-    // implementer choice a closed set forbids.
+    // WHAT THE DRAWING RATIFIES. §VII names this card's regions in one sentence:
+    // "the **Core analysis** heading with its outcome pill, the scope sentence,
+    // and the two revision pins, and the field-by-field before / after of
+    // exactly what was inspected … It closes with **Advisory comments**: a label
+    // over one panel per comment." That is the closed set — chrome, outcome,
+    // revisions, field-diff, advisory — and it is the drawing's, not this
+    // slice's. The scope sentence is deliberately NOT in it: §VII draws it as
+    // copy inside the chrome rather than as a region, so it gets no anchor, and
+    // an anchor nobody drew is the implementer choice a closed set forbids.
+    //
+    // WHERE THE NAMES COME FROM. §VII gives those five regions no ids of its
+    // own, so they are named here in the tree's existing attribute convention —
+    // the same footing, and the same wording, as the schedule-proposal row's two
+    // controls three rows up ("ratified in prose and are now named, in the
+    // existing verb-object convention"). Naming a prose-ratified region is not
+    // choosing the requirement; adding or dropping one would be, and neither
+    // happened. A reader checking this row checks it against §VII's sentence,
+    // not against the card.
     //
     // The same five are `VERIFICATION_CORE_ANCHORS` below, which is what R2 bans
     // outside this owner. One list, read from both ends: the drawing may not be
@@ -832,11 +868,24 @@ export const RETIRED_PARALLELS = Object.freeze([
     // survives, and must, because it carries the page-only visual pair (#2044
     // L-D) that no card in a turn can draw. So the ban now names the DRAWING —
     // §VII's five regions — instead of the identifier that used to carry it.
-    // That is strictly wider on the thing R9 protects (any module redrawing a
-    // §VII region trips it, whatever it is called, which is the look-alike R1
-    // structurally cannot see) and narrower on one thing only: a second
-    // component merely NAMED `VerificationView` that draws no §VII region. That
-    // is not a parallel core renderer, and R9 never existed to catch it.
+    //
+    // WHAT THAT TRADE COSTS AND BUYS, stated both ways rather than as a win.
+    // WIDER: any module redrawing a §VII region trips it whatever it is called,
+    // which is precisely the look-alike R1's name patterns structurally cannot
+    // see. NARROWER: a second component merely NAMED `VerificationView` that
+    // emits no §VII region no longer trips R2 — but that is a wrapper, an alias
+    // or a harness, not a parallel core renderer, and R9 never existed to catch
+    // it. UNCHANGED, and recorded because it is the honest limit: a renderer
+    // that copies the drawing under a novel name AND invents its own attributes
+    // evades both forms. It always did — it is the first entry in this file's
+    // MISSES list — and R3, R4 and review are what stand behind the lexical
+    // rule there.
+    //
+    // OVER-DETECTION, accepted on purpose: the `\b` makes the pattern fire on a
+    // prefixed relative too (`data-verification-chrome-extra`). A neighbouring
+    // attribute on a §VII region drawn outside the owner is the same second
+    // drawing, and this file's recorded posture is that a spurious red is one
+    // conversation while a miss is a second approval surface.
     re: new RegExp(
       String.raw`data-verification-(?:${VERIFICATION_CORE_ANCHORS.join("|")})\b`,
       "g",
@@ -1004,13 +1053,28 @@ export function scanRegistry(source) {
   const code = stripComments(source);
   const findings = [];
   for (const kind of REGISTRY_KINDS) {
-    // The row and its right-hand side in one match: `kind: Component,`. The
-    // component is a bare identifier in this registry (the map is built from
-    // imported components), so anything else on the right — a call, an inline
-    // arrow, a member expression — does not match and is reported as a row
-    // whose owner could not be read, which is fail-closed.
+    // The row and its WHOLE right-hand side in one match: everything from the
+    // colon to the value's own terminator, which in an object literal is the
+    // next `,` or the closing `}`. The side is then required to be a BARE
+    // IDENTIFIER — the registry is a map of imported components, so that is its
+    // only legal shape, and a call, an inline arrow, a member expression, a
+    // ternary or a string is reported as a row whose owner could not be read.
+    //
+    // TWO FAIL-OPENS, both found by cinatra#2861's Codex rounds, both fixed
+    // here, and recorded because the shape of the mistake is instructive: each
+    // time, the pattern read only the FRONT of the value and the expected name
+    // was sitting there.
+    //   · capturing a leading identifier — `verification_summary:
+    //     VerificationSummaryCard(kind),` passed, because the capture stopped at
+    //     the `(` and the prefix equalled the owner.
+    //   · stopping the capture at a NEWLINE — the same call written across two
+    //     lines passed for the same reason. A newline does not end a JavaScript
+    //     value, so it may not end the capture either.
+    // So the terminator set is `,` and `}` ONLY. Whitespace, newlines and the
+    // rest of a continued expression stay inside the captured side, where the
+    // bare-identifier test can see them and refuse them.
     const hits = [
-      ...code.matchAll(new RegExp(String.raw`^\s*${kind}\s*:\s*([A-Za-z_$][\w$]*)?`, "gm")),
+      ...code.matchAll(new RegExp(String.raw`^\s*${kind}\s*:([^,}]*)`, "gm")),
     ];
     if (hits.length !== 1) {
       findings.push({
@@ -1021,7 +1085,8 @@ export function scanRegistry(source) {
       continue;
     }
     const expected = CARD_OWNERS[kind]?.component;
-    const actual = hits[0][1];
+    const side = hits[0][1].trim();
+    const actual = /^[A-Za-z_$][\w$]*$/.test(side) ? side : null;
     if (expected && actual !== expected) {
       findings.push({
         rule: "R4",
