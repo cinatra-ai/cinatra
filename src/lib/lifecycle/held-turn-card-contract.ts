@@ -390,10 +390,18 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
       '[data-skill-action="skip"]',
     ]),
     ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
-    // §V's two terminal acts, on the shipped `RunRecommendationChipRow`.
+    // §V's terminal acts, on the shipped `RunRecommendationChipRow` — the SAME
+    // three the owner anchors above and the capture contract
+    // (`decisionControls` in `scripts/ci/lib/capture-record-contract.mjs`)
+    // already name. The §V redraw (cinatra#2841) made the decision PER CHIP, so
+    // the row-level `confirm-run-recommendation` / `skip-run-recommendation`
+    // pair this list used to hold is emitted nowhere; cinatra#2866 renamed the
+    // owner anchors but left this field behind, which is what asserted a
+    // selector the shipped row never draws.
     decisionControls: Object.freeze([
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "held-turn-card-contract",

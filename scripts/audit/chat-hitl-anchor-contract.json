@@ -19,8 +19,9 @@
     "owner": "RecommendationHoldCard",
     "ownerAnchors": [
      "[data-conformance-id=\"run-chip-row\"]",
-     "[data-action=\"confirm-run-recommendation\"]",
-     "[data-action=\"skip-run-recommendation\"]"
+     "[data-skill-action=\"confirm\"]",
+     "[data-skill-action=\"adjust\"]",
+     "[data-skill-action=\"skip\"]"
     ],
     "ruledRootAnchors": [
      "[data-lifecycle-card=\"recommendation_hold\"]",
@@ -83,5 +84,5 @@
    }
   }
  },
- "digest": "87260ce65c8bfcdb573ffb6f30e5f24f11580d212d0e0ff5b2b4467dd94f3d59"
+ "digest": "110b8027589e55e7053c37caeb7ead3a1c05c7addeade91ed752c41798a1f7b6"
 }
