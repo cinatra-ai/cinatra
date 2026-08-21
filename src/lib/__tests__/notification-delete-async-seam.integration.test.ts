@@ -18,6 +18,12 @@
  *                       delete has returned — `Atomics.wait` froze the loop.
  *                   The contrast is the evidence; both halves run here.
  *
+ *   THE CEILING    — a delete held behind a lock nobody releases REJECTS at the
+ *                   seam's own bound and gives its client back to the pool.
+ *                   The sync bridge always settled (`Atomics.wait` times out);
+ *                   an async seam with no ceiling would be strictly weaker —
+ *                   a promise pending forever and a checkout never returned.
+ *
  *   NO SILENT FALLBACK
  *                 — a host that wires no async runner makes the seam THROW a
  *                   named error rather than quietly re-crossing the sync
@@ -29,7 +35,8 @@
  * could never fire during the sync half, because that is precisely the thing
  * the sync half prevents.
  *
- * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
+ * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided — EXCEPT in
+ * the dedicated lane, which refuses to skip (see the guard below). Run with:
  *   SUPABASE_DB_URL='postgresql://dev:devpass@/devdb?host=/path/to/pgsock' \
  *     pnpm test:async-notification-seam
  */
@@ -38,7 +45,10 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
-import { runPostgresQueriesAsync } from "@/lib/postgres-async";
+import {
+  getPostgresAsyncPool,
+  runPostgresQueriesAsync,
+} from "@/lib/postgres-async";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import {
   deleteNotificationsByDedupeKeyForUser,
@@ -52,6 +62,32 @@ const HAS_DB =
   DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
 const describeDb = HAS_DB ? describe : describe.skip;
 
+/**
+ * REFUSE TO SKIP IN THE DEDICATED LANE (cinatra#2882).
+ *
+ * `describeDb` above is the right default everywhere else: a DB tier must not
+ * red an ordinary unit run on a machine with no Postgres. But the dedicated
+ * script exists for exactly one purpose, and a run whose only failure mode is
+ * "skipped" reports success by doing nothing — a vacuous green over a seam
+ * whose whole point is that it is provable. `vitest.integration-2882.config.ts`
+ * sets the flag below, so `pnpm test:async-notification-seam` with no database
+ * exits non-zero with a message naming the variable it wants. Set
+ * `X2882_ALLOW_SKIP=1` to opt back into skipping (a deliberate no-DB smoke of
+ * the config itself); every other config leaves the skip semantics untouched.
+ */
+const IN_DEDICATED_LANE =
+  process.env.CINATRA_ASYNC_NOTIFICATION_SEAM_REALDB === "1";
+const ALLOW_SKIP = process.env.X2882_ALLOW_SKIP === "1";
+
+if (IN_DEDICATED_LANE && !ALLOW_SKIP && !HAS_DB) {
+  throw new Error(
+    "the #2882 async notification-seam lane needs a live Postgres: set " +
+      "SUPABASE_DB_URL to a real connection string (it is unset, empty, or the " +
+      "unused:unused placeholder). Refusing to skip — a skipped proof of an " +
+      "async seam proves nothing. Pass X2882_ALLOW_SKIP=1 to skip anyway.",
+  );
+}
+
 const TEST_SCHEMA = `cinatra_x2882_${randomUUID().slice(0, 8)}`;
 const q = (s: string) => s.replaceAll('"', '""');
 const TABLE = `"${q(TEST_SCHEMA)}"."notifications"`;
@@ -62,6 +98,14 @@ const TABLE = `"${q(TEST_SCHEMA)}"."notifications"`;
 // so a timer that fires "during" is unambiguous and one that cannot is too.
 const LOCK_HOLD_MS = 1200;
 const TIMER_DUE_MS = 150;
+
+// The seam's own ceiling, as the dedicated config sets it (4000ms — the 30s
+// production default shrunk so it is provable inside a test run). Read from the
+// environment rather than restated, so the config and this suite cannot drift.
+const BOUND_MS = (() => {
+  const raw = Number(process.env.POSTGRES_ASYNC_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+})();
 
 let admin: Client;
 
@@ -112,7 +156,7 @@ async function snapshot(): Promise<string[]> {
  * idle in a transaction. Server-side on purpose: a client-side `setTimeout`
  * release would never run during the sync half.
  */
-async function holdTableLock(): Promise<Client> {
+async function holdTableLock(holdMs: number = LOCK_HOLD_MS): Promise<Client> {
   const blocker = new Client({ connectionString: DB_URL });
   // Postgres TERMINATES this session to release the lock (that is the point),
   // which surfaces on the client as an async FATAL 25P03 / "Connection
@@ -122,7 +166,7 @@ async function holdTableLock(): Promise<Client> {
   blocker.on("error", () => {});
   await blocker.connect();
   await blocker.query(
-    `SET idle_in_transaction_session_timeout = '${LOCK_HOLD_MS}ms'`,
+    `SET idle_in_transaction_session_timeout = '${holdMs}ms'`,
   );
   await blocker.query("BEGIN");
   await blocker.query(`LOCK TABLE ${TABLE} IN ACCESS EXCLUSIVE MODE`);
@@ -300,6 +344,76 @@ describeDb("cinatra#2882 async notification-delete seam", () => {
 
       expect(await snapshot()).toEqual([]);
     }, 60_000);
+  });
+
+
+  describe("the seam's own ceiling", () => {
+    /**
+     * THE SETTLE GUARANTEE. The sync bridge this seam replaced always settled —
+     * `Atomics.wait` returns "timed-out" and the caller gets a throw. The first
+     * cut of the async seam set no ceiling at all, so a delete behind a lock
+     * nobody releases left the handler's promise pending FOREVER and never gave
+     * its client back. The three migrated clears swallow their errors by
+     * design, so that leak would have been permanent and silent.
+     *
+     * Here the lock is held far past the ceiling and never released on its own.
+     * The delete must REJECT (ordinarily — the caller's best-effort catch takes
+     * it), at roughly the ceiling, and the client must be back in the pool and
+     * still usable.
+     */
+    it("a delete blocked past the bound rejects, and gives its client back", async () => {
+      await seed([{ id: "n-bounded", user_id: "user-a", dedupe_key: "bounded" }]);
+      // Ten ceilings of hold: long enough that nothing here can be explained by
+      // the lock lapsing, short enough to be a safety net if this test throws.
+      const blocker = await holdTableLock(BOUND_MS * 10);
+      const pool = getPostgresAsyncPool(DB_URL);
+      const checkedOutBefore = pool.totalCount - pool.idleCount;
+
+      const t0 = performance.now();
+      // Raced against a watchdog ON PURPOSE: with the ceiling removed this must
+      // fail as a bounded assertion that says what happened, not as a test that
+      // hangs until the runner's timeout kills it.
+      const outcome = await Promise.race([
+        deleteNotificationsByDedupeKeyForUserAsync({
+          userId: "user-a",
+          dedupeKey: "bounded",
+        })
+          .then(() => "resolved-without-waiting" as const)
+          .catch((error: unknown) => error),
+        new Promise<"never-settled">((resolve) =>
+          setTimeout(() => resolve("never-settled"), BOUND_MS * 3),
+        ),
+      ]);
+      const elapsedMs = performance.now() - t0;
+
+      await releaseBlocker(blocker);
+
+      // Settled at all — this is the assertion the unbounded seam fails.
+      expect(outcome).not.toBe("never-settled");
+      // ...as an ordinary rejection, not a silent success.
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(
+        /statement timeout|Query read timeout/i,
+      );
+      // It really did wait for the ceiling rather than failing fast for an
+      // unrelated reason, and it did not wait appreciably past it.
+      expect(elapsedMs).toBeGreaterThan(BOUND_MS * 0.5);
+      expect(elapsedMs).toBeLessThan(BOUND_MS * 3);
+
+      // THE LEAK PIN: the checked-out client came back. An unbounded call holds
+      // its checkout for the life of the process, so `max` of them wedge every
+      // later caller of this pool.
+      expect(pool.totalCount - pool.idleCount).toBe(checkedOutBefore);
+      expect(pool.waitingCount).toBe(0);
+
+      // And the pool is still serviceable: the same seam, same key, now that
+      // the lock is gone.
+      await deleteNotificationsByDedupeKeyForUserAsync({
+        userId: "user-a",
+        dedupeKey: "bounded",
+      });
+      expect(await snapshot()).toEqual([]);
+    }, 120_000);
   });
 
   describe("a host that wires no async runner", () => {

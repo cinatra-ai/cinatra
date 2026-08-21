@@ -45,7 +45,8 @@
 //
 // If your caller can `await`, use `@/lib/postgres-async` (`runPostgresQueriesAsync`)
 // — same input keys, same `{ rows, rowCount }` results, same build-phase no-op,
-// no frozen loop. This bridge is for callers that genuinely cannot: module-scope
+// the same settle-or-throw ceiling (30s, `POSTGRES_ASYNC_TIMEOUT_MS`), and no
+// frozen loop. This bridge is for callers that genuinely cannot: module-scope
 // schema init, the sync-leaf stores under the Turbopack sync-import contract
 // (see `src/lib/postgres-schema-init.ts`), and security-critical instant
 // decisions where an `await` would open a TOCTOU window.
