@@ -529,6 +529,33 @@ describe("runWaitNotifier.onAutoGateOpen — emit on auto-gate open", () => {
     expect(input.dedupeKey).toBe("run-awaiting-human:auto:R1:auto-review-abc");
   });
 
+  // cinatra#2864 — the row is written behind the GATE's own row, in the same
+  // statement. Without this the pair had no ordering: a resolve-delete that ran
+  // while this insert was in flight matched nothing, the insert then committed,
+  // and the row outlived the review it announced. The ordering property itself is
+  // proven against a real database in
+  // packages/agents/src/__tests__/auto-gate-notification-ordering.integration.test.ts;
+  // what this pins is the HAND-OFF — that the host actually asks for the fence.
+  it("cinatra#2864: fences the insert on the gate row, still pending, FOR UPDATE", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "user-1", title: "Digest", status: "running" });
+    await runWaitNotifier.onAutoGateOpen!({ runId: "R1", reviewTaskId: "auto-review-abc" });
+
+    // The production call passes a third `options` argument the local mock's
+    // signature does not declare; read it positionally.
+    const options = (createNotificationForRecipient.mock.calls[0] as unknown[])[2] as {
+      recipientUserIds?: string[];
+      fence?: { values: unknown[]; precondition: string };
+    };
+    expect(options.fence).toBeDefined();
+    expect(options.fence!.values).toEqual(["R1", "auto-review-abc"]);
+    expect(options.fence!.precondition).toContain("artifact_review_gates");
+    expect(options.fence!.precondition).toContain("status = 'pending'");
+    expect(options.fence!.precondition).toContain("FOR UPDATE");
+    // One already-resolved recipient, so the fence takes ONE gate row lock for
+    // ONE insert rather than once per expanded recipient.
+    expect(options.recipientUserIds).toEqual(["user-1"]);
+  });
+
   it("skips the emit for a run with no initiator (synthetic orphan / system run)", async () => {
     readAgentRunById.mockResolvedValue({ id: "R1", runBy: null, title: null, status: "running" });
     await runWaitNotifier.onAutoGateOpen!({ runId: "R1", reviewTaskId: "t" });

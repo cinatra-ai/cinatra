@@ -38,6 +38,8 @@ export {
   deleteNotificationsByDedupeKeyForUser,
 } from "./service";
 export type { CreateNotificationOptions } from "./service";
+// cinatra#2864 — the write-time precondition a caller fences an insert behind.
+export type { NotificationWriteFence } from "./service";
 export type { AgentCreationProgressMilestone } from "./service";
 export type { NotificationsKeysetBefore } from "./service";
 

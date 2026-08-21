@@ -100,6 +100,15 @@ export type UiMessage = {
   // `thoughtGroups` during streaming. Renderer prefers this when present.
   // Older persisted messages without `parts` fall back to the flat layout.
   parts?: AssistantMessagePart[];
+  // The lifecycle SLOTS of the ordered trace (cinatra#2825, S9l), carried by a
+  // layout projection that omits `parts` itself — the Slack layout, whose pinned
+  // turn shape is thoughtGroups + flat content. A lifecycle item is not part of
+  // that layout: it is an adjunct the reader may have to ACT on, so the slot the
+  // card mounts at survives the projection here while the ordered trace stays
+  // omitted. Absent on every ChatGPT-mode turn (the full trace is on `parts`)
+  // and on any turn that carries no lifecycle slot, so persisted thread JSON is
+  // byte-identical to before wherever there is nothing to carry.
+  lifecycleParts?: AssistantMessagePart[];
   citations?: UiCitation[];
   // Structured `DATA_PART` payloads the AG-UI reducer carried through (i.e. the
   // ones it did not consume itself — never `agent_run` / `citations`), kept on

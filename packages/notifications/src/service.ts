@@ -314,6 +314,51 @@ export type CreateNotificationOptions = {
    * result. Empty array ⇒ no rows written (same as an empty expansion).
    */
   recipientUserIds?: readonly string[];
+  /**
+   * cinatra#2864 — write the row behind a caller-supplied PRECONDITION, in the
+   * same statement.
+   *
+   * Some notifications are only truthful while a row in ANOTHER table says so,
+   * and checking that row before calling here is not enough: whatever the check
+   * observed can change before the insert commits, and for a notification whose
+   * only clearing event may already have passed, that window is the whole defect.
+   * A `fence` closes it by moving the check INTO the write — the precondition is
+   * composed as a CTE and the INSERT is driven FROM its rows, so zero rows means
+   * zero writes. A precondition that takes a row lock (`FOR UPDATE`)
+   * additionally serialises this write against whoever else mutates that row.
+   *
+   * The package stays ignorant of what is being fenced: the caller owns the SQL
+   * and the table it names. See `buildAutoGateNotificationFence` in
+   * `@cinatra-ai/agents/run-wait-notifier` for the review-gate instance.
+   *
+   * TRUSTED SQL, INTERNAL CALLERS ONLY. `precondition` is composed into the
+   * statement verbatim — it is CODE, not data. It must come from a
+   * build-the-SQL-here helper that parameterises every value it carries (the two
+   * helpers that exist do), and no part of it may ever be derived from a request,
+   * a user field, or anything else outside this repository.
+   */
+  fence?: NotificationWriteFence;
+};
+
+/** See `CreateNotificationOptions.fence`. */
+export type NotificationWriteFence = {
+  /**
+   * Placeholder values for `precondition`, which numbers its own placeholders
+   * from `$1` over THIS array. The insert's row values are numbered AFTER them,
+   * so the caller never has to know how many columns the insert carries. One
+   * array because the whole fence is one statement, and one statement has one
+   * parameter space.
+   */
+  values: readonly unknown[];
+  /**
+   * SQL for a SELECT that GATES the insert: its rows feed the INSERT's source,
+   * so zero rows write nothing.
+   *
+   * It is composed as a CTE, so it may carry `FOR UPDATE` / `LIMIT`, and it MUST
+   * be a plain SELECT (a data-modifying precondition is not supported and would
+   * run even when the insert does not).
+   */
+  precondition: string;
 };
 
 /**
@@ -396,31 +441,55 @@ function insertNotificationRowForUser(args: {
             WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL
             DO NOTHING`;
 
+  const rowValues = [
+    id,
+    args.userId,
+    recipientKind,
+    recipientId,
+    args.topic,
+    kind,
+    args.input.title,
+    args.input.body ?? "",
+    args.input.href ?? null,
+    args.input.metadata ? JSON.stringify(args.input.metadata) : null,
+    args.input.sourceJobId ?? null,
+    args.input.sourceJobName ?? null,
+    dedupeKey,
+  ];
+  const returning = `id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at`;
+
+  // FENCED (cinatra#2864) vs plain. The two differ only in where the row values
+  // come from: a bare `VALUES` list, or a `SELECT` over the precondition's rows
+  // so an unmet precondition inserts NOTHING. The fence's own placeholders occupy
+  // `$1..$n`, so the row values shift behind them — that offset is the only
+  // reason this is not a single template.
+  //
+  // ONE STATEMENT, which is what makes it atomic. The precondition is a CTE of
+  // the INSERT, not a query before it, so the row lock a `FOR UPDATE`
+  // precondition takes is held for the insert it gates and released with it. A
+  // separate transaction wrapper would add nothing here and is deliberately not
+  // taken: there is only ever one statement to wrap.
+  const fence = args.options.fence;
+  const offset = fence ? fence.values.length : 0;
+  const rowPlaceholders = rowValues.map((_, i) => `$${offset + i + 1}`).join(", ");
+  const source = fence
+    ? `SELECT ${rowPlaceholders}, now(), ${readAtSql} FROM notification_write_fence`
+    : `VALUES (${rowPlaceholders}, now(), ${readAtSql})`;
+  const insertSql = `INSERT INTO ${schemaQualified("notifications")}
+          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at)
+          ${source}
+          ${conflictSql}
+          RETURNING ${returning}`;
+
   const host = getNotificationsHostAdapters();
   const [result] = host.runPostgresQueriesSync({
     connectionString: host.getPostgresConnectionString(),
     queries: [
       {
-        text: `INSERT INTO ${schemaQualified("notifications")}
-          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), ${readAtSql})
-          ${conflictSql}
-          RETURNING id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at`,
-        values: [
-          id,
-          args.userId,
-          recipientKind,
-          recipientId,
-          args.topic,
-          kind,
-          args.input.title,
-          args.input.body ?? "",
-          args.input.href ?? null,
-          args.input.metadata ? JSON.stringify(args.input.metadata) : null,
-          args.input.sourceJobId ?? null,
-          args.input.sourceJobName ?? null,
-          dedupeKey,
-        ],
+        text: fence
+          ? `WITH notification_write_fence AS (${fence.precondition})\n          ${insertSql}`
+          : insertSql,
+        values: fence ? [...fence.values, ...rowValues] : rowValues,
       },
     ],
   });
