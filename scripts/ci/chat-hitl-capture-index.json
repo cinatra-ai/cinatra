@@ -809,7 +809,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:56:52.794Z",
       "runtime": "dev-runtime",
-      "note": "§V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
+      "note": "\u00a7V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
     },
     {
       "cell": "V2__recommendation-card__run_card__held__dark",
@@ -1089,7 +1089,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:57:15.084Z",
       "runtime": "dev-runtime",
-      "note": "§V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
+      "note": "\u00a7V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
     },
     {
       "cell": "V4__recommendation-card__run_card__held__adjust-panel",
@@ -1369,7 +1369,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:57:59.190Z",
       "runtime": "dev-runtime",
-      "note": "§V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
+      "note": "\u00a7V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
     },
     {
       "cell": "V6__recommendation-card__run_card__settled__dark",
@@ -1649,7 +1649,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:58:17.869Z",
       "runtime": "dev-runtime",
-      "note": "§V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
+      "note": "\u00a7V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
     },
     {
       "cell": "V8__recommendation-card__run_card__held__trigger-position",
@@ -1789,7 +1789,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:58:25.799Z",
       "runtime": "dev-runtime",
-      "note": "§6.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
+      "note": "\u00a76.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
     },
     {
       "cell": "V9__recommendation-card__run_card__decided__page",
@@ -1930,6 +1930,213 @@
       "recordedAt": "2026-08-20T19:58:33.351Z",
       "runtime": "dev-runtime",
       "note": "The settled row in its page: nothing is summarised above it and there is nothing left to press."
+    },
+    {
+      "cell": "D1__review-card__chat_thread__slack-layout__held",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7361390f-450f-4d1a-b82b-7f2df1184d2e",
+      "build": "development",
+      "screenshot": "evidence/2825-s9l-survival/captures/D1__review-card__chat_thread__slack-layout__held.png",
+      "sha256": "0395564933141b5f394f8349ce79210516b9b68fa66ec329a8d0ed30aa23e86c",
+      "capturedAt": "2026-08-20T22:55:47.508Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "review-gate-card"
+        }
+      }
+    },
+    {
+      "cell": "D2__review-card__chat_thread__chatgpt-layout__error-turn__held",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/34b05ce8-3d52-4b3c-85b0-786c11b56684",
+      "build": "development",
+      "screenshot": "evidence/2825-s9l-survival/captures/D2__review-card__chat_thread__chatgpt-layout__error-turn__held.png",
+      "sha256": "4574e4ac446d47dd21a122f4bbc6c70211a5878771e1915410e04b7c00663c91",
+      "capturedAt": "2026-08-20T22:56:07.682Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "review-gate-card"
+        }
+      }
+    },
+    {
+      "cell": "D3__review-card__chat_thread__slack-layout__error-turn__held",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ed1582d4-5829-4ed0-9015-ac3885b2d656",
+      "build": "development",
+      "screenshot": "evidence/2825-s9l-survival/captures/D3__review-card__chat_thread__slack-layout__error-turn__held.png",
+      "sha256": "959c6528f0ef8bf3fb9da58f92fcbaaa5b422f3483a11221fdffbd23bc9b92f5",
+      "capturedAt": "2026-08-20T22:56:29.507Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-conformance-id": "review-gate-card"
+        }
+      }
     }
   ]
 }
