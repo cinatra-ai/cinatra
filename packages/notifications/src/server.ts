@@ -63,7 +63,7 @@ export { resolveAgentRunHref } from "./agent-run-href";
 // async pooled adapter instead of the synchronous `Atomics.wait` bridge. For
 // callers that already have an `await`; `./service`'s synchronous twins stay
 // exported above, unchanged, for genuinely synchronous hosts.
-export { deleteNotificationsByDedupeKeyForUserAsync } from "./service-async";
+export { deleteNotificationsByDedupeKeyForUserAsync } from "./service";
 
 // Ergonomic-only re-export for NON-boot callers (adapter-mocking tests).
 export {

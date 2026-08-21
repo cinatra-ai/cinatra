@@ -36,10 +36,10 @@
 // clear in `src/lib/agent-run-wait-notifications.ts` is an `async` handler that
 // was blocking the loop for a single keyed DELETE. The fix for that shape is an
 // ADDITIVE async seam beside the sync one, not a rewrite of it:
-// `deleteNotificationsByDedupeKeyForUserAsync` in
-// `packages/notifications/src/service-async.ts` drives the SAME statement
-// builder over `@/lib/postgres-async`, and the sync twin stays exactly where it
-// is for genuinely synchronous hosts.
+// `deleteNotificationsByDedupeKeyForUserAsync`, in the async-seam section of
+// `packages/notifications/src/service.ts`, drives the SAME statement builder
+// over `@/lib/postgres-async`, and the sync twin stays exactly where it is for
+// genuinely synchronous hosts.
 //
 // ## Before you add a call site here
 //

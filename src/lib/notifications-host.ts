@@ -65,8 +65,8 @@ const adapters: NotificationsHostAdapters = {
   // `process.env.SUPABASE_SCHEMA?.trim() || "cinatra"`.
   postgresSchema: process.env.SUPABASE_SCHEMA?.trim() || "cinatra",
   runPostgresQueriesSync,
-  // cinatra#2882 — the ASYNC counterpart, for the package's `./service-async`
-  // seam. LAZY (dynamic import inside the fn) for the same reason the auth
+  // cinatra#2882 — the ASYNC counterpart, for the package's async seam.
+  // LAZY (dynamic import inside the fn) for the same reason the auth
   // wrappers below are: this module is boot-reachable via background-jobs.ts,
   // and @/lib/postgres-async statically imports `pg` through @/lib/db/pooled.
   // Nothing here needs to be on the boot graph — the seam is only reached at

@@ -108,7 +108,7 @@ export type NotificationsHostAdapters = {
    * OPTIONAL on this type on purpose: the adapter-mocking tests construct this
    * object by hand, and a required field would break every one of them for a
    * seam they do not exercise. The real host (src/lib/notifications-host.ts)
-   * always supplies it; the async seam in `./service-async` throws a named
+   * always supplies it; the async seam in `./service` throws a named
    * error rather than silently falling back to the sync bridge when it is
    * missing, so a half-wired host is loud instead of quietly re-freezing the
    * event loop.

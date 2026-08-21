@@ -651,7 +651,7 @@ export function deleteNotificationsByDedupeKeyForUser(args: {
 /**
  * cinatra#2882 — the ONE definition of the keyed-delete statement, shared by
  * the synchronous bridge caller above and the async seam
- * `deleteNotificationsByDedupeKeyForUserAsync` in `./service-async`.
+ * `deleteNotificationsByDedupeKeyForUserAsync` below.
  *
  * The guard semantics live here and only here: the statement is scoped to the
  * exact `(user_id, dedupe_key)` pair, so neither driver can ever touch an
@@ -660,11 +660,10 @@ export function deleteNotificationsByDedupeKeyForUser(args: {
  * comes from the host adapter, which the real-database suites repoint), which
  * is why this is a function and not a template constant.
  *
- * INTERNAL: exported for `./service-async` only, deliberately NOT re-exported
- * from the `/server` barrel — callers use one of the two drivers, never the
- * statement.
+ * INTERNAL: the two drivers that sit either side of it are what callers use;
+ * it is deliberately NOT re-exported from the `/server` barrel.
  */
-export function buildDeleteNotificationsByDedupeKeyQuery(args: {
+function buildDeleteNotificationsByDedupeKeyQuery(args: {
   userId: string;
   dedupeKey: string;
 }): { text: string; values: unknown[] } {
@@ -673,6 +672,91 @@ export function buildDeleteNotificationsByDedupeKeyQuery(args: {
           WHERE user_id = $1 AND dedupe_key = $2`,
     values: [args.userId, args.dedupeKey],
   };
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#2882 — THE ASYNC SEAM.
+//
+// Everything above reaches Postgres through the host's `runPostgresQueriesSync`
+// adapter, which is the synchronous bridge: a worker thread plus `Atomics.wait`
+// on the MAIN thread until the worker answers or the 30s
+// `POSTGRES_SYNC_TIMEOUT_MS` ceiling fires. For the whole of that wait no timer,
+// no abort listener and no microtask runs anywhere in the process, and no
+// `AbortSignal` can reach it — un-abortable by construction, not by omission
+// (the finding PR #2875 had to design around).
+//
+// Every production caller of the notification CLEAR is `async` already. This
+// section gives them the same statement over the host's ASYNC adapter
+// (`runPostgresQueriesAsync` -> `@/lib/postgres-async` -> the shared pool), so
+// they stop paying for a freeze they never needed.
+//
+// SCOPE, on purpose: a seam, not a fork. It holds async variants of the
+// specific functions whose production callers have an `await` to give, and each
+// drives the SAME statement builder its synchronous twin drives — which is why
+// it lives HERE, immediately below that builder, rather than in a module of its
+// own. Nothing above is deprecated and nothing above is rewritten: genuinely
+// synchronous hosts keep every one of them.
+//
+// (It was a separate `./service-async` module until round 1 of #2884. That
+// module was reachable from four ratcheted routes through the `/server` barrel
+// and cost each of them one module of first-party graph pressure for code that
+// already had to import this file. See the route-graph-ratchet baseline.)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the host's async query runner, or fail loudly.
+ *
+ * Deliberately does NOT fall back to `runPostgresQueriesSync`. A silent
+ * fallback would put the `Atomics.wait` freeze back under a name that promises
+ * it is gone, and the callers of this seam swallow their errors by design
+ * (a notification write can never fail the status transition it follows) — so
+ * the regression would be invisible in exactly the place it matters. A named
+ * throw is caught by that same handler and logged, which is loud enough to
+ * find and honest about what happened.
+ */
+function requireAsyncRunner() {
+  const host = getNotificationsHostAdapters();
+  const runAsync = host.runPostgresQueriesAsync;
+  if (!runAsync) {
+    throw new Error(
+      "notifications host adapters do not supply runPostgresQueriesAsync — " +
+        "the async notification seam requires it. Wire it in " +
+        "src/lib/notifications-host.ts (or in the adapter this test registers); " +
+        "it is NOT silently backed by the synchronous Atomics.wait bridge.",
+    );
+  }
+  return { host, runAsync };
+}
+
+/**
+ * Async twin of `deleteNotificationsByDedupeKeyForUser` (cinatra#2882).
+ *
+ * Same statement, same guard, same idempotence, same early return on a missing
+ * id — the two differ ONLY in which host adapter carries the query. The
+ * hard-delete rationale is unchanged and documented on the synchronous twin:
+ * these rows are ephemeral state-of-the-world entries whose meaning expires
+ * the moment the underlying condition resolves, and deleting (rather than
+ * marking read) frees the `(user_id, dedupe_key)` slot so a later re-gating
+ * inserts a fresh UNREAD row instead of colliding with a stale read one.
+ *
+ * `ensurePostgresSchema()` is still called and is still synchronous. That is
+ * NOT a hidden freeze: it short-circuits on a `globalThis` flag / process-local
+ * done-marker after the one cold init per process (see
+ * `src/lib/postgres-schema-init.ts`), so in steady state it touches no
+ * database at all. Dropping it here would have been a real behaviour change —
+ * the very first caller in a process would query a schema nobody had created.
+ */
+export async function deleteNotificationsByDedupeKeyForUserAsync(args: {
+  userId: string;
+  dedupeKey: string;
+}): Promise<void> {
+  if (!args.userId || !args.dedupeKey) return;
+  const { host, runAsync } = requireAsyncRunner();
+  host.ensurePostgresSchema();
+  await runAsync({
+    connectionString: host.getPostgresConnectionString(),
+    queries: [buildDeleteNotificationsByDedupeKeyQuery(args)],
+  });
 }
 
 export function markAllNotificationsReadForUser(userId: string): void {
