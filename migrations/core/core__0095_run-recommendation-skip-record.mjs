@@ -1,4 +1,4 @@
-// core__0094 — the RUN-LEVEL recommendation-skip record (cinatra#2794 S9b).
+// core__0095 — the RUN-LEVEL recommendation-skip record (cinatra#2794 S9b).
 //
 // ONE brand-new table, `run_recommendation_skips`, that gives a skipped run's
 // decision a record keyed by the RUN rather than by a skill.
@@ -60,14 +60,15 @@
 // keeps settling. Backfilling would have to invent a `skipped_by` the old rows
 // never recorded.
 //
-// SEQ 0094 — strictly greater than the max shipped seq on origin/main
-// (core__0093 agent-run-hitl-gate-artifacts). SEQ IS PROVISIONAL: a concurrent
-// lane may claim 0094 first, in which case a rename-only renumber is normal
-// (FLAGGED for the coordinator's train). migrations/** is HIGH-RISK: owner
+// SEQ 0095 — strictly greater than the max shipped seq on origin/main
+// (core__0094 recommendation-hold-notification-state). RENUMBERED FROM 0094 AT
+// THE FORWARD-MERGE: the concurrent lane cinatra#2875 claimed core__0094 first,
+// which this note anticipated, so the rename-only renumber is the normal move.
+// The two migrations touch different tables, so nothing reorders. migrations/** is HIGH-RISK: owner
 // approval required; the lane never merges.
 //
 // DOWN. Reversible in shape: a fresh addition, so dropping it restores the exact
-// pre-0094 shape on any lineage (the index rides the table drop). HONEST COST:
+// pre-0095 shape on any lineage (the index rides the table drop). HONEST COST:
 // run-level skip markers are lost, which returns those runs to reading their
 // skip from the legacy `user_skipped` rejected rows — and a skip that named NO
 // candidate has no such row, so its card reverts to the unsettled state this

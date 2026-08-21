@@ -13,11 +13,16 @@ const BASE = process.argv[2] || "http://localhost:3794";
 const OUT = process.argv[3] || "/tmp/s9b-session";
 mkdirSync(OUT, { recursive: true });
 
+// The throwaway capture actor. Every field is a local-only fixture: the account
+// is created BY THIS DRIVER on a disposable capture database that is torn down
+// with the run, the address is a reserved example.com name that can receive
+// nothing, and the password below is a literal placeholder, named so no reader
+// or scanner mistakes it for a credential. It grants nothing anywhere else.
 export const CAPTURE_ACTOR = {
   name: "S9b Capture Owner",
   username: "s9bcapture",
   email: "s9b-capture@example.com",
-  password: "s9b-capture-dev-12345",
+  password: "s9b-capture-dev-not-a-secret-12345",
 };
 
 const log = [];

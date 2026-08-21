@@ -6,7 +6,7 @@
  * card depends on: the writer is `ON CONFLICT DO NOTHING`, so a non-empty
  * argument and a committed row are different things. This file drives the REAL
  * sync-pg store against real DDL (fresh schema per file from the CANONICAL
- * `buildCreateStoreSchemaQueries` bootstrap — the migration core__0094 twin) so
+ * `buildCreateStoreSchemaQueries` bootstrap — the migration core__0095 twin) so
  * the marker is proved COMMITTED, by a reader that never saw the write:
  *
  *   COMMITTED  — the marker is readable through a SEPARATE connection after the
@@ -20,7 +20,7 @@
  *                make an un-skipped run look skipped. This is the exact defect
  *                the reserved-id marker carried.
  *   LEGACY     — a run skipped BEFORE this table (only `user_skipped` rejected
- *                rows, no marker) still reads as skipped, so core__0094 needs no
+ *                rows, no marker) still reads as skipped, so core__0095 needs no
  *                backfill and no already-settled card regresses.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
@@ -201,7 +201,7 @@ describe.skipIf(!HAS_DB)("cinatra#2794 — the run-level skip record (real store
   });
 
   it("LEGACY: a run skipped before this table still reads as skipped (no backfill needed)", async () => {
-    // core__0094 ships no backfill — it would have to invent a `skipped_by` the
+    // core__0095 ships no backfill — it would have to invent a `skipped_by` the
     // old rows never recorded — so the reader keeps the legacy arm, keyed on the
     // SOURCE column rather than on any reserved skill id.
     const runId = `run-legacy-${randomUUID()}`;

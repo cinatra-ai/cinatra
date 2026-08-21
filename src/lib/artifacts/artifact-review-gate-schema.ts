@@ -918,7 +918,7 @@ export function agentRunHitlGatesSchemaQueries(schemaName: string): QueryInput[]
 // run-level record joins it (the core__0093 precedent, one file over).
 //
 // FRESH-INSTALL half. The operator-upgrade twin is
-// migrations/core/core__0094_run-recommendation-skip-record.mjs; both are
+// migrations/core/core__0095_run-recommendation-skip-record.mjs; both are
 // idempotent and are pinned against each other by a DDL-parity suite
 // (src/lib/__tests__/run-recommendation-skips-schema.test.ts).
 // ---------------------------------------------------------------------------

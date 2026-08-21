@@ -238,7 +238,7 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
 // `run_recommendation_skips` is that record: PK `run_id`, so the write is
 // idempotent per run and the marker needs no skill to name. See the bootstrap
 // leaf in `@/lib/artifacts/artifact-review-gate-schema` and its migration twin
-// core__0094 for the shape rationale.
+// core__0095 for the shape rationale.
 // ---------------------------------------------------------------------------
 
 /**
@@ -299,7 +299,7 @@ export function writeRunRecommendationSkip(input: {
  *
  * TWO SOURCES, ON PURPOSE. The run-level record is the authority for every skip
  * taken since cinatra#2794. Runs skipped BEFORE it carry their evidence only as
- * `user_skipped` rows in the rejected table, and core__0094 deliberately ships
+ * `user_skipped` rows in the rejected table, and core__0095 deliberately ships
  * no backfill (it would have to invent a `skipped_by` those rows never
  * recorded), so the legacy arm keeps an already-skipped run's card settling
  * instead of regressing it to `none`. The legacy arm keys on the SOURCE column,
