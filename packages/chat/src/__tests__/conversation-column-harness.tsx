@@ -804,8 +804,12 @@ const VERIFICATION_BODY = {
   outcome: "verified",
   reviewedRevisionId: "rev-base",
   repairedRevisionId: "rev-fixed",
-  scopePaths: ["content.title"],
-  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+  // The authorization travels as each ROW's own mark, decided server-side
+  // against the whole manifest (cinatra#2861) — never as a `scopePaths` list.
+  // The body schema is `.strict()`, so a stub still sending the retired list,
+  // or omitting `inScope`, is rejected and the card fails closed.
+  fieldDiff: [{ field: "content.title", before: "old", after: "new", inScope: true }],
+  advisoryComments: [],
 };
 
 /** A live proposal — the schedule kind's own body. */

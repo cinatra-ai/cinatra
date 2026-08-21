@@ -78,11 +78,13 @@
    "verification_summary": {
     "hosts": {
      "chat_thread": "transcript",
+     "page_gate_region": "composition",
+     "run_card": "composition",
      "site_widget": "transcript"
     },
     "owed": []
    }
   }
  },
- "digest": "110b8027589e55e7053c37caeb7ead3a1c05c7addeade91ed752c41798a1f7b6"
+ "digest": "ff0c4a78de21df2311f3c90b9f841aa648b651cbad5fb19bcb008057f1ac3bab"
 }
