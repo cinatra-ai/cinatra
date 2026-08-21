@@ -46,11 +46,18 @@
 //
 // WHY THE TWO CLASSES DIFFER IN WHAT IS ASSERTED. The review card is mounted in
 // the chat transcript today, so its own root and its controls are asserted. The
-// recommendation card's chat mount is still OWED (`HELD_TURN_MOUNT_OBLIGATIONS`
-// in the S9h contract) — so what this matrix asserts for that class is that the
-// SLOT it mounts at survives every cell, and a separate block puts the REAL held
-// card in that surviving slot and drives it. The day the obligation is struck,
-// the slot assertion tightens to the owner root by reading the same list.
+// recommendation card's chat mount was still OWED
+// (`HELD_TURN_MOUNT_OBLIGATIONS` in the S9h contract) when this file was
+// written, so what the matrix asserted for that class was that the SLOT it
+// mounts at survives every cell, with a separate block putting the REAL held
+// card in that surviving slot and driving it.
+//
+// THE OBLIGATION IS NOW STRUCK. S9b (cinatra#2786) landed the production
+// chat_thread mount, so the list is empty and the slot assertion has tightened
+// to the owner root, by reading the same list and with no edit to the assertion
+// itself. One thing did have to change for that arm to mean anything: a
+// recommendation cell now drives a HELD hold, because the card self-gates and
+// draws nothing without one. See the fixture note in the matrix body.
 // ---------------------------------------------------------------------------
 
 import React from "react";
@@ -431,6 +438,44 @@ afterEach(() => {
 describe("a lifecycle item survives every layout, every turn outcome, live and reloaded", () => {
   for (const cell of MATRIX) {
     it(cellName(cell), async () => {
+      // A RECOMMENDATION CELL NEEDS A HOLD TO DRAW, and this is the fixture that
+      // gives it one (cinatra#2786, S9b).
+      //
+      // The struck-obligation arm below requires the owner root itself once
+      // `recommendation_hold` leaves `HELD_TURN_MOUNT_OBLIGATIONS`. S9b struck
+      // it, and the arm then failed all sixteen recommendation cells. The
+      // mount is not missing. The suite's `beforeEach`
+      // leaves the hold at `state: "none"`, and `RecommendationHoldCard`
+      // SELF-GATES: no live hold means it renders nothing. That gate is
+      // deliberate and load-bearing. It is what lets the card survive a
+      // transcript reload and settle IN PLACE into its decided summary instead
+      // of disappearing, and it is why a fresh thread reports zero
+      // `recommendation_hold` roots on entry. So with `"none"` there is no root
+      // to find in ANY layout, and the arm could not have passed however good
+      // the mount was.
+      //
+      // The fixture is the same held row the operability describe below already
+      // uses, so the two halves read the same card. This STRENGTHENS the arm:
+      // it now asserts the mount actually draws through
+      // `MessageLifecycleSlots` in both pinned layouts and on an error turn,
+      // live and reloaded, where before it asserted an absence it had itself
+      // arranged. No assertion was changed or removed.
+      if (cell.carriage === "recommendation_slot") {
+        holdStateMock.mockImplementation(async () => ({
+          state: "held",
+          agentPackageName: "@cinatra-ai/proof-agent",
+          promptText: "{}",
+          recommendations: [
+            {
+              skillId: HELD_SKILL_ID,
+              skillRevisionId: "rev-a",
+              recommended: true,
+              name: "Skill A",
+            },
+          ],
+          holdRef: "hold-ref-2825",
+        }));
+      }
       const driven = await driveCell(cell);
 
       // (1) THE TURN IS ON THE LIST. The Slack layout writes the whole turn in
