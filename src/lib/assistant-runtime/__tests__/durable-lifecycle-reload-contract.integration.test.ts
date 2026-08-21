@@ -1186,6 +1186,124 @@ describe("a save can only tombstone a turn it ASSERTS the removal of", () => {
   });
 });
 
+describe("the truncation intent has to WIN the race, not merely run in it", () => {
+  // cinatra#2823 review round 5. The intent is carried by ONE save, and it used
+  // to be posted fire-and-forget: `editAndResend` did not await it, and the rest
+  // of the edit flow — the persistence effect on the truncated transcript, then
+  // the save after the regenerated turn completes — kept going underneath it. So
+  // the flow's OWN ordinary saves could reach the server FIRST.
+  //
+  // An ordinary save asserts nothing, but it is a whole-transcript save, so the
+  // reconcile DELETE removes the truncated-away MIRROR rows all the same. And the
+  // supersede reads the removed rows' identity OUT OF THOSE ROWS. Whichever save
+  // commits first decides whether the removal is recorded at all.
+  //
+  // The orders below are DRIVEN, not raced: each save is a real, completed mirror
+  // write issued in the order under test. No sleeps, no scheduling luck.
+
+  it("the intent lands FIRST, and the flow's later ordinary saves cannot bring the turn back", async () => {
+    // The order `editAndResend` now GUARANTEES (round 5): the intent save is
+    // issued before the truncation reaches the screen and awaited before anything
+    // else in the flow runs, and every same-tab save to a thread is chained
+    // behind it (`saveChatThreadInOrder`). This arm is the server-side half of
+    // that promise — once the tombstone is in, the flow's remaining saves are
+    // ordinary whole-transcript writes and none of them undoes it.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-intentfirst-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: `Please handle the ${carriage.kind} case.`,
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    const assistantMessage = savedAssistantMessageFor(drive, carriage);
+    saveWholeTranscript({ threadId, messages: [userMessage, assistantMessage] });
+    expect(reloadWithNoRedisAndNoClientMemory(threadId).map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+
+    // THE EDIT — the intent first, and it is the save that truncates.
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "actually, never mind" };
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      removedMessageIds: [userMessage.id, String(assistantMessage.id)],
+    });
+
+    // ...then the flow's ordinary saves, which is what actually happens next:
+    // the persistence effect on the truncated transcript, and the save after the
+    // regenerated turn completes. Both assert nothing.
+    saveWholeTranscript({ threadId, messages: [editedPrompt] });
+    const regenerated = { id: `a-${randomUUID()}`, role: "assistant" as const, content: "sure, dropping it" };
+    saveWholeTranscript({ threadId, messages: [editedPrompt, regenerated] });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(
+      reloaded.map((m) => m.id),
+      "a later ordinary save from the edit flow resurrected the turn the intent had already tombstoned",
+    ).toEqual([editedPrompt.id, regenerated.id]);
+  });
+
+  it("RESIDUAL: an ordinary save that lands FIRST destroys the evidence, and the server cannot recover", async () => {
+    // WHY THIS ARM ASSERTS THE BAD OUTCOME. It is the reason the ordering above
+    // is a FENCE and not a preference, and it is pinned so the fence cannot be
+    // removed on the belief that the server would cope.
+    //
+    // The server cannot. A run-bound row and a truncated-away mirror row SHARE NO
+    // KEY: the mirror row's id is `buildLegacyMirrorTurnId(threadId, messageId)`
+    // and the run-bound row's is a `randomUUID()` the store mints — indeed
+    // `appendAssistantTurn` REFUSES the `legacy:` namespace outright, so a legacy
+    // id can never name a runtime row. The only link is the server-minted
+    // identity both copies carry (tool-call ids, lifecycle `viewType|ref`), and
+    // that lives in the mirror row's `content`. Once an assertion-free save has
+    // DELETEd it there is nothing left in the schema to match on, and every way
+    // to act anyway — matching on `run_id`, or on created_at order, or on tokens
+    // the client asserts about rows the server can no longer corroborate — widens
+    // the tombstone past the asserted-AND-absent intersection round 4 fixed it
+    // down to. So the fix is that this order does not happen (round 5, direction
+    // 1), not that it is survivable.
+    //
+    // IF THIS ARM EVER GOES GREEN the schema grew a link it does not have today,
+    // and the client-side fence can be reconsidered on purpose rather than by
+    // accident.
+    const carriage = CARRIAGES[0];
+    const threadId = `thr-2823-lateintent-${randomUUID()}`;
+    const drive = await driveTheRealSink(carriage, threadId);
+    const { userMessage } = persistThroughTheRealStore({
+      threadId,
+      userText: `Please handle the ${carriage.kind} case.`,
+      runId: drive.runId,
+      durable: drive.durable,
+    });
+    const assistantMessage = savedAssistantMessageFor(drive, carriage);
+    saveWholeTranscript({ threadId, messages: [userMessage, assistantMessage] });
+
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "actually, never mind" };
+    // The assertion-free save gets there first and takes the mirror rows with it.
+    saveWholeTranscript({ threadId, messages: [editedPrompt] });
+    // The intent arrives to rows that are already gone.
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      removedMessageIds: [userMessage.id, String(assistantMessage.id)],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    // The edited-away turn is back, and ABOVE the edited prompt — the run-bound
+    // stamp is taken at run START, the edited message gets a fresh one.
+    expect(
+      reloaded.map((m) => m.role),
+      "the server RECOVERED a truncation whose evidence a prior save destroyed — the schema grew a link it did not have; re-read the client-side ordering fence in editAndResend, it may no longer be the only thing holding this",
+    ).toEqual(["assistant", "user"]);
+    expect(reloaded[1].id).toBe(editedPrompt.id);
+    expect(viewsCarriedBy(reloaded[0]).atSlot(drive.toolCallId)).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+    ]);
+  });
+});
+
 describe("a reloaded card lands at its slot, and a pre-slot row still lands at turn level", () => {
   // The sequencing directive (cinatra#2823 review round 3; #2879's named
   // follow-up). The merge-forward gave the SLOT an event-level argument so the
@@ -1385,6 +1503,50 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     const everywhere = source.split("removedMessageIds").length - 1;
     const inEditAndResend = body.split("removedMessageIds").length - 1;
     expect(everywhere).toBe(inEditAndResend);
+  });
+
+  it("edit-and-resend WAITS for its truncation intent before it changes anything", () => {
+    // Round 5, and the other half of the same claim: carrying the intent is not
+    // enough if the flow's own ordinary saves can overtake it. The RESIDUAL arm
+    // above shows what the server does when they do — nothing, because it cannot
+    // — so this ordering IS the fix, and it is pinned where the ordering lives.
+    // Source-level for the reason the arm above is: `chat-page.tsx` is the whole
+    // /chat surface and this tier has no business booting its graph. The
+    // behaviour of the chain itself is driven for real in
+    // `packages/chat/src/__tests__/chat-persistence.test.ts`.
+    const source = readFileSync(
+      path.join(process.cwd(), "packages/chat/src/chat-page.tsx"),
+      "utf8",
+    );
+    const fnStart = source.indexOf("async function editAndResend(");
+    expect(fnStart).toBeGreaterThan(-1);
+    const nextFn = source.indexOf("\n  async function ", fnStart + 1);
+    const body = source.slice(fnStart, nextFn === -1 ? undefined : nextFn);
+
+    // EVERY /chat save goes through the per-thread chain. An unordered save could
+    // be POSTed alongside the intent and commit first — which is the whole defect.
+    expect(source).not.toContain("saveChatThreadViaFetch(");
+
+    // The intent save is AWAITED, and retried once INSIDE its chain slot (a
+    // re-enqueued retry could land behind a save issued after it).
+    const intentSaveAt = body.indexOf("await saveChatThreadInOrder(");
+    expect(intentSaveAt).toBeGreaterThan(-1);
+    expect(body.slice(intentSaveAt)).toContain("{ attempts: 2 }");
+
+    // NOTHING IRREVERSIBLE HAPPENS BEFORE IT LANDS: the truncation does not reach
+    // the screen, and the regeneration does not start.
+    const truncationOnScreenAt = body.indexOf("setMessages(truncated)");
+    expect(truncationOnScreenAt).toBeGreaterThan(intentSaveAt);
+    for (const regenerate of ["await streamResponse(truncated)", "void streamResponse(truncated,"]) {
+      expect(body.indexOf(regenerate)).toBeGreaterThan(intentSaveAt);
+    }
+
+    // ...and a failed intent does not degrade silently: it stops the flow and
+    // says so on a never-blank bubble, the fail-closed affordance this file
+    // already uses for a turn it refuses to dispatch.
+    const failurePath = body.slice(body.indexOf("} catch (err) {", intentSaveAt), truncationOnScreenAt);
+    expect(failurePath).toContain("error:");
+    expect(failurePath).toContain("return;");
   });
 });
 

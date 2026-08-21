@@ -62,7 +62,7 @@ import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as Threa
 import type { ChatViewComponents } from "./chat-messages-view";
 import type { ChatPageProps } from "./chat-page-props";
 import {
-  saveChatThreadViaFetch,
+  saveChatThreadInOrder,
   fetchThreadList,
   fetchThreadById,
   generateId,
@@ -554,7 +554,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       slackMode: isSlackMode,
       ownerUserId: userId,
     };
-    saveChatThreadViaFetch(thread).catch(() => {});
+    saveChatThreadInOrder(thread).catch(() => {});
     // Real activity: advance this thread's updatedAt in-place. The sidebar's
     // default "Activity" mode sorts by updatedAt desc, so this re-positions the
     // thread to the top without an explicit array reorder here.
@@ -739,7 +739,6 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         : {}),
     };
     const truncated = [...prior, editedMessage];
-    setMessages(truncated);
     // THE TRUNCATION INTENT (cinatra#2823 S9j, review round 4, F1). This is the
     // ONE save in /chat that truly truncates — the user edited `messageId`, so it
     // and everything below it is deliberately gone. Saying so EXPLICITLY is what
@@ -757,7 +756,22 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // Resolve threadId — edits always happen in an existing thread.
     const threadId = activeThreadId ?? activeThreadIdRef.current;
 
-    // Persist the truncated history before routing (same as sendMessage).
+    // THE INTENT SAVE GOES FIRST, AND THIS FLOW WAITS FOR IT (round 5). It used
+    // to be fire-and-forget, with the truncation applied and the regeneration
+    // started underneath it — which made the ONE save that records the removal
+    // race the flow's own ORDINARY saves. Those carry the same truncated
+    // transcript and assert nothing, so the server's reconcile DELETE removes
+    // the very mirror rows the intent's tombstone reads the removed turns'
+    // identity out of. First one home wins, and when it was the silent one the
+    // removal was never recorded: the edited-away turn folds back in on the next
+    // reload, permanently. `saveChatThreadInOrder` chains same-tab saves per
+    // thread, and issuing this one BEFORE the state update means nothing else
+    // this flow triggers can be POSTed ahead of it.
+    //
+    // NOTHING IS TRUNCATED LOCALLY UNTIL IT LANDS, and no regeneration starts.
+    // A truncation applied on the screen but not recorded on the server is the
+    // silent degradation this whole leg exists to remove — the transcript would
+    // come back on reload with the "removed" turn in it and no trace of why.
     if (threadId) {
       const now = new Date().toISOString();
       const title = threads.find((t) => t.id === threadId)?.title ?? deriveThreadTitle(editedMessage.content);
@@ -765,9 +779,25 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       // createdAt (covers the body loading before the summary list), then now
       // for a genuinely new thread (#283).
       const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-      saveChatThreadViaFetch({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId, removedMessageIds } as Record<string, unknown> & { id: string })
-        .catch((err) => console.error("[chat] saveChatThread failed (edit):", err));
+      try {
+        // Retried once INSIDE the chain slot: a re-enqueued retry could land
+        // behind a save issued after it, which is the losing position again.
+        await saveChatThreadInOrder({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId, removedMessageIds } as Record<string, unknown> & { id: string }, { attempts: 2 });
+      } catch (err) {
+        console.error("[chat] saveChatThread failed (edit):", err);
+        // Surfaced on a never-blank assistant bubble, the same fail-closed
+        // affordance `streamResponse` uses when it refuses to dispatch a turn.
+        setMessages((prev) => [...prev, {
+          id: generateId(),
+          role: "assistant" as const,
+          content: "",
+          error: "Your edit could not be saved, so the conversation was left unchanged. Try again.",
+        }]);
+        return;
+      }
     }
+
+    setMessages(truncated);
 
     // ChatGPT (normal) mode — preserve byte-identical behavior.
     if (!isSlackMode) {
@@ -912,7 +942,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       // createdAt is immutable: prefer the summary, then the loaded thread's
       // createdAt, then now for a genuinely new thread (#283).
       const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-      saveChatThreadViaFetch({ id: threadId, title, messages: currentMessages, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId } as Record<string, unknown> & { id: string }).catch((err) => console.error("[chat] saveChatThread failed:", err));
+      saveChatThreadInOrder({ id: threadId, title, messages: currentMessages, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId } as Record<string, unknown> & { id: string }).catch((err) => console.error("[chat] saveChatThread failed:", err));
     }
 
     // -----------------------------------------------------------------------
@@ -949,7 +979,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         // thread's createdAt, then now for a genuinely new thread (#283).
         const createdAt =
           threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-        saveChatThreadViaFetch({
+        saveChatThreadInOrder({
           id: threadId,
           title,
           messages: messagesWithAck,
