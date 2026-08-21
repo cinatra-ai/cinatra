@@ -335,7 +335,7 @@ async function driveTheRealSink(carriage: Carriage, threadId: string): Promise<S
 /**
  * The renderable views a reloaded turn carries, split by WHERE it carries them.
  *
- * Position is now part of the contract (cinatra#2823 review round 3): a card the
+ * Position is part of the contract (cinatra#2823): a card the
  * sink stamped with its producing call must come back ON that `tool_call` part —
  * the mount the live render uses — and must be ABSENT from the turn-level list,
  * because the two mounts partition the turn's views so a card is drawn once.
@@ -486,14 +486,25 @@ function saveWholeTranscript(args: {
   threadId: string;
   messages: Array<Record<string, unknown>>;
   /**
-   * The save's EXPLICIT truncation assertion (cinatra#2823 review round 4, F1):
+   * The save's EXPLICIT truncation assertion (cinatra#2823):
    * the message ids this writer is saying the user removed. Omitted by every
    * ordinary save — a whole-transcript save asserts nothing about what it does
    * not carry, because it may simply never have had it.
    */
   removedMessageIds?: string[];
+  /**
+   * The TRANSPORT-VERIFIED writer the route derived. Defaults to the thread's
+   * OWNER, which is what the save route derives for a personal thread — the only
+   * shape where an assertion is self-harm. An arm naming someone else is naming
+   * a SECOND writer, which is exactly what a team / unowned thread has.
+   */
+  actorUserId?: string;
+  /** The thread's ownership axes, when an arm needs a shape other than the
+   *  personal one every other arm uses. */
+  ownership?: { ownerUserId?: string; teamId?: string };
 }): void {
   const now = new Date().toISOString();
+  const ownerUserId = args.ownership ? args.ownership.ownerUserId : OWNER_ID;
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     transaction: true,
@@ -505,10 +516,12 @@ function saveWholeTranscript(args: {
         messages: args.messages,
         createdAt: now,
         updatedAt: now,
-        ownerUserId: OWNER_ID,
+        ...(ownerUserId ? { ownerUserId } : {}),
+        ...(args.ownership?.teamId ? { teamId: args.ownership.teamId } : {}),
         ...(args.removedMessageIds ? { removedMessageIds: args.removedMessageIds } : {}),
       },
       explicitMirrorOrgId: ORG_ID,
+      actorUserId: args.actorUserId ?? OWNER_ID,
     }),
   });
 }
@@ -933,8 +946,7 @@ describe("a stale save cannot push a turn out of its place in time", () => {
 });
 
 describe("edit-and-resend does not resurrect the turns the user removed", () => {
-  // cinatra#2823 review round 3, blocker 2, reproduced for BOTH kinds the
-  // reviewer reproduced it for.
+  // cinatra#2823, reproduced for BOTH kinds of removal.
   //
   // The truncating save deletes MIRROR rows only — the reconcile DELETE is
   // scoped `id LIKE 'legacy:%'` so a legacy write can never delete a
@@ -1058,10 +1070,10 @@ describe("edit-and-resend does not resurrect the turns the user removed", () => 
 });
 
 describe("a save can only tombstone a turn it ASSERTS the removal of", () => {
-  // cinatra#2823 review round 4 — the two holes in round 3's tombstone.
+  // cinatra#2823 — the two holes in a payload-keyed tombstone.
   //
-  // Round 3 read "the mirror row is in the database and absent from THIS payload"
-  // as the writer asserting a removal. It is not one when the writer NEVER HAD
+  // Reading "the mirror row is in the database and absent from THIS payload"
+  // as the writer asserting a removal is wrong when the writer NEVER HAD
   // the row, and it reaches turns the writer never touched when the identities of
   // every removed row are pooled thread-wide. Both arms below are the shipped
   // mirror write, on a real database, through the same reconcile production runs.
@@ -1186,8 +1198,225 @@ describe("a save can only tombstone a turn it ASSERTS the removal of", () => {
   });
 });
 
+describe("a view ref names an ENTITY, so the tombstone keys on the CALL that drew it", () => {
+  // The other half of the same key correction the reload matcher makes. Two turns
+  // may legitimately draw the SAME lifecycle entity, so `viewType|ref` alone says
+  // nothing about WHICH turn is speaking. The tombstone therefore keys on the
+  // card's PRODUCING TOOL CALL — the slot stamp, which the removed mirror row
+  // carries on the `tool_call` part it folded the card onto and the durable row
+  // carries in `dataPartSlots`.
+  //
+  // The arm below isolates that: the removed row's card is SLOTTED on its own
+  // call, and the kept turn draws the SAME entity from a DIFFERENT call. Nothing
+  // links them but the entity, and the entity is not a link.
+
+  it("truncating a turn whose SLOTTED card names an entity leaves another turn that drew the SAME entity", async () => {
+    const viewType = CARRIAGES[0].kind as LifecycleViewType;
+    const sharedRef = refFor(viewType);
+    const sharedEntity: Carriage = {
+      ...CARRIAGES[0],
+      build: () => {
+        const result = buildLifecycleViewEnvelope({ viewType, ref: sharedRef });
+        if (result === null) {
+          throw new Error(`the producer refused the shared ${viewType} ref — this arm cannot be driven`);
+        }
+        return { result, identity: sharedRef };
+      },
+    };
+    const threadId = `thr-2823-slotkey-${randomUUID()}`;
+
+    // Y — the earlier turn, KEPT. Its card is stamped with Y's OWN call.
+    const driveY = await driveTheRealSink(sharedEntity, threadId);
+    const { userMessage: userY } = persistThroughTheRealStore({
+      threadId,
+      userText: "Put the first draft up for review.",
+      runId: driveY.runId,
+      durable: driveY.durable,
+    });
+    const assistantY = savedAssistantMessageFor(driveY, sharedEntity);
+    saveWholeTranscript({ threadId, messages: [userY, assistantY] });
+
+    // X — a LATER turn re-rendering the SAME entity through its own call, and the
+    // one the user removes. Its mirror row folds the card onto X's `tool_call`
+    // part, which is the shape the slot-bound key reads.
+    const userX = { id: `u-${randomUUID()}`, role: "user" as const, content: "show me that again" };
+    saveWholeTranscript({ threadId, messages: [userY, assistantY, userX] });
+    const driveX = await driveTheRealSink(sharedEntity, threadId);
+    persistAnotherRunBoundTurn({ threadId, runId: driveX.runId, durable: driveX.durable });
+    const baseX = savedAssistantMessageFor(driveX, sharedEntity);
+    const assistantX: Record<string, unknown> = {
+      ...baseX,
+      parts: [{ ...(baseX.parts as Record<string, unknown>[])[0], views: [{ viewType, schemaVersion: 1, ref: sharedRef }] }],
+    };
+    // The two turns really do share the entity and NOT the call — otherwise this
+    // arm would be testing the tool-call key it exists to look past.
+    expect(driveX.toolCallId).not.toBe(driveY.toolCallId);
+    saveWholeTranscript({ threadId, messages: [userY, assistantY, userX, assistantX] });
+
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "actually, never mind" };
+    saveWholeTranscript({
+      threadId,
+      messages: [userY, assistantY, editedPrompt],
+      removedMessageIds: [userX.id, assistantX.id as string],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(
+      reloaded.map((m) => m.id),
+      "the removed turn came back, or the kept one did not",
+    ).toEqual([userY.id, assistantY.id, editedPrompt.id]);
+    expect(
+      viewsCarriedBy(reloaded[1]).atSlot(driveY.toolCallId),
+      "a SLOTTED card's entity ref reached a turn that drew the same entity from a different call",
+    ).toEqual([{ viewType, schemaVersion: 1, ref: sharedRef }]);
+  });
+});
+
+describe("a tombstone is SELF-HARM ONLY — one writer cannot erase another's turns", () => {
+  // The tombstone's whole licence is a claim about REACH: a false assertion costs
+  // the writer the repair of its OWN turn and nothing else. That holds where a
+  // thread has ONE writer. Two shapes do not:
+  //
+  //   * a TEAM-owned thread (`owner_user_id` null, `team_id` set) is writable by
+  //     every member of the team's org;
+  //   * a legacy UNOWNED thread (both null) is writable by anyone who reaches it.
+  //
+  // On either, one member's edit-and-resend would permanently supersede run-bound
+  // rows belonging to turns another member is still reading — rows that are the
+  // server's only copy of those turns. So the statement authorizes itself against
+  // the thread row, in the write's own transaction, and refuses anywhere the
+  // acting writer is not the thread's personal owner.
+  //
+  // Driven end-to-end: a real drive, a real run-bound row, the real mirror
+  // builder, and the real reload. The assertion is on what came BACK.
+
+  /** Drive one real turn into `threadId` and return the ids a truncation would
+   *  have to name to remove it. */
+  async function aRealTurnOn(threadId: string, ownership?: { ownerUserId?: string; teamId?: string }) {
+    const carriage = CARRIAGES[0];
+    const drive = await driveTheRealSink(carriage, threadId);
+    const userMessage = {
+      id: `u-${randomUUID()}`,
+      role: "user" as const,
+      content: `Please handle the ${carriage.kind} case.`,
+    };
+    const assistantMessage = {
+      ...savedAssistantMessageFor(drive, carriage),
+      id: `a-${randomUUID()}`,
+    };
+    // The whole-transcript save writes the thread row (with the ownership axes
+    // this arm wants) and the mirror rows the truncation will read identity from.
+    saveWholeTranscript({
+      threadId,
+      messages: [userMessage, assistantMessage],
+      ownership,
+      actorUserId: ownership ? "user-other" : undefined,
+    });
+    persistAnotherRunBoundTurn({ threadId, runId: drive.runId, durable: drive.durable });
+    return { drive, carriage, userMessage, assistantMessage };
+  }
+
+  it("REFUSES a second writer's tombstone on a TEAM-owned thread — the reader's turn survives", async () => {
+    const threadId = `thr-2823-team-${randomUUID()}`;
+    const { drive, carriage, userMessage, assistantMessage } = await aRealTurnOn(threadId, {
+      teamId: "team-2823",
+    });
+
+    // ANOTHER member of the team edits the user's message. Their save is
+    // legitimate — a team thread is theirs to write — and it truncates the
+    // transcript. What it may NOT do is permanently supersede the run-bound row
+    // of a turn that is not theirs.
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      ownership: { teamId: "team-2823" },
+      actorUserId: "user-a-different-member",
+      removedMessageIds: [userMessage.id, assistantMessage.id],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    // The mirror rows are gone — that writer's own transcript is theirs to
+    // truncate — but the run-bound row was NOT tombstoned, so the server's copy
+    // of the turn folds back in, card and all.
+    const assistants = reloaded.filter((m) => m.role === "assistant");
+    expect(
+      assistants,
+      "a team-mate's tombstone erased another writer's turn permanently",
+    ).toHaveLength(1);
+    expect(viewsCarriedBy(assistants[0]).atSlot(drive.toolCallId)).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+    ]);
+  });
+
+  it("REFUSES a tombstone on a legacy UNOWNED thread — nobody there is harming only themselves", async () => {
+    const threadId = `thr-2823-unowned-${randomUUID()}`;
+    const { drive, carriage, userMessage, assistantMessage } = await aRealTurnOn(threadId, {});
+
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      ownership: {},
+      actorUserId: "user-any-reader",
+      removedMessageIds: [userMessage.id, assistantMessage.id],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    const assistants = reloaded.filter((m) => m.role === "assistant");
+    expect(
+      assistants,
+      "an unowned thread let one reader tombstone another's turn",
+    ).toHaveLength(1);
+    expect(viewsCarriedBy(assistants[0]).atSlot(drive.toolCallId)).toEqual([
+      { viewType: carriage.kind, schemaVersion: 1, ref: drive.identity },
+    ]);
+  });
+
+  it("REFUSES a non-owner's tombstone on a PERSONAL thread", async () => {
+    // The same boundary from the other side: the thread has one owner, and a
+    // writer who is not that owner cannot reach its rows either.
+    const threadId = `thr-2823-personal-${randomUUID()}`;
+    const { drive, carriage, userMessage, assistantMessage } = await aRealTurnOn(threadId);
+
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      actorUserId: "user-not-the-owner",
+      removedMessageIds: [userMessage.id, assistantMessage.id],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(reloaded.filter((m) => m.role === "assistant")).toHaveLength(1);
+    expect(viewsCarriedBy(reloaded.filter((m) => m.role === "assistant")[0]).atSlot(drive.toolCallId))
+      .toEqual([{ viewType: carriage.kind, schemaVersion: 1, ref: drive.identity }]);
+  });
+
+  it("still lets the thread's OWNER tombstone their own turn — the positive control", async () => {
+    // Without this the arms above would pass on a tombstone that never works at
+    // all. The owner's own truncation must still land.
+    const threadId = `thr-2823-selfharm-${randomUUID()}`;
+    const { userMessage, assistantMessage } = await aRealTurnOn(threadId);
+
+    const editedPrompt = { id: `u-${randomUUID()}`, role: "user" as const, content: "never mind" };
+    saveWholeTranscript({
+      threadId,
+      messages: [editedPrompt],
+      actorUserId: OWNER_ID,
+      removedMessageIds: [userMessage.id, assistantMessage.id],
+    });
+
+    const reloaded = reloadWithNoRedisAndNoClientMemory(threadId);
+    expect(
+      reloaded.map((m) => m.id),
+      "the owner's own removal did not stick",
+    ).toEqual([editedPrompt.id]);
+  });
+});
+
 describe("the truncation intent has to WIN the race, not merely run in it", () => {
-  // cinatra#2823 review round 5. The intent is carried by ONE save, and it used
+  // cinatra#2823. The intent is carried by ONE save, and it used
   // to be posted fire-and-forget: `editAndResend` did not await it, and the rest
   // of the edit flow — the persistence effect on the truncated transcript, then
   // the save after the regenerated turn completes — kept going underneath it. So
@@ -1305,8 +1534,7 @@ describe("the truncation intent has to WIN the race, not merely run in it", () =
 });
 
 describe("a reloaded card lands at its slot, and a pre-slot row still lands at turn level", () => {
-  // The sequencing directive (cinatra#2823 review round 3; #2879's named
-  // follow-up). The merge-forward gave the SLOT an event-level argument so the
+  // The sequencing directive (cinatra#2823; #2879's named follow-up). The merge-forward gave the SLOT an event-level argument so the
   // live render draws a card inside its producing step. The durable row now
   // records that same stamp OUT OF BAND — `dataPartSlots`, a sibling array,
   // never inside the strict payload, which a reload would re-emit as payload and
@@ -1375,8 +1603,8 @@ describe("a reloaded card lands at its slot, and a pre-slot row still lands at t
 });
 
 describe("a SLACK-MODE turn whose save SUCCEEDED is not folded in twice", () => {
-  // cinatra#2823 review round 3, blocker 1 — RE-VERIFIED at the merge-forward,
-  // where the shape has moved and the defect has not.
+  // cinatra#2823 — RE-VERIFIED at the merge-forward, where the shape has moved
+  // and the defect has not.
   //
   // The reviewer's reading (at `b1aaa66e`) was that the Slack projection "omits
   // `parts` and keeps `dataParts`", so a Slack turn carried the card's own
@@ -1476,56 +1704,66 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
   });
 
   it("edit-and-resend is the ONLY /chat save that asserts a truncation", () => {
-    // The other half of the round-4 F1 seam, and the same kind of claim: the
-    // server now tombstones ONLY under an explicit `removedMessageIds`, so the
-    // deliberate edit keeps working only while the edit path keeps carrying it —
-    // and a stale tab stays harmless only while no OTHER save carries it. Both
-    // halves are source-level for the reason the arm above is: `chat-page.tsx` is
-    // the whole /chat surface, and mounting it here to drive one handler would
-    // pull a graph this tier has no business booting.
-    const source = readFileSync(
-      path.join(process.cwd(), "packages/chat/src/chat-page.tsx"),
+    // The other half of the same seam, and the same kind of claim: the server
+    // tombstones ONLY under an explicit `removedMessageIds`, so the deliberate
+    // edit keeps working only while the edit path keeps carrying it — and a stale
+    // tab stays harmless only while no OTHER save carries it. Source-level for
+    // the reason the arm above is: driving the handler here would pull a graph
+    // this tier has no business booting. The flow now lives in its own module
+    // (`packages/chat/src/message-edit-flow.ts`), so both halves are read there —
+    // and the "no other save" half is checked across the WHOLE /chat surface,
+    // which is a stronger statement than the single-file one it replaces.
+    const flow = readFileSync(
+      path.join(process.cwd(), "packages/chat/src/message-edit-flow.ts"),
       "utf8",
     );
-    const fnStart = source.indexOf("async function editAndResend(");
-    expect(fnStart).toBeGreaterThan(-1);
-    const nextFn = source.indexOf("\n  async function ", fnStart + 1);
-    const body = source.slice(fnStart, nextFn === -1 ? undefined : nextFn);
+    expect(flow).toContain("export async function editAndResend(");
     // It derives the assertion from the truncation it just performed — the edited
-    // message and every successor — rather than restating a list by hand.
-    expect(body).toContain("const removedMessageIds = messages.slice(idx).map((m) => m.id);");
+    // message and every successor, plus any turn still streaming — rather than
+    // restating a list by hand.
+    expect(flow).toContain(
+      "const removedMessageIds = buildTruncationIntent(messages, idx, deps.streamingAssistantIds());",
+    );
     // ...and posts it with the truncated transcript, in the same save.
-    expect(body).toContain("messages: truncated");
-    expect(body).toContain("removedMessageIds }");
-    // NO OTHER SAVE IN THE FILE MENTIONS IT. If an ordinary whole-transcript save
-    // ever carried this field, every stale tab would be asserting removals again
-    // and F1 would be back with a different first line.
-    const everywhere = source.split("removedMessageIds").length - 1;
-    const inEditAndResend = body.split("removedMessageIds").length - 1;
-    expect(everywhere).toBe(inEditAndResend);
+    expect(flow).toContain("messages: truncated");
+    expect(flow).toContain("removedMessageIds }");
+    // NO OTHER /chat SAVE MENTIONS IT. If an ordinary whole-transcript save ever
+    // carried this field, every stale tab would be asserting removals again and
+    // the defect would be back with a different first line. Comments are stripped
+    // first: the save chain DOCUMENTS the intent it exists to order, and prose
+    // about a field is not a writer of it.
+    const stripComments = (text: string) =>
+      text
+        .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
+        .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
+    const surface = ["chat-page.tsx", "ag-ui-chat-client.ts", "chat-routing.ts", "actions.ts"];
+    for (const file of surface) {
+      const src = stripComments(readFileSync(path.join(process.cwd(), "packages/chat/src", file), "utf8"));
+      expect(src, `${file} carries a truncation assertion`).not.toContain("removedMessageIds");
+    }
   });
 
   it("edit-and-resend WAITS for its truncation intent before it changes anything", () => {
-    // Round 5, and the other half of the same claim: carrying the intent is not
-    // enough if the flow's own ordinary saves can overtake it. The RESIDUAL arm
-    // above shows what the server does when they do — nothing, because it cannot
-    // — so this ordering IS the fix, and it is pinned where the ordering lives.
-    // Source-level for the reason the arm above is: `chat-page.tsx` is the whole
-    // /chat surface and this tier has no business booting its graph. The
-    // behaviour of the chain itself is driven for real in
-    // `packages/chat/src/__tests__/chat-persistence.test.ts`.
-    const source = readFileSync(
+    // The other half of the same claim: carrying the intent is not enough if the
+    // flow's own ordinary saves can overtake it. The RESIDUAL arm above shows
+    // what the server does when they do — nothing, because it cannot — so this
+    // ordering IS the fix, and it is pinned where the ordering lives. The flow is
+    // its own module now; the page it was lifted out of is still checked for the
+    // unordered-save escape hatch. The behaviour of the chain itself is driven
+    // for real in `packages/chat/src/__tests__/chat-persistence.test.ts`.
+    const body = readFileSync(
+      path.join(process.cwd(), "packages/chat/src/message-edit-flow.ts"),
+      "utf8",
+    );
+    const page = readFileSync(
       path.join(process.cwd(), "packages/chat/src/chat-page.tsx"),
       "utf8",
     );
-    const fnStart = source.indexOf("async function editAndResend(");
-    expect(fnStart).toBeGreaterThan(-1);
-    const nextFn = source.indexOf("\n  async function ", fnStart + 1);
-    const body = source.slice(fnStart, nextFn === -1 ? undefined : nextFn);
 
     // EVERY /chat save goes through the per-thread chain. An unordered save could
     // be POSTed alongside the intent and commit first — which is the whole defect.
-    expect(source).not.toContain("saveChatThreadViaFetch(");
+    expect(body).not.toContain("saveChatThreadViaFetch(");
+    expect(page).not.toContain("saveChatThreadViaFetch(");
 
     // The intent save is AWAITED, and retried once INSIDE its chain slot (a
     // re-enqueued retry could land behind a save issued after it).
