@@ -755,6 +755,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
     // Resolve threadId — edits always happen in an existing thread.
     const threadId = activeThreadId ?? activeThreadIdRef.current;
+    // The ORIGIN thread this edit was made IN, captured BEFORE the intent-save
+    // await below. Awaiting that save (round 5) added a suspension point this
+    // flow did not have: the user can select another thread while the POST — or
+    // its in-slot retry — is still open, and everything after the await would
+    // otherwise resume against WHATEVER thread is active by then. Same guard
+    // idiom `streamAgUiResponse` uses for its delayed stream updates.
+    const originThreadId = threadId;
+    const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
 
     // THE INTENT SAVE GOES FIRST, AND THIS FLOW WAITS FOR IT (round 5). It used
     // to be fire-and-forget, with the truncation applied and the regeneration
@@ -785,6 +793,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         await saveChatThreadInOrder({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId, removedMessageIds } as Record<string, unknown> & { id: string }, { attempts: 2 });
       } catch (err) {
         console.error("[chat] saveChatThread failed (edit):", err);
+        // The failure belongs to the thread the edit was made in. If the user
+        // has moved on, the bubble would land on a transcript that never saw
+        // the edit — and nothing is left to say, because nothing was changed.
+        if (!stillOnOriginThread()) return;
         // Surfaced on a never-blank assistant bubble, the same fail-closed
         // affordance `streamResponse` uses when it refuses to dispatch a turn.
         setMessages((prev) => [...prev, {
@@ -796,6 +808,17 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         return;
       }
     }
+
+    // THE SWITCH THAT HAPPENED WHILE THE INTENT WAS IN FLIGHT. The save has
+    // landed, so the truncation IS durably recorded and the origin thread comes
+    // back truncated on its next load — that half is done and is not undone
+    // here. What must NOT happen is the rest of this flow landing on the thread
+    // the user is now reading: the local truncation below would replace ITS
+    // transcript, `streamResponse` reads the LIVE `activeThreadIdRef` and would
+    // dispatch the edited turn on IT, and that thread's persistence effect would
+    // then save the other thread's transcript under its id. So the resend simply
+    // does not happen: the user navigated away mid-edit.
+    if (!stillOnOriginThread()) return;
 
     setMessages(truncated);
 
@@ -826,6 +849,13 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
           handleMap: Object.fromEntries(assistantHandleMap),
         },
       );
+      // THE SECOND SUSPENSION POINT, and the same rule. Routing is an await
+      // too, so the switch can land here instead — and everything below it is
+      // the edit's: the assistant handle it resolved, the mentions it owes the
+      // connector poll, the turn it dispatches. None of that belongs to a
+      // thread the user moved to meanwhile, and `streamResponse` would read
+      // that thread off the LIVE ref.
+      if (!stillOnOriginThread()) return;
       if (routing.chatEndpoint) editEndpoint = routing.chatEndpoint;
       const nextHandle = routing.activeHandle !== undefined ? (routing.activeHandle || undefined) : activeAssistantHandle;
       if (routing.activeHandle !== undefined) setActiveAssistantHandle(nextHandle);
@@ -837,6 +867,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       editPending = routing.externalMentions;
     } catch {
       // Routing failed — proceed with current assistant context (legacy stream).
+      // The switch can have landed during a routing await that REJECTED too, and
+      // the legacy stream this falls through to is still the edit's turn.
+      if (!stillOnOriginThread()) return;
     }
 
     if (editDeclined) {
