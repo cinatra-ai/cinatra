@@ -97,8 +97,20 @@ export function TriggerScheduleProposalExpired({
    */
   onReproposed: (token: string, originRef: string) => void;
 }): ReactElement {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // BOTH TRANSIENT STATES CARRY THE REF THEY WERE MADE UNDER, for the same
+  // reason the completion does. This instance is reused by index, so the ref in
+  // `cardRef` can change while a press is in flight or while its refusal is on
+  // screen. An unscoped `busy` would draw "Proposing…" over a proposal nobody
+  // has pressed, and an unscoped refusal would tell the reader that THIS card
+  // had already been adjusted when it was the previous one. Rendering compares
+  // the stored origin against the ref the card is showing now, so a state that
+  // no longer belongs to it is simply not drawn.
+  const [pending, setPending] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<{ originRef: string; text: string } | null>(
+    null,
+  );
+  const busy = pending === cardRef;
+  const error = refusal?.originRef === cardRef ? refusal.text : null;
   // TRUE only inside a well-formed cookie-session host declaration. False for a
   // brokered host, for a refused declaration, and for no provider at all — so
   // the default is the silent one. See the header note for why the broker
@@ -110,8 +122,12 @@ export function TriggerScheduleProposalExpired({
     // the guard is here too, because "the control was disabled" is a rendering
     // fact and this is the thing that actually issues the call.
     if (!cookieSession) return;
-    setBusy(true);
-    setError(null);
+    // The ref THIS press is issued under. Everything below states it, so a
+    // state that outlives the card it was made for can be recognised and
+    // dropped rather than painted onto whatever the instance is showing next.
+    const issuedFor = cardRef;
+    setPending(issuedFor);
+    setRefusal((held) => (held?.originRef === issuedFor ? null : held));
     try {
       // IMPORTED ON THE PRESS, not at module scope. The action module reaches
       // the session, the confirm transaction and the install outbox; a static
@@ -122,23 +138,30 @@ export function TriggerScheduleProposalExpired({
       const { adjustExpiredScheduleProposal } = await import(
         "@cinatra-ai/agents/trigger-schedule-proposal-actions"
       );
-      const result = await adjustExpiredScheduleProposal({ token: cardRef });
+      const result = await adjustExpiredScheduleProposal({ token: issuedFor });
       if (!result.ok) {
-        // The server's own sentence — "that time has already passed", or the
-        // one generic refusal. Never a reason this component invented.
-        setError(result.error);
+        // The server's own sentence — "that time has already passed", "this
+        // card was already adjusted", or the one generic refusal. Never a
+        // reason this component invented, and never shown under another card:
+        // the refusal is about the proposal the press named.
+        setRefusal({ originRef: issuedFor, text: result.error });
         return;
       }
-      // `cardRef` is the ref THIS press was issued under — the shell needs it
+      // `issuedFor` is the ref THIS press was issued under — the shell needs it
       // to tell a completion that is still about the card in front of the
       // reader from one that is not.
-      onReproposed(result.token, cardRef);
+      onReproposed(result.token, issuedFor);
     } catch {
       // A transport failure is not a refusal: say the neutral thing and leave
       // the expired card exactly as it was, still pressable.
-      setError("Couldn't propose that again just now. Try again.");
+      setRefusal({
+        originRef: issuedFor,
+        text: "Couldn't propose that again just now. Try again.",
+      });
     } finally {
-      setBusy(false);
+      // Only OUR press clears the flag. A press issued under a different ref is
+      // somebody else's in-flight state and is not this one's to end.
+      setPending((held) => (held === issuedFor ? null : held));
     }
   }, [cardRef, onReproposed, cookieSession]);
 

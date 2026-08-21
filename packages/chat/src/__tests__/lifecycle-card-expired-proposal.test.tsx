@@ -653,3 +653,131 @@ describe("an IN-FLIGHT re-proposal is bound to the ref it was issued under", () 
     expect(screen.queryByText(/expired/i)).toBeNull();
   });
 });
+
+describe("the REFUSAL and the BUSY state are bound to the ref they were made under", () => {
+  // The completion carries its origin; these two did not, and they are on
+  // screen for exactly the same reason and for longer. The instance is reused
+  // by index, so a refusal about proposal A stayed painted under proposal B —
+  // telling B's reader that the card in front of them had already been
+  // adjusted, or that a press they never made was still in flight. Both are
+  // states of a card, not of a component, so both state which card.
+
+  const OTHER_REF = "a-different-proposal-ref";
+  const OTHER_VIEW = { ...PROPOSAL_VIEW, ref: OTHER_REF };
+
+  function answers() {
+    return {
+      [EXPIRED_REF]: { state: { state: "settled" }, view: EXPIRED_BODY },
+      [FRESH_REF]: {
+        state: { state: "pending", canDecide: true, canComment: false },
+        view: PENDING_BODY,
+      },
+      [OTHER_REF]: { state: { state: "settled" }, view: EXPIRED_BODY },
+    };
+  }
+
+  function deferredAdjust() {
+    let release: (value: unknown) => void = () => {};
+    adjustExpiredScheduleProposal.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    return async (value: unknown) => {
+      await act(async () => {
+        release(value);
+      });
+    };
+  }
+
+  it("drops a refusal when the card moves to another proposal", async () => {
+    mockResolveByRef(answers());
+    adjustExpiredScheduleProposal.mockResolvedValue({
+      ok: false,
+      error: "This card was already adjusted. Use the newest card for this schedule and confirm that one.",
+    });
+    const { rerender } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <LifecycleCard view={PROPOSAL_VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    const adjust = await screen.findByRole("button", { name: "Adjust" });
+    await act(async () => {
+      fireEvent.click(adjust);
+    });
+    expect(await screen.findByText(/already adjusted/)).toBeTruthy();
+
+    await act(async () => {
+      rerender(
+        <LifecycleCardSurfaceProvider host="chat_thread">
+          <LifecycleCard view={OTHER_VIEW} />
+        </LifecycleCardSurfaceProvider>,
+      );
+    });
+    // The new card is drawn, and it is not carrying the previous card's answer.
+    expect(await screen.findByText(/expired/i)).toBeTruthy();
+    expect(screen.queryByText(/already adjusted/)).toBeNull();
+  });
+
+  it("keeps a refusal that is still about the card on screen", async () => {
+    // The positive control: nothing moved, so the refusal is this card's own
+    // and stays exactly where the reader can read it.
+    mockResolveByRef(answers());
+    adjustExpiredScheduleProposal.mockResolvedValue({
+      ok: false,
+      error: "That time has already passed. Ask for a new time and confirm the new card.",
+    });
+    const { rerender } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <LifecycleCard view={PROPOSAL_VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    const press = await screen.findByRole("button", { name: "Adjust" });
+    await act(async () => {
+      fireEvent.click(press);
+    });
+    expect(await screen.findByText(/already passed/)).toBeTruthy();
+    await act(async () => {
+      rerender(
+        <LifecycleCardSurfaceProvider host="chat_thread">
+          <LifecycleCard view={PROPOSAL_VIEW} />
+        </LifecycleCardSurfaceProvider>,
+      );
+    });
+    expect(screen.getByText(/already passed/)).toBeTruthy();
+  });
+
+  it("does not draw the previous card's press as THIS card's busy state", async () => {
+    mockResolveByRef(answers());
+    const release = deferredAdjust();
+    const { rerender } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <LifecycleCard view={PROPOSAL_VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    // The press is issued under EXPIRED_REF and does not answer.
+    const press = await screen.findByRole("button", { name: "Adjust" });
+    await act(async () => {
+      fireEvent.click(press);
+    });
+    expect(screen.getByRole("button", { name: "Proposing…" })).toBeTruthy();
+
+    // The instance is handed a DIFFERENT proposal while that press hangs.
+    await act(async () => {
+      rerender(
+        <LifecycleCardSurfaceProvider host="chat_thread">
+          <LifecycleCard view={OTHER_VIEW} />
+        </LifecycleCardSurfaceProvider>,
+      );
+    });
+    // Nobody has pressed Adjust on THIS card, so it is pressable, not busy.
+    const button = await screen.findByRole("button", { name: "Adjust" });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+
+    // The stale press finally answers, and still changes nothing here.
+    await release({ ok: false, error: "This card was already adjusted." });
+    expect(screen.getByRole("button", { name: "Adjust" })).toBeTruthy();
+    expect(screen.queryByText(/already adjusted/)).toBeNull();
+  });
+});
