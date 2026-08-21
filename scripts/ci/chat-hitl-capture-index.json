@@ -2332,6 +2332,178 @@
       "recordedAt": "2026-08-21T10:49:34.787Z",
       "runtime": "dev-runtime",
       "note": "§I: one open review binds the chat box with no press — the row above the buttons states the binding and offers the box back."
+    },
+    {
+      "cell": "I4__review-card__site_widget__pending",
+      "declaredHost": "site_widget",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "<a third-party page on another site; see frameUrl>",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2865-section-i-hierarchy/captures/I4__review-card__site_widget__pending.png",
+      "sha256": "9a355744773784d740cfa269edc40193e603f3cddfd6853fd9bc61c669083ebe",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-bound\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+          "scope": "root",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T13:10:01.329Z",
+      "runtime": "Next.js dev (Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + the verify Redis, loopback-only, placeholder-only provider environment (no model credential on this host).",
+      "note": "§I input hierarchy inside the EMBEDDED CROSS-SITE widget column, LIGHT: a real held review card whose subordinate note field (dashed baseline, no box) and the widget's OWN primary composer are in one frame, on a page served by another site."
+    },
+    {
+      "cell": "I5__review-card__site_widget__pending__dark",
+      "declaredHost": "site_widget",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "<a third-party page on another site; see frameUrl>",
+      "frameUrl": "/embed/assistant?<frame disambiguators>",
+      "screenshot": "evidence/2865-section-i-hierarchy/captures/I5__review-card__site_widget__pending__dark.png",
+      "sha256": "b5d444bf83cb70d33400408dfb3b8fc41b61a2627f1782adeaad484030b0fdd4",
+      "assertions": [
+        {
+          "selector": ".cw-frame",
+          "scope": "page",
+          "count": 1
+        },
+        {
+          "selector": "[data-embed-assistant][data-phase=\"active\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"site_widget\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"chat-composer-primary\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-bound\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-composer-unbound\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-note-field-subordinate\"]",
+          "scope": "root",
+          "count": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T13:10:28.072Z",
+      "runtime": "Next.js dev (Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + the verify Redis, loopback-only, placeholder-only provider environment (no model credential on this host).",
+      "note": "§I input hierarchy inside the EMBEDDED CROSS-SITE widget column, DARK: the same two inputs and the same weight difference on the dark field; the record carries the theme read-back measured inside the embed frame."
     }
   ]
 }
