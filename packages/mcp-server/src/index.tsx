@@ -54,7 +54,10 @@ import { writeMcpServerLogFile } from "@/lib/mcp-logging";
 import { betterAuthPool } from "@/lib/better-auth-db";
 import { readServiceAccountByClientId } from "./service-accounts";
 import { resolveOrgRoleFromMembership, composeBearerActorContext } from "./actor-identity";
-import type { DelegatedChatAdmissionSnapshot } from "./delegated-chat-admission";
+import {
+  unavailableDelegatedChatAdmissionSnapshot,
+  type DelegatedChatAdmissionSnapshot,
+} from "./delegated-chat-admission";
 import {
   isTrustedDevHost,
   parseTrustedHosts,
@@ -952,6 +955,32 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       }
     }
 
+    // THE SNAPSHOT IS A DELEGATED-CHAT COST, SO ONLY DELEGATED CHAT PAYS IT
+    // (cinatra#2817 slice 3, codex round-3). An unrestricted, agent-run or
+    // delegated-widget request has no admission question to answer; loading the
+    // snapshot for one would make an unrelated store outage abort a request that
+    // never needed it. The policy mode is resolved FIRST and the loader runs only
+    // for `delegated-chat`.
+    //
+    // A LOADER THAT THROWS DENIES, IT DOES NOT ABORT. The refusal a chat client
+    // should see is "this primitive is not available" from a closed perimeter,
+    // not a transport error — so a failure becomes an explicitly UNAVAILABLE
+    // snapshot, which admits nothing.
+    const toolPolicy = selectDelegatedToolPolicy(delegatedActor);
+    let delegatedChatAdmissionSnapshot: DelegatedChatAdmissionSnapshot | undefined;
+    if (toolPolicy.toolPolicyMode === "delegated-chat" && options.loadDelegatedChatAdmissionSnapshot) {
+      try {
+        delegatedChatAdmissionSnapshot = await options.loadDelegatedChatAdmissionSnapshot();
+      } catch (err) {
+        console.error("[mcp] delegated-chat admission snapshot could not be loaded:", err);
+        delegatedChatAdmissionSnapshot = unavailableDelegatedChatAdmissionSnapshot({
+          reason: "admission_snapshot_load_threw",
+          activationGeneration: -1,
+          admissionGeneration: -1,
+        });
+      }
+    }
+
     const server = await createMcpRuntimeServer({
       name: serverName,
       version: serverVersion,
@@ -961,14 +990,12 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       resolveCapabilityKey: options.resolvePrimitiveCapabilityKeys
         ? await options.resolvePrimitiveCapabilityKeys()
         : undefined,
-      delegatedChatAdmissionSnapshot: options.loadDelegatedChatAdmissionSnapshot
-        ? await options.loadDelegatedChatAdmissionSnapshot()
-        : undefined,
+      delegatedChatAdmissionSnapshot,
       // Fail-closed tool-policy dispatch over the VERIFIED delegation type (the
       // widget actor never falls through to "unrestricted"); the kind-scoped
       // widget allowlist keys off the verified `knd`. See
       // selectDelegatedToolPolicy in ./request-context.
-      ...selectDelegatedToolPolicy(delegatedActor),
+      ...toolPolicy,
     });
     // The two inbound serving legs — inbound posture row A. The legacy leg is an
     // EXPLICIT stateless transport on `application/json` framing rather than the
