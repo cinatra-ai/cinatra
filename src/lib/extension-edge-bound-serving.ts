@@ -678,6 +678,13 @@ export type DiscoveryDefaultTool = {
   handler: (input: unknown) => unknown | Promise<unknown>;
   /** The registration's typed delegated-chat declaration. Narrow-only. */
   delegatedChat?: DelegatedChatToolClass;
+  /**
+   * The EXACT version of the record that produced this registration
+   * (cinatra#2817 slice 1), or `null`/absent when the host cannot state one.
+   * Carried so the per-request plan can bind the registration to the version
+   * that is actually about to serve it.
+   */
+  resolvedVersion?: string | null;
 };
 
 /** One tool a per-request MCP server build must register for the CURRENT caller. */

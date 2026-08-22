@@ -179,7 +179,11 @@ describe("hop 3 — the REPLAY's freshly constructed registerTool config", () =>
   const source = readFileSync(new URL("../mcp-server.ts", import.meta.url), "utf8");
 
   it("the replay builds its config with the shared seam", () => {
-    expect(source).toContain("buildReplayedExtensionToolConfig(name, registration)");
+    // cinatra#2817 slice 1 added the PROVENANCE argument, so the pinned call
+    // shape now carries three arguments. Still the same assurance: the DB-bound
+    // replay routes through the shared seam rather than building its own
+    // literal, which would silently drop the declaration AND the provenance.
+    expect(source).toContain("buildReplayedExtensionToolConfig(name, registration, {");
   });
 
   it("the self-invoker capture runs against the shared recording server", () => {

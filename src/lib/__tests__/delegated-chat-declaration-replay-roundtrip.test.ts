@@ -114,7 +114,7 @@ describe("declaration round trip: register → replay → capture", () => {
   it("the captured entry carries the class the registration declared", () => {
     for (const cls of ["read", "discovery", "dispatch", "none"] as const) {
       _resetExtensionMcpForTests();
-      expect(roundTrip("acme_thing_list", cls).delegatedChat).toBe(cls);
+      expect(roundTrip("acme_thing_list", cls).planned.declaredClass).toBe(cls);
     }
   });
 
@@ -124,14 +124,14 @@ describe("declaration round trip: register → replay → capture", () => {
       // @ts-expect-error — a connector shipping an off-enum value is the case
       "superuser",
     );
-    expect(captured.delegatedChat).toBe("none");
+    expect(captured.planned.declaredClass).toBe("none");
   });
 
   it("preserves ABSENCE as absence, distinct from a declared `none`", () => {
     // Load-bearing: the interim shim fills in for an ABSENT declaration and
     // must not for an explicit `none`. A hop that collapsed the two would make
     // a connector's deliberate opt-out indistinguishable from silence.
-    expect(roundTrip("acme_thing_list").delegatedChat).toBeUndefined();
+    expect(roundTrip("acme_thing_list").planned.declaredClass).toBeUndefined();
   });
 });
 

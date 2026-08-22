@@ -10,7 +10,6 @@ import { z } from "zod";
 import {
   declarationPermitsDelegatedChat,
   isDelegatedChatMcpToolAllowed,
-  readDeclaredDelegatedChatClass,
   resolveDelegatedChatClass,
 } from "./delegated-chat-tool-policy";
 import {
@@ -18,6 +17,14 @@ import {
   type WidgetDelegationKind,
 } from "./delegated-widget-tool-policy";
 import { mcpRequestContextStorage } from "./request-context";
+import {
+  CapabilityPlanRecorder,
+  HOST_PRIMITIVE_OWNER_PACKAGE,
+  HOST_PRIMITIVE_RELEASE_VERSION,
+  type CapabilityPlan,
+  type HostPrimitiveIdentity,
+  type PlannedPrimitive,
+} from "./capability-plan";
 
 export type ScreenDescriptor = {
   readonly screen_id: string;
@@ -125,6 +132,33 @@ export async function createMcpRuntimeServer(input: {
    * input). Selects the kind-scoped allowlist. Ignored for other modes.
    */
   widgetDelegationKind?: WidgetDelegationKind;
+  /**
+   * The identity core/bundled primitives are planned under (cinatra#2817 slice
+   * 1). A registration that carries no host-written provenance stamp is a
+   * core/bundled one and inherits this owner + RELEASE version, which is the
+   * identity its migrated admission record is written against. Defaults to the
+   * host package at this server's own version.
+   */
+  hostPrimitiveIdentity?: HostPrimitiveIdentity;
+  /**
+   * Resolves the capability key that gates a primitive whose provenance stamp
+   * does not name one. Injected because the connector catalog is app-layer
+   * state this package must not reach for.
+   */
+  resolveCapabilityKey?: (name: string) => string | null | undefined;
+  /**
+   * Receives the finished request-scoped capability plan once the registration
+   * pass has run (cinatra#2817 slice 1).
+   *
+   * THE PLAN IS A BY-PRODUCT OF THE ONE PASS, not a second one: every entry is
+   * recorded from inside the single choke point every registration passes
+   * through, and `plan.servable` holds exactly the entries `registerTool`
+   * accepted. A consumer that wants "what is actually servable on this request"
+   * reads this rather than replaying module registration against its own sink —
+   * two passes can disagree for any caller-dependent registration, which is the
+   * disagreement class this seam exists to end.
+   */
+  onCapabilityPlan?: (plan: CapabilityPlan) => void;
 }) {
   const server = new McpServer(
     {
@@ -152,18 +186,35 @@ export async function createMcpRuntimeServer(input: {
   const policyMode = input.toolPolicyMode ?? "unrestricted";
   const widgetKind = input.widgetDelegationKind;
 
-  // Registration-time filter: is the named tool permitted under the ACTIVE
-  // policy mode? delegated-widget applies the CLOSED kind-keyed allowlist (G9 /
-  // G12) selected by `widgetKind`. An absent/unknown widgetKind on a
-  // delegated-widget request denies everything (fail-closed) — no widget
+  // The request-scoped capability PLAN (cinatra#2817 slice 1). Recorded from
+  // inside the ONE choke point below, so the plan and the live server are
+  // produced by the SAME pass rather than by two replays that could disagree
+  // for a caller-dependent registration.
+  const planRecorder = new CapabilityPlanRecorder({
+    // The core RELEASE identity, deliberately NOT `input.version` (the MCP
+    // server's own protocol-surface version): core admission records are
+    // written against the release identity, and a routine server-version bump
+    // must not silently invalidate — or silently carry forward — a reviewed
+    // security decision.
+    host: input.hostPrimitiveIdentity ?? {
+      packageName: HOST_PRIMITIVE_OWNER_PACKAGE,
+      version: HOST_PRIMITIVE_RELEASE_VERSION,
+    },
+    resolveCapabilityKey: input.resolveCapabilityKey,
+  });
+
+  // Registration-time filter: is the PLANNED primitive permitted under the
+  // ACTIVE policy mode? delegated-widget applies the CLOSED kind-keyed
+  // allowlist (G9 / G12) selected by `widgetKind`. An absent/unknown widgetKind
+  // on a delegated-widget request denies everything (fail-closed) — no widget
   // delegation may register a tool without a resolved kind.
   //
-  // The `config` argument is read for ONE thing only: the registration's typed
-  // delegated-chat declaration (cinatra#2771). This is the single choke point
-  // BOTH registration paths pass through — the manifest-discovered `(name,
-  // config, handler)` connectors call directly, and `ctx.mcp.registerTool`
-  // extensions via the replay in `@/lib/mcp-server` — so reading it here is
-  // what makes the declaration binding on both without a second walk.
+  // The decision reads the PLANNED ENTRY, never the raw `(name, config)` pair.
+  // That is the whole point of slice 1: the declaration, the owning package and
+  // the exact resolved version were resolved ONCE, at the moment the
+  // registration happened, and every later decision about this primitive — the
+  // catalog, the call-time guard, the self-invoker — is made about that same
+  // entry rather than about a name re-looked-up later.
   //
   // NARROW-ONLY, and the AND ordering below is the proof: host admission is
   // evaluated FIRST and a declaration is only ever consulted to REMOVE a name
@@ -171,28 +222,45 @@ export async function createMcpRuntimeServer(input: {
   // `isDelegatedChatMcpToolAllowed` refused, so a connector cannot
   // self-classify its way past a denied family, the destructive-verb backstop,
   // or the exact-name admission.
-  //
-  // An ABSENT declaration now means NONE (owner ruling) — so the read is routed
-  // through `resolveDelegatedChatClass`, which supplies the interim class the
-  // legacy allowlist implies for the names it admits. Nothing in the tree
-  // declares yet; without that fallback the ruling would withdraw every
-  // primitive on the chat surface rather than the undeclared ones. The fallback
-  // is reached only AFTER admission above, so it cannot widen either, and
-  // #2817 deletes it with the allowlist.
-  const isRegistrableUnderPolicy = (name: string, config: unknown): boolean => {
+  const registrationRefusal = (planned: PlannedPrimitive): string | null => {
+    // A CLOSED perimeter decides about the normalized name but the SDK serves
+    // the name as registered. When the two differ, the thing the policy
+    // reasoned about is not the thing the wire exposes — so on both delegated
+    // perimeters a non-canonical casing is refused outright rather than
+    // reconciled. Strictly narrowing (every cinatra primitive registers under
+    // its canonical lowercase name), and it removes the whole class in which a
+    // catalog entry, an admission key and a `tools/call` target could name
+    // three different things.
+    if (policyMode !== "unrestricted" && planned.registeredName !== planned.name) {
+      return "non_canonical_primitive_name";
+    }
     if (policyMode === "delegated-chat") {
-      if (!isDelegatedChatMcpToolAllowed(name)) return false;
-      return declarationPermitsDelegatedChat(
-        resolveDelegatedChatClass(name, readDeclaredDelegatedChatClass(config)),
-      );
+      if (!isDelegatedChatMcpToolAllowed(planned.name)) return "host_admission_denied";
+      if (
+        !declarationPermitsDelegatedChat(
+          resolveDelegatedChatClass(planned.name, planned.declaredClass),
+        )
+      ) {
+        return "declaration_declines_chat";
+      }
+      return null;
     }
     if (policyMode === "delegated-widget") {
       // The widget perimeter is its own CLOSED, kind-keyed allowlist and is
       // deliberately NOT declaration-aware: a connector must not be able to
-      // influence it in either direction (#2817 keeps it untouched too).
-      return widgetKind ? isDelegatedWidgetMcpToolAllowed(widgetKind, name) : false;
+      // influence it in either direction (#2817 keeps it untouched too). It is
+      // also deliberately NOT plan-aware — nothing about the capability plan
+      // widens it, and its decision still reads only (kind, name).
+      if (!widgetKind) return "widget_kind_unresolved";
+      // The name AS REGISTERED, never the normalized one: the widget allowlist
+      // is deliberately case-SENSITIVE (a `WordPress_Content_Editor_Run` is a
+      // DIFFERENT primitive and must be denied, not case-folded into the
+      // editor), so handing it a lower-cased name would widen it.
+      return isDelegatedWidgetMcpToolAllowed(widgetKind, planned.registeredName)
+        ? null
+        : "widget_policy_denied";
     }
-    return true;
+    return null;
   };
 
   // Call-time guard (defense-in-depth): re-derive the policy from the DELEGATED
@@ -200,38 +268,56 @@ export async function createMcpRuntimeServer(input: {
   // still denied. Delegation-aware — chat uses the chat allowlist, a
   // public_site_widget delegation uses its own KIND-scoped allowlist (reading
   // the kind from the actor's `knd`, NEVER caller input).
+  //
+  // Keyed on the PLANNED entry, so registration and call time decide about the
+  // same primitive identity rather than about a bare name.
   const isCallableForCtxActor = (
     ctx: ReturnType<typeof mcpRequestContextStorage.getStore>,
-    name: string,
+    planned: PlannedPrimitive,
   ): boolean => {
     const actor = ctx?.delegatedActor;
     if (actor?.delegation === "public_site_widget") {
-      return isDelegatedWidgetMcpToolAllowed(actor.kind, name);
+      // Case-SENSITIVE by design — same reason as the registration filter.
+      return isDelegatedWidgetMcpToolAllowed(actor.kind, planned.registeredName);
     }
     // Legacy chat gate keyed on `delegatedRestricted` (set only for the chat
     // delegation at the transport boundary).
-    if (ctx?.delegatedRestricted) return isDelegatedChatMcpToolAllowed(name);
+    if (ctx?.delegatedRestricted) return isDelegatedChatMcpToolAllowed(planned.name);
     return true;
   };
 
-  const policedRegisterTool: InstanceType<typeof McpServer>["registerTool"] = ((
+  // The raw, plan-recording implementation. Kept under its own precise type so
+  // the internal reserved-built-in registration below can pass `planOptions`;
+  // `policedRegisterTool` is the same function re-typed as the SDK's
+  // `registerTool` for the capability surface handed to registration callbacks.
+  const planRegisterTool = ((
     name: string,
     config: unknown,
     cb: (...cbArgs: unknown[]) => unknown,
+    planOptions?: { reserved?: boolean },
   ) => {
-    if (!isRegistrableUnderPolicy(name, config)) {
+    // PLAN FIRST, then decide, then register FROM the planned entry. The plan
+    // records every registration the pass attempted (in registration order) and
+    // the outcome of each, so `plan.servable` is the set that ACTUALLY
+    // registered — never a second replay's guess at it.
+    const planned = planRecorder.record(name, config, planOptions);
+    const refusal = registrationRefusal(planned);
+    if (refusal) {
       // Not registered: invisible to tools/list, unresolvable by tools/call.
+      planRecorder.markRefused(planned, refusal);
       return undefined as never;
     }
-    return (
-      server.registerTool as unknown as (
-        n: string,
-        c: unknown,
-        h: (...a: unknown[]) => unknown,
-      ) => unknown
-    )(name, config, async (...cbArgs: unknown[]) => {
+    let handle: unknown;
+    try {
+      handle = (
+        server.registerTool as unknown as (
+          n: string,
+          c: unknown,
+          h: (...a: unknown[]) => unknown,
+        ) => unknown
+      )(planned.registeredName, config, async (...cbArgs: unknown[]) => {
       const ctx = mcpRequestContextStorage.getStore();
-      if (!isCallableForCtxActor(ctx, name)) {
+      if (!isCallableForCtxActor(ctx, planned)) {
         return {
           content: [
             {
@@ -287,8 +373,27 @@ export async function createMcpRuntimeServer(input: {
       // null-safe: if no ctx was captured, the bare callback runs (matches
       // the behavior for unauthenticated dev probes).
       return ctx ? mcpRequestContextStorage.run(ctx, () => cb(...cbArgs)) : cb(...cbArgs);
-    });
-  }) as InstanceType<typeof McpServer>["registerTool"];
+      });
+    } catch (error) {
+      // The SDK refused it (a duplicate name, an unusable schema). The entry is
+      // NOT servable, and the plan must say so — an outcome that claimed
+      // otherwise would let the catalog advertise a tool `tools/call` cannot
+      // resolve.
+      planRecorder.markRefused(planned, "register_tool_threw");
+      throw error;
+    }
+    planRecorder.markRegistered(planned);
+    return handle as never;
+  }) as (
+    name: string,
+    config: unknown,
+    cb: (...cbArgs: unknown[]) => unknown,
+    planOptions?: { reserved?: boolean },
+  ) => never;
+
+  const policedRegisterTool = planRegisterTool as unknown as InstanceType<
+    typeof McpServer
+  >["registerTool"];
 
   // Capability merge order. Must be called BEFORE server.connect(transport);
   // the SDK throws SdkErrorCode.AlreadyConnected once a transport is attached
@@ -318,7 +423,7 @@ export async function createMcpRuntimeServer(input: {
   registerPlaceholderCapabilities(server);
   await input.registerCapabilities?.(toolServer, input.registerRequestContext);
 
-  policedRegisterTool(
+  planRegisterTool(
     "system_screen_lookup",
     {
       title: "Screen lookup",
@@ -329,7 +434,7 @@ export async function createMcpRuntimeServer(input: {
         module: z.string().optional(),
       }),
     },
-    async (lookupInput) => {
+    (async (lookupInput: { screen_id?: string; module?: string }) => {
       const entries = [...screenRegistry.values()];
       const filtered = lookupInput.screen_id
         ? entries.filter((s) => s.screen_id === lookupInput.screen_id)
@@ -340,8 +445,15 @@ export async function createMcpRuntimeServer(input: {
         content: [{ type: "text", text: JSON.stringify(filtered) }],
         structuredContent: { screens: filtered },
       };
-    },
+    }) as (...cbArgs: unknown[]) => unknown,
+    // A RESERVED host built-in: registered by the runtime server itself, after
+    // the registration pass, and marked as such in the plan so a consumer can
+    // tell it from an ordinary module registration without a name table.
+    { reserved: true },
   );
+
+  // The pass is complete: hand the finished plan to whoever asked for it.
+  input.onCapabilityPlan?.(planRecorder.plan());
 
   return server;
 }

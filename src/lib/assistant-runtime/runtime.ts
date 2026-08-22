@@ -34,7 +34,6 @@ import {
 } from "@/lib/connector-inventory.server";
 import { connectionSubjectUserId } from "@/lib/connection-use-gate";
 import {
-  delegatedChatAllowedToolNames,
   resolveDelegatedChatClass,
   isDelegatedChatMcpToolAllowed,
 } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
@@ -653,16 +652,26 @@ async function resolveChatMcpCatalogState(input: {
     // the filter silently gates nothing.
     const capabilityKeyFor = buildCapabilityKeyResolver(inventory.connectors);
 
-    // The INTERIM seeding site (cinatra#2817 replaces it wholesale). Admission
-    // still comes from the legacy allowlist, and since the owner's ruling a
-    // primitive with no class in force is unexposed, each seeded name carries
-    // the class `resolveDelegatedChatClass` puts in force for it — the interim
-    // one here, because nothing in the tree declares yet. Seeding no class
-    // would empty the catalog, which is exactly the failure the shim prevents.
-    const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map((name) => ({
-      name,
-      declaredClass: resolveDelegatedChatClass(name, undefined),
-      capabilityKey: capabilityKeyFor(name),
+    // cinatra#2817 slice 1 — THE SEEDING SITE, now the request-scoped
+    // registration PLAN rather than a static name list. The pass that decides
+    // what registers is the pass that produces this, so the catalog cannot
+    // advertise a primitive the perimeter refuses (or hide one it serves): the
+    // servable subset IS the set `registerTool` accepted, each entry carrying
+    // the class its registration put in force and the capability key resolved
+    // from the live connector catalog.
+    // LAZY, deliberately: `@/lib/mcp-server` carries the whole connector /
+    // module / database graph, and a static import here would put it on every
+    // route this runtime is on (and force every test of an unrelated turn seam
+    // to stub it). The catalog hint is best-effort and already inside a
+    // try/catch, so the import cost is paid only when the hint is built.
+    const { buildDelegatedChatCapabilityPlan } = await import("@/lib/mcp-server");
+    const plan = await buildDelegatedChatCapabilityPlan({
+      resolveCapabilityKey: capabilityKeyFor,
+    });
+    const servable: ServableChatPrimitive[] = plan.servable.map((entry) => ({
+      name: entry.name,
+      declaredClass: resolveDelegatedChatClass(entry.name, entry.declaredClass),
+      capabilityKey: entry.capabilityKey,
     }));
 
     return {

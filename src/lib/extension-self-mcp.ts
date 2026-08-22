@@ -32,20 +32,21 @@ import "server-only";
 // the request-context store instead).
 
 import type { ActorContext } from "@/lib/authz/actor-context";
+import type { PlannedPrimitive } from "@cinatra-ai/mcp-server/capability-plan";
 import { getActivationGeneration } from "@/lib/extension-activation-generation";
 
 type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
 /**
  * The captured entry the host's primitive map now holds: the handler PLUS the
- * typed delegated-chat declaration its registration carried (cinatra#2771).
+ * PLANNED PRIMITIVE its registration produced (cinatra#2771 → cinatra#2817).
  * Locally mirrored (this module is deliberately import-light and loads
  * `@/lib/mcp-server` lazily); the host's `CapturedHostPrimitive` is the
  * authoritative shape and is structurally identical.
  */
 type CapturedHostPrimitive = {
   handler: CapturedMcpToolHandler;
-  delegatedChat?: "read" | "discovery" | "dispatch" | "none";
+  planned: PlannedPrimitive;
 };
 
 // GENERATION-KEYED CACHE (#310): the host's `name → handler` map is memoised, but
@@ -143,7 +144,10 @@ export async function callHostPrimitive(
     // Using one resolver on both sides is what keeps the in-process
     // self-invoker and the live transport from disagreeing about the SAME
     // registration, which is the lossy hop the #2771 review named.
-    const effectiveClass = resolveDelegatedChatClass(primitiveName, captured.delegatedChat);
+    const effectiveClass = resolveDelegatedChatClass(
+      captured.planned.name,
+      captured.planned.declaredClass,
+    );
     if (ctx?.delegatedRestricted && !declarationPermitsDelegatedChat(effectiveClass)) {
       throw new Error(
         `[extension-self-mcp] "${primitiveName}" declines the delegated chat surface ` +

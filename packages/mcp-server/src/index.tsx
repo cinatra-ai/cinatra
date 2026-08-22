@@ -138,6 +138,12 @@ export type CreateMcpServerMountOptions = {
    * the connectivity check button. Optional — omitting it hides the selector.
    */
   readConfiguredLlmProviders?: () => Promise<string[]>;
+  /** cinatra#2817 slice 1 — builds the request's primitive→capability-key
+   *  resolver, so the LIVE request-scoped plan carries the same capability keys
+   *  the chat catalog derives (an incomplete live plan is a plan a later
+   *  admission slice cannot decide from). App-wired: the connector catalog is
+   *  app-layer state this package must not reach for. */
+  resolvePrimitiveCapabilityKeys?: () => Promise<(name: string) => string | null | undefined>;
   /** #1195 durable run-context binding resolver (run-token-keyed redis binding
    *  written by /api/llm-bridge; resolved via readAgentRunByTokenHash), called ONCE
    *  per request with the RAW bearer. "resolved" beats the header channel;
@@ -946,6 +952,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       registerCapabilities: options.registerCapabilities, registerRequestContext: delegatedActor?.delegation === "agent_run" ? { verifiedAgentRunId: delegatedActor.runId } : undefined, // cinatra#1392 S8: the VERIFIED (signed-OBO) agent-run identity for the extension-tool discovery union; chat delegations / plain bearers carry no verified run and stay caller-agnostic (pre-S8 behavior). One line to hold the tracked-file size ratchet.
       instructions: options.serverInstructions,
       experimental: options.serverExperimental,
+      resolveCapabilityKey: options.resolvePrimitiveCapabilityKeys
+        ? await options.resolvePrimitiveCapabilityKeys()
+        : undefined,
       // Fail-closed tool-policy dispatch over the VERIFIED delegation type (the
       // widget actor never falls through to "unrestricted"); the kind-scoped
       // widget allowlist keys off the verified `knd`. See
