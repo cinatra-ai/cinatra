@@ -121,6 +121,8 @@
         },
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "framing": "card-root",
+        "reviewTargetResolved": true,
+        "reviewTarget": "Connector Rollout Note\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post \u00b7 revision 65128429-95e\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-22T17:04:21.865Z\nFloor\nstructured data\nreview target unavailable \u2014 slot \"detail\", reason \"no-semantic-renderer\"\nConnector Rollout Note\nNo type renderer resolved for this artifact \u2014 showing the generic read-only view.\ntype\n@cinatra-ai/blog-post-artifact:post\nmime\ntext/markdown\nrevision\n65128429-95ea-4983-832c-37988b191dcf\nPreview\nDownload\nCommand Palette\nSearch for a command to run...",
         "cardText": "Blog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nWeb Research Skill\nCONFIRMED"
       },
       {
@@ -129,7 +131,7 @@
           "width": 2880,
           "height": 3540
         },
-        "sha256": "2f7d7f7a2b15394d91765bb79560533d631b863679481c1e190e66b8a4564a4b",
+        "sha256": "9ff2a88ed9ae65c879c7573f58e6ec94a12ed8a744ca421dbd0f6d2292b5fbc2",
         "observed": [
           {
             "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
@@ -243,6 +245,8 @@
         },
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "framing": "page",
+        "reviewTargetResolved": true,
+        "reviewTarget": "Connector Rollout Note\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post \u00b7 revision 65128429-95e\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-22T17:04:21.865Z\nFloor\nstructured data\nreview target unavailable \u2014 slot \"detail\", reason \"no-semantic-renderer\"\nConnector Rollout Note\nNo type renderer resolved for this artifact \u2014 showing the generic read-only view.\ntype\n@cinatra-ai/blog-post-artifact:post\nmime\ntext/markdown\nrevision\n65128429-95ea-4983-832c-37988b191dcf\nPreview\nDownload\nCommand Palette\nSearch for a command to run...",
         "cardText": "Blog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nWeb Research Skill\nCONFIRMED"
       },
       {
@@ -365,6 +369,8 @@
         },
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
         "framing": "card-root",
+        "reviewTargetResolved": true,
+        "reviewTarget": "Connector Rollout Note\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post \u00b7 revision 65128429-95e\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-22T17:04:21.865Z\nFloor\nstructured data\nreview target unavailable \u2014 slot \"detail\", reason \"no-semantic-renderer\"\nConnector Rollout Note\nNo type renderer resolved for this artifact \u2014 showing the generic read-only view.\ntype\n@cinatra-ai/blog-post-artifact:post\nmime\ntext/markdown\nrevision\n65128429-95ea-4983-832c-37988b191dcf\nPreview\nDownload\nCommand Palette\nSearch for a command to run...",
         "cardText": "Blog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nWeb Research Skill\nCONFIRMED"
       },
       {
@@ -373,7 +379,7 @@
           "width": 2880,
           "height": 3540
         },
-        "sha256": "631f6733cbd6bf5f54db941f12c98c77b23906067f4ee08ea0e952ac5b9a42fd",
+        "sha256": "10f0d25cdd2c2b30e0fb6392b352b94dbaee12c31c1dacc87ccad22767679afc",
         "observed": [
           {
             "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
@@ -487,6 +493,8 @@
         },
         "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
         "framing": "page",
+        "reviewTargetResolved": true,
+        "reviewTarget": "Connector Rollout Note\nBlog Post Artifact\n@cinatra-ai/blog-post-artifact:post \u00b7 revision 65128429-95e\u2026 \u00b7 pinned \u00b7 organization \u00b7 organization \u00b7 text/markdown \u00b7 updated 2026-08-22T17:04:21.865Z\nFloor\nstructured data\nreview target unavailable \u2014 slot \"detail\", reason \"no-semantic-renderer\"\nConnector Rollout Note\nNo type renderer resolved for this artifact \u2014 showing the generic read-only view.\ntype\n@cinatra-ai/blog-post-artifact:post\nmime\ntext/markdown\nrevision\n65128429-95ea-4983-832c-37988b191dcf\nPreview\nDownload\nCommand Palette\nSearch for a command to run...",
         "cardText": "Blog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nWeb Research Skill\nCONFIRMED"
       }
     ],
@@ -1491,8 +1499,8 @@
     ]
   },
   "runPageRealSequence": {
-    "runId": "2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
-    "runPath": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+    "runId": "e7c77fc6-da28-4bca-80f7-46c56867772e",
+    "runPath": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
     "held": {
       "present": true,
       "attributes": {
@@ -1621,105 +1629,126 @@
         "skip": 0
       }
     },
-    "runPageText": "INTELLIGENCE\nChat\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nAnalytics\nTOOLS\nSkills\nConnectors\nSC\n<the lane owner>\n<the lane owner's address>\nToggle Sidebar\nAgents\nBlog Draft Writer Agent (2)\nToggle theme\n1\n@cinatra-ai/blog-draft-writer-agent\nBlog Draft Writer Agent (2)\nSetup\nPermissions\nAgentic Run Progress\nfailed\nBlog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nWeb Research Skill\nCONFIRMED\nError\nCould not reach the agent runtime at <origin>/agents/cinatra-ai/blog-draft-writer-agent/ \u2014 fetch failed (ECONNREFUSED). This install's WayFlow runtime is expected to be local (no CINATRA_WAYFLOW_RUNTIME recorded \u2014 this install predates it, or the key is unset here) \u2014 it should be running and is not. Check that it's up and reachable (e.g. the dev tunnel/Funnel and WAYFLOW_BASE_URL). Start it with `cinatra instance wayflow start` if your cinatra-cli has it (not every released CLI does yet). Otherwise, bring it up directly from the checkout root: `source .env.local && node scripts/gen-wayflow-env.mjs --require-bridge-token && docker compose -p <project> -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d --build wayflow`.\nRetry\nStart new run\nNo messages yet.\nCommand Palette\nSearch for a command to run...",
+    "gatePresses": [
+      {
+        "at": "2026-08-22T17:04:01.976Z",
+        "pressed": "Continue"
+      }
+    ],
+    "runPageText": "INTELLIGENCE\nChat\nAssistants\nAgents\nMANAGEMENT\nPersonal\nProjects\nTeams\nOrganizations\nINFORMATION\nArtifacts\nAnalytics\nTOOLS\nSkills\nConnectors\nSC\n<the lane owner>\n<the lane owner's address>\nToggle Sidebar\nAgents\nBlog Draft Writer Agent (3)\nToggle theme\n@cinatra-ai/blog-draft-writer-agent\nBlog Draft Writer Agent (3)\nSetup\nPermissions\nAgentic Run Progress\ncompleted\nBlog Post Matcher Skill\nCONFIRMED\nBlog Writing Skill\nADJUSTED\nWeb Research Skill\nCONFIRMED\nRun complete\nThis run finished. Its output is in the run transcript below.\nStart new run\nCommand Palette\nSearch for a command to run...",
     "wire": [
       {
         "path": "/api/auth/sign-in/email",
         "status": 200,
-        "at": "2026-08-22T02:16:47.219Z"
+        "at": "2026-08-22T17:02:49.215Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:16:54.344Z"
+        "at": "2026-08-22T17:02:56.602Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:16:55.600Z"
+        "at": "2026-08-22T17:02:57.646Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:09.115Z"
+        "at": "2026-08-22T17:03:10.547Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:11.474Z"
+        "at": "2026-08-22T17:03:12.828Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:12.921Z"
+        "at": "2026-08-22T17:03:13.956Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:13.010Z"
+        "at": "2026-08-22T17:03:14.046Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:14.251Z"
+        "at": "2026-08-22T17:03:15.344Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:14.293Z"
+        "at": "2026-08-22T17:03:15.431Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:14.372Z"
+        "at": "2026-08-22T17:03:15.646Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:14.441Z"
+        "at": "2026-08-22T17:03:15.748Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:21.041Z"
+        "at": "2026-08-22T17:03:23.343Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd/trigger",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e/trigger",
         "status": 200,
-        "at": "2026-08-22T02:17:54.952Z"
+        "at": "2026-08-22T17:03:57.051Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:57.827Z"
+        "at": "2026-08-22T17:03:59.248Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:57.909Z"
+        "at": "2026-08-22T17:03:59.317Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:58.935Z"
+        "at": "2026-08-22T17:04:00.198Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:58.968Z"
+        "at": "2026-08-22T17:04:00.233Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:59.050Z"
+        "at": "2026-08-22T17:04:00.302Z"
       },
       {
-        "path": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
         "status": 200,
-        "at": "2026-08-22T02:17:59.146Z"
+        "at": "2026-08-22T17:04:00.376Z"
+      },
+      {
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
+        "status": 200,
+        "at": "2026-08-22T17:04:22.640Z"
+      },
+      {
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
+        "status": 200,
+        "at": "2026-08-22T17:04:22.792Z"
+      },
+      {
+        "path": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e",
+        "status": 200,
+        "at": "2026-08-22T17:04:22.936Z"
       }
     ],
     "pageErrors": [],
-    "$comment": "The run page's own text, recorded verbatim and then SCRUBBED of the lane's origins and the lane account's name/address \u2014 nothing else is altered. Every origin this lane used is read from the environment and appears in no committed file."
+    "$comment": "The run page's own text, recorded verbatim and then SCRUBBED of the lane's origins and the lane account's name/address \u2014 nothing else is altered. Every origin this lane used is read from the environment and appears in no committed file. THIS ROUND the run did not stop at its dispatch: it EXECUTED through the WayFlow runtime with a real model and wrote its own output, so the page's terminal reading is `completed`, not `failed`. The order the whole thing happened in, with the source of every timestamp, is in TIMELINE.md / timeline.json beside this file."
   }
 }

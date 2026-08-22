@@ -1,33 +1,81 @@
 {
-  "run": {
-    "id": "2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
-    "status": "failed",
-    "error": "Could not reach the agent runtime at <the local WayFlow runtime origin>/agents/cinatra-ai/blog-draft-writer-agent/ \u2014 fetch failed (ECONNREFUSED). This install's WayFlow runtime is expected to be local (no CINATRA_WAYFLOW_RUNTIME recorded \u2014 this install predates it, or the key is unset here) \u2014 it should be running and is not. Check that it's up and reachable (e.g. the dev tunnel/Funnel and WAYFLOW_BASE_URL). Start it with `cinatra instance wayflow start` if your cinatra-cli has it (not every released CLI does yet). Otherwise, bring it up directly from the checkout root: `source .env.local && node scripts/gen-wayflow-env.mjs --require-bridge-token && docker compose -p <project> -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d --build wayflow`."
+  "$comment": "cinatra#2790 S9f \u2014 the run's durable rows, read FROM THE DATABASE after the real sequence, never off a screen. THIS ROUND THE RUN PRODUCED ITS OWN OUTPUT: the step executed inside the WayFlow runtime against a real model, the bridge answered 200, and the artifact below was written by the step rather than by a materializer standing in for it. The previous round's verbatim execution error (503 NO_LLM_PROVIDER at /api/llm-bridge) is gone because the call it describes now succeeds. Timestamps and their sources are laid out row by row in TIMELINE.md / timeline.json.",
+  "runId": "e7c77fc6-da28-4bca-80f7-46c56867772e",
+  "agentRun": {
+    "status": "completed",
+    "error": null,
+    "completedAt": "2026-08-22T17:04:22.009Z",
+    "createdAtColumn": "2026-08-22T17:04:22.009Z",
+    "createdAtColumnNote": "NOT trusted as the creation time \u2014 identical to completedAt and 49s after the hold this run parked on. The terminal write appears to overwrite it. The creation anchor used everywhere in this evidence is lifecycle_continuation_park.created_at."
   },
-  "park": {
-    "run_id": "2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
+  "lifecycleContinuationPark": {
     "checkpoint": "recommendation",
-    "status": "released"
+    "status": "released",
+    "createdAt": "2026-08-22T17:02:53.103178Z",
+    "resolvedAt": "2026-08-22T17:03:10.446268Z"
   },
-  "selected": [
+  "runSelectedSkillRevisions": [
     {
-      "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
-      "selection_source": "recommended_confirmed"
+      "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+      "selectionSource": "recommended_confirmed",
+      "selectedAt": "2026-08-22T17:03:10.434846Z"
     },
     {
-      "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
-      "selection_source": "user_adjusted"
+      "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+      "selectionSource": "user_adjusted",
+      "selectedAt": "2026-08-22T17:03:10.434846Z"
     },
     {
-      "skill_id": "@cinatra-ai/web-research-skill:web-research",
-      "selection_source": "recommended_confirmed"
+      "skillId": "@cinatra-ai/web-research-skill:web-research",
+      "selectionSource": "recommended_confirmed",
+      "selectedAt": "2026-08-22T17:03:10.434846Z"
     }
   ],
-  "rejected": [],
-  "gate": {
-    "run_id": "2e7967ec-f263-4ff5-8add-b3f8ef43e2cd",
-    "review_task_id": "lifecycle-review:4c13bcca07ee74c29361f22957f11f8fe73a29e28c7ccab506a1d78db3753b92",
-    "status": "pending"
+  "runRejectedRecommendations": {
+    "rows": [],
+    "note": "empty, and that is correct \u2014 that table records a RECOMMENDED skill that was not kept, and a run started this way is created with empty input_params, so nothing scores over the recommend threshold and every chip is a force-add candidate. The skipped chip (brand-voice-matcher) was never recommended for this run."
   },
-  "$comment": "cinatra#2790 S9f R4 \u2014 the durable rows for the run the committed R-cells were shot on, read from the lane database on the shipped tables. The run status is READ BACK, never read off the screen. The error is the run's OWN verbatim error: its production leg dispatches to the WayFlow agent runtime, which this lane does not run. The runtime ORIGIN inside the error text is redacted to `<the local WayFlow runtime origin>`; nothing else in the sentence is changed, and no origin this lane used is written into any committed file."
+  "execution": {
+    "dispatchAcceptedAt": "2026-08-22T17:03:58.606715Z",
+    "dispatchEvidence": "WayFlow container log: POST /agents/cinatra-ai/blog-draft-writer-agent/ 200 OK; app log [wayflow] state=input-required with the runtime's own status timestamp",
+    "inFlightGateAnsweredAt": "2026-08-22T17:04:01.976Z",
+    "modelCall": {
+      "route": "POST /api/llm-bridge",
+      "status": 200,
+      "durationSeconds": 18.1,
+      "note": "the previous round got 503 NO_LLM_PROVIDER on this exact call"
+    },
+    "stepCompletedAt": "2026-08-22T17:04:20.800435Z",
+    "stepCompletedEvidence": "app log [wayflow] state=completed with the runtime's own status timestamp"
+  },
+  "outputWrittenByTheStep": {
+    "representationId": "65128429-95ea-4983-832c-37988b191dcf",
+    "artifactId": "bffae4e5-f598-44c0-8443-499f7b3b306b",
+    "createdByRunId": "e7c77fc6-da28-4bca-80f7-46c56867772e",
+    "createdAt": "2026-08-22T17:04:21.865797Z",
+    "title": "Connector Rollout Note",
+    "objectType": "@cinatra-ai/blog-post-artifact:post",
+    "mime": "text/markdown",
+    "bytes": 5695,
+    "outbox": {
+      "emitter": "createSemanticArtifact",
+      "originKind": "agent_produced",
+      "status": "processed",
+      "createdAt": "2026-08-22T17:04:21.865797Z",
+      "processedAt": "2026-08-22T17:04:47.249846Z"
+    }
+  },
+  "reviewGateOpenedBySweeper": {
+    "reviewTaskId": "lifecycle-review:912fa2b6c5928615f67701a03bf895a81f6bb148ee2e5d2db55903290026f117",
+    "status": "pending",
+    "createdAt": "2026-08-22T17:04:46.914590Z",
+    "sweepLine": "[lifecycle-review-orchestration] scanned=1 gatesCreated=1 noGate=0 notClassifiable=0 failed=0"
+  },
+  "wayflowHealthProbe": "GET /.health -> 200 {\"status\":\"ok\",\"agents\":29,\"failed\":0,\"failed_agents\":[],\"last_reload_at\":null}",
+  "gatePresses": [
+    {
+      "at": "2026-08-22T17:04:01.976Z",
+      "pressed": "Continue"
+    }
+  ]
 }

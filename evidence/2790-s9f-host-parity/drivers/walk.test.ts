@@ -8,8 +8,17 @@
  *   SEED    — one `pending_input`, human-present run per slot.
  *   HOLD    — park each through `maybeHoldRunForRecommendation`, the ONE seam
  *             the interactive run trigger uses, and read the park back.
- *   PRODUCE — for the review-page slot only: the artifact its review gate is
- *             opened on, through the shipped materializer.
+ *   PROVIDER— seed the model provider connection through the SHIPPED writer
+ *             `writeOpenAIConnection`, which SEALS the key at rest. The
+ *             credential reaches this process ONLY through the process
+ *             environment (the operator’s secret-manager `run` wrapper around this exact
+ *             command) and is never written to a file, never echoed, never
+ *             logged: this step reports presence and nothing else.
+ *   PRODUCE — RETIRED for the WayFlow round. It wrote the review gate's
+ *             artifact through the shipped materializer when the run could not
+ *             execute; the run now produces its own output through the WayFlow
+ *             runtime, so this step is not run and is kept only so the earlier
+ *             rounds in this lane's history stay reproducible.
  *   GATE    — `sweepReviewOrchestration()`, the shipped sweeper, which mints
  *             the `artifact_review_gates` row and its review task id.
  *   READBACK— the rows, verbatim.
@@ -25,14 +34,25 @@ import { it, vi } from "vitest";
 vi.mock("@/lib/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const cfg = await import("@/lib/postgres-config");
+  const metadataStore = await vi.importActual<typeof import("@/lib/database-metadata")>(
+    "@/lib/database-metadata",
+  );
   const real = await vi.importActual<typeof import("@/lib/postgres-schema-init")>(
     "@/lib/postgres-schema-init",
   );
   return {
     ...actual,
     readChatThreadForClassifier: () => null,
-    readMetadataValueFromDatabase: (_k: string, fallback: unknown) => fallback,
-    writeMetadataValueToDatabase: () => {},
+    // Metadata reads/writes are DELEGATED to the real store rather than
+    // stubbed. The earlier stub (`(_k, fallback) => fallback`) made every
+    // metadata row read as absent inside this harness, which silently turned
+    // the BINDINGS pre-check below into a false negative: it reported the
+    // instance identity as unconfigured while the row was in fact present.
+    // A pre-check that cannot see the row it is checking is worse than none.
+    readMetadataValueFromDatabase: (k: string, fallback: unknown) =>
+      metadataStore.readMetadataValueInternal(k, fallback),
+    writeMetadataValueToDatabase: (k: string, v: unknown) =>
+      metadataStore.writeMetadataValueInternal(k, v),
     getPostgresConnectionString: cfg.getPostgresConnectionString,
     postgresSchema: cfg.postgresSchema,
     ensurePostgresSchema: real.ensurePostgresSchema,
@@ -179,6 +199,42 @@ async function main() {
     say("HOLD", { packageName: String(tplRow.package_name), ...out });
   }
 
+  if (STEP === "PROVIDER") {
+    // The model credential arrives ONLY in the process environment, injected by
+    // the operator’s secret-manager `run` wrapper around this exact command. It is read
+    // once, handed straight to the shipped writer (which seals it at rest with
+    // CINATRA_ENCRYPTION_KEY), and never touched again. Nothing below prints,
+    // returns, stores or derives anything from the value — the read-back is a
+    // BOOLEAN.
+    const { writeOpenAIConnection, readOpenAIConnection } = await import(
+      "@/lib/openai-connection-store"
+    );
+    const apiKey = process.env.OPENAI_API_KEY ?? "";
+    if (!apiKey.trim()) {
+      throw new Error(
+        "OPENAI_API_KEY is absent from the process environment — run this step " +
+          "inside the vault wrapper; nothing is read from a file.",
+      );
+    }
+    const organizationId = process.env.OPENAI_API_ORG?.trim() || undefined;
+    const projectId = process.env.OPENAI_API_PROJECT?.trim() || undefined;
+    writeOpenAIConnection({
+      apiKey,
+      organizationId,
+      projectId,
+      lastValidatedAt: new Date().toISOString(),
+    });
+    const back = readOpenAIConnection();
+    say("PROVIDER", {
+      wrote: true,
+      // PRESENCE ONLY. Never a value, never a length, never a prefix.
+      storeResolvesAKey: Boolean(back?.apiKey && back.apiKey.length > 0),
+      defaultModel: back?.defaultModel ?? null,
+      hasLastValidatedAt: Boolean(back?.lastValidatedAt),
+      sealedAtRest: true,
+    });
+  }
+
   if (STEP === "PRODUCE") {
     const st = loadState();
     const runId = st.reviewRunId;
@@ -190,6 +246,30 @@ async function main() {
     });
     saveState({ artifactId: produced.artifactId, revisionId: produced.representationRevisionId });
     say("PRODUCE", { runId, ...produced });
+  }
+
+  if (STEP === "BINDINGS") {
+    // ZERO-COST PRE-CHECK. The run's own production leg persists what it made
+    // through the artifact materializer, which resolves the agent package's
+    // artifact BINDINGS from the instance registry before it writes anything.
+    // Every failure of that resolution costs a model call to discover from a
+    // live run, so this step exercises exactly that resolution — the SHIPPED
+    // `loadRunDerivationContext` — with no dispatch and no model call at all.
+    const { loadRunDerivationContext } = await import(
+      "@/lib/artifacts/run-artifact-materializer"
+    );
+    const st = loadState();
+    const templateId = process.env.WALK_TEMPLATE_ID ?? st.templateId;
+    let ctx: unknown;
+    try {
+      ctx = await loadRunDerivationContext({
+        templateId,
+        packageVersion: process.env.WALK_PACKAGE_VERSION ?? null,
+      });
+    } catch (e) {
+      ctx = { error: e instanceof Error ? e.message : String(e) };
+    }
+    say("BINDINGS", { templateId, context: ctx });
   }
 
   if (STEP === "GATE") {

@@ -1,7 +1,8 @@
 # cinatra#2790 (S9f) — the skills-recommendation card on its two new hosts
 
-Head under proof: `aa29034f2a7a8f093eafd77762fa223eb65598d3` (PR #2890), plus
-this evidence commit.
+Head under proof: `f4388183be46fbf63ceebeb58e72232bd2eb18d0` (PR #2890 — the
+branch head this round drove, which carries `aa29034f2` and the merges after
+it), plus this evidence commit.
 
 **Read `PLAN-WALK.md` beside this file.** It names, for every cell presented
 here, the exact plan sentences that govern the surface and the state it shows,
@@ -52,28 +53,75 @@ Nothing on that page is pressable in the row; everything pressable is in the
 gate card beneath it. The three held review-page cells and their grading are
 gone, not amended.
 
+**And this round the run RAN.** The last round could walk that order right up to
+the agent's own work and no further: the model call answered `503
+NO_LLM_PROVIDER`, so the artifact the review gate opens on had to be written by
+the shipped materializer standing in for the step. That was the one thing on
+this page that was stood in for, and it is stood in for no longer. The WayFlow
+runtime is up, a real model provider resolves, **the step executed and wrote its
+own output** — 5 695 bytes of markdown, `Connector Rollout Note` — and **the
+shipped sweeper opened the review on it by itself**. `R1`–`R4` are re-shot in
+place on that run.
+
+**Beside the pictures there is now a clock.** `TIMELINE.md` and `timeline.json`
+carry the whole sequence with the exact database column or log line every
+timestamp was read from, because the pictures prove *what is drawn and where*
+and cannot prove *in which order it happened*. Together they answer the
+maintainer's question: the chips were decided at `17:03:10`, the step that used
+them ran at `17:04:20`, the artifact it wrote landed at `17:04:21`, the review
+gate was opened on that artifact at `17:04:46`, and the photographs were taken
+at `17:30`.
+
 ## The runtime, said first
 
 `node scripts/dev-server.mjs` (Next.js 16.2.10, Turbopack),
-`CINATRA_RUNTIME_MODE=development`, `NODE_ENV != production`,
-`CINATRA_TEST_LLM_PROVIDER=scripted`, on a **dedicated lane database** on the
-verify Postgres (5634) and the verify Redis (6579), loopback-only, with the
-branch's own extension tree (114 packages) and a raised
-`CINATRA_BOOT_READY_TIMEOUT_MS`. **Placeholder-only environment: no model
-credential of any kind exists on this host**, and none is used. The lane tree is
-an APFS clone of the repository pinned to the head above, with per-package
-installs carried across; every symlink in it was measured to be worktree-local.
+`CINATRA_RUNTIME_MODE=development`, `NODE_ENV != production`, on a **dedicated
+lane database** on the verify Postgres (5634) and the verify Redis (6579),
+loopback-only, with the branch's own extension tree and a raised
+`CINATRA_BOOT_READY_TIMEOUT_MS`. The lane tree is an APFS clone of the repository
+pinned to the head above, with per-package installs carried across; every symlink
+in it was measured to be worktree-local, and the one that was not (an absolute
+link into the source checkout) was rewritten before anything was driven.
+
+**Two things changed in the runtime for this round, and they are the reason the
+run below produces its own output.**
+
+1. **The WayFlow runtime is UP.** Brought up from `docker-compose.yml`'s
+   `wayflow` profile with `scripts/gen-wayflow-env.mjs`, after minting a
+   `CINATRA_CONTEXT_ATTEST_KEY` into the lane `.env.local` the way
+   `scripts/setup.sh` does (the loader refuses to start without it). Its own
+   health probe — the one the compose healthcheck and the app use — answered:
+
+   ```
+   GET /.health -> 200 {"status":"ok","agents":29,"failed":0,"failed_agents":[],"last_reload_at":null}
+   ```
+
+2. **A REAL MODEL PROVIDER is configured, on this machine only.** The previous
+   round stopped exactly here: the agent's model call to `POST /api/llm-bridge`
+   answered `503 NO_LLM_PROVIDER`, because the bridge resolves a real provider
+   adapter and the scripted test provider never reaches adapter resolution. So
+   `CINATRA_TEST_LLM_PROVIDER` is **unset** for this round and a real provider
+   connection was seeded instead, through the shipped writer
+   (`writeOpenAIConnection`), which **seals the credential at rest**. The
+   credential reached that one seeding process through its environment and
+   nowhere else: it is in no file in this repository, in no log, in no record
+   here, and it was never given to the WayFlow container — the generated
+   `docker/wayflow/.wayflow.env` carries three keys and the model key is not one
+   of them, because the agent calls back through the host's bridge rather than
+   holding a key itself. **What this evidence states about it is one fact and
+   only one: the bridge answered `200`** (`logs/run-execution-readback.json`,
+   `TIMELINE.md` row 8).
 
 `CINATRA_E2E_SETUP_BYPASS=true` is set, and stated because it is set: the lane
 database is a clone of an already-provisioned instance, so the setup wizard has
 nothing to run and the bypass keeps boot from demanding services this lane does
 not have. It changes no surface photographed here.
 
-It is **not** a production-equivalent build, for the reason
-`evidence/2573-s7-conformance/README.md` measured and this round does not
-re-derive: `next start` bakes `NODE_ENV=production` into the server bundle, which
-the shipped `assertScriptedProviderNotProduction` fence reads, so a production
-build and a scripted dispatch are mutually exclusive.
+It is **not** a production-equivalent build: this is the dev server, so the
+surfaces are the dev build of the same components. That was already true of every
+earlier round in this lane; what is no longer true is the reason the earlier
+rounds gave for it (a scripted provider that cannot coexist with a production
+bundle), because this round runs no scripted provider at all.
 
 Every record is labelled `dev-runtime`. Cells are shot at `deviceScaleFactor: 2`,
 uncropped, full resolution.
@@ -107,6 +155,11 @@ present. That is the cross-site fact this host page exists to produce.
    `organization` ownership through the shipped writer
    `upsertCustomSkillAssignment`; `getAssignedSkillIdsForAgent` reads all four
    back (`walk.test.ts` step `ASSIGN`).
+2b. The model provider connection through the shipped writer
+   `writeOpenAIConnection`, which seals the credential at rest
+   (`walk.test.ts` step `PROVIDER`). Its read-back is a BOOLEAN by construction:
+   the step reports `storeResolvesAKey`, the default model and whether a
+   validation stamp exists, and nothing else.
 3. **The widget round only:** `pending_input`, human-present runs on that
    template, each parked through **`maybeHoldRunForRecommendation`** — the one
    seam the interactive run trigger uses. Each answered `{held: true, reason:
@@ -159,6 +212,20 @@ chip; the fourth is the shipped force-add candidate, and the DOM confirms it
    lane's `BETTER_AUTH_SECRET` and could not be decrypted under this lane's, so
    the hosted widget sign-in would return 500. The row was deleted and Better
    Auth minted a fresh key — the remedy the error itself names.
+4. **The instance identity** (`cinatra.metadata` row `instance_identity`) did not
+   travel with the clone, and without it the artifact-binding loader refuses
+   every materialization. It was provisioned through the SHIPPED `/setup/name`
+   wizard step in a browser (`drivers/02-provision-instance-identity.mjs`), not
+   written by hand — see *Three lane gaps* below.
+5. **The lane registry.** That wizard step self-registers against the local
+   registry a dev install runs, and the binding loader reads the agent package's
+   manifest from it, so the lane brought up the compose file's own Verdaccio and
+   published the branch's `@cinatra-ai/blog-draft-writer-agent@0.1.2` into it —
+   the version the template row already pins.
+6. **The provider connection** (`cinatra.metadata` row `openai_connection`),
+   written once through the shipped sealing writer so the agent's model call can
+   resolve an adapter. Lane data. The credential itself is discussed once, in
+   *The runtime*, and never appears here.
 
 ## The two defects, and what closed them
 
@@ -295,11 +362,12 @@ The card root carries, on all seven: `data-run-recommendation-chip-row`,
 `data-can-decide="true"` on the five held cells and no `data-can-decide` at all
 on the two settled ones.
 
-## The REAL SEQUENCE, and the one leg it could not walk
+## The REAL SEQUENCE — walked all the way through, this time
 
 The review-page cells are read off a run this lane **drove**, in this order,
 through the shipped surfaces (`drivers/05-run-page-real-sequence.mjs`, verbatim
-in `logs/real-sequence.txt`):
+in `logs/real-sequence.txt`). **Every step below ran. Nothing on this page is
+stood in for any more.**
 
 | # | Step | Driven how | Measured outcome |
 |---|---|---|---|
@@ -307,11 +375,18 @@ in `logs/real-sequence.txt`):
 | 2 | **Decide, chip by chip** | four real presses on the card's **own** per-chip controls in the browser — `confirm`, `adjust` → *“Keep it in this run”*, `skip`, `confirm` — never a row-level submit | the row released itself on the fourth press and settled **in place** on the run page: state `decided`, `data-run-recommendation-settled="true"`, **0/0/0** affordances |
 | 3 | **The run's own input** | the `Idea` field the run then asked for, and **Continue** | the run left the hold and reached its trigger step |
 | 4 | **The trigger form** | *“Run right after setup”*, then **Continue** | the run dispatched |
-| 5 | **The run's production leg** | the shipped executor | **it could not run here** — see below |
-| 6 | **The review gate** | `sweepReviewOrchestration()`, the shipped sweeper | `scanned: 1, gatesCreated: 1` — one `artifact_review_gates` row, `status=pending`, with its review task id |
+| 5 | **The dispatch, accepted by the runtime** | the shipped executor → the WayFlow container | `POST /agents/cinatra-ai/blog-draft-writer-agent/ 200 OK` in the runtime's own log; the flow's first step ran and parked on its **own** context-slot gate |
+| 6 | **The run's own in-flight gate** | one press of that gate's own `Continue` in the browser — nothing that could touch a recommendation (the row carries no control by then) | the flow resumed inside the runtime |
+| 7 | **THE STEP EXECUTED** | the agent's model call, out through `POST /api/llm-bridge` and back | **the bridge answered `200`** (18.1 s), then the runtime reported `state=completed` |
+| 8 | **THE RUN WROTE ITS OWN OUTPUT** | the shipped materialization path, on what the step returned | `cinatra.representation` row with `created_by_run_id` = this run — *Connector Rollout Note*, `@cinatra-ai/blog-post-artifact:post`, `text/markdown`, **5 695 bytes**; `artifact_produced_outbox` row, `emitter=createSemanticArtifact`, `origin_kind=agent_produced` |
+| 9 | **The review gate** | the shipped sweeper's own loop, unprompted | `[lifecycle-review-orchestration] scanned=1 gatesCreated=1 noGate=0 notClassifiable=0 failed=0` — one `artifact_review_gates` row, `status=pending`, with its review task id |
 
-**Durable rows after step 2** (`logs/run-execution-readback.json`, read from the
-database, never off the screen):
+**Read the order, with the source of every timestamp, in `TIMELINE.md` and
+`timeline.json` beside this file.** They are the second half of this evidence and
+they answer a question the pictures cannot.
+
+**Durable rows** (`logs/run-execution-readback.json`, read from the database,
+never off the screen):
 
 | Row | Value |
 |---|---|
@@ -320,58 +395,68 @@ database, never off the screen):
 | | `blog-writing` → **`user_adjusted`** |
 | | `web-research` → `recommended_confirmed` |
 | `run_rejected_recommendations` | **empty, and that is correct** — that table records a *recommended* skill that was not kept, and the skipped chip (`brand-voice-matcher`) was never recommended for this run. See the note on scoring below. |
+| `agent_runs` | `status=` **`completed`**, `error` empty |
+| `cinatra.representation` | `created_by_run_id` = this run, `created_at` `17:04:21.865797` |
+| `artifact_review_gates` | `status=pending`, opened `17:04:46.914590` |
 
 **All four chips are force-add candidates, and the record says so.** A run
 started this way is created with empty `input_params` — the person types the
 run's input at step 3, after the recommendation — so nothing scores over the
 recommend threshold and every chip carries `data-forced`. The chip row offers
-all four anyway, which is the shipped force-add behaviour; the previous
-(widget) round drove a pre-seeded prompt and therefore saw three recommended and
-one forced. Neither reading is dressed up as the other.
+all four anyway, which is the shipped force-add behaviour; the widget round drove
+a pre-seeded prompt and therefore saw three recommended and one forced. Neither
+reading is dressed up as the other.
 
-### The one leg the run could not walk, named exactly
+### What the previous round could not do, and what closed it
 
-**Step 5 failed, and this is its verbatim error** (`logs/run-execution-readback.json`,
-with only the runtime ORIGIN redacted):
+The previous round on this branch got as far as the dispatch and then stopped
+dead at the model call:
 
-> Could not reach the agent runtime at `<the local WayFlow runtime origin>`/agents/cinatra-ai/blog-draft-writer-agent/ — fetch failed (ECONNREFUSED).
+> `503 {"error":"The configured default LLM provider \"openai\" is not available","code":"NO_LLM_PROVIDER",…}`
 
-That is not a lane accident that a longer wait would fix. **Every** agent run's
-execution dispatches to the WayFlow runtime — `packages/agents/src/execution.ts`
-composes the agent's URL through `resolveWayflowUrl(template.packageName)` and
-there is no in-core execution branch beside it — and this lane runs no WayFlow
-container. And bringing one up would not close it either: the flow this agent is
-(`extensions/cinatra-ai/blog-draft-writer-agent/cinatra/oas.json` — *“Stateless
-LLM-only leaf agent … pure LLM generation”*) calls back through
-`/api/llm-bridge`, which resolves a **real** provider adapter
-(`resolveProviderAdapter`), and the scripted seam does not reach adapter
-resolution at all: `isScriptedTestProviderEnabled()` only short-circuits
-`hasConfiguredLlmRuntime()` and `describeLlmRuntimeUnavailability()`
-(`packages/llm/src/registry.ts:426`, `:458`). This host holds no model
-credential of any kind. The plan records the same limit in its own words at
-§11.4: *“the deterministic provider is not wired into adapter resolution”*.
+No model, no output, no artifact, no gate, and therefore no review page produced
+by a real run — the artifact its gate opened on had to be written by the shipped
+materializer standing in for the step. **That stand-in is gone.** The maintainer
+authorised a real model key for this proof on this machine, the provider
+connection was seeded through the shipped sealing writer, and the same call now
+answers `200`. What the run produced, it produced itself.
 
-**So exactly one thing on this page is stood in for, and it is this one.** The
-artifact the review gate is opened on was written by the SHIPPED materializer
-the host uses to persist this agent's output —
-`materializeBlogPostBodyArtifact({ …, createdByRunId: <this run> })`, the walk's
-`PRODUCE` step — instead of by the run's own model-backed leg. Everything either
-side of it is the real path: the hold, the four presses, the release, the
-selection rows, the sweeper, the gate, the review page and its two cards.
+### Three lane gaps this round had to close first, all stated
 
-**What is NOT stood in for, and matters most:** the decided form on the review
-page is not a state anybody put there. It is the state the row was left in by a
-decision taken **on the run page, before the run started**, exactly as the plan
-orders it. The recorder refuses to shoot anything else — it fails closed if the
-row reads anything but `decided`, or if a single decision affordance survives
-inside the card root.
+None of them is a defect of this branch; all three are consequences of driving a
+CLONED lane database rather than a freshly installed instance, and each was found
+by a run failing on it rather than by guesswork.
+
+1. **The `instance_identity` metadata row did not travel with the clone.**
+   Without it the artifact-binding loader refuses every materialization
+   (`INSTANCE_NAMESPACE_NOT_CONFIGURED`) — which is discovered only AFTER the
+   model has already answered. It was provisioned the way the product provisions
+   it: the shipped `/setup/name` wizard step, filled and submitted in a browser
+   (`drivers/02-provision-instance-identity.mjs`, verbatim in
+   `logs/provision-identity.txt`). Nothing was written into `cinatra.metadata` by
+   hand.
+2. **The lane registry was empty.** That wizard step self-registers against the
+   local registry a dev install runs, so the lane's Verdaccio was brought up from
+   the same compose file; and the binding loader reads the agent package's
+   manifest from that registry, so the branch's own
+   `@cinatra-ai/blog-draft-writer-agent@0.1.2` was published into it from the
+   worktree — the same package version the template row already pins.
+3. **A pre-check now exists so neither of those costs a model call to find
+   again.** `walk.test.ts` gained a `BINDINGS` step that runs the SHIPPED
+   `loadRunDerivationContext` with no dispatch at all; it answered
+   `{"producesRefs":[{"extension":"@cinatra-ai/blog-post-artifact"}],"hasBindings":true}`
+   before the run below was driven. Writing it exposed a second thing worth
+   stating: the harness's own `@/lib/database` mock used to answer **every**
+   metadata read with the caller's fallback, which made the first version of that
+   pre-check report the instance identity as missing while the row was in fact
+   present. The mock now delegates to the real metadata store.
 
 ## Cells DELIVERED — the review page (the decided form)
 
 | Cell | Pixels | What is VISIBLY on screen |
 |---|---|---|
 | `R1__recommendation-card__page_gate_region__decided` | 2096×52 | The settled row on its own root: **`Blog Post Matcher Skill ✓ CONFIRMED`**, **`Blog Writing Skill ⇄ ADJUSTED`**, **`Web Research Skill ✓ CONFIRMED`** — one chip per kept skill, each naming the owning extension's manifest `displayName` and its own outcome. **Nothing to press.** |
-| `R2__recommendation-card__page_gate_region__decided__above-gate` | 2880×3540 | The same row **in its page**, uncropped: `AGENT RUN / Review`, the run's step rail, the settled row at the top of the gate region, and **beneath it the review gate card still open** — *“Review requested / Awaiting your decision”*, the pinned target, and the decision floor `Comment` · `Reject` · `Approve`. |
+| `R2__recommendation-card__page_gate_region__decided__above-gate` | 2880×3540 | The same row **in its page**, uncropped: `AGENT RUN / Review`, the run's step rail, the settled row at the top of the gate region, and **beneath it the review gate card still open** — *“Review requested / Awaiting your decision”*, the pinned target, and the decision floor `Comment` · `Reject` · `Approve`. **The target panel names what THIS RUN produced**: *Connector Rollout Note*, `Blog Post Artifact`, `@cinatra-ai/blog-post-artifact:post · revision 65128429-95e… · text/markdown · updated 2026-08-22T17:04:21.865Z` — the same revision id `cinatra.representation.created_by_run_id` binds to this run. |
 | `R3__recommendation-card__page_gate_region__decided__dark` | 2096×52 | The same row, same run, same clip rectangle, in `dark`. |
 | `R4__recommendation-card__page_gate_region__decided__above-gate__dark` | 2880×3540 | The same page framing as `R2`, same run, in `dark`. |
 
@@ -380,6 +465,37 @@ measured once on the light pass, because shooting the locator twice gives widths
 that differ by a scrollbar. `R2` and `R4` are the same full-page framing at the
 same viewport. The order is measured, not eyeballed:
 `{cardTop: 191, gateTop: 233, cardAboveGate: true, domOrder: "card-then-gate"}`.
+
+**The gate card's target is a LAZY island, and the recorder now waits for it.**
+The target panel is an `<iframe>` (`/lifecycle/review-island`) that paints its own
+placeholder bars until it resolves — measured on this lane at roughly forty
+seconds, where the gate card itself lands in under twenty. A first pass of this
+round shot on the gate card alone and produced a page whose target was a row of
+grey bars, which reads as *“the run produced nothing”* — the opposite of what
+happened. The recorder waits for the island's own text now and records
+`reviewTargetResolved` on every cell; all four carry `true`.
+
+### What the pictures prove, and what the timeline proves
+
+**The pictures** (`R1`–`R4`) prove **placement and reading**: on the review page,
+under `page_gate_region`, the recommendation row is drawn **above** the review
+gate card (`cardTop 191 < gateTop 233`, `domOrder: card-then-gate`) and it is
+drawn **decided** — one settled chip per kept skill, each naming its own outcome,
+with **zero** decision affordances and no `data-can-decide`, while everything
+pressable on the page sits in the gate card beneath it. They cannot prove
+*when* any of that happened; a photograph has no clock.
+
+**The timeline** (`TIMELINE.md` / `timeline.json`) proves the ORDER, from
+database columns and runtime log lines rather than from the screen: the chip
+decisions were written at `17:03:10`, the step that used those skills executed at
+`17:04:20`, the artifact that step wrote landed at `17:04:21`, the sweeper opened
+the review gate on it at `17:04:46`, and the pictures were taken at `17:30`. So
+the decided row was **decided before the step ran**, and the step **ran before
+the review existed** — which is the claim the objection asked for and the one no
+screenshot on its own can carry. The timeline also names the one column it does
+**not** trust and why: `agent_runs.created_at` reads identical to `completed_at`
+on this run, so the run's creation is anchored on
+`lifecycle_continuation_park.created_at` and on the artifact and gate rows.
 
 **What the PIXELS say, not the DOM.** Every one of the four cells was read back
 with the platform's own text recognizer straight off the committed PNG
@@ -433,10 +549,16 @@ Against design §V (the ratified redraw the card renders, quoted verbatim in
 | 15 | The row on the review page is a **record**, not a control | **zero** decision affordances inside the card root, and no `data-can-decide` | `R1`–`R4`: `[data-skill-action]` confirm/adjust/skip = **0 / 0 / 0**; no `data-can-decide` attribute; the recognizer finds no `Confirm`/`Adjust`/`Skip` in the pixels | **PASS** |
 | 16 | The review card **beneath** is the decision still open | the gate card present and pending, with its decision floor | `R2`/`R4`: gate `state: "pending"`, `[data-conformance-id="review-decision-bar"]`=1, buttons `Comment` · `Reject` · `Approve`, drawn beneath the settled row | **PASS** |
 | 17 | Both palettes resolve on the review page | the same two framings in light and dark | `R1`/`R3` (one shared clip) and `R2`/`R4` (one page framing) | **PASS** |
-| 18 | The run's own **production** leg | the run produces the artifact its gate opens on | **NOT DELIVERED** — the run dispatched and answered `ECONNREFUSED` at the WayFlow runtime; the artifact was written by the shipped materializer bound to that run instead. Stated in full above; the ONE stand-in on this page. | **NOT DELIVERED** |
+| 18 | The run's own **production** leg | the run produces, itself, the artifact its gate opens on | the WayFlow runtime up and healthy (`/.health` → `200`, `status: ok`, 29 agents); the dispatch accepted (`POST /agents/cinatra-ai/blog-draft-writer-agent/ 200 OK`); **the model call answered `200`** at `POST /api/llm-bridge`; the step reported `completed`; a `cinatra.representation` row with `created_by_run_id` = this run carrying 5 695 bytes of `text/markdown`; an `artifact_produced_outbox` row with `emitter=createSemanticArtifact`, `origin_kind=agent_produced`. **No materializer stood in for anything.** | **PASS** — this row read **NOT DELIVERED** on the previous evidence commit |
+| 19 | The **order**: the recommendation is decided BEFORE the step that uses it, and the step runs BEFORE the review exists | timestamps read from the database and the runtime log, not from a screen, each citing its source | `TIMELINE.md` / `timeline.json`: decisions `17:03:10.434846` (`run_selected_skill_revisions.selected_at`) → step `17:04:20.800435` (runtime status payload) → artifact `17:04:21.865797` (`representation.created_at`, `created_by_run_id` = this run) → gate `17:04:46.914590` (`artifact_review_gates.created_at`; sweeper line `scanned=1 gatesCreated=1`) → pictures `17:30:21` (`recordedAt`). The one column NOT trusted is named with its reason. | **PASS** — new row |
+| 20 | The gate card's **target** is the thing this run made | the target panel naming the run's own artifact and its revision | `R2`/`R4`: *Connector Rollout Note*, `Blog Post Artifact`, `revision 65128429-95e…`, `text/markdown`, `updated 2026-08-22T17:04:21.865Z` — the same revision id the durable row binds to this run; `reviewTargetResolved: true` on all four cells | **PASS** — new row |
 
-Rows 13–18 are the ones that changed, and row 13 is the objection's resolution
-stated as a verdict. It read **NOT DELIVERED** on the previous evidence commit,
+Rows 13–20 are the ones that changed. Row 18 is this round's: it read **NOT
+DELIVERED** on the previous evidence commit, against the same requirement,
+unsoftened — the run now walks its own production leg instead of having one
+written for it. Rows 19 and 20 are new, and they exist because the maintainer's
+question was about TIME and about WHAT, which no picture answers on its own. Row
+13 is the earlier objection's resolution stated as a verdict. It read **NOT DELIVERED** on the previous evidence commit,
 where the review-page cells showed a **held**, still-pressable row. That reading
 was **staged and unreachable**: no real flow produces it, because the
 recommendation is decided before the run starts and the review page exists only
@@ -461,7 +583,6 @@ panel note below. What is measured here is the run: it left `pending_input`.
 | Cell | Why |
 |---|---|
 | a **held** reading on the review page | **Deliberately deleted, not owed.** The previous round carried one (`R1`–`R3`, held). It is a state no real flow produces — the recommendation is decided before the run starts, and the review page opens only after the run produced something — so it could only have been staged. The cells and their grading are gone. |
-| a run that produced its **own** output | The run's production leg dispatches to the WayFlow runtime, which this lane does not run, and the flow is LLM-only while the scripted seam never reaches adapter resolution and this host holds no model credential. Measured, verbatim, in `logs/run-execution-readback.json`; grading row 18. |
 | the card in the **chat** conversation | Not on this branch. It depends on the conversation-origin hold S9b (#2786) builds, exactly as the PR body says. |
 
 ## Also visible, and pre-existing
@@ -481,88 +602,110 @@ target unavailable — slot "detail", reason "no-semantic-renderer"”* and *“
 type renderer resolved for this artifact — showing the generic read-only view.”*
 That is the artifact type's own detail-renderer resolution on this lane, not
 anything S9f touches: the gate card falls back to its shipped generic read-only
-view and still draws its header, its pinned revision line and its whole decision
-floor, which is what these cells are graded on. It is stated because it is in
-the pictures.
+view and still draws its header, the artifact's title, its pinned revision line
+and its whole decision floor, which is what these cells are graded on. It is
+stated because it is in the pictures — and note that the header it draws is the
+title the RUN's own step wrote (*Connector Rollout Note*), so the fallback is
+about the renderer, never about whether the output exists.
+
+**Also on the review page, and also pre-existing:** in `R4` the target island
+renders in the LIGHT palette inside the dark page. The island is a separate
+document in an `<iframe>`, and the theme class the page's own control writes on
+`<html>` does not propagate into it. That is an island theme-propagation gap, not
+anything S9f touches; it is stated because it is visible in the dark cell. It
+does not affect what these cells are graded on — the row, its placement and the
+gate's decision floor all resolve dark correctly around it.
 
 ## Registration in the capture index
 
-**The seven widget records ARE registered** in
-`scripts/ci/chat-hitl-capture-index.json`. Each was run through the shipped
-validator (`scripts/ci/lib/capture-record-contract.mjs`) first and came back with
-**zero** violations — `record/ok` — because `site_widget` has a valid URL class
-(`embed_assistant`), which the frame path satisfies. `validateCaptureIndex` over
-the whole file after this round's replacement: **24 records, 0 violations.** The
-file's own inventory paragraph for this lane was rewritten to say what the cells
-now show — the row settling in place rather than being read back — and its
-mention of a diagnostic was removed with the diagnostic.
+**All eleven of this lane's records are registered** in
+`scripts/ci/chat-hitl-capture-index.json` — the seven widget cells and, since the
+merge-forward that brought `main`'s corrected `review_page` URL class onto this
+branch, the four review-page cells too. `validateCaptureIndex` over the whole
+file after this round's replacement: **50 records, 0 violations.**
 
-**The four review-page records are NOT registered on THIS branch, and that is
-the contract working rather than a lapse.** Each comes back with **exactly one**
-violation against the contract as this branch carries it,
-`record/url-class-mismatch`, and no other: here `review_page` is
+That URL class is the reason the four `R` cells were held out of the index on the
+first evidence commit in this lane, and it is worth keeping the history straight
+rather than quietly dropping it: the contract then read `review_page` as
 `/^\/agents\/reviews/`, while the shipped gate-region route is
-`/agents/<vendor>/<package>/<runId>/review/<taskId>`. Every anchor, both counts
-arms, the host claim, the kind claim, the **state** claim, the screenshot and its
-digest all pass.
+`/agents/<vendor>/<package>/<runId>/review/<taskId>`, so registering them would
+have turned a green gate red for a defect this branch does not own. `main` fixed
+the class; the merge landed it here; the records went in.
 
-**That class is already FIXED on `main`**, where it reads
-`/^\/agents\/[^/]+\/[^/]+\/[^/?#]+\/review\/[^/?#]+/`. Re-validated against
-`origin/main`'s copy of the same contract, all **eleven** of this lane's records
-— the four review-page ones included — come back `record/ok`, **0 violations**.
-So the registration rides the merge-forward, exactly as it did for the
-`page_gate_region` records from #2862 (A1) and #2863 (B1, B2): appending them to
-the index on THIS branch would make the index invalid under the contract this
-branch validates with, and turn a green gate red for a defect the branch does not
-own. They stay in this lane's `capture-records.json`. The index's own inventory
-paragraph for this lane is updated to name them as `R1`–`R4` in their decided
-form.
+**This round refreshed the digests, and only two of them moved.** `R2` and `R4`
+changed, because the page shows a different run and its target panel now names
+the artifact that run produced. `R1` and `R3` are **byte-identical to the
+previous round's files** — the card root carries no run id, so the same three
+chips with the same three marks in the same clip rectangle hash the same. Their
+PROVENANCE changed completely all the same: the row they show was left behind by
+a run that executed and produced its own output, where the previous round's was
+left behind by a run that failed at its model call. Pixels cannot tell those
+apart. `capture-records.json`, `logs/run-execution-readback.json` and
+`TIMELINE.md` can, which is why the digests are stated as unchanged here instead
+of being left to look like fresh evidence.
 
 ## Gates — real exits
 
 Both were run at this tree, and both were re-run with this lane contributing
-nothing at all, so no pre-existing finding is absorbed into this commit.
+nothing at all, so no pre-existing finding is absorbed into this commit and none
+is caused by it.
 
 | Gate | Exit | Findings |
 |---|---|---|
-| `scripts/ci/chat-hitl-evidence-gate.mjs` | **0** | 2 findings, both `grandfathered evidence/unbound-cell`, **both pre-existing**: `C1__review-card__chat_thread__pending` and `C2__review-card__chat_thread__decided`, cited by the acceptance manifest from `evidence/2573-s7-visuals-lane`. |
-| `scripts/audit/chat-hitl-acceptance-gate.mjs` | **1** | 4 capture-index violations, **all pre-existing**: the same two `chat_thread` cells, cited by manifest rows 1 and 15. These are the four the PR body already names as reproducing on main. |
+| `scripts/ci/chat-hitl-evidence-gate.mjs` | **0** | **none** — `no findings.` |
+| `scripts/audit/chat-hitl-acceptance-gate.mjs` | **0** | **none** — *“manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 50 record(s). Anchor contract ratified at the manifest's design pin.”* |
 
 **The isolation was measured, not asserted.** Each gate was re-run with this
-lane's `evidence/` directory moved aside **and** this lane's seven indexed
-records removed from `scripts/ci/chat-hitl-capture-index.json`, so the run saw a
-repo this lane had never touched. Both runs are **byte-identical** to the runs
-above, and both isolation runs are appended verbatim to the same log files. This
-commit therefore causes none of these findings and absorbs none of them; its own
-seven indexed records are bound rather than unbound. Full output:
+lane's `evidence/` directory moved aside **and** this lane's eleven indexed
+records removed from `scripts/ci/chat-hitl-capture-index.json` (50 → 39), so the
+run saw a repo this lane had never touched. Both control runs also exit **0**
+with **no findings**; the only difference in the output is the record count the
+acceptance gate prints. Both runs are appended verbatim to the same log files:
 `logs/gate-chat-hitl-evidence.txt`, `logs/gate-chat-hitl-acceptance.txt`.
+
+**These readings changed since the previous evidence commit, and not because
+anything here was softened.** That commit reported two `grandfathered
+evidence/unbound-cell` findings and four capture-index violations, all
+pre-existing and all pointing at the same pair of `chat_thread` cells. #2903
+retired that pair with evidence and has since merged into this branch, so the
+findings they caused are gone from both gates. This round measured that rather
+than inheriting the old text.
 
 ## Layout
 
 - `PLAN-WALK.md` — every presented cell, with the exact plan sentences that
   govern its surface and state, quoted character-for-character.
 - `captures/` — the PNGs, full resolution, uncropped.
+- `TIMELINE.md` + `timeline.json` — the order the run actually happened in, each
+  row citing the database column or the log line its timestamp was read from,
+  and naming the one column that is deliberately NOT trusted.
 - `capture-records.json` — every record in the shape
-  `scripts/ci/lib/capture-record-contract.mjs` validates; the seven widget ones
-  are also in the canonical index, and the four review-page ones validate clean
-  against `origin/main`'s copy of the same contract.
+  `scripts/ci/lib/capture-record-contract.mjs` validates; all eleven are in the
+  canonical index, which validates clean (50 records, 0 violations).
 - `capture-results.json` — the machine record beside the pixels: counts, the
   root's own `data-*` attributes, the per-chip DOM read-out, the card text, the
   wire, the decide outcome, `settleFacts`, the cookie jar, and the whole
   run-page real sequence (`runPageRealSequence`) with the run page's own text
   scrubbed of origins and of the lane account's name.
 - `logs/` — the capture runs verbatim (`*.txt`), the real sequence
-  (`real-sequence.txt`), what the recognizer reads off the committed pixels
-  (`pixel-readout.txt`), the run's durable rows and its own verbatim execution
-  error (`run-execution-readback.json`), the widget's broker wire
-  (present/absent only, never a value), the seeded ids, and both gate outputs.
-- `drivers/` — the harness exactly as run: `01-lane-setup.mjs`, `walk.config.ts` +
-  `walk.test.ts` (assign → seed → hold → produce → gate → widget → readback),
+  (`real-sequence.txt`), the instance-identity provisioning
+  (`provision-identity.txt`), what the recognizer reads off the committed pixels
+  (`pixel-readout.txt`), the run's durable rows including what its step produced
+  (`run-execution-readback.json`), the widget's broker wire (present/absent only,
+  never a value), the seeded ids, and both gate outputs.
+- `drivers/` — the harness exactly as run: `01-lane-setup.mjs`,
+  `02-provision-instance-identity.mjs`, `walk.config.ts` + `walk.test.ts`
+  (assign → provider → seed → hold → bindings → gate → widget → readback),
   `host-page.html` (the third-party page), `03-capture-widget.mjs`,
   `04-capture-review-page.mjs` and `05-run-page-real-sequence.mjs`, whose
-  counting rules and refusals are written at the top of each file.
+  counting rules and refusals are written at the top of each file. The `PRODUCE`
+  step — the materializer stand-in — is retired: it is kept in the file, unrun,
+  so the earlier rounds in this lane's history stay reproducible.
 
 No credential, token, password or host identity appears in any file here. Every
-origin the recorders use is read from the environment.
+origin the recorders use is read from the environment. The model credential this
+round used reached exactly one process, through its environment, from the vault;
+the only thing said about it anywhere in this directory is that the bridge
+answered `200`.
 
 Assisted-by: Claude Code (claude-opus-5)

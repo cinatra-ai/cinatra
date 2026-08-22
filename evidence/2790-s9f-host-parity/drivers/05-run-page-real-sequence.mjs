@@ -19,7 +19,13 @@
 //   3. CONTINUE — the run's own required input, then the trigger form's
 //      Continue, so the run leaves the pre-dispatch waiting states the way a
 //      person leaves them.
-//   4. RECORD what the run's execution actually did, verbatim, whatever it was.
+//   4. CARRY THE RUN THROUGH ITS OWN IN-FLIGHT GATES. Once dispatched, the
+//      flow runs inside the WayFlow runtime and may park on its own human
+//      gates. Those are the run's gates, not the recommendation's: this driver
+//      presses only the gate's OWN Continue, never anything that would decide a
+//      recommendation, and it stops the moment the run reaches a terminal
+//      reading.
+//   5. RECORD what the run's execution actually did, verbatim, whatever it was.
 //
 // Nothing about the decision is stood in for: the presses are real presses in a
 // real browser on the shipped card, and the run's status is read from the
@@ -203,11 +209,30 @@ try {
     say(`no trigger form — page is ${new URL(page.url()).pathname}`);
   }
 
-  // ---- 4. what the run's execution actually did ---------------------------
-  for (let i = 0; i < 24; i += 1) {
+  // ---- 4. the run's OWN in-flight gates, answered until it terminates ------
+  // The dispatched flow parks on its own human gates inside the runtime. Each
+  // is answered by pressing that gate's own Continue — nothing here touches a
+  // recommendation control (the row is already settled and carries none), and
+  // the loop exits the moment the run reads terminal.
+  const TERMINAL = /Completed|Complete\b|Failed|Error|Review requested|Awaiting your decision/i;
+  state.gatePresses = [];
+  for (let i = 0; i < 90; i += 1) {
     await page.waitForTimeout(5000);
     const text = await page.evaluate(() => document.body.innerText.replace(/\n{2,}/g, "\n"));
-    if (/Error|Failed|Complete|Review/i.test(text)) break;
+    if (TERMINAL.test(text)) {
+      say(`TERMINAL reading after ~${(i + 1) * 5}s`);
+      break;
+    }
+    const cont = page.getByRole("button", { name: /^Continue$/i }).first();
+    if (await cont.count().catch(() => 0)) {
+      const enabled = await cont.isEnabled().catch(() => false);
+      if (enabled) {
+        await cont.click({ timeout: 60_000 }).catch(() => {});
+        state.gatePresses.push({ at: new Date().toISOString(), pressed: "Continue" });
+        say(`GATE Continue pressed (#${state.gatePresses.length})`);
+        await page.waitForTimeout(8000);
+      }
+    }
   }
   state.runPageText = (await page.evaluate(() => document.body.innerText.replace(/\n{2,}/g, "\n"))).slice(0, 4000);
   await page.screenshot({ path: join(OUT, "run-page-after-execution.png"), fullPage: true });

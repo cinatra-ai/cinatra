@@ -25,6 +25,16 @@
 // rather than sampling once: a cell shot before it lands would show a decided
 // row over an empty region and quietly under-state the page.
 //
+// SO DOES ITS REVIEW TARGET, AND FOR LONGER. The gate card's target panel is a
+// LAZY `<iframe>` (`/lifecycle/review-island`) that paints its own placeholder
+// bars until it resolves — measured on this lane at roughly forty seconds,
+// where the gate card itself lands in under twenty. Shooting on the gate card
+// alone therefore photographs a page whose target is still a row of grey bars,
+// which reads as "the run produced nothing". So this recorder ALSO waits for
+// the island frame to carry the target's own text, and says in the log how long
+// that took. It never fabricates the wait: if the island does not resolve, the
+// cells still shoot and the record carries `reviewTargetResolved: false`.
+//
 // No origin is hard-coded: the app origin is read from the environment.
 //
 // Usage: node 04-capture-review-page.mjs <appOrigin> <reviewPath> <outDir> <repoRoot>
@@ -186,6 +196,9 @@ async function gateReadout() {
 
 const records = [];
 const results = [];
+/** The gate card's own review-target island reading, filled in below. */
+let reviewTarget = "";
+let reviewTargetResolved = false;
 /** The one clip rectangle every paired card-root cell shares. */
 let sharedClip = null;
 
@@ -247,11 +260,13 @@ async function shoot(cell, declaredState, note, framing = "card-root", extra = {
     gate,
     themeClass: theme,
     framing,
+    reviewTargetResolved,
+    reviewTarget: reviewTarget.slice(0, 800),
     clip: framing === "card-root" ? sharedClip : null,
     pageErrors: [...pageErrors],
     ...extra,
   });
-  results.push({ cell, pixels: dims, sha256, observed, rootAttributes: attrs, chips, order, gate, themeClass: theme, framing, cardText: cardText.slice(0, 2000) });
+  results.push({ cell, pixels: dims, sha256, observed, rootAttributes: attrs, chips, order, gate, themeClass: theme, framing, reviewTargetResolved, reviewTarget: reviewTarget.slice(0, 800), cardText: cardText.slice(0, 2000) });
   say(`CAP ${cell} ${dims.width}x${dims.height} chips=${chips.length} order=${JSON.stringify(order)} gate=${JSON.stringify(gate)} theme="${theme}"`);
   return dims;
 }
@@ -314,6 +329,30 @@ try {
   }
   if (!ready) throw new Error("the gate region did not draw both cards");
   await page.waitForTimeout(3000);
+
+  // Wait for the gate card's own review-target island to resolve. Its text is
+  // read from the island FRAME, never asserted from the host document.
+  const islandText = async () => {
+    for (const f of page.frames()) {
+      if (f.url().includes("/lifecycle/review-island")) {
+        const t = await f.evaluate(() => document.body.innerText.replace(/\n{2,}/g, "\n")).catch(() => "");
+        if (t.trim().length > 0) return t;
+      }
+    }
+    return "";
+  };
+  let islandWaitedMs = 0;
+  for (let i = 0; i < 60; i += 1) {
+    reviewTarget = await islandText();
+    if (reviewTarget.trim().length > 0) break;
+    await page.waitForTimeout(3000);
+    islandWaitedMs += 3000;
+  }
+  reviewTargetResolved = reviewTarget.trim().length > 0;
+  say(`REVIEW TARGET resolved=${reviewTargetResolved} after ~${Math.round(islandWaitedMs / 1000)}s`);
+  say(`REVIEW TARGET TEXT ${JSON.stringify(reviewTarget.slice(0, 800))}`);
+  // Settle the frame's paint before the first shot.
+  await page.waitForTimeout(4000);
 
   const settled = await chipReadout();
   say(`CHIPS ${JSON.stringify(settled)}`);

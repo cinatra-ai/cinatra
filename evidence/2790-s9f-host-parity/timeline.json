@@ -1,0 +1,123 @@
+{
+  "$comment": "cinatra#2790 S9f \u2014 the order the real run happened in. Every row cites the exact column or log line it was read from. Times are UTC. See TIMELINE.md for the prose beside it.",
+  "runId": "e7c77fc6-da28-4bca-80f7-46c56867772e",
+  "date": "2026-08-22",
+  "columnNotTrusted": {
+    "column": "cinatra.agent_runs.created_at",
+    "observedValue": "2026-08-22T17:04:22.009Z",
+    "why": "identical to completed_at and 49s AFTER the recommendation hold this run parked on, so the terminal write appears to overwrite it. The run's existence is anchored on lifecycle_continuation_park.created_at and on the artifact/gate rows instead.",
+    "completedAt": "2026-08-22T17:04:22.009Z",
+    "equalToCompletedAt": true
+  },
+  "wayflowHealthProbe": "GET /.health -> 200 {\"status\":\"ok\",\"agents\":29,\"failed\":0,\"failed_agents\":[],\"last_reload_at\":null}",
+  "rows": [
+    {
+      "n": 1,
+      "event": "run-start page opened in a real browser",
+      "at": "2026-08-22T17:02:43.142Z",
+      "source": "logs/real-sequence.txt \u2014 the driver's first line"
+    },
+    {
+      "n": 2,
+      "event": "run created person-present and PARKED at the recommendation hold",
+      "at": "2026-08-22T17:02:53.103178Z",
+      "source": "cinatra.lifecycle_continuation_park.created_at (checkpoint=recommendation, status=parked)",
+      "note": "the trusted creation anchor; agent_runs.created_at is overwritten \u2014 see columnNotTrusted"
+    },
+    {
+      "n": 3,
+      "event": "four chips decided one at a time through the card's own per-chip controls (confirm, adjust->keep, skip, confirm)",
+      "at": "between 2026-08-22T17:02:53Z and 2026-08-22T17:03:10Z",
+      "source": "logs/real-sequence.txt \u2014 the PRESS lines, in order"
+    },
+    {
+      "n": 4,
+      "event": "the three kept decisions written (one release transaction, one timestamp)",
+      "at": "2026-08-22T17:03:10.434846Z",
+      "source": "cinatra.run_selected_skill_revisions.selected_at + .selection_source",
+      "rows": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "outcome": "recommended_confirmed"
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "outcome": "user_adjusted"
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "outcome": "recommended_confirmed"
+        }
+      ]
+    },
+    {
+      "n": 5,
+      "event": "hold RELEASED",
+      "at": "2026-08-22T17:03:10.446268Z",
+      "source": "cinatra.lifecycle_continuation_park.resolved_at (status=released)"
+    },
+    {
+      "n": 6,
+      "event": "WayFlow dispatch ACCEPTED; the flow's first step ran and parked on its own context-slot gate",
+      "at": "2026-08-22T17:03:58.606715Z",
+      "source": "app log [wayflow] status payload timestamp; WayFlow container log POST /agents/cinatra-ai/blog-draft-writer-agent/ 200 OK"
+    },
+    {
+      "n": 7,
+      "event": "the run's own in-flight gate answered (Continue)",
+      "at": "2026-08-22T17:04:01.976Z",
+      "source": "logs/real-sequence.txt (GATE Continue pressed (#1)); logs/run-execution-readback.json gatePresses[0].at"
+    },
+    {
+      "n": 8,
+      "event": "THE STEP EXECUTED \u2014 the agent's model call went out through the bridge and returned",
+      "at": "2026-08-22T17:04:20.800435Z",
+      "source": "app log 'POST /api/llm-bridge 200 in 18.1s' then [wayflow] state=completed status timestamp",
+      "bridgeStatus": 200,
+      "note": "the previous round on this branch got 503 NO_LLM_PROVIDER at this exact call"
+    },
+    {
+      "n": 9,
+      "event": "THE OUTPUT ARTIFACT WAS WRITTEN BY THE STEP",
+      "at": "2026-08-22T17:04:21.865797Z",
+      "source": "cinatra.representation.created_at (created_by_run_id = the run) and cinatra.artifact_produced_outbox.created_at (producer_run_id = the run, emitter=createSemanticArtifact, origin_kind=agent_produced)",
+      "artifact": {
+        "title": "Connector Rollout Note",
+        "type": "@cinatra-ai/blog-post-artifact:post",
+        "mime": "text/markdown",
+        "bytes": 5695,
+        "representationRevisionId": "65128429-95ea-4983-832c-37988b191dcf"
+      }
+    },
+    {
+      "n": 10,
+      "event": "run reached its terminal state",
+      "at": "2026-08-22T17:04:22.009Z",
+      "source": "cinatra.agent_runs.completed_at (status=completed, error empty)"
+    },
+    {
+      "n": 11,
+      "event": "THE SHIPPED SWEEPER OPENED THE REVIEW",
+      "at": "2026-08-22T17:04:46.914590Z",
+      "source": "cinatra.artifact_review_gates.created_at (status=pending); app log '[lifecycle-review-orchestration] scanned=1 gatesCreated=1 noGate=0 notClassifiable=0 failed=0'"
+    },
+    {
+      "n": 12,
+      "event": "produced-artifact outbox row processed",
+      "at": "2026-08-22T17:04:47.249846Z",
+      "source": "cinatra.artifact_produced_outbox.processed_at"
+    },
+    {
+      "n": 13,
+      "event": "the review page CAPTURED \u2014 R1..R4",
+      "at": "2026-08-22T17:30:21.550Z .. 2026-08-22T17:30:22.839Z",
+      "source": "capture-records.json recordedAt on each of the four cells"
+    }
+  ],
+  "whatTheOrderProves": [
+    "every chip decision (row 4, 17:03:10) precedes the step that used those skills (row 8, 17:04:20)",
+    "the step (row 8) precedes the artifact it wrote (row 9, 17:04:21)",
+    "the artifact (row 9) precedes the review gate the sweeper opened on it (row 11, 17:04:46)",
+    "the gate (row 11) precedes the pictures (row 13) \u2014 the review page could not have existed earlier"
+  ]
+}

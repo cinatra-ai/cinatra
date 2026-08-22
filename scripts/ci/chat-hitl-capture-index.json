@@ -3815,7 +3815,7 @@
    "declaredHost": "page_gate_region",
    "declaredKind": "recommendation_hold",
    "declaredState": "decided",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd/review/lifecycle-review:4c13bcca07ee74c29361f22957f11f8fe73a29e28c7ccab506a1d78db3753b92",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e/review/lifecycle-review:912fa2b6c5928615f67701a03bf895a81f6bb148ee2e5d2db55903290026f117",
    "screenshot": "evidence/2790-s9f-host-parity/captures/R1__recommendation-card__page_gate_region__decided.png",
    "sha256": "84aba5f61faa92571979866655c94a0bae0b315d747f99e30c4430a9c02f55be",
    "assertions": [
@@ -3876,7 +3876,7 @@
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-22T02:21:25.112Z",
+   "recordedAt": "2026-08-22T17:30:21.550Z",
    "runtime": "dev-runtime — Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
    "note": "The recommendation row on the run review page in its DECIDED form, framed on the card root. One settled chip per kept skill, each printing the owning extension's manifest displayName and its own outcome — Confirmed / Adjusted — and NOTHING to press. This is the record of what was chosen before the run started; the decision itself was taken on the run page through the card's own per-chip controls (see logs/real-sequence.log), never here.",
    "rootAttributes": {
@@ -3948,9 +3948,9 @@
    "declaredHost": "page_gate_region",
    "declaredKind": "recommendation_hold",
    "declaredState": "decided",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd/review/lifecycle-review:4c13bcca07ee74c29361f22957f11f8fe73a29e28c7ccab506a1d78db3753b92",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e/review/lifecycle-review:912fa2b6c5928615f67701a03bf895a81f6bb148ee2e5d2db55903290026f117",
    "screenshot": "evidence/2790-s9f-host-parity/captures/R2__recommendation-card__page_gate_region__decided__above-gate.png",
-   "sha256": "2f7d7f7a2b15394d91765bb79560533d631b863679481c1e190e66b8a4564a4b",
+   "sha256": "9ff2a88ed9ae65c879c7573f58e6ec94a12ed8a744ca421dbd0f6d2292b5fbc2",
    "assertions": [
     {
      "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
@@ -4009,7 +4009,7 @@
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-22T02:21:25.319Z",
+   "recordedAt": "2026-08-22T17:30:21.726Z",
    "runtime": "dev-runtime — Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
    "note": "The SAME decided row IN ITS PAGE, uncropped and full-length, with the REVIEW GATE CARD beneath it still AWAITING its decision (Comment / Reject / Approve). This is the ordering plan section 6.4 asks for, in the only composition a real flow produces: the run-start decision settled above the after-the-fact one that is still open. The measured order is carried in this record's `order`, the gate's own reading in `gate`.",
    "rootAttributes": {
@@ -4076,7 +4076,7 @@
    "declaredHost": "page_gate_region",
    "declaredKind": "recommendation_hold",
    "declaredState": "decided",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd/review/lifecycle-review:4c13bcca07ee74c29361f22957f11f8fe73a29e28c7ccab506a1d78db3753b92",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e/review/lifecycle-review:912fa2b6c5928615f67701a03bf895a81f6bb148ee2e5d2db55903290026f117",
    "screenshot": "evidence/2790-s9f-host-parity/captures/R3__recommendation-card__page_gate_region__decided__dark.png",
    "sha256": "c0efd4af306a4647e2cb62d66dafe39e662a34b962d29fa7b24048010cdd57e4",
    "assertions": [
@@ -4137,7 +4137,7 @@
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-22T02:21:26.260Z",
+   "recordedAt": "2026-08-22T17:30:22.657Z",
    "runtime": "dev-runtime — Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
    "note": "The SAME decided row, same run, same clip rectangle, in the dark palette — the class next-themes writes when the shipped theme control is pressed. Nothing else changed.",
    "rootAttributes": {
@@ -4209,9 +4209,9 @@
    "declaredHost": "page_gate_region",
    "declaredKind": "recommendation_hold",
    "declaredState": "decided",
-   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/2e7967ec-f263-4ff5-8add-b3f8ef43e2cd/review/lifecycle-review:4c13bcca07ee74c29361f22957f11f8fe73a29e28c7ccab506a1d78db3753b92",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e/review/lifecycle-review:912fa2b6c5928615f67701a03bf895a81f6bb148ee2e5d2db55903290026f117",
    "screenshot": "evidence/2790-s9f-host-parity/captures/R4__recommendation-card__page_gate_region__decided__above-gate__dark.png",
-   "sha256": "631f6733cbd6bf5f54db941f12c98c77b23906067f4ee08ea0e952ac5b9a42fd",
+   "sha256": "10f0d25cdd2c2b30e0fb6392b352b94dbaee12c31c1dacc87ccad22767679afc",
    "assertions": [
     {
      "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
@@ -4270,7 +4270,7 @@
     }
    ],
    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-   "recordedAt": "2026-08-22T02:21:26.446Z",
+   "recordedAt": "2026-08-22T17:30:22.839Z",
    "runtime": "dev-runtime — Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
    "note": "The SAME page framing as R2, same run, in the dark palette: the decided row above the still-open review gate card.",
    "rootAttributes": {

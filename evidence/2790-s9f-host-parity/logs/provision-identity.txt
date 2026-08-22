@@ -1,0 +1,21 @@
+# cinatra#2790 (S9f) — instance-identity provisioning through the SHIPPED
+# `/setup/name` wizard step, verbatim. Lane data, not code: the lane database is
+# a clone whose `instance_identity` metadata row did not travel with it, and
+# without that row the artifact-binding loader refuses every materialization.
+# Origins and the lane account's address are scrubbed; nothing else is altered.
+#
+# cinatra#2790 S9f instance-identity provisioning — 2026-08-22T16:52:07.851Z
+after sign-in: /chat/cinatra-ai/cinatra-assistant
+FIELDS display="S9f Capture Lane" namespace="s9fcapturelane"
+submit enabled: true
+SUBMIT pressed on /setup/name
+after submit: /setup
+page text: Setup
+ACCOUNT
+KEY
+NAME
+SECRETS
+MODEL
+Command Palette
+Search for a command to run...
+PROVISION OK

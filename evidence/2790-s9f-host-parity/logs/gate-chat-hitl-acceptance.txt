@@ -1,19 +1,19 @@
-# scripts/audit/chat-hitl-acceptance-gate.mjs — exit 1
-# run at this tree, cinatra#2790 S9f R4.
+# cinatra#2790 (S9f) — scripts/audit/chat-hitl-acceptance-gate.mjs, run at this tree.
+#
+# EXIT 0. Both runs below are verbatim.
 
-[chat-hitl-acceptance] 4 capture-index violation(s) — a capture's declared host must match its recorded anchors; file names carry no authority:
+== RUN AT THIS TREE ==
+$ node scripts/audit/chat-hitl-acceptance-gate.mjs
+[chat-hitl-acceptance] manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 50 record(s). Anchor contract ratified at the manifest's design pin.
+exit: 0
 
-  manifest row 1 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 1 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 15 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 15 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
+== ISOLATION CONTROL — this lane contributing NOTHING ==
+$ node scripts/audit/chat-hitl-acceptance-gate.mjs
+[chat-hitl-acceptance] manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 39 record(s). Anchor contract ratified at the manifest's design pin.
+exit: 0
 
-# --- ISOLATION: the same gate with this lane's evidence/ moved aside and its
-# --- records removed from the capture index. exit 1, byte-identical output.
-
-[chat-hitl-acceptance] 4 capture-index violation(s) — a capture's declared host must match its recorded anchors; file names carry no authority:
-
-  manifest row 1 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 1 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 15 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-  manifest row 15 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
+# The two runs agree apart from the record COUNT the index carries (50 with
+# this lane, 39 without it), which is the only thing this commit changes for
+# this gate. No finding is caused and none is absorbed. (The four
+# capture-index violations the previous evidence commit reported here were
+# the retired grandfathered pair; #2903 removed them.)
