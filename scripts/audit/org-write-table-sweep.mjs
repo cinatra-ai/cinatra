@@ -77,6 +77,13 @@ const COVERED_PREFIXES = [
   // either file fails this gate rather than hiding behind a prefix.
   "src/lib/assistant-thread-store.ts",
   "src/lib/assistant-thread-dormant-content-purge.ts",
+  // cinatra#2823 S9j: the truncation TOMBSTONE. Its statement is a new org-axis
+  // write, and project-inheritance.ts — where the mirror's other builders live —
+  // is a BROAD module this sweep deliberately does not prefix-cover (it carries a
+  // count baseline instead), so the tombstone got its own single-purpose module
+  // and registers the way every store above does: a registry row + a writer-set
+  // lockstep pin over its whole export surface.
+  "src/lib/assistant-turn-supersede.ts",
   "src/lib/connect-sites-store.ts",
   "src/lib/widget-user-auth.ts",
   "src/lib/drizzle-store.ts", // DDL owner

@@ -284,11 +284,28 @@ describe("the REAL manifest", () => {
 
   it("the design pin is the ratified drawing, and the drift is recorded rather than overwritten", () => {
     const m = manifest();
-    expect(m.specCommit).toContain("92c1be7c6f864dec6382a9ef01e7b2e1c38aa871");
+    // cinatra#2893 moved the pin to the §V addition that draws the ZERO-CHIP
+    // SETTLED READING. The pin the rows were read against BEFORE that move is
+    // the one this file used to assert here, and it is not deleted: it becomes
+    // `previousPin`, and the pin before THAT keeps its place in `priorPins`. The
+    // whole point of the drift record is that a pin move leaves a trail, so the
+    // assertions walk the trail rather than only checking the head.
+    expect(m.specCommit).toContain("71398a49c1f8adfe6176ab0dda25486920fac958");
     // An IMMUTABLE pin: a 40-character commit, never a branch name.
     expect(m.specCommit).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
-    expect(m.specCommitDrift.previousPin).toContain("6c20871b4108176c1d0193f19ecd2947f6c6355f");
+    expect(m.specCommitDrift.previousPin).toContain("92c1be7c6f864dec6382a9ef01e7b2e1c38aa871");
+    expect(m.specCommitDrift.previousPin).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
+    expect(m.specCommitDrift.priorPins.join("\n")).toContain(
+      "6c20871b4108176c1d0193f19ecd2947f6c6355f",
+    );
+    // No pin is ever its own predecessor: a "move" that recorded the same commit
+    // on both sides would satisfy every check above and record nothing.
+    expect(m.specCommitDrift.previousPin).not.toBe(m.specCommit);
     expect(m.specCommitDrift.why.length).toBeGreaterThan(60);
+    // The move says what CHANGED between the two documents, not merely that one
+    // happened, and it does not claim an approval it cannot see.
+    expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-22/);
   });
 
   it("both flipped rows keep the proofs they had — a flip withdraws a claim, not evidence", () => {

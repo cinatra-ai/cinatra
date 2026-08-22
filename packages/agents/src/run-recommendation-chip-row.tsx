@@ -120,7 +120,11 @@ import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-rev
 //   a summary   → the SETTLED row: one chip per skill, each stating what it
 //                 recorded (Confirmed / Adjusted / Skipped), nothing left to
 //                 press and nothing summarised above it.
-// The third reading, READ-ONLY, is `canDecide === false`: every chip keeps its
+//   a summary
+//   with NO skill → the SETTLED OUTCOME PANEL (cinatra#2893): the outcome word
+//                 in place of the row, with the decider beside it only where the
+//                 record carries a safely displayable name.
+// The fourth reading, READ-ONLY, is `canDecide === false`: every chip keeps its
 // three affordances on screen, disabled, over the reason line.
 // ---------------------------------------------------------------------------
 
@@ -135,7 +139,18 @@ export type RunRecommendationDecision =
       /** Per-skill settled marks, derived from the run's durable evidence. */
       decided?: RunRecommendationDecidedSkill[];
     }
-  | { kind: "skipped"; decided?: RunRecommendationDecidedSkill[] };
+  | {
+      kind: "skipped";
+      decided?: RunRecommendationDecidedSkill[];
+      /**
+       * The decider as a SURFACE-SAFE DISPLAY NAME, for §V's zero-chip settled
+       * reading (cinatra#2893) — never an id and never an address. Absent on
+       * this trunk: the resolver's `skipped` answer carries the decided set and
+       * no decider, so the ratified outcome-only face is what renders. See
+       * `SettledOutcomePanel` for why that is a true reading, not a gap.
+       */
+      decidedByName?: string;
+    };
 
 /** One chip's live (pre-release) state: what was pressed, and what it means. */
 type ChipDecision = { mark: RunRecommendationChipMark; keep: boolean };
@@ -332,6 +347,95 @@ function SettledChip({ skillId, name, mark }: RunRecommendationDecidedSkill): Re
   );
 }
 
+/**
+ * THE ZERO-CHIP SETTLED READING (cinatra#2893) — the outcome panel a settled
+ * hold draws when the recorded set names NO skill at all.
+ *
+ * §V, at the design commit this file's row is drawn to:
+ *
+ *   "A settled row with nothing to state per skill still states the outcome.
+ *    Where the hold settles and the recorded set names NO SKILL AT ALL, there is
+ *    no chip to draw — and the card does NOT disappear. In place of the row it
+ *    draws one OUTCOME PANEL: the outcome word, and beneath it the one sentence
+ *    for that outcome."
+ *   "The decider is named only when it can be named. The panel reads 'Skipped
+ *    by' a person when the record carries a SAFELY DISPLAYABLE NAME, and the
+ *    OUTCOME WORD ALONE when it does not. There is no third face: an
+ *    identifier, an address or a truncated handle is NEVER pressed into service
+ *    as a name, and the outcome word alone is a true reading, not a degraded
+ *    one."
+ *
+ * THE SAME TREATMENT AS THE SETTLED REVIEW CARD (cinatra#2855). `ReviewGateSettled`
+ * composes its title the same way — the outcome word, plus " by <name>" only
+ * when the resolver handed it a name it could safely display — and this panel
+ * takes that copy rule together with §IV's settled-panel geometry: the size-9
+ * marked square over a text-sm semibold outcome line and a text-xs muted
+ * sentence. What it does NOT take is a status colour: §V marks a skipped chip
+ * with the dashed edge and the muted ground and no tint, so the panel that
+ * states the same outcome for a whole row carries exactly that.
+ *
+ * ONLY THE SKIPPED OUTCOME REACHES IT, and that is a property of the evidence
+ * rather than a choice made here. `run-recommendation-actions.ts` answers
+ * `confirmed` only when `readRunSelectedSkillRevisions` returned a non-empty
+ * set, and `decidedSkillsFromEvidence` writes one entry per selected row — so a
+ * confirmed settled state always carries at least one chip. An empty decided
+ * set can therefore only accompany the `skipped` answer, which is exactly the
+ * state this panel is drawn for.
+ */
+function SettledOutcomePanel({
+  decidedByName,
+}: {
+  /**
+   * A SURFACE-SAFE DISPLAY NAME, or nothing.
+   *
+   * NOTHING SUPPLIES ONE ON THIS TRUNK, and the reason is worth stating exactly
+   * rather than leaving as "not wired yet". The run-level skip record IS here:
+   * `run_recommendation_skips` records the decision keyed by run, and it
+   * records WHO — `skipped_by`, written from the deciding session's `userId`.
+   * What it records is therefore an IDENTIFIER, and an identifier is not a
+   * name. `getRunRecommendationHoldStateAction` answers a settled skip with the
+   * decided set alone and reads no decider, so every settled zero-chip card
+   * drawn from the shipped resolver takes the FALLBACK face — the outcome word
+   * alone.
+   *
+   * THAT IS THE RATIFIED READING, NOT A DEGRADED ONE. The drawing gives the
+   * panel two faces and no third: an identifier, an address or a truncated
+   * handle is never pressed into service as a name, because "Skipped" is true
+   * and "Skipped by 4f3a…" is an id read out to whoever opens the transcript.
+   * This prop is the seam a projection lands on when one can resolve
+   * `skipped_by` to a name it may safely show — the same class of value
+   * `ReviewGateSettled` takes, bounded and meant to be read by a person. A
+   * caller holding only an identifier passes nothing.
+   */
+  decidedByName?: string;
+}): ReactElement {
+  const by = decidedByName ? ` by ${decidedByName}` : "";
+  return (
+    <div
+      data-recommendation-outcome-panel=""
+      data-recommendation-outcome="skipped"
+      // The two faces the drawing names, each with its own anchor, so a capture
+      // is graded against the face it actually photographed rather than against
+      // "the panel".
+      data-conformance-id={
+        decidedByName
+          ? "recommendation-settled-outcome-named"
+          : "recommendation-settled-outcome-only"
+      }
+      className="w-full rounded-control border border-dashed border-line bg-transparent px-4 py-5 text-center"
+    >
+      <div className="mx-auto mb-2.5 grid size-9 place-items-center rounded-lg bg-surface-muted text-muted-foreground">
+        <X aria-hidden="true" className="size-[18px]" />
+      </div>
+      <p className="font-sans text-sm font-semibold text-foreground">{`Skipped${by}`}</p>
+      <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">
+        The recommendation is recorded as skipped, and the run went ahead with its
+        default skill set.
+      </p>
+    </div>
+  );
+}
+
 export function RunRecommendationChipRow({
   runId,
   agentPackageName,
@@ -404,10 +508,18 @@ export function RunRecommendationChipRow({
           }))
         : []);
     // A settled hold whose durable evidence names no skill at all has nothing
-    // per-skill to state, and §V draws no chip-less settled reading — so the
-    // card is absent rather than invented. Reachable only where the row offered
-    // no candidate in the first place.
-    if (settled.length === 0) return null;
+    // PER-SKILL to state — and since cinatra#2893 §V draws the reading for
+    // exactly that row: the outcome panel below, in place of the chips. The card
+    // root is untouched by the choice, so the kind/host/state declaration a
+    // capture is identified by is the same one either reading carries.
+    //
+    // The one state with no ratified face left. `confirmed` with an empty
+    // decided set contradicts its own answer — `confirmed` means at least one
+    // skill was kept, and the resolver cannot produce it (see
+    // `SettledOutcomePanel`) — so no host mounts it, no outcome word is true of
+    // it, and none is invented for it.
+    const zeroChip = settled.length === 0;
+    if (zeroChip && decision.kind !== "skipped") return null;
     return (
       <div
         data-run-recommendation-chip-row=""
@@ -430,9 +542,17 @@ export function RunRecommendationChipRow({
         data-variant={variant}
         className="flex flex-wrap gap-2"
       >
-        {settled.map((s) => (
-          <SettledChip key={s.skillId} skillId={s.skillId} name={s.name} mark={s.mark} />
-        ))}
+        {zeroChip ? (
+          <SettledOutcomePanel
+            {...(decision.kind === "skipped" && decision.decidedByName
+              ? { decidedByName: decision.decidedByName }
+              : {})}
+          />
+        ) : (
+          settled.map((s) => (
+            <SettledChip key={s.skillId} skillId={s.skillId} name={s.name} mark={s.mark} />
+          ))
+        )}
       </div>
     );
   }

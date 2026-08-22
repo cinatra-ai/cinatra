@@ -667,12 +667,42 @@ function EmbedConversation({
     if (!wasRunningRef.current) return;
     wasRunningRef.current = false;
     if (messages.length === 0) return;
+    // THE COLUMN'S OUTSTANDING TRUNCATION INTENT (cinatra#2823 S9j). An edit in
+    // this column truncated the transcript, and this is the save that records
+    // it: without the assertion the server's reconcile DELETE drops the removed
+    // turns' mirror rows while their run-bound rows survive, and the reader's
+    // edit comes undone on the next reload. It is CONFIRMED rather than drained
+    // — a widget save is best-effort and silent, so an assertion dropped on a
+    // save that failed would be an assertion lost for good.
+    // The ids go on the wire; the SAVE TOKEN says which assertions they stand
+    // for and is what the confirm is matched on. Not the array — this host
+    // hands `removedMessageIds` to a payload builder, and a contract that read
+    // the array's object identity would silently confirm nothing the moment it
+    // did (codex round 3, finding 3).
+    // ...and the RUN half of it. A bubble id is minted in the column, and the
+    // server's link from one to the run-bound row runs through the turn's MIRROR
+    // ROW — which a save writes. This surface's saves are best-effort and
+    // silent, so a turn whose save never landed has no row at all: its id
+    // asserts a name the server has never seen and the removed turn folds back
+    // in on the next reload. The run id is the identity both sides hold for
+    // exactly those turns.
+    //
+    // The peek is handed the transcript this save CARRIES, so the confirm
+    // releases the column's run ledger for the turns that save gave a mirror row
+    // and for no others.
+    const {
+      ids: removedMessageIds,
+      runIds: removedRunIds,
+      saveToken,
+    } = turns.peekRemovedMessageIds(messages);
     void saveThreadTranscript(
       buildThreadWrite({
         threadId: session.threadId,
         messages,
         createdAt: createdAtRef.current,
         activeAssistantHandle: session.assistant,
+        removedMessageIds,
+        removedRunIds,
       }),
       // THE BROKER TRANSPORT, like every other request this surface makes. The
       // headers are built at call time from the closure-held tokens and
@@ -680,8 +710,15 @@ function EmbedConversation({
       // widget's turns into the conversation of whoever else is signed in on
       // this browser.
       serviceTransport,
-    );
-  }, [localTurnStatus, messages, serviceTransport, session.threadId, session.assistant]);
+    ).then((landed) => {
+      // A LANDED save is confirmed unconditionally: the confirm clears the
+      // assertions this save carried (of both halves) AND releases the column's
+      // run ledger for the transcript it wrote mirror rows for. Gating that on
+      // there being an assertion would leave the ledger holding every turn this
+      // panel ever streamed, since the ordinary save carries no assertion at all.
+      if (landed) turns.confirmRemovedMessageIds(saveToken);
+    });
+  }, [localTurnStatus, messages, serviceTransport, session.threadId, session.assistant, turns]);
   const host = useMemo(
     () => ({ lifecycleSurface, onApplyIntent }),
     [lifecycleSurface, onApplyIntent],
