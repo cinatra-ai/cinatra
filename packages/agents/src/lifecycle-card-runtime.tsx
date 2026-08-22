@@ -242,6 +242,40 @@ export function useLifecycleCardHost(): LifecycleCardHost | null {
   return useContext(LifecycleCardSurfaceContext);
 }
 
+/**
+ * ONE LIFECYCLE CARD PER RUN PER TURN.
+ *
+ * The inline run panel declares the `run_card` host and mounts the run's
+ * lifecycle cards on it. Inside a chat transcript that panel is a SIBLING of
+ * the conversation's own mount of the SAME card for the SAME run, so both
+ * drawing it shows a person two cards for one decision.
+ *
+ * This is the rule that settles it, and it is a FUNCTION rather than a line of
+ * JSX so the panel and the transcript's own test agree by construction instead
+ * of by two copies of the same condition: when an outer CONVERSATION host is
+ * already in scope, the conversation's card owns the run and the panel
+ * withholds its copy — in every state, held and settled alike. Anywhere else,
+ * including the run page where there is no outer host at all, the panel keeps
+ * its copy.
+ *
+ * BOTH CONVERSATION HOSTS, not just `chat_thread` (cinatra#2790, epic #2784
+ * S9f). One column serves `/chat` and the site widget, and S9f made it mount
+ * the recommendation card on the widget arm too. The duplication the rule
+ * exists to prevent is therefore reachable under `site_widget` exactly as it is
+ * under `chat_thread`, and the answer is the same one: the transcript owns the
+ * copy. Naming only the cookie host here would have made the widget the one
+ * surface where a person can be shown two cards for one decision.
+ *
+ * Gating on the ambient host rather than on a `surface` prop is deliberate: a
+ * future embedder of the panel inside a transcript inherits the rule without
+ * having to remember to pass anything.
+ */
+export function runCardOwnsLifecycleCopy(
+  ambientHost: LifecycleCardHost | null,
+): boolean {
+  return ambientHost !== "chat_thread" && ambientHost !== "site_widget";
+}
+
 // ---------------------------------------------------------------------------
 // COMPOSER FOCUS — which review card the chat composer is bound to
 // (cinatra#2566's composer-focus deliverable; the program Done-definition is

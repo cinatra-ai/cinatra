@@ -438,24 +438,26 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     // struck rather than carried forward as a requirement the tree already meets.
     openObligations: [],
     hosts: {
-      chat_thread: null,
-      // THE CONVERSATION HOST THIS SLICE BOUND (cinatra#2790, epic #2784 S9f).
-      // Enumerated under `site_widget` and under no other conversation host,
-      // because that is the only one this callsite draws on: the column mounts
-      // the card through `BrokerHostRecommendationHold`, which returns `null`
-      // whenever `useCookieSessionSurface()` is TRUE, and the widget embed is
-      // the one conversation surface that declares a credential instead of a
-      // cookie (`src/app/embed/assistant/embed-assistant-client.tsx` passes
-      // `host: "site_widget"` down to this same column; `/chat` takes the
-      // module's `chat_thread` default). So on `chat_thread` this module draws
-      // nothing at all, and naming it there would claim a mount the tree does
-      // not have.
+      // THE CONVERSATION HOSTS, both served by the ONE shared column
+      // (packages/chat/src/chat-messages-view.tsx). `/chat` mounts it under the
+      // module's `chat_thread` default; the widget embed
+      // (src/app/embed/assistant/embed-assistant-client.tsx) passes
+      // `host: "site_widget"` down to the same column. One adapter, two hosts —
+      // enumerated once per host because a host is what R8 counts instances on.
+      chat_thread: [
+        {
+          module: "packages/chat/src/chat-messages-view.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the assistant dispatch turn: the card mounts on the run identity read off the tool result, as a SIBLING of the inline run card, and NOT through the renderable-view registry, because this kind's carriage is an interrupt rather than a data part (cinatra#2794, S9b)",
+        },
+      ],
       site_widget: [
         {
           module: "packages/chat/src/chat-messages-view.tsx",
           adapter: "mount",
           surface: "production",
-          why: "the widget conversation column draws the run-start chip row itself, as a SIBLING of the inline run card for the `agent_run` step that started the run — on this host the run panel carries no card of its own (every path it seeds and drives itself with is cookie-bound), so this is the only mount that can draw the question there",
+          why: "the same column on the widget arm draws the run-start chip row for the `agent_run` step that started the run; the card's read and its two decisions travel on the host's own credential, so the mount is not gated on the surface kind (cinatra#2790, S9f)",
         },
       ],
       run_card: [
@@ -504,7 +506,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       },
     },
     hostGap:
-      "The chat thread is the one host that carries no mount, and it is RULED to the chat-origin slice: the card mounts in the assistant dispatch turn, keyed by the run identity off the tool result, and NOT through the renderable-view registry. The conversation column's own adapter enumerated above stands down there rather than covering it — it draws only where the surface declares a credential instead of a cookie. The site widget and the page gate region were the other two, and the host-parity slice bound route, identity and authorization reader and then mounted both.",
+      "NO HOST CARRIES A GAP ANY MORE. All four are mounted and each is counted: the run card and the review page's gate region compose the card directly, and the two conversation hosts are drawn by the one shared column — the chat thread by cinatra#2794 (S9b), the site widget by cinatra#2790 (S9f), each in the change that bound its route, identity and authorization reader. The panel's own copy stands down inside either conversation host (`runCardOwnsLifecycleCopy`), which is what keeps one mount per host true where two adapters are in scope.",
     // The row's own root, because the lifecycle-card identity is the open
     // obligation below. When that obligation closes, this becomes
     // `[data-lifecycle-card="recommendation_hold"]` in the same change.
@@ -514,7 +516,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // declared host, feeds it a validated hold state, and reads the row, its
       // two ratified decisions and the count back out of real DOM.
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-      testName: "host run_card draws EXACTLY ONE chip row, carrying the ratified decisions",
+      testName: "hosts run_card and chat_thread each draw EXACTLY ONE chip row, carrying the ratified decisions",
     },
     // ONE COUNTED PROOF PER HOST THAT ENUMERATES A PRODUCTION ADAPTER. The named
     // test drives all three in one loop and counts the rendered roots on each,
@@ -523,7 +525,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     instanceProof: {
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
       testName: "every host with a production adapter draws EXACTLY ONE chip row",
-      hosts: ["run_card", "site_widget", "page_gate_region"],
+      hosts: ["run_card", "chat_thread", "site_widget", "page_gate_region"],
     },
   },
 

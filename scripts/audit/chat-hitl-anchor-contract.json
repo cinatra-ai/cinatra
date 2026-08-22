@@ -61,13 +61,12 @@
    },
    "recommendation_hold": {
     "hosts": {
+     "chat_thread": "transcript",
      "page_gate_region": "composition",
      "run_card": "composition",
      "site_widget": "transcript"
     },
-    "owed": [
-     "chat_thread"
-    ]
+    "owed": []
    },
    "trigger_schedule_proposal": {
     "hosts": {
@@ -87,5 +86,5 @@
    }
   }
  },
- "digest": "be491d27ffb2054a7cd72c19dc2e8c32eb2398edc17f59ff04b8f1838950547e"
+ "digest": "21a8551df64c396a8a6dd0805fd29b0216c452ee59b2437d9e6680b394a5f568"
 }

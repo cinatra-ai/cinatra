@@ -53,8 +53,12 @@ import { AppRouteLink } from "./app-route-link";
 import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
-import { useCookieSessionSurface } from "@cinatra-ai/agents/lifecycle-card-runtime";
-import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-chip-row";
+// The ONE §V renderer, reached by its own SUBPATH rather than the client
+// barrel: the barrel drags the whole agents client graph into every consumer
+// (and into every test that mounts this list), while this leaf is all the
+// transcript needs. Same reason `lifecycle-card-runtime` and `review-gate-card`
+// are subpaths.
+import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -189,41 +193,6 @@ function ThoughtGroupSection({ group, isLive }: { group: UiThoughtGroup; isLive:
 }
 
 // ---------------------------------------------------------------------------
-// The held run's card, on a conversation host whose run card cannot carry it
-// (cinatra#2790, epic #2784 S9f).
-// ---------------------------------------------------------------------------
-//
-// WHY THIS IS CONDITIONAL, AND WHY THE CONDITION IS THE CREDENTIAL.
-//
-// The `agent_run` slot already carries `InlineAgentRunCard` — the AG-UI run
-// panel — and that panel mounts `RecommendationHoldCard` under its own
-// `run_card` host. On a COOKIE conversation surface that works: the panel seeds
-// itself with a same-origin `GET /api/agents/runs/<id>` and drives its gates
-// from the ambient session. Drawing a second copy of the same card beside it
-// there would put two instances of one kind on one screen, which the one-card
-// gate forbids; relabelling the panel's copy as the conversation's own mount is
-// the ruled S9b change (cinatra#2786), not this slice's.
-//
-// On a CREDENTIAL-DECLARING conversation surface — the site widget — the panel
-// carries nothing at all: every path it seeds and drives itself with is
-// cookie-bound, and the embed frame is same-origin to the app, so those requests
-// would answer as whoever else is signed in on that browser rather than as the
-// widget's reader. The slot is therefore empty of any card, and the column
-// mounts the broker-aware one itself. Exactly one card, on exactly the host that
-// has no other way to draw it.
-//
-// `useCookieSessionSurface()` is the ruled way to ask this. It is TRUE only for
-// a well-formed cookie-host declaration, and FALSE for no provider at all, for a
-// refused declaration and for any credential-bearing host — so a mis-wired mount
-// draws nothing rather than guessing, and this component can never put a
-// cookie-bound affordance on a surface that has none.
-function BrokerHostRecommendationHold({ runId }: { runId: string }): ReactNode {
-  const cookieSurface = useCookieSessionSurface();
-  if (cookieSurface) return null;
-  return <RecommendationHoldCard runId={runId} />;
-}
-
-// ---------------------------------------------------------------------------
 // Ordered parts renderer (chronologically interleaved text + tool badges)
 // ---------------------------------------------------------------------------
 
@@ -307,12 +276,62 @@ function OrderedPartsSection({
         if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
           return (
             <div key={`agent-run-${part.runId}`} data-transcript-slot={idx}>
-              {/* THE RUN-START SKILLS QUESTION, in the conversation that started
-                  the run (cinatra#2790, epic #2784 S9f). A SIBLING of the run
-                  card, never a child: the run card is a `run_card` host of its
-                  own, and a conversation card drawn inside that subtree would be
-                  another host's mount wearing this one's name. */}
-              <BrokerHostRecommendationHold runId={part.runId} />
+              {/* THE §V RECOMMENDATION HOLD, ON THE chat_thread HOST.
+                  A chat-started run can PARK on the run-start recommendation
+                  hold, and the decision belongs where the person is: in the
+                  conversation. This mounts the ONE §V renderer
+                  (`RecommendationHoldCard`, which composes the chip row) keyed
+                  by the server-produced `agent_run` tool-result runId, under
+                  the outer `chat_thread` LifecycleCardSurfaceProvider this view
+                  already declares. It resolves through the card's own
+                  cookie-bound state action.
+
+                  AT ITS PRODUCING SLOT, like every other kind (S9i, #2827).
+                  §V's carriage is an INTERRUPT rather than a DATA_PART, so its
+                  producing step is the `agent_run` dispatch itself — this very
+                  container, which now carries the slot mark S9i introduced. The
+                  card therefore satisfies the same positional rule as the
+                  slotted views below it without going through the wire: same
+                  container, same `data-transcript-slot`, drawn once.
+
+                  A SIBLING of the inline run panel, never a child of it:
+                  nesting these would put one card inside another host's subtree
+                  and make "which host drew it" unanswerable.
+
+                  AND THE ONLY ONE IN THE TURN. The panel mounts this same card
+                  on its own `run_card` host, so a sibling that also drew it
+                  would show the person two cards for one run. The panel now
+                  reads the ambient host and withholds its copy inside ANY
+                  conversation host (`runCardOwnsLifecycleCopy`) — the
+                  conversation's card owns this run's recommendation here, in
+                  EVERY state, and the run page's own panel keeps its copy
+                  because no conversation host is in scope there.
+
+                  BOTH ARMS OF THE ONE COLUMN (cinatra#2790, epic #2784 S9f).
+                  This container is shared by `/chat` and by the site widget, and
+                  the mount is deliberately NOT gated on the surface kind. On the
+                  widget the card's read and its two decisions travel on the
+                  host's own credential — the host declaration selects the
+                  transport inside the card itself — so the same mount is correct
+                  on both, and the widget's `site_widget` cell is drawn by this
+                  line. The credential-keyed withholding that stood here while
+                  the cookie mount was still owed is gone with the obligation
+                  that justified it.
+
+                  NOT a DATA_PART and NOT registered in `renderable-views`: a
+                  registry entry would create a second dispatch path for the
+                  same interaction and would reach the shared widget transcript,
+                  which this host is not authorized to decide on. That is also
+                  why it cannot arrive in `slottedViews` below and cannot be
+                  drawn twice by the two mounts S9i partitions.
+
+                  Mounted for every `agent_run` part rather than gated on the
+                  tool result's status, exactly as the run panel mounts it: the
+                  card self-gates (no live hold ⇒ it renders nothing), which is
+                  also what makes it survive a transcript reload and what lets
+                  it settle IN PLACE into its confirmed/skipped summary after a
+                  decision instead of disappearing. */}
+              <RecommendationHoldCard runId={part.runId} wireRef={null} />
               <InlineAgentRunCard
                 runId={part.runId}
                 onActiveGateChange={onActiveGateChange}

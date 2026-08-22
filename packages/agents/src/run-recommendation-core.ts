@@ -6,7 +6,7 @@ import {
   hasRunRecommendationSkip,
   readRunRejectedRecommendations,
   readRunSelectedSkillRevisions,
-  writeRunRejectedRecommendations,
+  writeRunRecommendationSkip,
   type RunRecommendationDecidedSkill,
   type RunRejectedRecommendation,
 } from "@/lib/run-selected-skill-revisions";
@@ -22,6 +22,8 @@ import {
   recommendationHoldThreadId,
   releaseRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
+  RECOMMENDATION_SKIP_NOT_RECORDED,
+  RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
   type RecommendationHoldActor,
 } from "./recommendation-hold";
 import { buildActorContextFromPrimitive } from "@/lib/authz/build-actor-context";
@@ -298,6 +300,27 @@ export async function resolveRecommendationHoldStateForActor(input: {
  * it is accepted. Only a decision naming a hold that is not the run's current
  * park at all is refused, and the refusal is the same generic one an
  * unauthorized caller gets.
+ *
+ * WHAT IT DOES NOT GUARANTEE, stated plainly: it is a read-and-compare, not an
+ * atomic claim, so two decisions racing on the SAME live hold both write their
+ * decision. What IS exactly-once is the DISPATCH — the park sweep is a
+ * `status='parked'` conditional update, so only one of them transitions the park
+ * and only one run is dispatched.
+ *
+ * The SHAPE that race leaves behind, named so the disclosure is not merely
+ * implied: a Confirm and a Skip racing the same live hold write into two
+ * different tables — the authoritative per-run selection rows, and the skip
+ * record with its `user_skipped` rejected rows. Both survive. The SURFACE stays
+ * single-valued and deterministic (the state resolver reads selections first and
+ * answers `confirmed`, so the settled card never shows two decisions), and the
+ * RUN is single-valued too (it executes the confirmed selection). What carries
+ * both is the recommendation-efficacy telemetry, which then counts one run as
+ * accepted and skipped. That is the residual: a double-counted telemetry row,
+ * not a contradictory run and not a contradictory card. Removing it means
+ * claiming the park before writing, which trades this race for a worse one (a
+ * claimed park whose decision write then fails leaves an un-dispatched run with
+ * no live hold and no row to decide) — so it belongs with the park store's own
+ * transaction, not here.
  */
 async function resolveDecisionHold(
   runId: string,
@@ -429,13 +452,14 @@ export async function confirmRecommendationForActor(input: {
 }
 
 /**
- * SKIP for one verified reader: persist durable skip evidence (a `user_skipped`
- * rejected row per recommended candidate), write NO selection row, then release
- * the hold and dispatch.
+ * SKIP for one verified reader: persist durable skip evidence — the RUN-LEVEL
+ * skip record plus one `user_skipped` rejected row per candidate the row
+ * actually offered — write NO selection row (the run falls back to the computed
+ * default set), then release the hold and dispatch.
  *
- * The ownership check is the same gate the dispatch enforces: a run with an
- * initiator may only be skipped by that person; a run without one accepts any
- * verified caller, matching the trigger semantics.
+ * BOTH ENTRIES REACH THIS. The rules below are therefore the widget's rules too:
+ * the broker entry does not get a laxer skip than the cookie entry, because
+ * there is only one skip.
  */
 export async function skipRecommendationForActor(input: {
   runId: string;
@@ -452,16 +476,72 @@ export async function skipRecommendationForActor(input: {
 
   const run = await readAgentRunById(input.runId).catch(() => null);
   if (!run) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
-  if (run.runBy && run.runBy !== userId) {
+
+  // OWNERSHIP, FAIL-CLOSED (cinatra#2794). Skip is a `runBy`-owner decision, so
+  // the run must NAME this caller as its owner — an unowned run is refused, not
+  // admitted.
+  //
+  // This deliberately does NOT copy `triggerAgentRun`'s `run.runBy && run.runBy
+  // !== userId`, which admits a null owner. That form reads as "nobody claimed
+  // it, so anybody may", and on THIS path a null owner is reachable: the chat
+  // dispatch boundary stamps the launch origin as a constant while carrying a
+  // user id only for a human principal (`chatActorToPrimitive` in
+  // `src/app/api/chat/explicit-dispatch-server.ts`), so a non-human principal
+  // reaching the pre-router creates a chat-origin run with no `runBy` — and the
+  // recommendation hold still fires on it. Fail-open there would let any
+  // authenticated caller release and dispatch that run.
+  //
+  // Skip being stricter than the dispatch it precedes is the intended
+  // direction: the tighter gate is the one that decides, and `triggerAgentRun`
+  // re-checks afterwards. Confirm is unaffected — it carries its own
+  // execute-tier authorization inside the selection write the entry hands in.
+  if (!run.runBy || run.runBy !== userId) {
     return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
   }
 
-  // Durable skip evidence. Best-effort — a telemetry write must never block the
-  // dispatch.
+  // DURABLE SKIP EVIDENCE, AND IT IS NOT BEST-EFFORT (cinatra#2794).
+  //
+  // This evidence IS the card's settled state: the state resolver above reads it
+  // back to answer `skipped`, and with no evidence it answers `none` and the card
+  // disappears from the conversation instead of settling. So a failed write may
+  // NOT fall through to the release: releasing a run while losing the record of
+  // the decision is precisely the outcome that made Skip vanish.
+  //
+  // The evidence has TWO HALVES, and only one of them can be empty.
+  //
+  // The PER-SKILL half covers every candidate the row offered, not only the
+  // scorer-recommended ones. The hold fires whenever there is any candidate at
+  // all, so a row can be — and in practice often is — made entirely of FORCED
+  // candidates; writing evidence only for recommended ones left those skips
+  // unrecorded. A forced candidate is written with a NULL rank, which is what
+  // keeps "offered but not recommended" distinguishable from "recommended at
+  // rank n" in the same table. This half is empty whenever drift retired the
+  // offered set, and that is allowed.
+  //
+  // The RUN-LEVEL half is the marker, and it is never empty on a successful
+  // skip. Every successful skip therefore leaves a durable marker — there is no
+  // releasing path through here that records nothing. The only non-recording
+  // ending is a REFUSAL, which keeps the hold and leaves the card decidable.
+  //
+  // A READ FAILURE IS A FAILURE, NOT AN ANSWER. The template read is INSIDE the
+  // try and carries no `.catch(() => null)`: swallowing it would turn "the
+  // database did not answer" into "this run has no package", walk past the
+  // evidence write, and release — the same lost decision a failed write
+  // produces, arriving by a quieter route. A template that genuinely reads back
+  // WITHOUT a package name is a different fact: it simply leaves the per-skill
+  // half empty, and the run-level marker still records the decision.
   try {
-    const template = await readAgentTemplateById(run.templateId).catch(() => null);
+    const template = await readAgentTemplateById(run.templateId);
     const packageName = template?.packageName;
+    let rejectedRows: Array<{
+      skillId: string;
+      skillRevisionId: string | null;
+      recommendationSource: string;
+      recommendedRank: number | null;
+    }> = [];
     if (packageName) {
+      // The evidence must name the SAME candidates the row offered
+      // (cinatra#2148 finding 1) — resolved through the shared run-actor seam.
       const assignedSkillIds = await resolveRecommendationCandidateSkillIds({ run, packageName });
       let intentPromptText = "";
       try {
@@ -474,30 +554,90 @@ export async function skipRecommendationForActor(input: {
         intent: { promptText: intentPromptText },
         restrictToSkillIds: assignedSkillIds,
       });
-      const rejectedRows = recommendations
-        .filter((r) => r.recommended)
-        .map((r) => ({
-          skillId: r.skillId,
-          skillRevisionId: r.skillRevisionId,
-          recommendationSource: SKIP_RECOMMENDATION_SOURCE,
-          recommendedRank: r.rank,
-        }));
-      writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
+      // PER-SKILL EFFICACY ROWS COME FROM THE EXACT SCORED RESULT, AND ONLY IT.
+      //
+      // Every row written here is read back as "this skill was OFFERED to a
+      // human and not kept", so it may only name a skill the row actually
+      // offered. `recommendations` is that set by construction: candidate
+      // generation intersects the assigned ids with the INSTALLED catalog and
+      // caps the result at `DEFAULT_MAX_CANDIDATES` (`recommend.server.ts`), so
+      // the scored result is the offered set and the assigned set is merely its
+      // superset.
+      //
+      // There used to be a fallback here that wrote every ASSIGNED id when the
+      // scorer came back empty. It recorded rejections for skills that were
+      // never offered — uninstalled ones the intersection had dropped, and
+      // everything past the cap on an agent assigned more than fifty — which is
+      // efficacy telemetry stating something that did not happen. Drift is real,
+      // but the answer to "the offered set is gone" is the RUN-LEVEL marker
+      // below, not a guess at what was on the row.
+      rejectedRows = recommendations.map((r) => ({
+        skillId: r.skillId,
+        skillRevisionId: r.skillRevisionId,
+        recommendationSource: SKIP_RECOMMENDATION_SOURCE,
+        // NULL for a forced candidate: it was offered, never ranked.
+        recommendedRank: r.recommended ? r.rank : null,
+      }));
+    }
+
+    // ONE DURABLE WRITE, AND IT IS VERIFIED BEFORE ANYTHING IS RELEASED.
+    //
+    // BOTH HALVES RIDE ONE TRANSACTION. They used to be two sequential
+    // autocommitted writes, rows first: a marker that failed after the rows
+    // committed refused the skip and left the park LIVE, while
+    // `hasRunRecommendationSkip` answered `skipped` off those orphaned
+    // `user_skipped` rows and settled the card for the decision this call had
+    // just refused. Nothing distinguishes such a row from a legitimate legacy
+    // one, so the reader cannot be taught to ignore it — the write is what has
+    // to be atomic. A refusal below can therefore no longer leave a HALF: the
+    // ordinary failure rolls both halves back, and the sync bridge's ambiguous
+    // ending (a COMMIT whose result was lost) leaves BOTH, which is a decision
+    // fully on record that the retry converges on.
+    //
+    // `writeRunRecommendationSkip` READS THE MARKER BACK and returns whether it
+    // is durably there. A write that quietly did nothing is therefore not
+    // mistaken for a decision on record: the release below is gated on the
+    // verified fact, not on the absence of an exception.
+    const recorded = writeRunRecommendationSkip({
+      runId: input.runId,
+      skippedBy: userId,
+      candidateCount: rejectedRows.length,
+      rejected: rejectedRows,
+    });
+    if (!recorded) {
+      console.error(
+        "[skipRecommendationForActor] skip marker did not read back for run",
+        input.runId,
+        "— refusing to release",
+      );
+      return {
+        ok: false,
+        error: RECOMMENDATION_SKIP_NOT_RECORDED,
+        code: RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
+      };
     }
   } catch (err) {
-    // The run id is a request-controlled value; keep it OUT of the console
-    // format-string position so a `%`-bearing id can never be interpreted as a
-    // util.format specifier (CodeQL js/tainted-format-string).
-    console.warn(
+    // A FAILED WRITE is fatal to the decision. The run id is request-controlled,
+    // so it is passed as a discrete argument and never interpolated into the
+    // format string (CodeQL js/tainted-format-string).
+    console.error(
       "[skipRecommendationForActor] skip-evidence write failed for run",
       input.runId,
-      "— continuing:",
+      "— refusing to release:",
       err instanceof Error ? err.message : String(err),
     );
+    // The TYPED outcome rides alongside the prose. A caller that offers a retry
+    // branches on the code; the message is what a person reads.
+    return {
+      ok: false,
+      error: RECOMMENDATION_SKIP_NOT_RECORDED,
+      code: RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
+    };
   }
 
   return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined, input.dispatch);
 }
+
 
 // ===========================================================================
 // THE ACTOR-PARAMETERIZED SELECTION WRITE (cinatra#2790, epic #2784 S9f).

@@ -198,23 +198,23 @@ export type HostParityRatchetRow = {
  * The two shell kinds reach the conversation hosts and nothing else — no run-card
  * or gate-region composition mounts them, so those cells are not targets.
  *
- * `recommendation_hold` gained two cells in S9f (cinatra#2790):
+ * `recommendation_hold` is on all four hosts too, and each cell was landed by a
+ * named slice:
  *
- *   · `site_widget`, by TRANSCRIPT. The card's read and its two decisions became
- *     broker-aware, the in-code credential guard that withheld it went with them,
- *     and the shared conversation column now mounts it at the `agent_run` slot on
- *     a host whose run card cannot carry it. The row that owed this cell is
- *     struck HERE, in the same change that made the observation flip — which is
- *     the only moment it may be struck.
- *   · `page_gate_region`, by COMPOSITION. The review route's gate region composes
+ *   · `run_card`, by COMPOSITION. The run screen's long-standing mount.
+ *   · `chat_thread`, by TRANSCRIPT. S9b (#2786) landed the conversation-origin
+ *     hold: a run started from a conversation now carries a verified launch
+ *     frame, is created with the "a person is present" mark and parks BEFORE
+ *     dispatch, so the shared column draws the card on the held dispatch turn.
+ *   · `site_widget`, by TRANSCRIPT. S9f (#2790) made the card's read and its two
+ *     decisions broker-aware, the in-code credential guard that withheld it went
+ *     with them, and the shared conversation column now mounts it at the
+ *     `agent_run` slot on a host whose run card cannot carry it.
+ *   · `page_gate_region`, by COMPOSITION. S9f's review route composes
  *     `RecommendationHoldCard` above the review card, keyed by the run (plan §9).
  *
- * `chat_thread` STAYS OWED, and the obligation is honest rather than pending
- * paperwork: a run started from a conversation is created without the
- * "a person is present" mark and never parks, and the ruled cookie-host mount —
- * relabelling the run panel's copy as the conversation's own — belongs to S9b
- * (#2786). Until that lands the `/chat` transcript really does not draw this
- * card, and this row says so.
+ * Each owed row was struck in the change that made its own observation flip —
+ * the only moment a row may be struck — so this kind now owes nothing.
  */
 export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
   Record<LifecycleCardKind, HostParityRatchetRow>
@@ -249,13 +249,12 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
   },
   recommendation_hold: {
     hosts: Object.freeze({
+      chat_thread: "transcript",
+      site_widget: "transcript",
       run_card: "composition",
       page_gate_region: "composition",
-      site_widget: "transcript",
     }),
-    owed: Object.freeze([
-      { host: "chat_thread" as LifecycleCardHost, tracking: "cinatra#2786 (S9b)" },
-    ]),
+    owed: Object.freeze([]),
   },
 });
 

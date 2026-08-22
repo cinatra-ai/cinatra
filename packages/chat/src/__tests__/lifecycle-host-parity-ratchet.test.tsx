@@ -465,19 +465,25 @@ describe("the ratchet goes red in every direction it claims to", () => {
   });
 
   it("an OWED cell that starts drawing fails, so the row must be struck", () => {
-    // The one cell still owed is `chat_thread` (S9b, cinatra#2786): a run started
-    // from a conversation does not park yet, and the ruled cookie-host mount is
-    // that slice's. S9f (cinatra#2790) struck the `site_widget` row in the same
-    // change that made its observation flip — the only moment a row may be
-    // struck — so the red direction is demonstrated on what is still owed.
-    const landed: ObservedHostParity = {
-      ...OBSERVED,
+    // NOTHING IS OWED ANY MORE, so the red direction is demonstrated against a
+    // ratchet that still owes what the tree now draws. S9f (cinatra#2790) struck
+    // the `site_widget` row and S9b (cinatra#2794) struck `chat_thread`, each in
+    // the change that made its own observation flip — the only moment a row may
+    // be struck. Re-owing `chat_thread` here, against the REAL observation, is
+    // exactly the state a premature strike would have to survive, and it does
+    // not: the arm is red, and it names the slice that owed the cell.
+    const stillOwed = {
+      ...LIFECYCLE_HOST_PARITY_RATCHET,
       recommendation_hold: {
-        ...(OBSERVED.recommendation_hold ?? {}),
-        chat_thread: "transcript",
+        hosts: Object.fromEntries(
+          Object.entries(LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.hosts).filter(
+            ([host]) => host !== "chat_thread",
+          ),
+        ),
+        owed: [{ host: "chat_thread" as const, tracking: "cinatra#2786 (S9b)" }],
       },
     };
-    const violations = evaluateHostParity({ observed: landed });
+    const violations = evaluateHostParity({ observed: OBSERVED, ratchet: stillOwed });
     expect(violations.some((v) => v.code === "owed-cell-observed" && v.host === "chat_thread")).toBe(
       true,
     );
@@ -485,24 +491,40 @@ describe("the ratchet goes red in every direction it claims to", () => {
     expect(violations.find((v) => v.code === "owed-cell-observed")?.detail).toContain("2786");
   });
 
-  it("the STRUCK widget row is backed by a render, not by an edit", () => {
+  it("the STRUCK rows are backed by renders, not by an edit", () => {
     // The other half of striking a row: the cell must now be OBSERVED, by the
-    // method it was recorded with. Deleting the mount turns this red before the
-    // ratchet's own `host-lost` arm runs, and re-adding the owed row while the
-    // card still draws turns `owed-cell-observed` red. So the row could not have
-    // been struck early, and cannot survive the card being taken away.
+    // method it was recorded with. Deleting a mount turns this red before the
+    // ratchet's own `host-lost` arm runs, and re-adding an owed row while the
+    // card still draws turns `owed-cell-observed` red. So neither row could have
+    // been struck early, and neither survives its card being taken away.
+    //
+    // BOTH STRUCK ROWS ARE ASSERTED, one per slice: `site_widget` and
+    // `page_gate_region` by S9f (cinatra#2790), `chat_thread` by S9b
+    // (cinatra#2794). With the last row struck the kind owes nothing, and the
+    // empty list is the claim — not an absence nobody reads.
     expect(OBSERVED.recommendation_hold?.site_widget).toBe("transcript");
     expect(OBSERVED.recommendation_hold?.page_gate_region).toBe("composition");
+    expect(OBSERVED.recommendation_hold?.chat_thread).toBe("transcript");
     expect(
       LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.owed.map((cell) => cell.host),
-    ).toEqual(["chat_thread"]);
+    ).toEqual([]);
   });
 
   it("a kind with NO conversation cell at all fails the mandatory-host rule", () => {
+    // BOTH halves are stripped, because the rule reads both: a kind satisfies
+    // it by RECORDING the conversation host or by OWING it. Since S9b landed,
+    // `recommendation_hold` records `chat_thread` rather than owing it, so
+    // filtering `owed` alone no longer produces the shape under test. (The
+    // fixture also goes `host-lost`/`host-unratcheted` against the real
+    // observation; the assertion below names the one code this case is about.)
     const stripped = {
       ...LIFECYCLE_HOST_PARITY_RATCHET,
       recommendation_hold: {
-        hosts: LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.hosts,
+        hosts: Object.fromEntries(
+          Object.entries(LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.hosts).filter(
+            ([host]) => host !== MANDATORY_HOST,
+          ),
+        ),
         owed: LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.owed.filter(
           (cell) => cell.host !== MANDATORY_HOST,
         ),
@@ -537,7 +559,13 @@ describe("the ratchet's recorded shape", () => {
   it("serialises every kind with sorted hosts and owed cells", () => {
     const expectations = hostParityExpectations();
     expect(Object.keys(expectations).sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
-    expect(expectations.recommendation_hold.owed).toEqual(["chat_thread"]);
+    // Both cells were struck from this list on the day their mounts landed —
+    // `site_widget` by S9f, `chat_thread` by S9b — and each is recorded in
+    // `hosts` instead. The kind now owes nothing on any host.
+    expect(expectations.recommendation_hold.owed).toEqual([]);
+    expect(expectations.recommendation_hold.hosts.chat_thread).toBe("transcript");
+    expect(expectations.recommendation_hold.hosts.site_widget).toBe("transcript");
+    expect(expectations.recommendation_hold.hosts.page_gate_region).toBe("composition");
     expect(expectations.artifact_review_gate.hosts.page_gate_region).toBe("composition");
   });
 });

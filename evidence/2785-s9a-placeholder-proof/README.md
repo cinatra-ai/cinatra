@@ -56,10 +56,14 @@ every gate contract are untouched. The arm grants no authority: the tool it name
 writes nothing. The provider cannot forge a card through the sink shown here —
 the envelope is built inside the tool handler, and the recognizer accepts it only
 from the server label the runtime stamps from a dispatch it actually performed.
-The required gate re-ran after the change and its output is byte-identical to
-`required-gate-run.txt`, the copy recorded before it. (That sentence describes
-S9a's own change. cinatra#2789 later drew the verification card and re-recorded
-the transcript with it — see the table below.)
+The required gate re-ran after the change and its output was byte-identical to
+`required-gate-run.txt` as that file stood AT S9a. That sentence describes S9a's
+own change. The committed copy has moved for TWO reasons since, because the gate
+suite holds it byte-identical to a fresh run: cinatra#2789 (S9e) drew the
+verification card, and cinatra#2786 (S9b) enumerated the `chat_thread` mount for
+`recommendation_hold`. Each retired a finding, and this head is the first tree
+that carries both (see the table below). The S9a claim above is about the S9a
+run, not about the bytes in the file today.
 
 **One sentence in the pull-request body is now narrower than the tree.** That
 body says the product diff against the default branch is empty. It no longer is:
@@ -112,7 +116,7 @@ taken on trust.
 |---|---|---|
 | `S9a-a__chat_thread__schedule-proposal-placeholder.png` | **development** | A scheduling request typed into the real composer. The assistant calls `schedule_proposal_render`, and what draws in the assistant turn is the S1 shell: a bordered strip reading "Schedule proposal / Waiting for your decision." No option rows, no Adjust, no Confirm. The thread and the composer are in frame. |
 | `S9a-b__chat_thread__verification-placeholder.png` | **development** | The verification reading asked for by its ref, in a real conversation. The assistant calls `verification_record_render`, and what draws is the same shell: "Verification / Advisory reading." No outcome pill, no revisions, no fields. Thread and composer in frame. |
-| `required-gate-run.txt` | — | The verbatim run of the required gate, exit 1, findings unfiltered. **Re-recorded by cinatra#2789 (S9e), which drew the verification card, and again by cinatra#2790 (S9f), which enumerated the skills card's site-widget and review-page mounts.** When S9a recorded this file it carried five findings and named both undrawn kinds; after S9e it carried four and named one; it now carries two — the schedule proposal's undrawn kind and the skills card's single remaining chat-thread host gap — because `verification_summary` is DRAWN. The file is not a historical quote — `chat-hitl-one-card-gate.test.mjs` asserts it is a byte-for-byte fresh run of the live gate, so it tracks the gate by design and a stale copy is a red test. The two captures above are dated evidence of the moment S9a proved and are unchanged. |
+| `required-gate-run.txt` | — | The verbatim run of the required gate, exit 1, findings unfiltered. ROLLING RECORD, not a frozen S9a artifact: `scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs` compares this file byte for byte against a fresh run, so every change to the gate's output must land here too, and a stale copy is a red test. It read FIVE findings at S9a, naming both undrawn kinds. It read FOUR after cinatra#2789 (S9e) drew the verification card, which retired that kind's `[R5]` line. It read TWO after cinatra#2790 (S9f) enumerated the skills card's `site_widget` and `page_gate_region` mounts, and THREE on main after cinatra#2786 (S9b) enumerated its `chat_thread` adapter with a counted instance proof. **Re-recorded here, where the two land together:** all four hosts now carry a mount, so every `[R8]` host-gap line is retired and the file reads ONE finding. That one names the last undrawn kind — `trigger_schedule_proposal` — and that, not a count, is what this row is evidence of. The two captures above are dated evidence of the moment S9a proved and are unchanged. |
 
 `capture-a-log.txt` and `capture-b-log.txt` were printed by the two capture
 programs committed beside them — `capture-a-schedule.mjs` and
@@ -152,7 +156,9 @@ treat them as claims:
 - that the operator's own Compose project was contacted exactly once, by the
   listing at the end of `teardown-log.txt`;
 - that the required gate re-ran byte-identical after the model change. Only one
-  gate output is committed, so a reader cannot diff the two.
+  gate output is committed, so a reader cannot diff the two — and that single
+  file is a rolling record of the CURRENT gate output, so it no longer holds the
+  S9a-era bytes at all.
 
 What the tree DOES prove is checkable and is the part the claim rests on: the
 programs contain no DOM injection, no stubbed fetch and no hand-written data

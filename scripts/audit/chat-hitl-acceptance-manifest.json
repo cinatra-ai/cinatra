@@ -363,7 +363,7 @@
     },
     {
      "file": "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-     "testName": "draws IDENTICALLY on every cookie host — the per-surface matrix is gone"
+     "testName": "draws IDENTICALLY on page_gate_region and chat_thread — the per-surface matrix is gone"
     },
     {
      "file": "src/lib/lifecycle/__tests__/widget-lifecycle-actor-parity.test.ts",

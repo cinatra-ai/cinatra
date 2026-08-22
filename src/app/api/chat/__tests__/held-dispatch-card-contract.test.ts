@@ -171,7 +171,17 @@ describe("a HELD chat dispatch (pending_input)", () => {
 
     await serverSideExplicitDispatch({ packageName: PACKAGE, actor: humanActor(), send });
 
-    const violations = evaluateHeldTurnProjection(projectionFromEvents(events), HELD_TURN_ROW);
+    // THE SERVER-SIDE ARM, and only that arm. This projection is built from SSE
+    // events, so `nodes` is empty by construction — the server renders no DOM
+    // and cannot answer "is the card mounted". Since S9b landed the mount the
+    // positive arm defaults ON for this kind, so it is named off here rather
+    // than asserted against a caller that structurally cannot satisfy it. The
+    // mount is proven where the DOM is, by the chat package's transcript suite.
+    const violations = evaluateHeldTurnProjection(
+      projectionFromEvents(events),
+      HELD_TURN_ROW,
+      { requireMount: false },
+    );
     expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
   });
 });

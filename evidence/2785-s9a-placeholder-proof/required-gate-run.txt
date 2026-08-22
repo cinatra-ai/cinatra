@@ -1,8 +1,7 @@
 $ node scripts/audit/chat-hitl-one-card-gate.mjs
-[chat-hitl-one-card] 2 violation(s):
+[chat-hitl-one-card] 1 violation(s):
 
   scripts/audit/chat-hitl-one-card-gate.mjs:1  [R5]  'trigger_schedule_proposal' has no card of its own (§VI (the schedule proposal card)) — The card is not drawn. The registry dispatches this kind to the S1 shell, which calls itself not-yet-drawn; the server already returns the proposal body and the client parses only the state name; the confirm action has no user interface caller. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.
-  packages/agents/src/run-recommendation-chip-row.tsx:1  [R8]  'recommendation_hold' has no production mount on host 'chat_thread' — The chat thread is the one host that carries no mount, and it is RULED to the chat-origin slice: the card mounts in the assistant dispatch turn, keyed by the run identity off the tool result, and NOT through the renderable-view registry. The conversation column's own adapter enumerated above stands down there rather than covering it — it draws only where the surface declares a credential instead of a cookie. The site widget and the page gate region were the other two, and the host-parity slice bound route, identity and authorization reader and then mounted both.
 
 The epic's structural rule is ONE card per interaction, rendered on every host —
 only the frame adapts. A second renderer is not a smaller feature; it is a second

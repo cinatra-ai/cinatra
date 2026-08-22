@@ -349,6 +349,16 @@ export function RunRecommendationChipRow({
   // above. `null` outside a `LifecycleCardSurfaceProvider`, which on a shipped
   // host cannot happen — `RecommendationHoldCard` refuses to draw without one.
   const lifecycleHost = useLifecycleCardHost();
+  // THE CHAT TRANSCRIPT'S EVIDENCE ANCHOR (S9b, cinatra#2794), on the card's OWN
+  // root. Under §V the ROW IS THE CARD, so that root is this row's outermost
+  // element — the same element carrying the kind/host/state declaration above,
+  // not a second wrapper. That is what keeps the mount FAIL-OPEN: a turn with no
+  // live hold draws no row, so it adds no marker and no node, and a conversation
+  // without a hold is byte-identical to one from before this mount existed. A
+  // wrapper rendered by the transcript would sit in every turn whether or not
+  // anything was inside it.
+  const chatThreadHoldMarker =
+    lifecycleHost === "chat_thread" ? { "data-chat-thread-recommendation-hold": "" } : {};
   const [recs, setRecs] = useState<RecommendedSkillForChip[]>(
     initialRecommendations ?? [],
   );
@@ -414,6 +424,7 @@ export function RunRecommendationChipRow({
         // Omitted rather than guessed when no surface declared a host: the
         // component renders outside a provider only in tests.
         data-lifecycle-card-host={lifecycleHost ?? undefined}
+        {...chatThreadHoldMarker}
         data-run-recommendation-decision={decision.kind}
         data-run-recommendation-settled="true"
         data-variant={variant}
@@ -513,6 +524,7 @@ export function RunRecommendationChipRow({
       data-lifecycle-card="recommendation_hold"
       data-lifecycle-card-state="held"
       data-lifecycle-card-host={lifecycleHost ?? undefined}
+      {...chatThreadHoldMarker}
       data-variant={variant}
       data-can-decide={canDecide ? "true" : "false"}
       className="flex flex-col gap-2"
@@ -1045,6 +1057,19 @@ export function RecommendationHoldCard({
   if (state === null || state.state === "none") return null;
 
   return (
+    // THE CARD'S OWN IDENTITY ROOT lives on `RunRecommendationChipRow` itself.
+    //
+    // S9b (cinatra#2794) put kind/host/state on a `display: contents` wrapper
+    // here, because the row it wrapped carried no declaration of its own. The §V
+    // redraw (cinatra#2841) made THE ROW THE CARD and moved that declaration —
+    // kind, host read from the same provider hook, and state — onto the row's
+    // outermost element, in both its held and its decided reading. Keeping this
+    // wrapper too would have published the identity on TWO nested elements and
+    // broken the "ONE root" the contract measures, so the wrapper is gone and
+    // the row's own root carries everything, including the chat transcript's
+    // evidence marker. Both mounts (`chat_thread` here, `run_card` on the run
+    // panel) still get host-correct values by construction, and the run panel —
+    // which renders the row directly — now gets them too.
     <RunRecommendationChipRow
       runId={runId}
       agentPackageName={

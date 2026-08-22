@@ -34,13 +34,14 @@ import { cleanup } from "@testing-library/react";
 // panel. Replaced here for the same reasons set out in
 // `conversation-column-inventory.test.tsx`; none of them is part of the SHAPE
 // this file measures.
-// The recommendation card's own graph (cinatra#2790, epic #2784 S9f). The
-// shared column now names that card at the `agent_run` slot — it draws it only
-// on a credential-declaring host, and these suites mount the COOKIE arm, so it
-// never renders here. Its MODULE is still evaluated, and it reaches the server
-// runtime, so it is replaced exactly as the sibling lifecycle suites replace it
-// and for their stated reason: without this the column does not mount at all,
-// and an empty column would look like a passing negative arm.
+// The recommendation card's own graph. The shared column now mounts that card
+// at the `agent_run` slot on BOTH of its arms — the cookie `/chat` transcript
+// (cinatra#2794, S9b) and the site widget (cinatra#2790, S9f) — and the card
+// statically imports its cookie-bound server actions, which reach a database.
+// Replaced here for the same reason the pending-call and undo actions above
+// are: none of them is part of what this file measures, and without these the
+// column does not mount at all — an empty column would look like a passing
+// negative arm. Any test that mounts the conversation column needs both.
 vi.mock("../../../agents/src/run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction: async () => ({ state: "none" }),
   confirmRunRecommendationAction: async () => ({ ok: true, dispatched: true }),

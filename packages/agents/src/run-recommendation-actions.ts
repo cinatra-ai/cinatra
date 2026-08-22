@@ -6,7 +6,7 @@
 //
 // WHAT THIS FILE IS NOW. A thin, cookie-bound entry: it resolves the signed-in
 // session and its live standing, and hands that verified actor to the ONE hold
-// core (`recommendation-hold.ts`). The ladder it used to contain — the run
+// core (`run-recommendation-core.ts`). The ladder it used to contain — the run
 // access door, the viewer-intersected candidate row, the hold-instance CAS, the
 // verified release, the resume announcement and the dispatch — did not change;
 // it moved, so that the site widget's broker entry
@@ -149,10 +149,17 @@ export async function confirmRunRecommendationAction(input: {
 }
 
 /**
- * SKIP: persist durable skip evidence (a `user_skipped` rejected row per
- * recommended candidate — distinguishable from no-decision AND from confirm),
- * write NO selection row (the run falls back to the computed default set), then
+ * SKIP: persist durable skip evidence — the RUN-LEVEL skip record (the marker
+ * the settled card reads, keyed by run_id and VERIFIED before any release) plus
+ * one `user_skipped` rejected row per candidate the row actually offered — write
+ * NO selection row (the run falls back to the computed default set), then
  * release the hold and dispatch.
+ *
+ * The evidence write is NOT best-effort (cinatra#2794): a skip whose marker does
+ * not read back is REFUSED with `RECOMMENDATION_SKIP_NOT_RECORDED`, keeping the
+ * hold live and the card decidable, rather than releasing a run while losing the
+ * record of the decision. The ownership guard behind it is fail-closed too — see
+ * `skipRecommendationForActor`, where both rules live for BOTH entries.
  */
 export async function skipRunRecommendationAction(input: {
   runId: string;

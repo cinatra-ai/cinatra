@@ -54,6 +54,7 @@
     { "alias": "@cinatra-ai/agents", "target": "./packages/agents/src/index.ts" },
     { "alias": "@cinatra-ai/agents/materialize-agent-package", "target": "./packages/agents/src/materialize-agent-package.ts" },
     { "alias": "@cinatra-ai/agents/builtin-assistant-template", "target": "./packages/agents/src/builtin-assistant-template.ts" },
+    { "alias": "@cinatra-ai/agents/run-recommendation-card", "target": "./packages/agents/src/run-recommendation-chip-row.tsx" },
     { "alias": "@cinatra-ai/agents/pages", "target": "./packages/agents/src/pages.tsx" },
     { "alias": "@cinatra-ai/agents/screens", "target": "./packages/agents/src/screens.tsx" },
     { "alias": "@cinatra-ai/agents/module", "target": "./packages/agents/src/integration/module.ts" },

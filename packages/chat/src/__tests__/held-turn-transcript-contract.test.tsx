@@ -462,7 +462,17 @@ describe("the PRODUCTION chat transcript, on a held dispatch turn", () => {
       name: "agent_run",
       result: DURABLE_RESULT,
     });
-    const violations = evaluateHeldTurnProjection(projection, HELD_TURN_ROW);
+    // THE NEGATIVE ARM, ON ITS OWN. The resolver is at its default `none` here,
+    // so the card self-gates to no DOM — a legitimate state, and the one that
+    // isolates what this arm measures: no pointer prose, and no stray anchors
+    // inside a foreign host. `requireMount` is named explicitly because the
+    // POSITIVE arm now defaults ON for this kind (S9b landed the mount and the
+    // obligation row was struck); the mount itself is asserted against the
+    // production view by "the struck row is backed by a card…" below, with the
+    // resolver answering HELD.
+    const violations = evaluateHeldTurnProjection(projection, HELD_TURN_ROW, {
+      requireMount: false,
+    });
     expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
   });
 
@@ -963,6 +973,15 @@ const OWED_OWNER_SYMBOLS = ["RecommendationHoldCard", "RunRecommendationChipRow"
  * every file that is not on this list, and the PRODUCTION `/chat` DOM arm above
  * still measures a transcript that draws no card — with the resolver answering
  * HELD, so the carriage is the only thing between it and a rendered card.
+ *
+ * AND THEN S9b LANDED THE COOKIE MOUNT TOO (cinatra#2794), which retires the
+ * allowlist's whole premise rather than extending it. With `recommendation_hold`
+ * struck from `HELD_TURN_MOUNT_OBLIGATIONS` the card is owed on NO host, so the
+ * one column mounts it unconditionally and the withholding this list certified
+ * is exactly what must no longer be there. Every arm below is therefore keyed on
+ * `HOLD_MOUNT_OWED`: while a row stands the allowlist is enforced verbatim, and
+ * once it is struck the positive arms take over — chat production code MUST
+ * import the card, and the production `/chat` transcript MUST draw it.
  */
 const CREDENTIAL_GATED_IMPORTERS = ["chat-messages-view.tsx"];
 
@@ -1097,13 +1116,18 @@ describe("the production mount points, read from the import graph", () => {
     } else expect(offenders.length + gated.length).toBeGreaterThan(0);
   });
 
-  it("the one allowed importer really withholds the card on a cookie surface", () => {
+  it.runIf(HOLD_MOUNT_OWED)("the one allowed importer really withholds the card on a cookie surface", () => {
     // The allowlist is only as good as what it certifies. This reads the file it
     // names and requires BOTH halves of the gate — the cookie discriminator and
     // the withholding return — so an entry cannot be kept by editing the list
     // once the gate is gone. The DOM arm above is the other end of the same
     // claim: with the resolver answering HELD, the production `/chat` transcript
     // still draws no card.
+    //
+    // RUNS ONLY WHILE A ROW STANDS. Once `recommendation_hold` is struck from
+    // the obligation list the cookie mount has landed, and requiring the
+    // withholding here would forbid the very mount the struck row asserts. The
+    // `!HOLD_MOUNT_OWED` arms carry the claim from there.
     for (const rel of CREDENTIAL_GATED_IMPORTERS) {
       const source = readFileSync(join(CHAT_SRC, rel), "utf8");
       for (const token of COOKIE_GATE_TOKENS) {
@@ -1202,18 +1226,24 @@ describe("the re-export route, closed by REACHABILITY rather than by spelling", 
 
   it("no chat production module can reach an owed card export, under ANY name", () => {
     const owed = owedExportsByModule(realGraph, owedSeeds());
-    // The credential-gated widget mount (cinatra#2790) reaches the card on
-    // purpose and is excluded HERE, at the one place the exclusion is stated,
-    // rather than by loosening the reachability analysis: every other file in
-    // the package is still measured under the original rule, and the excluded
-    // file's gate is asserted from its own source above.
-    const scanned = chatSourceFiles(CHAT_SRC).filter(
-      (f) => !CREDENTIAL_GATED_IMPORTERS.includes(f.slice(CHAT_SRC.length + 1)),
-    );
+    // The credential-gated widget mount (cinatra#2790) reached the card on
+    // purpose WHILE the cookie mount was still owed, and was excluded HERE — at
+    // the one place the exclusion is stated — rather than by loosening the
+    // reachability analysis. Once the row is struck (cinatra#2794 landed the
+    // cookie mount) the exclusion lapses with the obligation that justified it:
+    // the whole package is scanned, and the reacher is now what the arm below
+    // REQUIRES rather than what it forbids.
+    const scanned = HOLD_MOUNT_OWED
+      ? chatSourceFiles(CHAT_SRC).filter(
+          (f) => !CREDENTIAL_GATED_IMPORTERS.includes(f.slice(CHAT_SRC.length + 1)),
+        )
+      : chatSourceFiles(CHAT_SRC);
     expect(
       scanned.length,
       "the reachability scan excluded everything — it would answer green about nothing",
-    ).toBeGreaterThan(chatSourceFiles(CHAT_SRC).length - CREDENTIAL_GATED_IMPORTERS.length - 1);
+    ).toBeGreaterThan(
+      chatSourceFiles(CHAT_SRC).length - (HOLD_MOUNT_OWED ? CREDENTIAL_GATED_IMPORTERS.length : 0) - 1,
+    );
     const offenders = owedReachesFrom(realGraph, scanned, owed, (f) =>
       f.slice(CHAT_SRC.length + 1),
     );

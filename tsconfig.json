@@ -66,6 +66,7 @@
       "@cinatra-ai/agents": ["./packages/agents/src/index.ts"],
       "@cinatra-ai/agents/materialize-agent-package": ["./packages/agents/src/materialize-agent-package.ts"],
       "@cinatra-ai/agents/builtin-assistant-template": ["./packages/agents/src/builtin-assistant-template.ts"],
+      "@cinatra-ai/agents/run-recommendation-card": ["./packages/agents/src/run-recommendation-chip-row.tsx"],
       "@cinatra-ai/agents/pages": ["./packages/agents/src/pages.tsx"],
       "@cinatra-ai/agents/screens": ["./packages/agents/src/screens.tsx"],
       "@cinatra-ai/agents/module": ["./packages/agents/src/integration/module.ts"],
