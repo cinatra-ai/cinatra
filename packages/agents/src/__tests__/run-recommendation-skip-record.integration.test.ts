@@ -200,6 +200,95 @@ describe.skipIf(!HAS_DB)("cinatra#2794 — the run-level skip record (real store
     expect(await markerViaFreshConnection(runId)).toBeNull();
   });
 
+  it("ATOMIC: a failed MARKER write leaves NO durable skip evidence at all", async () => {
+    // cinatra#2794 round-8 finding 2, proved where it actually lives — in the
+    // store, against real rows. The two halves used to be two autocommitted
+    // writes, the per-skill `user_skipped` rows first. A marker that failed
+    // after those rows committed refused the skip and left the park LIVE, while
+    // `hasRunRecommendationSkip` answered `skipped` off the orphans through its
+    // legacy `recommendation_source` arm — settling the card for a decision the
+    // action had just refused, on a run still parked. The legacy arm cannot be
+    // narrowed away from that path: nothing distinguishes an orphan from a
+    // genuine pre-core__0095 row.
+    //
+    // The failure is driven the bluntest honest way: the marker table is taken
+    // out from under the write, so the rejected INSERT runs and the marker
+    // INSERT then throws — exactly the ordering the defect needed.
+    const runId = `run-atomic-${randomUUID()}`;
+    const rejected = [
+      {
+        skillId: "skill-ranked",
+        skillRevisionId: "rev-a",
+        recommendationSource: "user_skipped",
+        recommendedRank: 1,
+      },
+      {
+        skillId: "skill-forced",
+        skillRevisionId: "rev-b",
+        recommendationSource: "user_skipped",
+        recommendedRank: null,
+      },
+    ];
+
+    const admin = new Client({ connectionString: DB_URL });
+    await admin.connect();
+    const marker = `"${q(TEST_SCHEMA)}"."run_recommendation_skips"`;
+    await admin.query(`ALTER TABLE ${marker} RENAME TO run_recommendation_skips__hidden`);
+    let threw = false;
+    try {
+      store.writeRunRecommendationSkip({
+        runId,
+        skippedBy: "user-owner",
+        candidateCount: rejected.length,
+        rejected,
+      });
+    } catch {
+      threw = true;
+    } finally {
+      await admin.query(
+        `ALTER TABLE "${q(TEST_SCHEMA)}"."run_recommendation_skips__hidden" RENAME TO run_recommendation_skips`,
+      );
+      await admin.end().catch(() => {});
+    }
+
+    // The write failed, so the caller returns its typed refusal and the park
+    // stays live.
+    expect(threw).toBe(true);
+    // And the store holds NOTHING: the per-skill rows rolled back with the
+    // transaction that carried them...
+    expect(store.readRunRejectedRecommendations(runId)).toEqual([]);
+    // ...so the reader does not settle a card for the refused decision.
+    expect(store.hasRunRecommendationSkip(runId)).toBe(false);
+    expect(await markerViaFreshConnection(runId)).toBeNull();
+  });
+
+  it("ATOMIC: a SUCCESSFUL skip commits both halves together", async () => {
+    // The other side of the same invariant — atomicity must not have cost the
+    // happy path its per-skill half.
+    const runId = `run-atomic-ok-${randomUUID()}`;
+
+    const verified = store.writeRunRecommendationSkip({
+      runId,
+      skippedBy: "user-owner",
+      candidateCount: 2,
+      rejected: [
+        { skillId: "a-skill", skillRevisionId: "rev-a", recommendationSource: "user_skipped", recommendedRank: 1 },
+        { skillId: "b-skill", skillRevisionId: null, recommendationSource: "user_skipped", recommendedRank: null },
+      ],
+    });
+
+    expect(verified).toBe(true);
+    expect(await markerViaFreshConnection(runId)).toEqual({
+      skippedBy: "user-owner",
+      candidateCount: 2,
+    });
+    expect(store.readRunRejectedRecommendations(runId).map((r) => r.skillId)).toEqual([
+      "a-skill",
+      "b-skill",
+    ]);
+    expect(store.hasRunRecommendationSkip(runId)).toBe(true);
+  });
+
   it("LEGACY: a run skipped before this table still reads as skipped (no backfill needed)", async () => {
     // core__0095 ships no backfill — it would have to invent a `skipped_by` the
     // old rows never recorded — so the reader keeps the legacy arm, keyed on the
