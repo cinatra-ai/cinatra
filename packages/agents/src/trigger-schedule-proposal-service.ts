@@ -946,24 +946,18 @@ export async function reproposeExpiredScheduleProposal(
   const consumed = await readProposalConsume(consumeKey);
   if (consumed) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
 
-  // A ONE-SHOT WHOSE MOMENT HAS PASSED cannot be re-proposed as it stands, and
-  // saying so is the honest answer rather than a generic "no". `propose` would
-  // refuse it anyway (its future check is the same one Confirm applies); naming
-  // it here is what turns a dead button into the sentence that tells the reader
-  // what to do — ask for a new time.
-  if (proposal.schedule.kind === "scheduled") {
-    const ms = naiveDatetimeToUtcMs(
-      proposal.schedule.runAt,
-      proposal.schedule.timezone,
-    );
-    if (Number.isNaN(ms) || ms <= Date.now()) {
-      return { ok: false, error: PROPOSAL_REFUSALS.past };
-    }
-  }
-
-  // THE LINEAGE-LATEST RATCHET. If this lineage is already holding a
+  // THE LINEAGE-LATEST RATCHET, CONSULTED BEFORE THE PAST-TIME REFUSAL
+  // (groganz round-6 finding 3). If this lineage is already holding a
   // replacement open, that replacement IS the answer — pressing Adjust again
-  // does not mint a second one. The stored token is re-read against the reader
+  // does not mint a second one, and this has to run BEFORE the past-time
+  // check below rather than after it. A held replacement carrying a runAt
+  // DIFFERENT from the EXPIRED source's own is mintable only through
+  // `adjustLiveScheduleProposal` — so the source's own moment having passed
+  // says nothing about whether the slot it is the ancestor of still holds a
+  // live answer. Refusing on the source's stale `runAt` first made that live
+  // replacement unreachable from the expired card, and the card's
+  // `reproposedRef` is local by design (never persisted), so a reload lost the
+  // only pointer back to it. The stored token is re-read against the reader
   // asking, exactly as their own ref was, so the ratchet can never hand back a
   // token this reader is not entitled to and can never disagree with the
   // token's own clock about whether it is still live. BOTH places a stored
@@ -982,6 +976,22 @@ export async function reproposeExpiredScheduleProposal(
         token: latest.token,
         expiresAt: held.proposal.expiresAt,
       };
+    }
+  }
+
+  // A ONE-SHOT WHOSE MOMENT HAS PASSED cannot be re-proposed as it stands, and
+  // saying so is the honest answer rather than a generic "no" — but only once
+  // the ratchet above has confirmed the lineage holds no live replacement
+  // already. `propose` would refuse it anyway (its future check is the same
+  // one Confirm applies); naming it here is what turns a dead button into the
+  // sentence that tells the reader what to do — ask for a new time.
+  if (proposal.schedule.kind === "scheduled") {
+    const ms = naiveDatetimeToUtcMs(
+      proposal.schedule.runAt,
+      proposal.schedule.timezone,
+    );
+    if (Number.isNaN(ms) || ms <= Date.now()) {
+      return { ok: false, error: PROPOSAL_REFUSALS.past };
     }
   }
 

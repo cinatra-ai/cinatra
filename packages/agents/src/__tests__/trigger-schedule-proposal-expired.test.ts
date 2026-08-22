@@ -526,6 +526,47 @@ describe("ADJUST from an expired card re-proposes", () => {
     expect(result.error).toBe(service.PROPOSAL_REFUSALS.past);
   });
 
+  it("hands back the LIVE REPLACEMENT instead when the one-shot's lineage holds one (groganz round-6 finding 3)", async () => {
+    // The contrast with the test above: same PAST one-shot source, but this
+    // time the lineage is NOT empty — it is holding a live replacement with a
+    // DIFFERENT `runAt`, exactly what `adjustLiveScheduleProposal` mints. The
+    // ratchet must be consulted BEFORE the past-time refusal, or that live
+    // replacement is unreachable from the expired card whose own moment has
+    // passed — and since the card's `reproposedRef` is local by design, a
+    // reload loses the only pointer back to it.
+    const pastOneShot: ProposalSchedule = {
+      kind: "scheduled",
+      runAt: "2020-01-01T09:00",
+      timezone: "Europe/Berlin",
+    };
+    const expired = mintExpired(pastOneShot);
+    const nonce = readTriggerScheduleProposalToken({
+      token: expired.token,
+      expectedUserId: USER,
+      expectedOrgId: ORG,
+    })!.proposal.nonce;
+    const futureOneShot: ProposalSchedule = {
+      kind: "scheduled",
+      runAt: "2099-01-01T09:00",
+      timezone: "Europe/Berlin",
+    };
+    const replacement = mintTriggerScheduleProposalToken(
+      { templateId: TEMPLATE, userId: USER, orgId: ORG, schedule: futureOneShot },
+      { nonce },
+    );
+    expect(replacement).not.toBeNull();
+    lineage.set(expired.consumeKey, {
+      consumeKey: expired.consumeKey,
+      token: replacement!.token,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const result = await service.reproposeExpiredScheduleProposal(READER, expired.token);
+    if (!result.ok) throw new Error(`expected the live replacement back: ${result.error}`);
+    expect(result.token).toBe(replacement!.token);
+    expect(result.token).not.toBe(expired.token);
+  });
+
   it("refuses when the agent has since vanished", async () => {
     const expired = mintExpired();
     readAgentTemplateById.mockResolvedValue(null);

@@ -481,4 +481,61 @@ describe.skipIf(!HAS_DB)("ADJUST on a LIVE card goes through that slot", () => {
     expect(await slotCount(consumeKey)).toBe(1);
     expect((await slotRow(consumeKey))?.latest_token).toBe(adjusted.token);
   });
+
+  it("PAST ONE-SHOT + LIVE REPLACEMENT: the ratchet is consulted before the past-time refusal (groganz round-6 finding 3)", async () => {
+    // The composition invariant above passes by fixture luck: its expired
+    // member is a RECURRING schedule, so it never crosses the past-time
+    // branch. This arm crosses it. A live replacement carrying a DIFFERENT
+    // `runAt` (mintable only via `adjustLiveScheduleProposal`) must not be
+    // stranded just because the EXPIRED source's OWN one-shot moment has
+    // passed — the expired card's `reproposedRef` is local by design, so a
+    // reload loses the only pointer back to a replacement it cannot reach.
+    const templateId = await seedTemplate();
+    const original = await mintLive(templateId);
+    const consumeKey = consumeKeyOf(original.token);
+    const FUTURE_ONE_SHOT = {
+      kind: "scheduled" as const,
+      runAt: "2099-01-01T09:00",
+      timezone: "Europe/Berlin",
+    };
+    const adjusted = await service.adjustLiveScheduleProposal(READER, {
+      ref: original.token,
+      schedule: FUTURE_ONE_SHOT as never,
+    });
+    if (!adjusted.ok) throw new Error(`expected a fresh proposal: ${adjusted.error}`);
+    expect((await slotRow(consumeKey))?.latest_token).toBe(adjusted.token);
+
+    // An EXPIRED member of the SAME lineage, showing a PAST one-shot — the
+    // reading the transcript keeps for the card the reader originally saw.
+    const nonce = tokens.readTriggerScheduleProposalToken({
+      token: original.token,
+      expectedUserId: USER,
+      expectedOrgId: ORG,
+    })!.proposal.nonce;
+    const PAST_ONE_SHOT = {
+      kind: "scheduled" as const,
+      runAt: "2020-01-01T09:00",
+      timezone: "Europe/Berlin",
+    };
+    const expired = tokens.mintTriggerScheduleProposalToken(
+      { templateId, userId: USER, orgId: ORG, schedule: PAST_ONE_SHOT as never },
+      {
+        nonce,
+        nowSeconds: Math.floor(Date.now() / 1000) - tokens.PROPOSAL_TTL_SECONDS - 60,
+      },
+    );
+    expect(expired).not.toBeNull();
+    expect(consumeKeyOf(expired!.token)).toBe(consumeKey);
+
+    // THE ASSERTION THIS TEST EXISTS FOR. The expired PAST-one-shot source
+    // hands back the LIVE REPLACEMENT the lineage is holding — never the
+    // `past` refusal its own stale `runAt` would otherwise produce.
+    const held = await service.reproposeExpiredScheduleProposal(READER, expired!.token);
+    if (!held.ok) throw new Error(`expected the live replacement back: ${held.error}`);
+    expect(held.token).toBe(adjusted.token);
+    expect(held.token).not.toBe(original.token);
+    expect(held.token).not.toBe(expired!.token);
+    expect(await slotCount(consumeKey)).toBe(1);
+    expect((await slotRow(consumeKey))?.latest_token).toBe(adjusted.token);
+  });
 });
