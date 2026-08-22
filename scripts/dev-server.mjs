@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   BUNDLED_DB_SERVICES,
+  isLoopbackHost,
   shouldDiagnoseDrift,
   diagnoseDockerPortDrift,
   resolveMainRepoRoot,
@@ -232,17 +233,23 @@ async function runDbPortPreflight() {
     const mismatch = formatConnectPortMismatch({
       service: svc.label,
       claim,
+      connectHost: host,
       connectPort: port,
       laneScope: composeHostPortPlan.laneScope,
     });
     if (mismatch) console.warn(`[dev-server] ⚠ ${mismatch}`);
-    // Not the published port → the app connects somewhere this checkout does not
-    // publish, so any container found here would be somebody else's. Skipping is
-    // the pre-existing "not our docker stack" answer, now asked against the
-    // lane's port rather than the global one.
-    if (!shouldDiagnoseDrift({ host, port }, svc, claim.published)) continue;
+    // A non-loopback host is somebody else's infrastructure — a hosted DB, a
+    // shared cache — and always was outside this preflight. Not probed, not
+    // diagnosed, not remarked on: the one skip that stays in front of everything.
+    if (!isLoopbackHost(host)) continue;
     if (await probeTcp(host, port)) continue; // reachable → fine
-    down.push({ svc, host, port });
+    // Reachability and drift are two different questions, and the port test only
+    // answers the second. A checkout that connects on a port it does not publish
+    // has no container here to diagnose — but "nothing is listening there" is
+    // still true, and gating the PROBE on the drift test is what turned that
+    // case into total silence followed by ECONNREFUSED in app boot. Probe every
+    // loopback service; diagnose only the ones this checkout publishes.
+    down.push({ svc, host, port, diagnosable: shouldDiagnoseDrift({ host, port }, svc, claim.published) });
   }
   if (down.length === 0) return;
 
@@ -253,7 +260,11 @@ async function runDbPortPreflight() {
     mainRoot = process.cwd();
   }
   const drifted = [];
-  for (const { svc, port } of down) {
+  for (const { svc, port, diagnosable } of down) {
+    // Down, but not at a port this checkout publishes: no container here is its
+    // to inspect, so Docker is never touched for it. It still rides in `down`,
+    // so the "not reachable yet" warning below names it.
+    if (!diagnosable) continue;
     let diag;
     try {
       // `skip` is passed even though this function already returned on it

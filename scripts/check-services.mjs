@@ -53,13 +53,38 @@ const red = (s) => c("0;31", s);
 const yellow = (s) => c("1;33", s);
 const dim = (s) => c("2", s);
 
+// The `.env.local` this checkout keeps its configuration in, and the ONE reader
+// that resolves a value out of it (cinatra#2839). `readEnvFileValue` is the
+// launcher's reader and the one `resolveComposeHostPortPlan` resolves the plan
+// through, so this file cannot read the same line differently from the plan it
+// then compares against.
+const envLocalPath = path.join(repoRoot, ".env.local");
+const lookupEnvFile = (key) => readEnvFileValue(envLocalPath, key);
+
+// ONE READER FOR ONE FILE (cinatra#2839).
+//
+// This used to parse the file itself, with a regex that kept dotenv INLINE
+// COMMENTS in the value — while the plan resolved the same line through
+// `readEnvFileValue`, which strips them (#2845). The two halves of the
+// connect/publish note below then read one file two ways: a lane stating
+// `REDIS_URL=redis://127.0.0.1:16379 # lane cache` had its published port read
+// correctly and its connect port fall back to the shared 6379, so a correct
+// lane was accused of the very bleed this check warns about — and its Redis row
+// probed the OPERATOR's port under the lane's name.
+//
+// So the keys are enumerated here and every VALUE comes back through the shared
+// reader. Not a second copy of the comment rule: the same function, so the two
+// readers cannot drift apart again.
 function readEnvLocal() {
-  const file = path.join(repoRoot, ".env.local");
   const env = {};
-  if (!existsSync(file)) return env;
-  for (const line of readFileSync(file, "utf8").split("\n")) {
-    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-    if (match) env[match[1]] = match[2].replace(/^["']|["']$/g, "");
+  if (!existsSync(envLocalPath)) return env;
+  for (const line of readFileSync(envLocalPath, "utf8").split("\n")) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=/);
+    if (!match) continue;
+    const key = match[1];
+    if (key in env) continue; // first stated wins, exactly as the shared reader does
+    const value = lookupEnvFile(key);
+    if (value !== undefined) env[key] = value;
   }
   return env;
 }
@@ -162,8 +187,6 @@ const appPort = Number(process.env.PORT) || Number(fileEnv.PORT) || 3000;
 // the PUBLISHED PORT, because redis's host port is per-worktree now, and
 // measuring a lane's connect port against the global 6379 either skips the
 // diagnosis or condemns a healthy lane container.
-const envLocalPath = path.join(repoRoot, ".env.local");
-const lookupEnvFile = (key) => readEnvFileValue(envLocalPath, key);
 const composeProjectName = resolveComposeProjectName({
   processEnv: process.env,
   envFileValues: [lookupEnvFile(COMPOSE_PROJECT_ENV_VAR)],
@@ -339,11 +362,19 @@ const mismatchNotes = [];
 // surface. The refusals are printed instead, which is the answer an operator
 // running `pnpm check:services` actually needs.
 const planRefused = composeHostPortPlan.refusals.length > 0;
-if (downByLabel.size > 0 && !planRefused) {
-  const mainRoot = resolveMainRepoRoot(repoRoot);
+// The row this check already probed for each bundled service — its ADDRESS, up
+// or down. The connect/publish note is about the address, never about the
+// outcome, so it is read from here rather than from the down set.
+const rowByLabel = new Map(results.map((r) => [r.name, r]));
+// Docker is inspected at most once per run, and only if something is actually
+// down; `resolveMainRepoRoot` shells out to git, so it is not paid for by a
+// healthy checkout that only needed the note.
+let mainRoot;
+const mainRepoRoot = () => (mainRoot ??= resolveMainRepoRoot(repoRoot));
+if (!planRefused) {
   for (const svc of BUNDLED_DB_SERVICES) {
-    const down = downByLabel.get(svc.label);
-    if (!down) continue;
+    const row = rowByLabel.get(svc.label);
+    if (!row) continue;
     const claim = resolvePublishedHostPort({
       composeService: svc.composeService,
       defaultHostPort: svc.defaultHostPort,
@@ -352,20 +383,33 @@ if (downByLabel.size > 0 && !planRefused) {
     // Configured elsewhere: this checkout publishes no host port for it, so no
     // container found here is its to report on.
     if (claim.standDown) continue;
-    // Published here, connected there: the check that reports a service DOWN is
-    // the right place to say the port it was looked for on is not the port this
-    // checkout publishes.
+    // PUBLISHED HERE, CONNECTED THERE — computed for every bundled service,
+    // whatever its probe said (cinatra#2839).
+    //
+    // Building this inside the down-set gate inverted it. The bleed the note
+    // exists for is a lane publishing its own redis on 16379 while the app talks
+    // to one that ANSWERS on the shared 6379: the row is UP, so the service was
+    // never in the down set and the note was never produced. It could only
+    // appear when nothing answered on the connect port — the one case where
+    // there is no bleed to report. The launcher computes it before probing;
+    // this is that ordering, on the reporting surface.
     const mismatch = formatConnectPortMismatch({
       service: svc.label,
       claim,
-      connectPort: down.port,
+      connectHost: row.host,
+      connectPort: row.port,
       laneScope: composeHostPortPlan.laneScope,
     });
     if (mismatch) mismatchNotes.push(mismatch);
+    // The DRIFT diagnosis is a different question and keeps its own gate: only a
+    // service that is DOWN, at a port this checkout publishes, has a container
+    // here worth inspecting.
+    const down = downByLabel.get(svc.label);
+    if (!down) continue;
     if (!shouldDiagnoseDrift({ host: down.host, port: down.port }, svc, claim.published)) continue;
     const diag = diagnoseDockerPortDrift({
       service: svc,
-      mainRoot,
+      mainRoot: mainRepoRoot(),
       expectedHostPort: down.port,
       projectName: composeProjectName,
     });

@@ -18,7 +18,7 @@
 // and an impure wrapper (`diagnoseDockerPortDrift`) that shells out to Docker.
 
 import { spawnSync } from "node:child_process";
-import { buildComposeArgs, formatGuardedComposeCommand } from "./dev-preflight.mjs";
+import { buildComposeArgs, formatGuardedComposeCommand, isLoopbackHost } from "./dev-preflight.mjs";
 import path from "node:path";
 
 // The bundled local DB/cache services whose host ports come from the dev override.
@@ -30,11 +30,10 @@ export const BUNDLED_DB_SERVICES = [
   { composeService: "neo4j", label: "Neo4j", containerPort: 7687, defaultHostPort: 7687, envVar: "NEO4J_URI" },
 ];
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0"]);
-
-export function isLoopbackHost(host) {
-  return LOOPBACK_HOSTS.has(String(host ?? "").trim());
-}
+// Re-exported, not redefined: the connect/publish note in dev-preflight.mjs
+// asks the same question about the same address, so the two guards read ONE
+// loopback set. (That module owns it because this one already imports it.)
+export { isLoopbackHost };
 
 // Default port per URL scheme. A URL that omits an explicit port resolves to its
 // scheme default, NOT the bundled-stack fallback — otherwise a loopback

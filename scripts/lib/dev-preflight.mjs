@@ -432,6 +432,22 @@ export const PREFLIGHT_HOST_PORTS = [
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "0.0.0.0"]);
 
+/**
+ * Is this host THIS machine — the only place a published container port lands?
+ *
+ * The one definition, kept HERE because scripts/lib/docker-port-drift.mjs
+ * already imports this module and re-exports it (the reverse direction would be
+ * a cycle). Two copies of this set is how one guard drifts from another: the
+ * drift diagnosis and the connect/publish note ask the same question about the
+ * same address, and must not be able to answer it differently.
+ *
+ * @param {unknown} host
+ * @returns {boolean}
+ */
+export function isLoopbackHost(host) {
+  return LOOPBACK_HOSTS.has(String(host ?? "").trim());
+}
+
 const isUsablePort = (port) => Number.isInteger(port) && port > 0 && port < 65536;
 
 /**
@@ -630,6 +646,7 @@ export function classifyServiceUrl(urlValue) {
  *   refusals: Array<{ service: string, envVar: string, reason: string, message: string }>,
  *   warnings: Array<{ service: string, envVar: string, reason: string, message: string }>,
  *   laneScope: "unscoped" | "checkout" | "lane",
+ *   stated: string[],
  * }}
  */
 export function resolveComposeHostPortPlan({
@@ -687,6 +704,16 @@ export function resolveComposeHostPortPlan({
   const portEnv = {};
   const unmanaged = [];
   const refusals = [];
+  // The host ports this checkout STATED directly, as `CINATRA_*_HOST_PORT`.
+  //
+  // Kept apart from `portEnv` because a claim's SOURCE decides who the
+  // connect/publish note may address. Every other entry in `portEnv` is
+  // something this module worked out — a port read off a service URL, a
+  // companion derived from its container's, the historical default — and the
+  // unscoped checkout's immunity covers exactly those. A variable the operator
+  // typed is a statement, and it is honored whatever the scope, so the note
+  // that measures it has to be too. See `formatConnectPortMismatch`.
+  const statedHostPortVars = [];
   // A stated name compose will not accept can never boot this stack at all, so
   // refuse HERE — at the step that names the variable and the rule — instead of
   // letting the operator meet compose's own error after the entry point has
@@ -734,6 +761,7 @@ export function resolveComposeHostPortPlan({
         if (isUsablePort(explicit)) {
           portEnv[spec.envVar] = String(explicit); // an operator's direct claim wins
           origin[spec.envVar] = `stated directly as ${spec.envVar}=${explicit}`;
+          statedHostPortVars.push(spec.envVar);
           continue;
         }
         // Stated, but not a port. Emitting NOTHING here is the leak: the value
@@ -938,7 +966,7 @@ export function resolveComposeHostPortPlan({
     );
   }
 
-  return { portEnv, unmanaged, refusals, warnings, laneScope };
+  return { portEnv, unmanaged, refusals, warnings, laneScope, stated: statedHostPortVars };
 }
 
 /**
@@ -974,8 +1002,8 @@ export function resolveComposeHostPortPlan({
  * A companion entry (`derivedFrom`) is never the answer: it is a second port on
  * an existing service's container, not a bundled DB service of its own.
  *
- * @param {{ composeService: string, defaultHostPort: number, plan?: { portEnv?: Record<string, string>, unmanaged?: Array<{ envVar: string }> } }} input
- * @returns {{ published: number, standDown?: false } | { standDown: true }}
+ * @param {{ composeService: string, defaultHostPort: number, plan?: { portEnv?: Record<string, string>, unmanaged?: Array<{ envVar: string }>, stated?: string[] } }} input
+ * @returns {{ published: number, parameterized: boolean, stated?: boolean, standDown?: false } | { standDown: true }}
  */
 export function resolvePublishedHostPort({ composeService, defaultHostPort, plan = {} } = {}) {
   const spec = PREFLIGHT_HOST_PORTS.find(
@@ -988,7 +1016,15 @@ export function resolvePublishedHostPort({ composeService, defaultHostPort, plan
   // compose files, so a lane pointing at another one of those is the ordinary
   // external-service case and nothing to remark on.
   if (!spec) return { published: defaultHostPort, parameterized: false };
-  const base = { parameterized: true, envVar: spec.envVar, urlVar: spec.urlVar };
+  // `stated` carries the claim's SOURCE forward: was this port typed by the
+  // operator, or worked out by the plan? Only the caller that WARNS about a
+  // claim needs it — see `formatConnectPortMismatch`.
+  const base = {
+    parameterized: true,
+    envVar: spec.envVar,
+    urlVar: spec.urlVar,
+    stated: (plan.stated ?? []).includes(spec.envVar),
+  };
   if ((plan.unmanaged ?? []).some((entry) => entry.envVar === spec.envVar)) {
     return { ...base, standDown: true };
   }
@@ -1003,8 +1039,8 @@ export function resolvePublishedHostPort({ composeService, defaultHostPort, plan
  * The warning a SCOPED checkout owes its operator when it PUBLISHES a service
  * on one host port and its own app CONNECTS on another.
  *
- * This is the leak the drift fix alone does not close (cinatra#2839, round-1
- * Codex finding). `resolveComposeHostPortPlan` accepts an explicit
+ * This is the leak the drift fix alone does not close (cinatra#2839).
+ * `resolveComposeHostPortPlan` accepts an explicit
  * `CINATRA_*_HOST_PORT` as a complete claim, so a lane may state
  * `CINATRA_REDIS_HOST_PORT=16379` and no `REDIS_URL` at all and be refused
  * nothing. Compose then publishes the lane's redis on 16379 while the app,
@@ -1023,18 +1059,43 @@ export function resolvePublishedHostPort({ composeService, defaultHostPort, plan
  * own, connect to the shared one — and the plan already accepted it. Refusing
  * here would overturn that decision from a different module.
  *
- * Returns undefined when there is nothing to say: the unscoped checkout (whose
- * immunity is absolute), a service this plan does not parameterize, a service
- * stood down, or ports that agree.
+ * BOTH HALVES OF THE MESSAGE ARE CLAIMS ABOUT THIS HOST, so it is said only
+ * about a LOOPBACK connect address — the same test `shouldDiagnoseDrift` keeps,
+ * for the same reason. A checkout whose `REDIS_URL` names an external or shared
+ * service by design is not talking to another local stack, and "point
+ * `REDIS_URL` at 127.0.0.1" would move it off the service it was configured
+ * for: a false statement with an unsafe remedy attached.
  *
- * @param {{ service: string, claim?: { published?: number, parameterized?: boolean, standDown?: boolean, envVar?: string, urlVar?: string }, connectPort?: number, laneScope?: string }} input
+ * Returns undefined when there is nothing to say: a non-loopback connect host,
+ * an unscoped checkout that merely OMITTED a host port, a service this plan does
+ * not parameterize, a service stood down, or ports that agree.
+ *
+ * @param {{ service: string, claim?: { published?: number, parameterized?: boolean, standDown?: boolean, stated?: boolean, envVar?: string, urlVar?: string }, connectHost?: string, connectPort?: number, laneScope?: string }} input
  * @returns {string | undefined}
  */
-export function formatConnectPortMismatch({ service, claim = {}, connectPort, laneScope } = {}) {
+export function formatConnectPortMismatch({
+  service,
+  claim = {},
+  connectHost,
+  connectPort,
+  laneScope,
+} = {}) {
+  // Not this host, not this message. Everything below names ports on the local
+  // Docker host; a remote answer belongs to neither the operator's stack nor
+  // another lane, and re-pointing at loopback would break a working setup.
+  if (!isLoopbackHost(connectHost)) return undefined;
   // The unscoped checkout states no project name, so it is the operator's single
   // stack and nothing here remarks on it — the same immunity every rule above
   // states explicitly rather than leaving to fall out.
-  if (!laneScope || laneScope === "unscoped") return undefined;
+  //
+  // That immunity covers what a checkout OMITS, not what it STATES. An unscoped
+  // checkout that wrote `CINATRA_REDIS_HOST_PORT=16379` made a claim the plan
+  // honors whatever its scope, and published-vs-connect then disagree — which
+  // also switches `shouldDiagnoseDrift` off, so the drift refusal and the "not
+  // reachable yet" warning both stop describing it. This note is the only signal
+  // left before the ECONNREFUSED in app boot, and silence is worse than the
+  // wrong-but-loud answer it replaced.
+  if ((!laneScope || laneScope === "unscoped") && !claim.stated) return undefined;
   if (!claim.parameterized || claim.standDown) return undefined;
   // Both sides must be real ports before this can name them. A claim with no
   // usable published port is one the plan already refused or stood down, and the
