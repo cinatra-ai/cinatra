@@ -72,7 +72,9 @@
     "",
     "A record is TEXT, and text is forgeable: a person can hand-write one with a real image and",
     "invented counts. What the contract does catch is the accidental mislabel, the anchor nobody",
-    "measured, the drifted hash, the re-used picture, and the cell that cites nothing at all."
+    "measured, the drifted hash, the re-used picture, and the cell that cites nothing at all.",
+    "",
+    "  A1-A3 / B1-B3 / R1-R2 / E1-E2 - cinatra#2788 (PR #2858, S9d), evidence/2788-s9d-schedule-card. The SCHEDULE PROPOSAL card, drawn where the S1 placeholder box used to stand. The A group is one continuous interaction in one real transcript - the proposal with its schedule on screen, the same rows opened in place by Adjust, and the settled trigger chrome after a real press of Confirm - and the B group is those three cells on the dark ground, in a second transcript with a proposal of its own, because a proposal token is single-use. R1 / R2 are the SAME component on the run page, mounted by TriggerScreen against the run that Confirm created. E1 / E2 are the EXPIRED face and they are the one STAND-IN in the set: main's resolver answers an expired proposal `absent` (cinatra#2836 is the fix), so the card, the page and every counted anchor are real while the RESOLVE RESPONSE is substituted - the cell names carry `standin` and each record's note says so in words."
   ],
   "schemaVersion": 1,
   "recorder": "cinatra-lifecycle-capture-recorder@1",
@@ -3951,6 +3953,1630 @@
       },
       "note": "The same settled zero-chip card in the dark theme — the panel's tokens resolve to the dark ground and the reading is the same.",
       "runtime": "dev"
+    },
+    {
+      "cell": "A1__schedule-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-light-r6",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/A1__schedule-card__chat_thread__pending.png",
+      "sha256": "dcf2f176dc36651b1e5e85b1fec6ad4bf86e404a53ca42a49ca22581aad0c347",
+      "capturedAt": "2026-08-22T16:46:13.951Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "proposal",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "The proposal as it arrives in the transcript: the question, the three option rows with the RECURRING row chosen and owning its fields, the estimated duration, and §VI's floor — Adjust · Confirm. The schedule the reader is deciding on is on the card, which is what the placeholder box this slice retires never showed.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "A2__schedule-card__chat_thread__pending__adjust-open",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-light-r6",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/A2__schedule-card__chat_thread__pending__adjust-open.png",
+      "sha256": "037feae6d8ea4a6ccc3f93d76afb9b32b137bbbf36c0e674c0b39f0f399d1c2b",
+      "capturedAt": "2026-08-22T16:46:15.770Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"][aria-pressed=\"true\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-field=\"recurring-weekday\"]:not([disabled])",
+          "scope": "root",
+          "count": 7,
+          "frame": "main",
+          "expect": "present",
+          "visible": 7,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "proposal",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "WHAT ADJUST PRODUCES. The same rows, in place, now writable — the weekday buttons, the interval, the hour and the timezone are live and the Adjust control reads pressed. No second form is swapped in and no new card is drawn.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "A3__schedule-card__chat_thread__settled",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-light-r6",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/A3__schedule-card__chat_thread__settled.png",
+      "sha256": "73f95c5275d38967043b4f15e9b084eb8182a4e05240f1d85bc7cb239e890b9f",
+      "capturedAt": "2026-08-22T16:46:21.440Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "After a real press of Confirm in the same transcript: the card settles IN PLACE into the trigger's own chrome — read-only Trigger configuration, the steps held until the trigger fires, and the quiet controls. Nothing was reloaded and no second card was drawn.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "B1__schedule-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-dark-r6",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/B1__schedule-card__chat_thread__pending__dark.png",
+      "sha256": "a88a8bdd6c4762173b1c9a34a5dc6ebb180148ef5b1c65de198bef897063176e",
+      "capturedAt": "2026-08-22T16:46:28.851Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "proposal",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "The proposal as it arrives in the transcript: the question, the three option rows with the RECURRING row chosen and owning its fields, the estimated duration, and §VI's floor — Adjust · Confirm. The schedule the reader is deciding on is on the card, which is what the placeholder box this slice retires never showed.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    },
+    {
+      "cell": "B2__schedule-card__chat_thread__pending__adjust-open__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-dark-r6",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/B2__schedule-card__chat_thread__pending__adjust-open__dark.png",
+      "sha256": "eae5cf90142a5a73cb11a65bab21d13f25c29c87caad70a71e153cc72312c2c9",
+      "capturedAt": "2026-08-22T16:46:30.670Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"][aria-pressed=\"true\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-field=\"recurring-weekday\"]:not([disabled])",
+          "scope": "root",
+          "count": 7,
+          "frame": "main",
+          "expect": "present",
+          "visible": 7,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "proposal",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "WHAT ADJUST PRODUCES. The same rows, in place, now writable — the weekday buttons, the interval, the hour and the timezone are live and the Adjust control reads pressed. No second form is swapped in and no new card is drawn.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    },
+    {
+      "cell": "B3__schedule-card__chat_thread__settled__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-dark-r6",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/B3__schedule-card__chat_thread__settled__dark.png",
+      "sha256": "23536f15b8d7ad99ad46c885a6001ad654d30f90653379d7e5660eb2cafec6f1",
+      "capturedAt": "2026-08-22T16:46:34.838Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "After a real press of Confirm in the same transcript: the card settles IN PLACE into the trigger's own chrome — read-only Trigger configuration, the steps held until the trigger fires, and the quiet controls. Nothing was reloaded and no second card was drawn.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    },
+    {
+      "cell": "R1__schedule-card__run_card__settled",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/planner-agent/2b43cc9c-eb70-4b97-870e-a54a2a6cebd1/trigger",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/R1__schedule-card__run_card__settled.png",
+      "sha256": "8c61183fa0b5b4657b51f4aab08aecd70d92d78614b1aa7ba405e64be02a5f96",
+      "capturedAt": "2026-08-22T16:46:59.083Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "The SAME component on the run page, mounted by TriggerScreen under its own host declaration, addressed by a run-scoped ref minted server-side. The run is the one the confirmed proposal created; a run no proposal produced draws no card here at all.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "R2__schedule-card__run_card__settled__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/planner-agent/2b43cc9c-eb70-4b97-870e-a54a2a6cebd1/trigger",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/R2__schedule-card__run_card__settled__dark.png",
+      "sha256": "da8c5e1243c2a6a7c1ed56137648050a0dc3ed8a56b73e26d3bf437c1ebeb366",
+      "capturedAt": "2026-08-22T16:47:05.296Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "The SAME component on the run page, mounted by TriggerScreen under its own host declaration, addressed by a run-scoped ref minted server-side. The run is the one the confirmed proposal created; a run no proposal produced draws no card here at all.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    },
+    {
+      "cell": "E1__schedule-card__chat_thread__pending__expired-face__standin",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-expired-r6",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/E1__schedule-card__chat_thread__pending__expired-face__standin.png",
+      "sha256": "f76c0d1c88cdeb5c93d810a444f38e61046f2ebe724d6a5868c0237f73e1c2da",
+      "capturedAt": "2026-08-22T16:47:11.617Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"expired\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "expired",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "STAND-IN, NAMED: main's resolver answers an expired proposal `absent` (the vanish defect cinatra#2836 / PR #2837 fixes), so this branch cannot reach the expired PHASE through the server. The card, the transcript, the browser and every counted anchor are real; what is stood in is the RESOLVE RESPONSE, answered with the expired body this branch carries byte-identically from #2837. The reading it proves is the plan's: the card STAYS VISIBLE with the schedule it asked about and an Adjust to propose again, and no Confirm floor.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "E2__schedule-card__chat_thread__pending__expired-face__standin__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-expired-r6",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/E2__schedule-card__chat_thread__pending__expired-face__standin__dark.png",
+      "sha256": "ad7f21ef7725f8e0f0309d83eb65ee7b7d4f5951b71d2129a4de9b082df2cb3a",
+      "capturedAt": "2026-08-22T16:47:17.649Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"expired\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "expired",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "STAND-IN, NAMED: main's resolver answers an expired proposal `absent` (the vanish defect cinatra#2836 / PR #2837 fixes), so this branch cannot reach the expired PHASE through the server. The card, the transcript, the browser and every counted anchor are real; what is stood in is the RESOLVE RESPONSE, answered with the expired body this branch carries byte-identically from #2837. The reading it proves is the plan's: the card STAYS VISIBLE with the schedule it asked about and an Adjust to propose again, and no Confirm floor.",
+      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
     }
   ]
 }

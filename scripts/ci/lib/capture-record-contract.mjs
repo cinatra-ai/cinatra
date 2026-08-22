@@ -166,7 +166,29 @@ export const CARD_KINDS = {
   trigger_schedule_proposal: {
     cellTokens: ["trigger-card", "schedule-card", "trigger-schedule-proposal"],
     root: '[data-lifecycle-card="trigger_schedule_proposal"]',
-    decisionControls: ["[data-action]"],
+    // §VI's DECISION floor is `Adjust · Confirm`, and it is the only thing a
+    // capture of this kind owes: present while the card is undecided, absent
+    // once it is settled. The placeholder-era `[data-action]` was written
+    // before any of the card existed and matched too much — the SETTLED chrome
+    // draws `Cancel trigger` and `Release now` BY DESIGN (§VI: "two quiet
+    // right-aligned controls") — so a truthful settled capture was refused as
+    // "still offers a decision", and a pending one could have been answered by
+    // a control that decides nothing.
+    //
+    // ONE ENTRY, and it is a selector LIST on purpose. §VI's floor draws
+    // DIFFERENT controls in different phases: Adjust · Confirm on a live
+    // proposal, and Adjust ALONE on an expired one (plan §7 step 5 — it "stays
+    // visible with Adjust to propose again", and there is nothing left to
+    // confirm). A multi-member group is read by the audit tier as "EVERY member
+    // present", which is true of the chip row (it renders all three
+    // unconditionally) and false here: it would refuse the expired capture for
+    // showing exactly what the drawing gives it. The floor's own union states
+    // the real requirement, and both tiers read it the same way. Named off the
+    // shipped card (`packages/agents/src/schedule-proposal-card.tsx`) rather
+    // than guessed, exactly as the review card's decision bar is.
+    decisionControls: [
+      '[data-action="confirm-schedule-proposal"], [data-action="adjust-schedule-proposal"]',
+    ],
   },
   verification_summary: {
     cellTokens: ["verification-card", "audit-card", "verification"],
