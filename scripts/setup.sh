@@ -230,6 +230,45 @@ node scripts/gen-wayflow-env.mjs --require-bridge-token
 
 # ── Docker infrastructure ─────────────────────────────────────────────────────
 
+# scripts/dev-compose-env.mjs is the ONE step that resolves this checkout's
+# compose project and host ports (cinatra#2839). It runs HERE, before the first
+# compose invocation of this section, because `make setup` is a WHOLE-STACK
+# entry point exactly like `make dev` and `pnpm services`: without it, setup
+# ignored a lane's COMPOSE_PROJECT_NAME (compose fell back to the
+# directory-derived project), published the four historical default ports, and
+# bypassed every refusal this branch added — a missing service URL, a companion
+# port that overflows, an unusable ambient override, a stand-down.
+#
+# ASSIGN, then eval — and NOT as one `&&` chain. This script runs under `set -e`,
+# and errexit deliberately EXEMPTS a command that is part of an `&&` list, so
+# `ASSIGN && eval && docker compose up` would skip the `up` on a refusal and then
+# carry on with the REST of setup — the health waits, the app setup, the graphiti
+# recreate, "Setup complete!" — as if nothing had happened. A refusal has to stop
+# the script, so the assignment stands alone with an explicit `|| error`.
+#
+# --require-manageable is what makes the stand-down real here: this is a
+# whole-stack `up`, which has no way to leave out a service whose URL says it is
+# configured elsewhere, so for a named lane the step refuses rather than letting
+# compose publish that service on the shared default.
+#
+# PROPAGATION: `eval` of the step's `export` lines puts COMPOSE_PROJECT_NAME and
+# the CINATRA_*_HOST_PORT values into THIS shell, so every later `docker compose`
+# in this file inherits them as a child process — the wayflow build and the
+# `up -d` below, the `docker compose exec` health waits, the demo `--profile
+# plane`/`plane-mcp` bring-ups, and the graphiti recreate near the end. This
+# script never `cd`s and runs no compose inside a subshell or a function, so
+# there is no invocation the exports miss.
+#
+# SCOPE LIMIT, stated plainly (cinatra#2845/#2849): only nango-server,
+# nango-connect, nango-db and redis are parameterized. A second lane running this
+# script still collides on the stack's other fixed host ports — wayflow 3010,
+# verdaccio 4873, postgres 5434, neo4j, graphiti. Two-lane whole-stack setup is
+# not supported yet.
+info "Resolving this checkout's compose project and host ports..."
+CINATRA_COMPOSE_ENV="$(node scripts/dev-compose-env.mjs --require-manageable)" \
+  || error "Refusing to bring the stack up on ports this checkout does not own (see the [dev-compose-env] lines above). Setup stopped BEFORE starting anything, rather than publishing the shared defaults under a name that is not this lane's. Fix the reported variable in .env.local and re-run \`bash scripts/setup.sh\` (it reconciles in place)."
+eval "$CINATRA_COMPOSE_ENV"
+
 # cinatra#2654: the WayFlow agent runtime comes up WITH the stack. Its image
 # builds from ./docker/wayflow (there is no registry image), so build it as its
 # OWN step first: a broken build then fails setup by name and stays cheap to
@@ -264,7 +303,7 @@ done
 info "Redis is ready."
 
 info "Waiting for Nango to be ready..."
-until curl -sf http://127.0.0.1:3003/health >/dev/null 2>&1; do
+until curl -sf "http://127.0.0.1:${CINATRA_NANGO_SERVER_HOST_PORT:-3003}/health" >/dev/null 2>&1; do
   sleep 2
 done
 info "Nango is ready."
@@ -536,7 +575,7 @@ info "Setup complete!"
 echo ""
 echo "  Start the app:    pnpm dev"
 echo "  Open the app:     http://localhost:3000"
-echo "  Stop infra:       docker compose down"
+echo "  Stop infra:       make down"
 echo ""
 echo "  The first user to register becomes the admin."
 echo "  After that, you can (re-)load sample data with: pnpm seed"

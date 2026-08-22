@@ -155,9 +155,17 @@ services:
     # only applies the policy after a 10s successful start, so a true boot-loop
     # still surfaces instead of spinning forever. See cinatra-ai/cinatra#730.
     restart: unless-stopped
+    # Host ports are parameterized so a per-worktree lane can publish this
+    # service on its OWN ports instead of the global 3003/3009 (cinatra#2839:
+    # the `pnpm dev` preflight can bring this service up, and two lanes — or one
+    # lane beside the operator's stack — collided the moment it did). Defaults
+    # preserve the historical fixed ports exactly, so an operator who sets
+    # nothing sees no change. scripts/dev-compose-env.mjs is the ONE step that
+    # resolves these, and every entry point that starts this stack goes through
+    # it; the CONTAINER-side ports below are untouched.
     ports:
-      - "3003:3003"
-      - "3009:3009"
+      - "${CINATRA_NANGO_SERVER_HOST_PORT:-3003}:3003"
+      - "${CINATRA_NANGO_CONNECT_HOST_PORT:-3009}:3009"
     # NANGO_ENCRYPTION_KEY comes from a NARROW, generated file — NOT inlined as
     # `environment: NANGO_ENCRYPTION_KEY: "${NANGO_ENCRYPTION_KEY}"`. That
     # interpolation reads the *shell* env, so a bare `docker compose up` (no
@@ -173,9 +181,19 @@ services:
       - path: ./docker/nango/.nango.env
         required: false
     environment:
+      # SERVER_PORT is the CONTAINER-side listen port and stays fixed — it is
+      # the right-hand side of the mapping above.
       SERVER_PORT: "3003"
-      NANGO_SERVER_URL: http://localhost:3003
-      NANGO_PUBLIC_SERVER_URL: http://localhost:3003
+      # These two are what the container ADVERTISES, so they must name the
+      # published HOST port, not the container's. NANGO_PUBLIC_SERVER_URL is
+      # what the OAuth callback is built from
+      # (`${NANGO_PUBLIC_SERVER_URL}/oauth/callback`, see
+      # packages/sdk-extensions/src/host-context.ts) — a lane published on
+      # 13003 that still advertised 3003 sent its provider callbacks to
+      # whatever holds the global port, i.e. another lane. Same variable as the
+      # published port above, by construction (cinatra#2839).
+      NANGO_SERVER_URL: http://localhost:${CINATRA_NANGO_SERVER_HOST_PORT:-3003}
+      NANGO_PUBLIC_SERVER_URL: http://localhost:${CINATRA_NANGO_SERVER_HOST_PORT:-3003}
       NANGO_DASHBOARD_USERNAME: admin
       NANGO_DASHBOARD_PASSWORD: cinatra-local
       FLAG_AUTH_ENABLED: "false"

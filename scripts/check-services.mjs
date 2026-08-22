@@ -29,6 +29,7 @@ import {
   formatDriftRemedy,
   parseHostPort,
 } from "./lib/docker-port-drift.mjs";
+import { formatGuardedComposeCommand } from "./lib/dev-preflight.mjs";
 import { nangoHealthUrl, probeHttpHealth } from "./lib/nango-health.mjs";
 import { wayflowDownHint } from "./lib/wayflow-down-hint.mjs";
 
@@ -299,8 +300,18 @@ if (requiredDown.length > 0) {
         .join(", ")}.`,
     ),
   );
+  // The raw alternative is the GUARDED chain (cinatra#2839): a bare
+  // `docker compose up` pasted from here skips scripts/dev-compose-env.mjs, so
+  // it neither pins this checkout's compose project — Docker reads
+  // COMPOSE_PROJECT_NAME from its own env, never from `.env.local` — nor honors
+  // any of the refusals `make dev` now stops on. Same builder as the recipes.
   console.log(
-    dim("  Start them with `make dev` (or `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`), then inspect `make logs`."),
+    dim(
+      `  Start them with \`make dev\` (or \`${formatGuardedComposeCommand({
+        args: ["up", "-d"],
+        requireManageable: true,
+      })}\`), then inspect \`make logs\`.`,
+    ),
   );
   process.exit(1);
 }
