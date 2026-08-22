@@ -411,6 +411,135 @@ describe("auth-route-guard - cinatra#1881 assistant run-stream resume matcher", 
   });
 });
 
+describe("auth-route-guard - cinatra#2902 inline run panel seed matcher", () => {
+  // The inline run panel's SEED — GET /api/agents/runs/<runId> — is the one read
+  // the panel makes before it can draw anything. On the embedded widget that
+  // request carries no cookie, so the guard used to answer it with a 307 to
+  // sign-in before the handler ran, `fetch` followed the redirect, the JSON parse
+  // failed, and the panel drew "Could not load agent run … — please try again."
+  // for ever.
+  //
+  // A BOUNDED dynamic matcher admits exactly this path shape and nothing around
+  // it. Every row below proves either that admission REACHES THE HANDLER'S OWN
+  // CHECK (never a 307) or that a neighbour stays guarded.
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    const status = res.status ?? 200;
+    const location = res.headers?.get?.("location") ?? null;
+    return status !== 307 && location === null;
+  }
+  // A representative v4 UUID — the shape `randomUUID()` mints for a run id at
+  // the one creation perimeter (`createAgentRun`).
+  const RUN = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+  it("a cookieless GET to /api/agents/runs/<uuid> passes the guard (no 307 — the handler runs)", async () => {
+    const res = await guardAppRoute(fakeRequest(`/api/agents/runs/${RUN}`));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("accepts the `run_` prefixed form the dispatch paths mint", async () => {
+    // `src/lib/project-dispatch.ts` and both mint sites in
+    // `src/lib/host-content-editor-dispatch.ts` key their runs `run_<uuid>`. A
+    // matcher that admitted only the bare form would leave exactly those runs
+    // answering the widget with the 307 this entry removes.
+    const res = await guardAppRoute(fakeRequest(`/api/agents/runs/run_${RUN}`));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("accepts the `run-` prefixed form of the same id (the column is opaque text)", async () => {
+    const res = await guardAppRoute(fakeRequest(`/api/agents/runs/run-${RUN}`));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("accepts an upper-case-hex id (case-insensitive shape; the handler still binds the run)", async () => {
+    const res = await guardAppRoute(fakeRequest(`/api/agents/runs/${RUN.toUpperCase()}`));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("MALFORMED-ID CONTROL: a non-UUID run segment still 307s (fail-closed to the session gate)", async () => {
+    for (const seg of [
+      "not-a-uuid",
+      "..",
+      "12345",
+      "run-broker-xyz",
+      // one hex digit short of a UUID
+      "3f2504e0-4f89-41d3-9a0c-0305e82c330",
+      // one too long
+      `${RUN}0`,
+      // the right characters, the wrong grouping
+      "3f2504e04f8941d39a0c0305e82c3301",
+      // a `run-` prefix over something that is not a UUID
+      "run-not-a-uuid",
+      // …and the same for the underscore form the dispatch paths mint
+      "run_not-a-uuid",
+      // a prefix the mint sites never produce, over a real UUID
+      `runs-${RUN}`,
+      `run${RUN}`,
+    ]) {
+      const res = await guardAppRoute(fakeRequest(`/api/agents/runs/${seg}`));
+      expect(res.status, `${seg} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("DESCENDANT CONTROL: the run's live transports under the same id still 307", async () => {
+    // The panel's stream is deliberately OUT of this slice's scope: it is
+    // separately session-only and is named as follow-up, not opened here. A
+    // matcher that admitted it would silently promise a transport that does not
+    // work.
+    for (const suffix of ["/stream", "/", "/stream/", "/stream/extra", "/cancel", "/messages"]) {
+      const res = await guardAppRoute(fakeRequest(`/api/agents/runs/${RUN}${suffix}`));
+      expect(res.status, `suffix "${suffix}" must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("SIBLING CONTROL: the bare collection and its non-run siblings stay guarded", async () => {
+    for (const p of [
+      "/api/agents/runs",
+      "/api/agents/runs/",
+      "/api/agents/runs/stream",
+      "/api/agents/templates",
+      `/api/agents/${RUN}`,
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("UNRELATED-PATH CONTROL: a UUID-shaped segment elsewhere is not admitted by this matcher", async () => {
+    for (const p of [
+      `/api/agents/runs-archive/${RUN}`,
+      `/api/agent/runs/${RUN}`,
+      `/agents/runs/${RUN}`,
+      `/api/artifacts/${RUN}`,
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("SOURCE PIN: the matcher is a UUID-shaped structural regex, never an /api/agents prefix, with an in-handler-auth comment", () => {
+    expect(guardSource).toMatch(/AGENT_RUN_BY_ID_PATH/);
+    expect(guardSource).toMatch(
+      /\/\^\\\/api\\\/agents\\\/runs\\\/\(\?:run\[-_\]\)\?\[0-9a-fA-F\]\{8\}/,
+    );
+    // Never a broad /api/agents prefix — that would expose every sibling route.
+    expect(guardSource).not.toMatch(/"\/api\/agents"\s*,/);
+    const block = guardSource.slice(
+      guardSource.indexOf("cinatra#2902"),
+      guardSource.indexOf("const AGENT_RUN_BY_ID_PATH"),
+    );
+    // The rationale a later reader needs: what the handler's own gate is, and
+    // that the branch does not fall back to an ambient cookie.
+    expect(block.toLowerCase()).toMatch(/never falls back/);
+    expect(block.toLowerCase()).toMatch(/conversation\.read/);
+    // …and the scope note, so nobody assumes the live transports came with it.
+    expect(block.toLowerCase()).toMatch(/stream/);
+  });
+});
+
 describe("auth-route-guard - cinatra#340 generic /webhook namespace (behavioral)", () => {
   // The whole /webhook namespace skips the sign-in redirect (a webhook arrives
   // from an unauthenticated connected site). Both a DECLARED hook path and an

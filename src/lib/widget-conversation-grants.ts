@@ -18,6 +18,7 @@ import "server-only";
 
 import type { WidgetTokenGrant } from "@/lib/lifecycle/widget-lifecycle-actor";
 import {
+  WIDGET_AGENT_RUN_SEED_ROUTE_PATH,
   WIDGET_CHAT_PARTICIPANTS_ROUTE_PATH,
   WIDGET_CHAT_PENDING_CALLS_ROUTE_PATH,
   WIDGET_CHAT_SETTINGS_ROUTE_PATH,
@@ -118,6 +119,27 @@ export const WIDGET_PENDING_CALLS_DECIDE_GRANT: WidgetTokenGrant = {
  */
 export const WIDGET_UNDO_CANDIDATE_GRANT: WidgetTokenGrant = {
   routePath: WIDGET_CHAT_UNDO_ROUTE_PATH,
+  requiredScopes: [WIDGET_CONVERSATION_READ_SCOPE],
+  auditAuthorized: "widget_conversation_read_authorized",
+  auditRejected: "widget_conversation_read_rejected",
+};
+
+/**
+ * cinatra#2902 — the inline run panel's SEED: "draw the agent run this message
+ * is about".
+ *
+ * READ ONLY, and it is the seed only. The panel's live transports (the run's
+ * stream, its creation-progress notifications) are separately session-only and
+ * carry no grant here, so a widget session reaches the one read this grant names
+ * and nothing beside it.
+ *
+ * It rides `conversation.read` because the run is part of the conversation the
+ * reader is already looking at — the same reading the parked-call list and the
+ * undo chip are — and its own audience keeps AC-1 true: a session minted before
+ * this slice holds the scope, not the audience, and dies at the consume.
+ */
+export const WIDGET_AGENT_RUN_SEED_GRANT: WidgetTokenGrant = {
+  routePath: WIDGET_AGENT_RUN_SEED_ROUTE_PATH,
   requiredScopes: [WIDGET_CONVERSATION_READ_SCOPE],
   auditAuthorized: "widget_conversation_read_authorized",
   auditRejected: "widget_conversation_read_rejected",

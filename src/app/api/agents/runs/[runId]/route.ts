@@ -9,19 +9,160 @@ import {
   readAgentTemplateById,
   type ActorRoleHints,
 } from "@cinatra-ai/agents";
+import {
+  authenticateWidgetConversationRequest,
+  isWidgetBranchRequest,
+} from "@/lib/widget-conversation-door";
+import { WIDGET_AGENT_RUN_SEED_GRANT } from "@/lib/widget-conversation-grants";
+
+// ---------------------------------------------------------------------------
+// GET /api/agents/runs/<runId> — the inline run panel's SEED.
+//
+// The chat transcript knows a run id and nothing else; this endpoint answers
+// with the run state, its messages and the template metadata the panel needs to
+// mount. It is the panel's FIRST read and the only one this slice opens.
+//
+// TWO AUTH BRANCHES (cinatra#2902).
+//
+//   · COOKIE SESSION — the first-party hosts (`/chat`), unchanged to the byte.
+//   · BROKER `cwu_`  — the embedded site widget. Its actor is built by the ONE
+//     conversation door, consumed at THIS route's audience under
+//     `conversation.read`, and the run is then bound to that credential by the
+//     SAME per-run authorization ladder the first-party read runs.
+//
+// THE BRANCH IS DECIDED BY THE PRESENTED CREDENTIAL, NEVER BY A CLAIM ABOUT THE
+// SURFACE, and it does not fall back. This route is same-origin to the embed
+// frame, so an ambient Cinatra cookie is exactly what a failed widget consume
+// must not be rescued by — it would hand the frame whoever else is signed in on
+// that browser, and a run is somebody's work.
+//
+// THE WIDGET BRANCH'S REFUSAL IS UNIFORM. A rejected credential, a run that does
+// not exist, a run in another tenant and a run this reader may not see all
+// answer with the SAME status and the SAME body, and none of them reads a
+// message or a template first. The first-party branch keeps its 403/404 split,
+// which is a distinction its caller is already entitled to; on a third-party
+// page that same split is an existence oracle for runs the asker has no standing
+// to learn about.
+//
+// SCOPE, STATED NARROWLY. The seed and the render. The panel's live transports —
+// the run's stream (`./stream`) and its creation-progress notifications — remain
+// session-only and are deliberately NOT opened here, which is why the guard's
+// matcher terminates at this path and the grant declares this audience alone.
+// ---------------------------------------------------------------------------
 
 type RouteContext = { params: Promise<{ runId: string }> };
 
-export async function GET(_request: Request, context: RouteContext) {
+/** The widget branch's ONE answer to every refusal. */
+function widgetRefusal(): NextResponse {
+  return NextResponse.json({ error: "Run not found" }, { status: 404 });
+}
+
+/**
+ * The seed body. ONE serializer for both branches, so the widget cannot drift
+ * into showing more (or less) of a run than the app shows for the same reader.
+ */
+async function seedResponse(
+  run: NonNullable<Awaited<ReturnType<typeof readAgentRunById>>>,
+): Promise<NextResponse> {
+  const messages = await readAgentRunMessages(run.id);
+
+  // Fetch the template once and reuse it in BOTH the hitlContext derivation
+  // AND the inline-card metadata response below.
+  const template = await readAgentTemplateById(run.templateId);
+
+  // Shared derivation (also used by the A2A snapshot path — see
+  // packages/agents/src/hitl-context.ts): persisted AG-UI INTERRUPT first
+  // (bounded Redis Streams reverse read — the SSE stream can open AFTER the
+  // worker emitted the INTERRUPT and miss it), then the synthetic
+  // wayflow-<a2aTaskId> / setup-<runId> gate-identity fallbacks.
+  const hitlContext = await deriveRunHitlContext(run, { template });
+
+  // Surface the template+run metadata fields the chat-inline
+  // <AgenticRunPanel> wrapper needs (templateId for HITL-assist endpoints,
+  // agentPackageName for renderer override resolution, agUiEnabled to pick
+  // SSE-vs-poll, a2aTaskId for cancel logic, traceId for trace links).
+  // These are SSR-loaded directly from the DB on the run-detail page; the
+  // chat wrapper has to fetch via this REST endpoint. The template is
+  // already loaded above (reused — single DB round-trip).
+  return NextResponse.json({
+    status: run.status,
+    error: run.error,
+    inputParams: run.inputParams ?? {},
+    startedAt: run.startedAt ? run.startedAt.toISOString() : null,
+    completedAt: run.completedAt ? run.completedAt.toISOString() : null,
+    templateId: run.templateId,
+    agentPackageName: template?.packageName ?? null,
+    agUiEnabled: run.agUiEnabled ?? null,
+    taskId: run.a2aTaskId ?? null,
+    traceId: run.traceId ?? null,
+    messages: messages.map((m) => ({
+      id: m.id,
+      runId: m.runId,
+      sequence: m.sequence,
+      role: m.role,
+      messageType: m.messageType,
+      toolCallId: m.toolCallId,
+      toolName: m.toolName,
+      body: m.body,
+      createdAt: m.createdAt.toISOString(),
+    })),
+    hitlContext,
+  });
+}
+
+/**
+ * The WIDGET branch: authenticate the presented credential per call, then bind
+ * the run to it.
+ *
+ * The binding is not a second rule written here — it is `readAgentRunById` run
+ * with the widget principal and the org the TOKEN is bound to, which is the same
+ * owner / co-owner / same-org / platform-admin ladder the first-party read runs.
+ * A run outside it never reaches the serializer, so no run field, no message and
+ * no template ever leaves this branch on a failed binding.
+ */
+async function widgetSeed(request: Request, decodedRunId: string): Promise<NextResponse> {
+  const authed = await authenticateWidgetConversationRequest(
+    request,
+    WIDGET_AGENT_RUN_SEED_GRANT,
+  );
+  // No session fallback behind a failed widget consume.
+  if (!authed) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  let run: Awaited<ReturnType<typeof readAgentRunById>>;
   try {
+    run = await readAgentRunById(
+      decodedRunId,
+      authed.actorCtx.actor,
+      // The org the TOKEN is bound to travels on these hints — never a session's
+      // active org, which a widget request has no business reading.
+      authed.actorCtx.roleHints,
+    );
+  } catch (err) {
+    if (err instanceof AuthzError) return widgetRefusal();
+    throw err;
+  }
+  if (!run) return widgetRefusal();
+  return seedResponse(run);
+}
+
+export async function GET(request: Request, context: RouteContext) {
+  try {
+    const { runId } = await context.params;
+    const decodedRunId = decodeURIComponent(runId);
+
+    // The discriminant is the header's PRESENCE, not whether its value looks
+    // usable: a request that DID declare itself a widget — with an empty value —
+    // must not fall through to the session branch, where an ambient cookie would
+    // answer it as somebody else.
+    if (isWidgetBranchRequest(request)) {
+      return await widgetSeed(request, decodedRunId);
+    }
+
     const session = await requireAuthSession();
     const actorUserId = session?.user?.id ?? null;
     if (!actorUserId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
-    const { runId } = await context.params;
-    const decodedRunId = decodeURIComponent(runId);
 
     // Thread the caller through readAgentRunById so enforceRunAccess runs the
     // real per-run authorization: owner / co-owner / same-org / platform-admin.
@@ -56,50 +197,7 @@ export async function GET(_request: Request, context: RouteContext) {
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     }
 
-    const messages = await readAgentRunMessages(run.id);
-
-    // Fetch the template once and reuse it in BOTH the hitlContext derivation
-    // AND the inline-card metadata response below.
-    const template = await readAgentTemplateById(run.templateId);
-
-    // Shared derivation (also used by the A2A snapshot path — see
-    // packages/agents/src/hitl-context.ts): persisted AG-UI INTERRUPT first
-    // (bounded Redis Streams reverse read — the SSE stream can open AFTER the
-    // worker emitted the INTERRUPT and miss it), then the synthetic
-    // wayflow-<a2aTaskId> / setup-<runId> gate-identity fallbacks.
-    const hitlContext = await deriveRunHitlContext(run, { template });
-
-    // Surface the template+run metadata fields the chat-inline
-    // <AgenticRunPanel> wrapper needs (templateId for HITL-assist endpoints,
-    // agentPackageName for renderer override resolution, agUiEnabled to pick
-    // SSE-vs-poll, a2aTaskId for cancel logic, traceId for trace links).
-    // These are SSR-loaded directly from the DB on the run-detail page; the
-    // chat wrapper has to fetch via this REST endpoint. The template is
-    // already loaded above (reused — single DB round-trip).
-    return NextResponse.json({
-      status: run.status,
-      error: run.error,
-      inputParams: run.inputParams ?? {},
-      startedAt: run.startedAt ? run.startedAt.toISOString() : null,
-      completedAt: run.completedAt ? run.completedAt.toISOString() : null,
-      templateId: run.templateId,
-      agentPackageName: template?.packageName ?? null,
-      agUiEnabled: run.agUiEnabled ?? null,
-      taskId: run.a2aTaskId ?? null,
-      traceId: run.traceId ?? null,
-      messages: messages.map((m) => ({
-        id: m.id,
-        runId: m.runId,
-        sequence: m.sequence,
-        role: m.role,
-        messageType: m.messageType,
-        toolCallId: m.toolCallId,
-        toolName: m.toolName,
-        body: m.body,
-        createdAt: m.createdAt.toISOString(),
-      })),
-      hitlContext,
-    });
+    return await seedResponse(run);
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Internal error" },
