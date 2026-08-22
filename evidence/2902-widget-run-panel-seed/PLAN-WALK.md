@@ -5,10 +5,10 @@ Every `PLAN>` line below is copied from that page verbatim; every `CELL:` names
 the record that answers the line above it, and says where the answer is — or
 says plainly that it is not answered yet.
 
-Four of the eight cells are NOT DELIVERED. The capture round did not complete on
-the host it was driven on; `README.md` gives the measurement and the reason. They
-are listed here rather than dropped, because a walk that quietly omitted the
-lines it cannot answer would read as though it answered them.
+All eight cells are DELIVERED. The four capture cells were shot on a host that
+meets the application's memory floor; `README.md` records what the round
+measured, what it had to fix in its own drivers, and the two things the pictures
+show that this slice does not claim.
 
 ---
 
@@ -16,46 +16,69 @@ CELL: W1__run-panel__site_widget__loaded
 PLAN> The chat and the widget run the **same conversation code** with a different sign-in: whatever the conversation draws, the widget draws, subject to the widget's own authorization (section 10.2, 10.13).
 PLAN> Nothing on this page is chat-only.
 
-**NOT DELIVERED.** This is the picture the round exists to take: the conversation
-column INSIDE the embed frame, on a page served by another site, in LIGHT, with
-`[data-testid="inline-run-page-link"]` present — an element built from
-`agentPackageName`, a field nothing but the seed response carries — and
-`Could not load agent run` counting 0, beside a `wire` entry reading
-`cookie: absent`, `widgetUserToken: present (cwu_)`, `status: 200`.
+**DELIVERED** — `captures/W1__run-panel__site_widget__loaded.png`, record
+`W1__run-panel__site_widget__loaded` in `capture-results.json`.
 
-The lane reached the frame and stopped at the sign-in ceremony; no seed was ever
-issued, so there is no record and no screenshot. What the branch does have for
-this line is the code that makes it true and the three suites below. The
-measurement that stopped the round, and how far it got, is in `README.md`.
+The conversation column INSIDE the embed frame, on a page served by another site,
+in LIGHT: the widget's own composer at its foot, the person's turn, the assistant
+turn, and the panel drawn under it — `Agentic Run Progress`, `completed`, the
+run's own Input and Assistant messages, and `Open the run page`
+(`[data-testid="inline-run-page-link"]` counted 1, an element built from
+`agentPackageName`, a field nothing but the seed response carries).
+`Could not load agent run` counts 0. Beside it the wire entry the picture was
+produced by: `cookie: absent`, `widgetUserToken: present (cwu_)`,
+`widgetOrigin: present`, `status: 200`.
+
+Whatever the conversation draws, the widget drew: the same column component, the
+same panel, under the widget's own authorization.
 
 ---
 
 CELL: W3__run-panel__site_widget__loaded__dark
 PLAN> The reply says the run started, and a live **run card** appears in the conversation.
 
-**NOT DELIVERED.** The same claim on the dark theme, with the theme read back
-inside the embed frame (the document the picture would be taken in) rather than
-assumed from the browser context's `colorScheme`.
+**DELIVERED** — `captures/W3__run-panel__site_widget__loaded__dark.png`, record
+`W3__run-panel__site_widget__loaded__dark`.
+
+The same claim on the dark theme, with the theme READ BACK inside the embed frame
+(the document the picture was taken in) rather than assumed from the browser
+context: the record's `measured.theme` carries the frame's own
+`documentElement` class list ending in `dark` and `color-scheme: dark`. The run
+card is the same card, drawn from the same seed — `status: 200`, cookie absent,
+widget token present.
 
 ---
 
 CELL: W2__run-panel__site_widget__unbound-run
 PLAN> The guard exists so a mis-wired widget mount can never ride an ambient cookie.
 
-**NOT DELIVERED.** The negative control, photographed: the same credential, the
-same conversation, the same screen — and a run that lives in another
-organization. The binding refuses it and the panel draws no run.
+**DELIVERED** — `captures/W2__run-panel__site_widget__unbound-run.png`, record
+`W2__run-panel__site_widget__unbound-run`.
 
-The refusal itself IS proven, in the route's suite below, with the run in another
-tenant refused before any message or template is read. What is missing is the
-picture of that refusal happening on the widget's own screen.
+The negative control, photographed: the same credential, the same conversation,
+the same screen — and a run that lives in another organization, owned by another
+person, both registered through the shipped routes. The binding refuses it: the
+seed for that run answers **404**, the column draws
+`Agent run … is not available yet.` and NO panel, and the run-page link count
+stays at 1 — the panel from the turn above, still drawn, unmoved.
+
+The refusal is also proven in the route's suite below, before any message or
+template is read. This is that refusal happening on the widget's own screen.
+
+One thing this cell needed before it could mean anything, recorded in `README.md`
+and asserted by the seeder: the reader must not be a PLATFORM ADMIN. Platform
+admin is a rung of the same ladder, so an admin reader is entitled to the other
+tenant's run and answers 200 — on the widget branch and on the first-party cookie
+branch alike.
 
 ---
 
 CELL: W4__run-panel__site_widget__unbound-run__dark
 PLAN> The guard exists so a mis-wired widget mount can never ride an ambient cookie.
 
-**NOT DELIVERED.** The same control on the dark theme.
+**DELIVERED** — `captures/W4__run-panel__site_widget__unbound-run__dark.png`,
+record `W4__run-panel__site_widget__unbound-run__dark`. The same control on the
+dark theme, the theme read back inside the frame, the same 404 in the wire.
 
 ---
 
@@ -109,5 +132,11 @@ slice delivers, and nothing here claims it. The guard's matcher terminates at th
 seed path and has a descendant control that keeps `/stream` guarded; the grant
 declares the seed audience alone. The live transports are named as follow-up, not
 promised.
+
+The capture SHOWS that boundary rather than hiding it: after the seed has drawn
+the run, the panel's own fallback poll re-reads the same path WITHOUT the widget
+header and, on a third-party page with no cookie either, answers 500. It is in
+every record's `wire` (cookie absent, widget token absent, 500) and named in
+`README.md` as the follow-up it is.
 
 ---

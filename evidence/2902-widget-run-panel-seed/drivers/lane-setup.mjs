@@ -50,8 +50,26 @@ await post("/api/auth/organization/set-active", { organizationId: orgId });
 const tpl = await client.query(
   `SELECT id, package_name FROM cinatra.agent_templates ORDER BY package_name LIMIT 20`,
 );
+
+// THE READER IS DEMOTED AGAIN, AND THE CONTROL DEPENDS ON IT.
+//
+// The `admin` role above exists for ONE reason: the first account has to create
+// the organization through the shipped route. But `admin` is PLATFORM admin, and
+// platform-admin is a rung of the very authorization ladder this capture's
+// negative control is supposed to fail on (`readAgentRunById`: owner / co-owner /
+// same-org / platform-admin). A platform admin is ENTITLED to a run in another
+// organization, so the "unbound" run answers 200 and the control proves nothing —
+// measured exactly that way on 2026-08-22 before this line existed.
+//
+// So the capture's reader ends as an ordinary member: their own run is theirs by
+// ownership, and another tenant's run is out of reach on the shipped ladder
+// rather than by anything this driver arranged.
+await client.query(`UPDATE public."user" SET role='user' WHERE email=$1`, [EMAIL]);
+const finalRole = (await client.query(`SELECT role FROM public."user" WHERE email=$1`, [EMAIL])).rows[0]?.role;
+console.log(`capture reader role after setup: ${finalRole}`);
+if (finalRole === "admin") throw new Error("the capture reader is still a platform admin — the unbound-run control would be vacuous");
 await client.end();
 
-const out = { orgId, userId, templates: tpl.rows, cookie: cookieHeader() };
+const out = { orgId, userId, readerRole: finalRole, templates: tpl.rows, cookie: cookieHeader() };
 fs.writeFileSync(process.env.OUT_JSON, JSON.stringify(out, null, 2));
 console.log(JSON.stringify({ orgId, userId, templates: tpl.rows.map(r => r.package_name) }, null, 2));

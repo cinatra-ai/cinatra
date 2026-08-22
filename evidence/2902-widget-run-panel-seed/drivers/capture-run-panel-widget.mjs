@@ -67,7 +67,12 @@ const say = (m) => { log.push(m); console.log(m); };
 const results = [];
 
 async function runSession({ dark, cells }) {
-  const browser = await pw.chromium.launch({ headless: true });
+  // The frame's hosted-PKCE sign-in opens a POPUP, so the popup blocker is off:
+  // without it the window never appears and the frame never mints its `cwu_`.
+  const browser = await pw.chromium.launch({
+    headless: true,
+    args: ["--disable-popup-blocking"],
+  });
   // NO storageState: an EMPTY cookie jar, so every cookie this context ever
   // holds was set by the app during this run and can be reported.
   const ctx = await browser.newContext({
@@ -257,6 +262,11 @@ async function runSession({ dark, cells }) {
         '[data-conformance-id="chat-composer-primary"]': n('[data-conformance-id="chat-composer-primary"]'),
         "[data-transcript-slot]": n("[data-transcript-slot]"),
         [anchor]: n(anchor),
+        // MEASURED, not assumed: the inline run panel is not a lifecycle card and
+        // declares no `data-lifecycle-card-host`. The count is recorded so the
+        // capture index's own contract is read against an OBSERVATION rather than
+        // an argument.
+        '[data-lifecycle-card-host="site_widget"]': n('[data-lifecycle-card-host="site_widget"]'),
         "text:Agentic Run Progress": (text.match(/Agentic Run Progress/g) ?? []).length,
         "text:Could not load agent run": (text.match(/Could not load agent run/g) ?? []).length,
         "text:is not available yet": (text.match(/is not available yet/g) ?? []).length,
