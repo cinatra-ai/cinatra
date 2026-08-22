@@ -44,6 +44,7 @@ import {
   createComposeRunner,
   explicitLoopbackPort,
   formatComposeCommand,
+  formatConnectPortMismatch,
   formatGuardedComposeCommand,
   formatUnmanagedServices,
   isLinkedWorktree,
@@ -53,13 +54,16 @@ import {
   readEnvFileValue,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
+  resolvePublishedHostPort,
   shouldSkipDevPreflight,
   unmanagedComposeServices,
 } from "../lib/dev-preflight.mjs";
 import {
+  BUNDLED_DB_SERVICES,
   diagnoseDockerPortDrift,
   formatDriftRemedy,
   parseHostPort,
+  shouldDiagnoseDrift,
 } from "../lib/docker-port-drift.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -2889,5 +2893,587 @@ describe("inline comments in the values the launcher reads (PORT, DSNs)", () => 
   // secret, which would turn a wrong password into a confusing auth failure.)
   it("keeps a # that is part of the value itself", () => {
     expect(read("SUPABASE_DB_URL")).toBe("postgresql://postgres:p#ss@127.0.0.1:15434/postgres");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The DB-drift preflight, scoped to the worktree's plan (cinatra#2839 item 2)
+// ---------------------------------------------------------------------------
+//
+// The launcher has TWO doors to Docker, and only one of them was scoped. The
+// compose runner honors the resolved host-port plan (#2845, #2849); the
+// READ-ONLY drift diagnosis above it still measured every bundled service
+// against the HARDCODED global default (`BUNDLED_DB_SERVICES[].defaultHostPort`
+// — redis 6379), which is exactly the port #2849 made per-worktree. Three
+// outcomes followed on a correctly-configured lane, and the middle one is a
+// hard boot failure:
+//
+//   A. A lane that claims redis's host port directly (CINATRA_REDIS_HOST_PORT)
+//      was measured at the GLOBAL 6379. Its healthy container publishes the
+//      lane port instead, so `detectDriftFromInspect` found no 6379 binding,
+//      called that drift, and `pnpm dev` exited 1 — refusing to start a lane
+//      whose configuration is correct.
+//   B. A lane that states REDIS_URL on its own port was skipped entirely
+//      ("not our stack"), so the drift guard silently ceased to exist for the
+//      lanes the scoping exists to serve.
+//   C. A lane that STANDS REDIS DOWN — the plan claims no host port for it, so
+//      it is somebody else's service — was diagnosed anyway, against the LANE's
+//      compose project, and could condemn the boot over a container that is not
+//      this checkout's to judge.
+//
+// The fix reads the expected port from the SAME plan the compose runner is
+// pinned to (`resolvePublishedHostPort`), never a second derivation. These
+// cases drive the real launcher with a fake `docker` that answers `ps`/
+// `inspect`, so what is asserted is the launcher's actual exit status and its
+// actual argv — not a restatement of the resolver.
+describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", () => {
+  let dir;
+  let dockerLog;
+  let laneRedisPort;
+  let lanePgPort;
+
+  beforeAll(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), "cinatra-2839-drift-"));
+    dockerLog = path.join(dir, "docker-calls.log");
+    // Closed, so every probed service reads as DOWN and the drift diagnosis is
+    // the path under test. Reserved rather than hardcoded: a lane port that
+    // happened to be live on the test host would silently skip the diagnosis.
+    laneRedisPort = await reserveClosedPort();
+    lanePgPort = await reserveClosedPort();
+
+    // Fake `docker`: records argv, then answers `ps -aq` / `inspect` from the
+    // environment so a container can be SIMULATED without one existing. Any
+    // command the case did not arm for still exits non-zero, so nothing is ever
+    // really started and no bounded wait runs long.
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      path.join(bin, "docker-recorder.cjs"),
+      [
+        'const { appendFileSync } = require("node:fs");',
+        "const argv = process.argv.slice(2);",
+        "appendFileSync(",
+        "  process.env.CINATRA_TEST_DOCKER_LOG,",
+        '  JSON.stringify({ argv }) + "\\n",',
+        ");",
+        "const containerId = process.env.CINATRA_TEST_DOCKER_PS_ID;",
+        'if (containerId && argv.includes("ps") && argv.includes("-aq")) {',
+        '  process.stdout.write(containerId + "\\n");',
+        "  process.exit(0);",
+        "}",
+        "const published = process.env.CINATRA_TEST_DOCKER_PORTS;",
+        'if (published && argv[0] === "inspect") {',
+        '  process.stdout.write("true\\t" + published + "\\n");',
+        "  process.exit(0);",
+        "}",
+        "process.exit(1);",
+        "",
+      ].join("\n"),
+    );
+    const shim = path.join(bin, "docker");
+    writeFileSync(
+      shim,
+      `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$(dirname "$0")/docker-recorder.cjs" "$@"\n`,
+    );
+    chmodSync(shim, 0o755);
+
+    const nextBin = path.join(dir, "node_modules", ".bin");
+    mkdirSync(nextBin, { recursive: true });
+    const nextStub = path.join(nextBin, "next");
+    writeFileSync(nextStub, "#!/usr/bin/env node\nprocess.exit(0);\n");
+    chmodSync(nextStub, 0o755);
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  /**
+   * Run the real launcher in the temp worktree.
+   *
+   * `containerPorts` is the `.NetworkSettings.Ports` JSON the fake `docker
+   * inspect` reports for the simulated redis container; omitted means no
+   * container exists at all (`ps -aq` returns nothing).
+   *
+   * Everything the launcher reads is stated in `.env.local`, and every relevant
+   * shell variable is deleted, because a shell value outranks the file and the
+   * whole point of these cases is what a LANE FILE resolves to.
+   */
+  const runLauncher = (envLocal, { containerPorts } = {}) => {
+    rmSync(dockerLog, { force: true });
+    writeFileSync(path.join(dir, ".env.local"), envLocal);
+
+    const env = {
+      ...process.env,
+      PATH: `${path.join(dir, "bin")}${path.delimiter}${process.env.PATH}`,
+      CINATRA_TEST_DOCKER_LOG: dockerLog,
+    };
+    if (containerPorts) {
+      env.CINATRA_TEST_DOCKER_PS_ID = "lane-redis-container";
+      env.CINATRA_TEST_DOCKER_PORTS = containerPorts;
+    } else {
+      delete env.CINATRA_TEST_DOCKER_PS_ID;
+      delete env.CINATRA_TEST_DOCKER_PORTS;
+    }
+    for (const key of [
+      "CINATRA_SKIP_DEV_PREFLIGHT",
+      "COMPOSE_PROJECT_NAME",
+      "PORT",
+      "REDIS_URL",
+      "SUPABASE_DB_URL",
+      "NEO4J_URI",
+      "NANGO_SERVER_URL",
+      "NANGO_DATABASE_URL",
+    ]) {
+      delete env[key];
+    }
+    for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
+
+    const result = spawnSync(process.execPath, [DEV_SERVER], {
+      cwd: dir,
+      encoding: "utf8",
+      timeout: 120_000,
+      env,
+    });
+    const calls = existsSync(dockerLog)
+      ? readFileSync(dockerLog, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+    return { ...result, calls };
+  };
+
+  /**
+   * A complete lane: it names its own compose project and states a host port
+   * for every scoped service, so `resolveComposeHostPortPlan` refuses nothing
+   * and the drift path is the only thing under test.
+   *
+   * Nango is pointed at a RESERVED (RFC 2606) remote host on purpose: that
+   * stands nango-server down, so the Nango heal makes zero docker calls and
+   * every call in the log belongs to the drift diagnosis.
+   */
+  const laneEnv = (redisLine) =>
+    [
+      "PORT=13839",
+      "COMPOSE_PROJECT_NAME=p2839lane",
+      redisLine,
+      "NANGO_SERVER_URL=https://nango.example.invalid",
+      `NANGO_DATABASE_URL=postgresql://nango:nango@127.0.0.1:15435/nango`,
+      `SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${lanePgPort}/postgres`,
+      "",
+    ].join("\n");
+
+  const redisCalls = (calls) =>
+    calls.filter((c) => c.argv.includes("redis") || c.argv[0] === "inspect");
+
+  // Case A — the boot-blocking one. The lane claims redis's published port
+  // directly; its container publishes exactly that. Measuring against the
+  // global 6379 turned a correct lane into "drift" and exited 1.
+  it("does not condemn a lane whose redis publishes the port the plan claims", () => {
+    const result = runLauncher(laneEnv(`CINATRA_REDIS_HOST_PORT=${laneRedisPort}`), {
+      containerPorts: `{"6379/tcp":[{"HostIp":"127.0.0.1","HostPort":"${laneRedisPort}"}]}`,
+    });
+    expect(
+      result.status,
+      `launcher exited ${result.status}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    ).toBe(0);
+    expect(result.stderr).not.toContain("Docker host-port drift");
+    // …and it does not pass in silence either: the lane publishes redis on its
+    // own port while the app, stating no REDIS_URL, connects to the shared
+    // 6379 — the operator's container. Not condemning the boot is right; saying
+    // nothing would leave the lane bleeding into another stack all session.
+    expect(result.stderr).toContain("but the app connects on 6379");
+    expect(result.stderr).toContain("CINATRA_REDIS_HOST_PORT");
+  });
+
+  // Case B — the guard comes BACK for a lane. This container really is the
+  // base-only-compose failure the diagnosis exists to name, at the LANE's port,
+  // so the launcher must refuse — and it must have looked at the LANE's compose
+  // project to find out.
+  it("diagnoses real drift at the lane's own published port, in the lane's project", () => {
+    const result = runLauncher(
+      laneEnv(`REDIS_URL=redis://127.0.0.1:${laneRedisPort}`),
+      { containerPorts: '{"6379/tcp":null}' },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Docker host-port drift");
+    const ps = result.calls.find((c) => c.argv.includes("ps"));
+    expect(ps, "the drift diagnosis should have inspected the lane's redis").toBeDefined();
+    expect(ps.argv.slice(0, 3)).toEqual(["compose", "-p", "p2839lane"]);
+  });
+
+  // Case B′ — same lane, healthy container. The port IS published, so this is
+  // not drift: the launcher warns that redis is not reachable yet and boots.
+  it("clears a lane whose redis container publishes the lane port", () => {
+    const result = runLauncher(
+      laneEnv(`REDIS_URL=redis://127.0.0.1:${laneRedisPort}`),
+      { containerPorts: `{"6379/tcp":[{"HostIp":"127.0.0.1","HostPort":"${laneRedisPort}"}]}` },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("Docker host-port drift");
+    expect(result.stderr).toContain("not reachable yet");
+  });
+
+  // Case C — the plan STOOD REDIS DOWN (a loopback URL with no port states no
+  // host-port claim), so no container here is this checkout's to judge. The
+  // diagnosis must not run at all, let alone condemn the boot.
+  it("never diagnoses a service the plan claims no host port for", () => {
+    const result = runLauncher(laneEnv("REDIS_URL=redis://127.0.0.1/0"), {
+      containerPorts: '{"6379/tcp":null}',
+    });
+    expect(
+      result.status,
+      `launcher exited ${result.status}\nstderr:\n${result.stderr}`,
+    ).toBe(0);
+    expect(result.stderr).not.toContain("Docker host-port drift");
+    expect(redisCalls(result.calls)).toEqual([]);
+  });
+
+  // The regression pin: the operator's UNSCOPED checkout states no project name,
+  // so redis resolves to the historical 6379 and the diagnosis behaves exactly
+  // as it did before any of this work. Nothing here may take `make dev` away.
+  it("still diagnoses the unscoped checkout at the historical default port", () => {
+    const result = runLauncher(
+      [
+        "PORT=13839",
+        "REDIS_URL=redis://127.0.0.1:6379",
+        "NANGO_SERVER_URL=https://nango.example.invalid",
+        `SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${lanePgPort}/postgres`,
+        "",
+      ].join("\n"),
+      { containerPorts: '{"6379/tcp":null}' },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Docker host-port drift");
+    const ps = result.calls.find((c) => c.argv.includes("ps"));
+    // No `-p`: compose's own basename derivation, unchanged.
+    expect(ps.argv.slice(0, 2)).toEqual(["compose", "-f"]);
+  });
+
+  // Item 1 still holds over the whole widened path: the flag's promise is that
+  // NOTHING is touched, and the drift door is the one that spawns `docker`
+  // without the compose runner.
+  it("makes zero docker calls on every scoped drift shape behind the skip flag", () => {
+    for (const redisLine of [
+      `CINATRA_REDIS_HOST_PORT=${laneRedisPort}`,
+      `REDIS_URL=redis://127.0.0.1:${laneRedisPort}`,
+      "REDIS_URL=redis://127.0.0.1/0",
+    ]) {
+      const result = runLauncher(
+        `${laneEnv(redisLine)}CINATRA_SKIP_DEV_PREFLIGHT=1\n`,
+        { containerPorts: '{"6379/tcp":null}' },
+      );
+      expect(result.status, `for ${redisLine}: ${result.stderr}`).toBe(0);
+      expect(result.calls, `for ${redisLine}`).toEqual([]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolvePublishedHostPort — the one answer both drift callers read
+// ---------------------------------------------------------------------------
+describe("resolvePublishedHostPort", () => {
+  const REDIS = BUNDLED_DB_SERVICES.find((s) => s.composeService === "redis");
+  const POSTGRES = BUNDLED_DB_SERVICES.find((s) => s.composeService === "postgres");
+
+  const planFor = (processEnv, envFile = {}) =>
+    resolveComposeHostPortPlan({
+      processEnv,
+      envFileLookup: (key) => envFile[key],
+      projectName: processEnv.COMPOSE_PROJECT_NAME,
+      defaultProjectName: "/tmp/some-checkout",
+    });
+
+  const askRedis = (plan) =>
+    resolvePublishedHostPort({
+      composeService: REDIS.composeService,
+      defaultHostPort: REDIS.defaultHostPort,
+      plan,
+    });
+
+  it("answers the historical default for the unscoped checkout", () => {
+    expect(askRedis(planFor({}))).toMatchObject({ published: 6379, parameterized: true });
+  });
+
+  it("answers the port a lane derived from its own REDIS_URL", () => {
+    const plan = planFor(
+      { COMPOSE_PROJECT_NAME: "p2839" },
+      {
+        REDIS_URL: "redis://127.0.0.1:16379",
+        NANGO_SERVER_URL: "http://127.0.0.1:13003",
+        NANGO_DATABASE_URL: "postgresql://n:n@127.0.0.1:15435/nango",
+      },
+    );
+    expect(plan.refusals).toEqual([]);
+    expect(askRedis(plan)).toMatchObject({ published: 16379 });
+  });
+
+  it("answers the port a lane claimed directly with CINATRA_REDIS_HOST_PORT", () => {
+    const plan = planFor(
+      { COMPOSE_PROJECT_NAME: "p2839", CINATRA_REDIS_HOST_PORT: "16379" },
+      {
+        NANGO_SERVER_URL: "http://127.0.0.1:13003",
+        NANGO_DATABASE_URL: "postgresql://n:n@127.0.0.1:15435/nango",
+      },
+    );
+    expect(plan.refusals).toEqual([]);
+    expect(askRedis(plan)).toMatchObject({ published: 16379 });
+  });
+
+  it("reports a stand-down for a service the plan claims no host port for", () => {
+    const plan = planFor(
+      { COMPOSE_PROJECT_NAME: "p2839" },
+      {
+        REDIS_URL: "redis://redis.example.com:6379",
+        NANGO_SERVER_URL: "http://127.0.0.1:13003",
+        NANGO_DATABASE_URL: "postgresql://n:n@127.0.0.1:15435/nango",
+      },
+    );
+    expect(askRedis(plan)).toMatchObject({ standDown: true });
+    expect(askRedis(plan).published).toBeUndefined();
+  });
+
+  // postgres and neo4j are NOT parameterized by the plan — the compose files
+  // state their host ports — so this must keep answering the fixed default even
+  // for a fully-scoped lane, or the diagnosis would move a port nothing moved.
+  it("keeps the fixed default for a service the plan does not parameterize", () => {
+    const plan = planFor(
+      { COMPOSE_PROJECT_NAME: "p2839", CINATRA_REDIS_HOST_PORT: "16379" },
+      {
+        NANGO_SERVER_URL: "http://127.0.0.1:13003",
+        NANGO_DATABASE_URL: "postgresql://n:n@127.0.0.1:15435/nango",
+      },
+    );
+    expect(
+      resolvePublishedHostPort({
+        composeService: POSTGRES.composeService,
+        defaultHostPort: POSTGRES.defaultHostPort,
+        plan,
+      }),
+    ).toEqual({ published: 5434, parameterized: false });
+  });
+
+  it("falls back to the default when handed no plan at all", () => {
+    expect(
+      resolvePublishedHostPort({
+        composeService: REDIS.composeService,
+        defaultHostPort: REDIS.defaultHostPort,
+      }),
+    ).toMatchObject({ published: 6379 });
+  });
+
+  // The gate the resolver feeds: same connect port, two different published
+  // ports, two different answers.
+  it("is what makes shouldDiagnoseDrift ask about the lane's port", () => {
+    const at = (port, published) =>
+      shouldDiagnoseDrift({ host: "127.0.0.1", port }, REDIS, published);
+    expect(at(16379, 16379)).toBe(true);
+    expect(at(16379, 6379)).toBe(false);
+    expect(at(6379, 16379)).toBe(false);
+    // Unchanged for a caller that states nothing — the pre-#2839 signature.
+    expect(shouldDiagnoseDrift({ host: "127.0.0.1", port: 6379 }, REDIS)).toBe(true);
+  });
+});
+
+// The second caller of the same diagnosis. `pnpm check:services` reported drift
+// too, and it read the global default AND passed no project — so on a lane it
+// inspected the basename-derived project rather than the lane's. One mechanism
+// may not have one honest caller and one dishonest one.
+describe("check-services.mjs reads the same plan as the launcher", () => {
+  const source = readFileSync(path.join(REPO_ROOT, "scripts", "check-services.mjs"), "utf8");
+
+  it("resolves the published host port instead of the hardcoded default", () => {
+    expect(source).toContain("resolvePublishedHostPort");
+    expect(source).toMatch(/shouldDiagnoseDrift\([^)]*claim\.published\)/s);
+  });
+
+  it("pins its drift diagnosis to the resolved compose project", () => {
+    expect(source).toMatch(/diagnoseDockerPortDrift\(\{[^}]*projectName: composeProjectName/s);
+  });
+
+  it("stands down for a service the plan claims no host port for", () => {
+    expect(source).toContain("if (claim.standDown) continue;");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatConnectPortMismatch — published here, connected there
+// ---------------------------------------------------------------------------
+describe("formatConnectPortMismatch", () => {
+  const claim = {
+    parameterized: true,
+    published: 16379,
+    envVar: "CINATRA_REDIS_HOST_PORT",
+    urlVar: "REDIS_URL",
+  };
+
+  it("names both ports and both fixes when a lane publishes one and connects to another", () => {
+    const message = formatConnectPortMismatch({
+      service: "Redis",
+      claim,
+      connectPort: 6379,
+      laneScope: "lane",
+    });
+    expect(message).toContain("published on host port 16379");
+    expect(message).toContain("the app connects on 6379");
+    expect(message).toContain("REDIS_URL");
+    expect(message).toContain("CINATRA_REDIS_HOST_PORT");
+  });
+
+  it("says nothing when the published port IS the connect port", () => {
+    expect(
+      formatConnectPortMismatch({ service: "Redis", claim, connectPort: 16379, laneScope: "lane" }),
+    ).toBeUndefined();
+  });
+
+  // The immunity every rule in this module states explicitly: a checkout that
+  // names no compose project is the operator's single stack, and nothing here
+  // remarks on it.
+  it("never remarks on the unscoped checkout", () => {
+    for (const laneScope of ["unscoped", undefined]) {
+      expect(
+        formatConnectPortMismatch({ service: "Redis", claim, connectPort: 6379, laneScope }),
+      ).toBeUndefined();
+    }
+  });
+
+  // postgres/neo4j host ports are pinned in the compose files, so a lane whose
+  // DSN names another one of those is the ordinary external-service case.
+  it("says nothing about a service the plan does not parameterize", () => {
+    expect(
+      formatConnectPortMismatch({
+        service: "PostgreSQL",
+        claim: { parameterized: false, published: 5434 },
+        connectPort: 15434,
+        laneScope: "lane",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("says nothing about a service the plan stood down", () => {
+    expect(
+      formatConnectPortMismatch({
+        service: "Redis",
+        claim: { ...claim, standDown: true, published: undefined },
+        connectPort: 6379,
+        laneScope: "lane",
+      }),
+    ).toBeUndefined();
+  });
+
+  // The operator's own no-op pin is still a SCOPED checkout: a warning never
+  // takes `make dev` away, and the bleed is just as real there.
+  it("warns on the checkout's own pin too — it is a warning, not a refusal", () => {
+    expect(
+      formatConnectPortMismatch({
+        service: "Redis",
+        claim,
+        connectPort: 6379,
+        laneScope: "checkout",
+      }),
+    ).toBeDefined();
+  });
+});
+
+// The same note on the other surface an operator reads.
+describe("check-services.mjs reports the connect/publish mismatch too", () => {
+  const source = readFileSync(path.join(REPO_ROOT, "scripts", "check-services.mjs"), "utf8");
+
+  it("builds the note from the shared formatter, not a second wording", () => {
+    expect(source).toContain("formatConnectPortMismatch");
+    expect(source).toMatch(/laneScope: composeHostPortPlan\.laneScope/);
+  });
+
+  it("prints what it collected", () => {
+    expect(source).toMatch(/for \(const note of mismatchNotes\)/);
+  });
+});
+
+// Round-2 Codex finding: the note is built from the plan, which reads the shell
+// first — so the endpoint it is compared against must too, or an exported
+// service URL makes the check accuse a lane of a mismatch the app and the plan
+// agree on. (This surface is source-level; the launcher's own precedence is
+// covered end to end above, where `runLauncher` deletes every shell variable
+// precisely because a shell value outranks the file.)
+describe("check-services.mjs resolves service endpoints shell-over-file", () => {
+  const source = readFileSync(path.join(REPO_ROOT, "scripts", "check-services.mjs"), "utf8");
+
+  it("overlays the shell value over the .env.local one for every endpoint it reads", () => {
+    expect(source).toMatch(/const env = \{ \.\.\.fileEnv \};/);
+    expect(source).toMatch(/for \(const key of ENDPOINT_VARS\)/);
+    expect(source).toMatch(/const shell = process\.env\[key\];/);
+  });
+
+  // Every URL the check turns into a probed endpoint must be in the list, or
+  // that one service keeps the old file-only precedence silently.
+  it("covers every service URL the check probes", () => {
+    const probed = [...source.matchAll(/hostPort\(env\.([A-Z0-9_]+)/g)].map((m) => m[1]);
+    expect(probed.length).toBeGreaterThan(0);
+    const declared = source.slice(
+      source.indexOf("const ENDPOINT_VARS = ["),
+      source.indexOf("];", source.indexOf("const ENDPOINT_VARS = [")),
+    );
+    for (const key of new Set(probed)) {
+      expect(declared, `${key} is probed but keeps file-only precedence`).toContain(`"${key}"`);
+    }
+  });
+
+  // …and nothing else: the MCP fallback vars are deliberately file-only, which
+  // their own note in that file states.
+  it("leaves the deliberately file-only MCP vars alone", () => {
+    const declared = source.slice(
+      source.indexOf("const ENDPOINT_VARS = ["),
+      source.indexOf("];", source.indexOf("const ENDPOINT_VARS = [")),
+    );
+    expect(declared).not.toContain("MCP_PUBLIC_BASE_URL");
+    expect(declared).not.toContain("APP_PUBLIC_URL");
+  });
+});
+
+// Codex round-2 hardening: a claim whose published port is not a port can only
+// produce a message that names a non-port.
+describe("formatConnectPortMismatch refuses to name a non-port", () => {
+  it("says nothing when the claim carries no usable published port", () => {
+    for (const published of [undefined, NaN, 0, 70000, "nope"]) {
+      expect(
+        formatConnectPortMismatch({
+          service: "Redis",
+          claim: { parameterized: true, published, envVar: "V", urlVar: "U" },
+          connectPort: 6379,
+          laneScope: "lane",
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("says nothing when the connect port is not a port", () => {
+    for (const connectPort of [undefined, NaN, 0, 70000]) {
+      expect(
+        formatConnectPortMismatch({
+          service: "Redis",
+          claim: { parameterized: true, published: 16379, envVar: "V", urlVar: "U" },
+          connectPort,
+          laneScope: "lane",
+        }),
+      ).toBeUndefined();
+    }
+  });
+});
+
+// Round-3 Codex finding: `resolvePublishedHostPort` falls back to the historical
+// default when a plan resolved no key, on the stated assumption that the caller
+// already stood the run down on the refusal. The launcher does (`planRefused`);
+// the reporting surface did not, so it could name a port compose was never going
+// to publish.
+describe("check-services.mjs stands down on a refused plan, as the launcher does", () => {
+  const source = readFileSync(path.join(REPO_ROOT, "scripts", "check-services.mjs"), "utf8");
+
+  it("gates the whole Docker-inspecting block on the plan resolving", () => {
+    expect(source).toMatch(/const planRefused = composeHostPortPlan\.refusals\.length > 0;/);
+    expect(source).toMatch(/if \(downByLabel\.size > 0 && !planRefused\)/);
+  });
+
+  it("prints the refusals rather than swallowing them", () => {
+    expect(source).toMatch(/planMessages\(composeHostPortPlan\.refusals\)/);
+  });
+
+  it("resolves the app's own port shell-over-file too", () => {
+    expect(source).toMatch(/Number\(process\.env\.PORT\) \|\| Number\(fileEnv\.PORT\)/);
   });
 });

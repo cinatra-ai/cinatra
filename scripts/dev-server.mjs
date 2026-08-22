@@ -33,12 +33,14 @@ import {
   SKIP_PREFLIGHT_ENV_VAR,
   createComposeRunner,
   formatComposeCommand,
+  formatConnectPortMismatch,
   formatUnmanagedServices,
   isLinkedWorktree,
   planMessages,
   readEnvFileValue,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
+  resolvePublishedHostPort,
   unmanagedComposeServices,
   shouldSkipDevPreflight,
 } from "./lib/dev-preflight.mjs";
@@ -202,11 +204,43 @@ async function runDbPortPreflight() {
   );
   const down = [];
   for (const svc of targets) {
+    // The port THIS checkout publishes for the service, read off the SAME plan
+    // the compose runner below is pinned to (cinatra#2839, acceptance item 2).
+    // Measuring against the hardcoded global default instead is what let this
+    // read-only door disagree with the writing one: on a lane it either skipped
+    // the diagnosis or condemned a healthy container. `resolvePublishedHostPort`
+    // returns the historical default for anything the plan does not scope, so
+    // postgres, neo4j and the whole unscoped checkout are untouched.
+    const claim = resolvePublishedHostPort({
+      composeService: svc.composeService,
+      defaultHostPort: svc.defaultHostPort,
+      plan: composeHostPortPlan,
+    });
+    // The plan claims no host port for it: the service is configured somewhere
+    // else, so no container here is this checkout's to judge — the same
+    // stand-down the Nango heal honors with `--no-deps`.
+    if (claim.standDown) continue;
     const { host, port } = envHostPort(envPath, svc.envVar, {
       host: "127.0.0.1",
       port: svc.defaultHostPort,
     });
-    if (!shouldDiagnoseDrift({ host, port }, svc)) continue; // external/non-default → not ours
+    // The probe follows the APP, always — it answers "can the app reach its
+    // service?", so resolving it from the plan instead would report a healthy
+    // container the app never talks to. When the two disagree on a scoped
+    // checkout that disagreement is itself the finding, and a loud one: the lane
+    // publishes its own service and then does its work in somebody else's.
+    const mismatch = formatConnectPortMismatch({
+      service: svc.label,
+      claim,
+      connectPort: port,
+      laneScope: composeHostPortPlan.laneScope,
+    });
+    if (mismatch) console.warn(`[dev-server] ⚠ ${mismatch}`);
+    // Not the published port → the app connects somewhere this checkout does not
+    // publish, so any container found here would be somebody else's. Skipping is
+    // the pre-existing "not our docker stack" answer, now asked against the
+    // lane's port rather than the global one.
+    if (!shouldDiagnoseDrift({ host, port }, svc, claim.published)) continue;
     if (await probeTcp(host, port)) continue; // reachable → fine
     down.push({ svc, host, port });
   }

@@ -78,11 +78,21 @@ export function parseHostPort(urlValue, fallback) {
 
 // Decide whether a DOWN service is a candidate for Docker drift diagnosis. Only
 // the bundled local stack qualifies: the expected host must be loopback AND the
-// expected port must be the override's default. A non-loopback host (a hosted
-// DB / external infra) or a non-default port means "not our docker stack" — skip
-// (so a perfectly-healthy external DB is never mis-blamed on docker-compose.dev.yml).
-export function shouldDiagnoseDrift({ host, port }, service) {
-  return isLoopbackHost(host) && Number(port) === service.defaultHostPort;
+// port the app connects on must be the one THIS CHECKOUT PUBLISHES. A
+// non-loopback host (a hosted DB / external infra), or a port that is not the
+// published one, means "not our docker stack" — skip (so a perfectly-healthy
+// external DB is never mis-blamed on docker-compose.dev.yml).
+//
+// `publishedHostPort` defaults to the service's historical fixed port, which is
+// what this compared against before the dev stack's host ports became
+// per-worktree (cinatra#2839). It is now passed explicitly by both callers, read
+// off the resolved plan via `resolvePublishedHostPort`, because redis's
+// "default" is exactly the port a lane moves: comparing a lane's connect port to
+// the GLOBAL 6379 either skipped the diagnosis entirely or condemned a healthy
+// lane container for not publishing a port it was never asked to publish.
+export function shouldDiagnoseDrift({ host, port }, service, publishedHostPort) {
+  const expected = publishedHostPort === undefined ? service.defaultHostPort : publishedHostPort;
+  return isLoopbackHost(host) && Number(port) === Number(expected);
 }
 
 // PURE drift detector. Given a service's running state + the published-ports map

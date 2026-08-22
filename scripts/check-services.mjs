@@ -29,7 +29,17 @@ import {
   formatDriftRemedy,
   parseHostPort,
 } from "./lib/docker-port-drift.mjs";
-import { formatGuardedComposeCommand } from "./lib/dev-preflight.mjs";
+import {
+  COMPOSE_PROJECT_ENV_VAR,
+  formatConnectPortMismatch,
+  formatGuardedComposeCommand,
+  isLinkedWorktree,
+  planMessages,
+  readEnvFileValue,
+  resolveComposeHostPortPlan,
+  resolveComposeProjectName,
+  resolvePublishedHostPort,
+} from "./lib/dev-preflight.mjs";
 import { nangoHealthUrl, probeHttpHealth } from "./lib/nango-health.mjs";
 import { wayflowDownHint } from "./lib/wayflow-down-hint.mjs";
 
@@ -114,8 +124,57 @@ function probe(host, port, timeoutMs = 2500) {
   });
 }
 
-const env = readEnvLocal();
-const appPort = Number(env.PORT) || 3000;
+const fileEnv = readEnvLocal();
+
+// SHELL OVER FILE, for the service ENDPOINTS (cinatra#2839).
+//
+// The app resolves these with the shell winning — Next.js loads `.env.local`
+// but never over an exported value, and scripts/dev-server.mjs and
+// `resolveComposeHostPortPlan` both read the shell first. Reading the file
+// alone made this check report an endpoint nothing connects to whenever one was
+// exported, and made the connect/publish note below accuse a lane of a mismatch
+// the plan and the app agree on. Restricted to the endpoint variables on
+// purpose: MCP_PUBLIC_BASE_URL / APP_PUBLIC_URL stay file-only, which is what
+// their own note below documents.
+const ENDPOINT_VARS = [
+  "SUPABASE_DB_URL",
+  "REDIS_URL",
+  "NANGO_SERVER_URL",
+  "GRAPHITI_URL",
+  "WAYFLOW_BASE_URL",
+];
+const env = { ...fileEnv };
+for (const key of ENDPOINT_VARS) {
+  const shell = process.env[key];
+  if (typeof shell === "string" && shell.trim()) env[key] = shell.trim();
+}
+
+// The app's own listen port follows the same rule: scripts/dev-server.mjs takes
+// a real shell PORT over `.env.local`, so reading the file alone reported the
+// wrong address for the "Cinatra app" row whenever one was exported.
+const appPort = Number(process.env.PORT) || Number(fileEnv.PORT) || 3000;
+
+// The compose scoping this checkout runs under, resolved by the SAME resolvers
+// `pnpm dev` and the shared derivation step use (cinatra#2839). The drift
+// diagnosis below needs both halves: the PROJECT, because an unpinned `compose
+// ps` inspects the basename-derived project while a lane's containers live in
+// its own — so a lane could be told about a container that is not its own — and
+// the PUBLISHED PORT, because redis's host port is per-worktree now, and
+// measuring a lane's connect port against the global 6379 either skips the
+// diagnosis or condemns a healthy lane container.
+const envLocalPath = path.join(repoRoot, ".env.local");
+const lookupEnvFile = (key) => readEnvFileValue(envLocalPath, key);
+const composeProjectName = resolveComposeProjectName({
+  processEnv: process.env,
+  envFileValues: [lookupEnvFile(COMPOSE_PROJECT_ENV_VAR)],
+});
+const composeHostPortPlan = resolveComposeHostPortPlan({
+  processEnv: process.env,
+  envFileLookup: lookupEnvFile,
+  projectName: composeProjectName,
+  defaultProjectName: repoRoot,
+  linkedWorktree: isLinkedWorktree(repoRoot),
+});
 
 // tier: "required"  — core; a failure exits non-zero.
 //       "recommended" — needed for full agent/object functionality; warn only.
@@ -270,22 +329,60 @@ const downByLabel = new Map(
   [...requiredDown, ...recommendedDown].map((r) => [r.name, r]),
 );
 const driftedLabels = [];
-if (downByLabel.size > 0) {
+const mismatchNotes = [];
+// A plan with a hole in it resolves NO publishable port for the affected
+// service, so neither the drift diagnosis nor the connect/publish note has a
+// port to judge against — `resolvePublishedHostPort` would hand back the
+// historical default, and this check would then state a port compose is not
+// going to publish. scripts/dev-server.mjs stops on the same condition before
+// its preflight (`planRefused`); this is that stand-down, on the reporting
+// surface. The refusals are printed instead, which is the answer an operator
+// running `pnpm check:services` actually needs.
+const planRefused = composeHostPortPlan.refusals.length > 0;
+if (downByLabel.size > 0 && !planRefused) {
   const mainRoot = resolveMainRepoRoot(repoRoot);
   for (const svc of BUNDLED_DB_SERVICES) {
     const down = downByLabel.get(svc.label);
     if (!down) continue;
-    if (!shouldDiagnoseDrift({ host: down.host, port: down.port }, svc)) continue;
+    const claim = resolvePublishedHostPort({
+      composeService: svc.composeService,
+      defaultHostPort: svc.defaultHostPort,
+      plan: composeHostPortPlan,
+    });
+    // Configured elsewhere: this checkout publishes no host port for it, so no
+    // container found here is its to report on.
+    if (claim.standDown) continue;
+    // Published here, connected there: the check that reports a service DOWN is
+    // the right place to say the port it was looked for on is not the port this
+    // checkout publishes.
+    const mismatch = formatConnectPortMismatch({
+      service: svc.label,
+      claim,
+      connectPort: down.port,
+      laneScope: composeHostPortPlan.laneScope,
+    });
+    if (mismatch) mismatchNotes.push(mismatch);
+    if (!shouldDiagnoseDrift({ host: down.host, port: down.port }, svc, claim.published)) continue;
     const diag = diagnoseDockerPortDrift({
       service: svc,
       mainRoot,
       expectedHostPort: down.port,
+      projectName: composeProjectName,
     });
     if (diag.available && diag.drift) driftedLabels.push(svc.label);
   }
 }
 
 console.log("");
+if (planRefused) {
+  console.log(red("  ✖ Compose host-port scoping is unresolved — not inspecting Docker for this checkout:"));
+  for (const message of planMessages(composeHostPortPlan.refusals)) {
+    console.log(dim(`     • ${message}`));
+  }
+}
+for (const note of mismatchNotes) {
+  console.log(yellow(`  ⚠ ${note}`));
+}
 if (driftedLabels.length > 0) {
   console.log(red("  ⚠ Docker host-port drift detected:"));
   for (const line of formatDriftRemedy(driftedLabels).split("\n")) {

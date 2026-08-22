@@ -942,6 +942,119 @@ export function resolveComposeHostPortPlan({
 }
 
 /**
+ * The host port THIS checkout publishes for one BUNDLED DB/CACHE service, read
+ * off the resolved plan — never derived a second time.
+ *
+ * Why this exists (cinatra#2839, acceptance item 2): the launcher has two doors
+ * to Docker and only one of them was scoped. `createComposeRunner` honors the
+ * plan; the READ-ONLY drift diagnosis above it measured every service against
+ * the HARDCODED `BUNDLED_DB_SERVICES[].defaultHostPort` — and redis's default
+ * (6379) is precisely the port the port scoping made per-worktree. On a
+ * correctly-configured lane that produced three wrong answers, one of them a
+ * hard boot failure:
+ *
+ *   - a lane that claims redis's host port directly was measured at the global
+ *     6379, found its healthy container published elsewhere, called that drift
+ *     and exited 1;
+ *   - a lane that states REDIS_URL on its own port was skipped as "not our
+ *     stack", so the guard silently stopped existing for lanes;
+ *   - a lane that STANDS REDIS DOWN was diagnosed anyway, against a container
+ *     that is by the plan's own decision not this checkout's to judge.
+ *
+ * The answer is the plan's, in every case:
+ *
+ *   - `{ standDown: true }` — the plan claims NO host port for this service
+ *     (its URL names a remote host, or a loopback with no port). Nothing here
+ *     is ours to diagnose.
+ *   - `{ published }` — the host port the plan publishes. For a service the
+ *     plan does not parameterize (postgres, neo4j: the compose files state a
+ *     fixed host port for them) that IS the historical default, so those
+ *     services and the whole unscoped checkout behave exactly as before.
+ *
+ * A companion entry (`derivedFrom`) is never the answer: it is a second port on
+ * an existing service's container, not a bundled DB service of its own.
+ *
+ * @param {{ composeService: string, defaultHostPort: number, plan?: { portEnv?: Record<string, string>, unmanaged?: Array<{ envVar: string }> } }} input
+ * @returns {{ published: number, standDown?: false } | { standDown: true }}
+ */
+export function resolvePublishedHostPort({ composeService, defaultHostPort, plan = {} } = {}) {
+  const spec = PREFLIGHT_HOST_PORTS.find(
+    (entry) => entry.service === composeService && !entry.derivedFrom,
+  );
+  // Not a service the plan parameterizes — the compose files pin its host port,
+  // so the historical default is the honest answer and always was. `parameterized`
+  // says which of the two this is, because a caller may only compare a connect
+  // port against a port THIS plan decided; postgres and neo4j are pinned in the
+  // compose files, so a lane pointing at another one of those is the ordinary
+  // external-service case and nothing to remark on.
+  if (!spec) return { published: defaultHostPort, parameterized: false };
+  const base = { parameterized: true, envVar: spec.envVar, urlVar: spec.urlVar };
+  if ((plan.unmanaged ?? []).some((entry) => entry.envVar === spec.envVar)) {
+    return { ...base, standDown: true };
+  }
+  const claimed = Number((plan.portEnv ?? {})[spec.envVar]);
+  // A plan that resolved no key for a managed service is the unscoped checkout
+  // (or one whose claim was refused, in which case the caller has already stood
+  // the whole run down); the default is what compose would publish.
+  return { ...base, published: isUsablePort(claimed) ? claimed : defaultHostPort };
+}
+
+/**
+ * The warning a SCOPED checkout owes its operator when it PUBLISHES a service
+ * on one host port and its own app CONNECTS on another.
+ *
+ * This is the leak the drift fix alone does not close (cinatra#2839, round-1
+ * Codex finding). `resolveComposeHostPortPlan` accepts an explicit
+ * `CINATRA_*_HOST_PORT` as a complete claim, so a lane may state
+ * `CINATRA_REDIS_HOST_PORT=16379` and no `REDIS_URL` at all and be refused
+ * nothing. Compose then publishes the lane's redis on 16379 while the app,
+ * having no URL, falls back to the shared 6379 — and the lane silently spends
+ * the whole session talking to the OPERATOR's redis. That is precisely the
+ * cross-lane bleed the scoping exists to prevent, arriving through the one door
+ * the plan leaves open.
+ *
+ * The probe is NOT moved to the published port to paper over it: the probe
+ * answers "can the app reach its service?", so following the plan instead of
+ * the app would report a healthy service the app cannot use. The mismatch is
+ * said out loud instead, naming both ports and both ways to fix it.
+ *
+ * A WARNING, not a refusal, and deliberately so. `REDIS_URL=…:6379` beside
+ * `CINATRA_REDIS_HOST_PORT=16379` is a strange but STATED intent — publish my
+ * own, connect to the shared one — and the plan already accepted it. Refusing
+ * here would overturn that decision from a different module.
+ *
+ * Returns undefined when there is nothing to say: the unscoped checkout (whose
+ * immunity is absolute), a service this plan does not parameterize, a service
+ * stood down, or ports that agree.
+ *
+ * @param {{ service: string, claim?: { published?: number, parameterized?: boolean, standDown?: boolean, envVar?: string, urlVar?: string }, connectPort?: number, laneScope?: string }} input
+ * @returns {string | undefined}
+ */
+export function formatConnectPortMismatch({ service, claim = {}, connectPort, laneScope } = {}) {
+  // The unscoped checkout states no project name, so it is the operator's single
+  // stack and nothing here remarks on it — the same immunity every rule above
+  // states explicitly rather than leaving to fall out.
+  if (!laneScope || laneScope === "unscoped") return undefined;
+  if (!claim.parameterized || claim.standDown) return undefined;
+  // Both sides must be real ports before this can name them. A claim with no
+  // usable published port is one the plan already refused or stood down, and the
+  // caller has stopped on that; saying "published on host port undefined" here
+  // would only bury the message that matters.
+  if (!isUsablePort(Number(claim.published)) || !isUsablePort(Number(connectPort))) {
+    return undefined;
+  }
+  if (Number(connectPort) === Number(claim.published)) return undefined;
+  return (
+    `${service} is published on host port ${claim.published} by this checkout (${claim.envVar}), but the app connects ` +
+    `on ${connectPort}. Those are different services: whatever answers on ${connectPort} is somebody else's — the ` +
+    `operator's stack on the shared default, or another lane — so this checkout starts a ${service} nothing here ` +
+    `uses and does its real work in a container it does not own. Point ${claim.urlVar} at ` +
+    `127.0.0.1:${claim.published}, or set ${claim.envVar} to ${connectPort} so the published port is the one the app ` +
+    `connects on.`
+  );
+}
+
+/**
  * The distinct messages of a plan's `refusals` / `warnings`, in order.
  *
  * A refusal on a derived port repeats its source's, so entries are
