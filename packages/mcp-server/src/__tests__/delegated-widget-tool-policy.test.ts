@@ -231,6 +231,29 @@ describe("S8d — no lifecycle DECIDE/MUTATE primitive, by construction", () => 
     }
   });
 
+  // ---- THE WIDGET CANNOT START A RUN AT ALL ---------------------------------
+  // Pinned because a neighbouring change now depends on it. `agent_run` learned
+  // to PAUSE a chat-started run on the recommendation hold, and the reason no
+  // extra guarding was added for the widget is precisely this policy: a widget
+  // delegation cannot reach `agent_run`, so a widget-carried run is headless by
+  // the closed allowlist rather than by a second check somewhere downstream.
+  //
+  // That is a real dependency, so it gets a real assertion. If this policy ever
+  // admits `agent_run`, the "widget runs stay headless" reasoning stops holding
+  // and this test is where that shows up — instead of silently, in a run that
+  // parks on a card no widget draws.
+  it("REGRESSION: a widget delegation can never reach agent_run, on any kind", () => {
+    for (const kind of KINDS) {
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run"), kind).toBe(false);
+      expect(delegatedWidgetAllowedToolNames(kind), kind).not.toContain("agent_run");
+      // The neighbouring run-lifecycle primitives are refused too, so the
+      // refusal is about the run plane and not about one name.
+      for (const name of ["agent_run_resume", "agent_run_stop", "agent_run_get"]) {
+        expect(isDelegatedWidgetMcpToolAllowed(kind, name), `${kind}/${name}`).toBe(false);
+      }
+    }
+  });
+
   it("NEGATIVE CONTROL: the set assertion itself fails on an added primitive", () => {
     // The second half of the guarantee. The backstop covers the DECISION class;
     // this covers everything else a widening could add (a connector read, an

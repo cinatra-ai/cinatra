@@ -68,8 +68,14 @@ describe("the four mounts exist and are host-declared", () => {
     expect(registry).toMatch(/trigger_schedule_proposal:\s*ScheduleProposalCard/);
     // THE S1 SHELL IS RETIRED FOR THIS KIND — the whole point of the swap.
     expect(registry).not.toMatch(/trigger_schedule_proposal:\s*LifecycleCard/);
-    // The verification kind keeps the shell until §VII's own slice draws it.
-    expect(registry).toMatch(/verification_summary:\s*LifecycleCard/);
+    // AND THE OTHER KIND'S SWAP SURVIVES THIS ONE. This line read
+    // `verification_summary: LifecycleCard` while §VII was still owed; S9e
+    // (cinatra#2789) drew that card, so the assertion is re-aimed rather than
+    // dropped. Its job never was to record which kinds are undrawn — it is that
+    // THIS slice swaps ONE row and leaves its neighbour's alone, which a
+    // registry-wide edit would break silently.
+    expect(registry).toMatch(/verification_summary:\s*VerificationSummaryCard/);
+    expect(registry).not.toMatch(/verification_summary:\s*LifecycleCard/);
     // ONE row, not two: `chat_thread` and `site_widget` are the same dispatch.
     expect(registry.match(/trigger_schedule_proposal:/g)).toHaveLength(1);
   });

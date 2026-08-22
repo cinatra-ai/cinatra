@@ -29,8 +29,8 @@ import { ContentChangeProposalCard, type ApplyIntentRef } from "./content-change
 import { ArtifactPreviewCard } from "./artifact-preview-card";
 import { CitationGroupCard } from "./citation-group-card";
 import { ChangeHistoryCard } from "./change-history-card";
-import { LifecycleCard } from "./lifecycle-card";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
+import { VerificationSummaryCard } from "@cinatra-ai/agents/verification-summary-card";
 import { ScheduleProposalCard } from "@cinatra-ai/agents/schedule-proposal-card";
 
 type ComponentFor<K extends KnownRenderableViewType> = (props: {
@@ -68,9 +68,17 @@ const RENDERABLE_VIEW_COMPONENTS: {
   // page mount the same component themselves, under their own host declaration,
   // because a registry row is not a mount on a surface that has no transcript.
   //
-  // The verification card keeps the shell until §VII's own slice (S9e) draws it.
+  // With S9e (#2789) and S9d (#2788) both landed, NO lifecycle kind dispatches
+  // the S1 shell from this registry any more — `LifecycleCard` stays exported
+  // from ./lifecycle-card for the surfaces and tests that still name it, but it
+  // is no longer a dispatch target here.
   artifact_review_gate: ReviewGateCard,
-  verification_summary: LifecycleCard,
+  // S9e (#2789) swapped the verification line the same way: `verification_summary`
+  // now dispatches to the DRAWN `VerificationSummaryCard` — §VII's Core-analysis
+  // chrome, outcome pill, revision pins, before/after table (each row carrying
+  // its own authorization mark) and advisory comments — and the S1 shell is
+  // RETIRED for this kind.
+  verification_summary: VerificationSummaryCard,
   trigger_schedule_proposal: ScheduleProposalCard,
 };
 

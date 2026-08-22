@@ -18,7 +18,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -92,16 +92,25 @@ vi.mock("../agent-ui-override-registry", () => ({
   agentUIOverrideRegistry: { resolve: () => null },
 }));
 
-const { readRunOutputEvidence, getRunRecommendationHoldStateAction } = vi.hoisted(
-  () => ({
-    readRunOutputEvidence: vi.fn(),
-    getRunRecommendationHoldStateAction: vi.fn(),
-  }),
-);
+const {
+  readRunOutputEvidence,
+  getRunRecommendationHoldStateAction,
+  confirmRunRecommendationAction,
+  skipRunRecommendationAction,
+} = vi.hoisted(() => ({
+  readRunOutputEvidence: vi.fn(),
+  getRunRecommendationHoldStateAction: vi.fn(),
+  confirmRunRecommendationAction: vi.fn(
+    async (_input: Record<string, unknown>) => ({ ok: true, dispatched: true }),
+  ),
+  skipRunRecommendationAction: vi.fn(
+    async (_input: Record<string, unknown>) => ({ ok: true, dispatched: true }),
+  ),
+}));
 vi.mock("../run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction,
-  confirmRunRecommendationAction: vi.fn(async () => ({ ok: true })),
-  skipRunRecommendationAction: vi.fn(async () => ({ ok: true })),
+  confirmRunRecommendationAction,
+  skipRunRecommendationAction,
 }));
 vi.mock("../run-actions", () => ({
   resetAgentRun: vi.fn(async () => ({ ok: true })),
@@ -396,7 +405,9 @@ describe("the core's review lifecycle takes over in the conversation", () => {
 //   exception is credential-keyed, not a surface rule, and the state reader is
 //   documented for "the chat-mounted run panel … the SAME shared chip-row
 //   serves chat" (run-recommendation-actions.ts). The panel declares the
-//   `run_card` host unconditionally, so a matching hold draws in a conversation.
+//   `run_card` host wherever no OUTER lifecycle host already owns the card, so
+//   a matching hold draws in a conversation — from whichever mount owns it
+//   there. See the ambient-host pin at the bottom of this file for that rule.
 //
 //   AUDIT — there is no audit screen in this tree to surface, on any host. The
 //   auditor agent is retired at exact zero
@@ -413,21 +424,34 @@ describe("the core's review lifecycle takes over in the conversation", () => {
 // Neither pin invents a gate. They state the core's own decision and prove the
 // conversation mount does not narrow it.
 //
-// NOT pinned here, because it is the core's to rule on: a chat-started run is
-// never PARKED for the recommendation. The chat pre-router creates its run
-// through the `agent_run` primitive (mcp/handlers.ts createAgentRun), which
-// stamps no `humanPresent` and never calls `maybeHoldRunForRecommendation`, so
-// the decision short-circuits at recommendation-hold.ts's
-// `run.humanPresent !== true` headless branch. The mount below is ready for the
-// hold; today nothing hands it one on this path.
+// A CHAT-STARTED RUN NOW REACHES THIS MOUNT. This note used to say the
+// opposite, and it was true when it was written: the chat pre-router created
+// its run through `agent_run`, which stamped no `humanPresent` and never called
+// `maybeHoldRunForRecommendation`, so the decision short-circuited at the
+// headless branch and the mount below sat ready for a hold nothing handed it.
+//
+// The primitive now derives the launch origin from the verified frame, creates
+// a chat-started run `pending_input`, and evaluates the hold BEFORE dispatch —
+// so a held chat run arrives here parked, in a conversation. The pin at the
+// bottom of this block covers that state, and the handler's own state path is
+// proved in chat-origin-recommendation-hold.test.ts.
 const HELD_RECOMMENDATION = {
   state: "held" as const,
   agentPackageName: "@cinatra-ai/blog-draft-writer-agent",
   promptText: "draft a blog post",
   recommendations: [
-    { id: "skill-blog", name: "Blog content", description: "", selected: true },
+    {
+      skillId: "skill-blog",
+      skillRevisionId: "skill-blog@1",
+      name: "Blog content",
+      score: 0.9,
+      rank: 1,
+      recommended: true,
+      scoredFeatures: [],
+    },
   ],
   holdRef: "hold-ref-2729",
+  canDecide: true,
 };
 
 describe("the skill-recommendation screen reaches the conversation", () => {
@@ -436,12 +460,15 @@ describe("the skill-recommendation screen reaches the conversation", () => {
     getRunRecommendationHoldStateAction.mockResolvedValue(HELD_RECOMMENDATION);
   });
 
-  async function renderRun(surface: "chat" | "agent-detail") {
+  async function renderRun(
+    surface: "chat" | "agent-detail",
+    initialStatus = "running",
+  ) {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     return render(
       <AgenticRunPanel
         runId="run-2729"
-        initialStatus="running"
+        initialStatus={initialStatus}
         initialError={null}
         initialMessages={[]}
         agUiEnabled={false}
@@ -462,7 +489,16 @@ describe("the skill-recommendation screen reaches the conversation", () => {
           throw new Error("recommendation card not drawn");
         }
       });
-      expect(screen.queryByText(/Confirm the skills for this run/i)).not.toBeNull();
+      // REDRAWN to the ratified §V drawing (cinatra#2841): the heading plate this
+      // used to name is gone — the row IS the card. What proves the card reached
+      // the conversation is the chip the reader shapes the run with.
+      expect(screen.queryByText(/Confirm the skills for this run/i)).toBeNull();
+      const chip = document.querySelector('[data-recommendation-chip]');
+      expect(chip).not.toBeNull();
+      expect(chip?.textContent).toContain("Blog content");
+      expect(chip?.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+      expect(chip?.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+      expect(chip?.querySelector('[data-skill-action="skip"]')).not.toBeNull();
     },
   );
 
@@ -476,6 +512,92 @@ describe("the skill-recommendation screen reaches the conversation", () => {
     });
     expect(getRunRecommendationHoldStateAction).toHaveBeenCalledWith({
       runId: "run-2729",
+    });
+  });
+
+  // The state a chat-started run now actually arrives in. The primitive creates
+  // it `pending_input`, evaluates the hold, and — when it fires — leaves it
+  // there with nothing queued behind it. So the card has to draw for THAT
+  // status, in a conversation, and its two buttons have to reach the canonical
+  // release rather than any chat-local shortcut. Confirm and Skip both go to
+  // the same server actions the run page uses, which is what makes the run
+  // dispatch through `triggerAgentRun` once the park is released.
+  it("draws the held card for a chat-started run parked in pending_input", async () => {
+    await renderRun("chat", "pending_input");
+
+    await waitFor(() => {
+      if (!document.querySelector('[data-conformance-id="run-chip-row"]')) {
+        throw new Error("recommendation card not drawn for a parked chat run");
+      }
+    });
+    // RE-ANCHORED to the ratified §V drawing (cinatra#2841), same guarantee.
+    // This used to read the heading plate's question back — the plate was the
+    // human-readable proof the card had drawn its HELD content in the panel
+    // rather than an empty marker node. §V deleted the plate ("the row IS the
+    // whole card"), so that proof moves onto the row's own root and its chips,
+    // exactly as the sibling case above was re-anchored. Asserted negatively
+    // too, so the old drawing cannot creep back.
+    expect(screen.queryByText(/Confirm the skills for this run/i)).toBeNull();
+
+    const row = document.querySelector('[data-conformance-id="run-chip-row"]');
+    expect(row).not.toBeNull();
+    // Still the HELD reading this case is named for.
+    expect(row?.getAttribute("data-lifecycle-card-state")).toBe("held");
+    // ONE declaring root in the panel — the contract the wrapper removal fixed.
+    // The panel renders the row directly and now carries the declaration itself.
+    expect(
+      document.querySelectorAll('[data-lifecycle-card="recommendation_hold"]'),
+    ).toHaveLength(1);
+    expect(row?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+
+    // What the reader shapes the run with, inside that one root.
+    const chip = row?.querySelector("[data-recommendation-chip]");
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toContain("Blog content");
+    expect(chip?.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+    expect(chip?.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+    expect(chip?.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+  });
+
+  it("resolves Confirm through the canonical release action", async () => {
+    await renderRun("chat", "pending_input");
+
+    await waitFor(() => {
+      if (!screen.queryByRole("button", { name: /^Confirm$/ })) {
+        throw new Error("Confirm not drawn");
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Confirm$/ }));
+
+    await waitFor(() => {
+      if (confirmRunRecommendationAction.mock.calls.length === 0) {
+        throw new Error("Confirm did not reach the release action");
+      }
+    });
+    expect(confirmRunRecommendationAction.mock.calls[0]?.[0]).toMatchObject({
+      runId: "run-2729",
+      holdRef: "hold-ref-2729",
+    });
+  });
+
+  it("resolves Skip through the canonical release action", async () => {
+    await renderRun("chat", "pending_input");
+
+    await waitFor(() => {
+      if (!screen.queryByRole("button", { name: /^Skip$/ })) {
+        throw new Error("Skip not drawn");
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Skip$/ }));
+
+    await waitFor(() => {
+      if (skipRunRecommendationAction.mock.calls.length === 0) {
+        throw new Error("Skip did not reach the release action");
+      }
+    });
+    expect(skipRunRecommendationAction.mock.calls[0]?.[0]).toMatchObject({
+      runId: "run-2729",
+      holdRef: "hold-ref-2729",
     });
   });
 
@@ -549,4 +671,73 @@ describe("a flow gate's renderer is surface-blind (what would carry an audit scr
       expect(await screen.findByTestId("auditor-flow-screen")).not.toBeNull();
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// ONE CARD PER TURN — the ambient-host rule.
+//
+// Inside a chat transcript this panel is a SIBLING of the conversation's own
+// recommendation card, and both resolve the same run. An unconditional mount
+// here therefore drew the card TWICE in one turn. The defect hid because only
+// the SETTLED states rendered on both mounts: the held state self-gated to the
+// chat card's turn, which made the duplication read as a settled-only quirk
+// instead of what it was.
+//
+// The rule is one card per run per turn, in EVERY state: inside a `chat_thread`
+// the chat card owns the recommendation and the panel draws none; with no outer
+// lifecycle host — the run page — the panel keeps its own copy exactly as
+// before. Gating on the AMBIENT host rather than on the `surface` prop is what
+// makes the rule hold for any future embedder of this panel in a transcript,
+// without that embedder having to remember a prop.
+// ---------------------------------------------------------------------------
+describe("the panel draws one recommendation card per turn, never two", () => {
+  beforeEach(() => {
+    getRunRecommendationHoldStateAction.mockReset();
+    getRunRecommendationHoldStateAction.mockResolvedValue(HELD_RECOMMENDATION);
+  });
+
+  async function renderPanelUnderHost(host: "chat_thread" | null) {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
+    const panel = (
+      <AgenticRunPanel
+        runId="run-2729"
+        initialStatus="pending_input"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={false}
+        templateId="tmpl-2729"
+        agentPackageName="@cinatra-ai/blog-draft-writer-agent"
+        surface="chat"
+      />
+    );
+    return render(
+      host === null ? (
+        panel
+      ) : (
+        <LifecycleCardSurfaceProvider host={host}>{panel}</LifecycleCardSurfaceProvider>
+      ),
+    );
+  }
+
+  it("withholds its copy inside a chat_thread — the chat card owns the run there", async () => {
+    await renderPanelUnderHost("chat_thread");
+
+    // The panel still paints (its chrome is the run's progress), and the hold
+    // read still happens for the chat card — what must not appear is a SECOND
+    // recommendation card on this run's turn.
+    await screen.findByText(/Agentic Run Progress/i);
+    expect(document.querySelectorAll('[data-conformance-id="run-chip-row"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-lifecycle-card-host="run_card"]')).toHaveLength(0);
+  });
+
+  it("keeps its copy on the run page, where no outer host owns the card", async () => {
+    await renderPanelUnderHost(null);
+
+    await waitFor(() => {
+      if (!document.querySelector('[data-conformance-id="run-chip-row"]')) {
+        throw new Error("the run page lost its own recommendation card");
+      }
+    });
+  });
 });

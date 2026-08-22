@@ -9,10 +9,9 @@ import {
   type ReactElement,
 } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Check } from "lucide-react";
+import { Check, SlidersHorizontal, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Sheet,
   SheetContent,
@@ -20,7 +19,6 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 import {
   useLifecycleCardAuth,
@@ -34,35 +32,108 @@ import {
   skipRunRecommendationAction,
   type RunRecommendationHoldState,
 } from "./run-recommendation-actions";
+import type { RunRecommendationDecidedSkill } from "@/lib/run-selected-skill-revisions";
 
 // ---------------------------------------------------------------------------
 // RunRecommendationChipRow — the SHARED run-start recommendation chip-row
-// (cinatra#2067, epic #2037 C3). ONE component serving BOTH the canonical run
-// view (instance-screens.tsx) and the chat-mounted run panel (agentic-run-panel
-// .tsx) — issue #2067 item 5 (chat parity is not assumed; it uses the SAME
-// component). Reuses the HitlSkillChips visual language (a collapsible chip row
-// + a per-skill detail Sheet) and adds the confirm / adjust / skip affordances:
+// (cinatra#2067, epic #2037 C3; REDRAWN to the ratified drawing by cinatra#2841).
+// ONE component serving every host that draws `recommendation_hold` — the run
+// page's trigger position today, the chat mount as it lands — so a redraw here
+// is the redraw everywhere.
 //
-//   ADJUST  — toggle a chip on/off (a recommended chip starts selected; a
-//             non-recommended candidate starts unselected and rides
-//             `forcedRevisions` when turned on).
-//   CONFIRM — write the currently-selected set as the authoritative per-run
-//             selection and release the run-start hold (the run dispatches).
-//   SKIP    — proceed with the computed default set (durable skip evidence).
+// THE DRAWING THIS RENDERS. design `specs/app-lifecycle-cards.html` §V "The
+// recommendation card", at design commit 60b27dfbb8a2 (the ratified redraw):
 //
-// These are skill-selection affordances, NOT a review decision — the review
-// floor (Approve/Reject/Comment) is untouched (issue #2067 AC-8).
+//   "the turn carries a chip-row: ONE CHIP PER SKILL, each carrying its own
+//    Confirm, Adjust and Skip, so the reader shapes the run one skill at a time
+//    before it runs."
+//   "THE ROW IS THE WHOLE CARD. There is no heading plate above it and no
+//    row-level submit beneath it — nothing states the question a second time,
+//    and nothing decides every skill at once. A skill is settled by pressing
+//    one of ITS OWN three affordances, and each chip then shows what it
+//    recorded."
 //
-// `decision` drives the two visual modes:
+// WHAT WENT, AND WHY IT MAY NOT COME BACK. The shipped card carried a heading
+// plate restating the question with a subtitle under it, a collapsible skills
+// selector whose pills were the only adjust affordance, and ONE card-level
+// submit pair that decided the whole row at once. §V draws
+// none of those, so none of them is rendered here: the row IS the card.
+//
+// THE THREE AFFORDANCES, PER CHIP:
+//
+//   CONFIRM — take this skill as scored: it rides the run's authoritative
+//             selection. (On a candidate the scorer did NOT recommend, that is
+//             the shipped force-add — its exact revision is pinned. See the
+//             CANDIDATE-SET deviation below.)
+//   ADJUST  — open THIS skill's panel and edit its selection: keep it in, or
+//             leave it out. The chip records `adjusted` either way, so "I looked
+//             at this one and shaped it" is distinguishable from "I took it as
+//             offered". The drawing does not fix what Adjust opens; the panel it
+//             opens is the SHIPPED per-skill detail panel, and the selection is
+//             the ONE thing the run's store records per skill — nothing wider is
+//             invented here.
+//
+//             THE ADJUSTED MARK IS NOW DURABLE FOR "KEEP" (cinatra#2841 fix).
+//             An in-set Adjust → "Keep it in this run" is written as a
+//             `user_adjusted` selection row, so the settled row reads back
+//             `Adjusted` instead of `Confirmed`. Before this it was written
+//             `recommended_confirmed` — indistinguishable from a plain Confirm —
+//             and `adjusted` was UNREACHABLE on a settled chip, because the only
+//             source that mapped to it (`user_forced`) is stamped exclusively
+//             for an id OUTSIDE the scored set, and the row only offers the
+//             scored set.
+//
+//             RESIDUAL, NAMED: Adjust → "Leave it out" is durably a REJECTED
+//             row, and the rejected half records only that the skill was not
+//             kept — so it reads back `Skipped`, which is what it is (the skill
+//             is not in the run). Distinguishing "skipped outright" from
+//             "inspected, then dropped" would need the rejected row to carry a
+//             third source, and this slice does not widen the store.
+//   SKIP    — leave this skill out of the run.
+//
+// DEVIATION — THE RELEASE IS STILL WHOLE-ROW (named, cinatra#2841). The shipped
+// store has no per-skill decision record to write against a LIVE hold: the
+// recommendation hold carries one scored candidate set and one selection, and
+// the two decision actions (`confirmRunRecommendationAction`,
+// `skipRunRecommendationAction`) each write a decision AND release the park in
+// one shot. So the per-chip decision model is UI state over the shipped release:
+// each chip records its own mark, and when EVERY chip is decided the row
+// releases once — a confirm carrying the kept set, or a skip when the reader
+// kept nothing. No new store semantics are invented, and a chip stays
+// re-pressable until that release lands.
+//
+// DEVIATION — THE CANDIDATE SET IS EVERY OFFERED CANDIDATE (named,
+// cinatra#2841). §V draws chips for the skills the assistant PROPOSES. The
+// shipped row offers the scorer's whole candidate list — recommended ones plus
+// the below-threshold ones a reader may force on — and dropping the latter would
+// delete a shipped affordance, which this slice may not do. Every candidate
+// therefore gets a chip; a non-recommended one keeps its shipped marking
+// (`data-forced`) and its shipped tooltip.
+//
+// `decision` drives the two readings §V draws:
 //   "pending"   → the interactive chip-row (a live parked hold).
-//   a summary   → the read-only decided state (a released hold) — confirmed
-//                 (labeled skills) or skipped.
+//   a summary   → the SETTLED row: one chip per skill, each stating what it
+//                 recorded (Confirmed / Adjusted / Skipped), nothing left to
+//                 press and nothing summarised above it.
+// The third reading, READ-ONLY, is `canDecide === false`: every chip keeps its
+// three affordances on screen, disabled, over the reason line.
 // ---------------------------------------------------------------------------
+
+/** What one chip recorded — the three marks §V draws on a settled chip. */
+export type RunRecommendationChipMark = "confirmed" | "adjusted" | "skipped";
 
 export type RunRecommendationDecision =
   | { kind: "pending" }
-  | { kind: "confirmed"; skillNames: string[] }
-  | { kind: "skipped" };
+  | {
+      kind: "confirmed";
+      skillNames: string[];
+      /** Per-skill settled marks, derived from the run's durable evidence. */
+      decided?: RunRecommendationDecidedSkill[];
+    }
+  | { kind: "skipped"; decided?: RunRecommendationDecidedSkill[] };
+
+/** One chip's live (pre-release) state: what was pressed, and what it means. */
+type ChipDecision = { mark: RunRecommendationChipMark; keep: boolean };
 
 type Props = {
   runId: string;
@@ -81,6 +152,14 @@ type Props = {
    */
   holdRef?: string;
   decision: RunRecommendationDecision;
+  /**
+   * Whether THIS reader may shape the run (§V's read-only reading). Presentation
+   * only: the decision actions re-authorize on their own and are untouched by
+   * this flag, so a `true` it should not have been given buys nothing but a
+   * refusal line. It therefore defaults to `true` — a reader who may decide must
+   * never lose the affordances to an unresolvable presentation hint.
+   */
+  canDecide?: boolean;
   /** Compact styling for the inline chat mount. */
   variant?: "panel" | "inline";
   /**
@@ -95,6 +174,55 @@ type Props = {
   onDecided?: () => void;
 };
 
+const MARK_LABEL: Record<RunRecommendationChipMark, string> = {
+  confirmed: "Confirmed",
+  adjusted: "Adjusted",
+  skipped: "Skipped",
+};
+
+/** Per-mark chip treatment — §V's confirmed tint, adjusted tint, dashed skip. */
+const MARK_CHIP_CLASS: Record<RunRecommendationChipMark, string> = {
+  confirmed: "border-success/45 bg-success/10 text-foreground",
+  adjusted: "border-warning/50 bg-warning/12 text-foreground",
+  skipped: "border-dashed border-line bg-transparent text-muted-foreground",
+};
+
+function MarkIcon({ mark }: { mark: RunRecommendationChipMark }): ReactElement {
+  if (mark === "confirmed") return <Check className="h-3 w-3" aria-hidden />;
+  if (mark === "adjusted") return <SlidersHorizontal className="h-3 w-3" aria-hidden />;
+  return <X className="h-3 w-3" aria-hidden />;
+}
+
+/**
+ * One SETTLED chip — the skill and the mark it recorded, and nothing to press.
+ * §V: "The settled row is still the whole card: each chip states its own outcome
+ * in place. Nothing is summarised above it, and there is nothing left to press."
+ */
+function SettledChip({ skillId, name, mark }: RunRecommendationDecidedSkill): ReactElement {
+  return (
+    <span
+      data-recommendation-chip=""
+      data-skill-id={skillId}
+      data-chip-mark={mark}
+      className={`inline-flex items-center gap-2 rounded-chip border px-3 py-1 text-xs ${MARK_CHIP_CLASS[mark]}`}
+    >
+      {/* THE NAME, not the id and not the slug (cinatra#2841). §V draws
+          "Enrich contacts", "Draft email", "Schedule send" on its settled
+          chips — the same labels its held chips carry — and draws NO second,
+          package-qualified line beside them, so none is rendered. The name
+          arrives already resolved: it is the owning extension's manifest
+          `cinatra.displayName`, joined onto the run's id-only evidence by
+          `resolveDecidedSkillNames`. The id stays machine-readable on
+          `data-skill-id` where the conformance walk reads it. */}
+      <span className="font-medium">{name}</span>
+      <span className="inline-flex items-center gap-1 font-mono text-badge-2xs uppercase tracking-kicker text-muted-foreground">
+        <MarkIcon mark={mark} />
+        {MARK_LABEL[mark]}
+      </span>
+    </span>
+  );
+}
+
 export function RunRecommendationChipRow({
   runId,
   agentPackageName,
@@ -102,17 +230,31 @@ export function RunRecommendationChipRow({
   initialRecommendations,
   holdRef,
   decision,
+  canDecide = true,
   variant = "panel",
   onDecided,
 }: Props) {
   const router = useRouter();
+  // The host that declared this surface, read for the card-root declaration
+  // above. `null` outside a `LifecycleCardSurfaceProvider`, which on a shipped
+  // host cannot happen — `RecommendationHoldCard` refuses to draw without one.
+  const lifecycleHost = useLifecycleCardHost();
+  // THE CHAT TRANSCRIPT'S EVIDENCE ANCHOR (S9b, cinatra#2794), on the card's OWN
+  // root. Under §V the ROW IS THE CARD, so that root is this row's outermost
+  // element — the same element carrying the kind/host/state declaration above,
+  // not a second wrapper. That is what keeps the mount FAIL-OPEN: a turn with no
+  // live hold draws no row, so it adds no marker and no node, and a conversation
+  // without a hold is byte-identical to one from before this mount existed. A
+  // wrapper rendered by the transcript would sit in every turn whether or not
+  // anything was inside it.
+  const chatThreadHoldMarker =
+    lifecycleHost === "chat_thread" ? { "data-chat-thread-recommendation-hold": "" } : {};
   const [recs, setRecs] = useState<RecommendedSkillForChip[]>(
     initialRecommendations ?? [],
   );
   const [loaded, setLoaded] = useState(initialRecommendations != null);
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set((initialRecommendations ?? []).filter((r) => r.recommended).map((r) => r.skillId)),
-  );
+  /** Per-chip marks — the decision model §V draws, held until the row releases. */
+  const [chips, setChips] = useState<Record<string, ChipDecision>>({});
   const [detail, setDetail] = useState<RecommendedSkillForChip | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -126,7 +268,6 @@ export function RunRecommendationChipRow({
       .then((r) => {
         if (cancelled) return;
         setRecs(r);
-        setSelected(new Set(r.filter((s) => s.recommended).map((s) => s.skillId)));
         setLoaded(true);
       })
       .catch(() => {
@@ -137,64 +278,105 @@ export function RunRecommendationChipRow({
     };
   }, [loaded, decision.kind, agentPackageName, promptText]);
 
-  // ── Read-only decided state (a released hold) ────────────────────────────
-  if (decision.kind === "confirmed") {
+  // ── The SETTLED row (a released hold) — one chip per skill, each with its
+  //    own recorded outcome. No heading, no summary line, nothing to press.
+  if (decision.kind !== "pending") {
+    const settled: RunRecommendationDecidedSkill[] =
+      decision.decided ??
+      (decision.kind === "confirmed"
+        ? decision.skillNames.map((name) => ({
+            // The pre-#2841 fallback shape: `skillNames` is a bare list with no
+            // per-skill evidence behind it, so the one label it carries is both
+            // the chip's name and its only handle.
+            skillId: name,
+            name,
+            mark: "confirmed" as const,
+          }))
+        : []);
+    // A settled hold whose durable evidence names no skill at all has nothing
+    // per-skill to state, and §V draws no chip-less settled reading — so the
+    // card is absent rather than invented. Reachable only where the row offered
+    // no candidate in the first place.
+    if (settled.length === 0) return null;
     return (
       <div
-        data-run-recommendation-decision="confirmed"
-        className="flex flex-wrap items-center gap-2 rounded-panel border border-line bg-surface-muted px-4 py-3"
+        data-run-recommendation-chip-row=""
+        data-conformance-id="run-chip-row"
+        // THE CARD-ROOT DECLARATION (cinatra#2841). The capture contract
+        // (`scripts/ci/lib/capture-record-contract.mjs`) identifies a
+        // `recommendation_hold` capture by the card root's OWN three
+        // attributes, exactly as it does for the review gate — the kind, the
+        // host that declared the surface, and the state. The row IS the card
+        // (§V), so the row's outermost element carries them; without them no
+        // truthful capture of this card could ever satisfy its own contract.
+        data-lifecycle-card="recommendation_hold"
+        data-lifecycle-card-state="decided"
+        // Omitted rather than guessed when no surface declared a host: the
+        // component renders outside a provider only in tests.
+        data-lifecycle-card-host={lifecycleHost ?? undefined}
+        {...chatThreadHoldMarker}
+        data-run-recommendation-decision={decision.kind}
+        data-run-recommendation-settled="true"
+        data-variant={variant}
+        className="flex flex-wrap gap-2"
       >
-        <Check className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <span className="text-xs font-medium text-muted-foreground">
-          Skills confirmed ({decision.skillNames.length})
-        </span>
-        {decision.skillNames.map((n) => (
-          <Badge key={n} variant="secondary" className="rounded-chip text-xs">
-            {n}
-          </Badge>
+        {settled.map((s) => (
+          <SettledChip key={s.skillId} skillId={s.skillId} name={s.name} mark={s.mark} />
         ))}
       </div>
     );
   }
-  if (decision.kind === "skipped") {
-    return (
-      <div
-        data-run-recommendation-decision="skipped"
-        className="flex items-center gap-2 rounded-panel border border-line bg-surface-muted px-4 py-3"
-      >
-        <span className="text-xs font-medium text-muted-foreground">
-          Skill recommendation skipped — running with the default set.
-        </span>
-      </div>
-    );
-  }
 
-  // ── Interactive chip-row (a live parked hold) ────────────────────────────
-  const toggle = (skillId: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(skillId)) next.delete(skillId);
-      else next.add(skillId);
-      return next;
-    });
-  };
+  // ── The interactive chip-row (a live parked hold) ────────────────────────
 
-  const onConfirm = () => {
+  /**
+   * Release the hold with the marks the reader ended on. THE WHOLE-ROW RELEASE
+   * DEVIATION lives here: the store cannot record a partial decision, so the row
+   * releases once, when every chip has been decided — a confirm carrying the
+   * kept set, or a skip when nothing was kept. A skip is not "an empty confirm":
+   * an empty selection writes no row at all, which reads back as no decision.
+   */
+  const release = (next: Record<string, ChipDecision>) => {
     setError(null);
-    const confirmedSkillIds = [...selected];
-    // Forced revisions: a SELECTED skill that was NOT recommended is a
-    // human-forced addition — pin its exact revision.
-    const forcedRevisions: Record<string, string> = {};
-    for (const r of recs) {
-      if (!r.recommended && selected.has(r.skillId)) forcedRevisions[r.skillId] = r.skillRevisionId;
+    const kept = recs.filter((r) => next[r.skillId]?.keep === true);
+    if (kept.length === 0) {
+      startTransition(async () => {
+        const res = await skipRunRecommendationAction({
+          runId,
+          ...(holdRef ? { holdRef } : {}),
+        });
+        if (!res.ok) {
+          setError(res.error || "Could not skip.");
+          return;
+        }
+        onDecided?.();
+        router.refresh();
+      });
+      return;
     }
+    // Forced revisions: a KEPT skill that was NOT recommended is a human-forced
+    // addition — pin its exact revision (shipped behaviour, unchanged).
+    const forcedRevisions: Record<string, string> = {};
+    for (const r of kept) {
+      if (!r.recommended) forcedRevisions[r.skillId] = r.skillRevisionId;
+    }
+    // THE ADJUSTED SET (cinatra#2841). A kept skill whose chip was settled
+    // through ADJUST — the reader opened its panel and chose "Keep it in this
+    // run" — is written `user_adjusted` rather than `recommended_confirmed`, so
+    // the settled row reads back `Adjusted`. Without this the mark was
+    // UNREACHABLE for the scored set, which is the only set the row offers: an
+    // in-set adjust landed as `recommended_confirmed` and read back `Confirmed`.
+    const adjustedSkillIds = kept
+      .filter((r) => next[r.skillId]?.mark === "adjusted")
+      .map((r) => r.skillId);
     startTransition(async () => {
       const res = await confirmRunRecommendationAction({
         runId,
         agentPackageName,
-        confirmedSkillIds,
+        confirmedSkillIds: kept.map((r) => r.skillId),
         promptText,
         forcedRevisions: Object.keys(forcedRevisions).length ? forcedRevisions : undefined,
+        adjustedSkillIds: adjustedSkillIds.length ? adjustedSkillIds : undefined,
         ...(holdRef ? { holdRef } : {}),
       });
       if (!res.ok) {
@@ -206,96 +388,125 @@ export function RunRecommendationChipRow({
     });
   };
 
-  const onSkip = () => {
-    setError(null);
-    startTransition(async () => {
-      const res = await skipRunRecommendationAction({
-        runId,
-        ...(holdRef ? { holdRef } : {}),
-      });
-      if (!res.ok) {
-        setError(res.error || "Could not skip.");
-        return;
-      }
-      onDecided?.();
-      router.refresh();
-    });
+  /** Record one chip's own decision; release once every chip has one. */
+  const decideChip = (skillId: string, mark: RunRecommendationChipMark, keep: boolean) => {
+    const next = { ...chips, [skillId]: { mark, keep } };
+    setChips(next);
+    if (recs.length > 0 && recs.every((r) => next[r.skillId] !== undefined)) release(next);
+  };
+
+  const openAdjust = (skill: RecommendedSkillForChip) => {
+    setDetail(skill);
+    setSheetOpen(true);
+  };
+
+  const closeAdjust = () => {
+    setSheetOpen(false);
+    setDetail(null);
   };
 
   return (
     <div
       data-run-recommendation-chip-row=""
       data-conformance-id="run-chip-row"
-      data-action="confirm-skill -> confirmed"
+      // The same card-root declaration the settled branch carries — see there.
+      // A live hold is `held`; the settled row above is `decided`.
+      data-lifecycle-card="recommendation_hold"
+      data-lifecycle-card-state="held"
+      data-lifecycle-card-host={lifecycleHost ?? undefined}
+      {...chatThreadHoldMarker}
       data-variant={variant}
-      className="flex flex-col gap-3 rounded-panel border border-line bg-surface p-4"
+      data-can-decide={canDecide ? "true" : "false"}
+      className="flex flex-col gap-2"
     >
-      <div className="flex flex-col gap-0.5">
-        <span className="text-sm font-medium text-foreground">
-          Confirm the skills for this run
-        </span>
-        <span className="text-xs text-muted-foreground">
-          Recommended for your request. Adjust the selection, then confirm — or skip to run
-          with the default set.
-        </span>
+      <div className="flex flex-wrap gap-2">
+        {!loaded ? (
+          <span className="text-xs text-muted-foreground">Loading recommendations…</span>
+        ) : recs.length === 0 ? (
+          <span className="text-xs text-muted-foreground">No candidate skills.</span>
+        ) : (
+          recs.map((skill) => {
+            const chip = chips[skill.skillId];
+            return (
+              <span
+                key={skill.skillId}
+                data-recommendation-chip=""
+                data-skill-id={skill.skillId}
+                data-chip-mark={chip ? chip.mark : "undecided"}
+                data-forced={!skill.recommended ? "true" : undefined}
+                aria-disabled={canDecide ? undefined : "true"}
+                className={`inline-flex items-center gap-2 rounded-chip border px-3 py-1 text-xs ${
+                  chip ? MARK_CHIP_CLASS[chip.mark] : "border-line bg-surface-strong text-foreground"
+                }`}
+                title={
+                  skill.recommended
+                    ? `Recommended (rank ${skill.rank})`
+                    : "Not recommended — adding forces this skill"
+                }
+              >
+                {/* The RESOLVED display label (cinatra#2841) — the owning
+                    extension's manifest `cinatra.displayName`, resolved once
+                    server-side and carried on `RecommendedSkillForChip.name`.
+                    Never re-derived here, and never the package id, which stays
+                    on `data-skill-id` above. */}
+                <span className="font-medium">{skill.name}</span>
+                <span className="inline-flex gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-5 rounded-chip px-2 text-badge-xs font-medium"
+                    data-action="confirm-skill -> confirmed"
+                    data-skill-action="confirm"
+                    data-skill-id={skill.skillId}
+                    aria-pressed={chip?.mark === "confirmed"}
+                    disabled={!canDecide || pending}
+                    onClick={() => decideChip(skill.skillId, "confirmed", true)}
+                  >
+                    Confirm
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-5 rounded-chip px-2 text-badge-xs font-medium"
+                    data-action="adjust-skill -> adjusted"
+                    data-skill-action="adjust"
+                    data-skill-id={skill.skillId}
+                    aria-pressed={chip?.mark === "adjusted"}
+                    disabled={!canDecide || pending}
+                    onClick={() => openAdjust(skill)}
+                  >
+                    Adjust
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-5 rounded-chip px-2 text-badge-xs font-medium"
+                    data-action="skip-skill -> skipped"
+                    data-skill-action="skip"
+                    data-skill-id={skill.skillId}
+                    aria-pressed={chip?.mark === "skipped"}
+                    disabled={!canDecide || pending}
+                    onClick={() => decideChip(skill.skillId, "skipped", false)}
+                  >
+                    Skip
+                  </Button>
+                </span>
+              </span>
+            );
+          })
+        )}
       </div>
 
-      <Collapsible defaultOpen>
-        <div className="flex items-center gap-2">
-          <CollapsibleTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-1 rounded-chip text-muted-foreground hover:text-foreground"
-            >
-              <span className="text-xs font-medium">
-                Skills ({selected.size}/{recs.length})
-              </span>
-              <ChevronDown className="h-3.5 w-3.5" />
-            </Button>
-          </CollapsibleTrigger>
-        </div>
-        <CollapsibleContent>
-          <div className="flex flex-wrap gap-2 pt-2">
-            {!loaded ? (
-              <span className="text-xs text-muted-foreground">Loading recommendations…</span>
-            ) : recs.length === 0 ? (
-              <span className="text-xs text-muted-foreground">No candidate skills.</span>
-            ) : (
-              recs.map((skill) => {
-                const isSelected = selected.has(skill.skillId);
-                return (
-                  <div key={skill.skillId} className="flex items-center">
-                    <Button
-                      type="button"
-                      variant={isSelected ? "default" : "outline"}
-                      size="sm"
-                      className="rounded-chip gap-1.5 text-xs"
-                      aria-pressed={isSelected}
-                      data-skill-id={skill.skillId}
-                      data-selected={isSelected ? "true" : "false"}
-                      data-forced={!skill.recommended ? "true" : undefined}
-                      onClick={() => toggle(skill.skillId)}
-                      onDoubleClick={() => {
-                        setDetail(skill);
-                        setSheetOpen(true);
-                      }}
-                      title={
-                        skill.recommended
-                          ? `Recommended (rank ${skill.rank})`
-                          : "Not recommended — adding forces this skill"
-                      }
-                    >
-                      {isSelected ? <Check className="h-3 w-3" /> : null}
-                      {skill.name}
-                    </Button>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
+      {/* §V's read-only reading: the chips keep their three affordances on
+          screen, disabled, and the reason sits under the row. */}
+      {!canDecide ? (
+        <p data-run-recommendation-restricted="" className="text-xs text-warning">
+          Shaping this run needs run access on it.
+        </p>
+      ) : null}
 
       {error ? (
         <p className="text-xs text-destructive" role="alert">
@@ -303,31 +514,20 @@ export function RunRecommendationChipRow({
         </p>
       ) : null}
 
-      <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          onClick={onConfirm}
-          disabled={pending || !loaded}
-          data-action="confirm-run-recommendation"
-        >
-          {pending ? "Working…" : "Confirm"}
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={onSkip}
-          disabled={pending}
-          data-action="skip-run-recommendation"
-        >
-          Skip
-        </Button>
-      </div>
-
-      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+      {/* ADJUST opens THIS skill's panel: what it was scored on, and the one
+          selection the run's store records for it. Pressing either control
+          settles the chip as `adjusted` — the drawing's third mark. */}
+      <Sheet
+        open={sheetOpen}
+        onOpenChange={(open) => {
+          if (!open) closeAdjust();
+          else setSheetOpen(true);
+        }}
+      >
         <SheetContent side="right" className="w-[480px] sm:max-w-[480px] overflow-y-auto">
           <SheetHeader>
+            {/* The ADJUST panel titles the skill with the SAME resolved label
+                its chip prints (cinatra#2841) — one label, one source. */}
             <SheetTitle className="text-foreground">{detail?.name ?? ""}</SheetTitle>
             <SheetDescription className="text-muted-foreground">
               {detail?.recommended
@@ -336,16 +536,49 @@ export function RunRecommendationChipRow({
             </SheetDescription>
           </SheetHeader>
           {detail ? (
-            <div className="mt-4 flex flex-col gap-2">
-              <span className="text-xs font-medium text-muted-foreground">Scored on</span>
-              <ul className="flex flex-col gap-1">
-                {(detail.scoredFeatures ?? []).map((f, i) => (
-                  <li key={i} className="text-xs text-foreground">
-                    <span className="text-muted-foreground">{f.kind}</span> · {f.detail}{" "}
-                    <span className="text-muted-foreground">(+{f.contribution})</span>
-                  </li>
-                ))}
-              </ul>
+            <div className="mt-4 flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Scored on</span>
+                <ul className="flex flex-col gap-1">
+                  {(detail.scoredFeatures ?? []).map((f, i) => (
+                    <li key={i} className="text-xs text-foreground">
+                      <span className="text-muted-foreground">{f.kind}</span> · {f.detail}{" "}
+                      <span className="text-muted-foreground">(+{f.contribution})</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  data-skill-action="adjust-keep"
+                  data-skill-id={detail.skillId}
+                  disabled={!canDecide || pending}
+                  onClick={() => {
+                    const id = detail.skillId;
+                    closeAdjust();
+                    decideChip(id, "adjusted", true);
+                  }}
+                >
+                  Keep it in this run
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  data-skill-action="adjust-drop"
+                  data-skill-id={detail.skillId}
+                  disabled={!canDecide || pending}
+                  onClick={() => {
+                    const id = detail.skillId;
+                    closeAdjust();
+                    decideChip(id, "adjusted", false);
+                  }}
+                >
+                  Leave it out
+                </Button>
+              </div>
             </div>
           ) : null}
         </SheetContent>
@@ -640,6 +873,19 @@ export function RecommendationHoldCard({
   if (state === null || state.state === "none") return null;
 
   return (
+    // THE CARD'S OWN IDENTITY ROOT lives on `RunRecommendationChipRow` itself.
+    //
+    // S9b (cinatra#2794) put kind/host/state on a `display: contents` wrapper
+    // here, because the row it wrapped carried no declaration of its own. The §V
+    // redraw (cinatra#2841) made THE ROW THE CARD and moved that declaration —
+    // kind, host read from the same provider hook, and state — onto the row's
+    // outermost element, in both its held and its decided reading. Keeping this
+    // wrapper too would have published the identity on TWO nested elements and
+    // broken the "ONE root" the contract measures, so the wrapper is gone and
+    // the row's own root carries everything, including the chat transcript's
+    // evidence marker. Both mounts (`chat_thread` here, `run_card` on the run
+    // panel) still get host-correct values by construction, and the run panel —
+    // which renders the row directly — now gets them too.
     <RunRecommendationChipRow
       runId={runId}
       agentPackageName={
@@ -648,12 +894,13 @@ export function RecommendationHoldCard({
       promptText={state.state === "held" ? state.promptText : undefined}
       initialRecommendations={state.state === "held" ? state.recommendations : undefined}
       holdRef={state.state === "held" ? state.holdRef : undefined}
+      canDecide={state.state === "held" ? state.canDecide !== false : true}
       decision={
         state.state === "held"
           ? { kind: "pending" }
           : state.state === "confirmed"
-            ? { kind: "confirmed", skillNames: state.skillNames }
-            : { kind: "skipped" }
+            ? { kind: "confirmed", skillNames: state.skillNames, decided: state.decided }
+            : { kind: "skipped", decided: state.decided }
       }
       variant="inline"
       onDecided={onDecided}

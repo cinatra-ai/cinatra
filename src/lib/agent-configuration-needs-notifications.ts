@@ -212,7 +212,17 @@ export async function syncAgentConfigurationNeedsNotifications(input: {
     const {
       listNotificationsByDedupeKeyPrefixForUser,
       createNotificationForRecipient,
-      deleteNotificationsByDedupeKeyForUser,
+      // cinatra#2882 — the ASYNC seam, for the same reason the three
+      // `agent-run-wait-notifications.ts` clears use it: the synchronous twin
+      // parks this thread on `Atomics.wait` for the whole round trip (up to
+      // POSTGRES_SYNC_TIMEOUT_MS, 30s), freezing every timer, abort listener
+      // and microtask in the process. This function is already `async` and is
+      // AWAITED from the Extensions-catalog render, so it was paying that on a
+      // user-facing path — and paying it once PER cleared key, since the clear
+      // below is a loop. Same statement, same key-scoped guard, same
+      // best-effort posture: an awaited rejection reaches the catch below
+      // exactly as a synchronous throw did.
+      deleteNotificationsByDedupeKeyForUserAsync,
     } = await import("@cinatra-ai/notifications/server");
 
     // Read the COMPLETE config-needs family by dedupeKey prefix (uncapped), not
@@ -231,8 +241,14 @@ export async function syncAgentConfigurationNeedsNotifications(input: {
       });
 
     // Clear first so a content-changed entry's slot is free before re-insert.
+    // Sequentially, as before: the ordering that matters is clears-then-creates
+    // (a content-changed entry's `(user_id, dedupe_key)` slot must be free
+    // before its replacement is inserted), and issuing the clears concurrently
+    // would take one pooled checkout per key for no correctness gain. What
+    // changes is that the gaps between them now belong to the event loop
+    // instead of to `Atomics.wait`.
     for (const dedupeKey of toClearDedupeKeys) {
-      deleteNotificationsByDedupeKeyForUser({ userId, dedupeKey });
+      await deleteNotificationsByDedupeKeyForUserAsync({ userId, dedupeKey });
     }
     for (const notificationInput of toCreateInputs) {
       await createNotificationForRecipient(

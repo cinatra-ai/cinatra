@@ -1,0 +1,11 @@
+$ node scripts/audit/chat-hitl-one-card-gate.mjs
+[chat-hitl-one-card] 2 violation(s):
+
+  packages/agents/src/run-recommendation-chip-row.tsx:1  [R8]  'recommendation_hold' has no production mount on host 'site_widget' — Two of the four hosts carry no mount. The chat thread HAS one: cinatra#2786 (S9b) landed the assistant-dispatch-turn mount, keyed by the run identity off the tool result and NOT through the renderable-view registry, and it is enumerated above with a counted instance proof. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.
+  packages/agents/src/run-recommendation-chip-row.tsx:1  [R8]  'recommendation_hold' has no production mount on host 'page_gate_region' — Two of the four hosts carry no mount. The chat thread HAS one: cinatra#2786 (S9b) landed the assistant-dispatch-turn mount, keyed by the run identity off the tool result and NOT through the renderable-view registry, and it is enumerated above with a counted instance proof. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.
+
+The epic's structural rule is ONE card per interaction, rendered on every host —
+only the frame adapts. A second renderer is not a smaller feature; it is a second
+place where 'approved' can come to mean something different — and a kind with NO
+renderer is not one implementation either, however few duplicates it has.
+exit 1

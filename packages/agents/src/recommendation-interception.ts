@@ -179,6 +179,13 @@ export interface ConfirmRunSkillSelectionInput {
   confirmedSkillIds: string[];
   /** Pinned revision for any forced (non-recommended) skill: skillId → revId. */
   forcedRevisions?: Record<string, string>;
+  /**
+   * Kept skills the reader settled through the chip's ADJUST panel
+   * (cinatra#2841). An in-set one is written `user_adjusted` instead of
+   * `recommended_confirmed`, which is what makes §V's `Adjusted` settled mark
+   * reachable for the scored set the row offers.
+   */
+  adjustedSkillIds?: string[];
   restrictToSkillIds?: string[];
 }
 
@@ -206,6 +213,7 @@ export async function confirmRunSkillSelection(
     recommendations,
     confirmedSkillIds: input.confirmedSkillIds,
     forcedRevisions: input.forcedRevisions,
+    adjustedSkillIds: input.adjustedSkillIds,
   });
   writeRunSelectedSkillRevisions({ runId: input.runId, selections: selection });
   const efficacy = summarizeRecommendationEfficacy({

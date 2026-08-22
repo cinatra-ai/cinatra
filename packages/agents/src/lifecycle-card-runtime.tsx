@@ -50,7 +50,7 @@ import {
   parseLifecycleResolveEnvelope,
   type LifecycleCardHost,
   type LifecycleDataPartViewType,
-  type LifecycleResolveEnvelopeFor,
+  type LifecycleResolveAnswerFor,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 /** The server route that re-authorizes a ref and answers with the card envelope. */
@@ -224,6 +224,31 @@ export function useCookieSessionSurface(): boolean {
 
 export function useLifecycleCardHost(): LifecycleCardHost | null {
   return useContext(LifecycleCardSurfaceContext);
+}
+
+/**
+ * ONE LIFECYCLE CARD PER RUN PER TURN.
+ *
+ * The inline run panel declares the `run_card` host and mounts the run's
+ * lifecycle cards on it. Inside a chat transcript that panel is a SIBLING of
+ * the conversation's own mount of the SAME card for the SAME run, so both
+ * drawing it shows a person two cards for one decision.
+ *
+ * This is the rule that settles it, and it is a FUNCTION rather than a line of
+ * JSX so the panel and the transcript's own test agree by construction instead
+ * of by two copies of the same condition: when an outer `chat_thread` host is
+ * already in scope, the CHAT card owns the run and the panel withholds its
+ * copy — in every state, held and settled alike. Anywhere else, including the
+ * run page where there is no outer host at all, the panel keeps its copy.
+ *
+ * Gating on the ambient host rather than on a `surface` prop is deliberate: a
+ * future embedder of the panel inside a transcript inherits the rule without
+ * having to remember to pass anything.
+ */
+export function runCardOwnsLifecycleCopy(
+  ambientHost: LifecycleCardHost | null,
+): boolean {
+  return ambientHost !== "chat_thread";
 }
 
 // ---------------------------------------------------------------------------
@@ -616,7 +641,7 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
   ref: string;
   enabled: boolean;
   reloadToken?: number;
-}): LifecycleResolveEnvelopeFor<K> | null {
+}): LifecycleResolveAnswerFor<K> | null {
   const { viewType, ref, enabled, reloadToken = 0 } = params;
   // The host's credential declaration (cinatra#2577). Read here so the resolve
   // callback closes over ONE value; a host that declares none keeps S1's exact
@@ -649,7 +674,7 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
   const identity = `${viewType}\u0000${ref}\u0000${enabled ? "1" : "0"}\u0000${activationRef.current}`;
   const [resolved, setResolved] = useState<{
     identity: string;
-    envelope: LifecycleResolveEnvelopeFor<K>;
+    envelope: LifecycleResolveAnswerFor<K>;
   } | null>(null);
   // Monotonic request id. Mount and focus can overlap, and a slow earlier
   // answer must never overwrite a fresher one — otherwise a card could settle

@@ -416,6 +416,63 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     // COMPILED MANIFEST — agent_templates.lifecycle_config (JSON-as-text).
     // -----------------------------------------------------------------------
     { text: `ALTER TABLE "${q}"."agent_templates" ADD COLUMN IF NOT EXISTS lifecycle_config text` },
+
+    // -----------------------------------------------------------------------
+    // HOLD-NOTIFICATION STATE (cinatra#2835) — additive ALTER on the continuation
+    // park created above. Migration twin: core__0094.
+    //
+    // A run-start recommendation hold mints a durable "needs your input"
+    // notification, and that row must be gone the moment the park stops being
+    // `parked`. The notification lives in `notifications`, written through the
+    // host's own connection, so the delete cannot ride the park's status CAS
+    // transaction. This column carries the OBLIGATION instead: the enter sets it
+    // to 'live' in the same STATEMENT as the INSERT, gated on that INSERT's own
+    // RETURNING (cinatra#2838 — the insert can still no-op on its ON CONFLICT DO
+    // NOTHING dedupe arbiter, so a guard row alone does not mean a row was
+    // written), the CAS leaves it alone, and the sweeper retires it
+    // to 'cleared' only after an awaited, successful delete. "Park no longer
+    // parked AND hold_notification = 'live'" is therefore a durable, retryable
+    // clear obligation — a process that dies mid-clear leaves work for the next
+    // sweep instead of a permanently stale bell.
+    // -----------------------------------------------------------------------
+    {
+      text: `ALTER TABLE "${q}"."lifecycle_continuation_park"
+  ADD COLUMN IF NOT EXISTS hold_notification text NOT NULL DEFAULT 'none'`,
+    },
+    // The value domain, asserted at the boundary like the table's other unions
+    // (checkpoint / status / protected_effect). Guarded so the bootstrap stays
+    // idempotent — ADD CONSTRAINT has no IF NOT EXISTS.
+    {
+      text: `DO $$ BEGIN
+  ALTER TABLE "${q}"."lifecycle_continuation_park"
+    ADD CONSTRAINT lifecycle_continuation_park_hold_notification_chk
+    CHECK (hold_notification IN ('none','live','cleared'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`,
+    },
+    // PARTIAL: only the parks that currently owe a clear are indexed, so the
+    // sweeper's drain never scans the append-only park table.
+    {
+      text: `CREATE INDEX IF NOT EXISTS lifecycle_continuation_park_hold_notify_idx
+  ON "${q}"."lifecycle_continuation_park" (hold_notification, status)
+  WHERE hold_notification = 'live'`,
+    },
+    // The drain's RETRY CURSOR (cinatra#2838). The obligation drain used to take an
+    // UNORDERED page of `limit` live obligations and merely SKIP the ones whose
+    // dispatch failed, leaving them exactly as it found them — so `limit`
+    // permanently-failing obligations could hold the page on every pass and
+    // everything queued behind them was never attempted at all. The drain now
+    // CLAIMS its page ordered by `coalesce(hold_notify_attempted_at, created_at)`
+    // ASC and stamps this column in the same statement, so an attempted obligation
+    // rotates to the back of the queue before its dispatch is even made: poison
+    // delays the rows behind it by a pass, and can never starve them. NULLABLE with
+    // no default on purpose — null reads as "never attempted", ordered by the
+    // park's creation (how long it has actually waited), and a null default keeps
+    // the ADD COLUMN catalog-only on a deployed table.
+    {
+      text: `ALTER TABLE "${q}"."lifecycle_continuation_park"
+  ADD COLUMN IF NOT EXISTS hold_notify_attempted_at timestamptz`,
+    },
   ];
 }
 
@@ -805,6 +862,92 @@ export function agentRunHitlGatesSchemaQueries(schemaName: string): QueryInput[]
     {
       text: `CREATE INDEX IF NOT EXISTS ${AGENT_RUN_HITL_GATES_LATEST_INDEX}
   ON "${q}"."${AGENT_RUN_HITL_GATES_TABLE}" (run_id, materialized_at DESC)`,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// run_recommendation_skips — the RUN-LEVEL skip record (cinatra#2794 S9b)
+// ---------------------------------------------------------------------------
+//
+// THE DEFECT THIS TABLE CLOSES. A skip is a decision about the RUN, and the §V
+// card settles only when that decision is on record. The record used to live in
+// `run_rejected_recommendations`, which is keyed (run_id, skill_id) — so a skip
+// that named no skill (drift retired every offered candidate while the run sat
+// parked, or the template read back with no package) had no row to occupy. The
+// stop-gap was a RESERVED skill id, `__run_level_skip__`, written into that
+// table as if it were a skill.
+//
+// Why the stop-gap could not stay: skill ids are caller-provided text
+// (`createOrUpdateSkill` takes `input.skillId` verbatim, packages/skills/src/
+// skills-store.ts) and no constraint excludes the reserved value, so a real
+// skill CAN carry that id. Two failures follow from one collision: the efficacy
+// reader filtered the id out, silently dropping a genuine rejected skill from
+// the accepted/rejected split, and a genuine rejection could be misread as a
+// run-level marker. A marker that is only safe while nobody types a particular
+// string is not a marker.
+//
+// SHAPE. One row per run — `run_id` is the PRIMARY KEY, so the write is
+// naturally idempotent and a retried skip (a lost response, a double-click)
+// converges on the same row instead of duplicating. The row carries:
+//   skipped_by      — the principal whose decision this was. The skip path is
+//                     already fail-closed on `run.runBy === userId`, so this is
+//                     always known at write time and the record names its owner
+//                     without a join.
+//   candidate_count — how many per-skill efficacy rows accompanied this skip.
+//                     This is the fact the sentinel row destroyed: 0 means the
+//                     scorer returned nothing to name (drift), n means n
+//                     candidates were offered and recorded. The efficacy split
+//                     can now tell "skipped with nothing offered" from "skipped
+//                     over n offers" WITHOUT inventing a rejected skill.
+//   skipped_at      — the decision's own clock.
+//
+// NO FOREIGN KEY, deliberately, on the sibling precedent: both members of this
+// family — `run_selected_skill_revisions` (the accepted half) and
+// `run_rejected_recommendations` (the rejected half) — carry a bare `run_id
+// text NOT NULL`, and this record is read beside them by the same efficacy
+// path. There is also a behavioural reason not to break with them here: a
+// failed marker write now REFUSES the skip and leaves the park live, so an FK
+// would turn a benign race (the run row deleted concurrently) into a
+// user-visible refusal on a decision that is otherwise fine.
+//
+// WHY THIS LEAF. The bootstrap DDL for a new table must live in a module
+// `drizzle-store.ts` ALREADY imports, or a new first-party module joins four
+// route budgets the route-graph ratchet locks. This leaf is already in that
+// graph and already hosts the sibling `run_rejected_recommendations`, so the
+// run-level record joins it (the core__0093 precedent, one file over).
+//
+// FRESH-INSTALL half. The operator-upgrade twin is
+// migrations/core/core__0095_run-recommendation-skip-record.mjs; both are
+// idempotent and are pinned against each other by a DDL-parity suite
+// (src/lib/__tests__/run-recommendation-skips-schema.test.ts).
+// ---------------------------------------------------------------------------
+
+/** The table name, shared by the schema builder, the store, and the tests. */
+export const RUN_RECOMMENDATION_SKIPS_TABLE = "run_recommendation_skips";
+/** Name of the recency index the skip-audit reads drive. */
+export const RUN_RECOMMENDATION_SKIPS_SKIPPED_AT_INDEX =
+  "run_recommendation_skips_skipped_at_idx";
+
+export function runRecommendationSkipsSchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."${RUN_RECOMMENDATION_SKIPS_TABLE}" (
+  -- One skip per run: the PK is what makes a retried decision converge instead
+  -- of duplicating, and what lets the marker be keyed by the run ALONE.
+  run_id          text PRIMARY KEY,
+  -- Always known: the skip path is fail-closed on run.runBy === the session.
+  skipped_by      text NOT NULL,
+  -- How many per-skill efficacy rows rode with this skip. 0 = drift left
+  -- nothing to name; the marker still stands.
+  candidate_count integer NOT NULL DEFAULT 0,
+  skipped_at      timestamptz NOT NULL DEFAULT now()
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS ${RUN_RECOMMENDATION_SKIPS_SKIPPED_AT_INDEX}
+  ON "${q}"."${RUN_RECOMMENDATION_SKIPS_TABLE}" (skipped_at DESC)`,
     },
   ];
 }

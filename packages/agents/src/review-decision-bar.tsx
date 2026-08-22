@@ -58,19 +58,36 @@ export type SubmitReviewDecisionAction = (input: {
 export function ReviewDecisionBar({
   permissions,
   submitAction,
-  suggestionDecisions = null,
+  suggestionDecisionsFor,
+  suggestionSummary,
 }: {
   permissions: ReviewDecisionPermissions;
   submitAction: SubmitReviewDecisionAction;
   /**
-   * The reviewer's current per-item marks (cinatra#2572), owned by the CARD that
-   * draws the chips above this bar. The bar does not know what a suggestion is;
-   * it carries the partition into the one submit it already owns, which is
-   * precisely §VIII's rule that the chips have no submit of their own. Absent on
-   * every surface that shows no chips, and the decision is then byte-identical
-   * to what it was before this parameter existed.
+   * The partition THIS decision would carry, asked PER DISPOSITION (cinatra#2572;
+   * reworked by cinatra#2852). Owned by the CARD that draws the suggestions above
+   * this bar — the bar does not know what a suggestion is; it carries what the
+   * card answers into the one submit it already owns, which is precisely §VIII's
+   * rule that the suggestions have no submit of their own.
+   *
+   * IT IS A QUESTION, NOT A VALUE, because an approve and a reject do not carry
+   * the same thing: with §VIII's accepted-by-default row, an approve carries what
+   * is on screen and a reject records every surfaced suggestion as NOT TAKEN. A
+   * bar handed one fixed partition would have to either refuse the reject or send
+   * accepts into a decision that tombstones the revisions they would apply to.
+   *
+   * Absent on every surface that shows no suggestions, and the decision is then
+   * byte-identical to what it was before this parameter existed.
    */
-  suggestionDecisions?: SuggestionDecisionPartition | null;
+  suggestionDecisionsFor?: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
+  /**
+   * §VIII's floor line — what the decision below is about to carry. The ratified
+   * drawing composes it INSIDE the decision floor, above the terminal row. It
+   * replaces the shipped reject warning outright: a reject is no longer refused,
+   * it records the surfaced suggestions as not taken. Absent when the surface
+   * shows no suggestions or the reader cannot decide.
+   */
+  suggestionSummary?: { accepted: number; total: number };
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -101,10 +118,14 @@ export function ReviewDecisionBar({
         // decision when the reviewer takes one.
         //
         // The omission also keeps the pre-#2571 shape exactly: a surface with no
-        // chips hands its action the byte-identical input it handed it before
-        // this slice — the review page's server-action payload included — so its
-        // decision fingerprint stays identity version 1.
-        ...(suggestionDecisions && disposition !== "comment" ? { suggestionDecisions } : {}),
+        // suggestions hands its action the byte-identical input it handed it
+        // before this slice — the review page's server-action payload included —
+        // so its decision fingerprint stays identity version 1.
+        ...(() => {
+          if (disposition === "comment") return {};
+          const suggestionDecisions = suggestionDecisionsFor?.(disposition) ?? null;
+          return suggestionDecisions ? { suggestionDecisions } : {};
+        })(),
       });
       setOutcome(result);
       // A landed terminal decision — or a changes-requested that resolved the gate
@@ -123,9 +144,35 @@ export function ReviewDecisionBar({
       data-conformance-id="review-decision-bar"
       className="overflow-hidden rounded-control border border-line bg-surface-strong"
     >
+      {suggestionSummary ? (
+        <p
+          data-conformance-id="suggestion-accepted-count"
+          className="px-4 pt-3 text-xs leading-relaxed text-muted-foreground"
+        >
+          {`${suggestionSummary.accepted} of ${suggestionSummary.total} ${
+            suggestionSummary.total === 1 ? "suggestion" : "suggestions"
+          } accepted — they ride this decision. A reject records them as not taken.`}
+        </p>
+      ) : null}
       {/* Decision rationale (§IV) — optional on approve, expected on reject, the
-          substance of a comment. Travels into the audit trail + the resume note. */}
-      <div className="px-4 pt-3">
+          substance of a comment. Travels into the audit trail + the resume note.
+
+          §I INPUT HIERARCHY — SUBORDINATE (design specs/app-lifecycle-cards.html
+          §I, the `.notefield` / `.nf-input` rules). A conversation carrying this
+          card has two places a reader could type — this note field and the
+          conversation's chat box — and drawn at the same weight they read as a
+          choice. They are not a choice: the chat box is the ONE primary input.
+          So the note field gives up the three things that make an input read as
+          somewhere to type — the enclosing box, the raised ground and the send
+          affordance — and keeps a single quiet dashed baseline under its mono
+          label. Nothing is hidden and nothing is disabled; only the weight
+          moves, and the label and placeholder are unchanged.
+
+          DISABLED / SETTLED. A disabled or settled note field keeps the SAME
+          dashed rule and takes the platform's standard disabled opacity. It
+          never falls back to the stock filled, boxed disabled treatment, which
+          would put back the box the hierarchy just took out. */}
+      <div data-conformance-id="review-note-field-subordinate" className="px-4 pt-3">
         <label
           htmlFor="review-rationale"
           className="mb-1.5 block font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground"
@@ -140,7 +187,7 @@ export function ReviewDecisionBar({
           onChange={(e) => setComment(e.target.value)}
           disabled={pending || settled}
           placeholder="Add a note for the run and the audit trail…"
-          className="min-h-[44px] text-xs"
+          className="min-h-[44px] rounded-none border-0 border-b border-dashed border-line bg-transparent px-0 text-xs text-muted-foreground shadow-none focus-visible:ring-0 disabled:bg-transparent md:text-xs dark:bg-transparent dark:disabled:bg-transparent"
         />
       </div>
 

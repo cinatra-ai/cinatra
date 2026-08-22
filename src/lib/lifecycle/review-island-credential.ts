@@ -42,7 +42,18 @@ import "server-only";
 //                            un-copyable; it can be made short-lived. The card
 //                            re-resolves on mount, on focus and on reload, and
 //                            each resolve re-mints, so a reader never meets the
-//                            expiry — only a copied link does.
+//                            expiry — only a copied link does. ONE MINUTE since
+//                            cinatra#2754.
+//
+// AND IT IS WORTH EXACTLY ONE PAINT (cinatra#2754). The sealed fields above are
+// what a credential SAYS; single use is what it is WORTH. The mint records the
+// SHA-256 of the browser-held string in a ledger and the serving path spends
+// that grant atomically as its last act, so the second presentation of the same
+// address — a reload, a copied link, a log line replayed by hand — finds
+// nothing and paints the ordinary empty island. The ledger is keyed by the
+// credential HASH and never by `jti`, because one transcript can frame several
+// review cards off ONE `cwu_` token and a per-token slot would let the second
+// card spend the first card's grant. See `review-island-grant-store.ts`.
 //
 // IT AUTHENTICATES; IT DOES NOT AUTHORIZE. Opening the seal proves this host
 // minted the URL and that it is still live. The island then re-runs the reader's
@@ -63,8 +74,18 @@ import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:
  * Bounded well below the `cwu_` user token's own 15-minute life, for the same
  * reason the capture capability is: the URL must be the shorter-lived of the
  * two, so a frame src can never outlive the session that was allowed to see it.
+ *
+ * ONE MINUTE (cinatra#2754, the maintainer's 2026-08-21 hardening ruling). It
+ * was two, and the halving costs a reader nothing: the card re-resolves on
+ * mount, on focus and on reload, and each resolve re-mints, so only a COPIED
+ * address ever meets this clock. THIS CONSTANT IS THE WHOLE DEFINITION — mint
+ * reads it as the default life and as the ceiling it will not exceed, verify
+ * reads it as the ceiling a sealed expiry may not overshoot, and the single-use
+ * ledger stores the credential's own sealed expiry rather than a second copy of
+ * this number. There is no other place to change, and therefore no second place
+ * to forget.
  */
-export const REVIEW_ISLAND_CREDENTIAL_TTL_SECONDS = 120;
+export const REVIEW_ISLAND_CREDENTIAL_TTL_SECONDS = 60;
 
 /** Ceiling on the encoded credential. A longer query value is not one of ours. */
 export const REVIEW_ISLAND_CREDENTIAL_MAX_LENGTH = 1024;

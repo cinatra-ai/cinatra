@@ -342,44 +342,75 @@ describe("the two absences", () => {
 // ---------------------------------------------------------------------------
 
 describe("§IX every host draws the same card", () => {
-  const HOSTS: Host[] = ["chat_thread", "site_widget", "run_card", "page_gate_region"];
-
-  it("the root carries its lifecycle-card identity, its host and its state — one instance per host", async () => {
-    for (const host of HOSTS) {
+  // ONE test for the WHOLE ratified anchor set, deliberately. The contract table
+  // S9a shipped (scripts/audit/chat-hitl-one-card-gate.mjs) reads a kind's closed
+  // anchor set off a SINGLE named rendered proof, so a card cannot borrow half of
+  // its evidence from a neighbouring case. §VI's set spans two phases — the
+  // proposal's rows and floor, the settled trigger's chrome and its two quiet
+  // controls — so both are driven here, on every host, in one case.
+  it("the root carries its lifecycle-card identity, its host and its state — one instance per host, drawing the ratified anchor set", async () => {
+    // The hosts are named as literals, one per line, because this test IS the
+    // record of which hosts were actually driven.
+    for (const host of [
+      "chat_thread",
+      "site_widget",
+      "run_card",
+      "page_gate_region",
+    ] as const) {
       mockTransport({ state: "pending", canDecide: true, canComment: false }, proposalBody());
-      const { container, unmount } = renderOn(host);
+      const pending = renderOn(host);
       await waitFor(() =>
         expect(
-          container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]'),
+          pending.container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]'),
         ).not.toBeNull(),
       );
       // The runtime property the epic states: ONE rendered instance per kind × host.
       expect(
-        container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]'),
+        pending.container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]'),
       ).toHaveLength(1);
-      const root = container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]');
+      const root = pending.container.querySelector(
+        '[data-lifecycle-card="trigger_schedule_proposal"]',
+      );
       expect(root?.getAttribute("data-lifecycle-card-host")).toBe(host);
       expect(root?.getAttribute("data-lifecycle-card-state")).toBe("pending");
       expect(root?.getAttribute("data-conformance-id")).toBe("schedule-proposal-card");
-      // The ratified anchor set, off real DOM on every host.
-      expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull();
-      expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).not.toBeNull();
-      unmount();
+      // The proposal half of the ratified anchor set, off real DOM on every host.
+      expect(
+        pending.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
+      ).not.toBeNull();
+      expect(
+        pending.container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
+      ).not.toBeNull();
+      pending.unmount();
       cleanup();
-    }
-  });
 
-  it("the settled chrome and its two controls are drawn on every host", async () => {
-    for (const host of HOSTS) {
+      // The SETTLED half of the same set, on the same host: the trigger's own
+      // chrome and the two quiet controls §VI closes on.
       mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
-      const { container, unmount } = renderOn(host);
+      const settled = renderOn(host);
       await waitFor(() =>
-        expect(container.querySelector('[data-conformance-id="scheduled-run-chrome"]')).not.toBeNull(),
+        expect(
+          settled.container.querySelector('[data-conformance-id="scheduled-run-chrome"]'),
+        ).not.toBeNull(),
       );
-      expect(container.querySelectorAll('[data-conformance-id="scheduled-run-chrome"]')).toHaveLength(1);
-      expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull();
-      expect(container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull();
-      unmount();
+      expect(
+        settled.container.querySelectorAll('[data-conformance-id="scheduled-run-chrome"]'),
+      ).toHaveLength(1);
+      expect(
+        settled.container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]'),
+      ).toHaveLength(1);
+      const settledRoot = settled.container.querySelector(
+        '[data-lifecycle-card="trigger_schedule_proposal"]',
+      );
+      expect(settledRoot?.getAttribute("data-lifecycle-card-host")).toBe(host);
+      expect(settledRoot?.getAttribute("data-lifecycle-card-state")).toBe("settled");
+      expect(
+        settled.container.querySelector('[data-action="cancel-trigger-schedule"]'),
+      ).not.toBeNull();
+      expect(
+        settled.container.querySelector('[data-action="release-trigger-now"]'),
+      ).not.toBeNull();
+      settled.unmount();
       cleanup();
     }
   });

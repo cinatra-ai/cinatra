@@ -130,6 +130,26 @@ export async function resolveTriggerScheduleProposalCard(params: {
       runId: resolved.runId,
       triggerType: resolved.triggerType,
       scheduleCopy: resolved.scheduleCopy,
+      // OMITTED UNLESS TRUE — a wire omission, deliberately NOT a version bump
+      // (cinatra#2874 review). `superseded` is a NEW key, and a client bundle
+      // still parsing with the pre-#2859 `.strict()` settled schema rejects any
+      // payload that carries it. Making the field optional only helps a NEW
+      // parser read an OLD payload; it does nothing for the direction that
+      // actually breaks. So emitting `superseded: false` on every ordinary
+      // settled card would blank EVERY settled card for a stale tab — to
+      // describe a state that card is not even in. Emitting it only when true
+      // means a stale client fails on exactly the genuinely superseded card:
+      // the new, rare state, which is the honest minimal blast radius.
+      //
+      // Bumping TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION is strictly worse, not
+      // safer: `version` is a `z.literal`, so a bump makes every stale client
+      // reject every card — the exact harm this avoids — in exchange for a
+      // clearer rejection nobody is left to read.
+      //
+      // `ProposalResolution.superseded` stays an always-boolean internally. Only
+      // the emission is conditional, so no reader of the resolution has to start
+      // handling `undefined`.
+      ...(resolved.superseded ? { superseded: true as const } : {}),
       timezone: resolved.timezone,
       // The held-step tree is a compile-time property of the template, read on
       // the run's own Trigger tab. It is deliberately empty here rather than
@@ -245,11 +265,19 @@ export async function decideTriggerScheduleProposal(params: {
     }
 
     if (op === "adjust") {
-      // THE TEMPLATE COMES FROM THE VERIFIED TOKEN, never from the body. The
-      // shipped server action takes a `templateId` argument because its only
-      // caller was going to be the surface that minted the proposal; a card on
-      // four hosts must not be able to re-point a proposal at another agent, so
-      // this path reads the template out of the ref it was drawn with.
+      // THE SUBJECT COMES FROM THE VERIFIED TOKEN, never from the body. A card
+      // on four hosts must not be able to re-point a proposal at another agent,
+      // so this path hands `adjustTriggerSchedule` the REF the card was drawn
+      // with and nothing else: the service re-verifies that token against this
+      // reader and takes the template off it.
+      //
+      // `priorToken` rather than a template id, and the difference is the
+      // safety property (cinatra#2859): the replacement inherits the adjusted-
+      // away proposal's consume identity, so the whole family is one row in the
+      // consume table and at most one member can ever become a run. Handing a
+      // template id would mint a fresh identity and leave the old card
+      // spendable for the rest of its TTL — two runs, one on the schedule the
+      // reader had just corrected away from.
       const { resolveProposalForReader, adjustTriggerSchedule, PROPOSAL_REFUSALS } =
         await import("@cinatra-ai/agents/trigger-schedule-proposal-service");
       const resolved = await resolveProposalForReader(ref, { userId, orgId });
@@ -261,7 +289,7 @@ export async function decideTriggerScheduleProposal(params: {
         return { kind: "error", message: PROPOSAL_REFUSALS.invalid };
       }
       const proposed = await adjustTriggerSchedule({
-        templateId: resolved.proposal.templateId,
+        priorToken: ref,
         userId,
         orgId,
         schedule: parsed.data,

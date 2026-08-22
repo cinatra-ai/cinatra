@@ -134,6 +134,28 @@ export type PromptFieldProps = {
   fieldClassName?: string;
 
   /**
+   * §I INPUT HIERARCHY — OPT-IN. Draws this field as the conversation's ONE
+   * PRIMARY input: it keeps its box, its raised ground and its send affordance
+   * and takes the `line-strong` edge, so the primary input is the darker-edged
+   * one on the page and a card's subordinate note field can never read as its
+   * peer.
+   *
+   * Opt-in, never a default. `PromptField` also backs the run panel's
+   * field-assist input, which sits on a surface the §I drawing does not
+   * promote; a field that says nothing keeps the ordinary `line` edge, exactly
+   * as it did before this prop existed.
+   */
+  primary?: boolean;
+
+  /**
+   * Optional `data-conformance-id` for the field container (the bordered box),
+   * so a host can name the role this field plays in its surface's drawing.
+   * Omitted by default — no attribute, and no DOM change for any consumer that
+   * does not ask for one.
+   */
+  conformanceId?: string;
+
+  /**
    * Entities that can be @-mentioned. When provided and non-empty,
    * typing '@' at a word boundary opens a flyout. Selecting an entry inserts
    * an inline chip showing the user's avatar and display name; the underlying
@@ -396,6 +418,8 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
     showStatusMessage = true,
     autosave,
     fieldClassName,
+    primary = false,
+    conformanceId,
     mentionables,
     onAttachmentsSelected,
     remoteChat,
@@ -715,7 +739,8 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
 
   const field = (
     <div
-      className={`relative flex items-end gap-1 rounded-control border border-line bg-surface-strong shadow-sm transition-shadow focus-within:border-border focus-within:shadow-md ${fieldClassName ?? ""}`}
+      {...(conformanceId ? { "data-conformance-id": conformanceId } : {})}
+      className={`relative flex items-end gap-1 rounded-control border ${primary ? "border-line-strong" : "border-line"} bg-surface-strong shadow-sm transition-shadow focus-within:border-border focus-within:shadow-md ${fieldClassName ?? ""}`}
     >
       {/* @-mention flyout — anchored inside the field container */}
       <Popover open={mentionOpen && filteredMentionables.length > 0} onOpenChange={setMentionOpen}>

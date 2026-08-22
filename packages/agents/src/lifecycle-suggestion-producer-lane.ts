@@ -13,11 +13,13 @@ import "server-only";
 // projection type, same provenance rules, same "a core lane reads only what it
 // was disclosed" contract — so a reader who knows one knows the other.
 //
-// WHAT THIS SLICE DOES NOT DO. It mints no decision surface: accepting or
-// dismissing a suggestion is S6b's terminal-submit partition (#2571) and
-// rendering them is S6c (#2572). There is deliberately NO per-item write here —
-// #2047 row 8 forbids a parallel decision path, which is exactly how the
-// retired `auditor_approval_receipts` receipt went inert.
+// WHAT THIS LANE DOES NOT DO. It mints no decision surface, and it still does
+// not now that the slices it used to defer to have landed: accepting or
+// dismissing a suggestion is the gate CAS's terminal-submit partition (S6b,
+// #2571, shipped) and drawing them is the review surfaces' §VIII chip row (S6c,
+// #2572, shipped). There is deliberately NO per-item write here — #2047 row 8
+// forbids a parallel decision path, which is exactly how the retired
+// `auditor_approval_receipts` receipt went inert.
 //
 // EVERY OUTCOME IS A VALUE, never a throw. The lane runs best-effort behind gate
 // creation; a producer that could take a review orchestration sweep down with it

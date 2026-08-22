@@ -67,6 +67,63 @@ export function reviewBlockedCopy(reason: ReviewBlockedReason): {
 }
 
 // ---------------------------------------------------------------------------
+// The SETTLED reading (§IV; plan §4.2) — a decided gate names what happened
+// ---------------------------------------------------------------------------
+//
+// `reviewBlockedCopy("no-longer-pending")` above is what a settled card says
+// when it knows nothing but the fact that it settled: "the gate was already
+// decided OR the run moved on", with a Refresh as the escape hatch for that
+// "or". This is the other half — the reading for a card that DOES know, which
+// states the outcome and the person who took it and needs no escape hatch,
+// because there is no longer an ambiguity for one to resolve.
+//
+// THE SENTENCES ARE THE SHIPPED ONES. Each body is the decision bar's own
+// post-press line (`review-decision-bar.tsx`), minus its leading verb, so the
+// card the reviewer read right after pressing and the card everyone reads
+// afterwards say the same thing about the same gate. What is deliberately NOT
+// carried over is the bar's `requested` / `escalated` split: that is a fact
+// about the repair the reviewer's own press started, not about the gate's
+// recorded outcome, and a settled card that claimed "a repair is now in flight"
+// would be asserting a live state it has not read.
+//
+// THE DECIDER IS OPTIONAL AND ITS ABSENCE IS QUIET. A gate whose decider has no
+// safely displayable name reads "Approved" rather than "Approved by" and a
+// dangling nothing — and never an identifier pressed into service as a name.
+
+/** The closed outcome axis a settled review card can name.
+ *
+ *  Kept as a local union rather than an import so this pure model stays free of
+ *  the wire package; `LIFECYCLE_SETTLED_OUTCOMES` in the protocol is the same
+ *  set, and a structural test pins the two together. */
+export type ReviewSettledOutcome = "approved" | "rejected" | "changes_requested";
+
+/** The user-facing copy for a settled gate whose outcome is recorded. Title +
+ *  one line; NO refresh (the component draws none) — the reading is final. */
+export function reviewSettledCopy(
+  outcome: ReviewSettledOutcome,
+  decidedByName?: string,
+): { title: string; body: string } {
+  const by = decidedByName ? ` by ${decidedByName}` : "";
+  switch (outcome) {
+    case "approved":
+      return {
+        title: `Approved${by}`,
+        body: "The gate is resolved and the run has been released to continue.",
+      };
+    case "rejected":
+      return {
+        title: `Rejected${by}`,
+        body: "The gate is resolved and the reviewed work has been turned back.",
+      };
+    case "changes_requested":
+      return {
+        title: `Changes requested${by}`,
+        body: "The gate is resolved and the reviewed work has been turned back for repair.",
+      };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Renderer provenance (§III) — the surface shows HOW each target was rendered.
 // The conformance anchor is derived from the OPAQUE mount kind, never a type id.
 // ---------------------------------------------------------------------------

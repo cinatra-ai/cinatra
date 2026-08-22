@@ -42,7 +42,45 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * THE ONE CANONICAL CAPTURE INDEX, named ONCE.
+ *
+ * Both halves read the same file, so both halves must compute the same path,
+ * and the only way to guarantee that is to compute it in ONE place. Each reader
+ * used to `join(__dirname, "chat-hitl-capture-index.json")` from its OWN
+ * directory, which produced two different files that each called itself
+ * canonical: the CI half's (populated) and the audit half's (empty). The empty
+ * one was also the capture driver's default output, so an honest capture run
+ * wrote its records where nothing would ever bind them.
+ *
+ * `CAPTURE_INDEX_PATH` is the absolute path every reader resolves;
+ * `CAPTURE_INDEX_RELATIVE_PATH` is the same file as a repo-relative string, for
+ * usage lines and messages. `scripts/ci/__tests__/capture-index-path.test.mjs`
+ * pins that the CI gate, the audit gate and the driver all land on the one file.
+ */
+export const CAPTURE_INDEX_RELATIVE_PATH = "scripts/ci/chat-hitl-capture-index.json";
+export const CAPTURE_INDEX_PATH = join(__dirname, "..", "chat-hitl-capture-index.json");
+
+/**
+ * THE ONE RECORDER IDENTITY, named ONCE, for the index header AND the per-record
+ * `recordedBy` field.
+ *
+ * There were three: the CI index header said `chat-hitl-capture-recorder@1`, the
+ * audit index header said `scripts/audit/lib/chat-hitl-capture-recorder.mjs@1`,
+ * and every one of the eight committed records said this. This value wins
+ * because it is the one already stamped on real records, and the same string is
+ * mirrored in each lane's own `evidence/<slice>/capture-records.json` twin --
+ * changing the index copies would silently desynchronize them from evidence
+ * this branch does not own. Identity here is PROSE: neither validator hashes it
+ * or derives anything from it, so the choice is about which committed text stays
+ * true, not about what a check can verify.
+ */
+export const RECORDER_ID = "cinatra-lifecycle-capture-recorder@1";
 
 /** The four hosts, mirroring `LIFECYCLE_CARD_HOSTS` in agent-ui-protocol. */
 export const CAPTURE_HOSTS = [
@@ -57,11 +95,30 @@ export const CAPTURE_HOSTS = [
  * taken, so the class is checked against the recorded final URL rather than
  * against the requested one (a redirect is exactly how a capture ends up on the
  * wrong screen without anybody noticing).
+ *
+ * `review_page` IS THE GATE-REGION DEEP LINK, not the queue. It used to read
+ * /^\/agents\/reviews/, which is `/agents/reviews` -- the org's open-review
+ * QUEUE, a navigation-and-volume screen that mounts no lifecycle card at all.
+ * The surface that actually declares `host="page_gate_region"` is the ONE named
+ * by the host-parity ratchet (`HOST_COMPOSITION_SOURCES` in
+ * `src/lib/lifecycle/lifecycle-host-parity-ratchet.ts`):
+ * `/agents/<vendor>/<package>/<runId>/review/<reviewTaskId>`. So the class as
+ * written could not be satisfied by ANY truthful page_gate_region record, and
+ * was satisfied instead by a picture of a screen with no card on it -- the
+ * #2794 defect inverted. The audit half already spelled the shipped shape
+ * (`URL_CLASS_ORDER` in `scripts/audit/lib/chat-hitl-capture-recorder.mjs`);
+ * this is the same regex, so the two halves now classify identically instead of
+ * disagreeing about the same URL.
+ *
+ * Note the deliberate overlap the audit half resolves by ORDER: a review page is
+ * also a run-detail path. That ordering is meaningful there because it
+ * CLASSIFIES an unknown URL; here each host names exactly one class and only
+ * that class is tested, so no ordering is needed.
  */
 export const URL_CLASSES = {
   chat: /^\/chat(?:[/?#]|$)/,
   run_detail: /^\/agents\/[^/]+\/[^/]+\/[0-9a-fA-F-]{36}(?:[/?#]|$)/,
-  review_page: /^\/agents\/reviews(?:[/?#]|$)/,
+  review_page: /^\/agents\/[^/]+\/[^/]+\/[^/?#]+\/review\/[^/?#]+(?:[/?#]|$)/,
   embed_assistant: /^\/embed\/assistant(?:[/?#]|$)/,
 };
 
@@ -78,7 +135,8 @@ export const HOST_URL_CLASS = {
  * decision controls a PENDING capture owes. Selectors are read off the shipped
  * components, not invented here:
  *   `packages/agents/src/review-gate-card.tsx`          (root + decision bar)
- *   `packages/agents/src/run-recommendation-chip-row.tsx` (confirm / skip)
+ *   `packages/agents/src/run-recommendation-chip-row.tsx` (per-chip confirm /
+ *                                                        adjust / skip)
  */
 export const CARD_KINDS = {
   artifact_review_gate: {
@@ -88,10 +146,21 @@ export const CARD_KINDS = {
   },
   recommendation_hold: {
     cellTokens: ["recommendation-hold", "recommendation-card", "recommendation"],
+    // The row IS the card (§V), so this root is the chip-row's own outermost
+    // element, which carries the kind/host/state declaration from cinatra#2841
+    // exactly as `ReviewGateCard` does. Before that fix no truthful capture of
+    // this card could satisfy this contract, because the shipped row emitted
+    // none of the three.
     root: '[data-lifecycle-card="recommendation_hold"]',
+    // REDRAWN by cinatra#2841 to the ratified §V drawing: the card's decision
+    // controls are PER CHIP (Confirm / Adjust / Skip on each skill), and the
+    // row-level Confirm/Skip pair the previous selectors named no longer exists.
+    // A pending capture owes at least one of the three; a decided capture owes
+    // the absence of all three, which is exactly what a settled row draws.
     decisionControls: [
-      '[data-action="confirm-run-recommendation"]',
-      '[data-action="skip-run-recommendation"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
     ],
   },
   trigger_schedule_proposal: {

@@ -26,18 +26,29 @@
 
 import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-import type { ActorRoleHints } from "./auth-policy";
 import {
-  writeRunRejectedRecommendations,
+  enforceRunAccess,
+  resolveEffectivePolicy,
+  type ActorRoleHints,
+} from "./auth-policy";
+import { actorFromSession } from "@/lib/authz/build-actor-context";
+
+import {
+  writeRunRecommendationSkip,
   SKIP_RECOMMENDATION_SOURCE,
 } from "@/lib/run-selected-skill-revisions";
 
 import {
   readRunSelectedSkillRevisions,
+  readRunRejectedRecommendations,
   hasRunRecommendationSkip,
+  decidedSkillsFromEvidence,
+  type RunRecommendationDecidedSkill,
+  type RunRejectedRecommendation,
+  type RunSelectedSkillRevision,
 } from "@/lib/run-selected-skill-revisions";
 
-import { readAgentRunById, readAgentTemplateById } from "./store";
+import { readAgentRunById, readAgentTemplateById, readRunCoOwners } from "./store";
 import { getRunRecommendations } from "./recommendation-interception";
 import {
   RECOMMENDATION_DECISION_REFUSAL,
@@ -48,6 +59,8 @@ import {
   recommendationHoldThreadId,
   releaseRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
+  RECOMMENDATION_SKIP_NOT_RECORDED,
+  RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
 } from "./recommendation-hold";
 import { triggerAgentRun } from "./run-actions";
 import { confirmRunSkillSelectionAction } from "./server-actions";
@@ -56,6 +69,7 @@ import type { RecommendedSkillForChip } from "./server-actions";
 export type RunRecommendationDecisionResult =
   | { ok: true; dispatched: boolean }
   | { ok: false; error: string; code?: string; settingsHref?: string };
+
 
 export type RunRecommendationHoldState =
   | { state: "none" }
@@ -72,9 +86,111 @@ export type RunRecommendationHoldState =
        * run-scoped behaviour rather than becoming un-decidable.
        */
       holdRef: string;
+      /**
+       * Whether THIS reader may shape the run — §V's read-only reading, which
+       * draws every chip with its three affordances DISABLED and the reason
+       * under the row.
+       *
+       * PRESENTATION ONLY, and deliberately so. The decision actions each
+       * re-authorize from the session on their own (`confirmRunSkillSelection‑
+       * Action` enforces execute tier; the skip path enforces the run's trigger
+       * ownership) and neither reads this flag, so it can neither grant nor
+       * remove any authority. It is therefore derived FAIL-OPEN: a derivation
+       * that cannot answer says `true`, because withholding the affordances from
+       * a reader who may in fact decide would be a regression on the shipped
+       * card, while showing them to a reader who may not costs one honest
+       * refusal line — exactly what ships today.
+       */
+      canDecide: boolean;
     }
-  | { state: "confirmed"; skillNames: string[] }
-  | { state: "skipped" };
+  | {
+      state: "confirmed";
+      skillNames: string[];
+      decided: RunRecommendationDecidedSkill[];
+    }
+  | { state: "skipped"; decided: RunRecommendationDecidedSkill[] };
+
+
+/**
+ * Can this session DECIDE this run's recommendation? The same execute-tier gate
+ * `confirmRunSkillSelectionAction` enforces before it writes, read here so the
+ * card can draw §V's read-only chips instead of offering a press that would only
+ * ever be refused. FAIL-OPEN by contract — see `canDecide` above.
+ */
+async function readerMayDecide(
+  run: Awaited<ReturnType<typeof readAgentRunById>>,
+  session: Parameters<typeof actorFromSession>[0] | null,
+  roleHints: ActorRoleHints,
+): Promise<boolean> {
+  if (!run || !session) return true;
+  try {
+    const runTemplate = await readAgentTemplateById(run.templateId).catch(() => null);
+    const coOwnerUserIds = (await readRunCoOwners(run.id).catch(() => [])).map((r) => r.userId);
+    await enforceRunAccess(
+      { ...run, effectivePolicy: resolveEffectivePolicy(run, runTemplate), coOwnerUserIds },
+      actorFromSession(session),
+      "execute",
+      roleHints,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * DISPLAY NAMES FOR THE SETTLED READING (cinatra#2841).
+ *
+ * §V's chips print a skill's NAME — held and settled alike ("Enrich contacts",
+ * never `@vendor/pkg:enrich`, and never the slug `enrich-contacts`). The run's
+ * durable evidence carries ids only, so the settled row joins the names in
+ * HERE, the same way the held branch below gets them: through the shared
+ * run-actor candidate seam and the scorer, whose `displayName` is the owning
+ * extension's manifest title resolved once server-side
+ * (`buildRecommendationCandidatesForAgent`). Reading THAT field rather than
+ * the catalog `name` is what keeps the settled row and the held row identical:
+ * both take the same resolved label from the same call.
+ *
+ * NOT VIEWER-INTERSECTED, deliberately and consistently with the branch that
+ * calls it: the decided summary is the set THIS run resolved, which the run's
+ * own Skills tab already lists to every reader who clears the same run-read
+ * door. Only the LIVE candidate row is intersected.
+ *
+ * BEST-EFFORT BY CONTRACT. A failure costs labels, never the card: every id with
+ * no resolved name keeps the id as its label, which is exactly what the settled
+ * row printed before this join existed.
+ */
+async function resolveDecidedSkillNames(
+  run: NonNullable<Awaited<ReturnType<typeof readAgentRunById>>>,
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  try {
+    const template = await readAgentTemplateById(run.templateId).catch(() => null);
+    const packageName = template?.packageName;
+    if (!packageName) return names;
+    const candidateSkillIds = await resolveRecommendationCandidateSkillIds({
+      run,
+      packageName,
+    });
+    let promptText = "";
+    try {
+      promptText = JSON.stringify(run.inputParams ?? {});
+    } catch {
+      promptText = "";
+    }
+    const recs = await getRunRecommendations({
+      agentId: packageName,
+      intent: { promptText },
+      restrictToSkillIds: candidateSkillIds,
+    });
+    for (const r of recs) {
+      if (r.skillId && r.displayName) names.set(r.skillId, r.displayName);
+    }
+  } catch {
+    /* labels only — an unresolvable name never costs the settled card */
+  }
+  return names;
+}
 
 /**
  * The run-start recommendation hold state for the chat-mounted run panel
@@ -134,8 +250,29 @@ export async function getRunRecommendationHoldStateAction(input: {
     // disclosure boundary. The LIVE candidate row below is the surface this
     // change actually widens, and that one IS intersected.
     const selected = readRunSelectedSkillRevisions(input.runId);
-    if (selected.length > 0) return { state: "confirmed", skillNames: selected.map((s) => s.skillId) };
-    if (hasRunRecommendationSkip(input.runId)) return { state: "skipped" };
+    // §V's settled row states each skill's OWN outcome, so the rejected half of
+    // the same evidence is read beside the accepted half. Best-effort: a store
+    // that cannot answer costs the per-chip marks, never the settled card.
+    let rejected: RunRejectedRecommendation[] = [];
+    try {
+      rejected = readRunRejectedRecommendations(input.runId);
+    } catch {
+      rejected = [];
+    }
+    // §V's settled chips print the SAME display name the held chips print, so
+    // the ids the evidence carries are joined to names before the row is built.
+    const nameBySkillId = await resolveDecidedSkillNames(run);
+    const decided = decidedSkillsFromEvidence(selected, rejected, nameBySkillId);
+    if (selected.length > 0) {
+      return {
+        state: "confirmed",
+        // The field is `skillNames`, and now it truthfully holds names — the id
+        // survives only as the fallback for a skill nothing could name.
+        skillNames: selected.map((s) => nameBySkillId.get(s.skillId) ?? s.skillId),
+        decided,
+      };
+    }
+    if (hasRunRecommendationSkip(input.runId)) return { state: "skipped", decided };
     return { state: "none" };
   }
 
@@ -173,11 +310,15 @@ export async function getRunRecommendationHoldStateAction(input: {
     state: "held",
     agentPackageName: packageName,
     promptText,
+    canDecide: await readerMayDecide(run, session, roleHints),
     holdRef: encodeRecommendationHoldRef({ runId: input.runId, holdId: park.id }) ?? "",
     recommendations: recs.map((r) => ({
       skillId: r.skillId,
       skillRevisionId: r.skillRevisionId,
-      name: r.name,
+      // The RESOLVED display label — the same field `resolveDecidedSkillNames`
+      // reads, so the held row and the settled row cannot label a skill
+      // differently.
+      name: r.displayName,
       score: r.score,
       rank: r.rank,
       recommended: r.recommended,
@@ -207,6 +348,18 @@ export async function getRunRecommendationHoldStateAction(input: {
  * this race for a worse one (a claimed park whose decision write then fails
  * leaves an un-dispatched run with no live hold and no row to decide) — so it
  * belongs with the park store's own transaction, not here.
+ *
+ * The SHAPE that race leaves behind, named so the disclosure is not merely
+ * implied: a Confirm and a Skip racing the same live hold write into two
+ * different tables — the authoritative per-run selection rows, and
+ * `user_skipped` rejected rows. Both survive. The SURFACE stays single-valued
+ * and deterministic (`getRunRecommendationHoldStateAction` reads selections
+ * first and answers `confirmed`, so the settled card never shows two
+ * decisions), and the RUN is single-valued too (it executes the confirmed
+ * selection). What carries both is the recommendation-efficacy telemetry, which
+ * then counts one run as accepted and skipped. That is the residual: a
+ * double-counted telemetry row, not a contradictory run and not a contradictory
+ * card. Removing it means the atomic claim above, at the price named above.
  *
  * IDEMPOTENT RETRY IS NOT A STALE DECISION. A decision whose response was lost
  * and is retried names a hold that is now RELEASED — and that is still THIS
@@ -254,6 +407,13 @@ export async function confirmRunRecommendationAction(input: {
   declaredProducedTypes?: string[];
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
+  /**
+   * The kept skills the reader settled through the chip's ADJUST panel
+   * (cinatra#2841). Written as `user_adjusted` selection rows, so §V's third
+   * settled mark is reachable for a skill that IS in the scored set — which is
+   * every skill the row offers.
+   */
+  adjustedSkillIds?: string[];
   /** The hold this decision was taken against (cinatra#2568) — see the CAS below. */
   holdRef?: string;
 }): Promise<RunRecommendationDecisionResult> {
@@ -277,6 +437,7 @@ export async function confirmRunRecommendationAction(input: {
     declaredProducedTypes: input.declaredProducedTypes,
     targetArtifactKind: input.targetArtifactKind,
     forcedRevisions: input.forcedRevisions,
+    adjustedSkillIds: input.adjustedSkillIds,
   });
   if (!written.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
@@ -285,9 +446,10 @@ export async function confirmRunRecommendationAction(input: {
 }
 
 /**
- * SKIP: persist durable skip evidence (a `user_skipped` rejected row per
- * recommended candidate — distinguishable from no-decision AND from confirm),
- * write NO selection row (the run falls back to the computed default set), then
+ * SKIP: persist durable skip evidence — the RUN-LEVEL skip record (the marker
+ * the settled card reads, keyed by run_id and VERIFIED before any release) plus
+ * one `user_skipped` rejected row per candidate the row actually offered — write
+ * NO selection row (the run falls back to the computed default set), then
  * release the hold and dispatch.
  */
 export async function skipRunRecommendationAction(input: {
@@ -307,19 +469,76 @@ export async function skipRunRecommendationAction(input: {
 
   const run = await readAgentRunById(input.runId).catch(() => null);
   if (!run) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
-  // Ownership check — the same gate `triggerAgentRun` (the dispatch, below)
-  // enforces. A run with no owner (runBy null) is triggerable by any session,
-  // matching the existing trigger semantics.
-  if (run.runBy && run.runBy !== userId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
-  // Persist durable skip evidence: mark every recommended candidate `user_skipped`.
-  // Best-effort — a telemetry write must never block the dispatch.
+  // OWNERSHIP, FAIL-CLOSED. Skip is a `runBy`-owner decision, so the run must
+  // NAME this session as its owner — an unowned run is refused, not admitted.
+  //
+  // This deliberately does NOT copy `triggerAgentRun`'s `run.runBy && run.runBy
+  // !== userId`, which admits a null owner. That form reads as "nobody claimed
+  // it, so anybody may", and on THIS path a null owner is reachable: the chat
+  // dispatch boundary stamps the launch origin as a constant while carrying a
+  // user id only for a human principal (`chatActorToPrimitive` in
+  // `src/app/api/chat/explicit-dispatch-server.ts`), so a non-human principal
+  // reaching the pre-router creates a chat-origin run with no `runBy` — and the
+  // recommendation hold still fires on it. Fail-open there would let any
+  // authenticated session release and dispatch that run.
+  //
+  // Skip being stricter than the dispatch it precedes is the intended
+  // direction: the tighter gate is the one that decides, and `triggerAgentRun`
+  // re-checks afterwards. Confirm is unaffected — it carries its own
+  // execute-tier authorization inside `confirmRunSkillSelectionAction`.
+  if (!run.runBy || run.runBy !== userId) {
+    return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+  }
+
+  // DURABLE SKIP EVIDENCE, AND IT IS NOT BEST-EFFORT.
+  //
+  // This evidence IS the card's settled state: `getRunRecommendationHoldStateAction`
+  // reads it back to answer `skipped`, and with no evidence it answers `none` and
+  // the card disappears from the conversation instead of settling. So a failed
+  // write may NOT fall through to the release: releasing a run while losing the
+  // record of the decision is precisely the outcome that made Skip vanish.
+  //
+  // The evidence has TWO HALVES, and only one of them can be empty.
+  //
+  // The PER-SKILL half covers every candidate the row offered, not only the
+  // scorer-recommended ones. The hold fires whenever there is any candidate at
+  // all, so a row can be — and in practice often is — made entirely of FORCED
+  // candidates; writing evidence only for recommended ones left those skips
+  // unrecorded. A forced candidate is written with a NULL rank, which is what
+  // keeps "offered but not recommended" distinguishable from "recommended at
+  // rank n" in the same table. This half is empty whenever drift retired the
+  // offered set, and that is allowed.
+  //
+  // The RUN-LEVEL half is the marker, and it is never empty on a successful
+  // skip.
+  //
+  // EVERY SUCCESSFUL SKIP LEAVES A DURABLE MARKER — there is no releasing path
+  // through here that records nothing. The marker is the RUN-LEVEL skip record
+  // (`run_recommendation_skips`, keyed by run_id alone), written and VERIFIED
+  // below on every branch; the per-skill efficacy rows are a separate, optional
+  // accompaniment. The only non-recording ending is a REFUSAL, which keeps the
+  // hold and leaves the card decidable.
+  //
+  // A READ FAILURE IS A FAILURE, NOT AN ANSWER. The template read is INSIDE the
+  // try and carries no `.catch(() => null)`: swallowing it would turn "the
+  // database did not answer" into "this run has no package", walk past the
+  // evidence write, and release — the same lost decision a failed write
+  // produces, arriving by a quieter route. A template that genuinely reads back
+  // WITHOUT a package name is a different fact: it simply leaves the per-skill
+  // half empty, and the run-level marker still records the decision.
   try {
-    const template = await readAgentTemplateById(run.templateId).catch(() => null);
+    const template = await readAgentTemplateById(run.templateId);
     const packageName = template?.packageName;
+    let rejectedRows: Array<{
+      skillId: string;
+      skillRevisionId: string | null;
+      recommendationSource: string;
+      recommendedRank: number | null;
+    }> = [];
     if (packageName) {
-      // The skip evidence must name the SAME candidates the row offered
-      // (cinatra#2148 finding 1) — resolve through the shared run-actor seam.
+      // The evidence must name the SAME candidates the row offered (cinatra#2148
+      // finding 1) — resolved through the shared run-actor seam.
       const assignedSkillIds = await resolveRecommendationCandidateSkillIds({
         run,
         packageName,
@@ -335,27 +554,97 @@ export async function skipRunRecommendationAction(input: {
         intent: { promptText: intentPromptText },
         restrictToSkillIds: assignedSkillIds,
       });
-      const rejectedRows = recommendations
-        .filter((r) => r.recommended)
-        .map((r) => ({
-          skillId: r.skillId,
-          skillRevisionId: r.skillRevisionId,
-          recommendationSource: SKIP_RECOMMENDATION_SOURCE,
-          recommendedRank: r.rank,
-        }));
-      writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
+      // PER-SKILL EFFICACY ROWS COME FROM THE EXACT SCORED RESULT, AND ONLY IT.
+      //
+      // Every row written here is read back as "this skill was OFFERED to a
+      // human and not kept", so it may only name a skill the row actually
+      // offered. `recommendations` is that set by construction: candidate
+      // generation intersects the assigned ids with the INSTALLED catalog and
+      // caps the result at `DEFAULT_MAX_CANDIDATES` (`recommend.server.ts`), so
+      // the scored result is the offered set and the assigned set is merely its
+      // superset.
+      //
+      // There used to be a fallback here that wrote every ASSIGNED id when the
+      // scorer came back empty. It recorded rejections for skills that were
+      // never offered — uninstalled ones the intersection had dropped, and
+      // everything past the cap on an agent assigned more than fifty — which is
+      // efficacy telemetry stating something that did not happen. Drift is real,
+      // but the answer to "the offered set is gone" is the RUN-LEVEL marker
+      // below, not a guess at what was on the row.
+      rejectedRows = recommendations.map((r) => ({
+        skillId: r.skillId,
+        skillRevisionId: r.skillRevisionId,
+        recommendationSource: SKIP_RECOMMENDATION_SOURCE,
+        // NULL for a forced candidate: it was offered, never ranked.
+        recommendedRank: r.recommended ? r.rank : null,
+      }));
+    }
+
+    // ONE DURABLE WRITE, AND IT IS VERIFIED BEFORE ANYTHING IS RELEASED.
+    //
+    // The MARKER is the record that makes the card settle: the state reader
+    // answers `skipped` from it, and with no marker it answers `none` and the
+    // card disappears from the conversation instead of settling. It is keyed by
+    // the RUN, so it exists on every branch above — including the ones with no
+    // candidate left to name.
+    //
+    // The per-skill half is OPTIONAL — it is empty whenever drift retired the
+    // offered set, or the template reads back with no package name. Neither
+    // makes the skip less of a decision, and neither is allowed to invent a
+    // rejected skill.
+    //
+    // BOTH HALVES RIDE ONE TRANSACTION (round-8 finding 2). They used to be two
+    // sequential autocommitted writes, rows first: a marker that failed after
+    // the rows committed refused the skip and left the park LIVE, while
+    // `hasRunRecommendationSkip` answered `skipped` off those orphaned
+    // `user_skipped` rows and settled the card for the decision this action had
+    // just refused. Nothing distinguishes such a row from a legitimate
+    // pre-core__0095 one, so the reader cannot be taught to ignore it — the
+    // write is what has to be atomic. A refusal below can therefore no longer
+    // leave a HALF: the ordinary failure rolls both halves back, and the sync
+    // bridge's ambiguous ending (a COMMIT whose result was lost) leaves BOTH,
+    // which is a decision fully on record that the retry converges on. See the
+    // store's own note for that boundary.
+    //
+    // `writeRunRecommendationSkip` READS THE MARKER BACK and returns whether it
+    // is durably there. A write that quietly did nothing is therefore not
+    // mistaken for a decision on record: the release below is gated on the
+    // verified fact, not on the absence of an exception.
+    const recorded = writeRunRecommendationSkip({
+      runId: input.runId,
+      skippedBy: userId,
+      candidateCount: rejectedRows.length,
+      rejected: rejectedRows,
+    });
+    if (!recorded) {
+      console.error(
+        "[skipRunRecommendationAction] skip marker did not read back for run",
+        input.runId,
+        "— refusing to release",
+      );
+      return {
+        ok: false,
+        error: RECOMMENDATION_SKIP_NOT_RECORDED,
+        code: RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
+      };
     }
   } catch (err) {
-    // The run id is a request-controlled value; keep it OUT of the console
-    // format-string position (pass it as a discrete argument) so a `%`-bearing
-    // id can never be interpreted as a util.format specifier (CodeQL
-    // js/tainted-format-string).
-    console.warn(
+    // A FAILED WRITE, on the other hand, is fatal to the decision. The run id is
+    // request-controlled, so it is passed as a discrete argument and never
+    // interpolated into the format string (CodeQL js/tainted-format-string).
+    console.error(
       "[skipRunRecommendationAction] skip-evidence write failed for run",
       input.runId,
-      "— continuing:",
+      "— refusing to release:",
       err instanceof Error ? err.message : String(err),
     );
+    // The TYPED outcome rides alongside the prose. A caller that offers a retry
+    // branches on the code; the message is what a person reads.
+    return {
+      ok: false,
+      error: RECOMMENDATION_SKIP_NOT_RECORDED,
+      code: RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
+    };
   }
 
   return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined);
