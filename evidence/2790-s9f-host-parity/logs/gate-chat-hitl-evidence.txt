@@ -1,6 +1,17 @@
+# scripts/ci/chat-hitl-evidence-gate.mjs — exit 0
+# run at this tree, cinatra#2790 S9f R4.
+
 [chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
   grandfathered  evidence/unbound-cell
       C1__review-card__chat_thread__pending: scripts/audit/chat-hitl-acceptance-manifest.json row "Chat-dispatch → typed chip-row hold → confirm → artifact → r…" cites a "chat_thread" capture that no index record answers -- an unindexed screenshot counts as zero
   grandfathered  evidence/unbound-cell
       C2__review-card__chat_thread__decided: scripts/audit/chat-hitl-acceptance-manifest.json row "Chat-dispatch → typed chip-row hold → confirm → artifact → r…" cites a "chat_thread" capture that no index record answers -- an unindexed screenshot counts as zero
-EXIT=0
+
+# --- ISOLATION: the same gate with this lane's evidence/ moved aside and its
+# --- records removed from the capture index. exit 0, byte-identical output.
+
+[chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
+  grandfathered  evidence/unbound-cell
+      C1__review-card__chat_thread__pending: scripts/audit/chat-hitl-acceptance-manifest.json row "Chat-dispatch → typed chip-row hold → confirm → artifact → r…" cites a "chat_thread" capture that no index record answers -- an unindexed screenshot counts as zero
+  grandfathered  evidence/unbound-cell
+      C2__review-card__chat_thread__decided: scripts/audit/chat-hitl-acceptance-manifest.json row "Chat-dispatch → typed chip-row hold → confirm → artifact → r…" cites a "chat_thread" capture that no index record answers -- an unindexed screenshot counts as zero

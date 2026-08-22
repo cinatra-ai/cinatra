@@ -1,7 +1,19 @@
+# scripts/audit/chat-hitl-acceptance-gate.mjs — exit 1
+# run at this tree, cinatra#2790 S9f R4.
+
 [chat-hitl-acceptance] 4 capture-index violation(s) — a capture's declared host must match its recorded anchors; file names carry no authority:
 
   manifest row 1 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
   manifest row 1 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
   manifest row 15 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
   manifest row 15 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
-EXIT=1
+
+# --- ISOLATION: the same gate with this lane's evidence/ moved aside and its
+# --- records removed from the capture index. exit 1, byte-identical output.
+
+[chat-hitl-acceptance] 4 capture-index violation(s) — a capture's declared host must match its recorded anchors; file names carry no authority:
+
+  manifest row 1 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
+  manifest row 1 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
+  manifest row 15 claims the chat_thread cell "C1__review-card__chat_thread__pending" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero
+  manifest row 15 claims the chat_thread cell "C2__review-card__chat_thread__decided" (evidence/2573-s7-visuals-lane/README.md), and no record in the capture index carries that cell — an unindexed screenshot counts as zero

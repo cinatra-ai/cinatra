@@ -1,15 +1,29 @@
 // ---------------------------------------------------------------------------
-// cinatra#2790 S9f — the RECOMMENDATION CARD on the RUN REVIEW PAGE
-// (`page_gate_region`), ABOVE the review gate card.
+// cinatra#2790 S9f — the RECOMMENDATION ROW on the RUN REVIEW PAGE
+// (`page_gate_region`), IN ITS DECIDED FORM, ABOVE the review gate card.
 //
-// A cookie surface: the page declares `host="page_gate_region"` with NO
-// credential, so the card resolves through the shipped server action, exactly
-// as it does on the run page. Nothing here is stood in for on the read side.
+// WHY DECIDED AND NOT HELD. The skills recommendation is the decision taken
+// BEFORE the agent starts; the review page is a surface that exists only AFTER
+// the run produced something. So a HELD, still-pressable recommendation on the
+// review page is a state no real flow can put there — it can only be staged.
+// The plan says the same in one sentence (§6.4 item 6): the row appears "on the
+// review page, where it is mostly seen in its decided form".
+//
+// So this recorder photographs the state the REAL sequence leaves behind. Its
+// input is a run that `05-run-page-real-sequence.mjs` already walked: started
+// person-present, decided chip by chip through the card's own controls on the
+// run page, then driven onward through its own input and its trigger form. This
+// recorder only READS.
 //
 // WHAT IS RECORDED BESIDE EVERY PICTURE: the anchors, counted in the document
-// the picture was taken in, plus the ORDER of the two cards inside the gate
-// region — which is the §6.4 claim this mount makes ("ahead of the steps it
-// would authorize ... and on the review page").
+// the picture was taken in; the settled per-chip read-out; the ABSENCE of every
+// decision affordance inside the card root; and the ORDER of the two cards
+// inside the gate region — the §6.4 claim this mount makes.
+//
+// THE GATE CARD RESOLVES ASYNCHRONOUSLY. It is a client card that fetches its
+// own view (`POST /api/lifecycle-views/resolve`), so this recorder WAITS for it
+// rather than sampling once: a cell shot before it lands would show a decided
+// row over an empty region and quietly under-state the page.
 //
 // No origin is hard-coded: the app origin is read from the environment.
 //
@@ -47,6 +61,12 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 1600 }, 
 const page = await ctx.newPage();
 const pageErrors = [];
 page.on("pageerror", (e) => pageErrors.push(String(e).slice(0, 300)));
+/** The lifecycle wire, presence + status only — never a body, never a value. */
+const wire = [];
+page.on("response", (res) => {
+  const path = new URL(res.url()).pathname;
+  if (path.startsWith("/api/lifecycle-views/")) wire.push({ method: res.request().method(), path, status: res.status() });
+});
 
 const stripDevOverlay = async () => {
   await page.evaluate(() => document.querySelectorAll("nextjs-portal").forEach((n) => n.remove())).catch(() => {});
@@ -84,6 +104,7 @@ const ASSERTIONS = [
   { selector: '[data-lifecycle-card="recommendation_hold"]', scope: "frame" },
   { selector: '[data-lifecycle-card="artifact_review_gate"]', scope: "frame" },
   { selector: '[data-conformance-id="review-gate-card"]', scope: "frame" },
+  { selector: '[data-conformance-id="review-decision-bar"]', scope: "frame" },
   { selector: "[data-lifecycle-card-state]", scope: "root" },
   { selector: '[data-skill-action="confirm"]', scope: "root" },
   { selector: '[data-skill-action="adjust"]', scope: "root" },
@@ -115,13 +136,14 @@ async function chipReadout() {
         mark: c.getAttribute("data-chip-mark"),
         forced: c.hasAttribute("data-forced"),
         label: (c.querySelector("span")?.textContent ?? "").trim(),
+        text: c.textContent.trim(),
         actions: [...c.querySelectorAll("[data-skill-action]")].map((b) => b.getAttribute("data-skill-action")),
       }));
     }, CARD_ROOT)
     .catch(() => []);
 }
 
-/** The ORDER claim, measured: is the recommendation card ABOVE the gate card? */
+/** The ORDER claim, measured: is the recommendation row ABOVE the gate card? */
 async function orderReadout() {
   return page
     .evaluate(
@@ -142,6 +164,23 @@ async function orderReadout() {
       },
       { cardSel: CARD_ROOT, gateSel: GATE_ROOT },
     )
+    .catch(() => null);
+}
+
+/** What the gate card underneath is asking for, read off its own decision bar. */
+async function gateReadout() {
+  return page
+    .evaluate((gateSel) => {
+      const gate = document.querySelector(gateSel);
+      if (!gate) return null;
+      const bar = document.querySelector('[data-conformance-id="review-decision-bar"]');
+      return {
+        state: gate.getAttribute("data-lifecycle-card-state"),
+        host: gate.getAttribute("data-lifecycle-card-host"),
+        decisionBar: Boolean(bar),
+        decisionButtons: bar ? [...bar.querySelectorAll("button")].map((b) => b.textContent.trim()).filter(Boolean) : [],
+      };
+    }, GATE_ROOT)
     .catch(() => null);
 }
 
@@ -181,6 +220,7 @@ async function shoot(cell, declaredState, note, framing = "card-root", extra = {
   const attrs = await rootAttributes();
   const chips = await chipReadout();
   const order = await orderReadout();
+  const gate = await gateReadout();
   const theme = await page.evaluate(() => document.documentElement.className).catch(() => "");
   const cardText = await page
     .locator(CARD_ROOT)
@@ -204,14 +244,15 @@ async function shoot(cell, declaredState, note, framing = "card-root", extra = {
     rootAttributes: attrs,
     chips,
     order,
+    gate,
     themeClass: theme,
     framing,
     clip: framing === "card-root" ? sharedClip : null,
     pageErrors: [...pageErrors],
     ...extra,
   });
-  results.push({ cell, pixels: dims, sha256, observed, rootAttributes: attrs, chips, order, themeClass: theme, framing, cardText: cardText.slice(0, 2000) });
-  say(`CAP ${cell} ${dims.width}x${dims.height} chips=${chips.length} order=${JSON.stringify(order)} theme="${theme}"`);
+  results.push({ cell, pixels: dims, sha256, observed, rootAttributes: attrs, chips, order, gate, themeClass: theme, framing, cardText: cardText.slice(0, 2000) });
+  say(`CAP ${cell} ${dims.width}x${dims.height} chips=${chips.length} order=${JSON.stringify(order)} gate=${JSON.stringify(gate)} theme="${theme}"`);
   return dims;
 }
 
@@ -229,65 +270,109 @@ async function setTheme(name) {
   return applied;
 }
 
-try {
-  say(`# cinatra#2790 S9f review-page capture — ${new Date().toISOString()}`);
-  await page.goto(`${APP}/sign-in`, { waitUntil: "domcontentloaded", timeout: 300_000 });
-  await page.waitForTimeout(2500);
-  if (new URL(page.url()).pathname.startsWith("/sign-in")) {
-    await page.locator('input[type="email"], input[name="email"]').first().fill(ACTOR.email);
-    await page.locator('input[type="password"], input[name="password"]').first().fill(ACTOR.password);
+/** Sign in through the app's OWN hosted form, retried against hydration races. */
+async function signIn() {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await page.goto(`${APP}/sign-in`, { waitUntil: "domcontentloaded", timeout: 300_000 });
+    await page.waitForSelector('input[name="email"]', { timeout: 300_000 });
+    await page.waitForTimeout(4000);
+    const em = page.locator('input[name="email"]').first();
+    const pw = page.locator('input[name="password"]').first();
+    await em.click();
+    await em.pressSequentially(ACTOR.email, { delay: 12 });
+    await pw.click();
+    await pw.pressSequentially(ACTOR.password, { delay: 6 });
+    if ((await em.inputValue()) !== ACTOR.email) continue;
     await page.locator('button[type="submit"]').first().click();
-    await page.waitForTimeout(6000);
+    for (let i = 0; i < 60; i += 1) {
+      await page.waitForTimeout(2000);
+      if (!new URL(page.url()).pathname.startsWith("/sign-in")) return new URL(page.url()).pathname;
+    }
   }
-  say(`after sign-in: ${new URL(page.url()).pathname}`);
+  throw new Error("sign-in did not leave /sign-in");
+}
+
+try {
+  say(`# cinatra#2790 S9f review-page capture (DECIDED form) — ${new Date().toISOString()}`);
+  say(`after sign-in: ${await signIn()}`);
 
   await page.goto(`${APP}${REVIEW_PATH}`, { waitUntil: "domcontentloaded", timeout: 300_000 });
   say(`review page: ${new URL(page.url()).pathname}`);
+  // BOTH cards, not just the first: the row is server-rendered and the gate card
+  // resolves over the wire, so waiting on the row alone would shoot too early.
+  let ready = false;
   for (let i = 0; i < 120; i += 1) {
     await page.waitForTimeout(2000);
-    const present = await page.evaluate((s) => Boolean(document.querySelector(s)), CARD_ROOT).catch(() => false);
-    if (present) {
-      say(`recommendation card appeared after ~${(i + 1) * 2}s`);
+    const seen = await page
+      .evaluate(({ c, g }) => ({ card: Boolean(document.querySelector(c)), gate: Boolean(document.querySelector(g)) }), { c: CARD_ROOT, g: GATE_ROOT })
+      .catch(() => ({ card: false, gate: false }));
+    if (seen.card && seen.gate) {
+      ready = true;
+      say(`both cards present after ~${(i + 1) * 2}s`);
       break;
     }
   }
+  if (!ready) throw new Error("the gate region did not draw both cards");
   await page.waitForTimeout(3000);
-  say(`CHIPS ${JSON.stringify(await chipReadout())}`);
+
+  const settled = await chipReadout();
+  say(`CHIPS ${JSON.stringify(settled)}`);
   say(`ORDER ${JSON.stringify(await orderReadout())}`);
+  say(`GATE ${JSON.stringify(await gateReadout())}`);
+  const affordances = await counts([
+    { selector: '[data-skill-action="confirm"]', scope: "root" },
+    { selector: '[data-skill-action="adjust"]', scope: "root" },
+    { selector: '[data-skill-action="skip"]', scope: "root" },
+  ]);
+  say(`AFFORDANCES ${JSON.stringify(affordances)}`);
+  // FAIL RATHER THAN PHOTOGRAPH A HELD ROW. This recorder exists because the
+  // held reading is unreachable here; if it ever appears, that is the finding,
+  // not the cell.
+  const state = await page.evaluate((s) => document.querySelector(s)?.getAttribute("data-lifecycle-card-state"), CARD_ROOT);
+  if (state !== "decided") throw new Error(`the row is "${state}", not "decided" — nothing here is staged into the decided form`);
+  if (affordances.some((a) => a.count !== 0)) throw new Error("a decided row still carries a decision affordance");
 
   await setTheme("cinatra");
   await shoot(
-    "R1__recommendation-card__page_gate_region__held",
-    "pending",
-    "The recommendation card HELD on the run review page, framed on the card root. One chip per skill, each carrying its own Confirm / Adjust / Skip and printing the owning extension's manifest displayName. The host declaration on the region root is what makes this a page_gate_region mount, per the anchor contract.",
+    "R1__recommendation-card__page_gate_region__decided",
+    "decided",
+    "The recommendation row on the run review page in its DECIDED form, framed on the card root. One settled chip per kept skill, each printing the owning extension's manifest displayName and its own outcome — Confirmed / Adjusted — and NOTHING to press. This is the record of what was chosen before the run started; the decision itself was taken on the run page through the card's own per-chip controls (see logs/real-sequence.log), never here.",
     "card-root",
   );
 
   await shoot(
-    "R2__recommendation-card__page_gate_region__held__above-gate",
-    "pending",
-    "The SAME held card IN ITS PAGE, uncropped and full-length, with the REVIEW GATE CARD beneath it — the ordering plan section 6.4 asks for: the run-start decision above the after-the-fact one, so reading down the gate region is reading the run in order. The measured order is carried in this record's `order`.",
+    "R2__recommendation-card__page_gate_region__decided__above-gate",
+    "decided",
+    "The SAME decided row IN ITS PAGE, uncropped and full-length, with the REVIEW GATE CARD beneath it still AWAITING its decision (Comment / Reject / Approve). This is the ordering plan section 6.4 asks for, in the only composition a real flow produces: the run-start decision settled above the after-the-fact one that is still open. The measured order is carried in this record's `order`, the gate's own reading in `gate`.",
     "page",
   );
 
   await setTheme("dark");
   await shoot(
-    "R3__recommendation-card__page_gate_region__held__dark",
-    "pending",
-    "The SAME held card, same run, same framing selector, in the dark palette — the class next-themes writes when the shipped theme control is pressed. Nothing else changed.",
+    "R3__recommendation-card__page_gate_region__decided__dark",
+    "decided",
+    "The SAME decided row, same run, same clip rectangle, in the dark palette — the class next-themes writes when the shipped theme control is pressed. Nothing else changed.",
     "card-root",
+  );
+
+  await shoot(
+    "R4__recommendation-card__page_gate_region__decided__above-gate__dark",
+    "decided",
+    "The SAME page framing as R2, same run, in the dark palette: the decided row above the still-open review gate card.",
+    "page",
   );
   await setTheme("cinatra");
 
-  writeFileSync(join(OUT, "capture-results.json"), JSON.stringify({ results, pageErrors }, null, 2));
+  writeFileSync(join(OUT, "capture-results.json"), JSON.stringify({ results, wire, pageErrors }, null, 2));
   writeFileSync(join(OUT, "records.json"), JSON.stringify(records, null, 2));
+  say(`WIRE ${JSON.stringify(wire)}`);
   say(`pageErrors: ${JSON.stringify(pageErrors)}`);
   say("CAPTURE OK");
 } catch (e) {
   say(`CAPTURE ERROR: ${e?.stack || e}`);
   await page.screenshot({ path: join(OUT, "error.png"), fullPage: true }).catch(() => {});
   writeFileSync(join(OUT, "records.json"), JSON.stringify(records, null, 2));
-  writeFileSync(join(OUT, "capture-results.json"), JSON.stringify({ results, pageErrors }, null, 2));
+  writeFileSync(join(OUT, "capture-results.json"), JSON.stringify({ results, wire, pageErrors }, null, 2));
 } finally {
   writeFileSync(join(OUT, "capture.log"), log.join("\n") + "\n");
   await browser.close();

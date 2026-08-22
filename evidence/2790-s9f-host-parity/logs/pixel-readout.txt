@@ -1,0 +1,73 @@
+# cinatra#2790 (S9f) — WHAT THE PIXELS THEMSELVES SAY
+#
+# Read OFF THE COMMITTED PNGs with the platform's own text recognizer (Vision,
+# VNRecognizeTextRequest, accurate level, language correction OFF), not off the DOM.
+# The DOM read-out beside each cell says what the page CONTAINED; this says what a
+# reader can SEE. Coordinates are fractions of the image (y from the top).
+# Recognizer artefacts on glyph-only marks (the check and the sliders icon) are left
+# exactly as returned rather than tidied.
+
+== R1__recommendation-card__page_gate_region__decided (the card root alone) ==
+y=0.712 x=0.461  Web Research Skill V CONFIRMED
+y=0.769 x=0.013  Blog Post Matcher Skill V CONFIRMED
+y=0.769 x=0.257  Blog Writing Skill #F ADJUSTED
+
+== R3__recommendation-card__page_gate_region__decided__dark (the card root alone) ==
+y=0.647 x=0.576  VCONFIRMED
+y=0.673 x=0.237  Blog Writing Skill IE ADJUSTED
+y=0.769 x=0.015  Blog Post Matcher Skill V CONFIRMED
+y=0.769 x=0.461  Web Research Skill
+
+== R2__recommendation-card__page_gate_region__decided__above-gate — the gate region, y 330..2600 device px ==
+y=0.039 x=0.467  Web Research Skill V CONFIRMED
+y=0.041 x=0.271  Blog Writing Skill #F ADJUSTED
+y=0.041 x=0.036  Blog Post Matcher Skill V CONFIRMED
+y=0.080 x=0.204  Awaiting your decision
+y=0.080 x=0.032  @ Review requested
+y=0.135 x=0.051  Connector rollout note ( Blog Post Artifact
+y=0.154 x=0.051  @cinatra-ai/blog-post-artifact:post • revision b43357d2-9be. • pinned • organization • organization • text/markdown • updated 2026-08-22T02:19:02.348Z
+y=0.188 x=0.094  structured data
+y=0.189 x=0.051  (Floor
+y=0.233 x=0.050  review target unavailable — slot "detail", reason "no-semantic-renderer"
+y=0.254 x=0.062  Connector rollout note
+y=0.275 x=0.062  No type renderer resolved for this artifact — showing the generic read-only view.
+y=0.294 x=0.062  type
+y=0.294 x=0.115  @cinatra-ai/blog-post-artifact:post
+y=0.310 x=0.061  mime
+y=0.310 x=0.116  text/markdown
+y=0.326 x=0.062  revision b43357d2-9be0-4c18-b607-383abb08a5d6
+y=0.352 x=0.062  Preview Download
+y=0.456 x=0.908  « Expand
+y=0.500 x=0.039  DECISION RATIONALE (optional on approve, expected on reject)
+y=0.529 x=0.050  Add a note for the run and the audit trail...
+y=0.573 x=0.050  Comment
+y=0.574 x=0.818  x Reject
+y=0.576 x=0.891  V Approve
+
+== R4__recommendation-card__page_gate_region__decided__above-gate__dark — the same crop of the dark cell ==
+y=0.039 x=0.469  Web Research Skill v CONFIRMED
+y=0.041 x=0.038  Blog Post Matcher Skill VCONFIRMED
+y=0.041 x=0.271  Blog Writing Skill IE ADJUSTED
+y=0.080 x=0.206  Awaiting your decision
+y=0.083 x=0.032  E Review requested
+y=0.135 x=0.201  Blog Post Artifact
+y=0.135 x=0.054  Connector rollout note
+y=0.156 x=0.053  @cinatra-ai/blog-post-artifact:post • revision b43357d2-9be.. • pinned • organization • organization • text/markdown • updated 2026-08-22T02:19:02.348Z
+y=0.187 x=0.061  Floor
+y=0.188 x=0.098  structured data
+y=0.233 x=0.053  review target unavailable — slot "detail", reason "no-semantic-renderer"
+y=0.254 x=0.065  Connector rollout note
+y=0.275 x=0.065  No type renderer resolved for this artifact — showing the generic read-only view.
+y=0.294 x=0.118  @cinatra-ai/blog-post-artifact:post
+y=0.294 x=0.064  type
+y=0.310 x=0.118  text/markdown
+y=0.310 x=0.062  mime
+y=0.326 x=0.115  b43357d2-9be0-4c18-b607-383abb08a5d6
+y=0.327 x=0.064  revision
+y=0.350 x=0.065  Preview Download
+y=0.456 x=0.906  <^ Expand
+y=0.500 x=0.041  DECISION RATIONALE (optional on approve, expected on reject)
+y=0.529 x=0.051  Add a note for the run and the audit trail...
+y=0.573 x=0.051  Comment
+y=0.574 x=0.897  V Approve
+y=0.576 x=0.815  X Reject
