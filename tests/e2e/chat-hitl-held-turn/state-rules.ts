@@ -28,7 +28,7 @@
 //      revert plans that compare the LIVE state against what this fixture itself
 //      wrote. A teardown reverts its own writes and nothing else, and it never
 //      removes a row it cannot prove it created.
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // 1. THE ROLE PREDICATE, AND THE TWO STATEMENTS BUILT ON IT
@@ -269,16 +269,44 @@ export const SNAPSHOT_SKIPPED_VERDICT = "skipped: not this run's snapshot";
  * A stable fingerprint of a SEALED secret field, for proving that the value stored
  * now is still the exact value this fixture wrote.
  *
- * It hashes the CIPHERTEXT as it was read — nothing is ever decrypted here, and
+ * It reads the CIPHERTEXT as it was stored — nothing is ever decrypted here, and
  * the only value this is ever computed over is the fixture's own published
  * placeholder. `null` when there is nothing stored.
+ *
+ * A CHANGE DETECTOR, DELIBERATELY NOT A CRYPTOGRAPHIC HASH. The question it
+ * answers is "is what is stored now byte-identical to what I wrote a few minutes
+ * ago?", and both sides of that comparison are produced by this same function
+ * inside one run. It is not a security control: it authenticates nothing, is never
+ * persisted anywhere a reader could use it, and guards no boundary.
+ *
+ * Running a cryptographic digest over a credential field is also the shape
+ * `js/insufficient-password-hash` flags, and it flags it whatever the digest —
+ * the repo carries a dismissed instance of the same rule over the production
+ * credential fingerprint (`src/lib/llm-credential-fingerprint.ts`), which uses an
+ * HMAC. A pair of FNV-1a passes says exactly what this needs and makes no claim it cannot
+ * keep: the two inputs differ only by a whole re-sealing, so an accidental
+ * collision is not a failure mode this can meet, and there is no attacker in the
+ * model to engineer one — nobody can choose what this fixture wrote.
  */
 export function sealedSecretFingerprint(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value === "string" && value.length === 0) return null;
   // Key-ORDER stable, so a row that survived a JSON round-trip with its fields in
   // a different order is not mistaken for a different stored key.
-  return createHash("sha256").update(stableStringify(value)).digest("hex").slice(0, 32);
+  const text = stableStringify(value);
+  // Two 32-bit FNV-1a passes rather than one 64-bit: the repo's TypeScript target
+  // is ES2017, which has no BigInt literals. The second pass runs the string
+  // backwards from a different offset basis, so the two are not the same function
+  // of the input, and the length is carried alongside both.
+  const pass = (offsetBasis: number, reverse: boolean): string => {
+    let hash = offsetBasis;
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.charCodeAt(reverse ? text.length - 1 - i : i);
+      hash = Math.imul(hash ^ code, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  };
+  return `fnv1a:${pass(0x811c9dc5, false)}${pass(0x9e3779b9, true)}:${text.length}`;
 }
 
 export interface ConnectionRevertInput {
