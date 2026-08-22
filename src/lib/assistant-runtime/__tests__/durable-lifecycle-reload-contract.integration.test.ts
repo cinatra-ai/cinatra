@@ -138,7 +138,30 @@ vi.mock("../../../../packages/agents/src/server-actions", () => ({
   confirmRunSkillSelectionAction: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("../../../../packages/agents/src/run-recommendation-actions", () => ({
-  getRunRecommendationHoldStateAction: async () => ({ state: "none" }),
+  // A LIVE hold, not "none": RecommendationHoldCard self-gates (no live hold ⇒ it
+  // renders nothing), so once #2794 struck recommendation_hold from
+  // HELD_TURN_MOUNT_OBLIGATIONS the mount arm flips positive and a "none" answer
+  // makes it fail on the drawn mount rather than measure it. On a tree where the
+  // mount is still owed nothing consumes this answer, so the live hold is inert
+  // there — the stub is valid on both sides of the strike.
+  getRunRecommendationHoldStateAction: async () => ({
+    state: "held",
+    agentPackageName: "@cinatra-ai/reload-harness-agent",
+    promptText: "reload harness held turn",
+    recommendations: [
+      {
+        skillId: "@cinatra-ai/reload-harness-agent:harness-skill",
+        skillRevisionId: "00000000-0000-4000-8000-00000000s9j0",
+        name: "harness-skill",
+        score: 1,
+        rank: 1,
+        recommended: true,
+        scoredFeatures: [],
+      },
+    ],
+    holdRef: "hold-ref-s9j-reload-harness",
+    canDecide: true,
+  }),
   confirmRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
   skipRunRecommendationAction: async () => ({ ok: true, dispatched: true }),
 }));
