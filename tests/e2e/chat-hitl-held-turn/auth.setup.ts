@@ -144,6 +144,10 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
   //    draws nothing, and the flow fails much later with "no held card" and no
   //    hint that the cause was a fixture. So the subprocess's exit code is the
   //    setup's exit code, and its output is printed either way.
+  //
+  //    `apply` snapshots the instance configuration it is about to change BEFORE
+  //    its first write; the `restore` teardown project puts it back and reads it
+  //    back to prove it. See `fixtures.mts` and `restore.teardown.ts`.
   const fixtureOut = execFileSync(
     process.execPath,
     [
@@ -152,6 +156,7 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
       "--import",
       "tsx",
       "tests/e2e/chat-hitl-held-turn/fixtures.mts",
+      "apply",
     ],
     {
       encoding: "utf8",
@@ -171,34 +176,58 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
   //    tools are unavailable", and the pre-router never dispatches — so the flow
   //    waits out its whole cold-compile budget for a card that was never going to
   //    appear, and reports "no held card" for a cause that has nothing to do with
-  //    holds. That exact failure cost this lane a full run.
+  //    holds.
   //
   //    So the route is compiled here, and then MEASURED: the loop below does not
   //    stop when the route merely answers, it stops when the route answers inside
   //    the same budget the runtime's own probe uses. A route that never gets there
   //    fails the SETUP, loudly, naming the reason — which is the difference between
   //    a diagnosis and a mystery.
+  //
+  //    A RESPONSE IS REQUIRED BEFORE AN ELAPSED TIME MEANS ANYTHING. A request that
+  //    fails immediately — connection refused, or a route that throws before it
+  //    compiles — also takes a few milliseconds, and grading that as warm would
+  //    turn this measurement into "it failed quickly". The STATUS stays
+  //    deliberately unread (a 401 is a perfectly good warm: the route compiled and
+  //    answered); the ABSENCE of a response is what may not pass.
   const MCP_PROBE_BUDGET_MS = 2_500;
   const WARM_DEADLINE = Date.now() + 180_000;
+  // Space the attempts, so a genuinely slow route is polled rather than hammered
+  // continuously for the whole three minutes.
+  const WARM_RETRY_DELAY_MS = 1_000;
   let fastest = Number.POSITIVE_INFINITY;
   let warm = false;
+  let lastFailure: string | null = null;
+  let answered = false;
   while (Date.now() < WARM_DEADLINE) {
     const started = Date.now();
-    // A 401 is a perfectly good warm: the route compiled and answered. What is
-    // being measured is latency, not authorization.
-    await request.get("/api/mcp", { failOnStatusCode: false }).catch(() => undefined);
+    const response = await request
+      .get("/api/mcp", { failOnStatusCode: false })
+      .catch((err: unknown) => {
+        lastFailure = err instanceof Error ? err.message : String(err);
+        return undefined;
+      });
     const elapsed = Date.now() - started;
-    fastest = Math.min(fastest, elapsed);
-    if (elapsed < MCP_PROBE_BUDGET_MS) {
-      warm = true;
-      break;
+    if (response) {
+      answered = true;
+      lastFailure = null;
+      fastest = Math.min(fastest, elapsed);
+      if (elapsed < MCP_PROBE_BUDGET_MS) {
+        warm = true;
+        break;
+      }
     }
+    await new Promise((resolve) => setTimeout(resolve, WARM_RETRY_DELAY_MS));
   }
   expect(
     warm,
     `/api/mcp never answered inside the runtime's own ${MCP_PROBE_BUDGET_MS}ms reachability ` +
-      `budget (fastest: ${Number.isFinite(fastest) ? `${fastest}ms` : "no response"}). Every chat ` +
-      "turn would be answered with \"Cinatra tools are unavailable\" and no run would be dispatched.",
+      `budget (${
+        answered
+          ? `fastest response: ${fastest}ms`
+          : `the route never produced a response at all${lastFailure ? ` — last error: ${lastFailure}` : ""}`
+      }). Every chat turn would be answered with "Cinatra tools are unavailable" and no run ` +
+      "would be dispatched.",
   ).toBe(true);
   console.log(`[S9k setup] /api/mcp warm — fastest response ${fastest}ms`);
 
