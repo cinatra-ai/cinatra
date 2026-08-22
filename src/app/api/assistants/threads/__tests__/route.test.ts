@@ -161,7 +161,10 @@ describe("POST /api/assistants/threads (save)", () => {
     await POST(saveReq({ id: "t-new", title: "new" }));
     expect(upsertChatThreadInDatabase).toHaveBeenCalledWith(
       expect.objectContaining({ id: "t-new" }),
-      { orgId: "org-9", assistantMirrorOrgId: "org-9" },
+      // ...and the SESSION's user as the acting writer (cinatra#2823 S9j) —
+      // the truncation tombstone authorizes against it, so it must come from
+      // the session and never from the body.
+      { orgId: "org-9", assistantMirrorOrgId: "org-9", actorUserId: "user-self" },
     );
   });
 });

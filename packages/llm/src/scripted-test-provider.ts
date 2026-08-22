@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { OrchestrateStreamInput } from "./types";
+import type { LlmResponse, OrchestrateStreamInput } from "./types";
 
 // ---------------------------------------------------------------------------
 // Deterministic, test-only LLM provider for the WordPress/Drupal Playwright
@@ -704,4 +704,223 @@ export async function runScriptedStream(input: OrchestrateStreamInput): Promise<
   } catch (err) {
     input.onError(err instanceof Error ? err : new Error(String(err)));
   }
+}
+
+// ---------------------------------------------------------------------------
+// The BRIDGE path (cinatra#2910).
+//
+// `/api/llm-bridge` is the surface an agent run performs its model call on. It
+// resolves a runtime (`resolveConfiguredLlmRuntime`) and executes it
+// (`runResolvedSkillAwareDeterministicLlmTask`); both resolve a real provider
+// adapter, so a credential-free stack answered every agent model call with
+// `503 NO_LLM_PROVIDER` even with this provider enabled — the chat surface had
+// a scripted seam and the agent-run surface had none.
+//
+// The two functions below are that seam, and they live HERE — beside the fence
+// — rather than in the orchestration barrel, so the decision to serve scripted
+// output and the assertion that refuses it outside development are the same
+// module, read together, and reachable from a test without loading the barrel.
+// ---------------------------------------------------------------------------
+
+/**
+ * The model id a scripted runtime reports. It is deliberately not a real
+ * provider model: anything that records the model of a scripted run records a
+ * name no provider answers to.
+ */
+export const SCRIPTED_TEST_MODEL = "scripted-test-model";
+
+/** The runtime the bridge resolves when this provider serves the call. */
+export type ScriptedLlmRuntime = { provider: "scripted"; model: string };
+
+/**
+ * The scripted runtime, or `null` when the flag is off.
+ *
+ * FENCE. `assertScriptedProviderNotProduction` runs before a runtime can be
+ * produced, so a set flag under anything other than an explicit development
+ * runtime THROWS here rather than yielding a runtime a caller could execute.
+ * With the flag off this is a no-op returning `null` — the caller's existing
+ * "nothing resolved" answer, unchanged.
+ *
+ * LAST RESORT, never a preference: the caller consults this only after real
+ * adapter resolution found nothing, so an install that HAS a configured
+ * provider keeps resolving that provider even with the flag set.
+ */
+export function resolveScriptedLlmRuntime(env: EnvLike = process.env): ScriptedLlmRuntime | null {
+  if (!isScriptedTestProviderEnabled(env)) return null;
+  assertScriptedProviderNotProduction(env);
+  return { provider: "scripted", model: SCRIPTED_TEST_MODEL };
+}
+
+/** Is this the scripted runtime? A type guard so consumers narrow instead of casting. */
+export function isScriptedLlmRuntime(
+  runtime: { provider: string } | null | undefined,
+): runtime is ScriptedLlmRuntime {
+  return runtime?.provider === "scripted";
+}
+
+/**
+ * The depth past which a node yields a plain string instead of its declared
+ * type. A bound is required — a `$ref`-recursive schema would otherwise not
+ * terminate — and the cap is part of the documented contract above, not an
+ * implementation detail a caller may assume away.
+ */
+const SCRIPTED_SCHEMA_MAX_DEPTH = 6;
+
+/**
+ * A deterministic value for one JSON-schema node — CONFORMING BY TYPE, not by
+ * constraint.
+ *
+ * The bridge's callers ask for structured output (`output_schema`) and parse
+ * the response as JSON, so a scripted completion has to answer in the TYPE
+ * SHAPE the caller declared or the run fails one frame later on a parse error
+ * instead of a 503. Every string leaf carries `UAT_SENTINEL`, so a scripted
+ * value is recognisable wherever it surfaces and can never be mistaken for a
+ * model's own words.
+ *
+ * This is NOT a JSON-Schema implementation, and callers must not read it as
+ * one. EXACTLY these keywords are honored, checked IN THIS ORDER — the first
+ * that applies wins, so a node carrying both `enum` and `const` answers with
+ * the enum's first member, not the const: the depth cap, then `enum`, then
+ * `const`, then the union keywords, then `type`:
+ *
+ *  - `const` — the pinned value (it is the only conforming one);
+ *  - `enum` — the FIRST member;
+ *  - `oneOf` / `anyOf` / `allOf` — the FIRST member, recursively. `allOf` is
+ *    therefore NOT composed: constraints declared in its later members are not
+ *    applied, so an `allOf` that splits a shape across members yields only the
+ *    first member's shape;
+ *  - `type` — `object` (the members named in `required`, or every declared
+ *    property when `required` is absent; a required name with no declared
+ *    property schema still appears), `array` (EXACTLY ONE element),
+ *    `string`, `number` / `integer`, `boolean`, `null`. A node with no usable
+ *    type yields a string;
+ *  - depth — a node deeper than `SCRIPTED_SCHEMA_MAX_DEPTH` yields a STRING
+ *    whatever its declared type, so a deeply nested or recursive schema stops
+ *    matching its own declaration at that depth.
+ *
+ * Everything else is IGNORED, and the value is only conforming-by-type:
+ * numeric bounds (`minimum` / `maximum` / `multipleOf` — numbers are always
+ * `0`), size bounds (`minItems` / `maxItems` — arrays are always length 1;
+ * `minLength` / `maxLength` — strings are always the sentinel string),
+ * `pattern` / `format`, `additionalProperties`, `not`, `if` / `then` / `else`,
+ * `dependent*`, and `$ref` / `$defs`. A caller that validates a scripted
+ * response against a schema carrying any of those may see it rejected — which
+ * is correct: this provider stands in for a model's SHAPE, not its judgement.
+ */
+function scriptedValueForSchema(
+  schema: unknown,
+  propertyName: string,
+  depth: number,
+): unknown {
+  const node = (schema ?? {}) as Record<string, unknown>;
+  const scriptedString = `${UAT_SENTINEL}: scripted ${propertyName}`;
+  if (depth > SCRIPTED_SCHEMA_MAX_DEPTH) return scriptedString;
+
+  const enumValues = Array.isArray(node.enum) ? node.enum : null;
+  if (enumValues && enumValues.length > 0) return enumValues[0];
+  // A pinned `const` IS the only conforming value.
+  if ("const" in node) return node.const;
+
+  // A union declaration picks its FIRST member — deterministic, and the member
+  // an author lists first is the one they described the shape with.
+  // FIRST member only — including for `allOf`, which is therefore not composed
+  // (see the contract above).
+  const union = ["oneOf", "anyOf", "allOf"].find((k) => Array.isArray(node[k]));
+  if (union) {
+    const members = node[union] as unknown[];
+    if (members.length > 0) {
+      return scriptedValueForSchema(members[0], propertyName, depth + 1);
+    }
+  }
+
+  const type = Array.isArray(node.type) ? node.type[0] : node.type;
+  // Value keywords only: NO bound (`minimum`, `minItems`, `minLength`, …) is
+  // read here. See the contract above — conforming by type, not by constraint.
+  switch (type) {
+    case "object": {
+      const properties = (node.properties ?? {}) as Record<string, unknown>;
+      const required = Array.isArray(node.required)
+        ? (node.required as string[])
+        : null;
+      // Required-only when the schema names required members (the minimal
+      // conforming object); otherwise every declared property. A required name
+      // with no declared property schema still appears — omitting it would
+      // produce an object the caller's own validator rejects.
+      const names = required ?? Object.keys(properties);
+      const out: Record<string, unknown> = {};
+      for (const name of names) {
+        out[name] = scriptedValueForSchema(properties[name], name, depth + 1);
+      }
+      return out;
+    }
+    case "array":
+      // ONE element, ALWAYS: enough for a consumer that iterates, small enough
+      // that a scripted payload never grows unbounded — and `minItems` is not
+      // consulted, so a schema demanding more is not satisfied.
+      return [scriptedValueForSchema(node.items, `${propertyName} item`, depth + 1)];
+    case "number":
+    case "integer":
+      return 0;
+    case "boolean":
+      return false;
+    case "null":
+      return null;
+    case "string":
+      return scriptedString;
+    default:
+      // An untyped node (`{}` / `true`) accepts anything; a string says the
+      // most about where the value came from.
+      return scriptedString;
+  }
+}
+
+/**
+ * The deterministic completion the bridge returns for a scripted runtime.
+ *
+ * It is the single-shot sibling of `runScriptedStream`: no network, no adapter,
+ * no tools — the model layer, and only it, is stood in for. Everything the
+ * bridge does around this call (its token auth, the run-token binding, skill
+ * injection, the efficacy ledger) is untouched and still real.
+ *
+ * FENCE. The production assertion runs FIRST, so no scripted bytes can be
+ * produced outside an explicit development runtime even if a scripted runtime
+ * value reached execution some other way. A runtime that arrives with the flag
+ * OFF is a wiring defect, not a state to serve — it throws rather than
+ * inventing output nobody asked for.
+ */
+export function runScriptedBridgeCompletion(
+  input: {
+    system?: string | null;
+    user?: string | null;
+    outputSchema?: Record<string, unknown> | null;
+    model?: string | null;
+  },
+  env: EnvLike = process.env,
+): LlmResponse {
+  assertScriptedProviderNotProduction(env);
+  if (!isScriptedTestProviderEnabled(env)) {
+    throw new Error(
+      `A scripted LLM runtime reached execution while ${SCRIPTED_TEST_PROVIDER_ENV} is ` +
+        `not set to "${SCRIPTED_TEST_PROVIDER_VALUE}". The scripted runtime is only ` +
+        `constructible under the flag, so this is a wiring defect.`,
+    );
+  }
+  const instructions = (input.user ?? "").slice(0, 120);
+  const text = input.outputSchema
+    ? JSON.stringify(scriptedValueForSchema(input.outputSchema, "output", 0))
+    : `${UAT_SENTINEL}: deterministic bridge reply. You said: "${instructions}".`;
+  return {
+    text,
+    status: "completed",
+    incompleteReason: null,
+    // No provider was called, so there is no native body to report: the raw
+    // body states exactly what produced the text.
+    rawBody: JSON.stringify({
+      provider: SCRIPTED_TEST_PROVIDER_VALUE,
+      model: input.model ?? SCRIPTED_TEST_MODEL,
+      text,
+    }),
+    model: input.model ?? SCRIPTED_TEST_MODEL,
+    // No `usage`: nothing was spent, so nothing is metered.
+  };
 }

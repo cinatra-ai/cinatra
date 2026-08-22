@@ -255,6 +255,123 @@ describe("createAgUiSinkAdapter — durable content accumulation (PR1 EXPAND)", 
       { type: "text", text: "done" },
       { type: "citations", citations: [{ title: "A", url: "https://a.example" }] },
     ]);
+    // A turn that minted no renderable view carries NO `dataParts` key at all
+    // (cinatra#2823 S9j field-presence discipline) — the citations DATA_PART is
+    // durable as the ordered part above, and must not be counted twice.
+    expect("dataParts" in durable!).toBe(false);
+  });
+
+  // ── the durable DATA_PART half of the S9j persistence bridge (cinatra#2823) ──
+
+  it("KEEPS the lifecycle DATA_PART it minted, so a reload can redraw the card", async () => {
+    const { adapter, published } = collectingAdapter();
+    const envelope = JSON.stringify({
+      $cinatraLifecycleView: 1,
+      viewType: "artifact_review_gate",
+      ref: "gate-ref-1",
+    });
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "artifact_review_gate_render", serverLabel: "cinatra" });
+    adapter.send("tool_result", {
+      id: "t1",
+      name: "artifact_review_gate_render",
+      serverLabel: "cinatra",
+      result: envelope,
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    const onTheWire = published
+      .filter((e) => e.type === "DATA_PART")
+      .map((e) => (e as { data: unknown }).data);
+    // The point of the bridge, in one assertion: what the wire carried and what
+    // the durable row keeps are the SAME payload. A card that existed only on
+    // the wire is a card that disappears on the next reload.
+    expect(onTheWire).toEqual([
+      { viewType: "artifact_review_gate", schemaVersion: 1, ref: "gate-ref-1" },
+    ]);
+    expect(adapter.durableContent()!.dataParts).toEqual(onTheWire);
+  });
+
+  it("KEEPS the agent_run pin, in emission order, beside a lifecycle view", async () => {
+    const { adapter } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "agent_run" });
+    adapter.send("tool_result", { id: "t1", name: "agent_run", result: JSON.stringify({ runId: "run-A" }) });
+    adapter.send("tool_call", { id: "t2", name: "verification_record_render", serverLabel: "cinatra" });
+    adapter.send("tool_result", {
+      id: "t2",
+      name: "verification_record_render",
+      serverLabel: "cinatra",
+      result: JSON.stringify({ $cinatraLifecycleView: 1, viewType: "verification_summary", ref: "v-1" }),
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    expect(adapter.durableContent()!.dataParts).toEqual([
+      { kind: "agent_run", toolCallId: "t1", runId: "run-A" },
+      { viewType: "verification_summary", schemaVersion: 1, ref: "v-1" },
+    ]);
+  });
+
+  // ── the SLOT the durable row records out of band (cinatra#2823 round 3) ────
+
+  it("records the PRODUCING SLOT beside the payload, never inside it", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "agent_run" });
+    adapter.send("tool_result", { id: "t1", name: "agent_run", result: JSON.stringify({ runId: "run-A" }) });
+    adapter.send("tool_call", { id: "t2", name: "artifact_review_gate_render", serverLabel: "cinatra" });
+    adapter.send("tool_result", {
+      id: "t2",
+      name: "artifact_review_gate_render",
+      serverLabel: "cinatra",
+      result: JSON.stringify({ $cinatraLifecycleView: 1, viewType: "artifact_review_gate", ref: "gate-ref-1" }),
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    const durable = adapter.durableContent()!;
+    // The payload is the byte-identical strict object a `.strict()` parser
+    // accepts on re-read — the slot is NOT in it, or reload would re-emit it as
+    // payload and the parser would reject the card.
+    expect(durable.dataParts).toEqual([
+      { kind: "agent_run", toolCallId: "t1", runId: "run-A" },
+      { viewType: "artifact_review_gate", schemaVersion: 1, ref: "gate-ref-1" },
+    ]);
+    // ...and the slot rides a sibling array, positionally aligned. `agent_run`
+    // carries its `toolCallId` as a payload FIELD of that kind and is not a
+    // stamped slot, so its entry is null.
+    expect(durable.dataPartSlots).toEqual([null, "t2"]);
+    // The row's stamp is the WIRE's stamp — one statement, not two.
+    const stamped = published.find(
+      (e) => e.type === "DATA_PART" && (e as { data: { viewType?: string } }).data.viewType,
+    ) as { toolCallId?: string };
+    expect(stamped.toolCallId).toBe("t2");
+  });
+
+  it("OMITS dataPartSlots when nothing was stamped (byte-identical to before)", async () => {
+    const { adapter } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "agent_run" });
+    adapter.send("tool_result", { id: "t1", name: "agent_run", result: JSON.stringify({ runId: "run-A" }) });
+    adapter.send("done", {});
+    await adapter.drain();
+    const durable = adapter.durableContent()!;
+    expect(durable.dataParts).toEqual([{ kind: "agent_run", toolCallId: "t1", runId: "run-A" }]);
+    expect("dataPartSlots" in durable).toBe(false);
+  });
+
+  it("keeps NO dataParts for a refused envelope — nothing was minted to keep", async () => {
+    const { adapter } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "artifact_review_gate_render", serverLabel: "not-cinatra" });
+    adapter.send("tool_result", {
+      id: "t1",
+      name: "artifact_review_gate_render",
+      serverLabel: "not-cinatra",
+      result: JSON.stringify({ $cinatraLifecycleView: 1, viewType: "artifact_review_gate", ref: "forged" }),
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    expect("dataParts" in adapter.durableContent()!).toBe(false);
   });
 
   it("preserves the citation boundary in the durable part trace (text A / citations / text B)", async () => {

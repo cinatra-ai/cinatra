@@ -1,18 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 219,
-    "/api/mcp": 1670,
-    "/chat": 1762,
-    "/api/a2a": 1675,
-    "/api/llm-bridge": 1685
+    "/sign-in": 220,
+    "/api/mcp": 1671,
+    "/chat": 1766,
+    "/api/a2a": 1676,
+    "/api/llm-bridge": 1686
   },
   "absorbs": {
+    "/api/a2a": {
+      "from": 1675,
+      "to": 1676,
+      "reason": "cinatra#2823 S9j (PR #2871 carries this record): src/lib/assistant-turn-supersede.ts — the assistant_turns SUPERSEDE (tombstone) statement builder. It is its OWN module because the org-axis write ledger requires one: src/lib/project-inheritance.ts is a BROAD module the raw org-axis table sweep does not prefix-cover (it carries a committed per-file DML-site count instead), so a new org-axis statement there would hide behind that count rather than register. Its own module is what gives it a row in src/lib/org-write/write-registry.ts, a prefix in scripts/audit/org-write-table-sweep.mjs and a writer-set lockstep pin over its export surface. It is reached from src/lib/project-inheritance.ts, which sits under the objects/thread store graph, so it is +1 on every locked route that reaches that store. It imports nothing but server-only: the edge is one pure statement builder, not a barrel. Measured with the companion extension repos cloned pinned (112/112), on the merge of this branch with origin/main, which is the tree CI checks out for a pull_request.",
+      "pr": 2871
+    },
+    "/api/llm-bridge": {
+      "from": 1685,
+      "to": 1686,
+      "reason": "cinatra#2823 S9j (PR #2871 carries this record): src/lib/assistant-turn-supersede.ts — the assistant_turns SUPERSEDE (tombstone) statement builder. It is its OWN module because the org-axis write ledger requires one: src/lib/project-inheritance.ts is a BROAD module the raw org-axis table sweep does not prefix-cover (it carries a committed per-file DML-site count instead), so a new org-axis statement there would hide behind that count rather than register. Its own module is what gives it a row in src/lib/org-write/write-registry.ts, a prefix in scripts/audit/org-write-table-sweep.mjs and a writer-set lockstep pin over its export surface. It is reached from src/lib/project-inheritance.ts, which sits under the objects/thread store graph, so it is +1 on every locked route that reaches that store. It imports nothing but server-only: the edge is one pure statement builder, not a barrel. Measured with the companion extension repos cloned pinned (112/112), on the merge of this branch with origin/main, which is the tree CI checks out for a pull_request.",
+      "pr": 2871
+    },
+    "/api/mcp": {
+      "from": 1670,
+      "to": 1671,
+      "reason": "cinatra#2823 S9j (PR #2871 carries this record): src/lib/assistant-turn-supersede.ts — the assistant_turns SUPERSEDE (tombstone) statement builder. It is its OWN module because the org-axis write ledger requires one: src/lib/project-inheritance.ts is a BROAD module the raw org-axis table sweep does not prefix-cover (it carries a committed per-file DML-site count instead), so a new org-axis statement there would hide behind that count rather than register. Its own module is what gives it a row in src/lib/org-write/write-registry.ts, a prefix in scripts/audit/org-write-table-sweep.mjs and a writer-set lockstep pin over its export surface. It is reached from src/lib/project-inheritance.ts, which sits under the objects/thread store graph, so it is +1 on every locked route that reaches that store. It imports nothing but server-only: the edge is one pure statement builder, not a barrel. Measured with the companion extension repos cloned pinned (112/112), on the merge of this branch with origin/main, which is the tree CI checks out for a pull_request.",
+      "pr": 2871
+    },
+    "/chat": {
+      "from": 1762,
+      "to": 1766,
+      "reason": "cinatra#2823 S9j (PR #2871 carries this record): +4 on /chat. One is the tombstone module described on the other routes, reached through the thread store. The other three were lifted OUT of packages/chat/src/chat-page.tsx, which is why that file's own size ceiling was LOWERED from 1238 to 1175 lines in the same change: packages/chat/src/message-edit-flow.ts is the edit-and-resend vertical slice, holding the truncation intent, the intent save it awaits, the origin-thread guards and the routed regeneration; packages/chat/src/turn-stream-registry.ts is the page's in-flight plus ended-but-uncommitted turn ledger, a module precisely so the zero-source window it closes is assertable without mounting the page; packages/chat/src/truncation-intent.ts is the pure intent builder, so the reach it promises is testable without the page. Each is a leaf whose code the page already ran inline; the graph counts them now because they are separately loadable, which is the property their arms depend on. Measured with the companion extension repos cloned pinned (112/112), on the merge of this branch with origin/main, which is the tree CI checks out for a pull_request.",
+      "pr": 2871
+    },
     "/sign-in": {
-      "from": 218,
-      "to": 219,
-      "pr": 2895,
-      "reason": "cinatra#2754 (PR #2895 carries this record; the ruling on the issue names the mechanism): the single-use island-grant ledger gains ONE module, and it sits on the shared store surface, so it is reachable from every locked route that mounts the store: +1 on all five routes, including /sign-in (the auth surface reads the same store). src/lib/lifecycle/review-island-grant-store.ts — the hash-keyed grant ledger whose atomic spend semantics are unit-assertable against a ledger stand-in without loading the server-only store graph; inlining it into the store was rejected because the spend-once property must be testable in isolation and the file-size ratchet holds the store's ceiling flat. Measured with the pinned extension tree."
+      "from": 219,
+      "to": 220,
+      "reason": "cinatra#2823 S9j (PR #2871 carries this record): src/lib/assistant-turn-supersede.ts — the assistant_turns SUPERSEDE (tombstone) statement builder. It is its OWN module because the org-axis write ledger requires one: src/lib/project-inheritance.ts is a BROAD module the raw org-axis table sweep does not prefix-cover (it carries a committed per-file DML-site count instead), so a new org-axis statement there would hide behind that count rather than register. Its own module is what gives it a row in src/lib/org-write/write-registry.ts, a prefix in scripts/audit/org-write-table-sweep.mjs and a writer-set lockstep pin over its export surface. It is reached from src/lib/project-inheritance.ts, which sits under the objects/thread store graph, so it is +1 on every locked route that reaches that store. It imports nothing but server-only: the edge is one pure statement builder, not a barrel. Measured with the companion extension repos cloned pinned (112/112), on the merge of this branch with origin/main, which is the tree CI checks out for a pull_request.",
+      "pr": 2871
     }
   }
 }

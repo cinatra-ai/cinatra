@@ -33,7 +33,11 @@
 //                     (cinatra#2565; see ./lifecycle-view-envelope) — stamped
 //                     with the PRODUCING `toolCallId` on the event (cinatra#2827)
 //                     so the client can fold the card into the ordered trace at
-//                     that call rather than after the turn.
+//                     that call rather than after the turn. Every DATA_PART but
+//                     `citations` is ALSO kept in the durable content
+//                     (cinatra#2823 S9j), because a card the wire carries and
+//                     the durable row drops is a card that renders live and is
+//                     gone after a reload.
 //   citations       → DATA_PART { kind: "citations", citations }
 //   error           → seal open text, RUN_ERROR (terminal)
 //   done            → seal open text, RUN_FINISHED (terminal)
@@ -75,12 +79,59 @@ export type AgUiPublish = (event: AgUiEvent) => Promise<void>;
  *  assistant turn survives in Postgres, not only in the bounded/lossy Redis log.
  *  `content` is the concatenated assistant text; `parts` is the ordered render
  *  trace (text / tool-call / tool-result / citations) — more than terminal text,
- *  as the design requires. */
+ *  as the design requires; `dataParts` is the turn's minted renderable views
+ *  (cinatra#2823 S9j), without which a lifecycle card has nothing to be redrawn
+ *  from after a reload. */
 export type AgUiTurnDurableContent = {
   format: "assistant-turn-v1";
   role: "assistant";
   content: string;
   parts: Array<Record<string, unknown>>;
+  /**
+   * The structured `DATA_PART` payloads this turn minted, in emission order
+   * (cinatra#2823, epic #2784 S9j) — the persistence half of the lifecycle-card
+   * bridge.
+   *
+   * WHY IT HAS TO BE HERE. The sink mints a lifecycle card's DATA_PART from the
+   * SAME tool result it captures durably two lines above, but the durable row
+   * used to keep only `content` + `parts`. So the card existed on the wire and
+   * nowhere else: live it rendered, and after a reload — no Redis, no client
+   * memory — there was nothing left to render it FROM. The payload is a bounded
+   * opaque REF, never content, so persisting it stores a pointer whose state is
+   * re-resolved server-side against the reader on every mount.
+   *
+   * CITATIONS ARE DELIBERATELY ABSENT. They are the one DATA_PART that already
+   * has a durable home — an ordered `citations` entry in `parts`, written so the
+   * text/citations/text boundary survives. Capturing them twice would project
+   * one turn's sources into two renders.
+   *
+   * OMITTED WHEN EMPTY, so a turn that minted none serializes byte-identically
+   * to what it serialized before this field existed.
+   */
+  dataParts?: Array<Record<string, unknown>>;
+  /**
+   * The PRODUCING SLOT of each entry in `dataParts`, positionally aligned with
+   * it (cinatra#2823 S9j) — the `toolCallId` the event carried,
+   * or `null` for an entry that named no call.
+   *
+   * OUT OF BAND, AND THAT IS THE WHOLE POINT. The slot may not go INSIDE the
+   * view payload: `dataParts[i]` has to stay the byte-identical strict
+   * `{ viewType, schemaVersion, ref }` object a `.strict()` parser accepts on
+   * re-read, and a slot written into it would be re-emitted AS PAYLOAD on reload
+   * and rejected there. So it rides a sibling array, which the reload projection
+   * consumes and never re-emits — the same separation the live wire already
+   * makes, where the stamp rides the EVENT and never `data`
+   * (`DataPartEvent.toolCallId`).
+   *
+   * Without it a reloaded card kept its content and lost its position: the live
+   * render draws it inside its producing step (S9i, #2879) and the reload drew it
+   * after the turn. #2879 named that follow-up; this field is its durable half.
+   *
+   * OMITTED unless at least one entry is stamped, so a turn whose DATA_PARTs
+   * named no call persists byte-identically to what it persisted before this
+   * field existed.
+   */
+  dataPartSlots?: Array<string | null>;
 };
 
 export type AgUiSinkAdapter = {
@@ -108,7 +159,8 @@ export type AgUiSinkAdapter = {
    * The durable content accumulated from the sink (PR1 EXPAND), or null when the
    * turn produced nothing (no text, no tool calls) — the route persists this to
    * `assistant_turns.content` at completion. Independent of the AG-UI segment
-   * mapping: it captures the full assistant text + the ordered part trace.
+   * mapping: it captures the full assistant text, the ordered part trace, and
+   * (cinatra#2823 S9j) the DATA_PART payloads the turn minted.
    */
   durableContent(): AgUiTurnDurableContent | null;
 };
@@ -150,6 +202,12 @@ export function createAgUiSinkAdapter(params: {
   // (a new one starts after each seal, mirroring the AG-UI segment sealing).
   let contentText = "";
   const contentParts: Array<Record<string, unknown>> = [];
+  // The structured DATA_PART payloads this turn minted (cinatra#2823 S9j). See
+  // `AgUiTurnDurableContent.dataParts` for why the durable row needs them and
+  // why `citations` is not one of them.
+  const contentDataParts: Array<Record<string, unknown>> = [];
+  /** Positionally aligned with `contentDataParts` — see `dataPartSlots`. */
+  const contentDataPartSlots: Array<string | null> = [];
   let openContentTextPart: { type: "text"; text: string } | null = null;
   // Separate broken flag: a thrown `null`/`undefined` must still trip the
   // sentinel (never keyed on the error VALUE).
@@ -171,6 +229,42 @@ export function createAgUiSinkAdapter(params: {
         }
       }
     });
+  }
+
+  /**
+   * Emit a DATA_PART and keep it durably, in ONE call.
+   *
+   * The two must not drift: a DATA_PART the wire carries and the durable row
+   * does not is precisely a card that renders live and vanishes on reload
+   * (cinatra#2823). Routing both through one function is what makes "the sink
+   * emitted it" and "the sink kept it" the same statement rather than two
+   * statements a later edit can separate. `citations` deliberately does NOT come
+   * through here — it has its own ordered durable part.
+   *
+   * `producingToolCallId` is the SLOT STAMP (cinatra#2827 S9i): it rides the
+   * EVENT and is deliberately NOT written into `data`, because the durable
+   * payload has to stay the byte-identical strict `{ viewType, schemaVersion,
+   * ref }` object a `.strict()` parser accepts on re-read — a slot written into
+   * the payload would be re-emitted as payload on reload and rejected there.
+   * The DURABLE half of the same separation is `dataPartSlots` — a sibling array
+   * on the persisted content, positionally aligned with `dataParts`, which this
+   * function keeps in step with `contentDataParts` so the wire's stamp and the
+   * row's stamp cannot drift (#2879's named follow-up, closed here). Omitted when
+   * absent, so an unstamped emit is byte-identical to what it was before the
+   * field existed.
+   */
+  function emitDurableDataPart(
+    data: Record<string, unknown>,
+    producingToolCallId?: string,
+  ): void {
+    contentDataParts.push(data);
+    contentDataPartSlots.push(producingToolCallId ?? null);
+    emit({
+      type: "DATA_PART",
+      data,
+      ...(producingToolCallId !== undefined ? { toolCallId: producingToolCallId } : {}),
+      timestamp: Date.now(),
+    } as AgUiEvent);
   }
 
   function sealOpenText(): void {
@@ -279,11 +373,7 @@ export function createAgUiSinkAdapter(params: {
         if (d.name === "agent_run") {
           const agentRunId = extractAgentRunIdFromResult(d.result);
           if (agentRunId) {
-            emit({
-              type: "DATA_PART",
-              data: { kind: "agent_run", toolCallId: id, runId: agentRunId },
-              timestamp: Date.now(),
-            });
+            emitDurableDataPart({ kind: "agent_run", toolCallId: id, runId: agentRunId });
           }
         }
         // LIFECYCLE TYPED-VIEW PRODUCER (cinatra#2565): a reserved, versioned
@@ -302,13 +392,10 @@ export function createAgUiSinkAdapter(params: {
           // EVENT, never the payload — the payload stays the strict
           // `{ viewType, schemaVersion, ref }` a `.strict()` schema accepts, and
           // the client folds the card into the ordered trace at this call
-          // instead of appending it after the turn.
-          emit({
-            type: "DATA_PART",
-            data: { ...lifecycleView },
-            toolCallId: id,
-            timestamp: Date.now(),
-          });
+          // instead of appending it after the turn. It rides the durable-emit
+          // helper (cinatra#2823 S9j) so the stamp and the durable keep stay one
+          // statement: this call emits the slotted card AND retains its payload.
+          emitDurableDataPart({ ...lifecycleView }, id);
         }
         return;
       }
@@ -382,6 +469,15 @@ export function createAgUiSinkAdapter(params: {
         role: "assistant",
         content: contentText,
         parts: contentParts,
+        // Field-presence discipline: absent until populated, so a turn that
+        // minted no DATA_PART persists exactly the object it persisted before
+        // this field existed.
+        ...(contentDataParts.length > 0 ? { dataParts: contentDataParts } : {}),
+        // The slot array rides ALONGSIDE, never inside a payload, and only when
+        // something was actually stamped (see `dataPartSlots`).
+        ...(contentDataPartSlots.some((slot) => slot !== null)
+          ? { dataPartSlots: contentDataPartSlots }
+          : {}),
       };
     },
   };
