@@ -4,12 +4,14 @@ import { createMcpRuntimeServer } from "../runtime-server";
 import {
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
+  planPrimitiveRegistration,
   plannedServableNames,
   plannedServableNormalizedNames,
   primitiveProvenanceStamp,
   readPrimitiveProvenance,
   type CapabilityPlan,
 } from "../capability-plan";
+import { evaluateDelegatedChatAdmission } from "../delegated-chat-evaluator";
 import {
   coreDelegatedChatAdmissionSnapshot,
   coreDelegatedChatAdmittedNames,
@@ -510,5 +512,82 @@ describe("closed perimeters and non-canonical casing", () => {
       registrations: [{ name: "Acme_Thing_Get" }],
     });
     expect(registered).toContain("Acme_Thing_Get");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE HOST OWNER IS NOT CLAIMABLE (cinatra#2817 review round).
+//
+// The host owner string is load-bearing: `planPrimitiveRegistration` inherits
+// HOST_PRIMITIVE_DECLARATIONS whenever the owner is the host package, and the
+// migrated core records are keyed on that owner. The stamp's owner comes from
+// the INSTALLED package's own name, so before this refusal nothing structural
+// stopped a package that named itself `@cinatra-ai/host` from reaching for the
+// host identity. Two other rules made it unreachable in practice (it would
+// also have to resolve to HOST_PRIMITIVE_RELEASE_VERSION, and core names are
+// collision-skipped). This asserts the refusal itself, so the property does not
+// depend on those two rules holding.
+// ---------------------------------------------------------------------------
+describe("a STAMPED registration may not claim the host owner", () => {
+  const hostDeclaredName = Object.keys(HOST_PRIMITIVE_DECLARATIONS)[0];
+  // The realistic shape: the impersonator DECLARES for itself, so the
+  // declaration checks pass and the IDENTITY check is the one that decides.
+  const claimingHostOwner = (ownerPackage: string) => ({
+    ...primitiveProvenanceStamp({
+      ownerPackage,
+      resolvedVersion: HOST_PRIMITIVE_RELEASE_VERSION,
+    }),
+    delegatedChat: "read",
+  });
+  const plan = (ownerPackage: string) =>
+    planPrimitiveRegistration({
+      name: hostDeclaredName,
+      config: claimingHostOwner(ownerPackage),
+      order: 0,
+      host: { packageName: HOST_PRIMITIVE_OWNER_PACKAGE, version: HOST_PRIMITIVE_RELEASE_VERSION },
+    });
+
+  it("refuses the identity outright rather than resolving it", () => {
+    const planned = plan(HOST_PRIMITIVE_OWNER_PACKAGE);
+
+    expect(planned.identityFailure).toBe("host_owner_claimed");
+    expect(planned.ownerPackage).toBeNull();
+    expect(planned.resolvedVersion).toBeNull();
+    expect(planned.dispatchTarget).toBeNull();
+  });
+
+  it("the evaluator denies it under the real core admissions", () => {
+    const decision = evaluateDelegatedChatAdmission(
+      plan(HOST_PRIMITIVE_OWNER_PACKAGE),
+      coreDelegatedChatAdmissionSnapshot(),
+    );
+    expect(decision).toEqual({ allowed: false, reason: "identity_unresolved" });
+  });
+
+  it("CONTROL: the same registration under its OWN owner resolves normally", () => {
+    const planned = plan("@acme/widgets");
+
+    expect(planned.identityFailure).toBeNull();
+    expect(planned.ownerPackage).toBe("@acme/widgets");
+    expect(planned.resolvedVersion).toBe(HOST_PRIMITIVE_RELEASE_VERSION);
+    // Its OWN declaration is in force; it never inherits the host's.
+    expect(planned.declaredClass).toBe("read");
+    // And it is still not admitted: no reviewed record exists for that tuple.
+    expect(
+      evaluateDelegatedChatAdmission(planned, coreDelegatedChatAdmissionSnapshot()).allowed,
+    ).toBe(false);
+  });
+
+  it("CONTROL: a STAMP-LESS (core) registration still inherits the host declaration", () => {
+    const planned = planPrimitiveRegistration({
+      name: hostDeclaredName,
+      config: { title: "core" },
+      order: 0,
+      host: { packageName: HOST_PRIMITIVE_OWNER_PACKAGE, version: HOST_PRIMITIVE_RELEASE_VERSION },
+    });
+
+    expect(planned.identityFailure).toBeNull();
+    expect(planned.ownerPackage).toBe(HOST_PRIMITIVE_OWNER_PACKAGE);
+    expect(planned.declaredClass).toBe(HOST_PRIMITIVE_DECLARATIONS[hostDeclaredName]);
   });
 });

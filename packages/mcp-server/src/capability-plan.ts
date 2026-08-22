@@ -88,7 +88,15 @@ export type PrimitiveIdentityFailure =
   /** The provenance stamp is present but unreadable (throwing getter / Proxy). */
   | "provenance_unreadable"
   /** The provenance stamp is present but structurally invalid. */
-  | "provenance_malformed";
+  | "provenance_malformed"
+  /**
+   * The provenance stamp names the HOST package as its owner (cinatra#2817
+   * review round). Only a STAMP-LESS registration is host-owned; a stamped one
+   * that claims `@cinatra-ai/host` is claiming an identity the host reserves
+   * for itself, so the plan refuses it outright instead of relying on the
+   * release-version and collision-skip rules to make it unreachable.
+   */
+  | "host_owner_claimed";
 
 /**
  * One planned primitive: everything an admission decision needs about ONE
@@ -358,6 +366,34 @@ export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPri
       capabilityKey: null,
       dispatchTarget: null,
       identityFailure: provenance.failure,
+      reserved: input.reserved === true,
+    };
+  }
+
+  // THE HOST OWNER IS NOT CLAIMABLE (cinatra#2817 review round). A stamped
+  // registration reaching this line came through the extension registration
+  // path, and the stamp's owner is the INSTALLED package's own name. The host
+  // declaration table below is gated on that owner, and the migrated core
+  // records are keyed on it, so a package that named itself `@cinatra-ai/host`
+  // would be reaching for a host identity. It is not exploitable today (it
+  // would also have to resolve to HOST_PRIMITIVE_RELEASE_VERSION, and core
+  // names are collision-skipped before the replay), but "not exploitable
+  // today" is an accident of two other rules. Refuse it structurally instead.
+  if (
+    provenance.kind === "resolved" &&
+    provenance.provenance.ownerPackage === HOST_PRIMITIVE_OWNER_PACKAGE
+  ) {
+    return {
+      name: normalized,
+      registeredName: input.name,
+      order: input.order,
+      declaredClass: registrationDeclaredClass,
+      declarationMalformed,
+      ownerPackage: null,
+      resolvedVersion: null,
+      capabilityKey: null,
+      dispatchTarget: null,
+      identityFailure: "host_owner_claimed",
       reserved: input.reserved === true,
     };
   }
