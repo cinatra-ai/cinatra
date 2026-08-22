@@ -733,8 +733,6 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         hasActiveStream,
         removableTurnIds: () => streams.removableTurnIds(),
         removableRunIds: (removed) => streams.removableRunIds(removed),
-        // The pre-RUN_STARTED hold: the intent waits for every turn it could
-        // name by run to settle that identity (./turn-stream-registry).
         settleRemovableRunIds: (removed) => streams.settleRunIdsForRemoval(removed),
         activeThreadId,
         currentThreadId: () => activeThreadIdRef.current,
@@ -742,11 +740,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         threads,
         activeAssistantHandle,
         setActiveAssistantHandle,
-        taggedAssistantUserIds,
-        pausedParticipants,
-        assistantHandleMap,
-        userId,
-        streamResponse,
+        taggedAssistantUserIds, pausedParticipants, assistantHandleMap, userId, streamResponse,
       },
       messageId,
       newContent,
