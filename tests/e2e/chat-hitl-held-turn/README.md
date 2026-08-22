@@ -75,14 +75,33 @@ Never run `pnpm seed` against this database — the seed truncates `agent_templa
 
 ## What is world, and what is subject
 
-`fixtures.mts` writes three things, each through a **shipped writer**: an OpenAI
-*presence* placeholder (no real key; generation is served by the scripted provider,
-and without a bound provider adapter the turn goes conversation-only and the
-pre-router never fires), the MCP public base URL, and **one** `agent_assigned_skills`
-row. Without that row the recommendation scorer has no candidate to offer, so the
-checkpoint answers "no recommendation candidates" and the run dispatches unheld.
+`fixtures.mts apply` writes three things, each through a **shipped writer**: an
+OpenAI *presence* placeholder (no real key; generation is served by the scripted
+provider, and without a bound provider adapter the turn goes conversation-only and
+the pre-router never fires), the MCP public base URL, and **one**
+`agent_assigned_skills` row. Without that row the recommendation scorer has no
+candidate to offer, so the checkpoint answers "no recommendation candidates" and the
+run dispatches unheld.
 
 No hold, no park, no run and no decision is ever seeded. Those are the subject.
+
+### And every one of them is put back
+
+This suite runs on a developer's own dev instance, so it snapshots the state it is
+about to change **before** its first write and restores it afterwards:
+
+- the `restore` teardown project runs after the suite whether it **passed or
+  failed**, which is the only kind of restore worth having;
+- `fixtures.mts restore` puts the connection row, the MCP origin and the assignment
+  back, then **re-reads all three** and prints `restore verified` only when they
+  match the snapshot — `restore.teardown.ts` asserts that verdict, so a teardown
+  that silently failed reds the run;
+- an instance that **already holds an OpenAI key** gets no connection write at all:
+  presence is already satisfied, and overwriting a sealed key is a change no
+  teardown could undo without holding credential material on disk. The snapshot
+  carries the row's non-secret fields only, read without decrypting anything;
+- a row this fixture *created* is removed rather than factory-reset, because "no
+  row" and "a default row" are different states to every reader.
 
 ## The evidence it writes
 

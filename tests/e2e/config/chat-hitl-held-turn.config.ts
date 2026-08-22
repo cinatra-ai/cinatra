@@ -113,6 +113,18 @@ export default defineConfig({
     {
       name: "setup",
       testMatch: /auth\.setup\.ts/,
+      // PUT THE INSTANCE BACK, PASS OR FAIL. The setup changes instance
+      // configuration (a provider presence placeholder, the MCP public base URL,
+      // one assigned skill) and this suite is meant to run on a developer's own
+      // dev instance. A project's `teardown` runs after that project and everything
+      // depending on it finishes — including after a failure, which is the run that
+      // most needs putting back.
+      teardown: "restore",
+      use: { ...desktopChrome },
+    },
+    {
+      name: "restore",
+      testMatch: /restore\.teardown\.ts/,
       use: { ...desktopChrome },
     },
     {
