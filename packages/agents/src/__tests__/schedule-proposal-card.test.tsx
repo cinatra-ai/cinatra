@@ -292,6 +292,31 @@ describe("§VI the schedule proposal card", () => {
     expect(container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
   });
 
+  it("the CHOSEN weekdays are drawn on the legible variant, on both grounds", async () => {
+    // Caught by looking at a dark capture, not by review: the outline variant
+    // carries its own `dark:bg-input/30`, which survives beside an unprefixed
+    // `bg-primary` and painted over the selection — every weekday chip rendered
+    // identically muted in the dark theme, so the reader could not see WHICH
+    // days the card was proposing. A selected day is the `default` variant (the
+    // one Confirm draws with) and keeps its fill while the rows are read-only.
+    mockTransport({ state: "pending", canDecide: true, canComment: false }, proposalBody());
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-field="recurring-weekday"]')).not.toBeNull(),
+    );
+    const chips = [...container.querySelectorAll('[data-field="recurring-weekday"]')];
+    expect(chips).toHaveLength(7);
+    for (const chip of chips) {
+      const chosen = chip.getAttribute("aria-pressed") === "true";
+      expect(chip.getAttribute("data-variant")).toBe(chosen ? "default" : "outline");
+      // The read-only rows must not wash the selection out.
+      if (chosen) expect(chip.getAttribute("class") ?? "").toContain("disabled:opacity-100");
+    }
+    // Monday to Friday, exactly the schedule the body proposed.
+    expect(chips.filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.getAttribute("data-weekday")))
+      .toEqual(["1", "2", "3", "4", "5"]);
+  });
+
   it("expired: the card STAYS VISIBLE with Adjust to propose again, and no Confirm", async () => {
     mockTransport({ state: "settled" }, EXPIRED_BODY);
     const { container } = renderOn("chat_thread");

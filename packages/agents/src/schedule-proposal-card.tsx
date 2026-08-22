@@ -947,7 +947,21 @@ function ScheduleOptionRows({
                   <Button
                     key={label}
                     type="button"
-                    variant="outline"
+                    // THE SELECTED DAYS HAVE TO BE LEGIBLE ON BOTH GROUNDS, and
+                    // the variant is what decides that rather than the class
+                    // list. `variant="outline"` carries its own `dark:bg-input/30`,
+                    // which tailwind-merge keeps beside a caller's unprefixed
+                    // `bg-primary` (different modifier, different group) and
+                    // which therefore PAINTS OVER the selection in the dark
+                    // theme: every weekday chip rendered identically muted and
+                    // the reader could not see which days the card was
+                    // proposing. Caught by looking at the dark capture, not by
+                    // review. A selected day is the `default` variant — the same
+                    // one Confirm draws with, legible on both grounds — and it
+                    // keeps its fill when the rows are read-only, because in
+                    // that state the chip is the SCHEDULE being shown rather
+                    // than a control being offered.
+                    variant={recurring.weekdays.includes(i) ? "default" : "outline"}
                     size="sm"
                     data-field="recurring-weekday"
                     data-weekday={i}
@@ -955,7 +969,7 @@ function ScheduleOptionRows({
                     disabled={!editable}
                     className={`h-8 w-10 rounded-control border text-xs font-medium transition-colors ${
                       recurring.weekdays.includes(i)
-                        ? "border-primary bg-primary text-primary-foreground"
+                        ? "border-primary bg-primary text-primary-foreground disabled:opacity-100"
                         : "border-input bg-background text-muted-foreground hover:bg-muted"
                     }`}
                     onClick={() =>
