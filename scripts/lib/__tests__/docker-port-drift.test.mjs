@@ -127,6 +127,16 @@ test("formatDriftRemedy names the services + the canonical fix commands", () => 
   assert.match(msg, /PostgreSQL, Redis/);
   assert.match(msg, /pnpm services/);
   assert.match(msg, /docker-compose\.dev\.yml/);
+  // cinatra#2839: the raw alternative is the GUARDED chain, not a bare
+  // `docker compose up`. A pasted bring-up that skips the derivation step is
+  // unpinned (the step exports COMPOSE_PROJECT_NAME, which Docker never reads
+  // from `.env.local`) and unguarded (it skips every refusal).
+  assert.match(msg, /CINATRA_COMPOSE_ENV="\$\(node scripts\/dev-compose-env\.mjs/);
+  assert.match(msg, /eval "\$CINATRA_COMPOSE_ENV" && docker compose/);
+  assert.ok(
+    !msg.includes("# or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d"),
+    "the pre-fix unguarded bring-up must not be printed",
+  );
 });
 
 test("resolveMainRepoRoot returns an absolute path (smoke)", () => {
