@@ -114,13 +114,25 @@ describe("resolveEnforcement — the warn-first rollout rule", () => {
 });
 
 describe("partitionFindings — grandfathering by identity", () => {
+  // A FIXTURE key, not the real policy's. The mechanism is permanent; the debt
+  // it grandfathers is not, and `knownFindings` is EMPTY on main since
+  // cinatra#2791 re-captured the two S7-era chat cells. Deriving the fixture
+  // from the live list made these tests pass only while debt existed — i.e. the
+  // mechanism went untested exactly when the list was clean, which is the state
+  // it is supposed to be in.
+  const KNOWN = "evidence/unbound-cell:X1__review-card__chat_thread__pending";
+  const POLICY_WITH_DEBT = {
+    ...POLICY,
+    knownFindings: [KNOWN],
+    knownFindingNotes: { [KNOWN]: "a fixture entry, cleared by nothing" },
+  };
   const findings = [
-    { key: POLICY.knownFindings[0], code: "evidence/unbound-cell", detail: "" },
+    { key: KNOWN, code: "evidence/unbound-cell", detail: "" },
     { key: "pointer-text:src/new.ts:10", code: "pointer-text", detail: "" },
   ];
 
   it("keeps pre-existing main debt out of the failing set", () => {
-    const { blocking, grandfathered } = partitionFindings(findings, POLICY);
+    const { blocking, grandfathered } = partitionFindings(findings, POLICY_WITH_DEBT);
     expect(grandfathered).toHaveLength(1);
     expect(blocking.map((f) => f.code)).toEqual(["pointer-text"]);
   });
@@ -128,7 +140,7 @@ describe("partitionFindings — grandfathering by identity", () => {
   it("fails a NEW finding on an enforcing branch, and only that one", () => {
     const outcome = decideOutcome({
       findings,
-      policy: POLICY,
+      policy: POLICY_WITH_DEBT,
       branch: "feat/created-later",
       branchCreatedAt: "2026-09-01T00:00:00Z",
     });
@@ -139,7 +151,7 @@ describe("partitionFindings — grandfathering by identity", () => {
   it("fails nothing on a grandfathered branch, findings and all", () => {
     const outcome = decideOutcome({
       findings,
-      policy: POLICY,
+      policy: POLICY_WITH_DEBT,
       branch: GRANDFATHERED,
       branchCreatedAt: "2026-09-01T00:00:00Z",
     });
@@ -151,6 +163,16 @@ describe("partitionFindings — grandfathering by identity", () => {
     for (const key of POLICY.knownFindings) {
       expect(POLICY.knownFindingNotes?.[key], key).toBeTruthy();
     }
+  });
+
+  it("RATCHET: the live policy grandfathers NOTHING today", () => {
+    // Struck by cinatra#2791 (S9g): the two S7-era chat_thread cells were
+    // re-driven against a live app and indexed, so there is no debt left to
+    // carry. This assertion is the other half of that ratchet — new debt has to
+    // be ADDED here deliberately, in the slice that incurs it, and cannot slip
+    // in as a quiet edit to the policy file.
+    expect(POLICY.knownFindings).toEqual([]);
+    expect(POLICY.knownFindingNotes).toEqual({});
   });
 });
 
@@ -197,9 +219,13 @@ describe("the real tree", () => {
     expect(scanDispatchProse(REPO_ROOT)).toEqual([]);
   });
 
-  it("reports the two unvalidated chat captures that are already on main", () => {
-    const keys = scanCaptureEvidence(REPO_ROOT).map((f) => f.key);
-    expect(keys).toEqual(expect.arrayContaining(POLICY.knownFindings));
+  it("reports NO unvalidated chat captures on this tree", () => {
+    // It used to report two — the S7-era C1 / C2 cells the acceptance manifest
+    // cited and no index record answered. cinatra#2791 (S9g) re-drove both
+    // against a live app, registered the records, and moved the citations to
+    // the new cell names, so the honest expectation is now zero. A cell that
+    // comes back unbound is a real regression, not a known state.
+    expect(scanCaptureEvidence(REPO_ROOT)).toEqual([]);
   });
 });
 
@@ -208,9 +234,23 @@ describe("the real tree", () => {
 // ---------------------------------------------------------------------------
 
 let fixtureRoot;
+/** A policy that still carries debt, so the grandfathering arm has something to
+ *  grandfather. The live policy's list is empty since cinatra#2791. */
+let fixturePolicyPath;
 
 beforeAll(() => {
   fixtureRoot = mkdtempSync(join(tmpdir(), "s9h-gate-"));
+  fixturePolicyPath = join(fixtureRoot, "rollout.json");
+  writeFileSync(
+    fixturePolicyPath,
+    JSON.stringify({
+      ...POLICY,
+      knownFindings: ["evidence/unbound-cell:X1__review-card__chat_thread__pending"],
+      knownFindingNotes: {
+        "evidence/unbound-cell:X1__review-card__chat_thread__pending": "fixture",
+      },
+    }),
+  );
   mkdirSync(join(fixtureRoot, "src", "app", "api", "chat"), { recursive: true });
   mkdirSync(join(fixtureRoot, "scripts", "audit"), { recursive: true });
   // A dispatch file the gate must DISCOVER (it is not on the pinned list), whose
@@ -270,15 +310,17 @@ describe("runGate over a fixture tree", () => {
   });
 
   it("grandfathers a pre-existing cell name even on an enforcing branch", () => {
-    // The same fixture tree, citing one of the cells the policy already knows
-    // about: the finding is still reported, and it still does not fail.
+    // The same fixture tree, citing a cell a policy knows about: the finding is
+    // still reported, and it still does not fail. The policy is a FIXTURE one —
+    // the live policy's list is empty since cinatra#2791 cleared it, and this
+    // arm tests the MECHANISM, which outlives any particular debt.
     writeFileSync(
       join(fixtureRoot, "scripts", "audit", "chat-hitl-acceptance-manifest.json"),
       JSON.stringify({
         rows: [
           {
             criterion: "a pre-existing chat capture",
-            proofs: [{ testName: "C1__review-card__chat_thread__pending.png" }],
+            proofs: [{ testName: "X1__review-card__chat_thread__pending.png" }],
           },
         ],
       }),
@@ -286,7 +328,10 @@ describe("runGate over a fixture tree", () => {
     const result = runGate({
       repoRoot: fixtureRoot,
       argv: { enforce: true, branch: "feat/created-later" },
-      io: io(),
+      io: {
+        ...io(),
+        policyPath: fixturePolicyPath,
+      },
     });
     expect(result.grandfathered.map((f) => f.code)).toContain(
       "evidence/unbound-cell",

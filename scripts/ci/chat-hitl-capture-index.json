@@ -1148,6 +1148,412 @@
    }
   },
   {
+   "cell": "G1__review-card__chat_thread__pending",
+   "declaredHost": "chat_thread",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/s9g-review-gate-chat-cell",
+   "build": "development",
+   "screenshot": "evidence/2791-s9g-conformance/captures/G1__review-card__chat_thread__pending.png",
+   "sha256": "2c90b11b97cce4414670b589636cdd5f0a7d0094b961d1cb3e3bc3a03ba7a4e0",
+   "capturedAt": "2026-08-21T23:30:52.496Z",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "pending",
+   "instance": {
+    "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+    "matched": 1,
+    "index": 0,
+    "id": null,
+    "attributes": {
+     "class": "my-3 flex w-full flex-col gap-3",
+     "data-lifecycle-card": "artifact_review_gate",
+     "data-lifecycle-card-state": "pending",
+     "data-lifecycle-card-host": "chat_thread",
+     "data-conformance-id": "review-gate-card"
+    }
+   },
+   "runtime": "dev-runtime",
+   "note": "AC-15 chat_thread PENDING, re-driven at the current face. The §III review card in a real /chat transcript: the island at its Floor tier, §VIII before/after suggestion chips, the composer-binding row, the decision floor with the accepted-count line, the subordinate rationale field and Comment / Reject / Approve. Retires the S7-era C1 cell, whose round never looked for [data-conversation-list]."
+  },
+  {
+   "cell": "G2__review-card__chat_thread__decided",
+   "declaredHost": "chat_thread",
+   "finalUrl": "/chat/cinatra-ai/cinatra-assistant/s9g-review-gate-chat-cell",
+   "build": "development",
+   "screenshot": "evidence/2791-s9g-conformance/captures/G2__review-card__chat_thread__decided.png",
+   "sha256": "09298b101316128726857d09eba178104c7a1c25abd77d6ed8fbfde5d62a61bc",
+   "capturedAt": "2026-08-21T23:38:14.873Z",
+   "assertions": [
+    {
+     "selector": "[data-conversation-list]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-state]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 0,
+     "frame": "main",
+     "expect": "absent",
+     "visible": 0,
+     "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "decided",
+   "instance": {
+    "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+    "matched": 1,
+    "index": 0,
+    "id": null,
+    "attributes": {
+     "class": "my-3 flex w-full flex-col gap-3",
+     "data-lifecycle-card": "artifact_review_gate",
+     "data-lifecycle-card-state": "settled",
+     "data-lifecycle-card-host": "chat_thread",
+     "data-conformance-id": "review-gate-card"
+    }
+   },
+   "runtime": "dev-runtime",
+   "note": "AC-15 chat_thread DECIDED, driven by a REAL press of the card own Approve control in the transcript that held G1. The card re-resolves to its settled floor: the decision bar is gone and the settled reading names the outcome. Retires the S7-era C2 cell."
+  },
+  {
+   "cell": "G3__review-card__page_gate_region__pending",
+   "declaredHost": "page_gate_region",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/5200e7a2-ae0b-4d36-9a32-e3f2535e9d4d/review/lifecycle-review%3Ac398a9ba2af728c52b895cd40e9549523c079a6b2d8424dff5698f3cc01e99a5",
+   "build": "development",
+   "screenshot": "evidence/2791-s9g-conformance/captures/G3__review-card__page_gate_region__pending.png",
+   "sha256": "7ffbab79c03ce4407a74862247474411ca51f228200f8601ac96138b0f9b63c7",
+   "capturedAt": "2026-08-21T23:31:20.163Z",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-conformance-id=\"review-decision-bar\"]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "declaredKind": "artifact_review_gate",
+   "declaredState": "pending",
+   "instance": {
+    "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+    "matched": 1,
+    "index": 0,
+    "id": null,
+    "attributes": {
+     "class": "flex w-full flex-col gap-3",
+     "data-lifecycle-card": "artifact_review_gate",
+     "data-lifecycle-card-state": "pending",
+     "data-lifecycle-card-host": "page_gate_region",
+     "data-conformance-id": "review-gate-card"
+    }
+   },
+   "runtime": "dev-runtime",
+   "note": "§IX page_gate_region PENDING — the review page composes the SAME ReviewGateCard under host=\"page_gate_region\"."
+  },
+  {
+   "cell": "G5__audit-card__run_card__advisory",
+   "declaredHost": "run_card",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/f64a35b7-750b-43eb-b9d4-4c8a38950005",
+   "build": "development",
+   "screenshot": "evidence/2791-s9g-conformance/captures/G5__audit-card__run_card__advisory.png",
+   "sha256": "b05dc3b1a1fe60bcc9e360b0c581376823b53b2dd6518ec6020e3d53f7f09faa",
+   "capturedAt": "2026-08-21T23:31:48.642Z",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"verification_summary\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"verification_summary\"]"
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "declaredKind": "verification_summary",
+   "declaredState": "advisory",
+   "instance": {
+    "selector": "[data-lifecycle-card=\"verification_summary\"]",
+    "matched": 1,
+    "index": 0,
+    "id": null,
+    "attributes": {
+     "class": "flex w-full min-w-0 flex-col gap-3",
+     "data-lifecycle-card": "verification_summary",
+     "data-lifecycle-card-state": "advisory",
+     "data-lifecycle-card-host": "run_card",
+     "data-conformance-id": "verification-card"
+    }
+   },
+   "runtime": "dev-runtime",
+   "note": "§VII audit card on the RUN CARD host, advisory — the run screen composes VerificationSummaryCard per verification record the run carries."
+  },
+  {
+   "cell": "G6__audit-card__page_gate_region__advisory",
+   "declaredHost": "page_gate_region",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/f64a35b7-750b-43eb-b9d4-4c8a38950005/review/lifecycle-review%3Arepair%3A0db50f40-4a20-4e82-ba2c-14b40c16e286%3A1?view=verification",
+   "build": "development",
+   "screenshot": "evidence/2791-s9g-conformance/captures/G6__audit-card__page_gate_region__advisory.png",
+   "sha256": "7441c9c7c65b8945c908248d1d7f6d0aa0361523c187f174077c6c380bb1305c",
+   "capturedAt": "2026-08-21T23:37:36.495Z",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"verification_summary\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"verification_summary\"]"
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "declaredKind": "verification_summary",
+   "declaredState": "advisory",
+   "instance": {
+    "selector": "[data-lifecycle-card=\"verification_summary\"]",
+    "matched": 1,
+    "index": 0,
+    "id": null,
+    "attributes": {
+     "class": "flex w-full min-w-0 flex-col gap-3",
+     "data-lifecycle-card": "verification_summary",
+     "data-lifecycle-card-state": "advisory",
+     "data-lifecycle-card-host": "page_gate_region",
+     "data-conformance-id": "verification-card"
+    }
+   },
+   "runtime": "dev-runtime",
+   "note": "§VII audit card in the review page verification region (the run rail Core-analysis entry), advisory — S9e composes the shared renderer and the page adjuncts around it."
+  },
+  {
+   "cell": "G8__recommendation-card__run_card__held",
+   "declaredHost": "run_card",
+   "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b752a702-65b8-48a5-bb16-e281ba989a3e",
+   "build": "development",
+   "screenshot": "evidence/2791-s9g-conformance/captures/G8__recommendation-card__run_card__held.png",
+   "sha256": "1bd66ee03c1983a4be00d842337c4f01c0d0cffd67c7fc53b4485dc6d1f4f957",
+   "capturedAt": "2026-08-21T23:43:42.239Z",
+   "assertions": [
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+     "scope": "frame",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1
+    },
+    {
+     "selector": "[data-skill-action=\"confirm\"]",
+     "scope": "root",
+     "count": 4,
+     "frame": "main",
+     "expect": "present",
+     "visible": 4,
+     "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+    },
+    {
+     "selector": "[data-skill-action=\"adjust\"]",
+     "scope": "root",
+     "count": 4,
+     "frame": "main",
+     "expect": "present",
+     "visible": 4,
+     "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+    },
+    {
+     "selector": "[data-skill-action=\"skip\"]",
+     "scope": "root",
+     "count": 4,
+     "frame": "main",
+     "expect": "present",
+     "visible": 4,
+     "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+    },
+    {
+     "selector": "[data-lifecycle-card-host=\"run_card\"]",
+     "scope": "root",
+     "count": 1,
+     "frame": "main",
+     "expect": "present",
+     "visible": 1,
+     "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+    }
+   ],
+   "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+   "declaredKind": "recommendation_hold",
+   "declaredState": "pending",
+   "instance": {
+    "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+    "matched": 1,
+    "index": 0,
+    "id": null,
+    "attributes": {
+     "data-run-recommendation-chip-row": "",
+     "data-conformance-id": "run-chip-row",
+     "data-lifecycle-card": "recommendation_hold",
+     "data-lifecycle-card-state": "held",
+     "data-lifecycle-card-host": "run_card",
+     "data-variant": "inline",
+     "data-can-decide": "true",
+     "class": "flex flex-col gap-2"
+    }
+   },
+   "runtime": "dev-runtime",
+   "note": "§V chip row HELD on the run card: one chip per recommended skill, each with its own Confirm / Adjust / Skip. The run is parked at the recommendation checkpoint by the shipped maybeHoldRunForRecommendation."
+  },
+  {
    "cell": "H1__recommendation-card__site_widget__held",
    "declaredHost": "site_widget",
    "declaredKind": "recommendation_hold",
