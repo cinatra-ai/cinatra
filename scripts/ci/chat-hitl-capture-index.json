@@ -24,7 +24,7 @@
     "URL, or whose chat anchors were never asserted, is a mislabeled capture and fails. A PENDING",
     "capture owes its decision controls; a DECIDED one owes their ABSENCE and its own decided summary.",
     "",
-    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: FORTY-ONE",
+    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: FORTY-FIVE",
     "records, on all four hosts. Each group is ONE run of the recorder against a LIVE app on a",
     "lane database, not a hand-assembled set. The A / B / C groups are described here; the V, D",
     "and I groups arrived with later slices and each record carries its own `note`:",
@@ -872,7 +872,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:21.024Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out — they are sealed bearer strings — so each is reported by length, url-safe shape and a truncated digest."
+      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out \u2014 they are sealed bearer strings \u2014 so each is reported by length, url-safe shape and a truncated digest."
     },
     {
       "cell": "C3__review-card__site_widget__pending",
@@ -938,7 +938,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:29.104Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL — the single empty-island element every denial draws, which is why the framed region is blank — and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
+      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL \u2014 the single empty-island element every denial draws, which is why the framed region is blank \u2014 and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
     },
     {
       "cell": "V1__recommendation-card__run_card__held",
@@ -1078,7 +1078,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:56:52.794Z",
       "runtime": "dev-runtime",
-      "note": "§V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
+      "note": "\u00a7V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
     },
     {
       "cell": "V2__recommendation-card__run_card__held__dark",
@@ -1358,7 +1358,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:57:15.084Z",
       "runtime": "dev-runtime",
-      "note": "§V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
+      "note": "\u00a7V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
     },
     {
       "cell": "V4__recommendation-card__run_card__held__adjust-panel",
@@ -1638,7 +1638,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:57:59.190Z",
       "runtime": "dev-runtime",
-      "note": "§V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
+      "note": "\u00a7V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
     },
     {
       "cell": "V6__recommendation-card__run_card__settled__dark",
@@ -1918,7 +1918,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:58:17.869Z",
       "runtime": "dev-runtime",
-      "note": "§V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
+      "note": "\u00a7V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
     },
     {
       "cell": "V8__recommendation-card__run_card__held__trigger-position",
@@ -2058,7 +2058,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:58:25.799Z",
       "runtime": "dev-runtime",
-      "note": "§6.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
+      "note": "\u00a76.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
     },
     {
       "cell": "V9__recommendation-card__run_card__decided__page",
@@ -2470,7 +2470,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T10:49:34.787Z",
       "runtime": "dev-runtime",
-      "note": "§I input hierarchy, LIGHT: the ONE primary composer (boxed, raised, send affordance) and the card's subordinate note field (dashed baseline, transparent, no box) in ONE frame."
+      "note": "\u00a7I input hierarchy, LIGHT: the ONE primary composer (boxed, raised, send affordance) and the card's subordinate note field (dashed baseline, transparent, no box) in ONE frame."
     },
     {
       "cell": "I2__review-card__chat_thread__pending__dark",
@@ -2535,7 +2535,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T10:49:34.787Z",
       "runtime": "dev-runtime",
-      "note": "§I input hierarchy, DARK: the same two inputs, same weight difference, on the dark field."
+      "note": "\u00a7I input hierarchy, DARK: the same two inputs, same weight difference, on the dark field."
     },
     {
       "cell": "I3__review-card__chat_thread__pending__composer-bound",
@@ -2600,7 +2600,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T10:49:34.787Z",
       "runtime": "dev-runtime",
-      "note": "§I: one open review binds the chat box with no press — the row above the buttons states the binding and offers the box back."
+      "note": "\u00a7I: one open review binds the chat box with no press \u2014 the row above the buttons states the binding and offers the box back."
     },
     {
       "cell": "I4__review-card__site_widget__pending",
@@ -2686,7 +2686,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T13:10:01.329Z",
       "runtime": "Next.js dev (Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + the verify Redis, loopback-only, placeholder-only provider environment (no model credential on this host).",
-      "note": "§I input hierarchy inside the EMBEDDED CROSS-SITE widget column, LIGHT: a real held review card whose subordinate note field (dashed baseline, no box) and the widget's OWN primary composer are in one frame, on a page served by another site."
+      "note": "\u00a7I input hierarchy inside the EMBEDDED CROSS-SITE widget column, LIGHT: a real held review card whose subordinate note field (dashed baseline, no box) and the widget's OWN primary composer are in one frame, on a page served by another site."
     },
     {
       "cell": "I5__review-card__site_widget__pending__dark",
@@ -2772,7 +2772,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T13:10:28.072Z",
       "runtime": "Next.js dev (Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + the verify Redis, loopback-only, placeholder-only provider environment (no model credential on this host).",
-      "note": "§I input hierarchy inside the EMBEDDED CROSS-SITE widget column, DARK: the same two inputs and the same weight difference on the dark field; the record carries the theme read-back measured inside the embed frame."
+      "note": "\u00a7I input hierarchy inside the EMBEDDED CROSS-SITE widget column, DARK: the same two inputs and the same weight difference on the dark field; the record carries the theme read-back measured inside the embed frame."
     },
     {
       "cell": "G1__review-card__chat_thread__pending",
@@ -2843,7 +2843,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "AC-15 chat_thread PENDING, re-driven at the current face. The §III review card in a real /chat transcript: the island at its Floor tier, §VIII before/after suggestion chips, the composer-binding row, the decision floor with the accepted-count line, the subordinate rationale field and Comment / Reject / Approve. Retires the S7-era C1 cell, whose round never looked for [data-conversation-list]."
+      "note": "AC-15 chat_thread PENDING, re-driven at the current face. The \u00a7III review card in a real /chat transcript: the island at its Floor tier, \u00a7VIII before/after suggestion chips, the composer-binding row, the decision floor with the accepted-count line, the subordinate rationale field and Comment / Reject / Approve. Retires the S7-era C1 cell, whose round never looked for [data-conversation-list]."
     },
     {
       "cell": "G2__review-card__chat_thread__decided",
@@ -2986,7 +2986,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "§IX page_gate_region PENDING — the review page composes the SAME ReviewGateCard under host=\"page_gate_region\"."
+      "note": "\u00a7IX page_gate_region PENDING \u2014 the review page composes the SAME ReviewGateCard under host=\"page_gate_region\"."
     },
     {
       "cell": "G5__audit-card__run_card__advisory",
@@ -3040,7 +3040,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "§VII audit card on the RUN CARD host, advisory — the run screen composes VerificationSummaryCard per verification record the run carries."
+      "note": "\u00a7VII audit card on the RUN CARD host, advisory \u2014 the run screen composes VerificationSummaryCard per verification record the run carries."
     },
     {
       "cell": "G6__audit-card__page_gate_region__advisory",
@@ -3094,7 +3094,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "§VII audit card in the review page verification region (the run rail Core-analysis entry), advisory — S9e composes the shared renderer and the page adjuncts around it."
+      "note": "\u00a7VII audit card in the review page verification region (the run rail Core-analysis entry), advisory \u2014 S9e composes the shared renderer and the page adjuncts around it."
     },
     {
       "cell": "G8__recommendation-card__run_card__held",
@@ -3178,7 +3178,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "§V chip row HELD on the run card: one chip per recommended skill, each with its own Confirm / Adjust / Skip. The run is parked at the recommendation checkpoint by the shipped maybeHoldRunForRecommendation."
+      "note": "\u00a7V chip row HELD on the run card: one chip per recommended skill, each with its own Confirm / Adjust / Skip. The run is parked at the recommendation checkpoint by the shipped maybeHoldRunForRecommendation."
     },
     {
       "cell": "S9b-1__recommendation-hold__chat_thread__held",
@@ -3503,7 +3503,454 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T16:11:36.037Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted; a lane-private Postgres (55794) and Redis (56794) on loopback, compose project x2794cap; no real model credential on this host",
-      "note": "The settled row after a whole-row skip: all three chips present, each on §V's skipped treatment, display names intact, controls gone, still inside the conversation list, and the panel below carries no second copy."
+      "note": "The settled row after a whole-row skip: all three chips present, each on \u00a7V's skipped treatment, display names intact, controls gone, still inside the conversation list, and the panel below carries no second copy."
+    },
+    {
+      "cell": "C0__recommendation-card__run_card__held__per-chip-control",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/32bf900f-c0ba-4ec0-bb18-a09e1788886b",
+      "build": "development",
+      "screenshot": "evidence/2893-zero-chip-settled/captures/C0__recommendation-card__run_card__held__per-chip-control.png",
+      "sha256": "3ca674d7b02432833c40945bfb72e1fa1b4d5372d39913b12cf3b5856b7b8681",
+      "capturedAt": "2026-08-22T09:01:04.774Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 3,
+          "frame": "main",
+          "expect": "present",
+          "visible": 3,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 3,
+          "frame": "main",
+          "expect": "present",
+          "visible": 3,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 3,
+          "frame": "main",
+          "expect": "present",
+          "visible": 3,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3,
+          "frame": "main",
+          "expect": "present",
+          "visible": 3,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-recommendation-outcome-panel]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "held",
+          "data-lifecycle-card-host": "run_card",
+          "data-variant": "inline",
+          "data-can-decide": "true",
+          "class": "flex flex-col gap-2"
+        }
+      },
+      "note": "Control run, held: the shipped chip row on the run screen, one chip per assigned skill, each carrying its own Confirm / Adjust / Skip.",
+      "runtime": "dev"
+    },
+    {
+      "cell": "C1__recommendation-card__run_card__settled__per-chip-control",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/32bf900f-c0ba-4ec0-bb18-a09e1788886b",
+      "build": "development",
+      "screenshot": "evidence/2893-zero-chip-settled/captures/C1__recommendation-card__run_card__settled__per-chip-control.png",
+      "sha256": "ca9d0b3644500297b83d2d49555b1e38a093239cfd6017d9bfdd2971b36e58b0",
+      "capturedAt": "2026-08-22T09:02:15.893Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3,
+          "frame": "main",
+          "expect": "present",
+          "visible": 3,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-recommendation-outcome-panel]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "decided",
+          "data-lifecycle-card-host": "run_card",
+          "data-run-recommendation-decision": "skipped",
+          "data-run-recommendation-settled": "true",
+          "data-variant": "inline",
+          "class": "flex flex-wrap gap-2"
+        }
+      },
+      "note": "Control run, settled: the candidate set survived to settle time, so the recorded set names skills and the row draws the \u00a7V PER-CHIP settled faces. This is the reading the zero-chip addition does NOT change.",
+      "runtime": "dev"
+    },
+    {
+      "cell": "C3__recommendation-card__run_card__settled__zero-chip",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/5b85cff4-8da7-4725-a2d8-4b5288b28c75",
+      "build": "development",
+      "screenshot": "evidence/2893-zero-chip-settled/captures/C3__recommendation-card__run_card__settled__zero-chip.png",
+      "sha256": "ac8753253a1560a81f344fad41bd5e406e405c811298ac802e57139678539e5e",
+      "capturedAt": "2026-08-22T09:03:33.094Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-recommendation-outcome-panel]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "decided",
+          "data-lifecycle-card-host": "run_card",
+          "data-run-recommendation-decision": "skipped",
+          "data-run-recommendation-settled": "true",
+          "data-variant": "inline",
+          "class": "flex flex-wrap gap-2"
+        }
+      },
+      "note": "THE READING UNDER TEST. The hold settled after its candidates were retired: the run-level skip marker is on record with candidate_count 0 and no per-skill row beside it, so the recorded set names no skill and \u00a7V's outcome panel is drawn in place of the chips.",
+      "runtime": "dev"
+    },
+    {
+      "cell": "C4__recommendation-card__run_card__settled__zero-chip__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/5b85cff4-8da7-4725-a2d8-4b5288b28c75",
+      "build": "development",
+      "screenshot": "evidence/2893-zero-chip-settled/captures/C4__recommendation-card__run_card__settled__zero-chip__dark.png",
+      "sha256": "c59bfba6fb273bde1809d42a93a9917594d684ba8c24315f629e5996ce36842d",
+      "capturedAt": "2026-08-22T09:03:39.334Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        },
+        {
+          "selector": "[data-recommendation-outcome-panel]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"recommendation_hold\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "data-run-recommendation-chip-row": "",
+          "data-conformance-id": "run-chip-row",
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-state": "decided",
+          "data-lifecycle-card-host": "run_card",
+          "data-run-recommendation-decision": "skipped",
+          "data-run-recommendation-settled": "true",
+          "data-variant": "inline",
+          "class": "flex flex-wrap gap-2"
+        }
+      },
+      "note": "The same settled zero-chip card in the dark theme \u2014 the panel's tokens resolve to the dark ground and the reading is the same.",
+      "runtime": "dev"
     },
     {
       "cell": "S10__schedule-card__chat_thread__settled",
