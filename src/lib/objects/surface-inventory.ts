@@ -199,9 +199,11 @@ export const LIST_SURFACE = {
 //
 // `lists_list` + `lists_get` removed (entries retired alongside the
 // unregistered `lists_*` MCP primitives). The CRM-facade read replacements
-// are listed below; the live allowlist in
-// `packages/mcp-server/src/delegated-chat-tool-policy.ts` `ALLOWED_EXACT`
-// must match this set (parity asserted by the inventory test).
+// are listed below. Every entry must be ADMITTED by the live decision
+// (`evaluateDelegatedChatAdmission` over this build's core records in
+// `packages/mcp-server/src/host-primitive-declarations.ts`, cinatra#2817);
+// objects-surface-drift.test.ts asserts that against the real evaluator
+// rather than against a source-file name list.
 // ---------------------------------------------------------------------------
 export const DELEGATED_CHAT_OBJECT_ALLOWLIST: readonly string[] = [
   "objects_list",

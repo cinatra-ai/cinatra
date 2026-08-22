@@ -135,7 +135,7 @@ vi.mock("../pending-confirmation-context", () => ({
 // (every legacy-admitted name, carrying the class in force for it), which is
 // exactly the input this test's prefix-cost reasoning is about; that the plan
 // is genuinely produced by the registration pass is pinned separately, in
-// `mcp-server-capability-plan-parity.test.ts`.
+// `capability-plan-parity.test.ts`.
 vi.mock("@/lib/mcp-server", () => ({
   buildDelegatedChatCapabilityPlan: async (input?: {
     resolveCapabilityKey?: (name: string) => string | null | undefined;
