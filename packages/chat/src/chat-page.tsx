@@ -560,9 +560,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       ownerUserId: userId,
     };
     // A SAVE THAT LANDED releases the ledger's RUN half and adopts the baseline;
-    // ISSUING one releases nothing (codex round 4, finding 1) — this save is best-
-    // effort, a failed one wrote no mirror row, and its turns stay assertable.
-    saveChatThreadInOrder(thread).then(() => { streams.noteSavedTranscript(messages); loadedFingerprintRef.current = fingerprintMessages(messages); }, () => {});
+    // ISSUING one releases nothing (codex round 4, finding 1) — a failed one wrote
+    // no mirror row. Fenced on its OWN thread, like every resumed await here.
+    saveChatThreadInOrder(thread).then(() => { if (activeThreadIdRef.current !== thread.id) return; streams.noteSavedTranscript(messages); loadedFingerprintRef.current = fingerprintMessages(messages); }, () => {});
     // Real activity: advance this thread's updatedAt in-place. The sidebar's
     // default "Activity" mode sorts by updatedAt desc, so this re-positions the
     // thread to the top without an explicit array reorder here.

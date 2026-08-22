@@ -192,6 +192,11 @@ describe("saveChatThreadInOrder", () => {
 
     // Nothing answers it. It gives up on its own, and says why — which is what
     // the edit path reports on its never-blank bubble instead of hanging.
+    //
+    // WHAT THIS ARM DOES NOT PIN, said plainly: an abort stops the CLIENT, not
+    // the server, so an abandoned request may still commit late. That residual
+    // is stated at `CHAT_THREAD_SAVE_TIMEOUT_MS`; it needs a server-side write
+    // fence, and no client-side arm can observe it.
     await expect(hung).rejects.toThrow(/timed out after 5ms/);
 
     await net.drain();

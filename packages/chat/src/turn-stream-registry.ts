@@ -213,13 +213,18 @@
  */
 
 /**
- * The ledger's hard cap: how many ENDED-but-uncommitted turn ids one thread's
- * registry keeps at once. One entry is one turn that ended without a committed
- * transcript ever carrying it — in practice one stop press, or one turn cut by a
- * lost connection. 256 of those in a single thread, with no reload and not one of
- * them landing, is far past any real session; what the number buys is that the
- * ledger (and every edit payload that unions it in) is BOUNDED rather than
- * session-lifetime. The eviction site states what going over it costs.
+ * The ledger's hard cap: how many ENDED-but-unPERSISTED turns one thread's
+ * registry keeps at once. An entry is one turn that ended and has not been
+ * released — in practice one stop press, one turn cut by a lost connection, or
+ * (since the release split, codex round 4 finding 1) one turn that DID reveal but
+ * whose save has not landed yet. That last class is why the cap's population is
+ * wider than it was, and it is still narrow: an entry with no run leaves on the
+ * commit, and every other entry leaves on the next save that carries it, so the
+ * standing population is "the turns since the last landed save" — 256 of those in
+ * one thread, with no reload and no save landing once, is far past any real
+ * session. What the number buys is that the ledger (and every edit payload that
+ * unions it in) is BOUNDED rather than session-lifetime. The eviction site states
+ * what going over it costs.
  */
 export const MAX_ENDED_UNCOMMITTED_TURN_IDS = 256;
 
@@ -352,14 +357,16 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       // THE EVICTION, AND WHAT IT COSTS — stated here, at the line that actually
       // drops a nameable removal, rather than left to the constant.
       //
-      // The OLDEST id goes. An evicted id is re-assertable NEVER: no edit can
-      // name it again, so its run-bound row can fold back in above a later
-      // edited prompt — the same permanent undo this ledger exists to prevent,
-      // for that one turn. That is the honest price of a bound, and it is taken
-      // only past 256 turns that ended without a single one of them landing in a
-      // committed transcript, in one thread, with no reload. The alternative is
-      // not "no cost": an unbounded ledger puts every id a long session ever
-      // aborted into every edit payload for the rest of that session. Oldest
+      // The OLDEST entry goes. An evicted turn is re-assertable NEVER — neither
+      // by id nor by run — so its run-bound row can fold back in above a later
+      // edited prompt, the same permanent undo this ledger exists to prevent, for
+      // that one turn. That is the honest price of a bound, and it is taken only
+      // past 256 turns that ended in one thread, with no reload, without ONE save
+      // landing to release any of them (codex round 4, finding 3 on the split:
+      // before it, an entry left on its reveal, so the population here was the
+      // aborted turns alone). The alternative is not "no cost": an unbounded
+      // ledger puts every id a long session ever aborted into every edit payload
+      // for the rest of that session. Oldest
       // first, because an edit made now is a statement about the turns nearest
       // it, and the oldest id is the one whose reveal has been outstanding
       // longest — the least likely to still be about the transcript on screen.

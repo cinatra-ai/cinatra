@@ -857,12 +857,27 @@ export function extractAgentName(text: string): string | null {
  * succeed and BELOW the point where waiting is pointless. A whole-transcript
  * POST carries the entire thread over whatever uplink the reader has and the
  * route commits it in one transaction, so a slow-but-live save is measured in
- * seconds, not tens of them; and the route itself runs under a request ceiling
- * of the same order, so a request still open at 30s is not going to return. The
- * cost of being wrong is small in both directions: an abandoned save that would
- * have landed is re-issued by the next real activity (the baseline advances only
- * on a save that landed), and the edit path reports the failure on its
- * never-blank bubble instead of hanging.
+ * seconds, not tens of them, and a request still open at 30s is one whose
+ * connection is gone rather than one that is working. It is a UX-and-liveness
+ * bound, chosen for that shape — not a number read off a server ceiling, and it
+ * is deliberately generous so that abandoning a save that WOULD have returned
+ * stays rare. The cost of being wrong is small in both directions: an abandoned
+ * save that would have landed is re-issued by the next real activity (the
+ * baseline advances only on a save that landed), and the edit path reports the
+ * failure on its never-blank bubble instead of hanging.
+ *
+ * THE RESIDUAL, STATED RATHER THAN IMPLIED (codex, on this change). An abort
+ * stops this client READING the response; it does not stop the server committing
+ * the request it already holds. So an abandoned ORDINARY save can in principle
+ * commit AFTER a truncation intent that was issued once the chain moved on, and
+ * re-create the mirror rows that intent removed. That residual is not closed
+ * here: closing it needs a server-side fence (a per-thread write version the
+ * route rejects a stale save against), which is a change to the save CONTRACT.
+ * It is the far smaller side of the trade — without the bound the wedge is
+ * CERTAIN and permanent for the tab, while this needs a connection that hangs
+ * past 30s AND a server that commits it late AND an edit inside that window. The
+ * intent save's `attempts` retry is NOT part of it: both attempts carry the same
+ * body, so their commit order cannot matter.
  */
 export const CHAT_THREAD_SAVE_TIMEOUT_MS = 30_000;
 

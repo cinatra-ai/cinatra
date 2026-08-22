@@ -257,6 +257,11 @@ async function editUserTurn(view: ReturnType<typeof render>, index: number, text
   fireEvent.click(view.getByText("Send"));
 }
 
+/** The thread panel's own switch event — the real path a sidebar click takes. */
+function selectThread(threadId: string) {
+  window.dispatchEvent(new CustomEvent("cinatra:chat:select", { detail: { threadId } }));
+}
+
 /** Send through the REAL composer — the only way to get two concurrent turns. */
 function sendComposerMessage(view: ReturnType<typeof render>, text: string) {
   const editors = view.container.querySelectorAll('[data-testid="chat-prompt-input"]');
@@ -395,5 +400,50 @@ describe("the page releases a turn's RUN only on a save that landed", () => {
       net.saves[2].removedRunIds,
       "the run was still asserted although the turn has a mirror row of its own",
     ).toBeUndefined();
+  });
+
+  it("a save that lands AFTER a thread switch is inert — it drives the left thread's state, or nothing", async () => {
+    // CODEX, ROUND 4, ON THIS CHANGE. Waiting for the save added a suspension the
+    // synchronous version did not have, and the registry and the fingerprint
+    // baseline are ONE object each, shared by every thread the page shows. So the
+    // continuation is fenced on the thread it was issued for, exactly like the
+    // edit flow's own resumed awaits.
+    //
+    // WHAT THIS ARM CLAIMS, AND WHAT IT DOES NOT. It drives the sequence and
+    // pins that nothing is written for the arrived thread. It is NOT a red-green
+    // regression arm for the fence: with the fence removed this still passes,
+    // because the corrupted baseline is only read on the NEXT run of the
+    // persistence effect, and every reachable trigger for that run is a genuine
+    // messages change — which owes a save either way. The fence is therefore
+    // defence in depth against the cross-thread write, not the repair of an
+    // observable defect, and this arm says so rather than claiming otherwise.
+    const net = chatNetwork();
+    const view = await mountOn(THREAD_ONE);
+
+    await editUserTurn(view, 0, "alpha question, rephrased");
+    await waitFor(() => expect(net.saves.length).toBe(1));
+    net.settle(0);
+    await net.drain();
+    await waitFor(() => expect(drives.length).toBe(1));
+    await revealAndEnd(drives[0], "run-left-behind", "regenerated answer");
+    // The ordinary save for the revealed transcript is on the wire and HELD.
+    await waitFor(() => expect(net.saves.length).toBe(2));
+
+    // The user moves to another thread while it is still open.
+    selectThread(THREAD_SLACK);
+    await waitFor(() => expect(view.getByText("alpha answer")).toBeTruthy());
+    const savesAtSwitch = net.saves.length;
+
+    // ...and only now does the left thread's save land.
+    net.settle(1);
+    await net.drain();
+    await net.drain();
+
+    for (const save of net.saves.slice(savesAtSwitch)) {
+      expect(
+        save.id,
+        "a save was issued for the arrived thread by a continuation belonging to the thread that was left",
+      ).not.toBe(THREAD_SLACK);
+    }
   });
 });

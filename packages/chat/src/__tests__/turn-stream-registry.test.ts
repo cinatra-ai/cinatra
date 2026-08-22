@@ -159,6 +159,37 @@ describe("createTurnStreamRegistry", () => {
     expect(nameable).toContain(`a${MAX_ENDED_UNCOMMITTED_TURN_IDS + overflow - 1}`);
   });
 
+  it("BOUNDS the ledger over the WIDER population the release split gives it", () => {
+    // CODEX, ROUND 4, ON THE SPLIT. Before it, an entry left the ledger on its
+    // reveal, so the cap only ever held ABORTED turns. Now a turn that revealed
+    // and whose save has not landed is retained too — so the cap's population is
+    // wider, and this arm drives it in exactly that shape: every turn reveals
+    // (its ID half is released) and no save ever lands (its RUN half is not).
+    // The bound still holds, the eviction is still oldest-first, and what it
+    // costs is the same thing it always cost: that one turn's run is
+    // unassertable forever.
+    const streams = createTurnStreamRegistry();
+    const overflow = 5;
+    const total = MAX_ENDED_UNCOMMITTED_TURN_IDS + overflow;
+    for (let i = 0; i < total; i += 1) {
+      const token = streams.begin(`a${i}`, new AbortController(), `u${i}`);
+      streams.noteRunId(token, `run-${i}`);
+      streams.end(token);
+      streams.noteCommittedTranscript([{ id: `a${i}` }]);
+    }
+    // Every id half is released, so the ledger adds NOTHING to a truncation
+    // intent — the transcript names all of these turns itself.
+    expect(streams.removableTurnIds()).toEqual([]);
+    // The run halves are held, capped, and oldest-first.
+    expect(streams.retainedIdCount()).toBe(MAX_ENDED_UNCOMMITTED_TURN_IDS);
+    const everyAnchor = new Set(Array.from({ length: total }, (_, i) => `u${i}`));
+    const runs = streams.removableRunIds(everyAnchor);
+    expect(runs).toHaveLength(MAX_ENDED_UNCOMMITTED_TURN_IDS);
+    expect(runs).not.toContain("run-0"); // evicted, and gone for good
+    expect(runs[0]).toBe(`run-${overflow}`);
+    expect(runs).toContain(`run-${total - 1}`);
+  });
+
   it("a REUSED id cannot let a dead drive's end touch the live drive's turn", () => {
     // CODEX ROUND 3, FINDING 1. An assistant id is REUSABLE, so `end` keyed on
     // one reaches whichever turn is wearing it by the time the call arrives:
