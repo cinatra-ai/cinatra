@@ -47,6 +47,19 @@ function chatActorToPrimitive(actor: ActorContext): PrimitiveActorContext {
     source: "mcp",
     platformRole: actor.platformRole,
     tokenScopes: actor.tokenScopes,
+    // THE ONE STAMP SITE for the in-process launch origin (see
+    // `PrimitiveActorContext.launchOrigin`). This bridge is reached only from
+    // the hard pre-router below, which runs inside the authenticated chat
+    // route with the kernel Principal already resolved — so "this run was
+    // started from a conversation" is a fact of the call frame here, not a
+    // claim anyone made. It is a CONSTANT: no request field, no primitive
+    // input, and nothing the model emits can influence it.
+    //
+    // The remote MCP chat frame is stamped nowhere near here — it carries the
+    // transport-verified `delegatedRestricted` instead, deliberately, so there
+    // is exactly one carrier per path and neither one is re-derivable from
+    // model-reachable data.
+    launchOrigin: "chat",
   };
 }
 
@@ -534,8 +547,28 @@ export async function serverSideExplicitDispatch(input: {
       resultLabel: `runId: ${runId}, status: ${status}`,
       result: resultJson,
     });
+    // A chat-started run may PARK before it dispatches: the server evaluates
+    // the run-start recommendation hold, and a held run stays `pending_input`
+    // with nothing queued behind it. Saying "the agent is running" there is
+    // simply false.
+    //
+    // The text also does NOT direct the reader anywhere. THE CARD IS THE
+    // AFFORDANCE: this same assistant turn carries the §V recommendation card,
+    // with its own Confirm and Skip, on the `chat_thread` host. A sentence that
+    // sent the reader to another surface would be a pointer standing in for an
+    // implementation, which is the very thing this slice exists to remove. So
+    // the line states the run's condition and stops.
+    //
+    // EVENT TENSE, deliberately. This text is durable: it is persisted with the
+    // turn and re-read long after the card beside it has settled and the run has
+    // moved on. "The run is paused" would keep asserting a present state that
+    // stopped being true the moment someone decided. "The run paused" records
+    // what happened in that turn, which stays true.
+    const heldForRecommendation = status === "pending_input";
     send("text", {
-      content: `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The agent is running — I'll keep polling for its progress.`,
+      content: heldForRecommendation
+        ? `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The run paused for a decision on the recommended skills.`
+        : `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The agent is running — I'll keep polling for its progress.`,
     });
 
     // Append-only creation-progress emits, fired fire-and-forget. Recipient
@@ -543,8 +576,14 @@ export async function serverSideExplicitDispatch(input: {
     // caller-controlled, never an admin/team/org fanout vector). Non-human
     // actors silently skip the emit (chat dispatch from a service account
     // etc.).
+    //
+    // A HELD run emits nothing here. The milestone is literally `"queued"`, and
+    // the run is not: it is parked on a decision, with no job behind it. The
+    // decision's own release drives the run through the canonical trigger path,
+    // which is where a truthful queued milestone belongs.
     if (
       isCreationFlow &&
+      !heldForRecommendation &&
       input.actor.principalType === "HumanUser" &&
       input.actor.principalId
     ) {

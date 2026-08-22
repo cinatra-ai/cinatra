@@ -24,7 +24,7 @@
     "URL, or whose chat anchors were never asserted, is a mislabeled capture and fails. A PENDING",
     "capture owes its decision controls; a DECIDED one owes their ABSENCE and its own decided summary.",
     "",
-    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: TWENTY-EIGHT",
+    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: THIRTY-NINE",
     "records, on all four hosts. Each group is ONE run of the recorder against a LIVE app on a",
     "lane database, not a hand-assembled set. The A / B / C groups are described here; the V, D",
     "and I groups arrived with later slices and each record carries its own `note`:",
@@ -3179,6 +3179,331 @@
       },
       "runtime": "dev-runtime",
       "note": "§V chip row HELD on the run card: one chip per recommended skill, each with its own Confirm / Adjust / Skip. The run is parked at the recommendation checkpoint by the shipped maybeHoldRunForRecommendation."
+    },
+    {
+      "cell": "S9b-1__recommendation-hold__chat_thread__held",
+      "declaredHost": "chat_thread",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2a2939-bc6c-4c24-9c83-4afb73aa7206",
+      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-1__recommendation-hold__chat_thread__held.png",
+      "sha256": "e220d43a4065cb339be473252d4cae4b4521d57e13a6da4b0c3b6965650ca1fb",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T16:10:52.533Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted; a lane-private Postgres (55794) and Redis (56794) on loopback, compose project x2794cap; no real model credential on this host",
+      "note": "The held row in the transcript: one chip per skill, each printing its manifest display name and carrying its own Confirm, Adjust and Skip. No heading plate, no disclosure, no row-level pair. The card sits ABOVE the inline run panel and the panel carries no copy of it."
+    },
+    {
+      "cell": "S9b-2__recommendation-hold__chat_thread__held__root",
+      "declaredHost": "chat_thread",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2a2939-bc6c-4c24-9c83-4afb73aa7206",
+      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-2__recommendation-hold__chat_thread__held__root.png",
+      "sha256": "165869921db845bd6111ef7092b7bc8f539e3eb8e37ca030bec014dc2ec9fb57",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T16:10:52.593Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted; a lane-private Postgres (55794) and Redis (56794) on loopback, compose project x2794cap; no real model credential on this host",
+      "note": "The card root alone, framed on the selector the capture contract identifies the card by. The redraw made this root photographable; before it the root was `display: contents` and had no geometry."
+    },
+    {
+      "cell": "S9b-2b__recommendation-hold__chat_thread__held__shaped",
+      "declaredHost": "chat_thread",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2a2939-bc6c-4c24-9c83-4afb73aa7206",
+      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-2b__recommendation-hold__chat_thread__held__shaped.png",
+      "sha256": "b1a41cf62b9c77820c201aa95cdf41728ffeaf31ead340da9457e9baa1f2e0ca",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T16:10:53.626Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted; a lane-private Postgres (55794) and Redis (56794) on loopback, compose project x2794cap; no real model credential on this host",
+      "note": "One skill shaped in place through its OWN Adjust panel, while the row stays live: that chip carries the adjusted mark, its neighbours stay undecided, and the root still reads state=held. Nothing released, and no row-level control was pressed."
+    },
+    {
+      "cell": "S9b-3__recommendation-hold__chat_thread__decided__confirmed",
+      "declaredHost": "chat_thread",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/9b2a2939-bc6c-4c24-9c83-4afb73aa7206",
+      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-3__recommendation-hold__chat_thread__decided__confirmed.png",
+      "sha256": "31fe769c723dca7c7fd364f890da452a8f3c65dcf6286433cd2a8c532cd9e30d",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T16:11:00.370Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted; a lane-private Postgres (55794) and Redis (56794) on loopback, compose project x2794cap; no real model credential on this host",
+      "note": "The settled row, in the same transcript position, with no navigation and no reload: each chip states its own outcome, nothing is summarised above it, and there is nothing left to press."
+    },
+    {
+      "cell": "S9b-4__recommendation-hold__chat_thread__decided__skipped",
+      "declaredHost": "chat_thread",
+      "declaredKind": "recommendation_hold",
+      "declaredState": "decided",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/f8c15f63-a50d-42b1-b7a6-a8407b2f21ff",
+      "screenshot": "evidence/2786-s9b-chat-thread-held/S9b-4__recommendation-hold__chat_thread__decided__skipped.png",
+      "sha256": "3edd2640f5c7401e2c65c6e47ae9e49283eb7cc79199ee00dd049b59701074f3",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "root",
+          "count": 0
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "recordedAt": "2026-08-21T16:11:36.037Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted; a lane-private Postgres (55794) and Redis (56794) on loopback, compose project x2794cap; no real model credential on this host",
+      "note": "The settled row after a whole-row skip: all three chips present, each on §V's skipped treatment, display names intact, controls gone, still inside the conversation list, and the panel below carries no second copy."
     }
   ]
 }

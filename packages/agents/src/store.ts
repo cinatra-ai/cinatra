@@ -444,6 +444,25 @@ export type CreateAgentRunInput = {
   // perimeter then authorizes the persisted `runBy` (resolved LIVE), and
   // refuses when there is no principal at all.
   scopeActor?: ActorContext | null;
+  /**
+   * The status the row is INSERTED in. Defaults to `"queued"` — the historical
+   * and still overwhelmingly common shape, where creation and dispatch are the
+   * same act.
+   *
+   * `"pending_input"` exists for a caller that must decide something BEFORE the
+   * run may dispatch (today: the chat-origin recommendation hold). Such a
+   * caller creates the row parked, evaluates its hold, and then either leaves
+   * the run parked or drives the canonical `pending_input → queued` transition
+   * itself. That ordering is not a style preference: creating a `queued` row
+   * and holding afterwards STRANDS the run, because the release path admits
+   * only the two pre-dispatch waiting states.
+   *
+   * Every other creation-time behaviour is identical — same scope assertion,
+   * same OBO-ceiling derivation, same guard, same authority. This selects the
+   * initial state and nothing else; it is NOT a dispatch, and a caller that
+   * chooses `"pending_input"` owns getting the run out of it.
+   */
+  initialStatus?: "queued" | "pending_input";
 };
 
 // ---------------------------------------------------------------------------
@@ -1668,7 +1687,9 @@ export async function createAgentRun(
     templateId: input.templateId,
     versionId: input.versionId ?? null,
     runBy: input.runBy ?? null,
-    status: "queued",
+    // Defaults to "queued" — see CreateAgentRunInput.initialStatus for the one
+    // caller shape that parks the row instead.
+    status: input.initialStatus ?? "queued",
     inputParams: JSON.stringify(input.inputParams),
     title: input.title ?? null,
     sourceType: input.sourceType ?? "agent_builder",
