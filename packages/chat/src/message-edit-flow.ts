@@ -69,10 +69,13 @@ export type EditAndResendDeps = {
   pausedParticipants: string[];
   assistantHandleMap: Map<string, string>;
   userId?: string;
-  /** `anchorMessageId` is the PROMPT the dispatched turn answers. The page
+  /** `contextMessages` is what the MODEL is asked to answer, which for this
+   *  flow is NOT the transcript it persists: the payload carries what arrived
+   *  during the hold, the dispatch context ends at the edited prompt.
+   *  `anchorMessageId` is the PROMPT the dispatched turn answers. The page
    *  derives it from the tail of `contextMessages` when it is not named, which
-   *  is right for an ordinary send (the tail IS its prompt) and wrong for this
-   *  flow, whose transcript can end in a message that ARRIVED during the hold. */
+   *  is right for an ordinary send (the tail IS its prompt); this flow names it
+   *  so the claim does not depend on how its context is composed. */
   streamResponse: (
     contextMessages: Message[],
     handle?: string,
@@ -283,21 +286,38 @@ export async function editAndResend(
 
   setMessages(truncated);
 
-  // AND THE REGENERATION IS ANCHORED TO THE PROMPT IT ANSWERS, EXPLICITLY. The
-  // page anchors a turn to the LAST message of the context it is handed, which
-  // is right for an ordinary send and wrong here: `truncated` ends in whatever
-  // ARRIVED during the hold, not in the prompt this turn is being dispatched
-  // for. Left derived, the regeneration would register under a message the edit
-  // KEPT — and a later edit of THAT message would then condemn this turn's
-  // bubble and offer its run for the tombstone, deleting a reply to a prompt
-  // nobody removed. That is the one over-reach the anchor exists to prevent
-  // (`./turn-stream-registry`, `removableRunIds`), so the anchor is named here
-  // rather than inferred there. The model context is unchanged: it still ends
-  // with everything the reader can see, and the ANCHOR is the position claim.
+  // THE DISPATCH CONTEXT ENDS AT THE EDITED PROMPT, AND IS NOT THE PAYLOAD.
+  // `truncated` is the PERSISTENCE payload and is right for that job: a save
+  // posts the WHOLE thread, so it has to carry whatever ARRIVED during the
+  // hold. It is the wrong thing to hand the model. `streamAgUiResponse` maps
+  // the context it is given straight into the request, so dispatching
+  // `truncated` asks the model to answer a conversation whose last turn is a
+  // message that arrived while this edit was holding — a reply that revealed
+  // for a prompt ABOVE the edit point, or, since Slack mode allows re-entry, a
+  // message the reader posted themselves — instead of the prompt this
+  // regeneration exists to answer.
   //
-  // ChatGPT (normal) mode — preserve byte-identical behavior.
+  // So the dispatch gets the transcript AS OF THE EDIT POINT. What arrived is
+  // left OUT rather than re-ordered: it arrived AFTER the reader submitted this
+  // edit, so putting it before the edited prompt would misstate when it was
+  // said, and putting it after would restore the very tail this exists to
+  // remove. Nothing is lost by leaving it out — it stays in the posted
+  // transcript, on the screen, and in the context of the NEXT turn.
+  //
+  // AND THE REGENERATION IS ANCHORED TO THAT SAME PROMPT, EXPLICITLY. The page
+  // derives a turn's anchor from the last message of the context when the
+  // caller does not name one, which now AGREES with the named value — but the
+  // anchor is the position claim, not a by-product of the context, so it is
+  // stated here and stays right however the context is later composed. A turn
+  // registered under a message the edit KEPT is the one over-reach the anchor
+  // exists to prevent: a later edit of THAT message would condemn this turn's
+  // bubble and offer its run for the tombstone, deleting a reply to a prompt
+  // nobody removed (`./turn-stream-registry`, `removableRunIds`).
+  const dispatchContext = [...kept, editedMessage];
+
+  // ChatGPT (normal) mode — preserve the single-stream block.
   if (!isSlackMode) {
-    await streamResponse(truncated, undefined, undefined, undefined, undefined, editedMessage.id);
+    await streamResponse(dispatchContext, undefined, undefined, undefined, undefined, editedMessage.id);
     return;
   }
 
@@ -355,5 +375,5 @@ export async function editAndResend(
   }
 
   // Fire the stream so the user gets a regenerated response on edit.
-  void streamResponse(truncated, editHandle, editEndpoint, editAuthorId, editSelector, editedMessage.id);
+  void streamResponse(dispatchContext, editHandle, editEndpoint, editAuthorId, editSelector, editedMessage.id);
 }

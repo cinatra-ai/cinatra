@@ -2146,7 +2146,10 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     // the screen, and the regeneration does not start.
     const truncationOnScreenAt = body.indexOf("setMessages(truncated)");
     expect(truncationOnScreenAt).toBeGreaterThan(intentSaveAt);
-    for (const regenerate of ["await streamResponse(truncated,", "void streamResponse(truncated,"]) {
+    // The dispatch is handed the edit's OWN context (which ends at the edited
+    // prompt), not the transcript the save posts — the ordering pinned here is
+    // the same either way, and naming the real argument keeps it pinned.
+    for (const regenerate of ["await streamResponse(dispatchContext,", "void streamResponse(dispatchContext,"]) {
       expect(body.indexOf(regenerate)).toBeGreaterThan(intentSaveAt);
     }
 

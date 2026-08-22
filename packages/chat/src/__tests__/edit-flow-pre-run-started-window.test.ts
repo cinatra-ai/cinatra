@@ -272,13 +272,13 @@ describe("an edit made inside the pre-RUN_STARTED window", () => {
   });
 
   it("ANCHORS its regeneration to the EDITED PROMPT, not to what arrived during the hold", async () => {
-    // THE DISPATCH SIDE OF THE REBUILT TRANSCRIPT. `truncated` is
-    // `[...kept, edited, ...arrived]`, so whenever anything arrived during the
-    // hold the LAST message of the regeneration's context is not the prompt it
-    // answers. The page anchors a turn to that last message unless the caller
-    // names one — which would register this regeneration under a message the
-    // edit KEPT, and a later edit of THAT message would then condemn its bubble
-    // and offer its run: a reply to a prompt nobody removed, tombstoned.
+    // THE DISPATCH SIDE OF THE REBUILT TRANSCRIPT. The page anchors a turn to
+    // the last message of the context it is handed unless the caller names one.
+    // This flow names it, so the claim holds however that context is composed —
+    // left derived off a transcript that ends in what ARRIVED during the hold,
+    // the regeneration would register under a message the edit KEPT, and a
+    // later edit of THAT message would condemn its bubble and offer its run: a
+    // reply to a prompt nobody removed, tombstoned.
     const streams = createTurnStreamRegistry();
     const held = streams.begin("a-held", new AbortController(), "u2");
 
@@ -308,10 +308,12 @@ describe("an edit made inside the pre-RUN_STARTED window", () => {
     expect(editedId, "the edited prompt is in the posted transcript").toBeTruthy();
 
     expect(dispatched).toHaveLength(1);
-    // The tail of the dispatch context IS the message that arrived...
-    expect(dispatched[0]?.tail).toBe("u3");
-    // ...so the anchor cannot be derived from it. It is named, and it is the
-    // prompt this regeneration was dispatched to answer.
+    // The dispatch context ends at the edited prompt — what arrived during the
+    // hold is in the posted transcript above, not in what the model is asked to
+    // answer (the dispatch-context arm below is where that is the claim).
+    expect(dispatched[0]?.tail).toBe(editedId);
+    // The anchor is NAMED rather than left to be derived from that tail, and it
+    // is the prompt this regeneration was dispatched to answer.
     expect(
       dispatched[0]?.anchor,
       "the regeneration is anchored to a message that merely arrived during the hold",
@@ -331,6 +333,63 @@ describe("an edit made inside the pre-RUN_STARTED window", () => {
     ).not.toContain("run-regen");
     // ...while an edit of the prompt it actually answers still reaches it.
     expect(streams.condemnedTurnIds([editedId as string])).toContain("a-regen");
+  });
+
+  it("DISPATCHES a context ending at the edited prompt while the SAVE still posts what arrived", async () => {
+    // THE MODEL CONTEXT IS A DIFFERENT QUESTION FROM THE PAYLOAD, and this arm
+    // is the one that separates them. `streamAgUiResponse` maps the context it
+    // is handed straight into the request, so dispatching the rebuilt
+    // transcript would ask the model to answer a conversation whose last turn
+    // is a message that merely ARRIVED while this edit was holding. The
+    // regeneration answers the EDITED PROMPT, so that is where its context
+    // ends — while the save keeps posting the whole thread, arrivals and all,
+    // because a message missing from the payload is a message deleted.
+    const streams = createTurnStreamRegistry();
+    const held = streams.begin("a-held", new AbortController(), "u2");
+    // A concurrent turn ABOVE the edit point, so BOTH kinds of arrival are in
+    // play: a reply that reveals mid-hold, and a message the reader posts.
+    streams.begin("a-kept", new AbortController(), "u1");
+
+    const live: Message[] = [...SNAPSHOT];
+    const contexts: Message[][] = [];
+    const flow = editAndResend(
+      deps(streams, {
+        currentMessages: () => live,
+        streamResponse: async (contextMessages) => {
+          contexts.push(contextMessages);
+        },
+      }),
+      "u2",
+      "actually, ask something else",
+    );
+    await drainMicrotasks();
+
+    live.push(msg("a-kept", "assistant"));
+    live.push(msg("u3", "user"));
+
+    expect(streams.noteRunId(held, "run-held")).toBe(true);
+    await flow;
+
+    // THE SAVE carries both arrivals, in the order they happened relative to
+    // the edit point.
+    const posted = (saved[0] as { messages: Message[] }).messages;
+    expect(shape(posted)).toEqual(["u1", "a1", "<edit>", "a-kept", "u3"]);
+    const editedId = posted.find((m) => m.content === "actually, ask something else")?.id;
+    expect(editedId, "the edited prompt is in the posted transcript").toBeTruthy();
+
+    // THE DISPATCH carries neither, and ends at the prompt it answers.
+    expect(contexts).toHaveLength(1);
+    const dispatched = contexts[0] ?? [];
+    expect(
+      shape(dispatched),
+      "the model was handed the persistence payload instead of the edit's own context",
+    ).toEqual(["u1", "a1", "<edit>"]);
+    expect(
+      dispatched[dispatched.length - 1]?.id,
+      "the model was asked to answer a message that merely arrived during the hold",
+    ).toBe(editedId);
+    expect(dispatched.map((m) => m.id)).not.toContain("a-kept");
+    expect(dispatched.map((m) => m.id)).not.toContain("u3");
   });
 
   it("posts exactly the pre-await slice when NOTHING arrives during the hold", async () => {
