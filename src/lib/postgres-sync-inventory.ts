@@ -319,7 +319,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/run-selected-skill-revisions.ts": {
     class: "migratable-request-path",
     justification:
-      "The authoritative per-run selected skill-revision store (cinatra#2041 S3): immutable write (execution worker / headless auto-apply) + read (execution-start snapshot, llm-bridge delivery). Mirrors the sync-store shape of agent-run-skills-used.ts so both consumers share one import surface; the reads are best-effort at each call site (a failure falls back to the computed assignment, never failing the run/request). Request/run-time; migratable to async pooled access.",
+      "The authoritative per-run selected skill-revision store (cinatra#2041 S3): immutable write (execution worker / headless auto-apply) + read (execution-start snapshot, llm-bridge delivery). Mirrors the sync-store shape of agent-run-skills-used.ts so both consumers share one import surface; the reads are best-effort at each call site (a failure falls back to the computed assignment, never failing the run/request). Also carries the run-level recommendation-skip record (cinatra#2794 S9b, table run_recommendation_skips / migration core__0095): the verified write pairs an ON CONFLICT DO NOTHING insert with a read-back on the SAME non-transactional call, so the marker is proved COMMITTED before the run's park is released — one call site that cannot be split without losing that guarantee. Request/run-time; migratable to async pooled access.",
   },
   "src/lib/skill-efficacy.ts": {
     class: "migratable-request-path",

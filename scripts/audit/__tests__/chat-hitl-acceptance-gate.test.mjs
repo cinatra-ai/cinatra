@@ -216,17 +216,30 @@ describe("the REAL manifest", () => {
     // program's own review round caught by hand. An unindexed screenshot now
     // counts as zero, so the honest answer on this tree is RED in both modes.
     //
-    // This expectation was READY before, and flipping it is the conscious act
-    // the previous comment demanded. It goes back to green when the capture
-    // round indexes those cells against the shared recorder, and not before.
+    // This expectation was READY before, then RED, and it is green again now —
+    // for the reason the previous comment named as the only acceptable one.
+    // cinatra#2791 (S9g) drove both cells against a live app with the shipped
+    // recorder, validated them at the audit tier, registered the records in
+    // scripts/ci/chat-hitl-capture-index.json, and moved the manifest citations
+    // onto the new cell names. The evidence half is therefore silent.
+    //
+    // It is the EVIDENCE half this arm asserts, not readiness: `--strict` still
+    // exits 1 because two criteria are legitimately MISSING (see the next test),
+    // and conflating the two is exactly what the comment above warns against.
     for (const args of [[], ["--strict"]]) {
       const res = spawnSync(process.execPath, [GATE, ...args], {
         cwd: REPO_ROOT,
         encoding: "utf8",
       });
-      expect(res.stdout + res.stderr).toMatch(/an unindexed screenshot counts as zero/);
-      expect(res.status, `mode ${args.join(" ") || "audit"}`).toBe(1);
+      expect(
+        res.stdout + res.stderr,
+        `mode ${args.join(" ") || "audit"}`,
+      ).not.toMatch(/an unindexed screenshot counts as zero/);
     }
+    // The default mode — the required job — is fully green.
+    expect(
+      spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" }).status,
+    ).toBe(0);
   });
 
   it("the criteria half reports the program NOT READY — the two proof gaps, named", () => {
@@ -252,7 +265,16 @@ describe("the REAL manifest", () => {
     expect(unproven).toHaveLength(2);
     expect(partial).toHaveLength(1);
     expect(unproven.map((r) => r.gap).join("\n")).toMatch(/UI PROOF MISSING/);
-    expect(unproven.map((r) => r.gap).join("\n")).toMatch(/CARD AXIS MISSING/);
+    // "CARD AXIS MISSING" became "CARD AXIS PARTIAL" with cinatra#2791 (S9g):
+    // six cells landed — the review gate on chat_thread pending AND decided, the
+    // review gate on the page gate region, the audit card on two hosts, the chip
+    // row on the run card — so "missing" stopped being the true word. The row is
+    // still MISSING as a criterion, and the gap now names each remaining cell
+    // with the shipped line that blocks it, which is what this assertion pins.
+    expect(unproven.map((r) => r.gap).join("\n")).toMatch(/CARD AXIS PARTIAL/);
+    expect(unproven.map((r) => r.gap).join("\n")).toMatch(
+      /§VI is NOT DRAWN on main/,
+    );
     // The line the CLI would print, spelled out here so a regression in either
     // count is still legible as the sentence a reader sees.
     expect(`${total - unproven.length}/${total} criteria proven, ${unproven.length} MISSING, ${partial.length} partial`).toBe(

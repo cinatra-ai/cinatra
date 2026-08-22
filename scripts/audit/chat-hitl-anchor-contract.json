@@ -61,10 +61,10 @@
    },
    "recommendation_hold": {
     "hosts": {
+     "chat_thread": "transcript",
      "run_card": "composition"
     },
     "owed": [
-     "chat_thread",
      "site_widget"
     ]
    },
@@ -86,5 +86,5 @@
    }
   }
  },
- "digest": "3c5fd4eb17ad15f15b579b2870f7527444c81bdbeb1d49f75887f8948e39fbe2"
+ "digest": "1f944fe52218cd1d591f387d8dd2f01ec732603d104c307b7b1af42567b9c02a"
 }

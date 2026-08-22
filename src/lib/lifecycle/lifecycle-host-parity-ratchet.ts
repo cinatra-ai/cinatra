@@ -198,9 +198,11 @@ export type HostParityRatchetRow = {
  * The two shell kinds reach the conversation hosts and nothing else — no run-card
  * or gate-region composition mounts them, so those cells are not targets.
  *
- * `recommendation_hold` is the mirror image: it is composed on the run card
- * today, and its two conversation cells are owed by named slices — the chat
- * thread by S9b (#2786) and the widget by S9f (#2790), which is also why this
+ * `recommendation_hold` is the mirror image: it is composed on the run card,
+ * and it now draws on the chat thread too — S9b (#2786) landed that mount, so
+ * the chat_thread cell moved from `owed` to `hosts` and is RECORDED as a
+ * `transcript` observation, read off the shared column rendering a held
+ * dispatch turn. The widget cell stays owed by S9f (#2790), which is why this
  * slice consumes the widget row as an observation rather than asserting a card
  * that no branch has landed.
  */
@@ -236,9 +238,8 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
     owed: Object.freeze([]),
   },
   recommendation_hold: {
-    hosts: Object.freeze({ run_card: "composition" }),
+    hosts: Object.freeze({ chat_thread: "transcript", run_card: "composition" }),
     owed: Object.freeze([
-      { host: "chat_thread" as LifecycleCardHost, tracking: "cinatra#2786 (S9b)" },
       { host: "site_widget" as LifecycleCardHost, tracking: "cinatra#2790 (S9f)" },
     ]),
   },

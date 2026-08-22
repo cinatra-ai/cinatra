@@ -1,0 +1,36 @@
+{
+  "$comment": "Every cell this round DROVE, including the three it refused to write. A refusal is an observation: the counts that produced it are here so the reason can be checked rather than taken on trust.",
+  "refused": [
+    {
+      "cell": "G6__audit-card__page_gate_region__advisory",
+      "violations": [
+        "record \"G6__audit-card__page_gate_region__advisory\": assertion [data-lifecycle-card=\"verification_summary\"]: recorded as present but observed 0 times",
+        "record \"G6__audit-card__page_gate_region__advisory\": assertion [data-lifecycle-card-host=\"page_gate_region\"]: recorded as present but observed 0 times"
+      ]
+    },
+    {
+      "cell": "G7__audit-card__chat_thread__advisory",
+      "violations": [
+        "record \"G7__audit-card__chat_thread__advisory\": a chat_thread record must declare the `declaredState` it photographed (pending/decided) — a decided card owes the ABSENCE of its controls, not their presence; it declares \"advisory\""
+      ]
+    },
+    {
+      "cell": "G4__review-card__page_gate_region__decided",
+      "violations": [
+        "record \"G4__review-card__page_gate_region__decided\": assertion [data-lifecycle-card-host=\"page_gate_region\"]: recorded as present but observed 0 times",
+        "record \"G4__review-card__page_gate_region__decided\": assertion [data-lifecycle-card=\"artifact_review_gate\"]: recorded as present but observed 0 times",
+        "record \"G4__review-card__page_gate_region__decided\": assertion [data-lifecycle-card-state]: recorded as present but observed 0 times",
+        "record \"G4__review-card__page_gate_region__decided\": assertion [data-lifecycle-card-host=\"page_gate_region\"]: recorded as present but observed 0 times",
+        "record \"G4__review-card__page_gate_region__decided\": host \"page_gate_region\" requires [data-lifecycle-card-host=\"page_gate_region\"] PRESENT (frame-scoped); the record observed 0"
+      ]
+    },
+    {
+      "cell": "G9__recommendation-card__run_card__settled",
+      "violations": [
+        "record \"G9__recommendation-card__run_card__settled\": assertion [data-skill-action=\"confirm\"]: recorded as absent but observed 4 times",
+        "record \"G9__recommendation-card__run_card__settled\": assertion [data-skill-action=\"adjust\"]: recorded as absent but observed 4 times",
+        "record \"G9__recommendation-card__run_card__settled\": assertion [data-skill-action=\"skip\"]: recorded as absent but observed 4 times"
+      ]
+    }
+  ]
+}

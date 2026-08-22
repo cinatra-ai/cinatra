@@ -66,6 +66,27 @@ export type PrimitiveActorContext = {
     tier: "user" | "team" | "organization" | "workspace" | "project";
     id: string;
   }>;
+  // SERVER-DERIVED launch origin for the IN-PROCESS chat pre-router ONLY.
+  //
+  // A remote MCP frame does NOT use this field: its chat origin is already
+  // transport-verified as `McpRequestContext.delegatedRestricted` and forwarded
+  // onto the model actor by the agents registry, so a second independently
+  // stamped remote claim would be a second thing to forge. The in-process
+  // pre-router has no such carrier (it never builds a delegated actor at all),
+  // which is why this field exists.
+  //
+  // Trust boundary, and it is the whole point of the field: it is stamped in
+  // EXACTLY ONE place — `chatActorToPrimitive` in the chat dispatch boundary,
+  // which is server-only code holding an already-authenticated kernel
+  // Principal. No primitive INPUT is ever read into it, so the model cannot set
+  // it, and no client-side code can reach the envelope. Consumers must treat a
+  // present value as authoritative and an absent value as "not the in-process
+  // chat pre-router" — never as a reason to fall back to caller-supplied data.
+  //
+  // Presence, not permission: it decides whether a run is human-present (and so
+  // whether it may pause on a lifecycle hold). It grants no authority and
+  // widens no allowlist.
+  launchOrigin?: "chat";
 };
 
 export type PrimitiveErrorShape = {

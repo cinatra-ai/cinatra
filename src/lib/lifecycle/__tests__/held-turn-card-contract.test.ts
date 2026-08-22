@@ -546,15 +546,30 @@ describe("a cardless held turn: the exemption, and what it costs", () => {
     const codes = evaluateHeldTurnProjection(cardless(VERBLESS_POINTER), HELD_TURN_ROW).map(
       (v) => v.code,
     );
-    // The always-on arm, with no `requireMount` asked for: the obligation row
-    // still permits the missing card, and the pointer is refused anyway.
+    // The always-on arm, with no `requireMount` asked for. Since S9b landed the
+    // mount the row is struck, so the missing card is refused too — but the
+    // point of this case is that the POINTER is refused on its own terms, with
+    // no verb to anchor on, which is why the assertion stays a `toContain`.
     expect(codes).toContain("surface_pointer_without_card");
   });
 
-  it("PASSES the cardless turn main actually ships today", () => {
-    // The exemption is real, not a slow no. Today's dispatch text names no
-    // surface, so a held turn with no card is still clean while the row stands.
-    expect(evaluateHeldTurnProjection(cardless(CLEAN_DISPATCH_TEXT), HELD_TURN_ROW)).toEqual([]);
+  it("no longer passes the cardless turn — the exemption expired with the row", () => {
+    // This case used to record the exemption: main shipped a held turn with no
+    // card, its dispatch text named no surface, and the standing obligation row
+    // made that clean. S9b (cinatra#2786) landed the chat mount and the row was
+    // struck, so the SAME projection is now refused — and refused for the card
+    // alone, since the text still names no surface. That single code is the
+    // proof the strike moved this, rather than some prose regression.
+    expect(
+      evaluateHeldTurnProjection(cardless(CLEAN_DISPATCH_TEXT), HELD_TURN_ROW).map((v) => v.code),
+    ).toEqual(["card_not_mounted"]);
+    // And the turn with the card is clean, which is what the mount buys.
+    expect(
+      evaluateHeldTurnProjection(
+        { parts: heldParts(CLEAN_DISPATCH_TEXT), nodes: [cardNode()] },
+        HELD_TURN_ROW,
+      ),
+    ).toEqual([]);
   });
 
   it("stops applying the cardless arm once the card IS mounted", () => {
@@ -589,16 +604,27 @@ describe("the positive arm is the DEFAULT, and the obligation list is its only e
     }
   });
 
-  it("does NOT demand the card for the owed kind, so the ratchet still stands", () => {
-    // `recommendation_hold` is on the list today. Turning the arm on for it
-    // would red CI on main, which is the thing the list exists to avoid.
-    expect(heldTurnMountIsOwed(HELD_TURN_ROW.kind)).toBe(true);
+  it("DEMANDS the card for the held kind now that its row is struck", () => {
+    // `recommendation_hold` was the one row on the list. S9b (cinatra#2786)
+    // landed the production chat_thread mount, the row was struck, and the arm
+    // turned itself on — nobody passed a flag. A cardless held turn is a
+    // failure for this kind now, which is the state this whole module was built
+    // to reach.
+    expect(heldTurnMountIsOwed(HELD_TURN_ROW.kind)).toBe(false);
     expect(
       evaluateHeldTurnProjection(
         { parts: heldParts(CLEAN_DISPATCH_TEXT), nodes: [] },
         HELD_TURN_ROW,
       ).map((v) => v.code),
-    ).not.toContain("card_not_mounted");
+    ).toContain("card_not_mounted");
+  });
+
+  it("has no exemption left to take — the obligation list is empty", () => {
+    // The list is the ONLY ruled reason a held turn may show no card. Empty
+    // means every ruled kind is asserted, so a future kind arriving unmounted
+    // has to add its own row deliberately rather than inherit an exemption.
+    expect([...HELD_TURN_MOUNT_OBLIGATIONS]).toEqual([]);
+    for (const kind of RULED_KINDS) expect(heldTurnMountIsOwed(kind)).toBe(false);
   });
 
   it("DEMANDS the card for a kind whose row is struck, without anyone passing a flag", () => {

@@ -438,7 +438,14 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     // struck rather than carried forward as a requirement the tree already meets.
     openObligations: [],
     hosts: {
-      chat_thread: null,
+      chat_thread: [
+        {
+          module: "packages/chat/src/chat-messages-view.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the assistant dispatch turn: the card mounts on the run identity read off the tool result, and NOT through the renderable-view registry, because this kind's carriage is an interrupt rather than a data part",
+        },
+      ],
       site_widget: null,
       run_card: [
         {
@@ -473,7 +480,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       },
     },
     hostGap:
-      "Three of the four hosts carry no mount. The chat thread is RULED and belongs to the chat-origin slice: the card mounts in the assistant dispatch turn, keyed by the run identity off the tool result, and NOT through the renderable-view registry. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.",
+      "Two of the four hosts carry no mount. The chat thread HAS one: cinatra#2786 (S9b) landed the assistant-dispatch-turn mount, keyed by the run identity off the tool result and NOT through the renderable-view registry, and it is enumerated above with a counted instance proof. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.",
     // The row's own root, because the lifecycle-card identity is the open
     // obligation below. When that obligation closes, this becomes
     // `[data-lifecycle-card="recommendation_hold"]` in the same change.
@@ -483,12 +490,12 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // declared host, feeds it a validated hold state, and reads the row, its
       // two ratified decisions and the count back out of real DOM.
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-      testName: "host run_card draws EXACTLY ONE chip row, carrying the ratified decisions",
+      testName: "hosts run_card and chat_thread each draw EXACTLY ONE chip row, carrying the ratified decisions",
     },
     instanceProof: {
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-      testName: "host run_card draws EXACTLY ONE chip row, carrying the ratified decisions",
-      hosts: ["run_card"],
+      testName: "hosts run_card and chat_thread each draw EXACTLY ONE chip row, carrying the ratified decisions",
+      hosts: ["run_card", "chat_thread"],
     },
   },
 

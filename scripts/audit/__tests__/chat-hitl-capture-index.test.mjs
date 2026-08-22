@@ -917,10 +917,14 @@ describe("the committed index and the gate CLI", () => {
       "B3b__chat__the-ambiguous-send-is-refused-and-goes-nowhere :: -",
       "B4a__chat__explicit-focus-binds-that-card-only :: -",
       "B4b__chat__moving-the-focus-moves-where-the-comment-lands :: -",
-      "C1__review-card__chat_thread__pending :: chat_thread",
-      "C1__review-card__chat_thread__pending :: chat_thread",
-      "C2__review-card__chat_thread__decided :: chat_thread",
-      "C2__review-card__chat_thread__decided :: chat_thread",
+      "G1__review-card__chat_thread__pending :: chat_thread",
+      "G1__review-card__chat_thread__pending :: chat_thread",
+      "G2__review-card__chat_thread__decided :: chat_thread",
+      "G2__review-card__chat_thread__decided :: chat_thread",
+      "G3__review-card__page_gate_region__pending :: page_gate_region",
+      "G5__audit-card__run_card__advisory :: run_card",
+      "G6__audit-card__page_gate_region__advisory :: page_gate_region",
+      "G8__recommendation-card__run_card__held :: run_card",
       "island__first_party__server_rendered :: -",
       "island__forged_ref__empty :: -",
       "review-card__page_gate_region__pending :: page_gate_region",
@@ -934,6 +938,12 @@ describe("the committed index and the gate CLI", () => {
     // bypass sitting in the tree already, visible instead of silent: relabelling
     // a chat_thread cell to `__chat__` would land it in this list, not out of
     // sight. Binding them is the capture round's work, not a rename away.
+    //
+    // MOVED BY cinatra#2791 (S9g): the two S7-era `C1` / `C2` chat_thread cells
+    // are replaced by `G1` / `G2`, which have records; and the card axis grew
+    // three cells the manifest never cited before — the audit card on two hosts
+    // (`G5`, `G6`) and the chip row on the run card (`G8`). Every added name
+    // resolves to a record in the canonical index.
   });
 
   it("RATCHET: exactly these chat_thread cells are unbound today", () => {
@@ -948,18 +958,31 @@ describe("the committed index and the gate CLI", () => {
           .filter(Boolean),
       ),
     ].sort();
-    expect(unbound).toEqual([
-      "C1__review-card__chat_thread__pending",
-      "C2__review-card__chat_thread__decided",
-    ]);
+    // STRUCK by cinatra#2791 (S9g). Both cells were re-driven against a live
+    // app by the shipped recorder, validated at the audit tier, registered in
+    // scripts/ci/chat-hitl-capture-index.json, and the manifest rows that cited
+    // the old names now cite the new ones. An empty list is the direction this
+    // ratchet was built to move in — and it stays a ratchet: a later round that
+    // cites another unindexed chat screenshot fails HERE.
+    expect(unbound).toEqual([]);
   });
 
-  it("the gate CLI REFUSES both modes while a claimed chat cell is unbound", () => {
+  it("the gate CLI reports NO capture-index violation in either mode", () => {
+    // It used to REFUSE both modes, because two claimed chat cells had no
+    // record. cinatra#2791 (S9g) produced the records, so the honest assertion
+    // is the mirror image: the capture-index arm is silent. `--strict` may still
+    // exit non-zero for the CRITERIA half — two rows are legitimately MISSING —
+    // so this arm asserts the capture message specifically rather than the exit
+    // code, which is the thing this file is about.
     for (const args of [[], ["--strict"]]) {
       const run = spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8" });
-      expect(run.status, `mode ${args.join(" ") || "audit"}`).toBe(1);
-      expect(run.stderr).toMatch(/an unindexed screenshot counts as zero/);
+      expect(
+        `${run.stdout}${run.stderr}`,
+        `mode ${args.join(" ") || "audit"}`,
+      ).not.toMatch(/an unindexed screenshot counts as zero/);
     }
+    // And the default mode is fully green.
+    expect(spawnSync(process.execPath, [GATE], { encoding: "utf8" }).status).toBe(0);
   });
 });
 

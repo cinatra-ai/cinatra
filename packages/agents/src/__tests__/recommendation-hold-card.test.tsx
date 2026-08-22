@@ -431,7 +431,7 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     expect(holdStateMock).not.toHaveBeenCalled();
   });
 
-  it("draws IDENTICALLY on every cookie host — the per-surface matrix is gone", async () => {
+  it("draws IDENTICALLY on page_gate_region and chat_thread — the per-surface matrix is gone", async () => {
     // The removed rule said "a widget visitor never shapes a run's skills", and
     // it made this kind FALSE on `site_widget` in a presence table. The table is
     // gone: what a host draws is no longer a property of which host it is. The
@@ -443,17 +443,25 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     });
     expect(holdStateMock).toHaveBeenCalled();
     // React mints a fresh `useId` per mount, so the two renders differ in their
-    // generated ARIA ids and in nothing else. Normalising them is what makes
-    // "the same drawing" a byte comparison instead of a spot check.
-    // The host DECLARATION is normalised alongside the generated ids, and for the
-    // same reason: neither is part of the drawing. `data-lifecycle-card-host` is
-    // the surface saying which surface it is (cinatra#2841) — `ReviewGateCard`
-    // has emitted it per host since it shipped — so it differs across hosts by
-    // construction while the card drawn on them stays identical.
+    // generated ARIA ids. Normalising them is what makes "the same drawing" a
+    // byte comparison instead of a spot check.
+    //
+    // The card root also carries `data-lifecycle-card-host`, which by
+    // definition differs per host — it is the mount's IDENTITY, required on the
+    // §V root so each authorized mount is labelled with the host it actually
+    // declared (cinatra#2841; `ReviewGateCard` has emitted it per host since it
+    // shipped). That is not the thing this pin guards. The guarantee here is
+    // that what a host DRAWS — its content, its affordances, its state — is not
+    // a property of which host it is, so the label is normalised and everything
+    // else still compares byte for byte, including all three chip actions.
     const stripGeneratedIds = (html: string) =>
       html
         .replaceAll(/radix-_r_[0-9a-z]+_/g, "radix-_r_ID_")
-        .replaceAll(/data-lifecycle-card-host="[a-z_]+"/g, 'data-lifecycle-card-host="HOST"');
+        .replaceAll(/data-lifecycle-card-host="[a-z_]+"/g, 'data-lifecycle-card-host="HOST"')
+        // The chat host also stamps its own evidence marker on the same root —
+        // again an identity, not a drawing. Normalised for the same reason, and
+        // asserted explicitly below so its presence is still pinned.
+        .replaceAll(/ ?data-chat-thread-recommendation-hold=""/g, "");
     const widgetHtml = stripGeneratedIds(widget.container.innerHTML);
     expect(widgetHtml).not.toBe("");
     // REDRAWN (cinatra#2841): the decision affordances are PER CHIP now — the
@@ -463,6 +471,11 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     expect(widgetHtml).toContain('data-action="skip-skill -> skipped"');
     expect(widgetHtml).not.toContain("confirm-run-recommendation");
     expect(widgetHtml).not.toContain("skip-run-recommendation");
+    // The label is normalised above, so assert it is REALLY there and really
+    // host-correct on each mount — otherwise the normalisation could hide a
+    // missing or wrong identity.
+    expect(widget.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
+      ?.getAttribute("data-lifecycle-card-host")).toBe("page_gate_region");
 
     cleanup();
     holdStateMock.mockClear();
@@ -470,6 +483,12 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     await act(async () => {
       await Promise.resolve();
     });
+    expect(chat.container.querySelector('[data-lifecycle-card="recommendation_hold"]')
+      ?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+    // The chat mount's evidence marker rides that same root, and no other host
+    // carries it.
+    expect(chat.container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expect(widget.container.querySelector("[data-chat-thread-recommendation-hold]")).toBeNull();
     expect(stripGeneratedIds(chat.container.innerHTML)).toBe(widgetHtml);
   });
 
@@ -526,28 +545,49 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
   // set scripts/audit/chat-hitl-anchor-contract.json ratifies for this owner.
   // The row-level confirm/skip pair this assertion used to name is not emitted
   // on any host any more, so asserting it would test a retired drawing.
-  it("host run_card draws EXACTLY ONE chip row, carrying the ratified decisions", async () => {
-    holdStateMock.mockImplementation(async () => HELD);
-    const { container } = await mountCard({ wireRef: "hold-ref-1", host: "run_card" });
-    await waitFor(() =>
-      expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull(),
-    );
-    expect(container.querySelectorAll("[data-run-recommendation-chip-row]")).toHaveLength(1);
-    const root = container.querySelector("[data-run-recommendation-chip-row]")!;
-    // The card's IDENTITY, read off the root it mounted rather than assumed. The
-    // owner emits these since cinatra#2841 closed the root-identity obligation,
-    // so the instance proof can now name which card, on which host, in which
-    // state it photographed — the thing the recorded obligation said it could not.
-    expect(container.querySelector('[data-lifecycle-card="recommendation_hold"]')).not.toBeNull();
-    expect(container.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull();
-    expect(root.getAttribute("data-lifecycle-card-host")).toBe("run_card");
-    expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
-    expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
-    expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
-    expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
-    // Every value above came from the VALIDATED hold state, not from a literal:
-    // drop the skills the state carried and the row draws nothing to press.
-    expect(root.textContent).toContain("Skill A");
+  it("hosts run_card and chat_thread each draw EXACTLY ONE chip row, carrying the ratified decisions", async () => {
+    // BOTH production mounts are driven here, and the hosts are named as
+    // LITERALS, one per line, because this test IS the record of which hosts
+    // were actually driven (the S9e shape, review-gate-card.test.tsx).
+    //
+    // `chat_thread` joined this list when cinatra#2786 (S9b) landed the
+    // assistant-dispatch-turn mount and the one-card gate enumerated it: a host
+    // with a production adapter and no COUNTED instance proof is a host where a
+    // second renderer could arrive unseen, which is the whole failure the
+    // one-card rule exists to prevent.
+    for (const host of ["run_card", "chat_thread"] as const) {
+      holdStateMock.mockImplementation(async () => HELD);
+      const { container, unmount } = await mountCard({ wireRef: "hold-ref-1", host });
+      await waitFor(() =>
+        expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull(),
+      );
+      // EXACTLY ONE instance on this host. A second adapter drawing beside this
+      // one is only ever visible as a COUNT on rendered DOM — a presence check
+      // cannot see a duplicate.
+      expect(container.querySelectorAll("[data-run-recommendation-chip-row]")).toHaveLength(1);
+      expect(
+        container.querySelectorAll('[data-lifecycle-card="recommendation_hold"]'),
+      ).toHaveLength(1);
+      const root = container.querySelector("[data-run-recommendation-chip-row]")!;
+      // The card's IDENTITY, read off the root it mounted rather than assumed. The
+      // owner emits these since cinatra#2841 closed the root-identity obligation,
+      // so the instance proof can now name which card, on which host, in which
+      // state it photographed — the thing the recorded obligation said it could not.
+      expect(container.querySelector('[data-lifecycle-card="recommendation_hold"]')).not.toBeNull();
+      expect(container.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull();
+      // The host is read back off the root, so this asserts the mount DECLARED
+      // the host being driven rather than a constant the test supplied.
+      expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
+      expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
+      expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+      expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+      expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+      // Every value above came from the VALIDATED hold state, not from a literal:
+      // drop the skills the state carried and the row draws nothing to press.
+      expect(root.textContent).toContain("Skill A");
+      unmount();
+      cleanup();
+    }
   });
 
   it("draws nothing at all for a run that was never held", async () => {

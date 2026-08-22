@@ -18,9 +18,8 @@
 // and an impure wrapper (`diagnoseDockerPortDrift`) that shells out to Docker.
 
 import { spawnSync } from "node:child_process";
+import { buildComposeArgs, formatGuardedComposeCommand } from "./dev-preflight.mjs";
 import path from "node:path";
-
-import { buildComposeArgs } from "./dev-preflight.mjs";
 
 // The bundled local DB/cache services whose host ports come from the dev override.
 // `containerPort` is the in-container listen port; `defaultHostPort` is the
@@ -150,15 +149,30 @@ export function resolveMainRepoRoot(cwd = process.cwd()) {
 // on its own.)
 //
 // The compose argv comes from the SHARED builder so the file list cannot drift
-// between the two paths. No project is pinned: drift diagnosis deliberately
-// inspects the main checkout's shared stack, which is compose's own
-// basename-derived project — see resolveMainRepoRoot above.
+// between the two paths. The project is pinned to whatever the caller resolved:
+// this diagnosis must look at the SAME compose project the writes go to, and an
+// unpinned `ps` would inspect the basename-derived project while the preflight's
+// `up` targets the lane's — so a lane could be told its healthy container had
+// drifted. Pinning is what keeps the two in step (cinatra#2839). An UNSCOPED
+// checkout resolves no project name, `buildComposeArgs` then omits `-p`
+// entirely, and the diagnosis inspects the main checkout's shared stack under
+// compose's own basename-derived project exactly as before — see
+// resolveMainRepoRoot above.
 //
-// @param {{ service: object, mainRoot: string, expectedHostPort: number|string, skip?: boolean }} input
-export function diagnoseDockerPortDrift({ service, mainRoot, expectedHostPort, skip = false }) {
+// @param {{ service: object, mainRoot: string, expectedHostPort: number|string, projectName?: string, skip?: boolean }} input
+export function diagnoseDockerPortDrift({
+  service,
+  mainRoot,
+  expectedHostPort,
+  projectName,
+  skip = false,
+}) {
   if (skip) return { available: false, skipped: true };
   const compose = (args) =>
-    spawnSync("docker", buildComposeArgs({ args }), { cwd: mainRoot, encoding: "utf8" });
+    spawnSync("docker", buildComposeArgs({ projectName, args }), {
+      cwd: mainRoot,
+      encoding: "utf8",
+    });
 
   // `ps -q <service>` (all states) → the container id in THIS project for the
   // service, regardless of which compose files started it (project+service
@@ -191,6 +205,13 @@ export function diagnoseDockerPortDrift({ service, mainRoot, expectedHostPort, s
 }
 
 // The single actionable remedy message shared by both consumers.
+//
+// The raw alternative is the GUARDED chain, not a bare `docker compose up`
+// (cinatra#2839). A pasted bring-up that skips scripts/dev-compose-env.mjs is
+// unpinned — the step is what exports COMPOSE_PROJECT_NAME, which Docker never
+// reads from `.env.local` — and unguarded, so it publishes the very shared
+// defaults every real entry point now refuses to publish for a lane. Built from
+// `formatGuardedComposeCommand` so this line cannot drift from those recipes.
 export function formatDriftRemedy(driftedServiceLabels) {
   const which = driftedServiceLabels.join(", ");
   return [
@@ -200,7 +221,7 @@ export function formatDriftRemedy(driftedServiceLabels) {
     "docker-compose.dev.yml. Re-create the services WITH the dev override (data is preserved):",
     "",
     "    pnpm services",
-    "    # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d",
+    `    # or: ${formatGuardedComposeCommand({ args: ["up", "-d"], requireManageable: true })}`,
     "",
   ].join("\n");
 }
