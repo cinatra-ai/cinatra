@@ -16,10 +16,16 @@
 //   · READ FIRST, WRITE SECOND. The snapshot is persisted BEFORE the first
 //     mutation, so a crash halfway through setup still leaves the teardown
 //     something to put back.
-//   · PUT BACK THE ORIGINAL, NEVER A GUESS. The role string is recorded VERBATIM
-//     and written back verbatim. An account that ALREADY carried `admin` recorded
+//   · UNDO THE CHANGE, DO NOT REPLAY THE ROW. The role string is recorded
+//     VERBATIM, and the restore strips `admin` from whatever the column holds at
+//     teardown time rather than writing the snapshot back over it. That leaves a
+//     role somebody else granted mid-run standing; a verbatim replay would
+//     silently revoke it under a passing verdict. With no concurrent write the two
+//     agree exactly. An account that ALREADY carried `admin` recorded
 //     `roleChanged: false` and is not written at all — blindly stripping `admin`
-//     on the reuse path would remove a grant this suite never made.
+//     on the reuse path would remove a grant this suite never made. Where the two
+//     readings of "undo" diverge — a concurrent grant of `admin` ITSELF — the
+//     restore strips it anyway; see the rationale at the write.
 //   · ONLY WHAT THIS FIXTURE CHANGED IS RESTORED, AND ONLY THAT IS ASSERTED. A
 //     membership row that was already there is neither deleted nor compared: this
 //     suite neither created nor moved it, and asserting a value for somebody
@@ -83,9 +89,20 @@ export interface AccountSnapshot {
   memberInsert: "not_attempted" | "pending" | "inserted" | "already_present";
 }
 
-function persist(snapshot: AccountSnapshot): void {
+/**
+ * Write the snapshot. `claim` makes it an EXCLUSIVE CREATE.
+ *
+ * The first write is the one that claims the account, and it uses the `wx` flag —
+ * `O_CREAT | O_EXCL`, which the kernel decides atomically. A "does it exist?" check
+ * followed by a write would leave a window in which two runs both see no file and
+ * then overwrite each other, which is the exact race the claim exists to stop. The
+ * later writes are the SAME run refining its own record, so they overwrite.
+ */
+function persist(snapshot: AccountSnapshot, { claim = false } = {}): void {
   mkdirSync(dirname(ACCOUNT_SNAPSHOT_PATH), { recursive: true });
-  writeFileSync(ACCOUNT_SNAPSHOT_PATH, `${JSON.stringify(snapshot, null, 2)}\n`);
+  writeFileSync(ACCOUNT_SNAPSHOT_PATH, `${JSON.stringify(snapshot, null, 2)}\n`, {
+    flag: claim ? "wx" : "w",
+  });
 }
 
 function newClient(): Client {
@@ -98,6 +115,11 @@ function carriesAdmin(role: string | null): boolean {
   return role.split(",").some((part) => part.trim() === "admin");
 }
 
+/** `null` and `""` both mean "no roles"; a restore must not red on the difference. */
+function sameRole(a: string | null, b: string | null): boolean {
+  return (a ?? "").trim() === (b ?? "").trim();
+}
+
 /**
  * Record the account's PRE-MUTATION state and persist it, BEFORE the first write.
  *
@@ -105,6 +127,23 @@ function carriesAdmin(role: string | null): boolean {
  * still untouched. The membership half is not known yet — the organization is
  * looked up from the template afterwards — so it is recorded by
  * `recordMemberInsert` below, which persists again each time it learns more.
+ *
+ * AN EXISTING SNAPSHOT IS A HARD STOP, NEVER A THING TO OVERWRITE. The file is
+ * the ONLY record of some other run's pre-mutation state, and that run's grants
+ * are still live until its teardown consumes it. Clobbering it stranded the
+ * grants permanently, by a route with no red anywhere:
+ *
+ *   run A snapshots `role = "user"` and promotes the account;
+ *   run B snapshots the ALREADY-promoted account, records `roleChanged: false`,
+ *     restores nothing (correctly), and deletes the shared file;
+ *   run A's teardown finds no file, reads that as "never changed", and prints
+ *     `account restore verified` over an account that is still an admin.
+ *
+ * So a snapshot that is already there fails LOUDLY and names the file. Both
+ * causes are worth stopping for: a concurrent run against the same account, or a
+ * previous run that was killed before its teardown — and in the second case the
+ * file is exactly the thing needed to put that account back, so destroying it is
+ * the one move that cannot be undone.
  */
 export async function snapshotAccountState(
   c: Client,
@@ -127,7 +166,22 @@ export async function snapshotAccountState(
     memberExistedBefore: false,
     memberInsert: "not_attempted",
   };
-  persist(snapshot);
+  try {
+    persist(snapshot, { claim: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "EEXIST") {
+      throw new Error(
+        `account-state: a snapshot is already present at ${ACCOUNT_SNAPSHOT_PATH}, so this run ` +
+          "will not start. It records an account this suite has ALREADY escalated and not yet " +
+          "put back — either another run is in flight against the same account, or a previous " +
+          "run was killed before its teardown. Overwriting it would strand the platform-admin " +
+          "role and the owner membership it describes, with nothing left to restore them from. " +
+          "Run the restore teardown, or inspect that file and undo the grants it names, then " +
+          "delete it.",
+      );
+    }
+    throw err;
+  }
   return snapshot;
 }
 
@@ -201,15 +255,54 @@ export async function restoreAccountState(): Promise<string> {
   const c = newClient();
   await c.connect();
   const mismatches: string[] = [];
+  /**
+   * What the role column SHOULD read after the restore: the live value with this
+   * suite's one `admin` token dropped. Computed by the write below so the
+   * read-back asserts what was actually asked for, not the snapshot — those differ
+   * exactly when somebody else changed the role mid-run, which is the case the
+   * restore is deliberately carrying forward rather than erasing.
+   */
+  let expectedRole: string | null = snapshot.role;
   try {
-    // (1) THE ROLE STRING, written back VERBATIM and only when this suite moved
-    //     it. An account that already carried `admin` recorded `roleChanged:
-    //     false`; stripping it here would revoke a grant this suite never made.
+    // (1) THE ROLE STRING. Only when this suite moved it: an account that already
+    //     carried `admin` recorded `roleChanged: false`, and stripping it here
+    //     would revoke a grant this suite never made.
+    //
+    //     The write REMOVES THE `admin` TOKEN, computed from the value the column
+    //     holds NOW rather than replaying the snapshot over it. A role granted by
+    //     somebody else while the suite ran survives; with no concurrent write the
+    //     result is the snapshot exactly.
+    //
+    //     IT REMOVES EVERY `admin` TOKEN, NOT "the one this suite added", and that
+    //     is deliberate. The two differ only if somebody ALSO granted `admin`
+    //     during the run, and then no rule can tell the tokens apart. The snapshot
+    //     proves the account did not carry `admin` before this suite ran, so the
+    //     choice is between possibly dropping a grant made in that window and
+    //     possibly leaving a platform admin this suite created. This suite exists
+    //     to guarantee the second never happens, so it takes the first. The
+    //     read-back asserts no `admin` survives, which is that guarantee.
     if (snapshot.roleChanged) {
-      await c.query(`UPDATE public."user" SET role = $2 WHERE id = $1`, [
-        snapshot.userId,
-        snapshot.role,
-      ]);
+      // ONE STATEMENT, so there is no read-then-write window for a concurrent
+      // role edit to fall into: the new value is computed FROM the column inside
+      // the same UPDATE, and `RETURNING` hands back exactly what was stored.
+      //
+      // Kept tokens are returned VERBATIM — `btrim` is used only to compare, so a
+      // role somebody else spelled `" editor"` is not silently reformatted.
+      // `NULLIF(..., '')` restores the column's own unset state rather than `""`.
+      const updated = await c.query<{ role: string | null }>(
+        `UPDATE public."user"
+            SET role = NULLIF(
+                  array_to_string(
+                    ARRAY(
+                      SELECT t FROM unnest(string_to_array(role, ',')) AS t
+                       WHERE btrim(t) <> 'admin'
+                    ), ','
+                  ), '')
+          WHERE id = $1
+        RETURNING role`,
+        [snapshot.userId],
+      );
+      if (updated.rowCount) expectedRole = updated.rows[0]!.role;
     }
 
     // (2) THE MEMBERSHIP, removed ONLY when this fixture is the reason it is
@@ -231,10 +324,18 @@ export async function restoreAccountState(): Promise<string> {
           `public."user" row ${snapshot.userId} (${snapshot.email}) is gone, so this teardown ` +
             "cannot prove it put back the role string it changed",
         );
-      } else if (r.rows[0]!.role !== snapshot.role) {
+      } else if (!sameRole(r.rows[0]!.role, expectedRole)) {
         mismatches.push(
-          `public."user".role for ${snapshot.email}: expected ${JSON.stringify(snapshot.role)}, ` +
+          `public."user".role for ${snapshot.email}: expected ${JSON.stringify(expectedRole)}, ` +
             `read ${JSON.stringify(r.rows[0]!.role)}`,
+        );
+      } else if (carriesAdmin(r.rows[0]!.role)) {
+        // The token this suite added must be GONE, whatever else the string now
+        // holds. Belt and braces: it catches a promotion that appended `admin`
+        // more than once, which the expected-value compare alone would accept.
+        mismatches.push(
+          `public."user".role for ${snapshot.email} still carries admin after the restore: ` +
+            `${JSON.stringify(r.rows[0]!.role)}`,
         );
       }
     }
@@ -262,7 +363,13 @@ export async function restoreAccountState(): Promise<string> {
 
   lines.push(
     `[account] restored: role=${
-      snapshot.roleChanged ? `put back (${JSON.stringify(snapshot.role)})` : "never changed"
+      snapshot.roleChanged
+        ? `admin token removed -> ${JSON.stringify(expectedRole)}${
+            sameRole(expectedRole, snapshot.role)
+              ? ""
+              : ` (snapshot was ${JSON.stringify(snapshot.role)}; a concurrent role change was carried forward)`
+          }`
+        : "never changed"
     }, membership=${owns ? "removed" : "not this fixture's, kept"}`,
   );
   rmSync(ACCOUNT_SNAPSHOT_PATH, { force: true });

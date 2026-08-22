@@ -102,13 +102,19 @@ afterwards:
 - `fixtures.mts restore` puts the connection row, the MCP origin and the assignment
   back, then **re-reads all three** and prints `restore verified` only when they
   match the snapshot;
-- `account-state.ts` puts the role string back **verbatim** and removes the
+- `account-state.ts` removes the one `admin` token the promotion added and removes the
   membership row, then re-reads both and prints `account restore verified`. An
   account that **already** carried `admin` records `roleChanged: false` and is never
   written on either side — blindly stripping `admin` on the reuse path would revoke
   a grant this suite never made;
 - `restore.teardown.ts` attempts **both** halves and asserts **both** verdicts, so a
   teardown that silently failed reds the run;
+- a snapshot file that is **already there** stops the run before its first write.
+  It means an account this suite escalated has not been put back yet: either a run
+  is in flight against the same account, or an earlier run was killed before its
+  teardown. That file is the only record of the original state, so overwriting it
+  would strand the grants for good. Run the restore, or undo the grants the file
+  names and delete it;
 - both halves restore and assert **only what the snapshot recorded as changed**. The
   claim is "everything I changed, I put back", not "nothing on this instance moved
   while the suite ran" — the wider claim would erase a developer's concurrent edit
