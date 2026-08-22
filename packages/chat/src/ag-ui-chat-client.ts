@@ -868,16 +868,25 @@ export function extractAgentName(text: string): string | null {
  *
  * THE RESIDUAL, STATED RATHER THAN IMPLIED (codex, on this change). An abort
  * stops this client READING the response; it does not stop the server committing
- * the request it already holds. So an abandoned ORDINARY save can in principle
- * commit AFTER a truncation intent that was issued once the chain moved on, and
- * re-create the mirror rows that intent removed. That residual is not closed
- * here: closing it needs a server-side fence (a per-thread write version the
- * route rejects a stale save against), which is a change to the save CONTRACT.
- * It is the far smaller side of the trade — without the bound the wedge is
- * CERTAIN and permanent for the tab, while this needs a connection that hangs
- * past 30s AND a server that commits it late AND an edit inside that window. The
- * intent save's `attempts` retry is NOT part of it: both attempts carry the same
- * body, so their commit order cannot matter.
+ * the request it already holds. So ANY attempt this bound abandons — an ordinary
+ * save, a user-message save, a gate-ack save, or either attempt of the truncation
+ * intent — may still commit AFTER the saves the chain issued behind it. Two
+ * consequences, both real: an older whole-transcript body can overwrite newer
+ * content (and carry an older `updatedAt` with it), and an abandoned ordinary
+ * save can re-create the mirror rows a later intent removed. The intent's
+ * `attempts` retry does not make its two attempts race EACH OTHER — they carry
+ * the same body, so their order between themselves cannot matter — but a
+ * timed-out first attempt is in this residual like every other abandoned
+ * request, and issuing a second attempt WIDENS the window in which the first can
+ * land late.
+ *
+ * IT IS NOT CLOSED HERE, and the reason is that closing it is a change to the
+ * save CONTRACT: it needs a server-side fence — a per-thread write version the
+ * route rejects a stale save against — which no client-side bound can stand in
+ * for, and which nothing in this leg is allowed to introduce. The bound is still
+ * the right trade: without it the wedge is CERTAIN and permanent for the tab,
+ * while this needs a connection that hangs past 30s AND a server that commits it
+ * late AND another save inside that window.
  */
 export const CHAT_THREAD_SAVE_TIMEOUT_MS = 30_000;
 
