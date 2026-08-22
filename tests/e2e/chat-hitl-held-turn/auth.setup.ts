@@ -7,6 +7,13 @@
 //      mints the role into the session token, so a later grant is invisible to a
 //      saved state), given an org, and set active. This is the render-smoke
 //      pattern; it is not invented here.
+//
+//      BOTH OF THOSE ARE PERMANENT PRIVILEGE GRANTS on a real identity — the
+//      role string, and an `owner` membership of the agent's organization — so
+//      both are snapshotted BEFORE the first write and put back by the same
+//      verified teardown that restores the instance configuration. See
+//      `account-state.ts`; the account is chosen by an environment variable, so
+//      "it is only a test account" is not something this file may assume.
 //   2. The instance fixtures, through their SHIPPED writers, in a subprocess —
 //      see `fixtures.mts` for why they cannot run inside this file.
 //
@@ -23,6 +30,13 @@ import { test as setup, expect } from "@playwright/test";
 
 import { HELD_TURN_AGENT_PACKAGE } from "./constants";
 import { DATABASE_URL, SCHEMA } from "./probes";
+import {
+  markMemberInsertPending,
+  memberIdFor,
+  recordMemberInsert,
+  snapshotAccountState,
+  type AccountSnapshot,
+} from "./account-state";
 
 const EMAIL = process.env.E2E_CHAT_HITL_USER_EMAIL ?? "chat-hitl-s9k@local.test";
 const PASSWORD = process.env.E2E_CHAT_HITL_USER_PASSWORD ?? "ChatHitlS9k!2026";
@@ -43,6 +57,11 @@ async function userIdByEmail(c: Client, email: string): Promise<string | null> {
  * Better Auth's admin plugin stores roles as a comma-separated string; the
  * platform-admin check comma-splits and looks for "admin". Append rather than
  * clobber, so an existing role set survives a re-run.
+ *
+ * THIS IS A PERMANENT PRIVILEGE GRANT, so the string it overwrites is recorded
+ * VERBATIM first (`snapshotAccountState`) and put back by the verified teardown.
+ * See `account-state.ts` for why the reuse path — an account that already carries
+ * `admin` — is left alone on both sides.
  */
 async function promoteToPlatformAdmin(c: Client, userId: string): Promise<void> {
   await c.query(
@@ -75,7 +94,12 @@ async function promoteToPlatformAdmin(c: Client, userId: string): Promise<void> 
  * A missing template org is a hard failure rather than a fallback to a new org,
  * because the fallback is exactly the state that produced the misleading red.
  */
-async function orgOwningAgent(c: Client, userId: string, packageName: string): Promise<string> {
+async function orgOwningAgent(
+  c: Client,
+  userId: string,
+  packageName: string,
+  snapshot: AccountSnapshot,
+): Promise<string> {
   const r = await c.query<{ org_id: string | null }>(
     `SELECT org_id FROM "${SCHEMA}"."agent_templates" WHERE package_name = $1 LIMIT 1`,
     [packageName],
@@ -88,14 +112,26 @@ async function orgOwningAgent(c: Client, userId: string, packageName: string): P
         "was never materialized (run scripts/ci/sync-dev-extensions.mjs and reboot)",
     );
   }
+  // OWNERSHIP IS CLAIMED BEFORE THE WINDOW IS ENTERED. The pre-read and the
+  // `pending` mark are persisted BEFORE the insert, so a crash inside it still
+  // leaves the teardown an accurate answer to "may I delete this row?" — the same
+  // discipline `fixtures.mts` uses for the assigned-skill row, and for the same
+  // reason (removing somebody else's membership is the mirror of leaving behind
+  // one this fixture made).
+  await markMemberInsertPending(c, snapshot, orgId);
   // A DIRECT insert rather than the Better Auth organization API: the team
   // plugin's `team.slug NOT NULL` bug rejects that call for a fresh user, and the
   // notifications suite takes the same route for the same reason.
-  await c.query(
+  //
+  // `RETURNING id` is what separates "this fixture created the row" from "the
+  // conflict arm took it": `ON CONFLICT DO NOTHING` returns no row when the
+  // membership was already there, and that row belongs to somebody else.
+  const inserted = await c.query(
     `INSERT INTO public."member" (id, "userId", "organizationId", role, "createdAt")
-       VALUES ($1, $2, $3, 'owner', now()) ON CONFLICT (id) DO NOTHING`,
-    [`chat-hitl-s9k-member-${userId.slice(0, 8)}`, userId, orgId],
+       VALUES ($1, $2, $3, 'owner', now()) ON CONFLICT (id) DO NOTHING RETURNING id`,
+    [memberIdFor(userId), userId, orgId],
   );
+  recordMemberInsert(snapshot, (inserted.rowCount ?? 0) > 0 ? "inserted" : "already_present");
   return orgId;
 }
 
@@ -118,8 +154,11 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
   try {
     const userId = await userIdByEmail(c, EMAIL);
     if (!userId) throw new Error(`S9k owner not found after sign-up: ${EMAIL}`);
+    // READ FIRST, WRITE SECOND — persisted before the promotion, so a crash
+    // between here and the teardown still leaves the grants undoable.
+    const snapshot = await snapshotAccountState(c, userId, EMAIL);
     await promoteToPlatformAdmin(c, userId);
-    orgId = await orgOwningAgent(c, userId, HELD_TURN_AGENT_PACKAGE);
+    orgId = await orgOwningAgent(c, userId, HELD_TURN_AGENT_PACKAGE, snapshot);
   } finally {
     await c.end();
   }

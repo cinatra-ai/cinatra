@@ -85,17 +85,35 @@ run dispatches unheld.
 
 No hold, no park, no run and no decision is ever seeded. Those are the subject.
 
-### And every one of them is put back
+### And every one of them is put back — including the account's privileges
 
-This suite runs on a developer's own dev instance, so it snapshots the state it is
-about to change **before** its first write and restores it afterwards:
+`auth.setup.ts` also grants an **identity** two permanent privileges so the dispatch
+can happen at all: it appends `admin` to the account's Better Auth role string, and
+it makes that account an `owner` of the organization owning the agent. The account
+is chosen by `E2E_CHAT_HITL_USER_EMAIL`, so "it is only a test account" is not
+something this suite may assume.
+
+This suite runs on a developer's own dev instance and against a real account, so it
+snapshots the state it is about to change **before** its first write and restores it
+afterwards:
 
 - the `restore` teardown project runs after the suite whether it **passed or
   failed**, which is the only kind of restore worth having;
 - `fixtures.mts restore` puts the connection row, the MCP origin and the assignment
   back, then **re-reads all three** and prints `restore verified` only when they
-  match the snapshot — `restore.teardown.ts` asserts that verdict, so a teardown
-  that silently failed reds the run;
+  match the snapshot;
+- `account-state.ts` puts the role string back **verbatim** and removes the
+  membership row, then re-reads both and prints `account restore verified`. An
+  account that **already** carried `admin` records `roleChanged: false` and is never
+  written on either side — blindly stripping `admin` on the reuse path would revoke
+  a grant this suite never made;
+- `restore.teardown.ts` attempts **both** halves and asserts **both** verdicts, so a
+  teardown that silently failed reds the run;
+- both halves restore and assert **only what the snapshot recorded as changed**. The
+  claim is "everything I changed, I put back", not "nothing on this instance moved
+  while the suite ran" — the wider claim would erase a developer's concurrent edit
+  under a passing verdict, and would red on a `lastValidatedAt` stamp that has
+  nothing to do with this suite;
 - an instance that **already holds an OpenAI key** gets no connection write at all:
   presence is already satisfied, and overwriting a sealed key is a change no
   teardown could undo without holding credential material on disk. The snapshot
@@ -107,12 +125,40 @@ about to change **before** its first write and restores it afterwards:
 
 Screenshots go through the S9h recorder (`scripts/audit/lib/chat-hitl-capture-recorder.mjs`)
 at the **`audit`** tier, so each record is graded on everything it claims, and a
-violation fails the test rather than being logged. Records land in
-`evidence/2824-s9k/capture-index.provisional.json`, labeled `build: "development"`
-per the 2026-08-13 capture ruling.
+violation fails the test rather than being logged. Every record is labeled
+`build: "development"` per the 2026-08-13 capture ruling.
 
 They are **provisional**. S9g alone adopts and canonicalizes AC-15 records, so
 nothing here is written to the canonical capture index.
+
+### Runs mint into scratch; the committed set is the frozen reference
+
+Two directories, and the difference is the whole policy:
+
+- **`evidence/2824-s9k/`** is the **frozen reference** — four graded PNGs and one
+  `capture-index.provisional.json`, committed. Nothing a run does touches it. The
+  hashes cited in this PR's round comments stay true for as long as those blobs do.
+- **`evidence/2824-s9k/.run/`** is where **a run mints**. `.gitignore` covers it, so
+  a passing run — a developer's, or the future #2886 CI job — leaves
+  `git status --porcelain` **empty**.
+
+Refreshing the reference is a **deliberate** act, never a side effect of running
+the suite. Point the run directory at the committed one and drive a full green run:
+
+```
+E2E_CHAT_HITL_EVIDENCE_DIR=evidence/2824-s9k pnpm test:e2e:chat-hitl-held-turn
+```
+
+That rewrites the four PNGs and the index in place, from a run that was graded at
+the `audit` tier — which is the only kind of refresh worth committing. Review the
+resulting diff before you keep it.
+
+The scratch directory sits under `evidence/` rather than under the config's
+`test-results/` outputDir because the S9h recorder **refuses** a screenshot path
+outside `evidence/`, before the shutter, and grades the same rule again when it
+validates the record. A record is honest only when its `screenshot` field names
+where the file really is, so the scratch directory moved under the rule instead of
+the rule being widened for a test.
 
 ## Why `retries: 0`
 

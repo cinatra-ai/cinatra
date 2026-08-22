@@ -24,6 +24,19 @@
 // `restore` puts each one back and then RE-READS to prove it. The Playwright
 // `restore` teardown project runs `restore` after the suite, passing or failing.
 //
+// PUT BACK EXACTLY WHAT WAS CHANGED, AND CLAIM EXACTLY THAT. The promise is
+// "everything I changed, I put back" — NOT "nothing on this instance moved while
+// the suite ran". Both halves of the restore are held to the narrower sentence:
+// the writes carry every concurrent change forward instead of replaying a whole
+// snapshotted row over it, and the read-back compares only the fields the snapshot
+// recorded this fixture as having written. The wider sentence would erase a
+// developer's concurrent edit under a passing "restore verified", and would red on
+// a `lastValidatedAt` stamp that has nothing to do with this suite.
+//
+// THE ACCOUNT'S PRIVILEGES ARE THE OTHER HALF, and they live next door in
+// `account-state.ts` — the platform-admin role string and the `owner` membership
+// `auth.setup.ts` grants, snapshotted and restored under the same contract.
+//
 // THE STORED KEY IS NEVER TOUCHED AND NEVER READ. If the instance already holds an
 // OpenAI key, this file writes NOTHING to the connection row: presence is already
 // satisfied, and overwriting a sealed key with a placeholder is a change no
@@ -185,21 +198,6 @@ function asConnection(row: NonSecretRow | null): OpenAIConnection {
   };
 }
 
-/** Key-order-independent structural compare — a rewritten row need not be byte-equal. */
-function canonical(value: unknown): string {
-  const walk = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(walk);
-    if (v && typeof v === "object") {
-      const entries = Object.entries(v as Record<string, unknown>)
-        .filter(([, val]) => val !== undefined)
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-      return Object.fromEntries(entries.map(([k, val]) => [k, walk(val)]));
-    }
-    return v;
-  };
-  return JSON.stringify(walk(value) ?? null);
-}
-
 // ---------------------------------------------------------------------------
 // APPLY
 // ---------------------------------------------------------------------------
@@ -322,9 +320,30 @@ if (MODE === "restore") {
         // is removed, through the shipped metadata writer.
         deleteMetadataValueInternal(OPENAI_CONNECTION_METADATA_KEY);
       } else {
-        // `clearSecret` drops the placeholder key this fixture wrote. It is only
-        // ever reached when NO key was stored before, so nothing else can be lost.
-        writeOpenAIConnection(asConnection(snapshot.openAIConnection), { clearSecret: true });
+        // PUT BACK THE ONE FIELD THIS FIXTURE CHANGED, NOT THE WHOLE ROW.
+        //
+        // `apply` wrote the placeholder OVER the row's own non-secret fields
+        // (`{...asConnection(before.fields), apiKey}`), so `apiKey` is the only
+        // field it touched. Writing the SNAPSHOTTED row back would therefore
+        // erase any non-secret edit made while the suite ran — the developer
+        // switching the configured model, the connector stamping
+        // `lastValidatedAt` or refreshing `availableModels` — and it would do so
+        // under a passing "restore verified", which is worse than not restoring
+        // at all.
+        //
+        // So the row is re-read LIVE and written back with the secret cleared:
+        // every concurrent non-secret change is carried forward, and only the
+        // placeholder key goes. `clearSecret` is only ever reached when NO key was
+        // stored before, so nothing else can be lost.
+        //
+        // HONEST LIMIT: this is a read-then-write, not the store's own atomic
+        // read-modify-write (`mutateOpenAIConnection` is not exported), so a write
+        // landing inside this window is still lost. That window is milliseconds
+        // wide instead of the whole suite, which is the improvement available
+        // without widening a production module's surface for a test.
+        writeOpenAIConnection(asConnection(readNonSecretConnection().fields), {
+          clearSecret: true,
+        });
       }
     }
 
@@ -372,33 +391,55 @@ if (MODE === "restore") {
     // (4) READ IT BACK. A teardown that only calls the writers proves the calls
     //     were made, not that the instance is back where it started — which is the
     //     whole claim. Every mismatch is named.
+    //
+    //     SCOPED TO WHAT THIS FIXTURE ACTUALLY CHANGED. The claim this teardown
+    //     makes is "everything I changed, I put back" — not "nothing on this
+    //     instance moved while the suite ran". Those are different sentences, and
+    //     asserting the second reds the run on somebody else's write: the
+    //     connector stamping `lastValidatedAt`, a model list refreshing, the
+    //     developer editing the row in another tab. So each field is compared ONLY
+    //     when the snapshot recorded this fixture as having written it. An
+    //     untouched field gets no claim at all, for the same reason the untouched
+    //     assignment row below gets none.
     const after = readNonSecretConnection();
     const afterMcp = getMcpPublicBaseUrl();
     const afterAssigned = await readAssignedSkillsForAgentPackage(HELD_TURN_AGENT_PACKAGE);
     const mismatches: string[] = [];
-    if (canonical(after.fields) !== canonical(snapshot.openAIConnection)) {
-      mismatches.push(
-        `openai_connection non-secret fields: expected ${JSON.stringify(snapshot.openAIConnection)}, ` +
-          `read ${JSON.stringify(after.fields)}`,
-      );
+    if (snapshot.openAIConnectionWritten) {
+      if (snapshot.openAIConnection === null) {
+        // The fixture created the WHOLE row, so the whole row must be gone — a
+        // factory-reset row is a different state to every reader.
+        if (after.fields !== null) {
+          mismatches.push(
+            "openai_connection: the row this fixture created is still present, read " +
+              `${JSON.stringify(after.fields)}`,
+          );
+        }
+      } else if (after.keyStored !== snapshot.openAIKeyWasStored) {
+        // The row pre-existed and the fixture added exactly one field: the
+        // placeholder key. That is the one thing asserted. The non-secret fields
+        // are deliberately NOT compared — the restore above carried whatever they
+        // now hold forward rather than overwriting them, so a snapshot comparison
+        // here would fail precisely when the restore did the right thing.
+        mismatches.push(
+          `openai_connection stored key presence: expected ${snapshot.openAIKeyWasStored}, ` +
+            `read ${after.keyStored} (the placeholder key this fixture wrote was not dropped)`,
+        );
+      }
     }
-    if (after.keyStored !== snapshot.openAIKeyWasStored) {
-      mismatches.push(
-        `openai_connection stored key presence: expected ${snapshot.openAIKeyWasStored}, ` +
-          `read ${after.keyStored}`,
-      );
-    }
-    if (afterMcp.publicBaseUrl !== snapshot.mcpPublicBaseUrl) {
-      mismatches.push(
-        `mcp publicBaseUrl: expected ${snapshot.mcpPublicBaseUrl ?? "unset"}, ` +
-          `read ${afterMcp.publicBaseUrl ?? "unset"}`,
-      );
-    }
-    if (afterMcp.publicBaseUrlSource !== snapshot.mcpPublicBaseUrlSource) {
-      mismatches.push(
-        `mcp publicBaseUrlSource: expected ${snapshot.mcpPublicBaseUrlSource}, ` +
-          `read ${afterMcp.publicBaseUrlSource}`,
-      );
+    if (snapshot.mcpWritten) {
+      if (afterMcp.publicBaseUrl !== snapshot.mcpPublicBaseUrl) {
+        mismatches.push(
+          `mcp publicBaseUrl: expected ${snapshot.mcpPublicBaseUrl ?? "unset"}, ` +
+            `read ${afterMcp.publicBaseUrl ?? "unset"}`,
+        );
+      }
+      if (afterMcp.publicBaseUrlSource !== snapshot.mcpPublicBaseUrlSource) {
+        mismatches.push(
+          `mcp publicBaseUrlSource: expected ${snapshot.mcpPublicBaseUrlSource}, ` +
+            `read ${afterMcp.publicBaseUrlSource}`,
+        );
+      }
     }
     // A row this fixture owns must be GONE. A row it does not own gets no claim at
     // all: this teardown neither created nor removed it, and asserting a value for

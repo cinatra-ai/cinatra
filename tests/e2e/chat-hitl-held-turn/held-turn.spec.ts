@@ -46,8 +46,10 @@
  * ---------------------------------------------------------------------------
  * · The screenshots are PROVISIONAL runtime evidence, recorded through the S9h
  *   recorder and labeled `development`. S9g alone adopts and canonicalizes AC-15
- *   records; this flow writes its index to `evidence/2824-s9k/`, never to the
- *   canonical one.
+ *   records; this flow writes its index beside its own screenshots, never to the
+ *   canonical one. A run mints into the gitignored scratch directory named at
+ *   `RUN_EVIDENCE_DIR` below, so a PASSING run leaves the tree clean and the
+ *   committed reference set under `evidence/2824-s9k/` stays the frozen one.
  * · "Exactly one job" is measured as "jobs addressable by this run id", because the
  *   release path enqueues with `jobId = runId`. A queue TOTAL would count every
  *   other run on the lane and answer nothing.
@@ -97,7 +99,40 @@ import {
 } from "./probes";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
-const EVIDENCE_DIR = "evidence/2824-s9k";
+
+/**
+ * THE FROZEN REFERENCE SET — committed, and never written by a run.
+ *
+ * `evidence/2824-s9k/` holds the four graded PNGs and the provisional index this
+ * PR posted as its proof. They are a REFERENCE: a reader compares a run against
+ * them, and the hashes cited in the round comments stay true for as long as the
+ * blobs do.
+ */
+const REFERENCE_EVIDENCE_DIR = "evidence/2824-s9k";
+
+/**
+ * WHERE A RUN ACTUALLY MINTS, and why it is not the directory above.
+ *
+ * Writing the captures straight into the committed set made every single run —
+ * a developer's, and the #2886 CI job's — rewrite four tracked PNGs and a tracked
+ * index. That leaves a dirty tree after a PASSING run, and it means nothing ever
+ * compares a run against the reference: the reference was simply overwritten by
+ * whatever just happened.
+ *
+ * So a run mints into a SCRATCH directory that `.gitignore` covers, and the
+ * committed set is refreshed only DELIBERATELY, by pointing this variable at it:
+ *
+ *   E2E_CHAT_HITL_EVIDENCE_DIR=evidence/2824-s9k pnpm test:e2e:chat-hitl-held-turn
+ *
+ * WHY THE SCRATCH PATH IS UNDER `evidence/` rather than under the config's
+ * `test-results/` outputDir: the shipped S9h recorder REFUSES any screenshot path
+ * outside `evidence/` (`screenshotPathViolation`), before the shutter, and that
+ * rule is checked again by the validator that grades the record. A record is only
+ * honest if its `screenshot` field names where the file really is, so the scratch
+ * directory moves under the rule instead of the rule being widened for a test.
+ */
+const RUN_EVIDENCE_DIR =
+  process.env.E2E_CHAT_HITL_EVIDENCE_DIR ?? `${REFERENCE_EVIDENCE_DIR}/.run`;
 
 /**
  * THE COLD-COMPILE BUDGET. On a cold dev route the FIRST `POST /api/chat` compiles
@@ -581,7 +616,7 @@ async function recordCapture(
     });
   }
   await stripDevOverlay(page);
-  const screenshot = `${EVIDENCE_DIR}/${spec.file}`;
+  const screenshot = `${RUN_EVIDENCE_DIR}/${spec.file}`;
   const record = await observeCapture({
     page: playwrightPage(page),
     cell: spec.cell,
@@ -835,7 +870,7 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
 
   // ── The PROVISIONAL index. Written as an artifact of the run, labeled
   //    dev-runtime, and adopted by nobody. ─────────────────────────────────
-  const indexPath = resolve(REPO_ROOT, EVIDENCE_DIR, "capture-index.provisional.json");
+  const indexPath = resolve(REPO_ROOT, RUN_EVIDENCE_DIR, "capture-index.provisional.json");
   mkdirSync(dirname(indexPath), { recursive: true });
   writeFileSync(
     indexPath,
