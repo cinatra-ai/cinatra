@@ -22,6 +22,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  DUPLICATE_DISPATCH_CONTROL_JOB_NAME,
   MEMBER_IDENTITY_SQL,
   PROMOTE_ADMIN_ROLE_SQL,
   ROLE_TOKENS_SQL,
@@ -31,6 +32,10 @@ import {
   connectionRevertPlan,
   fixtureOwnsMembership,
   mcpRevertPlan,
+  QUEUE_STATES_NAMING_A_RUN,
+  countJobsNamingRun,
+  duplicateDispatchControlJobId,
+  jobNamesRun,
   memberIdFor,
   mintRunToken,
   roleCarriesAdmin,
@@ -143,6 +148,20 @@ describe("membership identity", () => {
     const b = memberIdFor("user-aaaaaaaa-1111", "org-22222222-y");
     expect(a).not.toBe(b);
     expect(memberIdFor("user-aaaaaaaa-1111", "org-11111111-x")).toBe(a);
+  });
+
+  it("carries both identifiers IN FULL — an eight-character prefix is not the key", () => {
+    // RED before this round: the id kept `slice(0, 8)` of each half, so two
+    // distinct pairs sharing those prefixes minted the SAME primary key. The
+    // insert names `("organizationId", "userId")` as its conflict target, so the
+    // collision fires OUTSIDE the do-nothing arm and kills the setup on a unique
+    // violation. These two pairs are byte-identical for the first eight
+    // characters of both halves and differ after them.
+    const first = memberIdFor("useraaaa-ONE", "orgbbbbb-ONE");
+    const second = memberIdFor("useraaaa-TWO", "orgbbbbb-TWO");
+    expect(first).not.toBe(second);
+    expect(first).toContain("useraaaa-ONE");
+    expect(first).toContain("orgbbbbb-ONE");
   });
 
   it("the pre-read asks the identity, not the synthetic id", () => {
@@ -412,5 +431,106 @@ describe("mcpRevertPlan — the same rule for the origin pair", () => {
     expect(mcpRevertPlan({ mcpWritten: true, fixtureWrote: null, live: { ...wrote } })).toBe(
       "leave",
     );
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// The blocking 2026-08-22 finding — "exactly one queue job names this run" has
+// to MEASURE what it says. The old probe asked `getJob(runId)` and turned
+// existence into 0|1, which cannot see a second job carrying the same runId
+// under another id. These arms are the rule behind the replacement.
+// ---------------------------------------------------------------------------
+
+describe("which queue jobs name the run", () => {
+  const RUN = "3eaa8d60-63b6-4f70-b8f1-9da3774e8151";
+  const OTHER = "4e6d5b5f-f44d-45c4-bc6d-e194c7b459d2";
+
+  it("THE DEFECT: a duplicate under a different id, with the same runId, is counted", () => {
+    // This is the case the previous probe passed on. The canonical job is
+    // addressable by the run id; the duplicate is not, and it dispatches the run
+    // a second time all the same.
+    const canonical = { id: RUN, data: { runId: RUN } };
+    const duplicate = { id: "some-other-job-id", data: { runId: RUN } };
+    expect(countJobsNamingRun([canonical], RUN)).toBe(1);
+    expect(countJobsNamingRun([canonical, duplicate], RUN)).toBe(2);
+  });
+
+  it("the payload is what names the run — an id lookup alone is not the measurement", () => {
+    expect(jobNamesRun({ id: "unrelated", data: { runId: RUN } }, RUN)).toBe(true);
+    expect(jobNamesRun({ id: "unrelated", data: { runId: OTHER } }, RUN)).toBe(false);
+  });
+
+  it("the id arm is a UNION, so an empty payload under the run id still counts", () => {
+    // Without it, a build enqueueing with `jobId = runId` and no payload would
+    // read as ZERO jobs — the released invariant would time out rather than fail,
+    // which is the least diagnosable red available.
+    expect(jobNamesRun({ id: RUN, data: {} }, RUN)).toBe(true);
+    expect(jobNamesRun({ id: RUN, data: null }, RUN)).toBe(true);
+  });
+
+  it("another run's jobs are never counted", () => {
+    expect(
+      countJobsNamingRun(
+        [
+          { id: OTHER, data: { runId: OTHER } },
+          { id: "x", data: { runId: OTHER } },
+          { id: "y", data: {} },
+          { id: "z", data: "not an object" },
+        ],
+        RUN,
+      ),
+    ).toBe(0);
+  });
+
+  it("one job is one job — matching on both arms, or returned twice, counts once", () => {
+    const job = { id: RUN, data: { runId: RUN } };
+    expect(countJobsNamingRun([job, job], RUN)).toBe(1);
+  });
+
+  it("a job with no id is counted on its own, since nothing else identifies it", () => {
+    expect(
+      countJobsNamingRun(
+        [
+          { id: null, data: { runId: RUN } },
+          { id: undefined, data: { runId: RUN } },
+        ],
+        RUN,
+      ),
+    ).toBe(2);
+  });
+
+  it("the scan covers the WHOLE lifecycle — a dispatch that already ran still dispatched", () => {
+    expect([...QUEUE_STATES_NAMING_A_RUN]).toEqual(
+      expect.arrayContaining(["waiting", "active", "delayed", "completed", "failed"]),
+    );
+  });
+
+  it("the negative control can never be the canonical job", () => {
+    // The control exists to prove the count can see a SECOND job, so its id must
+    // differ from the run id — an id-equal control would prove nothing.
+    expect(duplicateDispatchControlJobId(RUN)).not.toBe(RUN);
+    expect(duplicateDispatchControlJobId(RUN)).toContain(DUPLICATE_DISPATCH_CONTROL_JOB_NAME);
+  });
+
+  it("the control id carries NO COLON — BullMQ refuses one at runtime", () => {
+    // Observed, not assumed: BullMQ answers "Custom Id cannot contain :" and the
+    // flow died on it AFTER the release invariant had passed, which is the most
+    // expensive place to learn it.
+    expect(duplicateDispatchControlJobId(RUN)).not.toContain(":");
+    expect(DUPLICATE_DISPATCH_CONTROL_JOB_NAME).not.toContain(":");
+  });
+
+  it("the flow drives the arm red and puts the queue back", () => {
+    const source = flat(read("held-turn.spec.ts"));
+    expect(source).toContain("await expectDuplicateDispatchWouldBeSeen(runId);");
+    expect(source).toContain("await addDuplicateDispatchControl(runId);");
+    expect(source).toContain("await removeDuplicateDispatchControl(runId);");
+  });
+
+  it("the probe no longer answers the question with an id lookup", () => {
+    const source = flat(read("probes.ts"));
+    expect(source).toContain("const jobs = await queue.getJobs([...QUEUE_STATES_NAMING_A_RUN]);");
+    expect(source).not.toContain("const job = await queue.getJob(runId); return job ? 1 : 0;");
   });
 });

@@ -89,8 +89,10 @@ import {
   TRANSCRIPT_SLOT,
 } from "./constants";
 import {
+  addDuplicateDispatchControl,
   assertRunIsForPackage,
   jobsNamingRun,
+  removeDuplicateDispatchControl,
   readRecommendationParkStatus,
   readRejectedRecommendations,
   readRunFacts,
@@ -439,6 +441,43 @@ async function expectReleasedInvariant(runId: string): Promise<string> {
   return finalStatus;
 }
 
+/**
+ * THE NEGATIVE CONTROL FOR "EXACTLY ONE JOB NAMES THIS RUN".
+ *
+ * An invariant nobody has watched fail is a claim, not a gate. The released arm
+ * above asserts `jobs === 1`; this proves that arm can SEE a second dispatch —
+ * the one shape the invariant exists to catch and the one the previous
+ * `getJob(runId)` probe was blind to: a duplicate job carrying the same `runId`
+ * under a DIFFERENT job id.
+ *
+ * It is run inside the live flow rather than as a unit arm because the thing
+ * under test is the probe against the REAL queue, not the pure rule (which has
+ * its own coverage in `__tests__/state-rules.test.ts`).
+ *
+ * The control is added an hour into the future under an unregistered job name and
+ * removed in a `finally`, so it is counted and never executed, and a failure here
+ * leaves the queue exactly as it found it.
+ */
+async function expectDuplicateDispatchWouldBeSeen(runId: string): Promise<void> {
+  expect(
+    await jobsNamingRun(runId),
+    "the control starts from the released state's own count",
+  ).toBe(1);
+  try {
+    await addDuplicateDispatchControl(runId);
+    expect(
+      await jobsNamingRun(runId),
+      "a SECOND job naming this run under a different id is counted — the arm can go red",
+    ).toBe(2);
+  } finally {
+    await removeDuplicateDispatchControl(runId);
+  }
+  expect(
+    await jobsNamingRun(runId),
+    "and the control left the queue as it found it",
+  ).toBe(1);
+}
+
 /** Wait until a HELD card is on screen, then return the anchors it published. */
 async function waitForHeldCard(page: Page, timeoutMs: number): Promise<CardAnchors> {
   let last: CardAnchors | null = null;
@@ -752,6 +791,8 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   // ── (5) The run advanced — exactly one job ───────────────────────────────
   const confirmedStatus = await expectReleasedInvariant(runId);
   console.log(`[S9k] confirm released run ${runId}: pending_input -> ${confirmedStatus}`);
+  // The "exactly one" arm, driven red on purpose and put back.
+  await expectDuplicateDispatchWouldBeSeen(runId);
   expect(
     await readSelectedSkillRevisions(runId),
     "the confirmed selection is durable",

@@ -11,6 +11,14 @@ import { Queue } from "bullmq";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import {
+  DUPLICATE_DISPATCH_CONTROL_DELAY_MS,
+  DUPLICATE_DISPATCH_CONTROL_JOB_NAME,
+  QUEUE_STATES_NAMING_A_RUN,
+  countJobsNamingRun,
+  duplicateDispatchControlJobId,
+} from "./state-rules";
+
 function readEnvLocal(): Record<string, string> {
   try {
     const raw = readFileSync(resolve(process.cwd(), ".env.local"), "utf-8");
@@ -188,17 +196,66 @@ export async function readSelectedSkillRevisions(runId: string): Promise<string[
  * HOW MANY QUEUE JOBS NAME THIS RUN — the number #2824 is actually about, and NOT
  * a queue total, which counts every other run on the lane and answers nothing.
  *
- * The release path enqueues with `jobId = runId` for BullMQ-level dedup, so a job
- * for this run is addressable by the run id alone. `0` while the run is held is
- * the assertion that separates a genuine hold from a run that was dispatched
- * anyway and merely drawn as held; `1` after the decision is the assertion that
- * the decision actually advanced it, exactly once.
+ * `0` while the run is held is the assertion that separates a genuine hold from a
+ * run that was dispatched anyway and merely drawn as held; `1` after the decision
+ * is the assertion that the decision advanced it, EXACTLY ONCE.
+ *
+ * The measurement is the PAYLOAD, across every state, not `getJob(runId)`. The
+ * release path enqueues with `jobId = runId`, and an id lookup therefore proves
+ * only that a job addressable by that id exists — a duplicate added under any
+ * other id, carrying the same `runId`, is invisible to it, and a duplicate
+ * dispatch is exactly what the "exactly one" arm is sold as catching. The rule
+ * itself is pure and unit-covered (`state-rules.ts`, `countJobsNamingRun`); this
+ * function only feeds it the queue.
  */
 export async function jobsNamingRun(runId: string): Promise<number> {
   const queue = new Queue(QUEUE_NAME, { connection: { url: REDIS_URL } });
   try {
-    const job = await queue.getJob(runId);
-    return job ? 1 : 0;
+    const jobs = await queue.getJobs([...QUEUE_STATES_NAMING_A_RUN]);
+    return countJobsNamingRun(
+      jobs.filter((job) => Boolean(job)).map((job) => ({ id: job.id, data: job.data })),
+      runId,
+    );
+  } finally {
+    await queue.close();
+  }
+}
+
+/**
+ * THE NEGATIVE CONTROL — add ONE more job naming this run, under a DIFFERENT id.
+ *
+ * This is what makes `jobsNamingRun` refutable rather than merely asserted: the
+ * flow watches the count move 1 -> 2 on a duplicate the old id-lookup probe could
+ * not see, and removes it again. It is COUNTABLE and never RUNNABLE — an
+ * unregistered job name, added an hour into the future, removed in the same step
+ * — because a control that executed would dispatch the run a second time, which
+ * is the defect, not the proof.
+ */
+export async function addDuplicateDispatchControl(runId: string): Promise<string> {
+  const queue = new Queue(QUEUE_NAME, { connection: { url: REDIS_URL } });
+  try {
+    const job = await queue.add(
+      DUPLICATE_DISPATCH_CONTROL_JOB_NAME,
+      { runId },
+      {
+        jobId: duplicateDispatchControlJobId(runId),
+        delay: DUPLICATE_DISPATCH_CONTROL_DELAY_MS,
+        removeOnComplete: true,
+        removeOnFail: true,
+      },
+    );
+    return String(job.id);
+  } finally {
+    await queue.close();
+  }
+}
+
+/** Take the control back out. Called in a `finally`, so a failed arm leaves no residue. */
+export async function removeDuplicateDispatchControl(runId: string): Promise<void> {
+  const queue = new Queue(QUEUE_NAME, { connection: { url: REDIS_URL } });
+  try {
+    const job = await queue.getJob(duplicateDispatchControlJobId(runId));
+    if (job) await job.remove();
   } finally {
     await queue.close();
   }

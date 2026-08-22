@@ -155,11 +155,16 @@ interface InstanceSnapshot {
    * write, so the restore compares the live row against the fixture's own bytes
    * rather than against a snapshot of somebody else's earlier state.
    *
-   * `openAIKeyFingerprint` is a sha256 of the SEALED blob exactly as stored.
-   * Nothing is decrypted to compute it, and the only value it is ever computed
-   * over is this file's own published placeholder — so it carries no credential
-   * material, and it is the one thing that can tell "my placeholder is still
-   * there" from "a real key was stored during the run".
+   * `openAIKeyFingerprint` is a NON-CRYPTOGRAPHIC change detector over the SEALED
+   * blob exactly as stored (`sealedSecretFingerprint`, two FNV-1a passes — not a
+   * digest, and nothing in this suite computes one). Nothing is decrypted to
+   * compute it. THIS FIELD is assigned in exactly one place, immediately after
+   * this file writes its own published placeholder, so the value that reaches the
+   * snapshot is only ever the fixture's own — the helper itself is handed
+   * whatever the row holds, which is what makes it a change detector and not a
+   * secret. It carries no credential material, and it is the one thing that can
+   * tell "my placeholder is still there" from "a real key was stored during the
+   * run".
    */
   openAIKeyFingerprint: string | null;
   openAIConnectionAfterWrite: NonSecretRow | null;
@@ -214,8 +219,13 @@ const MCP_CONNECTOR_ID = MCP_PUBLIC_BASE_URL_METADATA_KEY.replace(/^connector_co
  * is stored, and a FINGERPRINT of the sealed key.
  *
  * RAW, never unsealed: this file has no business decrypting the operator's key,
- * and the snapshot has no business holding it. The fingerprint hashes the sealed
- * blob verbatim, so it identifies the stored value without carrying it.
+ * and the snapshot has no business holding it. The change detector runs over the
+ * sealed blob verbatim, so it identifies the stored value without carrying it —
+ * and note that it runs over whatever the row holds, INCLUDING an operator key
+ * this fixture did not write. That is safe for the two reasons the helper states:
+ * the derived value is non-cryptographic and is never logged, and the only
+ * fingerprint persisted into the snapshot is the one taken after this file wrote
+ * its own placeholder.
  */
 function readNonSecretConnection(): {
   fields: NonSecretRow | null;

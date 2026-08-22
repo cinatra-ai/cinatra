@@ -114,7 +114,25 @@ export default defineConfig({
       `WAYFLOW_BASE_URL=${WAYFLOW_UNREACHABLE} ` +
       `POSTGRES_SYNC_TIMEOUT_MS=90000 PORT=${PORT} pnpm dev`,
     cwd: REPO_ROOT,
-    url: BASE_URL,
+    /**
+     * READINESS IS `/api/health`, NOT THE ROOT — and this is a determinism fix,
+     * not a preference.
+     *
+     * Playwright's `webServer.url` probe accepts 2xx, 3xx and 4xx up to 403; a
+     * 404 reads as NOT READY. The root of a fresh instance redirects
+     * `/` -> `/sign-in?next=%2F` -> `/setup/account`, and that last hop answers
+     * 404 on a boot where the setup bypass is on — so the probe polls a
+     * permanently-404 URL for the full ten minutes and the suite dies as
+     * "Timed out waiting from config.webServer", with no test name and nothing
+     * to read. Observed on a clean database on 2026-08-23, on a stack where the
+     * server itself was up and answering in 522 ms.
+     *
+     * `/api/health` is the endpoint the app publishes for exactly this question:
+     * it answers 200 with the boot's own readiness, it never redirects, and it
+     * does not depend on which wizard route a fresh instance would send a
+     * browser to.
+     */
+    url: `${BASE_URL}/api/health`,
     // TEN MINUTES, sized to a FRESH database rather than a warm one. This suite's
     // whole premise is a throwaway instance, so its boot is never the cheap case:
     // it creates the `cinatra` schema, activates the extension closure, registers

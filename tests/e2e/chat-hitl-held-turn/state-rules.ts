@@ -16,7 +16,7 @@
 //     `__tests__/state-rules.test.ts`, which needs no database, no browser and no
 //     stack.
 //
-// The three contracts this file owns:
+// The four contracts this file owns:
 //
 //   1. THE ROLE PREDICATE — `roleCarriesAdmin`, plus the two SQL statements that
 //      act on it, built from ONE token expression so the promote and the strip
@@ -28,6 +28,10 @@
 //      revert plans that compare the LIVE state against what this fixture itself
 //      wrote. A teardown reverts its own writes and nothing else, and it never
 //      removes a row it cannot prove it created.
+//   4. WHAT COUNTS AS A QUEUE JOB THAT NAMES THE RUN — the rule behind the
+//      suite's headline invariant ("nothing queued while it is held, exactly one
+//      job after the decision"), separated from the Redis client so it can be
+//      run and refuted without one.
 import { randomBytes } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -170,11 +174,23 @@ export const MEMBER_IDENTITY_SQL = `"organizationId" = $1 AND "userId" = $2`;
 
 /**
  * The id this fixture mints for the membership row it creates, derived from the
- * IDENTITY so a row it made can always be recognized, and so the primary key can
- * never collide independently of the unique index the insert arbitrates on.
+ * IDENTITY so a row it made can always be recognized.
+ *
+ * BOTH HALVES IN FULL, and that is the whole change here. The earlier spelling
+ * kept only the first eight characters of each identifier, which is a real
+ * collision: two distinct `(organizationId, userId)` pairs that happen to share
+ * those prefixes mint the SAME primary key, and the insert then fails on the id
+ * — outside the `("organizationId", "userId")` conflict target it names, so the
+ * do-nothing arm never runs and the setup dies on a unique violation.
+ *
+ * Carrying both identifiers whole removes that: two distinct pairs can only mint
+ * the same id if one identifier contains the `::` separator and splits exactly
+ * there. No claim is made that the id is the arbiter of anything — the unique
+ * index on the PAIR is, on both the read and the insert side, and this id is
+ * only ever the one this fixture MINTS for a row it is about to create.
  */
 export function memberIdFor(userId: string, organizationId: string): string {
-  return `chat-hitl-s9k-member-${userId.slice(0, 8)}-${organizationId.slice(0, 8)}`;
+  return `chat-hitl-s9k-member-${userId}::${organizationId}`;
 }
 
 /** The membership half of the account snapshot, as the ownership rule reads it. */
@@ -269,15 +285,23 @@ export const SNAPSHOT_SKIPPED_VERDICT = "skipped: not this run's snapshot";
  * A stable fingerprint of a SEALED secret field, for proving that the value stored
  * now is still the exact value this fixture wrote.
  *
- * It reads the CIPHERTEXT as it was stored — nothing is ever decrypted here, and
- * the only value this is ever computed over is the fixture's own published
- * placeholder. `null` when there is nothing stored.
+ * It reads the CIPHERTEXT as it was stored — nothing is ever decrypted here.
+ * `null` when there is nothing stored.
+ *
+ * WHAT IT IS COMPUTED OVER, stated correctly. This function is handed whatever
+ * the row holds, including a key this fixture did not write: the caller reads the
+ * live row before it writes anything (`fixtures.mts`, `readNonSecretConnection`).
+ * What makes that safe is not that the value is always the fixture's own — it is
+ * that the derived value is a 64-bit NON-CRYPTOGRAPHIC change detector that is
+ * never logged, and that the only fingerprint ever persisted into the snapshot is
+ * the one taken after the fixture wrote its OWN published placeholder.
  *
  * A CHANGE DETECTOR, DELIBERATELY NOT A CRYPTOGRAPHIC HASH. The question it
  * answers is "is what is stored now byte-identical to what I wrote a few minutes
  * ago?", and both sides of that comparison are produced by this same function
- * inside one run. It is not a security control: it authenticates nothing, is never
- * persisted anywhere a reader could use it, and guards no boundary.
+ * inside one run. It is not a security control: it authenticates nothing, guards
+ * no boundary, and carries no credential material — the placeholder's own
+ * fingerprint is written into the snapshot file, and nothing else's ever is.
  *
  * Running a cryptographic digest over a credential field is also the shape
  * `js/insufficient-password-hash` flags, and it flags it whatever the digest —
@@ -401,3 +425,108 @@ function stableStringify(value: unknown): string {
     .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
 }
+
+// ---------------------------------------------------------------------------
+// 4. WHICH QUEUE JOBS NAME THE RUN
+// ---------------------------------------------------------------------------
+
+/**
+ * THE STATES A JOB THAT NAMES THIS RUN CAN BE SITTING IN.
+ *
+ * A dispatch is a dispatch whatever happened to it afterwards: a duplicate that
+ * already ran, or already failed, dispatched the run just as surely as one still
+ * waiting. So the scan is the whole lifecycle rather than the pending states —
+ * anything narrower would let the second dispatch this rule exists to catch hide
+ * in `completed` a second after it was added.
+ */
+export const QUEUE_STATES_NAMING_A_RUN = [
+  "waiting",
+  "waiting-children",
+  "prioritized",
+  "delayed",
+  "paused",
+  "active",
+  "completed",
+  "failed",
+] as const;
+
+/** A queue job, reduced to the two fields this rule reads. */
+export interface QueueJobIdentity {
+  /** The job id BullMQ addresses it by. */
+  id: string | null | undefined;
+  /** The job's payload, as stored. */
+  data: unknown;
+}
+
+/**
+ * DOES THIS JOB NAME THE RUN?
+ *
+ * THE DEFECT THIS REPLACES: the earlier probe asked `queue.getJob(runId)` and
+ * turned existence into `0 | 1`. The release path enqueues with `jobId = runId`,
+ * so that answered "is there a job ADDRESSABLE BY THIS ID" — and a second job
+ * added under any other id, carrying the same `runId` in its payload, is
+ * invisible to it. That is precisely the duplicate dispatch a gate sold as
+ * "exactly one job names this run" exists to catch, so the measurement is now the
+ * sentence: the PAYLOAD is read, across every state, and the id is only one of
+ * the two ways a job can name the run.
+ *
+ * The id arm is kept as a UNION, not a replacement: a build that enqueued with
+ * `jobId = runId` and an empty payload would otherwise read as zero jobs and hang
+ * the released invariant instead of failing it. Counting either way can only
+ * over-count, never under-count — and over-counting is the safe direction for
+ * both arms of this suite ("0 while held" gets stricter, "exactly 1 after" gets
+ * stricter).
+ */
+export function jobNamesRun(job: QueueJobIdentity, runId: string): boolean {
+  if (typeof job.id === "string" && job.id === runId) return true;
+  const data = job.data;
+  if (!data || typeof data !== "object") return false;
+  const named = (data as { runId?: unknown }).runId;
+  return typeof named === "string" && named === runId;
+}
+
+/**
+ * HOW MANY DISTINCT JOBS NAME THE RUN.
+ *
+ * De-duplicated by job id, because a job matching on BOTH arms above is still one
+ * job — and because `getJobs` over overlapping state sets can return the same job
+ * twice. A job with no id at all is counted as its own, since nothing else can
+ * identify it.
+ */
+export function countJobsNamingRun(jobs: readonly QueueJobIdentity[], runId: string): number {
+  const seen = new Set<string>();
+  let unidentified = 0;
+  for (const job of jobs) {
+    if (!jobNamesRun(job, runId)) continue;
+    if (typeof job.id === "string" && job.id.length > 0) seen.add(job.id);
+    else unidentified += 1;
+  }
+  return seen.size + unidentified;
+}
+
+/**
+ * THE NEGATIVE CONTROL'S JOB NAME AND ID.
+ *
+ * The flow adds one job under a DIFFERENT id carrying the same `runId`, proves
+ * the count moves 1 -> 2, and removes it again. Without that arm "exactly one"
+ * is an assertion nobody has watched fail.
+ *
+ * The name is deliberately NOT a registered background-job name, and the control
+ * is added with a long delay and removed inside the same step: it must be
+ * COUNTABLE and never RUNNABLE, because a control job that actually executed
+ * would dispatch the run a second time — the very defect being measured.
+ */
+export const DUPLICATE_DISPATCH_CONTROL_JOB_NAME = "chat-hitl-s9k-duplicate-dispatch-control";
+/**
+ * Its id — anything other than the run id, which is the whole point of the control.
+ *
+ * NO COLON. BullMQ refuses a custom job id containing `:` outright ("Custom Id
+ * cannot contain :"), which is a runtime error, not a type error — the first
+ * spelling of this control used one and the flow died on it after the release
+ * invariant had already passed. The unit arm pins the constraint.
+ */
+export function duplicateDispatchControlJobId(runId: string): string {
+  return `${DUPLICATE_DISPATCH_CONTROL_JOB_NAME}__${runId}`;
+}
+/** Far enough out that the control can never become runnable inside a suite run. */
+export const DUPLICATE_DISPATCH_CONTROL_DELAY_MS = 60 * 60_000;
