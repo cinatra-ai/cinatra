@@ -120,6 +120,28 @@ const STATES: Array<{ name: string; state: LifecycleCardState }> = [
     },
   },
   { name: "settled", state: { state: "settled" } },
+  // cinatra#2904 — the settled reading WITH its recorded outcome, enumerated on
+  // every host for the same reason the outcome-less one is: the review page is
+  // one of the four hosts this matrix walks, and until #2904 the page returned
+  // its own blocked panel before this component was mounted at all, so the
+  // matrix could not have caught the divergence. These entries are not a
+  // pre-envelope capture and do not claim to be — they were recorded against the
+  // component on this branch, and what they pin from here on is that the four
+  // hosts keep drawing them identically.
+  {
+    name: "settled-approved",
+    state: { state: "settled", outcome: "approved", decidedByName: "Ada Lovelace" },
+  },
+  {
+    name: "settled-rejected",
+    state: { state: "settled", outcome: "rejected", decidedByName: "Ada Lovelace" },
+  },
+  // The decider is optional and its absence is quiet: the card states the
+  // outcome alone rather than a dangling "by".
+  {
+    name: "settled-approved-no-decider",
+    state: { state: "settled", outcome: "approved" },
+  },
   { name: "advisory", state: { state: "advisory" } },
   { name: "absent", state: { state: "absent" } },
 ];
@@ -164,8 +186,18 @@ describe("review card render parity across the resolve envelope", () => {
       }
     }
 
-    if (!existsSync(FIXTURE_PATH) && process.env.CAPTURE_REVIEW_PARITY === "1") {
-      writeFileSync(FIXTURE_PATH, `${JSON.stringify(captured, null, 2)}\n`, "utf8");
+    // CAPTURE_REVIEW_PARITY=1 records entries this fixture does not yet hold —
+    // a new state added to the matrix above. It NEVER overwrites an entry that
+    // is already there: the committed captures are the guard, and a regenerate
+    // that could quietly re-take them would be a guard that agrees with whatever
+    // the tree currently draws. Regenerating an EXISTING entry is still a
+    // deliberate edit to the fixture file.
+    if (process.env.CAPTURE_REVIEW_PARITY === "1") {
+      const existing: Record<string, string> = existsSync(FIXTURE_PATH)
+        ? (JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Record<string, string>)
+        : {};
+      const merged = { ...captured, ...existing };
+      writeFileSync(FIXTURE_PATH, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
     }
 
     const expected = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Record<
@@ -181,6 +213,47 @@ describe("review card render parity across the resolve envelope", () => {
   it("draws NO DOM for the absent state on any host (§IV privacy)", async () => {
     for (const host of HOSTS) {
       expect(await renderCase(host, { state: "absent" })).toBe("");
+    }
+  });
+
+  // cinatra#2904 — plan §4.4 step 7: "Everyone looking at that run, in any
+  // channel, sees the same settled card." The byte comparison above already
+  // pins each host against its own capture; this states the claim directly, so a
+  // future host that starts drawing its own settled reading fails on the
+  // sentence it broke rather than on a fixture diff.
+  it("draws the SAME settled card on every host — the review page included", async () => {
+    // The frame is the ONE thing a host may change (§IX): the root's class and
+    // its host marker are normalized away, exactly as the §IX suite in
+    // `review-gate-card.test.tsx` normalizes them for the pending card. What
+    // remains is the reading itself, and it must be byte-identical.
+    const readingOf = (html: string): string => {
+      const holder = document.createElement("div");
+      holder.innerHTML = html;
+      const root = holder.querySelector('[data-conformance-id="review-gate-card"]');
+      if (!root) return "";
+      root.removeAttribute("class");
+      root.removeAttribute("data-lifecycle-card-host");
+      return root.innerHTML;
+    };
+
+    for (const outcome of ["approved", "rejected"] as const) {
+      const drawn: Record<string, string> = {};
+      for (const host of HOSTS) {
+        drawn[host] = readingOf(
+          await renderCase(host, {
+            state: "settled",
+            outcome,
+            decidedByName: "Ada Lovelace",
+          }),
+        );
+      }
+      for (const host of HOSTS) {
+        expect(drawn[host], `${host} draws its own settled card`).toBe(
+          drawn.chat_thread,
+        );
+        expect(drawn[host]).toContain(`data-review-outcome="${outcome}"`);
+        expect(drawn[host]).toContain("Ada Lovelace");
+      }
     }
   });
 });

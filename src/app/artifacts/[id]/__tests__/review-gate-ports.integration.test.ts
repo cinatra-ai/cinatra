@@ -5,8 +5,10 @@
  * #1796 left for this slice: the surface loader composes run access → pending
  * gate → prepared (never-blank) targets; the decision binder threads run access +
  * the live gate CAS + submit-time re-validation into the #1807 core; and the
- * result maps to the surface's visible outcomes FAIL-CLOSED (a conflict / settled
- * gate is a block, a denial is not-permitted).
+ * result maps to the surface's visible outcomes FAIL-CLOSED (a decision on a
+ * conflicting / already-resolved gate is a block, a denial is not-permitted).
+ * The SURFACE's own answer for a resolved gate is `settled` since cinatra#2904 —
+ * a decided review the one card draws — while an unavailable gate stays blocked.
  *
  * SCOPE (honest): the happy-path terminal COMMIT (CAS + audit + reject tombstone +
  * resume outbox) is proven end-to-end against the real store by the store
@@ -15,7 +17,8 @@
  * `commitReviewDecision`. A successful terminal decision through the FULL binder
  * additionally needs a live DB representation member (resolveArtifactVersionForServe),
  * whose seeding is the objects-store's, not this binder's. COVERED HERE against the
- * real store: SURFACE not-authorized (foreign) + blocked (resolved gate); SUBMIT
+ * real store: SURFACE not-authorized (foreign, pending AND resolved) + settled
+ * (resolved gate) + blocked (a gate that does not exist); SUBMIT
  * run-access denied (foreign) + fail-closed CONFLICT on a resolved gate. The
  * per-target FLOOR + revision-not-member outcomes need the objects read pool (not
  * wired in this lane DB) and are proven by the #1807 core unit tests + the live
@@ -153,7 +156,11 @@ describe.skipIf(!HAS_DB)("cinatra#1795 — review-gate-ports binder (real store)
     expect(surface.kind).toBe("not-authorized");
   });
 
-  it("SURFACE: a resolved gate is blocked (no-longer-pending), existence never leaked", async () => {
+  // cinatra#2904 — the two non-pending answers are DIFFERENT answers, against
+  // the real store. This pair used to be one: every non-pending gate returned
+  // `blocked`, which is what kept the review page from ever mounting the one
+  // card in its settled state (plan §4.4 step 7).
+  it("SURFACE: a RESOLVED gate is settled — the reader may see the decided review", async () => {
     const runId = await seedRun();
     const target: Target = { artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` };
     const reviewTaskId = await emitGate(runId, [target]);
@@ -166,7 +173,35 @@ describe.skipIf(!HAS_DB)("cinatra#1795 — review-gate-ports binder (real store)
       reviewTaskId,
       actorCtx: actorCtxFor(OWNER_ID),
     });
+    // It carries NOTHING: the settled reading is the card's, resolved from the
+    // ref against the live reader, never a second projection made here.
+    expect(surface).toEqual({ kind: "settled" });
+  });
+
+  it("SURFACE: a gate that does not exist stays BLOCKED — never a settled reading", async () => {
+    const runId = await seedRun();
+    const surface = await ports.loadReviewGateSurface({
+      runId,
+      // A task id no gate was ever emitted for on this run: `readReviewGateState`
+      // answers `unavailable`, and an unavailable gate is not a decided review.
+      reviewTaskId: `lifecycle-review:${randomUUID()}`,
+      actorCtx: actorCtxFor(OWNER_ID),
+    });
     expect(surface).toEqual({ kind: "blocked", reason: "no-longer-pending" });
+  });
+
+  it("SURFACE: a foreign actor on a RESOLVED gate is still not-authorized (the settled reading widens no audience)", async () => {
+    const runId = await seedRun();
+    const target: Target = { artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` };
+    const reviewTaskId = await emitGate(runId, [target]);
+    await gateStore.commitReviewDecision(resolvePlan(runId, reviewTaskId, [target]));
+
+    const surface = await ports.loadReviewGateSurface({
+      runId,
+      reviewTaskId,
+      actorCtx: actorCtxFor("user-foreign"),
+    });
+    expect(surface.kind).toBe("not-authorized");
   });
 
   // -------------------------------------------------------------------------
