@@ -25,6 +25,23 @@
  *      never from the assigned set — candidate generation intersects with the
  *      installed catalog and caps at 50, so the assigned set can name skills the
  *      row never offered.
+ *   5. THE TWO DURABLE HALVES RIDE ONE STORE CALL. As two sequential
+ *      autocommitted writes, a marker failure after the per-skill rows committed
+ *      left orphaned `user_skipped` rows that `hasRunRecommendationSkip` reads
+ *      through its legacy arm — settling the card for a decision the action
+ *      refused, on a run still parked. The reader cannot tell such a row from a
+ *      legitimate pre-core__0095 one, so the WRITE is what has to be atomic.
+ *
+ *      WHAT THIS FILE CAN PROVE OF THAT, AND WHAT IT CANNOT. The store is
+ *      mocked here, so these tests prove the ACTION'S WRITE TOPOLOGY: there is
+ *      exactly one durable call, both halves ride it, and no second call exists
+ *      that could have committed on its own. They do NOT prove a rollback — a
+ *      mock returning `false` is not a database. The ROLLBACK is proved against
+ *      real rows in `run-recommendation-skip-record.integration.test.ts`
+ *      ("ATOMIC: a failed MARKER write leaves NO durable skip evidence at all"),
+ *      which takes the marker table out from under the write and then reads the
+ *      store back. The two halves of the proof are deliberate: topology here,
+ *      durability there.
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/run-recommendation-skip-evidence.test.ts
@@ -119,8 +136,10 @@ describe("skip evidence covers every offered candidate", () => {
   it("writes a row for the FORCED candidate too, with a null rank", async () => {
     await skipRunRecommendationAction({ runId: RUN_ID });
 
-    expect(writeRunRejectedRecommendations).toHaveBeenCalledTimes(1);
-    const written = writeRunRejectedRecommendations.mock.calls[0][0] as {
+    // ONE durable write carries both halves, so the rows are read off IT.
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
+    const written = writeRunRecommendationSkip.mock.calls[0][0] as {
       runId: string;
       rejected: Array<{ skillId: string; recommendationSource: string; recommendedRank: number | null }>;
     };
@@ -146,7 +165,7 @@ describe("skip evidence covers every offered candidate", () => {
 
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
-    const written = writeRunRejectedRecommendations.mock.calls[0][0] as {
+    const written = writeRunRecommendationSkip.mock.calls[0][0] as {
       rejected: Array<{ skillId: string; recommendedRank: number | null }>;
     };
     expect(written.rejected).toHaveLength(1);
@@ -159,7 +178,7 @@ describe("skip evidence covers every offered candidate", () => {
 
 describe("the evidence write is not best-effort", () => {
   it("REFUSES the skip when the evidence write throws — the run is not released", async () => {
-    writeRunRejectedRecommendations.mockImplementation(() => {
+    writeRunRecommendationSkip.mockImplementation(() => {
       throw new Error("evidence store down");
     });
 
@@ -183,6 +202,7 @@ describe("the evidence write is not best-effort", () => {
 
     expect(result.ok).toBe(false);
     expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(writeRunRecommendationSkip).not.toHaveBeenCalled();
     expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
     expect(triggerAgentRun).not.toHaveBeenCalled();
   });
@@ -206,6 +226,10 @@ describe("the evidence write is not best-effort", () => {
       // Nothing was offered, and the marker says so rather than guessing.
       candidateCount: 0,
     });
+    // The per-skill half rides the same call and is simply empty.
+    expect(
+      (writeRunRecommendationSkip.mock.calls[0][0] as { rejected?: unknown[] }).rejected ?? [],
+    ).toHaveLength(0);
     expect(result.ok).toBe(true);
     expect(triggerAgentRun).toHaveBeenCalled();
   });
@@ -224,7 +248,7 @@ describe("the evidence write is not best-effort", () => {
 
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
-    const written = writeRunRejectedRecommendations.mock.calls[0][0] as {
+    const written = writeRunRecommendationSkip.mock.calls[0][0] as {
       rejected: Array<{ skillId: string }>;
     };
     expect(written.rejected.map((r) => r.skillId)).toEqual(["skill-ranked"]);
@@ -274,6 +298,59 @@ describe("the evidence write is not best-effort", () => {
     expect(triggerAgentRun).not.toHaveBeenCalled();
   });
 
+  it("a MARKER FAILURE has no SECOND durable write that could have committed", async () => {
+    // THE HALF-COMMIT (round-8 finding 2). The two durable halves used to be two
+    // separate autocommitted writes: the per-skill `user_skipped` rows landed
+    // first, then the run-level marker was written and read back. A marker that
+    // failed AFTER those rows committed refused the decision and left the park
+    // LIVE — while `hasRunRecommendationSkip` answered `skipped` from its legacy
+    // `recommendation_source` arm and settled the card for a decision the action
+    // had just refused. The legacy arm cannot be narrowed away from that path:
+    // nothing distinguishes a pre-core__0095 row from a row orphaned this way.
+    //
+    // WHAT IS ASSERTED HERE is the ACTION'S WRITE TOPOLOGY, which is all a
+    // mocked store can carry: on a refused skip there is exactly ONE durable
+    // call, the per-skill rows rode INSIDE it, and no separate write exists that
+    // could have committed on its own. The ROLLBACK itself is proved against
+    // real rows in the integration sibling named in this file's header.
+    writeRunRecommendationSkip.mockReturnValue(false);
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(result.ok).toBe(false);
+    expect((result as { code?: string }).code).toBe("recommendation_skip_not_recorded");
+    // No separate rejected-rows write exists to survive the refusal.
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    // The rows rode INSIDE the one call that failed, so the store's transaction
+    // is what decides their fate — not a second, already-committed statement.
+    expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
+    const only = writeRunRecommendationSkip.mock.calls[0][0] as {
+      runId: string;
+      candidateCount: number;
+      rejected?: Array<{ skillId: string; recommendationSource: string }>;
+    };
+    expect(only.runId).toBe(RUN_ID);
+    expect(only.rejected).toHaveLength(2);
+    expect(only.candidateCount).toBe(2);
+    // And the park stays live, so the card keeps its controls.
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("a marker write that THROWS has no second durable write either", async () => {
+    writeRunRecommendationSkip.mockImplementation(() => {
+      throw new Error("marker store down");
+    });
+
+    const result = await skipRunRecommendationAction({ runId: RUN_ID });
+
+    expect(result.ok).toBe(false);
+    expect((result as { code?: string }).code).toBe("recommendation_skip_not_recorded");
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
+
   it("NEVER releases without a VERIFIED run-level marker, on any successful path", async () => {
     // The invariant the individual cases above add up to, asserted as one
     // statement so a new branch cannot quietly join the list without a marker.
@@ -314,9 +391,11 @@ describe("the evidence write is not best-effort", () => {
         runId: RUN_ID,
         skippedBy: USER,
       });
-      // Whatever per-skill rows were written named ONLY scored candidates.
-      const perSkill = writeRunRejectedRecommendations.mock.calls[0]?.[0] as
-        | { rejected: Array<{ skillId: string }> }
+      // Whatever per-skill rows were written named ONLY scored candidates, and
+      // they rode the marker's own call — never a durable write of their own.
+      expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
+      const perSkill = writeRunRecommendationSkip.mock.calls[0]?.[0] as
+        | { rejected?: Array<{ skillId: string }> }
         | undefined;
       for (const row of perSkill?.rejected ?? []) {
         expect(CANDIDATES.map((c) => c.skillId)).toContain(row.skillId);
@@ -327,7 +406,7 @@ describe("the evidence write is not best-effort", () => {
   it("carries a TYPED code on the refusal, not only prose", async () => {
     // A caller that offers a retry branches on the code; the message is what a
     // person reads and may be reworded at any time.
-    writeRunRejectedRecommendations.mockImplementation(() => {
+    writeRunRecommendationSkip.mockImplementation(() => {
       throw new Error("evidence store down");
     });
 
@@ -382,8 +461,12 @@ describe("skip is a runBy-owner decision, fail-closed", () => {
   it("releases and dispatches once the evidence IS written", async () => {
     const result = await skipRunRecommendationAction({ runId: RUN_ID });
 
-    expect(writeRunRejectedRecommendations).toHaveBeenCalledTimes(1);
+    // ONE durable write, carrying both halves, then the release.
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
     expect(writeRunRecommendationSkip).toHaveBeenCalledTimes(1);
+    expect(
+      (writeRunRecommendationSkip.mock.calls[0][0] as { rejected: unknown[] }).rejected,
+    ).toHaveLength(2);
     expect(triggerAgentRun).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
   });

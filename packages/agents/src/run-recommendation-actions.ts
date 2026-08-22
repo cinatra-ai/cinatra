@@ -34,7 +34,6 @@ import {
 import { actorFromSession } from "@/lib/authz/build-actor-context";
 
 import {
-  writeRunRejectedRecommendations,
   writeRunRecommendationSkip,
   SKIP_RECOMMENDATION_SOURCE,
 } from "@/lib/run-selected-skill-revisions";
@@ -581,21 +580,31 @@ export async function skipRunRecommendationAction(input: {
       }));
     }
 
+    // ONE DURABLE WRITE, AND IT IS VERIFIED BEFORE ANYTHING IS RELEASED.
+    //
+    // The MARKER is the record that makes the card settle: the state reader
+    // answers `skipped` from it, and with no marker it answers `none` and the
+    // card disappears from the conversation instead of settling. It is keyed by
+    // the RUN, so it exists on every branch above — including the ones with no
+    // candidate left to name.
+    //
     // The per-skill half is OPTIONAL — it is empty whenever drift retired the
     // offered set, or the template reads back with no package name. Neither
     // makes the skip less of a decision, and neither is allowed to invent a
     // rejected skill.
-    if (rejectedRows.length > 0) {
-      writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
-    }
-
-    // THE MARKER, AND IT IS VERIFIED BEFORE ANYTHING IS RELEASED.
     //
-    // This is the record that makes the card settle: the state reader answers
-    // `skipped` from it, and with no marker it answers `none` and the card
-    // disappears from the conversation instead of settling. It is keyed by the
-    // RUN, so it exists on every branch above — including the ones with no
-    // candidate left to name.
+    // BOTH HALVES RIDE ONE TRANSACTION (round-8 finding 2). They used to be two
+    // sequential autocommitted writes, rows first: a marker that failed after
+    // the rows committed refused the skip and left the park LIVE, while
+    // `hasRunRecommendationSkip` answered `skipped` off those orphaned
+    // `user_skipped` rows and settled the card for the decision this action had
+    // just refused. Nothing distinguishes such a row from a legitimate
+    // pre-core__0095 one, so the reader cannot be taught to ignore it — the
+    // write is what has to be atomic. A refusal below can therefore no longer
+    // leave a HALF: the ordinary failure rolls both halves back, and the sync
+    // bridge's ambiguous ending (a COMMIT whose result was lost) leaves BOTH,
+    // which is a decision fully on record that the retry converges on. See the
+    // store's own note for that boundary.
     //
     // `writeRunRecommendationSkip` READS THE MARKER BACK and returns whether it
     // is durably there. A write that quietly did nothing is therefore not
@@ -605,6 +614,7 @@ export async function skipRunRecommendationAction(input: {
       runId: input.runId,
       skippedBy: userId,
       candidateCount: rejectedRows.length,
+      rejected: rejectedRows,
     });
     if (!recorded) {
       console.error(

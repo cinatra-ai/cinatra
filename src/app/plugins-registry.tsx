@@ -167,7 +167,7 @@ export async function getAgentPluginScreens(agentId: string) {
     includeNonPublished: true,
   });
   if (!template) return null;
-  const screens = (await import("@cinatra-ai/agents")).agentPluginScreens;
+  const screens = (await import("@cinatra-ai/agents/screens")).agentPluginScreens;
   // Marker so consumers can detect dynamic-template screens without a hardcoded allowlist.
   return Object.assign({}, screens, { __isDynamicBuilderScreens: true as const });
 }
@@ -187,7 +187,7 @@ export async function getAgentPluginScreensByPackageName(packageName: string) {
     includeNonPublished: true,
   });
   if (!template) return null;
-  const screens = (await import("@cinatra-ai/agents")).agentPluginScreens;
+  const screens = (await import("@cinatra-ai/agents/screens")).agentPluginScreens;
   return Object.assign({}, screens, { __isDynamicBuilderScreens: true as const });
 }
 

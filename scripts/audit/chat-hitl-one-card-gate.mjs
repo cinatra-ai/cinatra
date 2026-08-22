@@ -26,8 +26,8 @@
  *      Anywhere else, declaring a component whose name is that card's — or a
  *      `Prefixed…` look-alike of it — is a violation.
  *
- *   R2 THE RETIRED PARALLELS ARE GONE. The three renderers the epic ordered
- *      deleted may not come back, by name:
+ *   R2 THE RETIRED PARALLELS ARE GONE. The renderers the epic ordered deleted
+ *      may not come back, by name (or, for §VII, by anchor):
  *        · the review REDIRECT card (`ArtifactReviewRedirectCard`) — the
  *          display-only "Continue to review" link that sent a reader away;
  *        · a DIRECT `<RunRecommendationChipRow` mount on a lifecycle HOST — the
@@ -36,15 +36,141 @@
  *          mounted by the page instead of by the card. (Scoped to the BAR: the
  *          page's own ROUTE-LEVEL `ReviewGateBlocked` panel is legitimate and
  *          uses the shipped component — see the entry's own note.)
+ *        · the review page's DIRECT §VII composition — `VerificationView`
+ *          drawing the verification core itself instead of mounting
+ *          `VerificationSummaryCard`. (Scoped to the §VII ANCHORS, not to the
+ *          component name: `VerificationView` legitimately survives as the
+ *          page's adjunct composition — see the entry's own note.)
  *
  *   R3 EVERY MOUNT IS HOST-DECLARED. A lifecycle card may only be mounted
  *      inside a `LifecycleCardSurfaceProvider` subtree, so the fail-closed host
  *      gate cannot be bypassed by a surface that simply renders the component.
  *      Checked per FILE (a mount and its provider live in one component tree).
  *
- *   R4 ONE REGISTRY ENTRY PER KIND. The renderable-view component registry maps
- *      each lifecycle viewType exactly once; a second dispatch table anywhere is
- *      a parallel registry by another name.
+ *   R4 ONE REGISTRY ENTRY PER KIND, AND IT NAMES THE OWNER. The renderable-view
+ *      component registry maps each lifecycle viewType exactly once, and that
+ *      one line must dispatch to the kind's OWNER from `CARD_OWNERS`. A second
+ *      dispatch table anywhere is a parallel registry by another name; a row
+ *      that still counts as "exactly one" while pointing at a different
+ *      component is the retirement quietly undone.
+ *
+ * WHAT THE COMPLETENESS RULES ADD (the S9 round). R1–R4 answer "is there more
+ * than one renderer?". They never answered "is there ONE?" — and that is how a
+ * kind with NO drawing passed: two kinds pointed at the S1 shell, and one
+ * component serving two kinds reads as "one implementation per interaction" to a
+ * duplicate-detector. The rules below close that:
+ *
+ *   R5 ONE NAMED OWNER PER KIND. Every member of `LIFECYCLE_CARD_KINDS` —
+ *      including the typed-INTERRUPT recommendation kind — has its own row in
+ *      `LIFECYCLE_CARD_CONTRACTS`, and a DRAWN row names an owner module and a
+ *      component that no other kind shares. A kind with no drawing is recorded
+ *      as a PLACEHOLDER with a gap sentence: it may not claim an owner, and its
+ *      ratified component name may not exist anywhere in the tree (a card that
+ *      gets drawn without flipping its row fails here, so the placeholder claim
+ *      cannot become a lie in either direction).
+ *
+ *   R6 THE OWNER CONSUMES ITS AUTHORIZED BODY. The owner reads its kind's
+ *      validated body seam and every field the contract lists, and every body
+ *      parameter it declares is read in the component. An owner that takes a
+ *      body and ignores it is drawing something other than what the server
+ *      authorized.
+ *
+ *   R7 THE OWNER EMITS ITS RATIFIED ANCHOR SET. The anchor set per kind is
+ *      CLOSED: it is the ratified list, copied here verbatim, and an anchor an
+ *      implementer chose does not satisfy it. Each one is emitted by the owner
+ *      or by a module the owner composes, from code that is REACHABLE — an
+ *      anchor inside a statically dead branch does not count, and a component
+ *      whose only return is `null` emits nothing at all. Every owner ROOT also
+ *      carries `data-lifecycle-card-host` and its state, so a card can be
+ *      addressed by the host it drew on and the state it drew in.
+ *
+ *   R8 ONE RENDERED INSTANCE PER KIND × HOST. Not a callsite count: the rule is
+ *      that at runtime exactly one instance draws. So every production callsite
+ *      is ENUMERATED here, each is HOST-DECLARED, and a host served by more than
+ *      one adapter names the selector that picks between them plus the test that
+ *      proves the selector covers every branch. A literal one-mount rule would
+ *      reject a correct tree — the run card is legitimately served by two
+ *      exclusive panels — and a gate that rejects correct trees gets disabled.
+ *      A dev-preview adapter is enumerated and marked, never counted as
+ *      production and never hidden.
+ *
+ *   R9 THE RETIRED PARALLEL CORE RENDERERS. The route-bound page drawing of the
+ *      §VII reading — the same facts drawn a second time, outside the card — is
+ *      banned. S9a (cinatra#2792) shipped that ban as a PENDING RETIREMENT: the
+ *      identifier `VerificationView` banned by name, with the two route modules
+ *      allowlisted while the verification kind was still a placeholder, and the
+ *      record due to die with the slice that drew the card. S9e (cinatra#2789)
+ *      IS that slice. The card is DRAWN, the route modules draw none of §VII's
+ *      regions any more, the route-module allowlist is empty and the record is
+ *      deleted. The ban itself stays and got sharper: it now identifies the
+ *      retired drawing by §VII's five REGION ANCHORS rather than by an
+ *      identifier, because `VerificationView` legitimately survives as the
+ *      page's adjunct composition and a name ban would have banned the right
+ *      answer. The whole account lives on the R2 entry, with its history.
+ *
+ * TWO MODES, and the DEFAULT is the required one:
+ *   (no flag) — the DONE check, and the gate this repository runs. Every kind
+ *               DRAWN, every host mounted, every ratified anchor emitted and
+ *               proven, every open item closed. It fails today and names what is
+ *               missing. A gate whose ordinary run passes while two kinds are
+ *               placeholders does not "fail on main" in any run anybody makes.
+ *   --audit   — the lenient read: every DRAWN kind fully enforced, and the
+ *               recorded placeholders and open items tolerated. It answers "did
+ *               I add a NEW dishonesty", which is useful to a lane mid-flight
+ *               and is not the gate.
+ *
+ * WHERE THE ANCHOR SETS COME FROM. They are RATIFIED and CLOSED, and this table
+ * copies them rather than deriving them. An earlier round of this gate read them
+ * off the drawing itself; that reading was replaced by the ratified list, so no
+ * slice has to guess and no slice may decide after the fact that whatever it
+ * drew was the requirement. Two entries in that list name a control in prose and
+ * give it no anchor id. Those are recorded as OPEN ANCHOR NAMES rather than
+ * filled in, because filling them in is exactly the implementer choice a closed
+ * set forbids, and the done-check stays red until they are named.
+ *
+ * A PLACEHOLDER'S ANCHOR LIST IS NOT A RATIFICATION, and the difference matters
+ * enough to state (cinatra#2861). A PLACEHOLDER row is written by a slice that
+ * has not drawn the card: it records what the drawing OWES, in whatever words
+ * were available before the body and the DOM existed. That is an obligation, and
+ * an obligation can be WRONG about the drawing in a way a ratification cannot —
+ * it can paraphrase a body field, or mistake an ARTBOARD id (a marker the design
+ * page puts around an example specimen, like `state-loading`) for an anchor the
+ * card is supposed to emit. So the slice that draws a placeholder kind re-reads
+ * the row against the DRAWING AT THE PIN and records each correction where it
+ * occurs, with the drawing sentence it rests on. It is still not free to choose
+ * WHICH regions are required — those come from the drawing — only to name a
+ * region the drawing ratifies in PROSE and gives no id of its own, in the tree's
+ * existing convention. That naming is not new here either: the schedule-proposal
+ * row below names two controls on exactly that footing ("ratified in prose and
+ * are now named, in the existing verb-object convention"). What stays forbidden
+ * is the thing this paragraph opened with — drawing first and calling the result
+ * the requirement afterwards.
+ *
+ * AND WHERE THE TABLE SHAPE COMES FROM. The host-ownership table carries a
+ * component-owner column and a wire-carriage column, and each row below carries
+ * the same two fields. That is a HAND-KEPT correspondence, and it is stated as
+ * one: this gate does NOT read the table, which lives in a document CI cannot
+ * open, so nothing here is synchronized with it by any mechanism. What IS
+ * mechanical is narrower and worth having on its own: the carriage is checked
+ * against the protocol module, so the repository cannot disagree with itself.
+ *
+ * AN OPEN OBLIGATION is the third recording device, beside the placeholder row
+ * and the open anchor name. It is a ratified requirement the tree does not meet,
+ * on a kind that IS drawn. It names what it requires, why the requirement is
+ * unmet, and who closes it; the done-check fails on it; and it is checked for
+ * staleness in the other direction, so a requirement that quietly starts being
+ * met cannot keep hiding behind its own exemption. It is not a waiver. It exists
+ * so a gate can carry a requirement whose FIX belongs to a different slice,
+ * without either lying about the tree or blocking on somebody else's work.
+ *
+ * THE HONEST LIMIT, stated because a gate that overclaims is worse than none.
+ * This scanner reads source text. Source text can be arranged to satisfy a
+ * lexical rule without drawing anything, which is exactly the failure this round
+ * exists to end — so the anchor rule is deliberately NOT the proof. Each DRAWN
+ * kind also names a RENDERED owner test ({file, testName}), verified present
+ * here and EXECUTED by vitest, in which the anchors appear in real DOM produced
+ * from validated body fields. This gate proves the declaration; that suite
+ * proves the pixels. Neither alone is the criterion.
  *
  * KNOWN RESIDUALS, recorded rather than hidden (same posture as the sibling
  * writer guards):
@@ -82,39 +208,513 @@ const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
 const LABEL = "chat-hitl-one-card";
 
 /**
- * The SOLE module that may define each interaction's card component, and the
- * component-name pattern that identifies a definition of that card.
- *
- * The four kinds are the closed set in
- * `packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts`
- * (`LIFECYCLE_CARD_KINDS`); adding a fifth interaction means adding a row here,
- * which is the point — a new card is a design decision with an owner.
+ * The closed set of interaction kinds, mirrored from
+ * `packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts`. Mirrored
+ * rather than imported because a `.mjs` gate cannot load the project's
+ * TypeScript; the pinned tests assert the two lists are identical, so a fifth
+ * kind added there and forgotten here fails immediately.
  */
-export const CARD_OWNERS = Object.freeze({
+export const LIFECYCLE_CARD_KINDS = Object.freeze([
+  "artifact_review_gate",
+  "verification_summary",
+  "recommendation_hold",
+  "trigger_schedule_proposal",
+]);
+
+/** How each kind reaches a surface. Mirrors `LIFECYCLE_CARD_CARRIAGE`. */
+export const LIFECYCLE_CARD_CARRIAGE = Object.freeze({
+  artifact_review_gate: "data_part",
+  verification_summary: "data_part",
+  recommendation_hold: "interrupt",
+  trigger_schedule_proposal: "data_part",
+});
+
+/** The four hosts. Mirrors `LIFECYCLE_CARD_HOSTS`. */
+export const LIFECYCLE_CARD_HOSTS = Object.freeze([
+  "chat_thread",
+  "site_widget",
+  "run_card",
+  "page_gate_region",
+]);
+
+/** The S1 shell — the "not yet drawn" renderer, and its one module. */
+export const S1_SHELL = Object.freeze({
+  component: "LifecycleCard",
+  owner: "packages/chat/src/renderable-views/lifecycle-card.tsx",
+});
+
+/**
+ * THE CONTRACT, one row per interaction kind.
+ *
+ * A row is either DRAWN — it names the sole owner module, the component, the
+ * modules that owner composes, the authorized body it consumes, the anchors it
+ * must emit, its host mounts and the rendered test that photographs them — or
+ * PLACEHOLDER, which names the SAME requirements as the obligation the drawing
+ * slice inherits, plus a `gap` sentence saying what is absent today.
+ *
+ * A PLACEHOLDER row carries `owner: null` on purpose. Pointing it at the S1
+ * shell is what let the previous round read as satisfied: one component serving
+ * two kinds looks like "one implementation per interaction" to a duplicate
+ * detector, and the two kinds with no drawing at all were counted as met.
+ */
+export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
   artifact_review_gate: {
+    status: "DRAWN",
+    design: "§II (the review card in the thread)",
+    // The epic's table columns, mirrored: component owner, then wire carriage.
     component: "ReviewGateCard",
+    wireCarriage: "data_part",
     owner: "packages/agents/src/review-gate-card.tsx",
+    // The floor lives in its own module and is composed by the card. Anchors it
+    // emits count as the card's, because the card is what mounts it.
+    composes: ["packages/agents/src/review-decision-bar.tsx"],
+    body: {
+      // THE VALIDATED SEAM, NAMED BY WHAT THE OWNER CALLS. This row said
+      // `useLifecycleCardState` until #2870 split that hook into
+      // `useLifecycleCardAuth` / `useLifecycleCardFrame` / `useLifecycleCardHost`
+      // / `useLifecycleCardResolve`. The card did not stop validating its body;
+      // the READER was renamed, and the old name now survives in this tree only
+      // inside a comment (`review-gate-card.tsx:1324`), which R6 strips — so the
+      // rule correctly reported an owner that reads nothing.
+      //
+      // WHY `useLifecycleCardResolve` IS THE VALIDATED SEAM, and not merely the
+      // fetch. Its own header states the property this row is asserting
+      // (`lifecycle-card-runtime.tsx:614`): "THE ENVELOPE IS PARSED, NOT TRUSTED
+      // (epic S9, slice S9c). The answer is `{ kind, state, body }`, and it goes
+      // through the protocol's one parse seam with the kind THIS card asked for.
+      // An answer to another kind, an unknown kind, a body beside `absent`, or a
+      // missing body on a kind that must carry one are all refused — and a
+      // refused parse leaves the card exactly where it was before the first
+      // resolve landed, drawing nothing."
+      //
+      // So the next rename is checked the same way: name the hook the owner
+      // CALLS, and only if that hook's own header carries the parse-seam
+      // property. A reader that fetches without parsing is not a validator, and
+      // renaming this field to match such a reader would be weakening R6 rather
+      // than tracking it.
+      validator: "useLifecycleCardResolve",
+      params: ["view"],
+      fields: ["state", "canDecide", "canComment", "suggestions"],
+    },
+    // CLOSED SET. "the applicable decision-floor anchors" is read against the
+    // shipped floor, which emits exactly these two ids — the open floor and its
+    // disabled form. That is a reading of the ratified list, not an invention:
+    // both names already exist in the tree and in the conformance record.
+    anchors: [
+      '[data-lifecycle-card="artifact_review_gate"]',
+      "review-gate-card",
+      "review-decision-bar",
+      "review-decision-disabled",
+    ],
+    hosts: {
+      chat_thread: [
+        {
+          module: "packages/chat/src/renderable-views/registry.tsx",
+          adapter: "registry",
+          surface: "production",
+          why: "the transcript dispatch — the chat column declares the host once and every turn resolves inside it",
+        },
+      ],
+      site_widget: [
+        {
+          module: "packages/chat/src/renderable-views/registry.tsx",
+          adapter: "registry",
+          surface: "production",
+          why: "the SAME registry row serves the widget transcript; a second table would be a parallel registry",
+        },
+      ],
+      run_card: [
+        {
+          module: "packages/agents/src/agentic-run-panel.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the agentic panel branch of the run card",
+        },
+        {
+          module: "packages/agents/src/orchestrator-stepper-panel.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the stepper branch of the same host: the run-detail review branch, which composes the shared card and defines no drawing of its own",
+        },
+      ],
+      page_gate_region: [
+        {
+          module:
+            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the review page mounts the card in its gate region; the page composes no floor of its own",
+        },
+      ],
+    },
+    // Where two adapters serve ONE host, exclusivity is a property somebody can
+    // read, not a hope. The branch selector decides which panel the run-detail
+    // screen draws, so exactly one of the two can be mounted for a given run.
+    exclusions: {
+      run_card: {
+        selector: "runDetailPanelKind",
+        module: "packages/agents/src/instance-screens.tsx",
+        proof: {
+          file: "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
+          // The row used to cite "covers every branch — no shape is left without
+          // an answer", which is the totality proof of the OTHER picker
+          // (`screenHostsRecommendationCard`). It named no reading of
+          // `runDetailPanelKind` at all, and the old "asserts anything" check
+          // could not see that. The cited test now proves THIS picker.
+          testName:
+            "answers exactly one panel for every run shape — the two run_card adapters are never both chosen",
+        },
+      },
+    },
+    instanceRootSelector: '[data-lifecycle-card="artifact_review_gate"]',
+    renderedProof: {
+      file: "packages/agents/src/__tests__/review-gate-card.test.tsx",
+      testName: "the root carries its lifecycle-card identity, its host and its state",
+    },
+    // The SAME rendered test counts the roots on each host it drives, so the
+    // anchors, the root attributes and the one-instance property are all read
+    // off one mounted card rather than off three separate claims.
+    instanceProof: {
+      file: "packages/agents/src/__tests__/review-gate-card.test.tsx",
+      testName: "the root carries its lifecycle-card identity, its host and its state",
+      // The registry-served hosts are named here TOO. `jsxHosts` below can only
+      // see hosts with a JSX mount, so a registry-served host would otherwise
+      // carry no counted instance proof at all — the declaration would say four
+      // hosts and the count would cover three.
+      hosts: ["chat_thread", "run_card", "page_gate_region", "site_widget"],
+    },
   },
+
   recommendation_hold: {
+    status: "DRAWN",
+    design: "§V (the recommendation card) — the chip row IS the whole card",
     component: "RecommendationHoldCard",
+    wireCarriage: "interrupt",
     owner: "packages/agents/src/run-recommendation-chip-row.tsx",
+    composes: [],
+    body: {
+      // A typed INTERRUPT, so its authorized state comes from the hold's own
+      // cookie-bound read rather than the data-part resolve seam.
+      //
+      // UNCHANGED BY #2870, and checked rather than assumed: the owner still
+      // calls this reader (`run-recommendation-chip-row.tsx:633`), and this row
+      // never named the split hook. The reader carries the same posture the
+      // resolve seam does — a failed read stays with the last authorized answer
+      // or with none, and is never turned into a state — so an unresolvable card
+      // is silent here too, rather than optimistic.
+      validator: "useRecommendationHoldState",
+      params: ["runId", "wireRef"],
+      fields: [
+        "state",
+        "agentPackageName",
+        "promptText",
+        "recommendations",
+        "holdRef",
+        "skillNames",
+      ],
+    },
+    // TRANSCRIBED from the ratified source, not chosen here: cinatra#2841 redrew
+    // §V so the decision affordances are PER CHIP, and cinatra#2826's anchor
+    // contract (scripts/audit/chat-hitl-anchor-contract.json, digest-pinned and
+    // bound by src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts) names
+    // this owner's ratified anchors. The row-level pair this list used to carry
+    // ('[data-action="confirm-run-recommendation"]' and its skip twin) is not
+    // emitted on any host any more, so naming it here would make this gate assert
+    // a requirement the ratified drawing retired.
+    anchors: [
+      '[data-lifecycle-card="recommendation_hold"]',
+      "[data-run-recommendation-chip-row]",
+      '[data-conformance-id="run-chip-row"]',
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
+    ],
+    // The 'recommendation-root-identity' obligation recorded here is CLOSED by
+    // cinatra#2841: the redrawn owner emits the lifecycle-card identity attribute
+    // and the root's host/state pair on both the held and the decided root. The
+    // gate's own both-directions check ("recorded as unmet and the owner now emits
+    // every part of it — strike the record here, in whichever change lands
+    // second") names this merge as the change landing second, so the record is
+    // struck rather than carried forward as a requirement the tree already meets.
+    openObligations: [],
+    hosts: {
+      chat_thread: [
+        {
+          module: "packages/chat/src/chat-messages-view.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the assistant dispatch turn: the card mounts on the run identity read off the tool result, and NOT through the renderable-view registry, because this kind's carriage is an interrupt rather than a data part",
+        },
+      ],
+      site_widget: null,
+      run_card: [
+        {
+          module: "packages/agents/src/agentic-run-panel.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the agentic panel branch of the run card",
+        },
+        {
+          module: "packages/agents/src/instance-screens.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the run screen branch: the agentic panel does not render for a run that is pending_input, and a HELD run is exactly that, so this branch draws the held state",
+        },
+        {
+          module: "packages/agents/src/orchestrator-stepper-panel.tsx",
+          adapter: "mount",
+          surface: "dev_preview",
+          why: "the Dev Stepper's child-run preview row, which draws only while a dev preview child is open and addresses that child's own run — enumerated because it is a real callsite, and marked dev_preview because it is not one of the production adapters",
+        },
+      ],
+      page_gate_region: null,
+    },
+    exclusions: {
+      run_card: {
+        selector: "screenHostsRecommendationCard",
+        module: "packages/agents/src/instance-screens.tsx",
+        proof: {
+          file: "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
+          testName: "stands down on the branch whose panel already declares the host",
+        },
+      },
+    },
+    hostGap:
+      "Two of the four hosts carry no mount. The chat thread HAS one: cinatra#2786 (S9b) landed the assistant-dispatch-turn mount, keyed by the run identity off the tool result and NOT through the renderable-view registry, and it is enumerated above with a counted instance proof. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.",
+    // The row's own root, because the lifecycle-card identity is the open
+    // obligation below. When that obligation closes, this becomes
+    // `[data-lifecycle-card="recommendation_hold"]` in the same change.
+    instanceRootSelector: "[data-run-recommendation-chip-row]",
+    renderedProof: {
+      // The OWNER's own rendered suite: it mounts RecommendationHoldCard on a
+      // declared host, feeds it a validated hold state, and reads the row, its
+      // two ratified decisions and the count back out of real DOM.
+      file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
+      testName: "hosts run_card and chat_thread each draw EXACTLY ONE chip row, carrying the ratified decisions",
+    },
+    instanceProof: {
+      file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
+      testName: "hosts run_card and chat_thread each draw EXACTLY ONE chip row, carrying the ratified decisions",
+      hosts: ["run_card", "chat_thread"],
+    },
   },
-  // The verification and schedule-proposal kinds are BOTH drawn by the S1 shell
-  // `LifecycleCard`, and that is the truth rather than a placeholder: neither
-  // has been given its own drawn component yet (S5 shipped the schedule
-  // proposal's producer, token and install order, not a second renderer). One
-  // component serving two kinds still satisfies "exactly one implementation per
-  // interaction"; two components serving one kind would not. If either gets its
-  // own drawing later, this row changes and the gate follows it.
-  verification_summary: {
-    component: "LifecycleCard",
-    owner: "packages/chat/src/renderable-views/lifecycle-card.tsx",
-  },
+
   trigger_schedule_proposal: {
-    component: "LifecycleCard",
-    owner: "packages/chat/src/renderable-views/lifecycle-card.tsx",
+    status: "PLACEHOLDER",
+    design: "§VI (the schedule proposal card)",
+    component: "ScheduleProposalCard",
+    wireCarriage: "data_part",
+    owner: null,
+    composes: [],
+    body: {
+      // The obligation the drawing slice inherits, named for the reader that
+      // exists. #2870 split `useLifecycleCardState` apart; the validated seam is
+      // `useLifecycleCardResolve` (see the review row's note above for the
+      // parse-seam property this name asserts). An obligation may not point at a
+      // hook nobody can call.
+      validator: "useLifecycleCardResolve",
+      params: ["view"],
+      fields: ["state", "proposal", "options", "estimatedDuration"],
+    },
+    // The settled card's two quiet controls were ratified in prose and are now
+    // named, in the existing verb-object convention. The set is complete.
+    anchors: [
+      "schedule-option-rows",
+      "schedule-proposal-floor",
+      "scheduled-run-chrome",
+      '[data-action="cancel-trigger-schedule"]',
+      '[data-action="release-trigger-now"]',
+    ],
+    instanceRootSelector: '[data-lifecycle-card="trigger_schedule_proposal"]',
+    instanceProof: null,
+    hosts: {
+      chat_thread: null,
+      site_widget: null,
+      run_card: null,
+      page_gate_region: null,
+    },
+    hostGap:
+      "No host mounts this kind, because no component draws it. The registry still dispatches the kind to the S1 shell. The drawing slice names the run_card adapter and binds route, identity and authorization reader for the page gate region before it implements either.",
+    renderedProof: null,
+    gap: "The card is not drawn. The registry dispatches this kind to the S1 shell, which calls itself not-yet-drawn; the server already returns the proposal body and the client parses only the state name; the confirm action has no user interface caller. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.",
+  },
+
+  // DRAWN by S9e (cinatra#2789), which is why this row no longer reads as a
+  // placeholder. Its PLACEHOLDER obligation was re-read against the drawing at
+  // the pin (design@92c1be7c §VII) rather than transcribed, per the header's
+  // "a placeholder's anchor list is not a ratification"; the three places the
+  // obligation and the drawing disagreed are corrected where they occur, each
+  // with the drawing sentence it rests on. A row that keeps a guess after the
+  // drawing lands is the same dishonesty as a placeholder that keeps a name
+  // after the card lands.
+  verification_summary: {
+    status: "DRAWN",
+    design: "§VII (the verification card) — advisory, no floor",
+    component: "VerificationSummaryCard",
+    wireCarriage: "data_part",
+    owner: "packages/agents/src/verification-summary-card.tsx",
+    composes: [],
+    openObligations: [],
+    body: {
+      // #2870 split `useLifecycleCardState` apart; the validated seam is
+      // `useLifecycleCardResolve` (see the review row's note above for the
+      // parse-seam property this name asserts). The placeholder named this hook
+      // and the shipped card really calls it, so this line is unchanged.
+      validator: "useLifecycleCardResolve",
+      params: ["view"],
+      // The placeholder's guess is corrected here (1 of 3), against the SERVER
+      // rather than against the card. The obligation read
+      // `["state", "outcome", "revisions", "fields", "comments"]`
+      // — a paraphrase of §VII's regions, written before the body existed. The
+      // AUTHORIZED body is `verificationSummaryBodySchema`
+      // (packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts),
+      // and these are its field names, plus the envelope's own `state`. Naming
+      // the paraphrase instead would make this gate assert that the card
+      // consumes fields the server never sends.
+      fields: [
+        "state",
+        "outcome",
+        "reviewedRevisionId",
+        "repairedRevisionId",
+        "fieldDiff",
+        "advisoryComments",
+      ],
+    },
+    // THE RATIFIED SET, CLOSED — and the placeholder's guess is corrected here
+    // (2 of 3). Read the header's "a placeholder's anchor list is not a
+    // ratification" first: the requirement below comes from the DRAWING, and
+    // only the NAMES come from the tree's convention.
+    //
+    // WHAT WAS WRONG. The obligation PINNED `["verification-in-thread"]` — it
+    // recorded that name, which is not the same act as ratifying it. That
+    // is an ARTBOARD id: in the drawing at design@92c1be7c it wraps the specimen
+    // slot inside §VII's "the verification card in the assistant turn" figure,
+    // exactly as `state-loading` wraps §IV's and `review-target-in-thread` wraps
+    // §II's — and this table ratifies neither of those for the review card. An
+    // artboard marker is how the design page labels its own examples; it is not
+    // something a shipped card emits. The corroboration is independent of this
+    // slice: scripts/audit/lib/chat-hitl-capture-recorder.mjs has graded a
+    // capture of this kind against the conformance id `verification-card` since
+    // before either S9a or S9e, and `verification-in-thread` appears nowhere in
+    // this repository's executable expectations.
+    //
+    // WHAT THE DRAWING RATIFIES. §VII names this card's regions in one sentence:
+    // "the **Core analysis** heading with its outcome pill, the scope sentence,
+    // and the two revision pins, and the field-by-field before / after of
+    // exactly what was inspected … It closes with **Advisory comments**: a label
+    // over one panel per comment." That is the closed set — chrome, outcome,
+    // revisions, field-diff, advisory — and it is the drawing's, not this
+    // slice's. The scope sentence is deliberately NOT in it: §VII draws it as
+    // copy inside the chrome rather than as a region, so it gets no anchor, and
+    // an anchor nobody drew is the implementer choice a closed set forbids.
+    //
+    // WHERE THE NAMES COME FROM. §VII gives those five regions no ids of its
+    // own, so they are named here in the tree's existing attribute convention —
+    // the same footing, and the same wording, as the schedule-proposal row's two
+    // controls three rows up ("ratified in prose and are now named, in the
+    // existing verb-object convention"). Naming a prose-ratified region is not
+    // choosing the requirement; adding or dropping one would be, and neither
+    // happened. A reader checking this row checks it against §VII's sentence,
+    // not against the card.
+    //
+    // The same five are `VERIFICATION_CORE_ANCHORS` below, which is what R2 bans
+    // outside this owner. One list, read from both ends: the drawing may not be
+    // redrawn elsewhere, and it may not quietly stop being drawn here.
+    anchors: [
+      "[data-verification-chrome]",
+      "[data-verification-outcome]",
+      "[data-verification-revisions]",
+      "[data-verification-field-diff]",
+      "[data-verification-advisory]",
+    ],
+    instanceRootSelector: '[data-lifecycle-card="verification_summary"]',
+    // NO `anchorsOneOf`, and the placeholder's guess is corrected here (3 of 3).
+    // The obligation expressed §VII's three outcomes as three conformance ids
+    // (`verification-verified` / `-drift` / `-findings-not-met`) — again the
+    // drawing's three SPECIMEN artboards, not three things one card emits. The
+    // shipped card carries the outcome as the VALUE of one anchor,
+    // `data-verification-outcome={body.outcome}`, over the closed enum
+    // `VERIFICATION_SUMMARY_OUTCOMES`. That is the same requirement, better
+    // drawn: "exactly one of the three at a time" is structural in a single
+    // valued attribute rather than a rule about three ids, and all three remain
+    // reachable. Keeping the three-id form would have failed R7 against a card
+    // that draws §VII correctly — a gate rejecting a correct tree.
+    //
+    // The three-outcome requirement is not dropped, it MOVED to where it can be
+    // proven: `renderedProof` below drives `verified`, `drifted` and `unmet`
+    // through real DOM and reads §VII's own three labels back out.
+    hosts: {
+      chat_thread: [
+        {
+          module: "packages/chat/src/renderable-views/registry.tsx",
+          adapter: "registry",
+          surface: "production",
+          why: "the transcript dispatch — the same one registry row the review card uses; the chat column declares the host once and every turn resolves inside it",
+        },
+      ],
+      site_widget: [
+        {
+          module: "packages/chat/src/renderable-views/registry.tsx",
+          adapter: "registry",
+          surface: "production",
+          why: "the SAME registry row serves the widget transcript; a second table would be a parallel registry",
+        },
+      ],
+      run_card: [
+        {
+          module: "packages/agents/src/instance-screens.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the run screen draws one card per verification record the run carries, under its own <LifecycleCardSurfaceProvider host=\"run_card\">",
+        },
+      ],
+      page_gate_region: [
+        {
+          module:
+            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the review page's verification region mounts the card and composes only its page-only adjunct around it — R2's 'page-direct-verification-composition' entry is what keeps it from drawing the core itself",
+        },
+      ],
+    },
+    // All four hosts carry a mount, so there is no `hostGap` to write. §IX's
+    // "every card appears on every host" is met for this kind.
+    // The SAME rendered test carries both proofs, exactly as the review card's
+    // does: it drives all four hosts, counts the roots on each, reads the two
+    // required root attributes, and reads all five ratified anchors back out of
+    // real DOM. One executed test, so the declaration above and the pixels can
+    // never be two separate claims.
+    renderedProof: {
+      file: "packages/agents/src/__tests__/verification-summary-card.test.tsx",
+      testName:
+        "the root carries its identity, host and state, and draws EXACTLY ONE instance per host",
+    },
+    instanceProof: {
+      file: "packages/agents/src/__tests__/verification-summary-card.test.tsx",
+      testName:
+        "the root carries its identity, host and state, and draws EXACTLY ONE instance per host",
+      // Named explicitly, like the review card's: two of the four hosts are
+      // registry-served, so a JSX-mount scan alone would leave them uncounted.
+      hosts: ["chat_thread", "site_widget", "run_card", "page_gate_region"],
+    },
   },
 });
+
+/**
+ * The SOLE module that may define each interaction's card component — derived
+ * from the contract so the two can never disagree. A PLACEHOLDER kind
+ * contributes no owner row; the S1 shell keeps its own row so a second shell
+ * definition is still an R1 violation while the shell is still in service.
+ */
+export const CARD_OWNERS = Object.freeze(
+  Object.fromEntries([
+    ...Object.entries(LIFECYCLE_CARD_CONTRACTS)
+      .filter(([, c]) => c.status === "DRAWN")
+      .map(([kind, c]) => [kind, { component: c.component, owner: c.owner }]),
+    ["s1_placeholder_shell", { component: S1_SHELL.component, owner: S1_SHELL.owner }],
+  ]),
+);
 
 /**
  * The definition pattern for one card component: the component's own name, or
@@ -131,13 +731,48 @@ export function cardDefinitionPattern(component) {
 }
 
 /**
- * R2 — the three retired parallel renderers, as exact JSX/identifier forms.
+ * R2 — the retired parallel renderers, as exact JSX / identifier / anchor forms.
  *
  * Each entry names WHAT was deleted and WHY it may not return, because the ban
  * is the whole content of the criterion. `allow` lists the modules where the
  * token is legitimate: the component's own definition module, and (for the
  * decision bar / blocked state) the ONE card that composes them.
  */
+/**
+ * The STRUCTURAL ANCHORS of §VII's core — the data attributes that identify the
+ * verification drawing itself, independently of what any component is called.
+ *
+ * Exported because two things read them and they must not drift: the R2 rule
+ * below (which bans them outside the owner module) and the slice's own
+ * one-renderer test (which asserts the owner really emits every one of them, so
+ * the ban can never go vacuous by the anchors quietly disappearing).
+ *
+ * They are the sections §VII names: the Core-analysis chrome, the outcome pill,
+ * the REVISION PINS, the field-by-field before/after, and the advisory
+ * comments. §VII draws no authorized-scope region — the plan's own binding
+ * correction puts the authorization in the card's copy and in the before/after
+ * columns — so there is no anchor for one, and an "authorized-scope" anchor
+ * appearing anywhere would be a region outside the closed set rather than a
+ * parallel drawing of one inside it (cinatra#2861).
+ *
+ * `revisions` is in this list and must stay: the two revision pins are §VII
+ * CORE, not a page adjunct. The page's own ruling names exactly two adjuncts —
+ * the pinned VISUAL pair (#2044 L-D) and the back-to-gate route affordance —
+ * and the revision pins are neither. The name collision between "the revision
+ * pins" and "the pinned visual pair" is precisely how this anchor was left out
+ * of the first cut of this list (restored in cinatra#2861): without it, a
+ * production module could emit `data-verification-revisions` and redraw that
+ * portion of the reading without tripping R2 or the emitter test — which is
+ * exactly the parallel renderer this gate exists to forbid.
+ */
+export const VERIFICATION_CORE_ANCHORS = Object.freeze([
+  "chrome",
+  "outcome",
+  "revisions",
+  "field-diff",
+  "advisory",
+]);
+
 export const RETIRED_PARALLELS = Object.freeze([
   {
     id: "review-redirect-card",
@@ -178,6 +813,94 @@ export const RETIRED_PARALLELS = Object.freeze([
     fix: "Mount <RecommendationHoldCard> under a declared host; the card composes the row.",
   },
   {
+    id: "page-direct-verification-composition",
+    // The review page's `VerificationView` DRAWING §VII itself. Before S9e
+    // (cinatra#2789) that component composed the whole reading — the
+    // Core-analysis chrome, the outcome pill, the revision pins, the
+    // field-by-field before/after and the advisory comments — while the same
+    // reading in a chat transcript drew the S1 shell. Two drawings of one
+    // reading is exactly the drift this gate exists to catch, so the core moved
+    // into `VerificationSummaryCard` and `VerificationView` became a composition
+    // of that card plus its one page-only adjunct, the pinned visual pair. (The
+    // navigation back to the gate went with the drawing: plan §8.3(5) and §8.4
+    // say the link exists only because the reading lived on its own page, so it
+    // goes when the card lands — cinatra#2861.)
+    //
+    // BANNED BY THE §VII ANCHORS, NOT BY A COMPONENT NAME, and deliberately so.
+    // `VerificationView` still exists and must — it is the legitimate adjunct
+    // composition — so banning its name would ban the right answer. What may
+    // not come back is the DRAWING, and the drawing is identified by the
+    // structural anchors §VII's core carries: the Core-analysis chrome, the
+    // outcome pill, the REVISION PINS, the before/after table and the
+    // advisory-comment list — every section the history above says the page
+    // used to draw, because the ban and that history have to name the same
+    // drawing or the ban has a hole in it.
+    // Emitting any of those outside the owner module is a second §VII renderer
+    // whatever it is called — which also catches the look-alike that R1's name
+    // patterns structurally cannot see.
+    //
+    // R9'S RETIREMENT, COMPLETED HERE — the history kept, because an
+    // empty-looking allowlist hides what it cost (the same posture the
+    // `direct-chip-row-mount` entry above keeps for S7's). S9a (cinatra#2792)
+    // shipped this ban in its PENDING form: the pattern was the identifier
+    // `VerificationView`, and the allowlist named the two route modules that
+    // carried the parallel drawing —
+    // `…/review/[reviewTaskId]/verification-view.tsx` and its `page.tsx`. That
+    // record said, in its own words, that it was "valid ONLY while the
+    // verification kind is a placeholder: the slice that draws the card must
+    // delete the parallel renderer with it", and that "the slice that draws the
+    // card deletes this and empties the allowlist in the same change". This is
+    // that slice, and this is that change:
+    //
+    //   · the PARALLEL DRAWING is deleted — `VerificationView` composed §VII's
+    //     five regions itself and now composes none of them; it mounts
+    //     `VerificationSummaryCard` under `host="page_gate_region"` and adds one
+    //     page-only adjunct. Neither route module emits a single
+    //     `data-verification-*` anchor any more, which is a property this very
+    //     rule now checks on every run rather than a claim in a comment.
+    //   · the ROUTE-MODULE ALLOWLIST is emptied — both entries are gone above.
+    //     What remains in `allow` is the owner's own definition module, which is
+    //     not an exception at all: every entry in this table allows the module
+    //     that defines the shipped thing (`run-recommendation-chip-row.tsx` for
+    //     the row, `review-gate-card.tsx` / `review-decision-bar.tsx` for the
+    //     floor). An `allow: []` here would flag the one renderer for drawing.
+    //   · the PENDING_RETIREMENT record is deleted, with its expiry check in
+    //     `auditContracts`. Its whole content was "these modules must be gone
+    //     the moment the kind is DRAWN"; the kind is DRAWN and the drawing is
+    //     gone from them, so carrying the record would be carrying a debt
+    //     nobody owes.
+    //
+    // AND THE IDENTITY OF THE BAN MOVED WITH IT, deliberately. A name ban plus
+    // an empty allowlist would have banned the RIGHT answer: `VerificationView`
+    // survives, and must, because it carries the page-only visual pair (#2044
+    // L-D) that no card in a turn can draw. So the ban now names the DRAWING —
+    // §VII's five regions — instead of the identifier that used to carry it.
+    //
+    // WHAT THAT TRADE COSTS AND BUYS, stated both ways rather than as a win.
+    // WIDER: any module redrawing a §VII region trips it whatever it is called,
+    // which is precisely the look-alike R1's name patterns structurally cannot
+    // see. NARROWER: a second component merely NAMED `VerificationView` that
+    // emits no §VII region no longer trips R2 — but that is a wrapper, an alias
+    // or a harness, not a parallel core renderer, and R9 never existed to catch
+    // it. UNCHANGED, and recorded because it is the honest limit: a renderer
+    // that copies the drawing under a novel name AND invents its own attributes
+    // evades both forms. It always did — it is the first entry in this file's
+    // MISSES list — and R3, R4 and review are what stand behind the lexical
+    // rule there.
+    //
+    // OVER-DETECTION, accepted on purpose: the `\b` makes the pattern fire on a
+    // prefixed relative too (`data-verification-chrome-extra`). A neighbouring
+    // attribute on a §VII region drawn outside the owner is the same second
+    // drawing, and this file's recorded posture is that a spurious red is one
+    // conversation while a miss is a second approval surface.
+    re: new RegExp(
+      String.raw`data-verification-(?:${VERIFICATION_CORE_ANCHORS.join("|")})\b`,
+      "g",
+    ),
+    allow: ["packages/agents/src/verification-summary-card.tsx"],
+    fix: "`VerificationView` mounts <VerificationSummaryCard> and keeps only its page-only adjunct; the card owns §VII's core.",
+  },
+  {
     id: "page-direct-decision-composition",
     // The review PAGE composing the DECISION FLOOR itself. S2 moved the bar into
     // the card so all four hosts draw one floor, bound to one decision module.
@@ -199,7 +922,8 @@ export const RETIRED_PARALLELS = Object.freeze([
 ]);
 
 /** R3 — the JSX mounts that are lifecycle CARD mounts. */
-const CARD_MOUNT_RE = /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard)\b/g;
+const CARD_MOUNT_RE =
+  /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard|VerificationSummaryCard)\b/g;
 const HOST_PROVIDER_RE = /<\s*LifecycleCardSurfaceProvider\b/;
 
 /**
@@ -217,7 +941,17 @@ export const HOST_PROVIDED_BY_PARENT = Object.freeze({
     "packages/chat/src/chat-messages-view.tsx (<LifecycleCardSurfaceProvider {...lifecycleSurface}>)",
 });
 
-/** R4 — the one registry, and the one line per kind inside it.
+/** R4 — the one registry, the one line per kind inside it, and WHAT that line
+ * dispatches to.
+ *
+ * CHECKING THE RIGHT-HAND SIDE IS THE POINT (cinatra#2861). Counting `kind:`
+ * occurrences alone leaves the rule half-blind: reverting
+ * `verification_summary: VerificationSummaryCard` to
+ * `verification_summary: LifecycleCard` keeps the count at exactly one and
+ * sails through, silently un-retiring the S1 shell for a kind the epic has
+ * DRAWN. So the row's component is compared against `CARD_OWNERS[kind]`, which
+ * is the same table R1 enforces ownership with — one source of truth for who
+ * draws a kind, read from both ends.
  *
  * SCOPED TO THE DATA-PART KINDS. `recommendation_hold` rides a typed INTERRUPT,
  * not a `DATA_PART` (`LIFECYCLE_CARD_CARRIAGE`), so it is correctly absent from
@@ -326,16 +1060,853 @@ export function scanRegistry(source) {
   const code = stripComments(source);
   const findings = [];
   for (const kind of REGISTRY_KINDS) {
-    const hits = [...code.matchAll(new RegExp(String.raw`^\s*${kind}\s*:`, "gm"))];
+    // The row and its WHOLE right-hand side in one match: everything from the
+    // colon to the value's own terminator, which in an object literal is the
+    // next `,` or the closing `}`. The side is then required to be a BARE
+    // IDENTIFIER — the registry is a map of imported components, so that is its
+    // only legal shape, and a call, an inline arrow, a member expression, a
+    // ternary or a string is reported as a row whose owner could not be read.
+    //
+    // TWO FAIL-OPENS, both found by cinatra#2861's Codex rounds, both fixed
+    // here, and recorded because the shape of the mistake is instructive: each
+    // time, the pattern read only the FRONT of the value and the expected name
+    // was sitting there.
+    //   · capturing a leading identifier — `verification_summary:
+    //     VerificationSummaryCard(kind),` passed, because the capture stopped at
+    //     the `(` and the prefix equalled the owner.
+    //   · stopping the capture at a NEWLINE — the same call written across two
+    //     lines passed for the same reason. A newline does not end a JavaScript
+    //     value, so it may not end the capture either.
+    // So the terminator set is `,` and `}` ONLY. Whitespace, newlines and the
+    // rest of a continued expression stay inside the captured side, where the
+    // bare-identifier test can see them and refuse them.
+    const hits = [
+      ...code.matchAll(new RegExp(String.raw`^\s*${kind}\s*:([^,}]*)`, "gm")),
+    ];
     if (hits.length !== 1) {
       findings.push({
         rule: "R4",
         detail: `the renderable-view registry maps '${kind}' ${hits.length} time(s) — expected exactly 1`,
         line: hits.length > 0 ? lineOf(code, hits[0].index) : 1,
       });
+      continue;
+    }
+    const expected = CARD_OWNERS[kind]?.component;
+    const side = hits[0][1].trim();
+    const actual = /^[A-Za-z_$][\w$]*$/.test(side) ? side : null;
+    if (expected && actual !== expected) {
+      findings.push({
+        rule: "R4",
+        detail:
+          `the renderable-view registry dispatches '${kind}' to ` +
+          `${actual ? `'${actual}'` : "an expression this gate cannot read"} — ` +
+          `CARD_OWNERS names '${expected}' (${CARD_OWNERS[kind].owner}) as the one renderer of this kind`,
+        line: lineOf(code, hits[0].index),
+      });
     }
   }
   return findings;
+}
+
+// ---------------------------------------------------------------------------
+// The completeness rules — R5 to R9
+// ---------------------------------------------------------------------------
+
+/** Skip a string or template literal from `i`; returns the index after it. */
+function skipQuoted(code, i) {
+  const quote = code[i];
+  for (let j = i + 1; j < code.length; j++) {
+    if (code[j] === "\\") {
+      j += 1;
+      continue;
+    }
+    if (code[j] === quote) return j + 1;
+  }
+  return code.length;
+}
+
+/**
+ * The index just past the block that opens at `open` (a `{`, `(` or `[`),
+ * skipping quoted spans so a brace inside a string cannot end it early.
+ */
+export function matchBlock(code, open) {
+  const pairs = { "{": "}", "(": ")", "[": "]" };
+  const close = pairs[code[open]];
+  if (close === undefined) return -1;
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    const ch = code[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipQuoted(code, i) - 1;
+      continue;
+    }
+    if (ch === code[open]) depth += 1;
+    else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Remove the branches that can never run: `if (false) {…}`, `if (0) {…}` and the
+ * `false && (…)` / `0 && (…)` short-circuit form.
+ *
+ * This is what stops an anchor from being satisfied by dead text. It is
+ * deliberately narrow — a statically-false literal is the shape that reads as
+ * "the anchor is here" while nothing ever renders it. A branch that is false for
+ * a runtime reason is NOT dead code and is left alone; the rendered owner test
+ * is what proves those paths draw.
+ */
+export function stripUnreachable(code) {
+  let out = code;
+  for (const guard of [/\bif\s*\(\s*(?:false|0)\s*\)\s*\{/g, /(?:\bfalse|(?<![\w.])0)\s*&&\s*\(/g]) {
+    for (;;) {
+      guard.lastIndex = 0;
+      const m = guard.exec(out);
+      if (m === null) break;
+      const open = m.index + m[0].length - 1;
+      const end = matchBlock(out, open);
+      if (end < 0) break;
+      out = out.slice(0, m.index) + out.slice(end);
+    }
+  }
+  return out;
+}
+
+/**
+ * The body of one top-level component, or `null` when it is not defined here.
+ * Handles the `function X(…) {…}` and `const X = (…) => {…}` forms.
+ */
+export function extractComponentBody(code, component) {
+  const decl = new RegExp(
+    String.raw`\b(?:export\s+)?(?:function\s+${component}\s*\(|const\s+${component}\s*(?::[^=]+)?=\s*(?:function\s*)?\()`,
+  );
+  const m = decl.exec(code);
+  if (m === null) return null;
+  const paramsOpen = code.indexOf("(", m.index + m[0].length - 1);
+  const afterParams = matchBlock(code, paramsOpen);
+  if (afterParams < 0) return null;
+  const bodyOpen = code.indexOf("{", afterParams);
+  if (bodyOpen < 0) return null;
+  const bodyEnd = matchBlock(code, bodyOpen);
+  if (bodyEnd < 0) return null;
+  return code.slice(bodyOpen, bodyEnd);
+}
+
+/**
+ * Is `anchor` emitted anywhere in `code`?
+ *
+ * The ratified list is written in TWO forms and both are kept verbatim, because
+ * a closed set stops being closed the moment it is paraphrased:
+ *   `[data-lifecycle-card="recommendation_hold"]` — an attribute selector, with
+ *       or without a value (`[data-run-recommendation-chip-row]`);
+ *   `review-gate-card` — a bare conformance id.
+ */
+export function emitsAnchor(code, anchor) {
+  const selector = /^\[([a-zA-Z0-9-]+)(?:=["']([^"']+)["'])?\]$/.exec(anchor);
+  if (selector === null) {
+    return new RegExp(String.raw`data-conformance-id=["']${anchor}["']`).test(code);
+  }
+  const [, attr, value] = selector;
+  return value === undefined
+    ? new RegExp(String.raw`\b${attr}(?==|\s|>|$)`, "m").test(code)
+    : new RegExp(String.raw`\b${attr}=["']${value}["']`).test(code);
+}
+
+/**
+ * The attributes every owner ROOT must carry, so a card can be addressed by the
+ * host it drew on and the state it drew in. Ratified with the closed anchor
+ * sets; a capture that cannot say which host and which state it photographed is
+ * not evidence of a matrix cell.
+ */
+export const REQUIRED_ROOT_ATTRIBUTES = Object.freeze([
+  "data-lifecycle-card-host",
+  "data-lifecycle-card-state",
+]);
+
+/**
+ * Does the RENDERED owner test read `anchor` back out of the DOM?
+ *
+ * A test may address an anchor as a selector (`[data-action="skip-…"]`) or as an
+ * attribute in rendered HTML (`toContain('data-action="skip-…"')`). Both are the
+ * same assertion about the same pixels, so both count. What does NOT count is a
+ * test that never names the anchor at all.
+ *
+ * THE LIMIT, stated rather than left to be discovered: this function is LEXICAL
+ * over whatever text it is handed, so on its own it counts an anchor named in a
+ * comment. The GATE does not hand it that text: the window comes from
+ * `extractTestBlock`, which searches and slices a comment-stripped copy, and the
+ * caller strips statically-dead branches on top. What survives the strip is an
+ * anchor named in a live STRING that nothing renders — a fixture list, an
+ * unused constant. So this rule still cannot be the proof on its own, and it is
+ * not asked to be: the same named test is EXECUTED by vitest, where the anchor
+ * has to come back off real DOM. Negative fixtures pin both readings so they
+ * stay known rather than assumed.
+ */
+export function proofAssertsAnchor(proofSource, anchor) {
+  const selector = /^\[([a-zA-Z0-9-]+)(?:=["']([^"']+)["'])?\]$/.exec(anchor);
+  if (selector === null) return proofSource.includes(anchor);
+  const [, attr, value] = selector;
+  if (value === undefined) return proofSource.includes(attr);
+  return (
+    proofSource.includes(`${attr}="${value}"`) || proofSource.includes(`${attr}='${value}'`)
+  );
+}
+
+/**
+ * The body of ONE named test, or `null` when that test is not in this file.
+ *
+ * This is what stops a proof from being a file-wide substring match. A rendered
+ * assertion counts only when it sits INSIDE the test the contract names, so a
+ * card cannot borrow the assertions of some unrelated case that happens to live
+ * in the same file — which is exactly how an empty proof test passed before.
+ *
+ * HOW THE WINDOW IS CHOSEN, and what that rules out. The search runs over a
+ * COMMENT-STRIPPED copy of the file, and it matches a test DECLARATION — an
+ * `it(`/`test(` (with any `.only`/`.skip`/`.concurrent` modifiers) whose first
+ * argument is the quoted name — not a bare quoted occurrence of the name. Three
+ * shapes that used to select the wrong window therefore cannot any more:
+ *   - the name repeated inside a COMMENT, which is not in the searched text;
+ *   - the name as a `describe` title or as a plain string somewhere else, which
+ *     is not a test declaration;
+ *   - the enclosing `(` guessed by scanning backwards, which could open at any
+ *     arbitrary paren before the name; the block now opens at the declaration's
+ *     own paren.
+ * When several declarations share one name the EARLIEST is taken, and that is
+ * chosen across all three quote characters at once rather than by quote-type
+ * priority — so the window is the first test with that name, whichever quote it
+ * was written with.
+ *
+ * THE LIMIT that remains, stated rather than left to be discovered: this is
+ * still LEXICAL, not a parse. Two tests really sharing one name read as the
+ * first of them, and the end of the block is found by brace matching, which
+ * skips quoted spans but not a regex literal carrying an unbalanced brace
+ * (`/\{/`) — such a literal inside the named test can end the window early.
+ * A table-driven declaration (`it.each([…])("name")`) is not recognised as a
+ * declaration at all, so a contract may not name one. What the rule buys is a
+ * narrower window than the file, not a guarantee that the window is the right
+ * test. It cannot be the proof on its own, and it is not asked to be: the same
+ * named test is EXECUTED by vitest, where a wrong or absent body fails on its
+ * own.
+ */
+export function extractTestBlock(source, testName) {
+  const code = stripComments(source);
+  const name = testName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const decl = new RegExp(
+    String.raw`\b(?:it|test)(?:\s*\.\s*\w+)*\s*\(\s*(["'\`])${name}\1`,
+    "g",
+  );
+  const m = decl.exec(code);
+  if (m === null) return null;
+  const open = code.indexOf("(", m.index);
+  if (open < 0) return null;
+  const end = matchBlock(code, open);
+  if (end < 0) return null;
+  return code.slice(open, end);
+}
+
+/**
+ * Does `block` COUNT the rendered roots and require exactly one?
+ *
+ * The runtime property the epic states is "one rendered instance per kind ×
+ * host". A presence check cannot see a second instance; only a count can. So
+ * the named test must select every root and assert the length is one.
+ */
+export function assertsExactlyOneInstance(block, rootSelector) {
+  const selector = rootSelector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    String.raw`querySelectorAll\(\s*["'\`][^"'\`]*${selector}[^"'\`]*["'\`]\s*\)[\s\S]{0,200}?(?:toHaveLength\(\s*1\s*\)|length\s*\)?\s*\)?\s*\.toBe\(\s*1\s*\))`,
+  ).test(block);
+}
+
+/** An `expect(…)` argument that carries no reading — a bare literal constant. */
+const LITERAL_SUBJECT = /^(?:true|false|null|undefined|-?\d+(?:\.\d+)?|["'`][^"'`]*["'`])$/;
+
+/**
+ * Does `block` assert something ABOUT `subject` — the thing it is named as the
+ * proof of?
+ *
+ * "The test is not empty" was too weak to be a proof. ANY live `expect(` used to
+ * satisfy it, so `expect(true).toBe(true)`, an expectation parked in a branch
+ * that never runs, or an assertion about something else entirely all read as a
+ * proof of the picker. Two production adapters could then be declared exclusive
+ * by a test that never touched the selector.
+ *
+ * So an expectation counts here only when BOTH hold:
+ *   LIVE AND NOT VACUOUS  it survives comment stripping and dead-branch
+ *                         stripping, and its `expect(…)` argument is not a bare
+ *                         literal constant — `expect(true).toBe(true)` and
+ *                         `expect(1).toBe(1)` carry no reading of anything;
+ *   ABOUT THE SUBJECT     the subject's identifier appears in that same
+ *                         expectation statement, in the argument or in the
+ *                         matcher, so the assertion reads the thing under proof
+ *                         rather than a neighbour of it.
+ *
+ * THE LIMIT that remains: this is LEXICAL inside the extracted block. A live
+ * expectation that names the subject and asserts something trivial about it
+ * still reads as an assertion, and the subject may be named through a wrapper
+ * rather than called directly. It cannot be the proof on its own, and it is not
+ * asked to be: the same named test is EXECUTED by vitest, where the expectation
+ * has to hold. Negative fixtures pin the shapes it DOES reject — an empty proof,
+ * one whose only assertion is commented out, one that borrows a neighbour's, a
+ * vacuous `expect(true).toBe(true)`, an expectation inside `if (false)`, and one
+ * that never names the subject — so the reading stays known rather than assumed.
+ */
+export function assertsAbout(block, subject) {
+  const live = stripUnreachable(stripComments(block));
+  const named =
+    subject === undefined || subject === null
+      ? null
+      : new RegExp(String.raw`\b${subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\b`);
+  const re = /\bexpect\s*\(/g;
+  for (let m = re.exec(live); m !== null; m = re.exec(live)) {
+    const open = live.indexOf("(", m.index);
+    const end = matchBlock(live, open);
+    if (end < 0) continue;
+    const arg = live.slice(open + 1, end - 1).trim();
+    if (LITERAL_SUBJECT.test(arg)) continue;
+    if (named === null) return true;
+    // The statement is the expectation plus its matcher chain, up to the `;`
+    // that ends it — `expect(x).toBe(pick(y))` names the subject in the matcher.
+    const semi = live.indexOf(";", end);
+    const statement = live.slice(m.index, semi < 0 ? live.length : semi);
+    if (named.test(statement)) return true;
+  }
+  return false;
+}
+
+/** Every requirement a kind has recorded as open, flattened to plain strings. */
+export function openRequirements(contract) {
+  const out = new Set();
+  for (const o of contract.openObligations ?? []) for (const r of o.requires) out.add(r);
+  return out;
+}
+
+/**
+ * R5/R6/R7 for ONE drawn kind. Pure over the sources it is handed, so a fixture
+ * drives exactly what CI runs.
+ *
+ * @param {string} kind
+ * @param {object} contract  the row from LIFECYCLE_CARD_CONTRACTS
+ * @param {Record<string,string>} sourcesByRel  owner + composed module sources
+ */
+export function scanOwnerModule(kind, contract, sourcesByRel) {
+  const findings = [];
+  const push = (rule, detail, file = contract.owner) =>
+    findings.push({ rule, file, line: 1, detail });
+
+  const ownerRaw = sourcesByRel[contract.owner];
+  if (typeof ownerRaw !== "string") {
+    push("R5", `'${kind}': the declared owner module is not readable — a named owner must exist`);
+    return findings;
+  }
+  const owner = stripComments(ownerRaw);
+
+  // R5 — the owner module really defines the component it is named for.
+  if (!new RegExp(String.raw`\b(?:export\s+)?(?:function|const|class)\s+${contract.component}\b`).test(owner)) {
+    push("R5", `'${kind}': ${contract.owner} does not define ${contract.component}`);
+  }
+
+  const body = extractComponentBody(owner, contract.component);
+  if (body === null) {
+    push("R5", `'${kind}': ${contract.component} has no readable component body in ${contract.owner}`);
+  } else {
+    const live = stripUnreachable(body);
+    // R7 — an owner that never returns DOM draws nothing. The empty stub and the
+    // null-returning owner both land here.
+    if (!/return\s*[(<]/.test(live)) {
+      push(
+        "R7",
+        `'${kind}': ${contract.component} never returns drawn DOM — an owner that only returns null is a placeholder with a name`,
+      );
+    }
+    // R6 — a body parameter the component never reads is a body it does not use.
+    for (const param of contract.body.params) {
+      if (!new RegExp(String.raw`\b${param}\b`).test(live)) {
+        push(
+          "R6",
+          `'${kind}': ${contract.component} declares the body parameter '${param}' and never reads it — the card would draw something the server did not authorize`,
+        );
+      }
+    }
+  }
+
+  // R6/R7 — the owner plus everything it composes. The floor lives in its own
+  // module; anchors and fields it consumes belong to the card that mounts it.
+  const parts = [owner];
+  for (const rel of contract.composes) {
+    const src = sourcesByRel[rel];
+    if (typeof src !== "string") {
+      push("R5", `'${kind}': the composed module ${rel} is not readable`, rel);
+      continue;
+    }
+    parts.push(stripComments(src));
+  }
+  const consumed = parts.join("\n");
+  const drawn = parts.map(stripUnreachable).join("\n");
+
+  if (!new RegExp(String.raw`\b${contract.body.validator}\b`).test(consumed)) {
+    push(
+      "R6",
+      `'${kind}': the owner never reads its authorized body through ${contract.body.validator} — an unvalidated body is not an authorized one`,
+    );
+  }
+  for (const field of contract.body.fields) {
+    if (!new RegExp(String.raw`\.${field}\b`).test(consumed)) {
+      push("R6", `'${kind}': the authorized body field '${field}' is never consumed`);
+    }
+  }
+  const open = openRequirements(contract);
+  for (const anchor of contract.anchors) {
+    if (emitsAnchor(drawn, anchor)) continue;
+    if (open.has(anchor)) continue; // recorded as an open obligation, not hidden
+    const dead = parts.some((p) => emitsAnchor(p, anchor));
+    push(
+      "R7",
+      dead
+        ? `'${kind}': the anchor '${anchor}' is emitted only from a branch that can never run`
+        : `'${kind}': the ratified anchor '${anchor}' is never emitted`,
+    );
+  }
+  // "plus exactly one outcome anchor of A / B / C" — every branch must be
+  // reachable, so the owner emits all of them and draws one at a time.
+  for (const alt of contract.anchorsOneOf?.of ?? []) {
+    if (emitsAnchor(drawn, alt) || open.has(alt)) continue;
+    push("R7", `'${kind}': the ratified '${contract.anchorsOneOf.id}' anchor '${alt}' is never emitted, so that outcome cannot be drawn`);
+  }
+  // Every owner ROOT carries its host and its state.
+  for (const attr of REQUIRED_ROOT_ATTRIBUTES) {
+    if (new RegExp(String.raw`\b${attr}\b`).test(drawn) || open.has(attr)) continue;
+    push("R7", `'${kind}': the owner root never emits '${attr}' — a card that cannot say which host and state it drew on cannot be captured as a matrix cell`);
+  }
+  return findings;
+}
+
+/**
+ * R8 for ONE drawn kind — the RUNTIME instance rule, not a callsite count.
+ *
+ * The rule the epic states is: exactly ONE rendered card instance per kind ×
+ * host at runtime; every production callsite enumerated, host-declared, and
+ * proven mutually exclusive where more than one adapter serves the same host.
+ *
+ * A literal one-mount-per-host rule would be WRONG here, and rejecting a correct
+ * tree is how a gate gets disabled. The run card is legitimately served by two
+ * exclusive adapters, chosen by a branch selector: one panel draws for a leaf
+ * run, the other for a stepped one, and never both. So this rule checks the
+ * three properties that actually make "one instance" true:
+ *
+ *   ENUMERATED   every callsite in the tree is declared here, and every declared
+ *                module really mounts the component.
+ *   HOST-DECLARED each adapter sits under a host declaration (R3 proves the file
+ *                carries the provider; this rule proves the adapter was claimed).
+ *   EXCLUSIVE    a host with more than one adapter names the selector that picks
+ *                between them, and a test that proves the selector covers every
+ *                branch. Two adapters and no named selector is two instances
+ *                waiting to happen.
+ *
+ * A DEV-PREVIEW adapter is enumerated like any other and does NOT count as a
+ * production adapter: it draws only inside an explicitly opened preview and
+ * addresses a different run. Hiding it would leave a real callsite unenumerated;
+ * counting it as production would claim a host mount nobody ships.
+ *
+ * @param {string} kind
+ * @param {object} contract
+ * @param {string[]} mountedIn  modules where the component is mounted
+ * @param {string} registrySource  the renderable-view registry's source
+ * @param {(rel: string) => string|null} readModule  for the exclusion check
+ */
+export function scanHostMounts(kind, contract, mountedIn, registrySource, readModule = () => null) {
+  const findings = [];
+  const push = (detail, file = contract.owner) =>
+    findings.push({ rule: "R8", file, line: 1, detail });
+  const declaredMounts = new Set();
+  const registryModules = new Set();
+
+  for (const host of LIFECYCLE_CARD_HOSTS) {
+    const entries = contract.hosts[host];
+    if (entries === null || entries === undefined) continue;
+    const production = entries.filter((e) => e.surface !== "dev_preview");
+    for (const e of entries) {
+      if (!e.why || e.why.length < 20) {
+        push(`'${kind}': the adapter ${e.module} on host '${host}' does not say what it is — every enumerated callsite states its own reason`, e.module);
+      }
+      if (e.surface !== "production" && e.surface !== "dev_preview") {
+        push(`'${kind}': the adapter ${e.module} on host '${host}' declares no surface — production or dev_preview`, e.module);
+      }
+      if (e.adapter === "registry") registryModules.add(e.module);
+      else declaredMounts.add(e.module);
+    }
+    // More than one PRODUCTION adapter on one host needs a proven picker.
+    if (production.length > 1) {
+      const exclusion = (contract.exclusions ?? {})[host];
+      if (!exclusion || !exclusion.selector || !exclusion.module || !exclusion.proof) {
+        push(
+          `'${kind}': host '${host}' has ${production.length} production adapters and no named mutual-exclusion selector — two adapters with nothing choosing between them is two rendered instances`,
+        );
+      } else {
+        const source = readModule(exclusion.module);
+        if (source === null) {
+          push(`'${kind}': the exclusion selector's module ${exclusion.module} is not readable`, exclusion.module);
+        } else if (!new RegExp(String.raw`\bexport\s+(?:function|const)\s+${exclusion.selector}\b`).test(stripComments(source))) {
+          push(`'${kind}': ${exclusion.module} does not export the exclusion selector '${exclusion.selector}' — the picker must be readable, not implied`, exclusion.module);
+        }
+        // The proof is read the way the instance proof is read: the named test
+        // is EXTRACTED and must assert something ABOUT THE PICKER inside its own
+        // body. A file-wide match on the test name passes for a test that is
+        // empty; "asserts anything" passes for `expect(true).toBe(true)` and for
+        // an assertion about an unrelated subject. Neither is a proof of the
+        // claim the row makes.
+        const proof = readModule(exclusion.proof.file);
+        const proofBlock = proof === null ? null : extractTestBlock(proof, exclusion.proof.testName);
+        if (proofBlock === null) {
+          push(`'${kind}': the exclusion proof "${exclusion.proof.testName}" is not in ${exclusion.proof.file} — an unproven picker is an assumption`, exclusion.proof.file);
+        } else if (!assertsAbout(proofBlock, exclusion.selector)) {
+          push(`'${kind}': the exclusion proof "${exclusion.proof.testName}" in ${exclusion.proof.file} runs no live expectation that reads '${exclusion.selector}' — an empty, vacuous or unrelated assertion under a picker's name proves no branch of it`, exclusion.proof.file);
+        }
+      }
+    }
+  }
+
+  const found = new Set(mountedIn);
+  for (const rel of declaredMounts) {
+    if (!found.has(rel)) {
+      push(`'${kind}': ${rel} is declared as a host adapter and does not mount ${contract.component} — a missing host adapter`, rel);
+    }
+  }
+  for (const rel of found) {
+    if (declaredMounts.has(rel) || registryModules.has(rel)) continue;
+    push(`'${kind}': ${rel} mounts ${contract.component} and is not an enumerated adapter — an unenumerated callsite is a second rendered instance nobody chose`, rel);
+  }
+
+  // A registry-served host is served by the registry ROW, not by a JSX mount.
+  if (registryModules.size > 0 && typeof registrySource === "string") {
+    const code = stripComments(registrySource);
+    const row = new RegExp(String.raw`^\s*${kind}\s*:\s*${contract.component}\b`, "m");
+    if (!row.test(code)) {
+      push(
+        `'${kind}': the renderable-view registry does not dispatch this kind to ${contract.component} — the transcript hosts would draw something else`,
+        REGISTRY_MODULE,
+      );
+    }
+  }
+  return findings;
+}
+
+/**
+ * R5 at the TABLE level, plus R9's expiry. Shape only — no file reads — so the
+ * fixtures can hand it a synthetic table.
+ */
+export function auditContracts(contracts = LIFECYCLE_CARD_CONTRACTS) {
+  const findings = [];
+  const push = (rule, detail) => findings.push({ rule, file: "scripts/audit/chat-hitl-one-card-gate.mjs", line: 1, detail });
+
+  const kinds = Object.keys(contracts);
+  for (const kind of LIFECYCLE_CARD_KINDS) {
+    if (!kinds.includes(kind)) push("R5", `'${kind}' has no contract row — every lifecycle card kind needs one named owner`);
+  }
+  for (const kind of kinds) {
+    if (!LIFECYCLE_CARD_KINDS.includes(kind)) push("R5", `'${kind}' is not a lifecycle card kind`);
+  }
+
+  const byComponent = new Map();
+  const byOwner = new Map();
+  for (const [kind, c] of Object.entries(contracts)) {
+    if (c.status !== "DRAWN" && c.status !== "PLACEHOLDER") {
+      push("R5", `'${kind}': status "${c.status}" is neither DRAWN nor PLACEHOLDER`);
+      continue;
+    }
+    // The epic's table gained two columns — component owner and wire carriage.
+    // The contract mirrors that shape, and the carriage is checked against the
+    // protocol rather than against the prose, so the two can never disagree.
+    if (LIFECYCLE_CARD_CARRIAGE[kind] !== undefined && c.wireCarriage !== LIFECYCLE_CARD_CARRIAGE[kind]) {
+      push("R5", `'${kind}': the contract carries it as ${c.wireCarriage ?? "nothing"}; the protocol says ${LIFECYCLE_CARD_CARRIAGE[kind]}`);
+    }
+    // An OPEN OBLIGATION is a ratified requirement the tree does not meet yet.
+    // It must name what it requires, why it is open, and who closes it — a bare
+    // exemption is the shape this whole round exists to end.
+    for (const o of c.openObligations ?? []) {
+      if (!Array.isArray(o.requires) || o.requires.length === 0) {
+        push("R7", `'${kind}': the open obligation '${o.id}' names no requirement`);
+      }
+      for (const r of o.requires ?? []) {
+        const known =
+          (c.anchors ?? []).includes(r) ||
+          (c.anchorsOneOf?.of ?? []).includes(r) ||
+          REQUIRED_ROOT_ATTRIBUTES.includes(r);
+        if (!known) {
+          push("R7", `'${kind}': the open obligation '${o.id}' defers '${r}', which is not part of the ratified set — an obligation may only defer a requirement, never invent one`);
+        }
+      }
+      if (!o.why || o.why.length < 40) push("R7", `'${kind}': the open obligation '${o.id}' does not say what is absent`);
+      if (!o.closedBy || o.closedBy.length < 20) push("R7", `'${kind}': the open obligation '${o.id}' does not say who closes it`);
+    }
+    // An OPEN ANCHOR NAME is a control the ratified list names in prose only.
+    // The set is closed, so nobody here may choose the missing name.
+    for (const a of c.openAnchors ?? []) {
+      if (!a.id || !a.describedAs || !a.why || a.why.length < 40) {
+        push("R7", `'${kind}': the open anchor '${a.id ?? "?"}' must say what control it is and why it has no name yet`);
+      }
+    }
+    if (c.anchorsOneOf !== undefined) {
+      if (!Array.isArray(c.anchorsOneOf.of) || c.anchorsOneOf.of.length < 2) {
+        push("R7", `'${kind}': a one-of anchor group needs at least two alternatives`);
+      }
+    }
+    if (!c.component) push("R5", `'${kind}': no component name`);
+    if (!Array.isArray(c.anchors) || c.anchors.length === 0) {
+      push("R7", `'${kind}': no ratified anchor set — the requirement must be written down before the drawing`);
+    }
+    if (c.component) {
+      const seen = byComponent.get(c.component);
+      if (seen !== undefined) push("R5", `'${kind}' and '${seen}' both name ${c.component} — one component serving two kinds is how a placeholder passes for a card`);
+      else byComponent.set(c.component, kind);
+    }
+    if (c.status === "DRAWN") {
+      if (!c.owner) {
+        push("R5", `'${kind}': DRAWN with no owner module`);
+      } else {
+        const seen = byOwner.get(c.owner);
+        if (seen !== undefined) push("R5", `'${kind}' and '${seen}' share the owner module ${c.owner}`);
+        else byOwner.set(c.owner, kind);
+      }
+      if (!c.renderedProof || !c.renderedProof.file || !c.renderedProof.testName) {
+        push("R7", `'${kind}': DRAWN with no rendered owner test — the anchors would be a source-text claim`);
+      }
+      if (c.owner === S1_SHELL.owner || c.component === S1_SHELL.component) {
+        push("R5", `'${kind}': DRAWN but pointing at the S1 shell, which draws no card`);
+      }
+    } else {
+      if (c.owner !== null) push("R5", `'${kind}': PLACEHOLDER rows may not claim an owner — ${c.owner}`);
+      if (!c.gap || c.gap.length < 40) push("R5", `'${kind}': PLACEHOLDER rows must say what is absent, in \`gap\` (a real sentence)`);
+    }
+    for (const host of LIFECYCLE_CARD_HOSTS) {
+      if (!(host in (c.hosts ?? {}))) push("R8", `'${kind}': host '${host}' is not declared`);
+    }
+    const unmounted = LIFECYCLE_CARD_HOSTS.filter((h) => (c.hosts ?? {})[h] === null);
+    if (unmounted.length > 0 && (!c.hostGap || c.hostGap.length < 40)) {
+      push("R8", `'${kind}': ${unmounted.join(", ")} carry no mount and the row does not say why, in \`hostGap\``);
+    }
+  }
+
+  // R9's expiry check is gone with the record it checked. It asked one
+  // question — "is `verification_summary` DRAWN while the pending-retirement
+  // record still stands?" — and cinatra#2789 answered it by drawing the card
+  // and retiring the record in the same change. The BAN did not go anywhere:
+  // it is the `page-direct-verification-composition` entry in
+  // RETIRED_PARALLELS, which now identifies the retired drawing by §VII's own
+  // anchors and is enforced on every module in the tree. See that entry for
+  // what the record cost and why the allowlist is down to the owner.
+  return findings;
+}
+
+/** The kinds with no drawing today, named. */
+export function placeholderKinds(contracts = LIFECYCLE_CARD_CONTRACTS) {
+  return Object.entries(contracts)
+    .filter(([, c]) => c.status === "PLACEHOLDER")
+    .map(([kind, c]) => ({ kind, design: c.design, gap: c.gap }));
+}
+
+/**
+ * R5–R9 over the real tree.
+ *
+ * `complete` turns the honesty check into the DONE check: a placeholder kind and
+ * an unmounted host stop being honest records and become the violations they
+ * describe.
+ */
+export function collectContractViolations({
+  contracts = LIFECYCLE_CARD_CONTRACTS,
+  files,
+  complete = false,
+  repoRoot = DEFAULT_REPO_ROOT,
+  readFileImpl = (p) => readFileSync(p, "utf8"),
+} = {}) {
+  const violations = [...auditContracts(contracts)];
+  const read = (rel) => {
+    try {
+      return readFileImpl(resolve(repoRoot, rel));
+    } catch {
+      return null;
+    }
+  };
+  const list = files ?? collectFiles(repoRoot);
+  const registrySource = read(REGISTRY_MODULE);
+
+  // Every production mount of every contracted component, in one pass.
+  const mountsByComponent = new Map();
+  const definitionsByComponent = new Map();
+  for (const rel of list) {
+    const code = stripComments(read(rel) ?? "");
+    for (const [, c] of Object.entries(contracts)) {
+      if (!c.component) continue;
+      if (new RegExp(String.raw`<\s*${c.component}\b`).test(code)) {
+        const seen = mountsByComponent.get(c.component) ?? [];
+        seen.push(rel);
+        mountsByComponent.set(c.component, seen);
+      }
+      if (cardDefinitionPattern(c.component).test(code)) {
+        const seen = definitionsByComponent.get(c.component) ?? [];
+        seen.push(rel);
+        definitionsByComponent.set(c.component, seen);
+      }
+    }
+  }
+
+  for (const [kind, c] of Object.entries(contracts)) {
+    if (c.status === "DRAWN") {
+      const sources = {};
+      for (const rel of [c.owner, ...c.composes]) {
+        const src = read(rel);
+        if (src !== null) sources[rel] = src;
+      }
+      violations.push(...scanOwnerModule(kind, c, sources));
+      violations.push(
+        ...scanHostMounts(kind, c, mountsByComponent.get(c.component) ?? [], registrySource, read),
+      );
+      if (c.renderedProof) {
+        const proofFile = read(c.renderedProof.file);
+        // The assertions must live INSIDE the named test, not merely in the
+        // same file. A file-wide match lets one card borrow another case's
+        // assertions, which is how an empty proof test passed before.
+        const block = proofFile === null ? null : extractTestBlock(proofFile, c.renderedProof.testName);
+        if (block === null) {
+          violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the rendered owner test "${c.renderedProof.testName}" is not in this file` });
+        } else {
+          const openHere = openRequirements(c);
+          // Read off text that RUNS. The window is already comment-stripped, and
+          // the dead-branch strip removes an anchor parked in `if (false)`.
+          const liveProof = stripUnreachable(block);
+          for (const anchor of [...c.anchors, ...(c.anchorsOneOf?.of ?? [])]) {
+            if (openHere.has(anchor)) continue;
+            if (!proofAssertsAnchor(liveProof, anchor)) {
+              violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the named rendered test never reads the anchor '${anchor}' off the card it mounted` });
+            }
+          }
+          for (const attr of REQUIRED_ROOT_ATTRIBUTES) {
+            if (openHere.has(attr)) continue;
+            // Read OFF THE ROOT, not merely mentioned: the test must pull the
+            // attribute from an element it selected.
+            if (!new RegExp(String.raw`getAttribute\(\s*["']${attr}["']\s*\)`).test(block)) {
+              violations.push({ rule: "R7", file: c.renderedProof.file, line: 1, detail: `'${kind}': the named rendered test never reads '${attr}' off the rendered root` });
+            }
+          }
+        }
+      }
+
+      // The RUNTIME instance property: one rendered instance per kind × host.
+      const jsxHosts = LIFECYCLE_CARD_HOSTS.filter((h) =>
+        (c.hosts[h] ?? []).some((e) => e.adapter !== "registry" && e.surface === "production"),
+      );
+      if (!c.instanceProof) {
+        violations.push({ rule: "R8", file: c.owner ?? REGISTRY_MODULE, line: 1, detail: `'${kind}': no rendered instance proof — module enumeration cannot show that exactly ONE card draws` });
+      } else {
+        const src = read(c.instanceProof.file);
+        const block = src === null ? null : extractTestBlock(src, c.instanceProof.testName);
+        if (block === null) {
+          violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': the instance proof "${c.instanceProof.testName}" is not in this file` });
+        } else {
+          if (!assertsExactlyOneInstance(block, c.instanceRootSelector)) {
+            violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': the instance proof never COUNTS the rendered roots (${c.instanceRootSelector}) and requires exactly one — a presence check cannot see a second instance` });
+          }
+          // The claimed host must be named in text that RUNS. `extractTestBlock`
+          // already hands back a comment-stripped window, and the dead-branch
+          // strip removes a host parked in `if (false)`. THE LIMIT, stated: a
+          // host named in a live array the test iterates cannot be told apart
+          // lexically from one named in a live array nothing reads — the shape
+          // these proofs use drives every member, and vitest is what proves it,
+          // because an undriven member would render nothing to assert on.
+          const liveBlock = stripUnreachable(block);
+          for (const host of c.instanceProof.hosts) {
+            if (!liveBlock.includes(host)) {
+              violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': the instance proof claims host '${host}' and never drives it` });
+            }
+          }
+          for (const host of jsxHosts) {
+            if (!c.instanceProof.hosts.includes(host)) {
+              violations.push({ rule: "R8", file: c.instanceProof.file, line: 1, detail: `'${kind}': host '${host}' has a production adapter and no rendered instance proof` });
+            }
+          }
+        }
+      }
+      continue;
+    }
+
+    // PLACEHOLDER — the claim must be true in BOTH directions.
+    const defined = definitionsByComponent.get(c.component) ?? [];
+    if (defined.length > 0) {
+      violations.push({
+        rule: "R5",
+        file: defined[0],
+        line: 1,
+        detail: `'${kind}' is recorded as a placeholder and ${c.component} is defined in ${defined.join(", ")} — flip the row, or delete the component`,
+      });
+    }
+    if (complete) {
+      violations.push({
+        rule: "R5",
+        file: "scripts/audit/chat-hitl-one-card-gate.mjs",
+        line: 1,
+        detail: `'${kind}' has no card of its own (${c.design}) — ${c.gap}`,
+      });
+    }
+  }
+
+  // An open obligation must still be OPEN. If the tree now satisfies it, the
+  // record is stale and hides a requirement that is actually met — the same
+  // both-directions honesty the placeholder rows carry.
+  for (const [kind, c] of Object.entries(contracts)) {
+    if (c.status !== "DRAWN" || !c.owner) continue;
+    const parts = [c.owner, ...c.composes].map((rel) => stripComments(read(rel) ?? ""));
+    const drawn = parts.map(stripUnreachable).join("\n");
+    for (const o of c.openObligations ?? []) {
+      const met = o.requires.every((r) =>
+        REQUIRED_ROOT_ATTRIBUTES.includes(r)
+          ? new RegExp(String.raw`\b${r}\b`).test(drawn)
+          : emitsAnchor(drawn, r),
+      );
+      if (met) {
+        violations.push({
+          rule: "R7",
+          file: c.owner,
+          line: 1,
+          detail: `'${kind}': the open obligation '${o.id}' is recorded as unmet and the owner now emits every part of it — strike the record here, in whichever change lands second`,
+        });
+      }
+    }
+  }
+
+  if (complete) {
+    for (const [kind, c] of Object.entries(contracts)) {
+      for (const o of c.openObligations ?? []) {
+        violations.push({
+          rule: "R7",
+          file: c.owner ?? "scripts/audit/chat-hitl-one-card-gate.mjs",
+          line: 1,
+          detail: `'${kind}': ${o.requires.join(", ")} — ${o.why} Closed by: ${o.closedBy}`,
+        });
+      }
+      for (const a of c.openAnchors ?? []) {
+        violations.push({
+          rule: "R7",
+          file: "scripts/audit/chat-hitl-one-card-gate.mjs",
+          line: 1,
+          detail: `'${kind}': ${a.describedAs} has no ratified anchor name — ${a.why}`,
+        });
+      }
+      if (c.status !== "DRAWN") continue;
+      for (const host of LIFECYCLE_CARD_HOSTS) {
+        if ((c.hosts ?? {})[host] !== null) continue;
+        violations.push({
+          rule: "R8",
+          file: c.owner ?? "scripts/audit/chat-hitl-one-card-gate.mjs",
+          line: 1,
+          detail: `'${kind}' has no production mount on host '${host}' — ${c.hostGap ?? "no reason recorded"}`,
+        });
+      }
+    }
+  }
+  return violations;
 }
 
 export function collectViolations({
@@ -358,29 +1929,83 @@ export function collectViolations({
   return violations;
 }
 
-function main() {
-  const violations = collectViolations();
-  if (violations.length === 0) {
-    console.log(
-      `[${LABEL}] clean — one card implementation per interaction, every mount host-declared.`,
+function main(argv = []) {
+  // THE REQUIRED GATE IS THE DONE-CHECK. It used to be opt-in, with the lenient
+  // mode as the default — and a default that passes while two kinds are
+  // placeholders makes "this gate fails on main" untrue in the only run anybody
+  // actually makes. So the done-check is what you get when you run this script.
+  // `--audit` is the lenient read, for a lane that wants to see whether it has
+  // added a NEW dishonesty on top of the recorded ones. It is not the gate.
+  // `--complete` is RECOGNISED rather than swallowed. #2785 rules that the
+  // done-check has that name, so the name has to keep working — and an
+  // unrecognised flag must not silently select a mode, which is how a typo
+  // ("--audti") reads as a passing done-check.
+  const KNOWN_FLAGS = new Set(["--audit", "--complete"]);
+  const unknown = argv.filter((a) => !KNOWN_FLAGS.has(a));
+  if (unknown.length > 0) {
+    console.error(
+      `[${LABEL}] unknown flag(s): ${unknown.join(", ")} — this gate takes ` +
+        `no flag (the done-check), --complete (the same done-check, named) or --audit (the lenient read).`,
     );
+    return 2;
+  }
+  // A flag passed twice is refused the way an unknown flag is. Accepting
+  // `--complete --complete` silently while `--audti` exits 2 makes the argument
+  // reading inconsistent, and an inconsistent reading is one a caller has to
+  // guess at. One mode word, once.
+  const repeated = [...new Set(argv.filter((a, i) => argv.indexOf(a) !== i))];
+  if (repeated.length > 0) {
+    console.error(`[${LABEL}] repeated flag(s): ${repeated.join(", ")} — pass each mode flag once.`);
+    return 2;
+  }
+  if (argv.includes("--audit") && argv.includes("--complete")) {
+    console.error(`[${LABEL}] --audit and --complete ask for different modes — pass one.`);
+    return 2;
+  }
+  const complete = !argv.includes("--audit");
+  const violations = [
+    ...collectViolations(),
+    ...collectContractViolations({ complete }),
+  ];
+  const placeholders = placeholderKinds();
+
+  if (violations.length === 0) {
+    if (complete) {
+      console.log(`[${LABEL}] clean — every lifecycle card kind is drawn, consumed, mounted and proven.`);
+      return 0;
+    }
+    console.log(
+      `[${LABEL}] --audit: no NEW false claim — ${Object.keys(LIFECYCLE_CARD_CONTRACTS).length - placeholders.length}/` +
+        `${Object.keys(LIFECYCLE_CARD_CONTRACTS).length} kinds drawn by a named owner, ` +
+        `every mount host-declared, every placeholder recorded.`,
+    );
+    if (placeholders.length > 0) {
+      console.log(
+        `\nSTILL A PLACEHOLDER — the REQUIRED gate (no flag) fails on these: ` +
+          placeholders.map((p) => `${p.kind} ${p.design}`).join("; "),
+      );
+    }
     return 0;
   }
-  console.error(`[${LABEL}] ${violations.length} violation(s):\n`);
+
+  console.error(
+    `[${LABEL}]${complete ? "" : " --audit:"} ${violations.length} violation(s):\n`,
+  );
   for (const v of violations) {
     console.error(`  ${v.file}:${v.line}  [${v.rule}]  ${v.detail}`);
   }
   console.error(
     "\nThe epic's structural rule is ONE card per interaction, rendered on every host —" +
       "\nonly the frame adapts. A second renderer is not a smaller feature; it is a second" +
-      "\nplace where 'approved' can come to mean something different.",
+      "\nplace where 'approved' can come to mean something different — and a kind with NO" +
+      "\nrenderer is not one implementation either, however few duplicates it has.",
   );
   return 1;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(__filename)) {
   try {
-    process.exit(main());
+    process.exit(main(process.argv.slice(2)));
   } catch (e) {
     console.error(`[${LABEL}] fatal:`, e);
     process.exit(2);

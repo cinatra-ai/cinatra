@@ -165,45 +165,69 @@ export type RunRejectedRecommendation = {
   recommendedRank: number | null;
 };
 
+export type RunRejectedRecommendationInput = {
+  skillId: string;
+  skillRevisionId?: string | null;
+  recommendationSource: string;
+  recommendedRank?: number | null;
+};
+
 /**
- * Persist the REJECTED half of the recommendation efficacy split (the accepted
- * half rode `writeRunSelectedSkillRevisions`). Idempotent on (run_id, skill_id) —
- * first write wins. No-op on an empty set; best-effort at the call site (a
- * telemetry write must never fail a run).
+ * The ONE rejected-rows INSERT, as a statement rather than as a call. Shared by
+ * the standalone writer below and by the transactional skip write further down,
+ * so both halves of the efficacy split speak exactly the same SQL and neither
+ * can drift into a different conflict rule.
  */
-export function writeRunRejectedRecommendations(input: {
-  runId: string;
-  rejected: Array<{ skillId: string; skillRevisionId?: string | null; recommendationSource: string; recommendedRank?: number | null }>;
-}): void {
-  if (input.rejected.length === 0) return;
-  const connectionString = getPostgresConnectionString();
-  const schema = postgresSchema;
+function buildRejectedRecommendationsInsert(
+  schema: string,
+  runId: string,
+  rejected: readonly RunRejectedRecommendationInput[],
+): { text: string; values: unknown[] } {
   const table = `"${schema.replaceAll('"', '""')}"."run_rejected_recommendations"`;
   const valuesSql: string[] = [];
   const params: unknown[] = [];
   let p = 1;
-  for (const r of input.rejected) {
+  for (const r of rejected) {
     valuesSql.push(`($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`);
     params.push(
       randomUUID(),
-      input.runId,
+      runId,
       r.skillId,
       r.skillRevisionId ?? null,
       r.recommendationSource,
       r.recommendedRank ?? null,
     );
   }
+  return {
+    text: `INSERT INTO ${table}
+             (id, run_id, skill_id, skill_revision_id, recommendation_source, recommended_rank)
+           VALUES ${valuesSql.join(", ")}
+           ON CONFLICT (run_id, skill_id) DO NOTHING`,
+    values: params,
+  };
+}
+
+/**
+ * Persist the REJECTED half of the recommendation efficacy split (the accepted
+ * half rode `writeRunSelectedSkillRevisions`). Idempotent on (run_id, skill_id) —
+ * first write wins. No-op on an empty set; best-effort at the call site (a
+ * telemetry write must never fail a run).
+ *
+ * NOT the SKIP path. A skip's rejected rows are `user_skipped`, which the state
+ * reader treats as skip evidence, so they may never commit on their own — they
+ * ride `writeRunRecommendationSkip`'s transaction instead. This writer stays for
+ * the CONFIRM path, whose `recommended_not_kept` rows settle nothing by
+ * themselves.
+ */
+export function writeRunRejectedRecommendations(input: {
+  runId: string;
+  rejected: Array<RunRejectedRecommendationInput>;
+}): void {
+  if (input.rejected.length === 0) return;
+  const connectionString = getPostgresConnectionString();
   runPostgresQueriesSync({
     connectionString,
-    queries: [
-      {
-        text: `INSERT INTO ${table}
-                 (id, run_id, skill_id, skill_revision_id, recommendation_source, recommended_rank)
-               VALUES ${valuesSql.join(", ")}
-               ON CONFLICT (run_id, skill_id) DO NOTHING`,
-        values: params,
-      },
-    ],
+    queries: [buildRejectedRecommendationsInsert(postgresSchema, input.runId, input.rejected)],
   });
 }
 
@@ -238,15 +262,27 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
 // `run_recommendation_skips` is that record: PK `run_id`, so the write is
 // idempotent per run and the marker needs no skill to name. See the bootstrap
 // leaf in `@/lib/artifacts/artifact-review-gate-schema` and its migration twin
-// core__0094 for the shape rationale.
+// core__0095 for the shape rationale.
 // ---------------------------------------------------------------------------
 
 /**
- * Persist the RUN-LEVEL skip marker AND VERIFY IT LANDED. Returns whether the
- * marker is READABLE afterwards — the caller releases the run's park only on
- * `true`.
+ * Persist a skip's DURABLE EVIDENCE — the run-level marker and, optionally, the
+ * per-skill `user_skipped` rows that accompany it — AND VERIFY THE MARKER
+ * LANDED. Returns whether the marker is READABLE afterwards; the caller releases
+ * the run's park only on `true`.
  *
- * WHY A VERIFIED WRITE, AND NOT JUST A WRITE. The insert is `ON CONFLICT
+ * ONE TRANSACTION, BECAUSE A HALF-COMMITTED SKIP SETTLES THE CARD ON A REFUSED
+ * DECISION (cinatra#2794 round-8 finding 2). The two halves used to be two
+ * separate autocommitted writes: the per-skill rows first, the marker second. A
+ * marker that failed after those rows committed refused the skip and left the
+ * park LIVE — while `hasRunRecommendationSkip` below answered `skipped` from its
+ * legacy `recommendation_source` arm, settling the card for a decision the
+ * action had just refused, on a run still parked. That arm cannot be narrowed
+ * out of the failure path: nothing distinguishes a pre-core__0095 row from a row
+ * orphaned this way. So the halves commit together or not at all: the rows can
+ * no longer outlive the marker they belong to.
+ *
+ * WHY A VERIFIED WRITE, AND NOT JUST A WRITE. The marker insert is `ON CONFLICT
  * (run_id) DO NOTHING` so a retried skip converges instead of duplicating — but
  * that also means the statement reports success both when it inserted and when
  * it silently did nothing. "The write did not throw" is therefore NOT the same
@@ -254,13 +290,35 @@ export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
  * releasing a run while losing the record of its decision is exactly the
  * vanishing card this whole path exists to remove.
  *
- * The read-back rides the SAME `runPostgresQueriesSync` call, which is NOT
- * transactional (no `transaction: true`) — so the insert has autocommitted by
- * the time the select runs on that connection, and a row the select returns is a
- * COMMITTED row rather than one visible only inside an open transaction.
+ * WHAT `true` MEANS UNDER THE TRANSACTION, AND WHAT A REFUSAL DOES NOT MEAN.
+ * The read-back now runs INSIDE the transaction, so it sees this statement's own
+ * row rather than a committed one — the durability it used to assert comes from
+ * the COMMIT instead. The worker publishes its result only AFTER `COMMIT`
+ * resolves, so `true` still means "the marker is durably on record".
+ *
+ * A refusal is the weaker direction, and the weakness is the sync bridge's, not
+ * this write's. A statement error rolls the whole transaction back, so the
+ * ordinary failure leaves nothing. But the worker can also lose the COMMIT'S
+ * RESULT after Postgres accepted it — the 30s timeout expires, the connection
+ * drops mid-response, the response file cannot be written — and the caller then
+ * refuses over a transaction that DID commit. That window is the one
+ * `postgres-sync.ts` names in its timeout note, and it is why this site now
+ * passes `transaction: true`: it moves the write out of the UNBOUNDED
+ * autocommitted class and into the BOUNDED transactional one. What the window
+ * can no longer produce is a HALF — an ambiguous ending leaves both halves or
+ * neither, so the marker is always there to name the decision the rows describe,
+ * and the retry converges on the same row instead of writing a second decision.
  *
  * Throws on a genuine DB error; the caller wraps both outcomes into the one
  * typed refusal.
+ *
+ * IDEMPOTENCE IS FIRST-WRITE-WINS ON BOTH HALVES, unchanged: the marker is
+ * `ON CONFLICT (run_id) DO NOTHING` and the rows are `ON CONFLICT
+ * (run_id, skill_id) DO NOTHING`. A retry whose offered set drifted can
+ * therefore add a row the first attempt did not carry while `candidate_count`
+ * keeps the first attempt's number. That is the pre-existing behaviour of both
+ * tables, and the count is read as "how many rows this DECISION named", not as a
+ * live row count.
  */
 export function writeRunRecommendationSkip(input: {
   runId: string;
@@ -270,25 +328,31 @@ export function writeRunRecommendationSkip(input: {
   /** How many per-skill efficacy rows rode with this skip (0 = drift left
    * nothing to name; the marker still stands). */
   candidateCount: number;
+  /** The per-skill efficacy half, committed IN THE SAME TRANSACTION as the
+   * marker. Empty or absent under drift — a legitimate state, and still a skip. */
+  rejected?: ReadonlyArray<RunRejectedRecommendationInput>;
 }): boolean {
   const connectionString = getPostgresConnectionString();
   const schema = postgresSchema;
   const table = `"${schema.replaceAll('"', '""')}"."run_recommendation_skips"`;
-  const [, verified] = runPostgresQueriesSync({
-    connectionString,
-    queries: [
-      {
-        text: `INSERT INTO ${table} (run_id, skipped_by, candidate_count)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (run_id) DO NOTHING`,
-        values: [input.runId, input.skippedBy, input.candidateCount],
-      },
-      {
-        text: `SELECT 1 FROM ${table} WHERE run_id = $1 LIMIT 1`,
-        values: [input.runId],
-      },
-    ],
-  });
+  const rejected = input.rejected ?? [];
+  const queries = [
+    ...(rejected.length > 0
+      ? [buildRejectedRecommendationsInsert(schema, input.runId, rejected)]
+      : []),
+    {
+      text: `INSERT INTO ${table} (run_id, skipped_by, candidate_count)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (run_id) DO NOTHING`,
+      values: [input.runId, input.skippedBy, input.candidateCount],
+    },
+    {
+      text: `SELECT 1 FROM ${table} WHERE run_id = $1 LIMIT 1`,
+      values: [input.runId],
+    },
+  ];
+  const results = runPostgresQueriesSync({ connectionString, queries, transaction: true });
+  const verified = results[results.length - 1];
   return (verified?.rows?.length ?? 0) > 0;
 }
 
@@ -299,7 +363,7 @@ export function writeRunRecommendationSkip(input: {
  *
  * TWO SOURCES, ON PURPOSE. The run-level record is the authority for every skip
  * taken since cinatra#2794. Runs skipped BEFORE it carry their evidence only as
- * `user_skipped` rows in the rejected table, and core__0094 deliberately ships
+ * `user_skipped` rows in the rejected table, and core__0095 deliberately ships
  * no backfill (it would have to invent a `skipped_by` those rows never
  * recorded), so the legacy arm keeps an already-skipped run's card settling
  * instead of regressing it to `none`. The legacy arm keys on the SOURCE column,

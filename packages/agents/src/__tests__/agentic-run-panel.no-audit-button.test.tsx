@@ -3,9 +3,11 @@
  * AgenticRunPanel must not contain the standalone Audit button.
  *
  * The panel must not mount a HitlAudit button or call
- * getAuditAvailabilityAction. Audit visibility is driven by the
- * auditor-agent flow gate, so the button and import must be physically gone
- * from the panel source.
+ * getAuditAvailabilityAction. THE RATCHET SURVIVES ITS ORIGINAL REASON: the
+ * auditor agent is retired, and audit output surfaces as the §VIII suggestion
+ * chips on the review card, so there is no second self-service audit entry
+ * point to offer — which is precisely why the button and the import must stay
+ * physically gone from the panel source rather than fall back behind a flag.
  *
  * Two assertions:
  *  1. Source-level: grep agentic-run-panel.tsx for `getAuditAvailabilityAction`
@@ -15,7 +17,7 @@
  *
  * Fails while agentic-run-panel.tsx still imports getAuditAvailabilityAction.
  *
- * Run: cd packages/agent-builder && pnpm exec vitest run src/__tests__/agentic-run-panel.no-audit-button.test.tsx
+ * Run: cd packages/agents && pnpm exec vitest run src/__tests__/agentic-run-panel.no-audit-button.test.tsx
  */
 import * as fs from "node:fs";
 import * as path from "node:path";

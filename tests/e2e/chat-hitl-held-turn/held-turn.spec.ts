@@ -46,8 +46,10 @@
  * ---------------------------------------------------------------------------
  * · The screenshots are PROVISIONAL runtime evidence, recorded through the S9h
  *   recorder and labeled `development`. S9g alone adopts and canonicalizes AC-15
- *   records; this flow writes its index to `evidence/2824-s9k/`, never to the
- *   canonical one.
+ *   records; this flow writes its index beside its own screenshots, never to the
+ *   canonical one. A run mints into the gitignored scratch directory named at
+ *   `RUN_EVIDENCE_DIR` below, so a PASSING run leaves the tree clean and the
+ *   committed reference set under `evidence/2824-s9k/` stays the frozen one.
  * · "Exactly one job" is measured as "jobs addressable by this run id", because the
  *   release path enqueues with `jobId = runId`. A queue TOTAL would count every
  *   other run on the lane and answer nothing.
@@ -66,6 +68,7 @@ import {
   CARD_HELD,
   CARD_HOST_CHAT,
   CARD_ROOT,
+  CARD_SETTLED,
   CHAT_HOLD_MARKER,
   CHAT_PROMPT,
   CHIP,
@@ -80,6 +83,7 @@ import {
   HELD_TURN_PAUSED_TEXT,
   HELD_TURN_RUNNING_TEXT,
   HELD_TURN_SKILL_ID,
+  INLINE_RUN_PAGE_LINK,
   RETIRED_ROW_CONFIRM,
   RETIRED_ROW_SKIP,
   TRANSCRIPT_SLOT,
@@ -95,7 +99,40 @@ import {
 } from "./probes";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
-const EVIDENCE_DIR = "evidence/2824-s9k";
+
+/**
+ * THE FROZEN REFERENCE SET — committed, and never written by a run.
+ *
+ * `evidence/2824-s9k/` holds the four graded PNGs and the provisional index this
+ * PR posted as its proof. They are a REFERENCE: a reader compares a run against
+ * them, and the hashes cited in the round comments stay true for as long as the
+ * blobs do.
+ */
+const REFERENCE_EVIDENCE_DIR = "evidence/2824-s9k";
+
+/**
+ * WHERE A RUN ACTUALLY MINTS, and why it is not the directory above.
+ *
+ * Writing the captures straight into the committed set made every single run —
+ * a developer's, and the #2886 CI job's — rewrite four tracked PNGs and a tracked
+ * index. That leaves a dirty tree after a PASSING run, and it means nothing ever
+ * compares a run against the reference: the reference was simply overwritten by
+ * whatever just happened.
+ *
+ * So a run mints into a SCRATCH directory that `.gitignore` covers, and the
+ * committed set is refreshed only DELIBERATELY, by pointing this variable at it:
+ *
+ *   E2E_CHAT_HITL_EVIDENCE_DIR=evidence/2824-s9k pnpm test:e2e:chat-hitl-held-turn
+ *
+ * WHY THE SCRATCH PATH IS UNDER `evidence/` rather than under the config's
+ * `test-results/` outputDir: the shipped S9h recorder REFUSES any screenshot path
+ * outside `evidence/` (`screenshotPathViolation`), before the shutter, and that
+ * rule is checked again by the validator that grades the record. A record is only
+ * honest if its `screenshot` field names where the file really is, so the scratch
+ * directory moves under the rule instead of the rule being widened for a test.
+ */
+const RUN_EVIDENCE_DIR =
+  process.env.E2E_CHAT_HITL_EVIDENCE_DIR ?? `${REFERENCE_EVIDENCE_DIR}/.run`;
 
 /**
  * THE COLD-COMPILE BUDGET. On a cold dev route the FIRST `POST /api/chat` compiles
@@ -131,6 +168,17 @@ interface CardAnchors {
   insideConversationList: boolean;
   /** The `data-transcript-slot` value of the container the card was drawn in. */
   slot: string | null;
+  /**
+   * Whether that SAME container is the `agent_run` part's own — measured by the
+   * one thing only that container holds: the inline run panel for this run id.
+   * `null` when the caller passed no run id (nothing to pin against yet).
+   *
+   * `slot !== null` alone would only say "inside some marked slot container", and
+   * `chat-messages-view.tsx` marks three different ones. Moving the card's mount
+   * from the `agent_run` container to the generic produced-views container breaks
+   * S9i's positional rule and leaves every non-null read intact.
+   */
+  slotIsProducingAgentRun: boolean | null;
   chipRow: boolean;
   chips: number;
   confirmControls: number;
@@ -151,7 +199,7 @@ interface CardAnchors {
   chipMarks: Array<string | null>;
 }
 
-async function readAnchors(page: Page): Promise<CardAnchors> {
+async function readAnchors(page: Page, runId?: string): Promise<CardAnchors> {
   await stripDevOverlay(page);
   return page.evaluate(
     ({
@@ -167,12 +215,25 @@ async function readAnchors(page: Page): Promise<CardAnchors> {
       retiredB,
       marker,
       decisionAttr,
+      runLinkSel,
+      pinnedRunId,
     }) => {
       const roots = [...document.querySelectorAll(root)];
       const card = roots[0] ?? null;
       const conversationList = document.querySelector(list);
       const q = (sel: string) => (card ? card.querySelectorAll(sel).length : 0);
       const chipEls = card ? [...card.querySelectorAll(chipSel)] : [];
+      const slotContainer = card ? card.closest(slotSel) : null;
+      // The inline run panel's own link out, built by the platform from the run id
+      // — present in the `agent_run` container and in no other.
+      const slotIsProducingAgentRun =
+        pinnedRunId === null
+          ? null
+          : slotContainer
+            ? [...slotContainer.querySelectorAll(runLinkSel)].some((a) =>
+                (a.getAttribute("href") ?? "").endsWith(`/${pinnedRunId}`),
+              )
+            : false;
       return {
         roots: roots.length,
         kind: card ? card.getAttribute("data-lifecycle-card") : null,
@@ -180,8 +241,14 @@ async function readAnchors(page: Page): Promise<CardAnchors> {
         state: card ? card.getAttribute("data-lifecycle-card-state") : null,
         chatThreadMarker: card ? card.matches(marker) : false,
         insideConversationList: Boolean(card && conversationList && conversationList.contains(card)),
-        slot: card ? (card.closest(slotSel)?.getAttribute("data-transcript-slot") ?? null) : null,
-        chipRow: card ? card.matches(chipRowSel) || card.querySelector(chipRowSel) !== null : false,
+        slot: slotContainer?.getAttribute("data-transcript-slot") ?? null,
+        slotIsProducingAgentRun,
+        // `matches` ALONE, never a descendant lookup. §V declares the chip row to
+        // BE the card's own outermost element, so a `querySelector` fallback is
+        // dead against correct code and alive only against the wrapper regression
+        // (a card root containing a heading plate around a nested row) that §V
+        // retired — which is the one thing this assertion exists to catch.
+        chipRow: card ? card.matches(chipRowSel) : false,
         chips: q(chipSel),
         confirmControls: q(confirm),
         adjustControls: q(adjust),
@@ -207,6 +274,8 @@ async function readAnchors(page: Page): Promise<CardAnchors> {
       retiredB: RETIRED_ROW_SKIP,
       marker: CHAT_HOLD_MARKER,
       decisionAttr: DECISION_ATTR,
+      runLinkSel: INLINE_RUN_PAGE_LINK,
+      pinnedRunId: runId ?? null,
     },
   );
 }
@@ -254,8 +323,8 @@ async function sendDrivingMessage(page: Page): Promise<void> {
  * The turn-level refusals that mean NO run will ever be dispatched. Each one ends
  * the wait immediately with its own cause, instead of letting the (deliberately
  * large) cold-compile budget expire and reporting "no held card" — which is true,
- * useless, and points at the wrong subsystem. The MCP one is not hypothetical: it
- * cost this lane a full run before the setup project learned to measure that route.
+ * useless, and points at the wrong subsystem. The MCP one is not hypothetical, which
+ * is why the setup project measures that route before the flow starts.
  */
 const TURN_REFUSALS = [
   // The public MCP URL missed its 2500 ms reachability probe (a cold route). The
@@ -396,16 +465,61 @@ async function waitForHeldCard(page: Page, timeoutMs: number): Promise<CardAncho
   return last!;
 }
 
-async function waitForDecidedCard(page: Page, want: string): Promise<CardAnchors> {
+async function waitForDecidedCard(
+  page: Page,
+  want: string,
+  runId?: string,
+): Promise<CardAnchors> {
   let last: CardAnchors | null = null;
   await waitFor(
     `the card to settle in place with decision "${want}"`,
     async () => {
-      last = await readAnchors(page);
+      last = await readAnchors(page, runId);
       return last.state === "decided" && last.decision === want;
     },
     { timeoutMs: DECISION_MS, intervalMs: 1_500 },
   );
+  return last!;
+}
+
+/**
+ * PIN THE CARD TO THE `agent_run` PART'S OWN CONTAINER.
+ *
+ * S9i's rule is positional: the card is drawn at the slot of the step that
+ * PRODUCED it. `data-transcript-slot` is a part index and three different
+ * containers carry it, so a non-null slot only says "inside some marked
+ * container" — a mount moved into the generic produced-views container satisfies
+ * it while breaking the rule outright.
+ *
+ * The `agent_run` container is the only one that also carries the inline run panel
+ * for this run, so that is what the card's own slot container is required to hold.
+ * This is the runtime half of the jsdom matrix's `slotOf(card) === producingSlot`.
+ *
+ * It is WAITED for rather than read once: the panel resolves its own seed over the
+ * run API, so its link appears a beat after the card. A container that never gets
+ * the link fails here, naming the container the card was actually drawn in.
+ */
+async function expectCardAtProducingSlot(
+  page: Page,
+  runId: string,
+  want: "held" | "decided",
+): Promise<CardAnchors> {
+  let last: CardAnchors | null = null;
+  await waitFor(
+    `the ${want} card's own slot container to be the \`agent_run\` producing container for ${runId}`,
+    async () => {
+      last = await readAnchors(page, runId);
+      return last.state === want && last.slotIsProducingAgentRun === true;
+    },
+    { timeoutMs: DECISION_MS, intervalMs: 1_000 },
+  ).catch((err) => {
+    throw new Error(
+      `${String(err)} — the card was drawn at slot ${
+        last?.slot ?? "(none)"
+      }, whose container does not carry the inline run panel for ${runId}: it is a marked ` +
+        "transcript slot, but not the `agent_run` part's own",
+    );
+  });
   return last!;
 }
 
@@ -475,16 +589,34 @@ async function recordCapture(
   // Measured: this reddened one run in two, on the confirm-settled cell, and
   // nowhere else. `retries: 0` means it has to be waited for rather than absorbed.
   //
-  // So the two anchors the record is graded on are required to be VISIBLE first.
-  // This cannot mask a genuine disappearance: the card is already asserted
-  // `decided` by this point, and a card that never comes back fails here loudly
-  // instead of producing a refused record.
+  // THE AWAITED CONDITION IS THE ROW'S OWN SETTLED STATE, not merely a visible
+  // transcript and a visible card root. The decision runs through a server action
+  // and then `router.refresh()` (`run-recommendation-chip-row.tsx`), so between the
+  // press and the settle the card root is legitimately on screen in its PREVIOUS
+  // state — a capture taken there is a photograph of the wrong moment, filed
+  // against a record that declares the new one. So the state the record declares is
+  // what is waited for: the settled row publishes `data-run-recommendation-settled`
+  // beside `data-lifecycle-card-state="decided"`, and the held row publishes its
+  // own `held` state with its chips already drawn.
+  //
+  // This cannot mask a genuine disappearance: the card is already asserted in the
+  // state being recorded by this point, and a card that never comes back fails here
+  // loudly instead of producing a refused record.
+  const stateSelector =
+    spec.state === "decided"
+      ? `${CARD_ROOT}${CARD_HOST_CHAT}${CARD_DECIDED}${CARD_SETTLED}`
+      : `${CARD_ROOT}${CARD_HOST_CHAT}${CARD_HELD}`;
   await expect(page.locator(CONVERSATION_LIST)).toBeVisible({ timeout: 60_000 });
-  await expect(page.locator(`${CARD_ROOT}${CARD_HOST_CHAT}`).first()).toBeVisible({
-    timeout: 60_000,
-  });
+  await expect(page.locator(stateSelector).first()).toBeVisible({ timeout: 60_000 });
+  if (spec.state === "pending") {
+    // A held row mid-load draws "Loading recommendations…" and no chip; the record
+    // claims a card the reader could have acted on, so wait for the chips.
+    await expect(page.locator(`${stateSelector} ${CHIP}`).first()).toBeVisible({
+      timeout: 60_000,
+    });
+  }
   await stripDevOverlay(page);
-  const screenshot = `${EVIDENCE_DIR}/${spec.file}`;
+  const screenshot = `${RUN_EVIDENCE_DIR}/${spec.file}`;
   const record = await observeCapture({
     page: playwrightPage(page),
     cell: spec.cell,
@@ -521,7 +653,7 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   const threadUrl = await freshThread(page);
   await sendDrivingMessage(page);
 
-  const held = await waitForHeldCard(page, FIRST_TURN_MS);
+  await waitForHeldCard(page, FIRST_TURN_MS);
 
   // ── (1) A REAL held run, behind THIS card ───────────────────────────────
   //    The id comes from the transcript, and is then checked to belong to the
@@ -532,6 +664,9 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   await expectHeldInvariant(runId);
 
   // ── (2) The card, at the `agent_run` producing slot, on the chat host ────
+  //    The anchors are re-read PINNED to the run id, because "at the producing
+  //    slot" is only answerable once the run the slot must belong to is known.
+  const held = await expectCardAtProducingSlot(page, runId, "held");
   expect(held.roots, "exactly one recommendation_hold card in the turn").toBe(1);
   expect(held.kind).toBe("recommendation_hold");
   expect(held.host, "the card declares the chat_thread host").toBe("chat_thread");
@@ -539,6 +674,11 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   expect(held.chatThreadMarker, "the transcript's own mount marker is on the card root").toBe(true);
   expect(held.insideConversationList, "the card is IN the transcript").toBe(true);
   expect(held.slot, "the card is drawn at a marked transcript slot (S9i)").not.toBeNull();
+  expect(
+    held.slotIsProducingAgentRun,
+    "and that slot container is the `agent_run` part's OWN — it carries the inline run panel " +
+      "for this run, which no other marked container does (S9i)",
+  ).toBe(true);
   expect(held.chipRow, "the row IS the card").toBe(true);
   expect(held.chips, "one chip per assigned skill").toBe(1);
   // §V's three per-chip controls, and nothing above them.
@@ -586,11 +726,15 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   await page.locator(`${CARD_ROOT} ${CHIP_CONFIRM}`).first().click();
 
   // ── (4) The same card settles IN PLACE, URL unchanged ───────────────────
-  const confirmed = await waitForDecidedCard(page, "confirmed");
+  const confirmed = await waitForDecidedCard(page, "confirmed", runId);
   expect(confirmed.roots, "still exactly one card — it settled, it did not multiply").toBe(1);
   expect(confirmed.host, "on the same host").toBe("chat_thread");
   expect(confirmed.insideConversationList, "in the same transcript").toBe(true);
   expect(confirmed.slot, "at the same producing slot").toBe(held.slot);
+  expect(
+    confirmed.slotIsProducingAgentRun,
+    "and still the `agent_run` part's own container — settling did not re-parent the card",
+  ).toBe(true);
   expect(confirmed.confirmControls + confirmed.adjustControls + confirmed.skipControls,
     "a settled card offers nothing to press").toBe(0);
   expect(confirmed.settled, "and says so on its own root").toBe(true);
@@ -624,11 +768,16 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   // ── (6) Reload the SAME thread — the settled card comes back ─────────────
   //    Read off a cold page, not a live React tree: this is the durable half.
   await page.goto(urlAtConfirm, { waitUntil: "domcontentloaded", timeout: 180_000 });
-  const reloaded = await waitForDecidedCard(page, "confirmed");
+  await waitForDecidedCard(page, "confirmed", runId);
+  // Re-read pinned: the durable half must come back AT ITS PRODUCING SLOT too, or
+  // "the card survives a reload" would be satisfied by a card that came back
+  // somewhere else in the transcript.
+  const reloaded = await expectCardAtProducingSlot(page, runId, "decided");
   expect(page.url(), "the reload landed on the same thread").toBe(urlAtConfirm);
   expect(reloaded.roots, "the settled card reappeared, once").toBe(1);
   expect(reloaded.host).toBe("chat_thread");
   expect(reloaded.insideConversationList).toBe(true);
+  expect(reloaded.decision, "with its recorded decision intact").toBe("confirmed");
   expect(reloaded.chipSkillIds).toEqual([HELD_TURN_SKILL_ID]);
   expect(reloaded.chipMarks).toEqual(["confirmed"]);
   expect(
@@ -650,7 +799,7 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   const skipThreadUrl = await freshThread(page);
   await sendDrivingMessage(page);
 
-  const held2 = await waitForHeldCard(page, WARM_TURN_MS);
+  await waitForHeldCard(page, WARM_TURN_MS);
   const runId2 = await runIdFromTranscript(page);
   expect(
     runId2,
@@ -658,9 +807,14 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   ).not.toBe(runId);
   await assertRunIsForPackage(runId2, HELD_TURN_AGENT_PACKAGE);
   await expectHeldInvariant(runId2);
+  const held2 = await expectCardAtProducingSlot(page, runId2, "held");
   expect(held2.roots).toBe(1);
   expect(held2.state).toBe("held");
   expect(held2.host).toBe("chat_thread");
+  expect(
+    held2.slotIsProducingAgentRun,
+    "the second card is at ITS OWN run's `agent_run` producing slot",
+  ).toBe(true);
   expect(held2.skipControls, "the chip carries its own Skip").toBe(1);
 
   // Same baseline rule as the confirm half: the thread route, read immediately
@@ -670,10 +824,14 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
   await stripDevOverlay(page);
   await page.locator(`${CARD_ROOT} ${CHIP_SKIP}`).first().click();
 
-  const skipped = await waitForDecidedCard(page, "skipped");
+  const skipped = await waitForDecidedCard(page, "skipped", runId2);
   expect(skipped.roots).toBe(1);
   expect(skipped.host).toBe("chat_thread");
   expect(skipped.slot, "the skipped card settled at its own producing slot").toBe(held2.slot);
+  expect(
+    skipped.slotIsProducingAgentRun,
+    "which is still the `agent_run` part's own container for this run",
+  ).toBe(true);
   expect(
     skipped.confirmControls + skipped.adjustControls + skipped.skipControls,
     "a skipped card offers nothing to press either",
@@ -705,14 +863,14 @@ test("a chat dispatch holds, draws its card in the transcript, is decided there,
 
   // Reload the SKIP thread too — the settled card is durable on both outcomes.
   await page.goto(urlAtSkip, { waitUntil: "domcontentloaded", timeout: 180_000 });
-  const skipReloaded = await waitForDecidedCard(page, "skipped");
+  const skipReloaded = await waitForDecidedCard(page, "skipped", runId2);
   expect(skipReloaded.roots).toBe(1);
   expect(skipReloaded.host).toBe("chat_thread");
   expect(skipReloaded.insideConversationList).toBe(true);
 
   // ── The PROVISIONAL index. Written as an artifact of the run, labeled
   //    dev-runtime, and adopted by nobody. ─────────────────────────────────
-  const indexPath = resolve(REPO_ROOT, EVIDENCE_DIR, "capture-index.provisional.json");
+  const indexPath = resolve(REPO_ROOT, RUN_EVIDENCE_DIR, "capture-index.provisional.json");
   mkdirSync(dirname(indexPath), { recursive: true });
   writeFileSync(
     indexPath,

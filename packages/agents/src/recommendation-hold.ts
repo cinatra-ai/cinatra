@@ -57,10 +57,17 @@ import {
   readContinuationParksForRun,
   type ParkRow,
 } from "./lifecycle-continuation-park-store";
+import {
+  dispatchRecommendationHoldEntered,
+  RECOMMENDATION_HOLD_CHECKPOINT,
+} from "./run-wait-notifier";
 import type { AgentRunRecord, AgentTemplateRecord } from "./store";
 
-/** The lifecycle checkpoint the run-start chip-row hold parks on. */
-export const RECOMMENDATION_CHECKPOINT = "recommendation" as const;
+/** The lifecycle checkpoint the run-start chip-row hold parks on. Defined in the
+ * notifier leaf (see `RECOMMENDATION_HOLD_CHECKPOINT`) so this module, the fence
+ * SQL the host writes behind, and the park store's release primitive share ONE
+ * literal. */
+export const RECOMMENDATION_CHECKPOINT = RECOMMENDATION_HOLD_CHECKPOINT;
 
 /** The event id the recommendation park is keyed on. ONE recommendation park
  * per run (the park is unique on (run_id, event_id, checkpoint)), so a per-run
@@ -738,6 +745,42 @@ export async function maybeHoldRunForRecommendation(input: {
     threadId: recommendationHoldThreadId(run),
     holdId: parked.parkId,
   });
+  // cinatra#2835 — the hold is a HUMAN WAIT, so it must also be discoverable off
+  // the surface it happened on: the run waits, not started, until the human
+  // confirms or skips, and before this the bell said nothing at all. Mint the
+  // same durable "needs your input" row the #2729 ruling gives an unanswered
+  // input field — `waitKind: "input"` because a held run carries no HITL
+  // interrupt for the host to classify, and the host deep-links it back to the
+  // conversation the run was started in (the run page when there is none).
+  //
+  // Here and not in the already-parked branch above (which returns early), so a
+  // retried run-start never re-notifies a hold the human is already looking at;
+  // the host's per-run dedupeKey is the second backstop. `reason:
+  // "pending_input"` is the run's ACTUAL status — the hold parks an
+  // already-`pending_input` run rather than moving it — so no consumer's state,
+  // filter, or route sees anything new.
+  //
+  // Awaited but internally swallowed, exactly like the wire announcement above:
+  // the park holds the run; the notification only tells the human about it.
+  //
+  // BOUND TO THE HOLD, IN THE DATABASE (Codex convergence round 3, findings 1+2).
+  // Round 2 bound the seam by RE-READING the park here and handing the row over
+  // for a structural check. That was still two operations: the read established
+  // liveness, the dispatch acted on it, and a concurrent `sweepParks` fitting
+  // between them could transition the park AND clear the notification before this
+  // write landed — recreating the row after its only clearing transition had
+  // already passed, permanently stale. The re-read is gone because it could not
+  // have fixed that; only the write itself can. The host now writes the row behind
+  // `SELECT … FOR UPDATE` of THIS park id in one transaction, so the park's row
+  // lock — the same lock the sweeper's `status = 'parked'` CAS takes — orders the
+  // two: either we commit first and the sweep's clear then finds our row, or the
+  // sweep commits first and our guard matches nothing and writes nothing. Passing
+  // the id we just inserted is now exactly right: it is a claim the database
+  // checks, not one we assert.
+  await dispatchRecommendationHoldEntered({
+    runId: run.id,
+    parkId: parked.parkId,
+  });
   return { held: true, parkId: parked.parkId, reason: outcome.reason };
 }
 
@@ -779,6 +822,12 @@ export async function releaseRecommendationParkForRun(
   const park = await readRecommendationParkForRun(runId);
   if (!park || park.status !== "parked") return false;
   if (expectedHoldId !== undefined && park.id !== expectedHoldId) return false;
+  // cinatra#2835 — the wait is over the moment the park leaves `parked`, so the
+  // "needs your input" notification goes with it. That clear is NOT wired here:
+  // it lives inside `sweepParks` itself, the one primitive a park transitions
+  // through, so the TTL fail-close and every other direct caller of the sweeper
+  // inherit it too (Codex convergence round 2, finding 1 — wiring it here covered
+  // only this helper's own callers and left every other release path stale).
   const { released } = await sweepParks({ releasedParkIds: [park.id] });
   return released > 0;
 }

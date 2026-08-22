@@ -416,6 +416,63 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     // COMPILED MANIFEST — agent_templates.lifecycle_config (JSON-as-text).
     // -----------------------------------------------------------------------
     { text: `ALTER TABLE "${q}"."agent_templates" ADD COLUMN IF NOT EXISTS lifecycle_config text` },
+
+    // -----------------------------------------------------------------------
+    // HOLD-NOTIFICATION STATE (cinatra#2835) — additive ALTER on the continuation
+    // park created above. Migration twin: core__0094.
+    //
+    // A run-start recommendation hold mints a durable "needs your input"
+    // notification, and that row must be gone the moment the park stops being
+    // `parked`. The notification lives in `notifications`, written through the
+    // host's own connection, so the delete cannot ride the park's status CAS
+    // transaction. This column carries the OBLIGATION instead: the enter sets it
+    // to 'live' in the same STATEMENT as the INSERT, gated on that INSERT's own
+    // RETURNING (cinatra#2838 — the insert can still no-op on its ON CONFLICT DO
+    // NOTHING dedupe arbiter, so a guard row alone does not mean a row was
+    // written), the CAS leaves it alone, and the sweeper retires it
+    // to 'cleared' only after an awaited, successful delete. "Park no longer
+    // parked AND hold_notification = 'live'" is therefore a durable, retryable
+    // clear obligation — a process that dies mid-clear leaves work for the next
+    // sweep instead of a permanently stale bell.
+    // -----------------------------------------------------------------------
+    {
+      text: `ALTER TABLE "${q}"."lifecycle_continuation_park"
+  ADD COLUMN IF NOT EXISTS hold_notification text NOT NULL DEFAULT 'none'`,
+    },
+    // The value domain, asserted at the boundary like the table's other unions
+    // (checkpoint / status / protected_effect). Guarded so the bootstrap stays
+    // idempotent — ADD CONSTRAINT has no IF NOT EXISTS.
+    {
+      text: `DO $$ BEGIN
+  ALTER TABLE "${q}"."lifecycle_continuation_park"
+    ADD CONSTRAINT lifecycle_continuation_park_hold_notification_chk
+    CHECK (hold_notification IN ('none','live','cleared'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$`,
+    },
+    // PARTIAL: only the parks that currently owe a clear are indexed, so the
+    // sweeper's drain never scans the append-only park table.
+    {
+      text: `CREATE INDEX IF NOT EXISTS lifecycle_continuation_park_hold_notify_idx
+  ON "${q}"."lifecycle_continuation_park" (hold_notification, status)
+  WHERE hold_notification = 'live'`,
+    },
+    // The drain's RETRY CURSOR (cinatra#2838). The obligation drain used to take an
+    // UNORDERED page of `limit` live obligations and merely SKIP the ones whose
+    // dispatch failed, leaving them exactly as it found them — so `limit`
+    // permanently-failing obligations could hold the page on every pass and
+    // everything queued behind them was never attempted at all. The drain now
+    // CLAIMS its page ordered by `coalesce(hold_notify_attempted_at, created_at)`
+    // ASC and stamps this column in the same statement, so an attempted obligation
+    // rotates to the back of the queue before its dispatch is even made: poison
+    // delays the rows behind it by a pass, and can never starve them. NULLABLE with
+    // no default on purpose — null reads as "never attempted", ordered by the
+    // park's creation (how long it has actually waited), and a null default keeps
+    // the ADD COLUMN catalog-only on a deployed table.
+    {
+      text: `ALTER TABLE "${q}"."lifecycle_continuation_park"
+  ADD COLUMN IF NOT EXISTS hold_notify_attempted_at timestamptz`,
+    },
   ];
 }
 
@@ -861,7 +918,7 @@ export function agentRunHitlGatesSchemaQueries(schemaName: string): QueryInput[]
 // run-level record joins it (the core__0093 precedent, one file over).
 //
 // FRESH-INSTALL half. The operator-upgrade twin is
-// migrations/core/core__0094_run-recommendation-skip-record.mjs; both are
+// migrations/core/core__0095_run-recommendation-skip-record.mjs; both are
 // idempotent and are pinned against each other by a DDL-parity suite
 // (src/lib/__tests__/run-recommendation-skips-schema.test.ts).
 // ---------------------------------------------------------------------------

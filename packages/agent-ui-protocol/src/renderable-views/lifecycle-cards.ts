@@ -673,10 +673,21 @@ export type TriggerScheduleProposalView = z.infer<
 // IT IS THE SHIPPED CORE-ANALYSIS READING, SANITIZED. The fields below are the
 // ones the run's own "Core analysis" surface already shows the SAME reader,
 // after the SAME run-read check: the verdict, the two pinned revisions, the
-// inspected scope, and the before/after field diff. What the body deliberately
-// omits is every internal identifier that names nothing on screen — the record
-// id, the gate id, the artifact ids — because a body that carries an addressable
-// id turns a card into a place to read one out of.
+// before/after field diff and §VII's advisory comments.
+//
+// WHAT THE READING IS OF (plan course correction, 2026-08-19). The reading is
+// the landed change measured against WHAT THE REVIEW AUTHORIZED — the accepted
+// findings and the scope manifest they produced. It is never a list of the
+// agent's skills, and nothing that draws this body may present it as one.
+//
+// THE AUTHORIZATION TRAVELS AS A MARK, NOT AS A LIST (cinatra#2861). §VII draws
+// no authorized-scope region — the plan's own binding correction puts the
+// authorization in the card's COPY and in the BEFORE/AFTER COLUMNS — so the
+// manifest does not travel as a list nobody draws. It travels as each diff
+// row's `inScope`, decided on the server against the WHOLE manifest. What the
+// body deliberately omits is every internal identifier that names nothing on
+// screen — the record id, the gate id, the artifact ids — because a body that
+// carries an addressable id turns a card into a place to read one out of.
 //
 // EVERY FIELD IS BOUNDED. The ceilings are part of the contract, not a
 // formatting nicety: the resolver clamps to them, so a pathological row cannot
@@ -695,21 +706,73 @@ export type VerificationSummaryOutcome =
 
 /** Ceiling on the diff rows one card may draw. */
 export const VERIFICATION_SUMMARY_MAX_FIELD_DIFF = 200;
-/** Ceiling on the inspected-scope paths one card may draw. */
-export const VERIFICATION_SUMMARY_MAX_SCOPE_PATHS = 200;
 /** Ceiling on one field path / scope path. */
 export const VERIFICATION_SUMMARY_PATH_MAX_LENGTH = 400;
 /** Ceiling on one before/after value. */
 export const VERIFICATION_SUMMARY_VALUE_MAX_LENGTH = 2000;
 /** Ceiling on a pinned revision identifier. */
 export const VERIFICATION_SUMMARY_REVISION_MAX_LENGTH = 128;
+/** Ceiling on the advisory comments one card may draw. */
+export const VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS = 50;
+/** Ceiling on one comment's author-kind label. */
+export const VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH = 64;
+/** Ceiling on one advisory comment body. */
+export const VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH = 4000;
 
-/** One before/after row. `null` is the honest "this side had no value". */
+/**
+ * One ADVISORY COMMENT (epic S9, slice S9e).
+ *
+ * §VII closes the card with "Advisory comments: a label over one panel per
+ * comment, each carrying its author kind in mono above the comment itself", and
+ * fixes where the reading's PROVENANCE lives: "the body of a service comment
+ * there, not a line of its own". So the comments are not decoration the page
+ * happened to have — they are the only place the card says where its reading
+ * came from, and a card drawn without them asserts a verdict with no provenance
+ * at all. They therefore travel in the body, on every host, rather than being a
+ * prop only the review page could supply.
+ *
+ * NO ID TRAVELS, deliberately — the same rule the rest of this body keeps. A
+ * comment's row id names nothing on screen (the card draws the comments in
+ * store order and keys them positionally), and an addressable id inside a card
+ * body is an invitation to read one out of it.
+ */
+export const verificationSummaryAdvisoryCommentSchema = z
+  .object({
+    /** The comment's author KIND — "service", "agent", a person's role. Drawn
+     *  in mono above the body, exactly as §VII draws it. */
+    authorKind: z.string().min(1).max(VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH),
+    body: z.string().min(1).max(VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH),
+  })
+  .strict();
+
+export type VerificationSummaryAdvisoryComment = z.infer<
+  typeof verificationSummaryAdvisoryCommentSchema
+>;
+
+/**
+ * One before/after row. `null` is the honest "this side had no value".
+ *
+ * `inScope` IS THE ROW'S OWN ANSWER, AND IT IS THE SERVER'S (cinatra#2861).
+ * §VII marks an out-of-scope field "in place in the table", so the mark is a
+ * property of the row — and it is decided against the review's WHOLE scope
+ * manifest, on the server, where that manifest is unclamped. The body used to
+ * ship the manifest as a bounded LIST and let the card re-derive the mark by
+ * set membership; that tested the row against a CLAMPED projection, so an
+ * authorized path past the list ceiling — or one truncated by the path ceiling
+ * — would silently fail the test and the card would accuse an authorized
+ * change of drift. A false drift mark is the worst error this card can make: it
+ * says a repair went outside what a human authorized. So the fact is decided
+ * once, where the manifest is whole, and travels on the row.
+ */
 export const verificationSummaryFieldDiffSchema = z
   .object({
     field: z.string().min(1).max(VERIFICATION_SUMMARY_PATH_MAX_LENGTH),
     before: z.string().max(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH).nullable(),
     after: z.string().max(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH).nullable(),
+    /** Whether the review's scope manifest AUTHORIZED this field. Decided
+     *  server-side against the full manifest; `false` is §VII's "out of
+     *  scope" mark. */
+    inScope: z.boolean(),
   })
   .strict();
 
@@ -731,14 +794,26 @@ export const verificationSummaryBodySchema = z
       .string()
       .min(1)
       .max(VERIFICATION_SUMMARY_REVISION_MAX_LENGTH),
-    /** The paths the analysis was scoped to. A diff row outside this set is the
-     *  drift the shipped surface marks "out of scope". */
-    scopePaths: z
-      .array(z.string().min(1).max(VERIFICATION_SUMMARY_PATH_MAX_LENGTH))
-      .max(VERIFICATION_SUMMARY_MAX_SCOPE_PATHS),
     fieldDiff: z
       .array(verificationSummaryFieldDiffSchema)
       .max(VERIFICATION_SUMMARY_MAX_FIELD_DIFF),
+    /**
+     * §VII's advisory comments — or `null` when the comment store could not be
+     * read at all (cinatra#2861).
+     *
+     * THREE ANSWERS, NOT TWO. An empty array is a real reading: the analysis
+     * carries no comments and the card says so. `null` is a DIFFERENT fact: the
+     * store failed, so this panel is unknown — and the card must say THAT
+     * instead, because "no advisory comments on this audit" asserts an absence
+     * nobody established. (The failure costs the panel, never the whole card:
+     * the verdict and the diff are still authorized.) ABSENT — the field
+     * missing from the body — remains illegal, because a body that omits the
+     * field cannot be told apart from one whose producer forgot the provenance.
+     */
+    advisoryComments: z
+      .array(verificationSummaryAdvisoryCommentSchema)
+      .max(VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS)
+      .nullable(),
   })
   .strict();
 
