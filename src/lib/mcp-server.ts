@@ -89,9 +89,9 @@ import {
   dispatchVersionedOnlyExtensionMcpTool,
   planExtensionToolDiscovery,
   planSelfInvokerRetainedUnion,
+  wrapExtensionToolResult,
 } from "@/lib/extension-edge-bound-serving";
 import { listServableVersionKeyedMcpTools } from "@/lib/extension-version-keyed-serving";
-import { wrapExtensionToolResult } from "@/lib/extension-authorized-dispatch";
 
 const MCP_SERVER_SETTINGS_KEY = "mcp_server";
 

@@ -23,7 +23,6 @@ import "server-only";
 // would need the test expanded too.
 
 import { removeExtensionMcpToolsForPackage } from "@/lib/extension-mcp-registry";
-import { revokeDelegatedChatAdmissionsForPackage } from "@/lib/delegated-chat-admission-store";
 import { bumpAdmissionPolicyGeneration } from "@/lib/delegated-chat-admission-generation";
 import {
   invalidateProvidersForPackage,
@@ -203,7 +202,16 @@ export function teardownExtensionCapabilities(packageName: string): {
   // so it cannot await; a failure is therefore reported loudly rather than
   // swallowed, because an approval the store still holds after an uninstall is
   // something an operator must see.
-  void revokeDelegatedChatAdmissionsForPackage(packageName, { reviewedNotAfter: teardownAt })
+  // The store module is reached LAZILY, at the moment of the detached write.
+  // Teardown is a SYNC hook on a hot path; the store pulls the admission
+  // evaluator + the core declaration table behind it, and none of that is
+  // needed to close the in-memory perimeter above. Only the generation bump
+  // stays a static import: it is a dependency-free leaf and it must run
+  // SYNCHRONOUSLY, before this function returns.
+  void import("@/lib/delegated-chat-admission-store")
+    .then(({ revokeDelegatedChatAdmissionsForPackage }) =>
+      revokeDelegatedChatAdmissionsForPackage(packageName, { reviewedNotAfter: teardownAt }),
+    )
     .then((ok) => {
       if (!ok) {
         console.error(

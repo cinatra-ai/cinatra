@@ -33,6 +33,23 @@ vi.mock("@/lib/extension-edge-bound-serving", () => ({
   dispatchVersionedOnlyExtensionMcpTool: async () => ({ ok: true }),
   planExtensionToolDiscovery: async () => ({ register: [], skipped: [] }),
   planSelfInvokerRetainedUnion: () => ({ register: [], dedupedExtensionNames: [] }),
+  // The result envelope moved into this module (cinatra#2817 review round) so
+  // `src/lib/mcp-server.ts` stops reaching the pinned-dispatch graph for one
+  // pure function. This suite mocks the module wholesale, so the envelope has
+  // to be restated here. These tests never inspect the envelope (they assert
+  // the PLANNED dispatch and the drift refusals), so this only has to exist and
+  // match the production shape.
+  wrapExtensionToolResult: (raw: unknown) => {
+    const resolved = raw === undefined ? null : raw;
+    return {
+      content: [{ type: "text", text: JSON.stringify(resolved) }],
+      structuredContent: Array.isArray(resolved)
+        ? { items: resolved }
+        : typeof resolved === "object" && resolved !== null
+          ? (resolved as Record<string, unknown>)
+          : { result: resolved },
+    };
+  },
 }));
 
 const PKG = "@cinatra-ai/acme";

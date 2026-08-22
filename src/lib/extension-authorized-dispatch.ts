@@ -2,23 +2,7 @@ import "server-only";
 
 import type { PrimitiveDispatchTarget } from "@cinatra-ai/mcp-server/capability-plan";
 import { listExtensionMcpTools, UNRESOLVED_EXTENSION_VERSION } from "@/lib/extension-mcp-registry";
-import { dispatchPlannedExtensionMcpTool } from "@/lib/extension-edge-bound-serving";
-
-/** The MCP result envelope for a plain extension-handler value (mirrors the
- * connector modules): arrays → { items }, objects → as-is, scalars/undefined →
- * { result }. Shared by the live-transport replay and the self-invoker capture
- * so the two surfaces stay byte-identical. */
-export function wrapExtensionToolResult(raw: unknown) {
-  const resolved = raw === undefined ? null : raw;
-  return {
-    content: [{ type: "text", text: JSON.stringify(resolved) }],
-    structuredContent: Array.isArray(resolved)
-      ? { items: resolved }
-      : typeof resolved === "object" && resolved !== null
-        ? (resolved as Record<string, unknown>)
-        : { result: resolved },
-  };
-}
+import { dispatchPlannedExtensionMcpTool, wrapExtensionToolResult } from "@/lib/extension-edge-bound-serving";
 
 // ---------------------------------------------------------------------------
 // THE PINNED DISPATCH FOR A DELEGATED-RESTRICTED SELF-INVOCATION (cinatra#2817
