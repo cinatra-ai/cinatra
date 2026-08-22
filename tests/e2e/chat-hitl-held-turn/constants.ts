@@ -117,9 +117,29 @@ export const CHIP_SKIP = '[data-skill-action="skip"]';
  * attribute is what stops the selector form from being written again.
  */
 export const DECISION_ATTR = "data-run-recommendation-decision";
+/** The settled row's own "I am finished" mark, beside the decision. */
+export const CARD_SETTLED = '[data-run-recommendation-settled="true"]';
 /** The transcript list, and the producing slot S9i marks. */
 export const CONVERSATION_LIST = "[data-conversation-list]";
 export const TRANSCRIPT_SLOT = "[data-transcript-slot]";
+
+/**
+ * THE `agent_run` PRODUCING SLOT'S OWN IDENTITY — the thing that separates "in some
+ * marked slot" from "at the slot the run was dispatched at".
+ *
+ * `data-transcript-slot` is a part INDEX, and `chat-messages-view.tsx` puts it on
+ * three different containers: the text-part container, the `agent_run` container,
+ * and the generic produced-views container. A non-null read therefore proves the
+ * card is inside SOME slot, which is not the positional rule S9i states.
+ *
+ * The `agent_run` container is identifiable by what only IT carries: the inline run
+ * panel for that same run. The panel's link out to the run page is built by the
+ * platform from the run id (`buildAgentInstancePath`), so an anchor whose href ends
+ * in `/<runId>` is the panel for THIS run and exists in no other container. Pinning
+ * the card's slot container to the one holding that link is what makes the runtime
+ * gate as strong as the jsdom matrix's `slotOf(card) === producingSlot`.
+ */
+export const INLINE_RUN_PAGE_LINK = '[data-testid="inline-run-page-link"]';
 /** The composer. */
 export const CHAT_PROMPT = '[data-testid="chat-prompt-input"]';
 
