@@ -21,6 +21,7 @@ import { renderHook, act } from "@testing-library/react";
 /** The one field of the turn request these arms drive: the list writer the real
  *  driver folds a turn's messages back in through. */
 type DriveRequest = {
+  assistantId: string;
   ui: { updateMessages: (updater: (prev: UiMessage[]) => UiMessage[]) => void };
 };
 const driveAssistantChatTurn = vi.fn<(req?: DriveRequest) => Promise<void>>(async () => undefined);
@@ -63,6 +64,20 @@ function mountTurns(initialMessages: UiMessage[] = SEEDED) {
 const peekIds = (r: { current: { peekRemovedMessageIds: () => { ids: string[] } } }) =>
   r.current.peekRemovedMessageIds().ids;
 
+/**
+ * The assistant id of the Nth turn this column dispatched, read off the driver
+ * request it was given.
+ *
+ * A turn whose drive REVEALED NOTHING is still nameable: the column keeps the
+ * same registry `/chat` keeps (cinatra#2823 S9j), and its ledger holds an ended
+ * turn until a COMMITTED transcript carries it. The stub driver in this file
+ * reveals nothing by design, so every turn it runs sits in that ledger — and an
+ * edit made afterwards names it, exactly as it should. The real driver appends
+ * the assistant bubble when the turn STARTS, so in production the ledger is
+ * empty by the time an edit can be made and this union contributes nothing.
+ */
+const turnId = (n: number) => driveAssistantChatTurn.mock.calls[n]![0]!.assistantId;
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -95,7 +110,9 @@ describe("the conversation column's edit carries a truncation intent", () => {
     await act(async () => {
       result.current.onEditAndResend("a1", "second rewrite");
     });
-    expect(peekIds(result)).toEqual(["a2", "u2"]);
+    // `turnId(0)` is the turn the FIRST edit dispatched to answer `u2`: it
+    // revealed nothing, and the second edit removes the prompt it was answering.
+    expect(peekIds(result)).toEqual(["a2", "u2", turnId(0)]);
   });
 
   it("keeps the intent until a save CONFIRMS it, because a widget save is silent", () => {
@@ -124,8 +141,9 @@ describe("the conversation column's edit carries a truncation intent", () => {
       result.current.onEditAndResend("a1", "rewrite again");
     });
     act(() => result.current.confirmRemovedMessageIds(inFlight.saveToken));
-    // `u2` was truncated by the SECOND edit and no save has carried it yet.
-    expect(peekIds(result)).toEqual(["u2"]);
+    // `u2` was truncated by the SECOND edit and no save has carried it yet —
+    // and so was the unrevealed turn the first edit dispatched for it.
+    expect(peekIds(result)).toEqual(["u2", turnId(0)]);
   });
 
   it("a confirm cannot clear an assertion its save never carried", async () => {
@@ -155,14 +173,14 @@ describe("the conversation column's edit carries a truncation intent", () => {
     await act(async () => {
       result.current.onEditAndResend("u2", "rewrite once more");
     });
-    expect(peekIds(result)).toEqual(["a2"]);
+    expect(peekIds(result)).toEqual(["a2", turnId(0)]);
 
     // A lands. It may only clear what it carried.
     act(() => result.current.confirmRemovedMessageIds(saveA.saveToken));
     expect(
       peekIds(result),
       "the confirm of an older save cleared an assertion made after it",
-    ).toEqual(["a2"]);
+    ).toEqual(["a2", turnId(0)]);
   });
 
   it("confirms a save whose ids array was COPIED — the TOKEN is what a save is", async () => {
@@ -208,9 +226,12 @@ describe("the conversation column's edit carries a truncation intent", () => {
     await act(async () => {
       result.current.onEditAndResend("u2", "rewrite once more");
     });
-    expect(peekIds(result)).toEqual(["a2"]);
+    expect(peekIds(result)).toEqual(["a2", turnId(0)]);
     act(() => result.current.confirmRemovedMessageIds(wire.saveToken));
-    expect(peekIds(result), "a stale token cleared a newer assertion").toEqual(["a2"]);
+    expect(peekIds(result), "a stale token cleared a newer assertion").toEqual([
+      "a2",
+      turnId(0),
+    ]);
   });
 
   it("BOUNDS the pending removals, evicting the oldest — the stated cost of a bound", () => {

@@ -120,6 +120,25 @@ export type ConversationThreadWrite = {
    * does not follow an edit asserts nothing and omits it.
    */
   removedMessageIds?: string[];
+  /**
+   * THE STREAMING HALF of the same intent (cinatra#2823 S9j) — the RUN IDS this
+   * save asserts the reader removed, present ONLY on a save that follows an
+   * edit-and-resend.
+   *
+   * Every id above is minted in the column, and the server's link from such an
+   * id to the run-bound row runs through the turn's MIRROR ROW — the row a
+   * whole-transcript save writes. A widget save is best-effort and SILENT, so a
+   * turn whose save never landed has no such row: its bubble id asserts a name
+   * the server has never seen, and the removed turn folds back in above the
+   * edited prompt anyway. The run id, minted by the turn route and delivered on
+   * the wire, is the one identity both sides hold for those turns.
+   *
+   * NARROWER than the ids on purpose. A bubble id the server cannot link to a
+   * row does nothing, so over-naming there is safe; a run id names the run-bound
+   * row outright, so the column offers only the runs of turns anchored to a
+   * prompt this edit invalidated (`turn-stream-registry.ts`).
+   */
+  removedRunIds?: string[];
 };
 
 /**
@@ -141,6 +160,8 @@ export function buildThreadWrite(input: {
   /** The column's outstanding truncation intent, when it has one. Empty and
    *  absent are the same thing — an assertion about nothing is no assertion. */
   removedMessageIds?: string[];
+  /** ...and its RUN half, on exactly the same terms. */
+  removedRunIds?: string[];
 }): ConversationThreadWrite {
   const firstUser = input.messages.find((m) => m.role === "user");
   return {
@@ -154,6 +175,9 @@ export function buildThreadWrite(input: {
       : {}),
     ...(input.removedMessageIds && input.removedMessageIds.length > 0
       ? { removedMessageIds: input.removedMessageIds }
+      : {}),
+    ...(input.removedRunIds && input.removedRunIds.length > 0
+      ? { removedRunIds: input.removedRunIds }
       : {}),
   };
 }

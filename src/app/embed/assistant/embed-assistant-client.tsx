@@ -679,7 +679,22 @@ function EmbedConversation({
     // hands `removedMessageIds` to a payload builder, and a contract that read
     // the array's object identity would silently confirm nothing the moment it
     // did (codex round 3, finding 3).
-    const { ids: removedMessageIds, saveToken } = turns.peekRemovedMessageIds();
+    // ...and the RUN half of it. A bubble id is minted in the column, and the
+    // server's link from one to the run-bound row runs through the turn's MIRROR
+    // ROW — which a save writes. This surface's saves are best-effort and
+    // silent, so a turn whose save never landed has no row at all: its id
+    // asserts a name the server has never seen and the removed turn folds back
+    // in on the next reload. The run id is the identity both sides hold for
+    // exactly those turns.
+    //
+    // The peek is handed the transcript this save CARRIES, so the confirm
+    // releases the column's run ledger for the turns that save gave a mirror row
+    // and for no others.
+    const {
+      ids: removedMessageIds,
+      runIds: removedRunIds,
+      saveToken,
+    } = turns.peekRemovedMessageIds(messages);
     void saveThreadTranscript(
       buildThreadWrite({
         threadId: session.threadId,
@@ -687,6 +702,7 @@ function EmbedConversation({
         createdAt: createdAtRef.current,
         activeAssistantHandle: session.assistant,
         removedMessageIds,
+        removedRunIds,
       }),
       // THE BROKER TRANSPORT, like every other request this surface makes. The
       // headers are built at call time from the closure-held tokens and
@@ -695,7 +711,12 @@ function EmbedConversation({
       // this browser.
       serviceTransport,
     ).then((landed) => {
-      if (landed && removedMessageIds.length > 0) turns.confirmRemovedMessageIds(saveToken);
+      // A LANDED save is confirmed unconditionally: the confirm clears the
+      // assertions this save carried (of both halves) AND releases the column's
+      // run ledger for the transcript it wrote mirror rows for. Gating that on
+      // there being an assertion would leave the ledger holding every turn this
+      // panel ever streamed, since the ordinary save carries no assertion at all.
+      if (landed) turns.confirmRemovedMessageIds(saveToken);
     });
   }, [localTurnStatus, messages, serviceTransport, session.threadId, session.assistant, turns]);
   const host = useMemo(
