@@ -186,6 +186,7 @@ describe("newly registered stores — writer-set lockstep", () => {
     "src/lib/widget-user-auth.ts",
     "src/lib/assistant-thread-store.ts",
     "src/lib/assistant-thread-dormant-content-purge.ts",
+    "src/lib/assistant-turn-supersede.ts",
   ];
 
   it("segmenter coverage guard: no store module uses a grouped `export {}` list or `export default` (either would bypass the export-form scan — extend the segmenter before introducing one)", () => {
@@ -221,6 +222,10 @@ describe("newly registered stores — writer-set lockstep", () => {
       // Deliberately re-pinned.
       "src/lib/assistant-thread-store.ts": 10,
       "src/lib/assistant-thread-dormant-content-purge.ts": 1,
+      // cinatra#2823 S9j: the truncation tombstone's ONE statement — the whole
+      // reason this module exists. A second org-axis statement here is a
+      // deliberate re-pin, not a silent addition.
+      "src/lib/assistant-turn-supersede.ts": 1,
     });
   });
 
@@ -289,6 +294,15 @@ describe("newly registered stores — writer-set lockstep", () => {
       "updateAssistantTurn",
     ]);
     expect(registryWriters("src/lib/assistant-thread-store.ts")).toEqual(detected);
+  });
+
+  it("assistant-turn-supersede: the tombstone builder is its module's only DML export and stays registered", () => {
+    const detected = exportedSegments("src/lib/assistant-turn-supersede.ts")
+      .filter((s) => RAW_VERBS.test(s.body))
+      .map((s) => s.name)
+      .sort();
+    expect(detected).toEqual(["buildSupersedeRunBoundTurnsQuery"]);
+    expect(registryWriters("src/lib/assistant-turn-supersede.ts")).toEqual(detected);
   });
 
   it("assistant-thread-dormant-content-purge: the migration purge is its module's only DML export and stays registered", () => {

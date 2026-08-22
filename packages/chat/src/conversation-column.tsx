@@ -93,6 +93,8 @@ import {
   generateId,
   type AssistantTurnRequestMessage,
 } from "./ag-ui-chat-client";
+import { buildTruncationIntent, buildRemovedRunIntent } from "./truncation-intent";
+import { createTurnStreamRegistry } from "./turn-stream-registry";
 import { startScrollSettlePin, type ScrollSettlePass } from "./scroll-settle";
 import dynamic from "next/dynamic";
 import type { UiMessage } from "./types";
@@ -517,6 +519,102 @@ export type ConversationTransport = {
 
 export type ConversationTurnStatus = "idle" | "running" | "finished" | "error";
 
+/**
+ * The pending-removals cap: how many asserted-but-unsaved message ids this
+ * column keeps at once. One entry is one MESSAGE, not one turn — a single edit
+ * asserts the whole truncated tail — so the ceiling is set well above any
+ * transcript a widget panel realistically holds, and reaching it means either a
+ * truncation of more than 512 messages in one edit or a host whose saves have
+ * been failing since the first one. The eviction site states what going over it
+ * costs.
+ */
+export const MAX_PENDING_REMOVED_MESSAGE_IDS = 512;
+
+/**
+ * THE SAVE TOKEN: which assertions one save carried, stated explicitly.
+ *
+ * The ids alone cannot say it. An id can be asserted TWICE — the save carrying
+ * the first assertion may still be open when the turn that follows folds that
+ * message back into the list and a later edit removes it again — and those are
+ * two different removals, so a confirm that simply subtracted its ids cleared
+ * whichever assertion happened to be standing. The fix is a REVISION per
+ * assertion, and the token is the snapshot of the revisions the peek handed out.
+ *
+ * It is DATA, not an identity. The previous round keyed that snapshot on the
+ * ids array object itself, held in a `WeakMap` — so any host that copied,
+ * rebuilt or serialized the array between the peek and the confirm handed back
+ * an array the hook had never seen, whose snapshot was therefore absent, and the
+ * confirm silently cleared NOTHING. A confirmed removal that never clears is
+ * re-asserted in every later save and, at the cap, evicts newer assertions to
+ * make room for itself, forever (codex round 3, finding 3). So the token carries
+ * what the confirm needs, in plain pairs that survive anything a host does to
+ * them that preserves JSON, and the array object means nothing at all.
+ */
+export type RemovedMessageIdsSaveToken = {
+  /** `[id, revision]` for every assertion standing when the peek was taken. */
+  readonly revisions: ReadonlyArray<readonly [string, number]>;
+  /** The same, for the RUN half of the intent — `[runId, revision]`. Kept apart
+   *  from the ids because the two are different names for the same removal and a
+   *  confirm has to clear exactly what its save carried of each. */
+  readonly runRevisions: ReadonlyArray<readonly [string, number]>;
+  /** THE TRANSCRIPT THE SAVE CARRIED, by message id. A save that LANDS is what
+   *  proves the server has a MIRROR ROW for every turn in it — the row the
+   *  ordinary key is read out of — so the column releases the registry's run
+   *  ledger for exactly those turns on the confirm, and for no others
+   *  (`./turn-stream-registry`, `noteSavedTranscript`). Recorded at peek time
+   *  rather than read at confirm time: a turn that revealed while the save was
+   *  open is NOT in the save that landed, and releasing it would drop the one
+   *  identity an edit could still have asserted about it. */
+  readonly savedMessageIds: readonly string[];
+};
+
+/** What `peekRemovedMessageIds` hands a host: the ids to put on the wire, and
+ *  the token to hand back to `confirmRemovedMessageIds` once they land. */
+export type PeekedRemovedMessageIds = {
+  ids: string[];
+  /** THE STREAMING HALF of the same intent (cinatra#2823 S9j): the RUN IDS of
+   *  the removed turns the server has no mirror row for. A widget save is
+   *  best-effort and silent, so a turn whose save never landed left no row for
+   *  the bubble id to reach — the run id is the only identity both sides hold
+   *  for it. Empty is the ordinary case and means the ids alone say everything.
+   */
+  runIds: string[];
+  saveToken: RemovedMessageIdsSaveToken;
+};
+
+/**
+ * Record ONE assertion into a pending map, under the cap. Used for both halves
+ * of the intent — the removed message ids and the removed run ids — so the two
+ * cannot drift in revision discipline or in what a bound costs them.
+ */
+function assertRemoval(
+  pending: Map<string, number>,
+  key: string,
+  revisionRef: { current: number },
+): void {
+  // Re-asserting a key makes it the NEWEST assertion, in revision and in order,
+  // so a confirm for the previous one can no longer clear it and an eviction
+  // reaches it last.
+  pending.delete(key);
+  if (pending.size >= MAX_PENDING_REMOVED_MESSAGE_IDS) {
+    // THE EVICTION, AND WHAT IT COSTS — stated here, at the line that drops a
+    // nameable removal, rather than left to the constant.
+    //
+    // The OLDEST assertion goes. Its removal becomes re-assertable NEVER: no
+    // later save carries it, so that turn's run-bound row can fold back in above
+    // the edited prompt on the next reload — the permanent undo this intent
+    // exists to prevent, for that one message or that one run. The bound is
+    // taken anyway because the alternative has no ceiling at all: a widget save
+    // is best-effort and silent, so a host whose saves keep failing accumulates
+    // every removal it ever asserted, for the life of the panel, and posts all
+    // of them on every save that does get through.
+    const oldest = pending.keys().next().value;
+    if (typeof oldest === "string") pending.delete(oldest);
+  }
+  revisionRef.current += 1;
+  pending.set(key, revisionRef.current);
+}
+
 const NO_PAUSED: string[] = [];
 const NO_TAGGED_IDS: string[] = [];
 const EMPTY_HANDLE_MAP = new Map<string, string>();
@@ -569,10 +667,61 @@ export function useConversationColumnTurns({
     setMessages(next);
   }, []);
   const [requestEditMessageId, setRequestEditMessageId] = useState<string | null>(null);
-  // The abort-controller registry `/chat` keeps: `isStreaming(id)` reads it, the
-  // stop control aborts every entry, and its size is `streamingCount`.
-  const streamingRef = useRef(new Map<string, AbortController>());
+  // THE TURN REGISTRY `/chat` keeps, and it is the SAME MODULE (cinatra#2823
+  // S9j). It was a bare `Map<assistantId, AbortController>` here — `isStreaming`
+  // read it, the stop control aborted it, its size was `streamingCount` — and a
+  // bare map has no room for the one thing the truncation below needs: the
+  // SERVER'S own name for each turn.
+  //
+  // A bubble id is minted HERE. The server's link from such an id to the
+  // run-bound row that survives a truncation runs through the turn's MIRROR ROW,
+  // and a whole-transcript save is what writes that row. A widget save is
+  // best-effort and SILENT, so a turn whose save never landed has no row at all:
+  // its bubble id asserts a name the server has never seen, the reconcile DELETE
+  // cannot reach the run-bound row, and the removed turn folds back in above the
+  // edited prompt on the next reload. The RUN ID is the identity both sides
+  // hold, `driveAssistantChatTurn` reports it on every mode, and this column
+  // simply never took it.
+  //
+  // Reusing the registry rather than growing a second mechanism is the point:
+  // the ledger, the instance token, the anchor filter, the cap and the
+  // two-halves release rule are ONE implementation, so a `/chat` fix to any of
+  // them is a widget fix (`./turn-stream-registry`).
+  const turnStreams = useMemo(() => createTurnStreamRegistry(), []);
   const [streamingCount, setStreamingCount] = useState(0);
+  // THE TRUNCATION INTENT THIS COLUMN OWES ITS HOST (cinatra#2823 S9j).
+  //
+  // `onEditAndResend` below truncates the transcript, and a truncating save is
+  // the ONE save the server may act on destructively: its reconcile DELETE drops
+  // the removed turns' mirror rows while their run-bound rows — minted when each
+  // run started — survive untouched, and the reload folds those back in above
+  // the edited prompt unless the save ASSERTED the removal. `/chat` carries that
+  // assertion (`message-edit-flow.ts`); this column truncated in silence, so a
+  // widget reader's edit came undone on every reload.
+  //
+  // It is ACCUMULATED rather than passed straight out, because the edit and the
+  // save are separate events here: the host saves when a TURN ENDS, which is one
+  // or more turns after the edit that truncated. The ids wait here until a save
+  // that carried them is known to have landed.
+  //
+  // Each id is held with the REVISION of its current assertion, and every
+  // assertion of an id mints a new one. An id can be asserted twice: the save
+  // that carried the first one may still be open when the list regains that
+  // message and a later edit removes it AGAIN, and those are two different
+  // removals. A confirm that simply subtracted its ids cleared whichever
+  // assertion happened to be standing, so the second removal ended up asserted
+  // by nothing — the silent truncation this whole leg removes (codex round 2,
+  // finding 4). WHICH revisions a save carried is stated by the SAVE TOKEN the
+  // peek hands out (`RemovedMessageIdsSaveToken`), never inferred from the ids
+  // array's object identity. Insertion order is the assertion order, which is
+  // what makes "evict the oldest" meaningful at the cap below.
+  const removedMessageIdsRef = useRef<Map<string, number>>(new Map());
+  /** THE RUN HALF of the same outstanding intent, held on exactly the same terms
+   *  — one revision per assertion, the same counter, the same cap, released by
+   *  the same confirm. Separate map because the two are different names for one
+   *  removal and the wire carries them in different fields. */
+  const removedRunIdsRef = useRef<Map<string, number>>(new Map());
+  const removalRevisionRef = useRef(0);
   // Remount key for mounted extension widgets — bumped when a turn ran a tool a
   // manifest declares as widget-refreshing, exactly as `/chat` bumps it.
   const [widgetRefreshKey, setWidgetRefreshKey] = useState(0);
@@ -581,9 +730,34 @@ export function useConversationColumnTurns({
 
   const hasActiveStream = streamingCount > 0;
   const isStreaming = useCallback(
-    (messageId: string) => streamingRef.current.has(messageId),
-    [],
+    (messageId: string) => turnStreams.has(messageId),
+    [turnStreams],
   );
+
+  // A COMMITTED transcript releases the BUBBLE-ID half of every ended turn it
+  // carries — the same effect `/chat` runs, for the same reason: from here the
+  // edit's own snapshot names the turn, so the ledger has nothing to add. The
+  // RUN half waits for a save that LANDED, which is what `confirmRemovedMessageIds`
+  // reports on this surface (`./turn-stream-registry`).
+  useEffect(() => {
+    turnStreams.noteCommittedTranscript(messages);
+  }, [messages, turnStreams]);
+
+  // THE LEDGER'S THREAD BOUNDARY. Its entries belong to the thread they streamed
+  // in, and no other thread's transcript or save would ever release them, so a
+  // panel re-pointed at a different thread must drop them rather than let an
+  // edit over there assert removals about turns that ran somewhere else. The
+  // registry decides that on the THREAD; the first observation of an empty
+  // registry is an adoption, so a mount (and React's double-invoked mount
+  // effect) resets nothing.
+  //
+  // The streaming COUNT needs no correction here, unlike `/chat`'s: every write
+  // of it in this column reads `turnStreams.size()` rather than adjusting a
+  // number, and each aborted drive's own `finally` runs one. A reset empties the
+  // map, so the next `finally` reports zero.
+  useEffect(() => {
+    turnStreams.resetForThread(threadId);
+  }, [threadId, turnStreams]);
 
   // A host that resolves no extension catalog still gets the SAME runtime the
   // catalog-bearing host gets — an empty one from the same factory — rather than
@@ -598,8 +772,18 @@ export function useConversationColumnTurns({
     async (history: UiMessage[]) => {
       const assistantId = generateId();
       const abort = new AbortController();
-      streamingRef.current.set(assistantId, abort);
-      setStreamingCount(streamingRef.current.size);
+      // THIS instance's token. The `finally` closes over the token, never over
+      // the id: an assistant id is reusable, and an `end` looked up by one
+      // reaches whatever turn is wearing it now. `anchorMessageId` is the PROMPT
+      // this turn was dispatched to answer — the last message of the history it
+      // was given — which is how the intent tells a turn below an edit point
+      // from one above it.
+      const token = turnStreams.begin(
+        assistantId,
+        abort,
+        history[history.length - 1]?.id ?? null,
+      );
+      setStreamingCount(turnStreams.size());
       onTurnStatusChange?.("running");
       const wire: AssistantTurnRequestMessage[] = history.map((m) => ({
         role: m.role,
@@ -624,17 +808,27 @@ export function useConversationColumnTurns({
               writeMessages(next);
             },
             setTypingIndicator: () => {},
+            // THE SERVER'S OWN NAME FOR THIS TURN, taken exactly as `/chat`
+            // takes it and gated on the same instance token — a superseded drive
+            // must never stamp its run onto the turn wearing its id now. The
+            // port is idempotent; the driver reports on every fold.
+            noteRunId: (runId) => {
+              turnStreams.noteRunId(token, runId);
+            },
             isWidgetRefreshTool: widgetRuntime.isWidgetRefreshTool,
             onWidgetRefresh: () => setWidgetRefreshKey((k) => k + 1),
           },
         });
       } finally {
-        streamingRef.current.delete(assistantId);
-        setStreamingCount(streamingRef.current.size);
+        // The turn stays NAMEABLE by the truncation intent after this: `end`
+        // moves it to the ledger, which releases the bubble id on the reveal's
+        // commit and the run on a save that landed.
+        turnStreams.end(token);
+        setStreamingCount(turnStreams.size());
         onTurnStatusChange?.(failed ? "error" : abort.signal.aborted ? "idle" : "finished");
       }
     },
-    [onTurnStatusChange, threadId, transport, widgetRuntime.isWidgetRefreshTool, writeMessages],
+    [onTurnStatusChange, threadId, transport, turnStreams, widgetRuntime.isWidgetRefreshTool, writeMessages],
   );
 
   const onSubmit = useCallback(
@@ -681,28 +875,122 @@ export function useConversationColumnTurns({
           : {}),
       };
       const history = [...current.slice(0, idx), edited];
+      // Everything from the edit point down is deliberately gone, and the host's
+      // next save has to SAY so. `idx + 1` because the edited message keeps its
+      // own id here (unlike `/chat`, which mints a fresh one) — it is being
+      // rewritten in place, not removed, so asserting its removal would be a
+      // lie about a message the payload still carries.
+      const removed = buildTruncationIntent(current, idx + 1, turnStreams.removableTurnIds());
+      // ...and the SERVER'S name for the removed turns it has no mirror row for.
+      //
+      // THE SET ASKED ABOUT IS THE TRANSCRIPT SLICE, NOT `removed`. A run id
+      // names the run-bound row outright, so under-naming is the fail-closed
+      // direction here and the query must be exact: `removed` unions in whatever
+      // the registry could name, which is deliberately generous for BUBBLE ids
+      // (the server intersects those with the rows the payload dropped) and
+      // would be a claim this column cannot support if it reached a run.
+      //
+      // AND IT INCLUDES THE REWRITTEN MESSAGE. This column edits in place,
+      // keeping the id — so `messageId` is not REMOVED and is rightly absent
+      // from the assertion on the wire — but every turn anchored to it answered
+      // a prompt that no longer says what it said, and is just as superseded as
+      // the turns below it. `/chat` mints a fresh id and gets this for free; here
+      // it is stated (`removableRunIds`, `./turn-stream-registry`).
+      const invalidatedPrompts = new Set<string>();
+      for (const message of current.slice(idx)) {
+        if (typeof message.id === "string" && message.id.length > 0)
+          invalidatedPrompts.add(message.id);
+      }
+      const removedRuns = buildRemovedRunIntent(turnStreams.removableRunIds(invalidatedPrompts));
+      for (const id of removed) assertRemoval(removedMessageIdsRef.current, id, removalRevisionRef);
+      for (const runId of removedRuns)
+        assertRemoval(removedRunIdsRef.current, runId, removalRevisionRef);
       writeMessages(history);
       void runTurn(history);
     },
-    [hasActiveStream, runTurn, writeMessages],
+    [hasActiveStream, runTurn, turnStreams, writeMessages],
+  );
+
+  /** The removals this column has truncated and not yet had saved: the `ids` to
+   *  put on the write, and the SAVE TOKEN naming the assertions those ids stand
+   *  for. They stay here until the host confirms they landed, so a save that
+   *  silently failed does not lose the assertion. Peeking does not consume, and
+   *  the host may do anything JSON-preserving to either half — nothing here is
+   *  keyed on an object's identity (`RemovedMessageIdsSaveToken`). */
+  const peekRemovedMessageIds = useCallback(
+    (savedMessages?: UiMessage[]): PeekedRemovedMessageIds => {
+      const pending = removedMessageIdsRef.current;
+      const pendingRuns = removedRunIdsRef.current;
+      // `savedMessages` is the transcript the save is about to carry. The host
+      // passes what it posts, so the confirm can release the run ledger for
+      // exactly the turns that save gave a mirror row and for no others; a caller
+      // that passes nothing gets this column's current list, which is the same
+      // thing for every host that peeks at save time.
+      const carried = savedMessages ?? listRef.current;
+      return {
+        ids: [...pending.keys()],
+        runIds: [...pendingRuns.keys()],
+        saveToken: {
+          revisions: [...pending],
+          runRevisions: [...pendingRuns],
+          savedMessageIds: carried
+            .map((m) => m.id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        },
+      };
+    },
+    [],
+  );
+  /** The save that carried this token came back OK — drop the assertions it
+   *  actually carried, and only those. An id re-asserted since (the message came
+   *  back and a later edit removed it again) has a newer revision standing than
+   *  the token records, and survives: its removal has not been saved by anyone
+   *  yet. A token from no peek of this column names no standing revision and so
+   *  clears nothing — keeping an assertion costs an id in one payload, dropping
+   *  one loses a removal for good, and this module takes the first every time. */
+  const confirmRemovedMessageIds = useCallback(
+    (saveToken: RemovedMessageIdsSaveToken) => {
+      const pending = removedMessageIdsRef.current;
+      for (const [id, carried] of saveToken?.revisions ?? []) {
+        if (pending.get(id) === carried) pending.delete(id);
+      }
+      const pendingRuns = removedRunIdsRef.current;
+      for (const [runId, carried] of saveToken?.runRevisions ?? []) {
+        if (pendingRuns.get(runId) === carried) pendingRuns.delete(runId);
+      }
+      // THE SAVE LANDED, so every turn it carried now has a MIRROR ROW and the
+      // ordinary key takes over for it: the registry releases those turns
+      // entirely, which is what keeps the run ledger from holding every turn this
+      // panel ever streamed. Only the transcript the save actually carried is
+      // released — a turn that revealed while the save was open is not in it, and
+      // releasing that one would drop the only identity a later edit could
+      // assert about it (`./turn-stream-registry`).
+      const saved = saveToken?.savedMessageIds ?? [];
+      if (saved.length > 0) turnStreams.noteSavedTranscript(saved.map((id) => ({ id })));
+    },
+    [turnStreams],
   );
 
   const onStop = useCallback(() => {
-    for (const controller of streamingRef.current.values()) controller.abort();
-  }, []);
+    // NOT a reset: stopping does not leave the thread, so each aborted turn is
+    // ended by its own drive into the ledger and stays nameable — which is the
+    // whole point of stopping one.
+    turnStreams.abortAll();
+  }, [turnStreams]);
 
   // Abort every in-flight turn when the column goes away (codex round 2). The
   // embed used to hold its own controller and abort it when the bridge tore
   // down; the registry lives here now, so the cleanup has to live here too. A
   // widget panel closed mid-answer would otherwise leave the stream reading —
-  // and its `updateMessages` writing — into an unmounted tree. The registry is
-  // read through the ref, so this runs once per mount and never re-subscribes.
+  // and its `updateMessages` writing — into an unmounted tree. `reset` rather
+  // than `abortAll`: the ledger's ids belong to a panel that is gone, and there
+  // is no later transcript or save here to release them. The registry identity
+  // is stable for the mount, so this runs once and never re-subscribes.
   useEffect(() => {
-    const registry = streamingRef.current;
     return () => {
-      for (const controller of registry.values()) controller.abort();
+      turnStreams.reset();
     };
-  }, []);
+  }, [turnStreams]);
 
   const onEditStarted = useCallback(() => setRequestEditMessageId(null), []);
   const onTogglePause = useCallback(() => {}, []);
@@ -722,6 +1010,8 @@ export function useConversationColumnTurns({
     streamingCount,
     isStreaming,
     onEditAndResend,
+    peekRemovedMessageIds,
+    confirmRemovedMessageIds,
     widgetRuntime,
     widgetSubmitRef,
     widgetRefreshKey,

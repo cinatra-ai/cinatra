@@ -595,6 +595,10 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     // same under-grant, in a place that is even harder to notice.
     isAdmin: widgetPrincipal.platformRole === "platform_admin",
     runProducer,
+    // The turn's PRODUCER — the server-verified principal this branch already
+    // resolved (cinatra#2823 round 3), recorded on the turn row so a recovered
+    // turn keeps its attribution.
+    producerAssistantUserId: assistantUserId,
     // cinatra#2650 — the widget's container comes from the SERVER-VERIFIED
     // principal this branch already built (the CLOSED widget binding's reserved
     // built-in package + the canonical instance the dual-token sequence pinned).
@@ -749,6 +753,10 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
   // unresolvable/corrupt config fails CLOSED (404) — never a Cinatra fallback for
   // a non-built-in principal.
   let runProducer: Parameters<typeof streamAgUiChatTurn>[0]["runProducer"];
+  // The turn's PRODUCER, when the selector named one — recorded on the turn row
+  // so a recovered turn keeps its attribution (cinatra#2823 round 3). Stays null
+  // on the historical @cinatra binding, which names no assistant principal.
+  let producerAssistantUserId: string | null = null;
   if (parsed.data.assistant === undefined) {
     runProducer = (send, signal, turnIdentity) =>
       runChatTurn({
@@ -786,6 +794,7 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
     if (!resolved.ok) {
       return Response.json({ error: "Assistant not found" }, { status: 404 });
     }
+    producerAssistantUserId = assistantUserId;
     const runtimeConfig = resolved.runtimeConfig;
     runProducer = (send, signal, turnIdentity) =>
       runAssistantTurn(runtimeConfig, {
@@ -809,6 +818,7 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
     userId,
     isAdmin,
     runProducer,
+    producerAssistantUserId,
     // The thread's HOME (cinatra#2650) — server-resolved above, never the
     // producer selected just below it.
     container,

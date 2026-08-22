@@ -1589,21 +1589,1021 @@ export function listAssistantThreadSummariesForOwnerInOrg(
   });
 }
 
+// ---------------------------------------------------------------------------
+// THE DURABLE ASSISTANT TURN → TRANSCRIPT MESSAGE PROJECTION
+// (cinatra-ai/cinatra#2823, epic #2784 S9j — the persistence bridge).
+// ---------------------------------------------------------------------------
+//
+// WHAT THIS IS FOR. A `/chat` turn is written down TWICE, by two different
+// writers, and until this projection only one of them could be read back:
+//
+//   * THE CLIENT'S whole-transcript save — the `legacy:`-namespaced mirror rows.
+//     It carries the projected `UiMessage`s, `dataParts` and all, and it is what
+//     `reconstructThreadPayload` reads. It is also BEST-EFFORT AND SILENT
+//     (`packages/chat/src/conversation-services.ts`): a save that fails is a turn
+//     that will not come back, and the reader is told nothing at the time.
+//   * THE STREAM ROUTE'S own record — one run-bound `assistant_turns` row whose
+//     `content` is the sink's `assistant-turn-v1` durable content. It is written
+//     by the server, inside the turn, and it cannot be lost by a client. It was
+//     also never read by anything: the reconstruction selected mirror rows only.
+//
+// So the plan's §2.3 row 5 — *a card present live can be absent after a reload
+// when the whole-message save fails silently* — was structural. The server had
+// the turn and the reconstruction would not look at it.
+//
+// WHAT IT DOES. It projects ONE durable turn into the `UiMessage` shape the
+// transcript renders, applying the SAME triage the AG-UI reducer applies to a
+// live turn (`packages/chat/src/renderer/ag-ui-reducer.ts`): a `tool_result`
+// completes its `tool_call` in place, an `agent_run` DATA_PART PINS its runId on
+// that call rather than becoming a view, `citations` become the message's
+// citations, and every remaining DATA_PART is CARRIED THROUGH as a renderable
+// view. One triage, two implementations, and they are pinned to each other by the
+// S9j contract suite, which drives the real sink and mounts the real view.
+//
+// WHY IT LIVES IN THIS FILE rather than in a module of its own. It is pure, it
+// has one caller — the fold-in below — and the five LOCKED dev-perf routes all
+// reach this store, so a separate module raised every one of their reachable-
+// module ceilings by one (measured: /sign-in 218→219, /chat 1793→1794, /api/mcp
+// 1714→1715, /api/a2a 1719→1720, /api/llm-bridge 1729→1730). The route-graph
+// ratchet says a ceiling "should only ever be LOWERED"; buying five raises for a
+// file boundary this store does not need was the wrong trade. Nothing is lost in
+// testability: these functions are EXPORTED and their unit suite
+// (`__tests__/assistant-turn-durable-projection.test.ts`) drives them directly,
+// exactly as it would have driven a separate module.
+// ---------------------------------------------------------------------------
+
+/** The durable content format this projection understands. */
+export const DURABLE_ASSISTANT_TURN_FORMAT = "assistant-turn-v1";
+
+/** A `UiMessage`-shaped assistant turn (structurally; the shape lives in
+ *  `@cinatra-ai/chat`'s `types.ts` and is deliberately not imported — this is a
+ *  sync store leaf and that module reaches the client render graph). */
+export type ProjectedAssistantTurn = {
+  id: string;
+  role: "assistant";
+  content: string;
+  /** External-author attribution (Slack mode), when the server recorded one on
+   *  the turn row. Same field, same meaning as the live projection's. */
+  authorUserId?: string;
+  parts?: Array<Record<string, unknown>>;
+  /** The flat tool-round summary the legacy layout draws — and the ONLY place a
+   *  Slack-projected turn records its tool calls. */
+  thoughtGroups?: Array<Record<string, unknown>>;
+  citations?: Array<Record<string, unknown>>;
+  dataParts?: Array<Record<string, unknown>>;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** Is this turn content the sink's durable `assistant-turn-v1` object? */
+export function isDurableAssistantTurnContent(content: unknown): boolean {
+  return isRecord(content) && content.format === DURABLE_ASSISTANT_TURN_FORMAT;
+}
+
+/**
+ * Project one durable `assistant-turn-v1` content object onto the transcript's
+ * message shape. Returns `null` for anything else — a mirror row's message
+ * object, a legacy shape, a malformed payload — so a caller can hand it every
+ * turn it has and let the format decide.
+ *
+ * DEFENSIVE THROUGHOUT. The input is persisted JSON from a writer that may be
+ * older or newer than this reader, so every field is checked rather than
+ * asserted: an unknown part type is skipped, a `tool_result` with no matching
+ * `tool_call` is dropped exactly as the reducer drops it, and a `dataParts` entry
+ * that is not an object is ignored. The failure mode is a THINNER turn, never a
+ * thrown reconstruction — a reload that 500s is strictly worse than a reload
+ * missing one part.
+ */
+export function projectDurableAssistantTurn(
+  turnId: string,
+  content: unknown,
+  /** The turn row's `assistant_user_id` — the server's own record of WHO
+   *  produced this turn. Carried through as `authorUserId`, the field the
+   *  transcript attributes an external-author turn by; omitted when the writer
+   *  recorded none (the historical @cinatra binding records nothing, and the
+   *  renderer's own `?? "cinatra"` fallback is what covers that). */
+  authorUserId?: string | null,
+): ProjectedAssistantTurn | null {
+  if (!isDurableAssistantTurnContent(content)) return null;
+  const durable = content as Record<string, unknown>;
+
+  const parts: Array<Record<string, unknown>> = [];
+  const citations: Array<Record<string, unknown>> = [];
+  const rawParts = Array.isArray(durable.parts) ? durable.parts : [];
+  // The turn's text as the LIVE reducer would have accumulated it, separators and
+  // all (see the `text` case). `pendingRoundSeparator` mirrors the reducer's own
+  // flag: set by a tool RESULT that matched its call, consumed by the next text.
+  let contentText = "";
+  let pendingRoundSeparator = false;
+
+  for (const raw of rawParts) {
+    if (!isRecord(raw)) continue;
+    switch (raw.type) {
+      case "text": {
+        const text = stringOrNull(raw.text);
+        if (text === null || text.length === 0) break;
+        // THE REDUCER'S PARAGRAPH SEPARATOR, reconstructed (cinatra#2823). Live,
+        // text that resumes AFTER a tool round gets a "\n\n" break — the bespoke
+        // `thinking_end` rule, keyed on TOOL_CALL_END
+        // since AG-UI (`reduceTextContent`). The sink's durable `content` is the
+        // raw concatenation of the deltas and its text parts are the raw
+        // segments, so a recovered turn used to come back with its paragraphs
+        // run together where the live turn had them separated. The ordered part
+        // trace records exactly what the rule needs — which text follows a tool
+        // RESULT — so the same condition is applied here, character for
+        // character: only after a completed round, never between ordinary
+        // chunks, and never onto text that already ends in whitespace.
+        const separator =
+          pendingRoundSeparator && contentText.length > 0 && !/\s$/.test(contentText) ? "\n\n" : "";
+        pendingRoundSeparator = false;
+        const content = separator + text;
+        contentText += content;
+        parts.push({ kind: "text", content });
+        break;
+      }
+      case "tool_call": {
+        const id = stringOrNull(raw.id);
+        const name = stringOrNull(raw.name);
+        if (id === null || name === null) break;
+        // Deduped by id, as the live applier dedupes: a retried call is one call.
+        if (parts.some((p) => p.kind === "tool_call" && p.id === id)) break;
+        parts.push({
+          kind: "tool_call",
+          id,
+          name,
+          // A turn is only persisted at terminal, so a call with no result is a
+          // call that never returned — `failed` is the honest reading, and it is
+          // what the live view would be showing when the stream ended.
+          status: "failed",
+          ...(typeof raw.serverLabel === "string" ? { serverLabel: raw.serverLabel } : {}),
+        });
+        break;
+      }
+      case "tool_result": {
+        const id = stringOrNull(raw.id);
+        if (id === null) break;
+        const target = parts.find((p) => p.kind === "tool_call" && p.id === id);
+        if (!target) break; // no matching call — the reducer drops it too
+        target.status = "completed";
+        if (typeof raw.resultLabel === "string") target.resultLabel = raw.resultLabel;
+        if (typeof raw.serverLabel === "string") target.serverLabel = raw.serverLabel;
+        // A tool round just ended → the next text segment gets a paragraph
+        // break. An ORPHAN result is a no-op here exactly as it is in the
+        // reducer, which is why this sits after the `target` guard.
+        pendingRoundSeparator = true;
+        break;
+      }
+      case "citations": {
+        if (!Array.isArray(raw.citations)) break;
+        for (const citation of raw.citations) {
+          if (isRecord(citation)) citations.push(citation);
+        }
+        break;
+      }
+      default:
+        // Vocabulary drift — a part type this reader does not know is skipped
+        // rather than rendered as an unknown blob.
+        break;
+    }
+  }
+
+  // The DATA_PART triage, mirroring the reducer's precedence exactly.
+  const views: Array<Record<string, unknown>> = [];
+  const rawDataParts = Array.isArray(durable.dataParts) ? durable.dataParts : [];
+  // THE PRODUCING SLOTS, read positionally (cinatra#2823). The sink writes
+  // `dataPartSlots` alongside `dataParts`, one entry each, so a view
+  // can be put back where the LIVE render draws it — inside its producing step —
+  // instead of after the turn. A length mismatch is a writer this reader does not
+  // understand: the whole array is ignored and every view folds in at turn level,
+  // which is exactly the pre-slot behaviour and never a card placed on a guess.
+  const rawSlots = Array.isArray(durable.dataPartSlots) ? durable.dataPartSlots : [];
+  const slots = rawSlots.length === rawDataParts.length ? rawSlots : [];
+  for (let i = 0; i < rawDataParts.length; i += 1) {
+    const raw = rawDataParts[i];
+    if (!isRecord(raw)) continue;
+    // A renderable view is classified by `viewType` and that classification WINS
+    // over any structural `kind` beside it — the reducer's rule, restated here so
+    // a payload cannot be consumed structurally on reload and carried through
+    // live (or the other way round), which would be a card that changes identity
+    // when the page is refreshed.
+    const isView = typeof raw.viewType === "string" && raw.viewType.length > 0;
+    if (!isView && raw.kind === "agent_run") {
+      const toolCallId = stringOrNull(raw.toolCallId);
+      const runId = stringOrNull(raw.runId);
+      if (toolCallId === null || runId === null) continue;
+      const target = parts.find((p) => p.kind === "tool_call" && p.id === toolCallId);
+      if (!target) continue; // unknown toolCallId — the reducer no-ops too
+      target.runId = runId;
+      continue;
+    }
+    if (!isView && raw.kind === "citations") {
+      // Belt and braces: the sink keeps citations as an ordered PART and never
+      // mints them here, but a payload written by an older/other producer must
+      // not turn into a renderable view the registry cannot draw.
+      continue;
+    }
+    // SLOTTED: fold the view onto the `tool_call` that produced it, which is the
+    // shape the S9i reducer produces live (`attachViewToToolCall`) and the shape
+    // the ordered-parts renderer draws inside that step's own container. A view
+    // placed here is deliberately ABSENT from the turn-level list — the two
+    // mounts partition the turn's views so a card is drawn once, never twice.
+    const slot = stringOrNull(slots[i]);
+    if (slot !== null && slot.length > 0) {
+      const target = parts.find((p) => p.kind === "tool_call" && p.id === slot);
+      if (target) {
+        const attached = Array.isArray(target.views) ? (target.views as unknown[]) : [];
+        target.views = [...attached, raw];
+        continue;
+      }
+      // The slot names a call this trace does not have. The card still owes the
+      // reader a render, so it falls through to the turn-level list — the same
+      // resolution the reducer makes for an unplaceable stamp.
+    }
+    views.push(raw);
+  }
+
+  // The reconstructed text WINS over the sink's raw `content` field, because it
+  // is the same string plus the round separators the live turn had. The raw
+  // field remains the floor for a row whose parts this reader could not read.
+  const text = contentText.length > 0
+    ? contentText
+    : typeof durable.content === "string"
+      ? durable.content
+      : "";
+  if (parts.length === 0 && views.length === 0 && text.length === 0) return null;
+
+  // THE FLAT TOOL-ROUND SUMMARY (cinatra#2823). The renderer prefers `parts`
+  // when present and falls back to `thoughtGroups` for a message
+  // persisted without one (`hydrateLegacyParts`), and the Slack layout draws
+  // `thoughtGroups` and nothing else — so a recovered turn without them is a turn
+  // that renders as bare text wherever the ordered trace is not the layout in
+  // use. Derived from the parts this projection just built, so the two can never
+  // disagree; ONE group, id "main", which is exactly what the AG-UI reducer
+  // produces (it has no thinking frames to open a second one with).
+  const toolCalls = parts
+    .filter((p) => p.kind === "tool_call")
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      status: p.status,
+      ...(p.resultLabel !== undefined ? { resultLabel: p.resultLabel } : {}),
+      ...(p.serverLabel !== undefined ? { serverLabel: p.serverLabel } : {}),
+    }));
+
+  return {
+    id: turnId,
+    role: "assistant",
+    content: text,
+    // Field-presence discipline, matching the live projection: a key appears
+    // only once populated, so a projected turn serializes like a client-saved
+    // one and a re-save cannot introduce spurious empty arrays.
+    ...(authorUserId !== null && authorUserId !== undefined && authorUserId.length > 0
+      ? { authorUserId }
+      : {}),
+    ...(parts.length > 0 ? { parts } : {}),
+    ...(toolCalls.length > 0 ? { thoughtGroups: [{ id: "main", toolCalls }] } : {}),
+    ...(citations.length > 0 ? { citations } : {}),
+    ...(views.length > 0 ? { dataParts: views } : {}),
+  };
+}
+
+/**
+ * Does this projected turn carry LIFECYCLE render state — a renderable view, or
+ * a run pinned on a tool call?
+ *
+ * This is the predicate that keeps the reconstruction's fold-in narrow. See
+ * `assembleThreadPayloadFromParts` for why narrow is the point.
+ */
+export function carriesLifecycleRenderState(turn: ProjectedAssistantTurn): boolean {
+  if ((turn.dataParts?.length ?? 0) > 0) return true;
+  return (turn.parts ?? []).some(
+    (p) =>
+      p.kind === "tool_call" &&
+      ((typeof p.runId === "string" && p.runId.length > 0) ||
+        // A SLOTTED card is render state too (cinatra#2823). Since the
+        // projection places a stamped view on its producing part, a turn
+        // whose only card is slotted has no turn-level list at all — reading
+        // `dataParts` alone would call that turn inert and drop it from the
+        // fold-in, which is the whole card lost rather than merely misplaced.
+        (Array.isArray(p.views) && p.views.length > 0)),
+  );
+}
+
+/**
+ * The tool-call ids a message's render trace carries — from BOTH places a
+ * projected turn can record them.
+ *
+ * WHY BOTH (cinatra#2823). `projectConversationMessage` has two shapes, not
+ * one. The ordinary shape carries the ordered `parts` trace.
+ * The SLACK-MODE shape — "whole-turn atomic reveal — deliberately NO `parts`"
+ * (`packages/chat/src/ag-ui-chat-client.ts`) — carries `thoughtGroups` instead,
+ * and Slack mode engages automatically once two assistants are tagged. Reading
+ * `parts` alone therefore said "this message has no tool calls" about a turn that
+ * has them and records them, one field over: the id is the SAME server-minted id
+ * off the SAME wire, written by the same projection, in the layout that turn uses.
+ *
+ * That was not a missing convenience, it was a duplicate: a Slack-projected turn
+ * could never share a key with its own durable row, so a save that SUCCEEDED read
+ * as a save that never happened and the server's copy folded in beside it.
+ */
+export function toolCallIdsOf(message: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!isRecord(message)) return ids;
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  for (const part of parts) {
+    if (!isRecord(part)) continue;
+    if (part.kind !== "tool_call") continue;
+    const id = stringOrNull(part.id);
+    if (id !== null) ids.add(id);
+  }
+  const groups = Array.isArray(message.thoughtGroups) ? message.thoughtGroups : [];
+  for (const group of groups) {
+    if (!isRecord(group)) continue;
+    const toolCalls = Array.isArray(group.toolCalls) ? group.toolCalls : [];
+    for (const call of toolCalls) {
+      if (!isRecord(call)) continue;
+      const id = stringOrNull(call.id);
+      if (id !== null) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The lifecycle VIEW REFS a message's `dataParts` carry, as `viewType|ref` pairs
+ * — a renderable card's identity. Structural data parts (`agent_run`,
+ * `citations`) carry no `viewType` and are not view refs.
+ */
+function lifecycleViewRefsOf(dataParts: unknown): Set<string> {
+  const refs = new Set<string>();
+  if (!Array.isArray(dataParts)) return refs;
+  for (const raw of dataParts) {
+    if (!isRecord(raw)) continue;
+    const viewType = stringOrNull(raw.viewType);
+    const ref = stringOrNull(raw.ref);
+    if (viewType === null || viewType.length === 0 || ref === null) continue;
+    refs.add(`${viewType}|${ref}`);
+  }
+  return refs;
+}
+
+/**
+ * The renderable views a message's TRACE carries at its slots (cinatra#2827,
+ * epic #2784 S9i) — the payloads folded onto the `tool_call` part that produced
+ * them, which the ordered-parts renderer draws inside that part's own container.
+ *
+ * WHY THIS EXISTS BESIDE `lifecycleViewRefsOf`. Since S9i a view whose DATA_PART
+ * named its producing call is folded onto that PART and is deliberately ABSENT
+ * from the turn-level `dataParts` list — the two mounts partition the turn's
+ * views so a card is drawn once, never twice. So `dataParts` alone stopped being
+ * the whole answer to "what does this message already show": a turn whose only
+ * card is slotted has NO `dataParts` key while the reader is looking straight at
+ * that card. Every reader below asks BOTH places.
+ */
+function slottedViewsOf(parts: unknown): Array<Record<string, unknown>> {
+  const views: Array<Record<string, unknown>> = [];
+  if (!Array.isArray(parts)) return views;
+  for (const raw of parts) {
+    if (!isRecord(raw)) continue;
+    if (raw.kind !== "tool_call") continue;
+    if (!Array.isArray(raw.views)) continue;
+    for (const view of raw.views) {
+      if (isRecord(view)) views.push(view);
+    }
+  }
+  return views;
+}
+
+/** Every lifecycle view ref a message carries ANYWHERE — turn-level list and
+ *  producing slots both (cinatra#2827 S9i). See `slottedViewsOf`. */
+function allLifecycleViewRefsOf(message: Record<string, unknown>): Set<string> {
+  const refs = lifecycleViewRefsOf(message.dataParts);
+  for (const ref of lifecycleViewRefsOf(slottedViewsOf(message.parts))) refs.add(ref);
+  return refs;
+}
+
+/**
+ * The lifecycle view keys a SPINE message carries that are TURN IDENTITY:
+ * `viewType|ref@producingToolCallId`, one per card folded onto the `tool_call`
+ * part that produced it.
+ *
+ * WHY THE SLOT IS PART OF THE KEY. A lifecycle `ref` names an ENTITY, and any
+ * number of turns may draw that entity's card, so a bare `viewType|ref` says
+ * nothing about WHICH turn is speaking. The producing tool call does: it is
+ * server-minted, it belongs to one turn, and since the slot stamp became durable
+ * both copies of a turn record it — the client's transcript folds the card onto
+ * its producing part, and the durable row keeps the stamp in `dataPartSlots`.
+ *
+ * A card sitting at TURN LEVEL carries no slot and therefore contributes no key.
+ * That is the whole correction: an entity ref alone is not an identity claim, and
+ * treating it as one let an older message that merely re-renders the same card
+ * claim a later turn.
+ */
+function turnBoundViewKeysOf(message: Record<string, unknown>): Set<string> {
+  const keys = new Set<string>();
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  for (const part of parts) {
+    if (!isRecord(part)) continue;
+    if (part.kind !== "tool_call") continue;
+    const slot = stringOrNull(part.id);
+    if (slot === null || slot.length === 0) continue;
+    if (!Array.isArray(part.views)) continue;
+    for (const raw of part.views) {
+      if (!isRecord(raw)) continue;
+      const viewType = stringOrNull(raw.viewType);
+      const ref = stringOrNull(raw.ref);
+      if (viewType === null || viewType.length === 0 || ref === null) continue;
+      keys.add(`${viewType}|${ref}@${slot}`);
+    }
+  }
+  return keys;
+}
+
+/** The same turn-identity keys for a PROJECTED durable turn. `durableViewsWithSlots`
+ *  has already restored each card to the slot its `dataPartSlots` stamp named, so
+ *  a card the projection could not place carries `slot: null` and — exactly as on
+ *  the spine side — contributes no key. */
+function turnBoundViewKeysOfProjected(projected: ProjectedAssistantTurn): Set<string> {
+  const keys = new Set<string>();
+  for (const { view, slot } of durableViewsWithSlots(projected)) {
+    if (slot === null || slot.length === 0) continue;
+    const viewType = stringOrNull(view.viewType);
+    const ref = stringOrNull(view.ref);
+    if (viewType === null || viewType.length === 0 || ref === null) continue;
+    keys.add(`${viewType}|${ref}@${slot}`);
+  }
+  return keys;
+}
+
+/** One renderable view the DURABLE row carries, with the slot it belongs at
+ *  (`null` == no slot was recorded, so it belongs at turn level). */
+type DurableView = { view: Record<string, unknown>; slot: string | null };
+
+/**
+ * Every renderable view a PROJECTED durable turn carries, each with its slot.
+ *
+ * The projection has already decided placement (`projectDurableAssistantTurn`):
+ * a view whose `dataPartSlots` entry named a call in this trace sits on that
+ * `tool_call` part, everything else sits in the turn-level list. This reader
+ * puts the two mounts back into one list WITHOUT losing which is which, because
+ * the repair below has to restore each one where it belongs — a card repaired
+ * into the turn-level list when the reader's own trace has the producing step is
+ * the "keeps its content, loses its position" defect, just arrived by the repair
+ * path instead of the fold-in path.
+ */
+function durableViewsWithSlots(projected: ProjectedAssistantTurn): DurableView[] {
+  const out: DurableView[] = [];
+  for (const part of projected.parts ?? []) {
+    if (part.kind !== "tool_call") continue;
+    const slot = stringOrNull(part.id);
+    if (slot === null) continue;
+    if (!Array.isArray(part.views)) continue;
+    for (const view of part.views) {
+      if (isRecord(view)) out.push({ view, slot });
+    }
+  }
+  for (const view of projected.dataParts ?? []) {
+    if (isRecord(view)) out.push({ view, slot: null });
+  }
+  return out;
+}
+
+/**
+ * Does the spine ALREADY DRAW this durable view at one of its slots?
+ *
+ * Ref identity (`viewType|ref`) is the card's own identity and is the test
+ * wherever the payload carries one. A payload that carries no ref falls back to
+ * STRUCTURAL equality — the same fallback `attachViewToToolCall` uses on the
+ * reducer side, and for the same reason: the wire carries no per-view id to key
+ * on, so two byte-identical payloads are one card.
+ */
+function slotAlreadyDraws(
+  view: Record<string, unknown>,
+  slotted: Array<Record<string, unknown>>,
+  slottedRefs: Set<string>,
+): boolean {
+  const viewType = stringOrNull(view.viewType);
+  const ref = stringOrNull(view.ref);
+  if (viewType !== null && viewType.length > 0 && ref !== null) {
+    return slottedRefs.has(`${viewType}|${ref}`);
+  }
+  try {
+    const serialized = JSON.stringify(view);
+    if (serialized === undefined) return false;
+    return slotted.some((v) => JSON.stringify(v) === serialized);
+  } catch {
+    // Unserializable (a hostile getter, a cycle) — treat as NOT already drawn.
+    // Re-adding a view the reader may already see is a doubled card; dropping
+    // one they cannot see is a card lost to a silent save. Neither is good, and
+    // the reducer resolves the same tie toward rendering, so this does too.
+    return false;
+  }
+}
+
+/** The runs a message's render trace has PINNED, keyed by tool-call id. */
+function pinnedRunsOf(message: unknown): Map<string, string> {
+  const runs = new Map<string, string>();
+  if (!isRecord(message)) return runs;
+  const parts = Array.isArray(message.parts) ? message.parts : [];
+  for (const part of parts) {
+    if (!isRecord(part)) continue;
+    if (part.kind !== "tool_call") continue;
+    const id = stringOrNull(part.id);
+    const runId = stringOrNull(part.runId);
+    if (id === null || runId === null || runId.length === 0) continue;
+    runs.set(id, runId);
+  }
+  return runs;
+}
+
+/**
+ * Does this spine message CONTRADICT the durable turn — does it share a
+ * tool-call id and yet carry state that says it cannot be the same turn?
+ *
+ * Both contradictions are over SERVER-MINTED state that reaches the client
+ * verbatim on the wire, so for one tool call it cannot legitimately differ:
+ *
+ *   * the SAME tool call is pinned to a DIFFERENT run;
+ *   * both sides carry lifecycle view refs and they share NONE — the reader's
+ *     message is showing a different card entirely.
+ *
+ * A side that is merely SILENT (no pin, no views) contradicts nothing: silence
+ * is exactly the dropped save this fold-in exists to repair.
+ */
+function contradictsDurableTurn(
+  spine: Record<string, unknown>,
+  projected: ProjectedAssistantTurn,
+): boolean {
+  const durableRuns = pinnedRunsOf(projected);
+  for (const [callId, runId] of pinnedRunsOf(spine)) {
+    const durableRunId = durableRuns.get(callId);
+    if (durableRunId !== undefined && durableRunId !== runId) return true;
+  }
+  // Both places (cinatra#2827 S9i): a spine whose cards are all SLOTTED carries
+  // no turn-level list, and reading `dataParts` alone would call it silent —
+  // silence contradicts nothing, so a spine showing an entirely different card
+  // would have been accepted as this turn.
+  const spineRefs = allLifecycleViewRefsOf(spine);
+  if (spineRefs.size === 0) return false;
+  // BOTH places on the durable side too, since the projection now slots a
+  // stamped card onto its producing part exactly as the reducer does.
+  const durableRefs = allLifecycleViewRefsOf(projected as unknown as Record<string, unknown>);
+  if (durableRefs.size === 0) return false;
+  for (const ref of durableRefs) {
+    if (spineRefs.has(ref)) return false;
+  }
+  return true;
+}
+
+/**
+ * Does this spine message CLAIM to be the durable turn — does it carry shared
+ * SERVER-MINTED identity evidence?
+ *
+ * TWO KINDS OF EVIDENCE, both minted by the server and both reaching the client
+ * verbatim on the wire:
+ *
+ *   1. A SHARED TOOL-CALL ID. The primary key, read from `parts` AND
+ *      `thoughtGroups` both, because those are the two shapes
+ *      `projectConversationMessage` produces (`toolCallIdsOf`).
+ *   2. A SHARED SLOT-BOUND VIEW KEY — a lifecycle card's `viewType|ref` BOUND TO
+ *      THE TOOL CALL THAT PRODUCED IT (`turnBoundViewKeysOf`).
+ *
+ * WHY (2) CARRIES ITS SLOT, and why a bare `viewType|ref` is not evidence at all.
+ * A lifecycle `ref` names an ENTITY, not a turn, and a turn may legitimately
+ * re-render an entity another turn already drew. Keyed on the ref alone, an older
+ * message that records no tool call but shows the same card CLAIMS a later turn
+ * whose save was lost — and a claim on this path costs the durable turn its
+ * fold-in entirely, so the later turn is suppressed and its card is lost. That is
+ * the precise defect this whole leg exists to remove, arriving by the matcher
+ * instead of by the dropped save. A third message re-rendering the entity turns a
+ * clean repair ambiguous for the same reason: two entity-ref claimants where
+ * there is only ever one turn.
+ *
+ * The turn identity a card actually carries is its PRODUCING TOOL CALL, and both
+ * copies of a turn now record it — the client's transcript folds a stamped card
+ * onto its producing part, and the durable row keeps the stamp in
+ * `dataPartSlots`, which the projection puts back before this reader sees it. So
+ * the key is `viewType|ref@callId`, and a card with NO slot contributes NO key on
+ * either side. An entity ref can no longer claim anything; a slot-bound key can
+ * only ever name the one turn that minted that call.
+ *
+ * That also retires the old "and only for a message that records NO tool call
+ * anywhere" fence. The fence existed to keep a WEAK key away from a message that
+ * was not silent about its identity. A slot-bound key is not weak — it is an
+ * identity claim about one server-minted call — so it contradicts nothing and
+ * needs no fence. What the fence used to permit (an entity ref from a traceless
+ * message) is exactly what is now refused.
+ *
+ * WHAT THIS COSTS PRE-CUTOVER ROWS, disclosed rather than discovered. Both
+ * halves of the slot-bound key are introduced BY this change: a durable row
+ * written before it has no `dataPartSlots`, and a mirror row written before it
+ * folds no card onto a producing part. So for a PRE-SLOT pair — a card-only
+ * legacy mirror row (no `parts`, no `thoughtGroups`) and its pre-slot durable
+ * row — neither side emits a key, nothing matches, and the durable turn folds in
+ * BESIDE the persisted message: a visible duplicate on every reload of that
+ * thread. The removed bare-`viewType|ref` fallback used to match them.
+ *
+ * That is left standing deliberately. The standing ruling is NO backward
+ * compatibility for data written before the cutover, and `dataPartSlots` is this
+ * PR's own introduction, so these rows are exactly that; a matcher
+ * that recognised the old shape is compat work, which the ruling reserves for a
+ * separate decision rather than something to smuggle in behind a key change. The
+ * cost is bounded in the direction that matters: the turn is DUPLICATED, never
+ * suppressed — a wrong match drops a turn and loses its card for good, which is
+ * the defect this key exists to remove, and it cannot happen here. Pinned by
+ * "a PRE-SLOT card-only mirror row leaves its durable turn VISIBLE, never lost"
+ * in `src/lib/__tests__/assistant-thread-store.test.ts`.
+ *
+ * The corroboration discipline on top is UNCHANGED and applies to whichever
+ * claimant emerges: more than one claimant is ambiguity and refuses
+ * (`findCoveringSpineIndex` (a)), and a claimant carrying a contradicting run pin
+ * or a disjoint card set refuses (`contradictsDurableTurn`).
+ */
+function claimsDurableTurn(
+  spine: Record<string, unknown>,
+  durableIds: Set<string>,
+  durableViewKeys: Set<string>,
+): boolean {
+  const spineIds = toolCallIdsOf(spine);
+  for (const id of spineIds) {
+    if (durableIds.has(id)) return true;
+  }
+  if (durableViewKeys.size === 0) return false;
+  for (const key of turnBoundViewKeysOf(spine)) {
+    if (durableViewKeys.has(key)) return true;
+  }
+  return false;
+}
+
+/**
+ * The index of the spine message that is THIS turn, identified by shared
+ * server-minted identity evidence (`claimsDurableTurn`), or -1 when the spine
+ * does not carry the turn.
+ *
+ * A CORROBORATED match, not a bare id hit (cinatra#2823 codex round 2). The
+ * evidence on the SPINE side is read off content the CLIENT wrote — the
+ * whole-transcript save is the client's own transcript — so a shared id is a
+ * claim, not a proof, and being wrong about it means one turn's card or run pin
+ * landing on another message. Two guards make the claim carry its own
+ * corroboration:
+ *
+ *   (a) AMBIGUITY IS NOT A LICENSE. If MORE THAN ONE spine message claims a
+ *       matching id, no repair is made — the turn is treated as one the spine
+ *       does not carry and folded in on its own. Picking the first of two
+ *       claimants would be picking by iteration order.
+ *   (b) CONTRADICTION VOIDS THE MATCH. If the one claimant already carries a
+ *       DIFFERENT run pin for a shared call, or a disjoint set of lifecycle view
+ *       refs, it is not this turn (`contradictsDurableTurn`) and the match is
+ *       refused.
+ *
+ * In both refusals the durable turn is still folded in POSITIONALLY rather than
+ * dropped: the server's own record of the turn is the one thing here that cannot
+ * be re-derived, so a spine message that fails to corroborate must never be able
+ * to SUPPRESS it — refusing a match costs a duplicate-looking turn, dropping one
+ * costs the card this whole leg exists to bring back.
+ *
+ * THE REMAINING TRUST BOUNDARY, stated plainly. This does not authenticate the
+ * spine; it cannot. The reconstruction query is THREAD-SCOPED and a repair only
+ * ever fills state that is ABSENT, so the reach of a lie is one reader's own
+ * thread, and the worst a lie buys is a DECLINED repair of that reader's own
+ * turn: a client that lies about its own transcript loses its own card. That is
+ * self-harm, and the server does not chase it.
+ */
+function findCoveringSpineIndex(
+  messages: Array<Record<string, unknown>>,
+  projected: ProjectedAssistantTurn,
+): number {
+  const durableIds = toolCallIdsOf(projected);
+  // A lifecycle view is always minted from a tool RESULT, so a turn that carries
+  // one always carries the call it came from. A durable turn with no call at all
+  // therefore has no shared key, and is treated as one the spine does not have.
+  if (durableIds.size === 0) return -1;
+  const durableViewKeys = turnBoundViewKeysOfProjected(projected);
+  let claimant = -1;
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i].role !== "assistant") continue;
+    if (!claimsDurableTurn(messages[i], durableIds, durableViewKeys)) continue;
+    if (claimant !== -1) return -1; // (a) two claimants — ambiguous, no repair
+    claimant = i;
+  }
+  if (claimant === -1) return -1;
+  if (contradictsDurableTurn(messages[claimant], projected)) return -1; // (b)
+  return claimant;
+}
+
+/** One run-bound durable turn that is a candidate for the fold-in, with the
+ *  spine message it matched (-1 == the spine does not carry the turn). */
+type DurableFoldCandidate = {
+  turn: AssistantTurn;
+  projected: ProjectedAssistantTurn;
+  covering: number;
+};
+
+/**
+ * The key that groups candidates which are THE SAME TURN: the covering spine
+ * message when one was corroborated, and otherwise the turn's lowest tool-call
+ * id — the server-minted key two rows for one turn would share. A turn carrying
+ * no tool call at all groups alone, under its own row id.
+ */
+function durableFoldGroupKey(candidate: DurableFoldCandidate): string {
+  if (candidate.covering >= 0) return `spine#${candidate.covering}`;
+  const ids = [...toolCallIdsOf(candidate.projected)].sort();
+  return ids.length > 0 ? `call#${ids[0]}` : `turn#${candidate.turn.id}`;
+}
+
+/**
+ * Where a durable turn the spine does NOT carry belongs, by SERVER TIME.
+ *
+ * `stamps` is the spine's own per-message server timestamps in spine (ordinal)
+ * order — the `assistant_turns.created_at` of each mirror row, which the mirror
+ * reconcile's `ON CONFLICT ... DO UPDATE` deliberately does not touch, so it
+ * stays the moment that message FIRST became durable. The turn is placed after
+ * the LAST spine message whose stamp does not follow it.
+ *
+ * WHY POSITIONALLY AND NOT AT THE TAIL. The tail is only right if the spine is a
+ * PREFIX of the conversation, and nothing enforces that: the whole-transcript
+ * save is last-writer-wins, so a stale tab can post a transcript that OMITS a
+ * middle turn while carrying later ones, and the mirror reconcile will delete
+ * the omitted row. Appending then puts a turn from the middle of the
+ * conversation after messages that followed it.
+ *
+ * NOT A RE-SORT. The spine's own order is `ordinal` and is never disturbed; this
+ * only chooses an insertion point among it. When no spine message carries a
+ * usable timestamp at all there is nothing to place against and the turn goes to
+ * the TAIL — the prior behaviour, kept as the floor.
+ */
+function insertionIndexByServerTime(stamps: Array<string | null>, createdAt: string): number {
+  let index = -1;
+  let placeable = false;
+  for (let i = 0; i < stamps.length; i += 1) {
+    const at = stamps[i];
+    if (at === null || at.length === 0) continue;
+    placeable = true;
+    if (at.localeCompare(createdAt) <= 0) index = i;
+  }
+  if (!placeable) return stamps.length;
+  return index + 1;
+}
+
+/**
+ * Fold the run-bound durable turns that carry lifecycle render state into the
+ * legacy-mirror spine. See `assembleThreadPayloadFromParts` for the rule and why
+ * every clause of it is narrow.
+ *
+ * COPY-ON-WRITE, never in place. The spine messages are the caller's own turn
+ * `content` objects, and this function is reachable from an EXPORTED pure
+ * assembler that other suites call with literals; a repaired message is a fresh
+ * object so nothing a caller still holds is edited behind its back.
+ *
+ * THREE PASSES, in this order, because each needs the one before it settled:
+ *
+ *   1. MATCH. Every candidate is matched against the ORIGINAL spine. Matching
+ *      after a fold-in would let one folded turn become the covering target of
+ *      the next — a claim the spine itself never made.
+ *   2. ELECT. Candidates are grouped by what they cover (`durableFoldGroupKey`)
+ *      and exactly ONE is elected per group: the LATEST, by (`created_at`,
+ *      `id`). Two rows carrying one turn's state are two server records of the
+ *      same thing and the NEWEST is the honest one to repair from. What stood
+ *      here before elected whichever row the loop reached first, which is
+ *      earliest-wins by accident rather than by decision.
+ *   3. APPLY. Repairs first — a repair replaces a message and cannot move one,
+ *      so every matched index stays valid — then the positional fold-ins, in
+ *      (`created_at`, `id`) order so each is placed against the ones already in.
+ *
+ * Ordered by `createdAt` then `id`: `created_at` is the order the SERVER recorded
+ * the turns in, and `id` is a TIE-BREAK ONLY — a run-bound turn's id is a random
+ * UUID (`appendAssistantTurn`), so for two rows written in the same millisecond
+ * it buys DETERMINISM, not insertion order. Nothing in the run-bound
+ * representation records insertion order at all (`ordinal` belongs to the mirror
+ * and is NULL on these rows), so determinism is the whole of what is on offer.
+ */
+function foldDurableLifecycleTurnsInto(
+  spine: AssistantTurn[],
+  turns: AssistantTurn[],
+): Array<Record<string, unknown>> {
+  const messages = spine.map((t) => t.content as Record<string, unknown>);
+  const durableTurns = turns
+    .filter((t) => t.content !== null && t.runId !== null)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  if (durableTurns.length === 0) return messages;
+
+  // 1. MATCH — against the original spine, before anything is folded in.
+  const candidates: DurableFoldCandidate[] = [];
+  for (const turn of durableTurns) {
+    const projected = projectDurableAssistantTurn(turn.id, turn.content, turn.assistantUserId);
+    if (projected === null) continue;
+    if (!carriesLifecycleRenderState(projected)) continue;
+    candidates.push({ turn, projected, covering: findCoveringSpineIndex(messages, projected) });
+  }
+  if (candidates.length === 0) return messages;
+
+  // 2. ELECT — one per covering target, latest-wins. The candidates are already
+  //    in ascending (created_at, id) order, so the last write to a key is it.
+  const elected = new Map<string, DurableFoldCandidate>();
+  for (const candidate of candidates) elected.set(durableFoldGroupKey(candidate), candidate);
+  const winners = candidates.filter((c) => elected.get(durableFoldGroupKey(c)) === c);
+
+  // 3. APPLY — repairs (index-preserving), then the positional fold-ins.
+  let folded = messages;
+  for (const winner of winners) {
+    if (winner.covering < 0) continue;
+    const repaired = repairedSpineMessage(folded[winner.covering], winner.projected);
+    if (repaired === folded[winner.covering]) continue; // nothing was owed
+    folded = folded === messages ? [...messages] : folded;
+    folded[winner.covering] = repaired;
+  }
+  const uncovered = winners.filter((w) => w.covering < 0);
+  if (uncovered.length === 0) return folded;
+  folded = folded === messages ? [...messages] : folded;
+  const stamps: Array<string | null> = spine.map((t) => t.createdAt || null);
+  for (const winner of uncovered) {
+    const at = insertionIndexByServerTime(stamps, winner.turn.createdAt);
+    folded.splice(at, 0, winner.projected as unknown as Record<string, unknown>);
+    stamps.splice(at, 0, winner.turn.createdAt || null);
+  }
+  return folded;
+}
+
+/**
+ * ADD what the client's save dropped; overwrite nothing it kept.
+ *
+ * The spine message is what the reader last saw, so it wins wherever it has an
+ * answer: a save that DID carry the views is left exactly as it is. Only an
+ * ABSENT view list and an unpinned run are filled in — the two things a dropped
+ * save costs, and the two things the server's own record can restore.
+ *
+ * ABSENT, NOT EMPTY. `dataParts: []` is a reader that persisted "this turn has
+ * no views", and it is left alone; only a message with no `dataParts` KEY has an
+ * unanswered question for the server to answer. Own-property presence is the
+ * test — the same presence-gating discipline `extractPausedParticipantsFromThread`
+ * uses for the pause set, and for the same reason: a partial write must never be
+ * read as a positive assertion, nor an explicit one as a gap. Since cinatra#2827
+ * (S9i) that presence test is NOT sufficient on its own: a card folded onto its
+ * producing slot is drawn without any turn-level list at all, so the absent key
+ * is cross-checked against what the slots already show (see below).
+ *
+ * Returns the SAME object when nothing was owed, which is what lets the caller
+ * leave the transcript untouched instead of rebuilding an identical one.
+ */
+function repairedSpineMessage(
+  spine: Record<string, unknown>,
+  projected: ProjectedAssistantTurn,
+): Record<string, unknown> {
+  const carriesOwnViews =
+    Object.prototype.hasOwnProperty.call(spine, "dataParts") && spine.dataParts !== undefined;
+  // A VIEW ALREADY DRAWN AT ITS SLOT IS NOT OWED (cinatra#2827 S9i). Since S9i a
+  // view that named its producing call is folded onto that PART and is absent
+  // from `dataParts` by design, so "no `dataParts` key" no longer means "the
+  // reader sees no card" — for a lifecycle card it is now the NORMAL shape.
+  // Filling the turn-level list from the durable row in that state would draw
+  // the very same card a SECOND time, turn-level, beside the one already drawn
+  // at its step: precisely the "once, never twice" invariant S9i is named for.
+  // So the durable views are filtered against what the slots already show, and
+  // only a card the reader genuinely cannot see is restored — which is still
+  // every card a dropped save costs, because a dropped save leaves no slot
+  // either.
+  const slotted = slottedViewsOf(spine.parts);
+  const slottedRefs = lifecycleViewRefsOf(slotted);
+  const owed = carriesOwnViews
+    ? []
+    : durableViewsWithSlots(projected).filter(
+        ({ view }) => !slotAlreadyDraws(view, slotted, slottedRefs),
+      );
+
+  const runIdByCall = new Map<string, string>();
+  for (const durablePart of projected.parts ?? []) {
+    if (durablePart.kind !== "tool_call") continue;
+    const id = durablePart.id;
+    const runId = durablePart.runId;
+    if (typeof id !== "string" || typeof runId !== "string" || runId.length === 0) continue;
+    runIdByCall.set(id, runId);
+  }
+  // EACH OWED CARD GOES BACK WHERE IT BELONGS (cinatra#2823). A card the
+  // server recorded a slot for is restored ONTO the reader's own
+  // `tool_call` part when the reader's trace has that step — the mount the live
+  // render uses — and only a card with no slot, or one whose step this reader
+  // never received, falls back to the turn-level list. Repairing every card into
+  // the turn-level list would give the reader back its content and not its
+  // position, which is the same defect the fold-in half of this round closes.
+  const owedBySlot = new Map<string, Array<Record<string, unknown>>>();
+  const owedAtTurnLevel: Array<Record<string, unknown>> = [];
+  const spineParts = Array.isArray(spine.parts) ? spine.parts : [];
+  const spineCallIds = new Set<string>();
+  for (const raw of spineParts) {
+    if (!isRecord(raw) || raw.kind !== "tool_call") continue;
+    const id = stringOrNull(raw.id);
+    if (id !== null) spineCallIds.add(id);
+  }
+  for (const { view, slot } of owed) {
+    if (slot !== null && spineCallIds.has(slot)) {
+      const at = owedBySlot.get(slot) ?? [];
+      at.push(view);
+      owedBySlot.set(slot, at);
+      continue;
+    }
+    owedAtTurnLevel.push(view);
+  }
+  const owesViews = owedAtTurnLevel.length > 0;
+
+  let owesRun = false;
+  let owesSlottedView = false;
+  const repairedParts = spineParts.map((raw) => {
+    if (typeof raw !== "object" || raw === null) return raw;
+    const part = raw as Record<string, unknown>;
+    if (part.kind !== "tool_call") return raw;
+    const id = typeof part.id === "string" ? part.id : null;
+    const owedHere = id === null ? undefined : owedBySlot.get(id);
+    const hasRun = typeof part.runId === "string" && part.runId.length > 0;
+    const runId = hasRun || id === null ? undefined : runIdByCall.get(id);
+    if (runId === undefined && owedHere === undefined) return raw;
+    const next: Record<string, unknown> = { ...part };
+    if (runId !== undefined) {
+      next.runId = runId;
+      owesRun = true;
+    }
+    if (owedHere !== undefined) {
+      const existing = Array.isArray(part.views) ? (part.views as unknown[]) : [];
+      next.views = [...existing, ...owedHere];
+      owesSlottedView = true;
+    }
+    return next;
+  });
+
+  if (!owesViews && !owesRun && !owesSlottedView) return spine;
+  return {
+    ...spine,
+    ...(owesViews ? { dataParts: owedAtTurnLevel } : {}),
+    ...(owesRun || owesSlottedView ? { parts: repairedParts } : {}),
+  };
+}
+
 /**
  * PURE reconstruction of the /chat thread payload from the structured parts —
  * unit-testable without a database (the DB reads live in
  * `reconstructThreadPayload`). Returns null when the thread is PRE-CUTOVER.
  *
- * EXCLUSION + FAITHFUL CONTENT (codex-converged): the /chat message content
- * lives EXCLUSIVELY in the LEGACY-MIRROR projection turns (deterministic
- * `legacy:` ids, run_id NULL, non-NULL `content`). Runtime-native turns (bare
- * UUID, run_id set) are a DIFFERENT representation and are NEVER mixed into the
- * reconstruction. A thread is readable iff it has >=1 such turn; a content-less
- * shadow or an empty thread reconstructs to null (404 / absent-from-list). Each
- * surviving turn's `content` IS the full persisted message object (PR1 EXPAND:
- * `parse(content)` deep-equals `payload.messages[i]`); `turns` MUST already be in
- * `ordinal` order (the caller's query orders by it), so `messages` is a faithful,
- * lossless, correctly-ordered reconstruction.
+ * THE SPINE: the LEGACY-MIRROR projection turns (deterministic `legacy:` ids,
+ * run_id NULL, non-NULL `content`). A thread is readable iff it has >=1 such
+ * turn; a content-less shadow or an empty thread reconstructs to null (404 /
+ * absent-from-list) — unchanged, so the read and the list agree exactly as
+ * before. Each surviving turn's `content` IS the full persisted message object
+ * (PR1 EXPAND: `parse(content)` deep-equals `payload.messages[i]`); `turns` MUST
+ * already be in `ordinal` order (the caller's query orders by it), so `messages`
+ * is a faithful, lossless, correctly-ordered reconstruction.
+ *
+ * ─── THE LIFECYCLE FOLD-IN (cinatra#2823, epic #2784 S9j) ────────────────────
+ *
+ * The spine is written by the client's whole-transcript save, which is
+ * BEST-EFFORT AND SILENT. So the spine can be missing the newest assistant turn,
+ * and until this fold-in the server's OWN record of that turn — the run-bound
+ * `assistant-turn-v1` row the stream route writes from the sink — was read by
+ * nothing. That is why a lifecycle card could be present in the live render and
+ * absent after a reload: not a renderer defect, a reconstruction that would not
+ * look at the one writer that cannot lose the turn.
+ *
+ * The fold-in is deliberately NARROW, and each narrowing is load-bearing:
+ *
+ *   * ONLY run-bound turns whose projection carries LIFECYCLE RENDER STATE — a
+ *     renderable view, or a run pinned on a tool call — participate. A thread
+ *     with no lifecycle card reconstructs BYTE-IDENTICALLY to before, so this
+ *     cannot change the shape of an existing transcript.
+ *   * A turn the spine ALREADY CARRIES is repaired, never duplicated. The two
+ *     writers share no key — the mirror row's id is built from the CLIENT's
+ *     message id and the run-bound row's is the turn's — but they do share the
+ *     SERVER-minted tool-call ids, which reach the client on the wire. A spine
+ *     message sharing a tool-call id with a durable turn is that turn PROVIDED
+ *     it corroborates the claim: the spine side of that id is content the client
+ *     wrote, so an AMBIGUOUS match (two claimants) or a CONTRADICTORY one (a
+ *     different run pinned on the shared call, disjoint view refs) is refused
+ *     rather than repaired — see `findCoveringSpineIndex`, which also states the
+ *     trust boundary that remains. A corroborated match adds only what the save
+ *     dropped (the views, the pinned run) and touches nothing else. The shared
+ *     key is read from EVERY shape the projection produces: the ordered `parts`
+ *     trace, the Slack-mode `thoughtGroups` that stand in for it, and — for a
+ *     turn that records no call at all — the card's own `viewType|ref`
+ *     (`claimsDurableTurn`). A projection that cannot be matched is a turn that
+ *     duplicates on every reload even when its save landed perfectly.
+ *   * A turn the spine does NOT carry is folded in POSITIONALLY, by the server's
+ *     `created_at` measured against the spine's own row timestamps. The tail
+ *     would be right only if the spine were always a PREFIX of the conversation,
+ *     and nothing enforces that: the whole-transcript save is last-writer-wins,
+ *     so a stale tab can post a transcript that omits a middle turn while
+ *     carrying later ones — and the mirror reconcile deletes the omitted row.
+ *     Placing by server time is the real position in that case and the same
+ *     position as the tail in the ordinary one (`insertionIndexByServerTime`).
+ *   * When two run-bound rows carry ONE turn's state, exactly one is elected —
+ *     the LATEST, as the newest server record — never whichever the loop reached
+ *     first (`foldDurableLifecycleTurnsInto`, pass 2).
+ *
+ * THE BOUND, stated: this repairs what the SERVER wrote down. A turn whose
+ * run-bound row was never written (a run that died before its terminal) is not
+ * recoverable here and is not claimed to be.
  *
  * The durable thread-level render-state scalars (`activeAssistantHandle`,
  * `taggedAssistantUserIds`, `slackMode`) are read back DIRECTLY from the persisted
@@ -1624,7 +2624,10 @@ export function assembleThreadPayloadFromParts(
   );
   if (contentTurns.length === 0) return null; // pre-cutover: no durable /chat content
 
-  const messages = contentTurns.map((t) => t.content as Record<string, unknown>);
+  // The spine ROWS, not just their content: the fold-in places a turn the spine
+  // does not carry against the spine's own `created_at` stamps, which live on
+  // the rows (`UiMessage` carries no timestamp of its own).
+  const messages = foldDurableLifecycleTurnsInto(contentTurns, turns);
 
   const payload: Record<string, unknown> = {
     // Durable render-state scalars, reconstructed directly; modeled fields below
@@ -1651,12 +2654,15 @@ export function assembleThreadPayloadFromParts(
  * Reconstruct the full /chat thread payload for a thread from the STRUCTURED
  * store (cinatra#1037 P5.6 PR2 CUTOVER) — the authoritative read source
  * replacing the legacy `chat_threads.payload`. Reads the thread row (incl. the
- * durable `scalars`), the legacy-mirror content turns ORDERED BY `ordinal` (then
- * created_at/id for pre-PR2 rows without an ordinal), and the structured pause
- * set — ALL in ONE `REPEATABLE READ` transaction so the assembled payload is a
- * single consistent snapshot (never metadata/turns/pause from different
- * concurrent revisions; codex convergence). Returns null when the thread is
- * absent OR pre-cutover (content-less) — callers 404 / exclude.
+ * durable `scalars`), the content turns of BOTH representations — the
+ * legacy-mirror spine ORDERED BY `ordinal` (then created_at/id for pre-PR2 rows
+ * without an ordinal) and the run-bound durable turns the stream route writes
+ * (cinatra#2823 S9j) — and the structured pause set, ALL in ONE `REPEATABLE READ`
+ * transaction so the assembled payload is a single consistent snapshot (never
+ * metadata/turns/pause from different concurrent revisions; codex convergence).
+ * Returns null when the thread is absent OR pre-cutover (content-less) — callers
+ * 404 / exclude. Which run-bound turns reach the transcript, and where, is
+ * `assembleThreadPayloadFromParts`'s narrow fold-in rule.
  */
 export function reconstructThreadPayload(threadId: string): Record<string, unknown> | null {
   ensurePostgresSchema();
@@ -1675,12 +2681,72 @@ export function reconstructThreadPayload(threadId: string): Record<string, unkno
         values: [threadId],
       },
       {
-        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status, content, created_at, updated_at
+        // BOTH representations, in ONE snapshot (cinatra#2823 S9j): the
+        // legacy-mirror spine AND the run-bound durable turns the stream route
+        // wrote. The assembler is what keeps them apart and decides which of the
+        // run-bound rows is folded in — reading them in a second query would put
+        // the two halves in different revisions, which is the exact thing this
+        // REPEATABLE READ transaction exists to prevent.
+        //
+        // ORDERING serves the spine, which is what it always did: mirror rows
+        // carry an `ordinal` and MUST come back in it. Run-bound rows have none,
+        // so `NULLS LAST` puts them after the spine and the assembler re-sorts
+        // them by `created_at` itself; the spine's own order is untouched.
+        //
+        // SUPERSEDED ROWS ARE NOT READ (cinatra#2823). A run-bound
+        // turn the user deliberately removed — by editing and resending, or
+        // regenerating — is tombstoned by the truncating save itself, in that
+        // save's own transaction (`buildSupersedeRunBoundTurnsQuery`). The row
+        // stays, because it is also the resume/authorization anchor; it simply
+        // stops being a turn the transcript folds back in. THIS is the only
+        // reader that filters on it.
+        // BOUNDED IN SQL, both ways (cinatra#2823). Widening
+        // the read to the run-bound rows meant every thread read shipped every
+        // historical raw tool RESULT the sink ever captured — the durable
+        // `tool_result` part keeps the full payload for faithful reconstruction
+        // after Redis loss, and a long thread's worth of those is megabytes the
+        // assembler then discards. Two bounds, each mirroring exactly what the
+        // JS side would have done with the rows:
+        //
+        //   * ROWS. Only a run-bound row that actually carries lifecycle render
+        //     state is selected, which is the same predicate
+        //     `carriesLifecycleRenderState` applies — for this format the ONLY
+        //     source of a renderable view or a pinned run is a non-empty
+        //     `dataParts` (a run pin is an `agent_run` DATA_PART), so a row
+        //     without one could never have participated in the fold-in.
+        //   * COLUMNS. The raw `result` is stripped from the run-bound rows that
+        //     DO come back. `projectDurableAssistantTurn` reads a tool_result's
+        //     `id`/`resultLabel`/`serverLabel` and never its `result`, and these
+        //     rows reach nothing but that projection. The SPINE's content is
+        //     never touched — those rows must round-trip losslessly.
+        text: `SELECT id, thread_id, run_id, assistant_user_id, role, status,
+                      CASE
+                        WHEN run_id IS NULL THEN content
+                        WHEN jsonb_typeof(content->'parts') <> 'array' THEN content
+                        ELSE jsonb_set(content, '{parts}', (
+                          SELECT COALESCE(
+                                   jsonb_agg(
+                                     CASE WHEN jsonb_typeof(e.part) = 'object' THEN e.part - 'result' ELSE e.part END
+                                     ORDER BY e.ord
+                                   ),
+                                   '[]'::jsonb)
+                            FROM jsonb_array_elements(content->'parts') WITH ORDINALITY AS e(part, ord)
+                        ))
+                      END AS content,
+                      created_at, updated_at
                FROM "${schema}"."assistant_turns"
                WHERE thread_id = $1
                  AND content IS NOT NULL
-                 AND run_id IS NULL
-                 AND id LIKE '${prefix}%'
+                 AND (
+                   (run_id IS NULL AND id LIKE '${prefix}%')
+                   OR (
+                     run_id IS NOT NULL
+                     AND superseded_at IS NULL
+                     AND content->>'format' = '${DURABLE_ASSISTANT_TURN_FORMAT}'
+                     AND jsonb_typeof(content->'dataParts') = 'array'
+                     AND jsonb_array_length(content->'dataParts') > 0
+                   )
+                 )
                ORDER BY ordinal NULLS LAST, created_at, id`,
         values: [threadId],
       },

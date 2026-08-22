@@ -4,7 +4,7 @@
     "packages/agents/src/mcp/handlers.ts": 6237,
     "src/lib/drizzle-store.ts": 4438,
     "packages/agents/src/store.ts": 4268,
-    "packages/chat/src/chat-page.tsx": 1238,
+    "packages/chat/src/chat-page.tsx": 1175,
     "packages/skills/src/skills-store.ts": 2833,
     "packages/mcp-server/src/index.tsx": 1967,
     "src/lib/background-jobs.ts": 908,
