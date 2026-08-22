@@ -93,6 +93,12 @@ export const HOST_COMPOSITION_SOURCES: Readonly<
   ]),
   page_gate_region: Object.freeze([
     "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+    // The review page's VERIFICATION region declares its own provider inside
+    // the component the page composes (cinatra#2789, S9e), so the page file
+    // alone no longer sees every owner this host mounts. A host source list
+    // that stops at the route file would read the audit card's gate-region
+    // cell as absent and call the loss a regression.
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
   ]),
 });
 
@@ -192,9 +198,11 @@ export type HostParityRatchetRow = {
  * The two shell kinds reach the conversation hosts and nothing else — no run-card
  * or gate-region composition mounts them, so those cells are not targets.
  *
- * `recommendation_hold` is the mirror image: it is composed on the run card
- * today, and its two conversation cells are owed by named slices — the chat
- * thread by S9b (#2786) and the widget by S9f (#2790), which is also why this
+ * `recommendation_hold` is the mirror image: it is composed on the run card,
+ * and it now draws on the chat thread too — S9b (#2786) landed that mount, so
+ * the chat_thread cell moved from `owed` to `hosts` and is RECORDED as a
+ * `transcript` observation, read off the shared column rendering a held
+ * dispatch turn. The widget cell stays owed by S9f (#2790), which is why this
  * slice consumes the widget row as an observation rather than asserting a card
  * that no branch has landed.
  */
@@ -211,7 +219,18 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
     owed: Object.freeze([]),
   },
   verification_summary: {
-    hosts: Object.freeze({ chat_thread: "transcript", site_widget: "transcript" }),
+    // S9e (cinatra#2789) draws the audit card once and mounts it on all four
+    // hosts: the shared column carries it on both conversation hosts from a
+    // transcript, the run screen composes it per verification record the run
+    // carries, and the review page composes it in its gate region. Recording
+    // only the two conversation cells would leave the two composition cells
+    // growing silently, which `host-unratcheted` refuses by design.
+    hosts: Object.freeze({
+      chat_thread: "transcript",
+      site_widget: "transcript",
+      run_card: "composition",
+      page_gate_region: "composition",
+    }),
     owed: Object.freeze([]),
   },
   trigger_schedule_proposal: {
@@ -219,9 +238,8 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
     owed: Object.freeze([]),
   },
   recommendation_hold: {
-    hosts: Object.freeze({ run_card: "composition" }),
+    hosts: Object.freeze({ chat_thread: "transcript", run_card: "composition" }),
     owed: Object.freeze([
-      { host: "chat_thread" as LifecycleCardHost, tracking: "cinatra#2786 (S9b)" },
       { host: "site_widget" as LifecycleCardHost, tracking: "cinatra#2790 (S9f)" },
     ]),
   },

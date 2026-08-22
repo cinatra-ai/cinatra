@@ -76,6 +76,18 @@ export default defineConfig({
         root,
         "packages/agents/src/review-gate-card.tsx",
       ),
+      // The §V recommendation card — the message list mounts it on the
+      // `chat_thread` host, so it must resolve here exactly as tsconfig maps it.
+      "@cinatra-ai/agents/run-recommendation-card": path.join(
+        root,
+        "packages/agents/src/run-recommendation-chip-row.tsx",
+      ),
+      // cinatra#2789 — §VII's ONE audit renderer, dispatched by the registry
+      // under test. Subpath alias, so it stays above the bare-package entry.
+      "@cinatra-ai/agents/verification-summary-card": path.join(
+        root,
+        "packages/agents/src/verification-summary-card.tsx",
+      ),
       // cinatra#2683 — the conversation column mounts the REAL message list in
       // a DOM test, so the leaves that list reaches must resolve here as they do
       // in tsconfig.json. Subpath keys, so they stay above the bare entry.

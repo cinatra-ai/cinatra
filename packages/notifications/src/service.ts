@@ -588,17 +588,40 @@ export function deleteHoldNotificationForUser(args: {
   host.ensurePostgresSchema();
   host.runPostgresQueriesSync({
     connectionString: host.getPostgresConnectionString(),
-    queries: [
-      {
-        text: `DELETE FROM ${schemaQualified("notifications")}
+    queries: [buildDeleteHoldNotificationQuery(args)],
+  });
+  return true;
+}
+
+/**
+ * cinatra#2882 — the ONE definition of the hold-scoped delete statement, shared
+ * by the synchronous bridge caller above and the async seam
+ * `deleteHoldNotificationForUserAsync` below.
+ *
+ * The narrowing that #2835 exists for lives HERE and only here: the park-id test on
+ * the row's own metadata is what stops a retried clear from deleting a
+ * DIFFERENT, still-live wait that has since taken the run's per-run key. Two
+ * drivers must never drift into a wider predicate than the other, and keeping
+ * one builder is what makes that structural rather than a convention.
+ * `schemaQualified()` is read at CALL time (the schema comes from the host
+ * adapter, which the real-database suites repoint), which is why this is a
+ * function and not a template constant.
+ *
+ * INTERNAL: the two drivers either side of it are what callers use; it is
+ * deliberately NOT re-exported from the `/server` barrel.
+ */
+function buildDeleteHoldNotificationQuery(args: {
+  userId: string;
+  dedupeKey: string;
+  holdParkId: string;
+}): { text: string; values: unknown[] } {
+  return {
+    text: `DELETE FROM ${schemaQualified("notifications")}
           WHERE user_id = $1
             AND dedupe_key = $2
             AND metadata -> 'runAwaitingHuman' ->> 'holdParkId' = $3`,
-        values: [args.userId, args.dedupeKey, args.holdParkId],
-      },
-    ],
-  });
-  return true;
+    values: [args.userId, args.dedupeKey, args.holdParkId],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -747,14 +770,179 @@ export function deleteNotificationsByDedupeKeyForUser(args: {
   host.ensurePostgresSchema();
   host.runPostgresQueriesSync({
     connectionString: host.getPostgresConnectionString(),
-    queries: [
-      {
-        text: `DELETE FROM ${schemaQualified("notifications")}
-          WHERE user_id = $1 AND dedupe_key = $2`,
-        values: [args.userId, args.dedupeKey],
-      },
-    ],
+    queries: [buildDeleteNotificationsByDedupeKeyQuery(args)],
   });
+}
+
+/**
+ * cinatra#2882 — the ONE definition of the keyed-delete statement, shared by
+ * the synchronous bridge caller above and the async seam
+ * `deleteNotificationsByDedupeKeyForUserAsync` below.
+ *
+ * The guard semantics live here and only here: the statement is scoped to the
+ * exact `(user_id, dedupe_key)` pair, so neither driver can ever touch an
+ * unrelated notification, and neither can drift from the other into a wider
+ * or narrower predicate. `schemaQualified()` is read at CALL time (the schema
+ * comes from the host adapter, which the real-database suites repoint), which
+ * is why this is a function and not a template constant.
+ *
+ * INTERNAL: the two drivers that sit either side of it are what callers use;
+ * it is deliberately NOT re-exported from the `/server` barrel.
+ */
+function buildDeleteNotificationsByDedupeKeyQuery(args: {
+  userId: string;
+  dedupeKey: string;
+}): { text: string; values: unknown[] } {
+  return {
+    text: `DELETE FROM ${schemaQualified("notifications")}
+          WHERE user_id = $1 AND dedupe_key = $2`,
+    values: [args.userId, args.dedupeKey],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#2882 — THE ASYNC SEAM.
+//
+// Everything above reaches Postgres through the host's `runPostgresQueriesSync`
+// adapter, which is the synchronous bridge: a worker thread plus `Atomics.wait`
+// on the MAIN thread until the worker answers or the 30s
+// `POSTGRES_SYNC_TIMEOUT_MS` ceiling fires. For the whole of that wait no timer,
+// no abort listener and no microtask runs anywhere in the process, and no
+// `AbortSignal` can reach it — un-abortable by construction, not by omission
+// (the finding PR #2875 had to design around).
+//
+// Every production caller of the notification CLEAR is `async` already. This
+// section gives them the same statement over the host's ASYNC adapter
+// (`runPostgresQueriesAsync` -> `@/lib/postgres-async` -> the shared pool), so
+// they stop paying for a freeze they never needed.
+//
+// SCOPE, on purpose: a seam, not a fork. It holds async variants of the
+// specific functions whose production callers have an `await` to give, and each
+// drives the SAME statement builder its synchronous twin drives — which is why
+// it lives HERE, immediately below that builder, rather than in a module of its
+// own. Nothing above is deprecated and nothing above is rewritten: genuinely
+// synchronous hosts keep every one of them.
+//
+// THE CALLER TABLE. Every production caller of a synchronous notification
+// DELETE, counted across the tree, and what it reaches now. Keep it exhaustive:
+// a new caller belongs in this table, and if its enclosing function is `async`
+// it belongs on the async side of it.
+//
+//   src/lib/agent-run-wait-notifications.ts
+//     onAutoGateResolved              async  -> ...ByDedupeKeyForUserAsync
+//     onLeaveHumanWait                async  -> ...ByDedupeKeyForUserAsync
+//     onHumanWaitFailed               async  -> ...ByDedupeKeyForUserAsync
+//     onClearRecommendationHold       async  -> deleteHoldNotificationForUserAsync
+//   src/lib/agent-configuration-needs-notifications.ts
+//     syncAgentConfigurationNeedsNotifications
+//                                     async  -> ...ByDedupeKeyForUserAsync
+//
+// Five, and five is all of them: NO production module calls a synchronous
+// notification delete. What still references the sync twins is the package
+// export itself (kept — genuinely synchronous hosts have no `await` to give)
+// and the integration suite that drives BOTH twins to prove they leave the same
+// store state.
+//
+// The fourth row arrived with #2838 (the run-start recommendation HOLD, whose
+// clear is park-scoped rather than key-scoped) and was migrated in the same
+// merge that took #2838 in, which is the only way the count above stays honest.
+//
+// (It was a separate `./service-async` module until round 1 of #2884. That
+// module was reachable from four ratcheted routes through the `/server` barrel
+// and cost each of them one module of first-party graph pressure for code that
+// already had to import this file. See the route-graph-ratchet baseline.)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the host's async query runner, or fail loudly.
+ *
+ * Deliberately does NOT fall back to `runPostgresQueriesSync`. A silent
+ * fallback would put the `Atomics.wait` freeze back under a name that promises
+ * it is gone, and the callers of this seam swallow their errors by design
+ * (a notification write can never fail the status transition it follows) — so
+ * the regression would be invisible in exactly the place it matters. A named
+ * throw is caught by that same handler and logged, which is loud enough to
+ * find and honest about what happened.
+ */
+function requireAsyncRunner() {
+  const host = getNotificationsHostAdapters();
+  const runAsync = host.runPostgresQueriesAsync;
+  if (!runAsync) {
+    throw new Error(
+      "notifications host adapters do not supply runPostgresQueriesAsync — " +
+        "the async notification seam requires it. Wire it in " +
+        "src/lib/notifications-host.ts (or in the adapter this test registers); " +
+        "it is NOT silently backed by the synchronous Atomics.wait bridge.",
+    );
+  }
+  return { host, runAsync };
+}
+
+/**
+ * Async twin of `deleteNotificationsByDedupeKeyForUser` (cinatra#2882).
+ *
+ * Same statement, same guard, same idempotence, same early return on a missing
+ * id — the two differ ONLY in which host adapter carries the query. The
+ * hard-delete rationale is unchanged and documented on the synchronous twin:
+ * these rows are ephemeral state-of-the-world entries whose meaning expires
+ * the moment the underlying condition resolves, and deleting (rather than
+ * marking read) frees the `(user_id, dedupe_key)` slot so a later re-gating
+ * inserts a fresh UNREAD row instead of colliding with a stale read one.
+ *
+ * `ensurePostgresSchema()` is still called and is still synchronous. That is
+ * NOT a hidden freeze: it short-circuits on a `globalThis` flag / process-local
+ * done-marker after the one cold init per process (see
+ * `src/lib/postgres-schema-init.ts`), so in steady state it touches no
+ * database at all. Dropping it here would have been a real behaviour change —
+ * the very first caller in a process would query a schema nobody had created.
+ */
+export async function deleteNotificationsByDedupeKeyForUserAsync(args: {
+  userId: string;
+  dedupeKey: string;
+}): Promise<void> {
+  if (!args.userId || !args.dedupeKey) return;
+  const { host, runAsync } = requireAsyncRunner();
+  host.ensurePostgresSchema();
+  await runAsync({
+    connectionString: host.getPostgresConnectionString(),
+    queries: [buildDeleteNotificationsByDedupeKeyQuery(args)],
+  });
+}
+
+/**
+ * Async twin of `deleteHoldNotificationForUser` (cinatra#2882, for the caller
+ * cinatra#2838 added).
+ *
+ * Same statement, same park-id narrowing, same idempotence, same early return
+ * on a missing id — the two differ ONLY in which host adapter carries the
+ * query. The narrowing's rationale is unchanged and documented on the
+ * synchronous twin: a hold's clear can be retried by a sweep long after the
+ * fact, so it must name its OWN row rather than whatever currently occupies the
+ * run's per-run key.
+ *
+ * THE BOOLEAN KEEPS ITS EXACT MEANING, which is the whole reason this is a
+ * migration and not a rewrite. `true` is "the statement COMMITTED", not "a row
+ * matched" — the sweeper reads it as an ack, and "no row to delete" discharges
+ * the obligation just as much as "row deleted" does. Here that means the
+ * `return true` sits AFTER the `await`, so a rejected query propagates to the
+ * caller (which turns it into `false` and leaves the park its obligation)
+ * instead of acking a delete that never ran. Resolving `true` early would hand
+ * the sweeper an ack for an in-flight statement, and the retry that failure is
+ * supposed to earn would be lost.
+ */
+export async function deleteHoldNotificationForUserAsync(args: {
+  userId: string;
+  dedupeKey: string;
+  holdParkId: string;
+}): Promise<boolean> {
+  if (!args.userId || !args.dedupeKey || !args.holdParkId) return false;
+  const { host, runAsync } = requireAsyncRunner();
+  host.ensurePostgresSchema();
+  await runAsync({
+    connectionString: host.getPostgresConnectionString(),
+    queries: [buildDeleteHoldNotificationQuery(args)],
+  });
+  return true;
 }
 
 export function markAllNotificationsReadForUser(userId: string): void {

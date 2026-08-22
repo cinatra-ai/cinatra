@@ -30,6 +30,7 @@ const hasRunRecommendationSkip = vi.fn();
 const readRunCoOwners = vi.fn();
 const enforceRunAccess = vi.fn();
 const writeRunRejectedRecommendations = vi.fn();
+const writeRunRecommendationSkip = vi.fn();
 const publishRecommendationHoldResume = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
@@ -44,6 +45,7 @@ vi.mock("@/lib/run-selected-skill-revisions", async (importOriginal) => ({
   readRunRejectedRecommendations: (...a: unknown[]) => readRunRejectedRecommendations(...a),
   hasRunRecommendationSkip: (...a: unknown[]) => hasRunRecommendationSkip(...a),
   writeRunRejectedRecommendations: (...a: unknown[]) => writeRunRejectedRecommendations(...a),
+  writeRunRecommendationSkip: (...a: unknown[]) => writeRunRecommendationSkip(...a),
   SKIP_RECOMMENDATION_SOURCE: "user_skipped",
 }));
 vi.mock("../store", () => ({
@@ -59,6 +61,10 @@ vi.mock("../auth-policy", async (importOriginal) => ({
   enforceRunAccess: (...a: unknown[]) => enforceRunAccess(...a),
 }));
 vi.mock("../recommendation-hold", () => ({
+  RECOMMENDATION_DECISION_REFUSAL: "This run's skill selection cannot be decided from here.",
+  RECOMMENDATION_SKIP_NOT_RECORDED:
+    "your skip was not recorded — the run is still waiting, please retry",
+  RECOMMENDATION_SKIP_NOT_RECORDED_CODE: "recommendation_skip_not_recorded",
   decodeRecommendationHoldRef: () => null,
   encodeRecommendationHoldRef: () => "ref-park-1",
   readRecommendationParkForRun: (...a: unknown[]) => readRecommendationParkForRun(...a),
@@ -137,6 +143,9 @@ beforeEach(() => {
   readRunSelectedSkillRevisions.mockReturnValue([]);
   readRunRejectedRecommendations.mockReturnValue([]);
   hasRunRecommendationSkip.mockReturnValue(false);
+  // The run-level skip marker writer VERIFIES its write and returns whether the
+  // marker read back (cinatra#2794); the happy path is "it landed".
+  writeRunRecommendationSkip.mockReturnValue(true);
   readRunCoOwners.mockResolvedValue([]);
   enforceRunAccess.mockResolvedValue(undefined);
 });

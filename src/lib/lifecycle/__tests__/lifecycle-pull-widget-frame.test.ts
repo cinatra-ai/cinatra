@@ -33,6 +33,9 @@ vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
   enforceReviewRunAccess: (...args: unknown[]) => enforceReviewRunAccess(...args),
   readReviewGateState: (...args: unknown[]) => readReviewGateState(...args),
   readReviewGate: (...args: unknown[]) => readReviewGate(...args),
+  // §VII's advisory comments ride the verification body (epic S9, slice S9e).
+  // The reading is what this suite is about, so the comments are stubbed empty.
+  readAdvisoryCommentsForGates: async () => [],
 }));
 
 vi.mock("@cinatra-ai/agents/lifecycle-verification-read-store", () => ({

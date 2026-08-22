@@ -53,6 +53,12 @@ import { AppRouteLink } from "./app-route-link";
 import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
+// The ONE §V renderer, reached by its own SUBPATH rather than the client
+// barrel: the barrel drags the whole agents client graph into every consumer
+// (and into every test that mounts this list), while this leaf is all the
+// transcript needs. Same reason `lifecycle-card-runtime` and `review-gate-card`
+// are subpaths.
+import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -270,6 +276,50 @@ function OrderedPartsSection({
         if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
           return (
             <div key={`agent-run-${part.runId}`} data-transcript-slot={idx}>
+              {/* THE §V RECOMMENDATION HOLD, ON THE chat_thread HOST.
+                  A chat-started run can PARK on the run-start recommendation
+                  hold, and the decision belongs where the person is: in the
+                  conversation. This mounts the ONE §V renderer
+                  (`RecommendationHoldCard`, which composes the chip row) keyed
+                  by the server-produced `agent_run` tool-result runId, under
+                  the outer `chat_thread` LifecycleCardSurfaceProvider this view
+                  already declares. It resolves through the card's own
+                  cookie-bound state action.
+
+                  AT ITS PRODUCING SLOT, like every other kind (S9i, #2827).
+                  §V's carriage is an INTERRUPT rather than a DATA_PART, so its
+                  producing step is the `agent_run` dispatch itself — this very
+                  container, which now carries the slot mark S9i introduced. The
+                  card therefore satisfies the same positional rule as the
+                  slotted views below it without going through the wire: same
+                  container, same `data-transcript-slot`, drawn once.
+
+                  A SIBLING of the inline run panel, never a child of it:
+                  nesting these would put one card inside another host's subtree
+                  and make "which host drew it" unanswerable.
+
+                  AND THE ONLY ONE IN THE TURN. The panel mounts this same card
+                  on its own `run_card` host, so a sibling that also drew it
+                  would show the person two cards for one run. The panel now
+                  reads the ambient host and withholds its copy inside a
+                  `chat_thread` — the chat card owns this run's recommendation
+                  here, in EVERY state, and the run page's own panel keeps its
+                  copy because no chat host is in scope there.
+
+                  NOT a DATA_PART and NOT registered in `renderable-views`: a
+                  registry entry would create a second dispatch path for the
+                  same interaction and would reach the shared widget transcript,
+                  which this host is not authorized to decide on. That is also
+                  why it cannot arrive in `slottedViews` below and cannot be
+                  drawn twice by the two mounts S9i partitions.
+
+                  Mounted for every `agent_run` part rather than gated on the
+                  tool result's status, exactly as the run panel mounts it: the
+                  card self-gates (no live hold ⇒ it renders nothing), which is
+                  also what makes it survive a transcript reload and what lets
+                  it settle IN PLACE into its confirmed/skipped summary after a
+                  decision instead of disappearing. */}
+              <RecommendationHoldCard runId={part.runId} wireRef={null} />
               <InlineAgentRunCard
                 runId={part.runId}
                 onActiveGateChange={onActiveGateChange}

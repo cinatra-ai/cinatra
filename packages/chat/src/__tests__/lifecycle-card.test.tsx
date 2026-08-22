@@ -65,8 +65,12 @@ const VERIFICATION_BODY = {
   outcome: "verified",
   reviewedRevisionId: "rev-base",
   repairedRevisionId: "rev-fixed",
-  scopePaths: ["content.title"],
-  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+  fieldDiff: [{ field: "content.title", before: "old", after: "new", inScope: true }],
+  // §VII's advisory comments (epic S9, slice S9e). The field is REQUIRED, not
+  // optional: a body that omits it cannot be told apart from one whose producer
+  // dropped the reading's provenance, so the parse refuses it and the card
+  // draws nothing at all.
+  advisoryComments: [{ authorKind: "service", body: "Core analysis of 1 disclosed field(s)." }],
 };
 
 function mockResolve(state: LifecycleCardState) {
@@ -327,6 +331,12 @@ describe("the resolved states (§IV)", () => {
   });
 
   it("draws the verification summary as advisory (§VII — no floor)", async () => {
+    // The SHELL's own `advisory` rung, exercised by mounting the shell
+    // DIRECTLY. Since S9e (#2789) the registry routes `verification_summary` to
+    // the drawn `VerificationSummaryCard` instead — that dispatch is pinned in
+    // its own case below, and the §VII drawing has its own suite in the agents
+    // package. What stays true here is the shell's state ladder, which every
+    // kind still on the shell depends on.
     mockResolve({ state: "advisory" });
     const { container } = render(
       <LifecycleCardSurfaceProvider host="chat_thread">
@@ -356,6 +366,28 @@ describe("registry dispatch", () => {
         container.querySelector('[data-lifecycle-card="artifact_review_gate"]'),
       ).not.toBeNull(),
     );
+  });
+
+  it("routes `verification_summary` to the DRAWN §VII card, not the S1 shell", async () => {
+    // S9e (#2789) swapped this registry line the way S2 swapped the review one.
+    // The payload is identical to the shell case above; only the registry entry
+    // decides which component draws, so this is the whole content of "the S1
+    // shell is retired for this kind".
+    mockResolve({ state: "advisory" });
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <RenderableViewCard data={{ ...REVIEW_VIEW, viewType: "verification_summary" }} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="verification-card"]'),
+      ).not.toBeNull(),
+    );
+    // The §VII core, not the shell's one-line summary.
+    expect(container.querySelector('[data-verification-chrome="Core analysis"]')).not.toBeNull();
+    expect(container.querySelector('[data-verification-field-diff]')).not.toBeNull();
+    expect(screen.queryByText("Advisory reading.")).toBeNull();
   });
 
   it("a lifecycle payload carrying CONTENT falls back rather than rendering it", () => {

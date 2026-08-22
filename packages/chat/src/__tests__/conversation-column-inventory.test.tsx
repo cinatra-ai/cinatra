@@ -78,6 +78,19 @@ const SERVER = vi.hoisted(() => ({
   undoChangeSetId: "cs-2683",
 }));
 
+// The message list now mounts the §V recommendation card directly, and that
+// card statically imports its cookie-bound server actions. Replaced here for
+// the same reason the pending-call and undo actions above are: they reach a
+// database, and none of them is part of what this file measures. Any test that
+// mounts the conversation column needs these two.
+vi.mock("../../../agents/src/run-recommendation-actions", () => ({
+  getRunRecommendationHoldStateAction: async () => ({ state: "none" }),
+  confirmRunRecommendationAction: async () => ({ ok: true }),
+  skipRunRecommendationAction: async () => ({ ok: true }),
+}));
+vi.mock("../../../agents/src/server-actions", () => ({
+  getRunRecommendedSkillsAction: async () => [],
+}));
 vi.mock("../pending-call-actions", () => ({
   listPendingToolConfirmations: async () => ({ rows: SERVER.pendingRows }),
   decidePendingToolCall: async () => ({ ok: true }),
