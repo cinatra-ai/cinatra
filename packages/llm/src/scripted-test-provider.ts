@@ -778,7 +778,10 @@ const SCRIPTED_SCHEMA_MAX_DEPTH = 6;
  * model's own words.
  *
  * This is NOT a JSON-Schema implementation, and callers must not read it as
- * one. EXACTLY these keywords are honored:
+ * one. EXACTLY these keywords are honored, checked IN THIS ORDER — the first
+ * that applies wins, so a node carrying both `enum` and `const` answers with
+ * the enum's first member, not the const: the depth cap, then `enum`, then
+ * `const`, then the union keywords, then `type`:
  *
  *  - `const` — the pinned value (it is the only conforming one);
  *  - `enum` — the FIRST member;
