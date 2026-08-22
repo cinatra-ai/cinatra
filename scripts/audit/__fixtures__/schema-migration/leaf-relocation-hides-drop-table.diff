@@ -7,7 +7,7 @@ index 185899567..0a8865b75 100644
  import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-thread-schema"; // + cinatra#2240 per-turn skill-delivery record (same pure-strings leaf as its FK parent)
  import { triggerSchemaQueries } from "@/lib/trigger-schema"; // cinatra#2569 — the trigger lifecycle's DDL leaf
 +import { outputDerivationSchemaQueries } from "@/lib/output-derivation-schema"; // cinatra#1893 — the derivation outbox DDL leaf
- import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 — the two NET-NEW proposal tables, born in their leaf
+ import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 (+#2837) — the three NET-NEW proposal tables, born in their leaf
  import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
  import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 @@ -1351,34 +1352,10 @@ END $$`,
