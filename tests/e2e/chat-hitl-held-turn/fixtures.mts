@@ -24,6 +24,16 @@
 // `restore` puts each one back and then RE-READS to prove it. The Playwright
 // `restore` teardown project runs `restore` after the suite, passing or failing.
 //
+// AND IT NEVER REMOVES OR CLEARS WHAT IT DID NOT WRITE. The restore does not
+// replay a snapshot and does not act on "the snapshot said there was no row": it
+// compares the LIVE state against what this fixture itself wrote and reverts only
+// that. The placeholder key's sealed bytes are read back at write time, so the
+// restore can tell its own placeholder from a REAL key stored during the run, and
+// the row this fixture created from one a developer edited afterwards. A key that
+// is not the placeholder is never cleared; a row that is not exactly the one this
+// fixture created is never deleted; an MCP origin changed during the run is left
+// where it is. See `state-rules.ts` for the rules, which are unit-covered.
+//
 // PUT BACK EXACTLY WHAT WAS CHANGED, AND CLAIM EXACTLY THAT. The promise is
 // "everything I changed, I put back" — NOT "nothing on this instance moved while
 // the suite ran". Both halves of the restore are held to the narrower sentence:
@@ -71,6 +81,7 @@ import {
 import {
   deleteMetadataValueInternal,
   readRawOpenAIConnectionRow,
+  writeSealedOpenAIConnectionRow,
 } from "../../../src/lib/database-metadata";
 import {
   OPENAI_CONNECTION_METADATA_KEY,
@@ -100,6 +111,15 @@ import {
   HELD_TURN_SKILL_ID,
   HELD_TURN_FIXTURE_ACTOR,
 } from "./constants";
+import {
+  SNAPSHOT_SKIPPED_VERDICT,
+  connectionRevertPlan,
+  currentRunToken,
+  mcpRevertPlan,
+  mintRunToken,
+  sealedSecretFingerprint,
+  snapshotClaim,
+} from "./state-rules";
 
 const MODE = process.argv[2] ?? "apply";
 if (MODE !== "apply" && MODE !== "restore") {
@@ -118,15 +138,36 @@ const SNAPSHOT_PATH = fileURLToPath(new URL("./.auth/instance-state.snapshot.jso
 type NonSecretRow = Omit<StoredOpenAIConnectionRow, "apiKey">;
 
 interface InstanceSnapshot {
+  /**
+   * WHICH RUN WROTE THIS FILE — see `state-rules.ts`. A teardown consumes only a
+   * snapshot carrying its own token, so a run refused by the account claim cannot
+   * restore from, or delete, the snapshot of the run that holds it.
+   */
+  runToken: string | null;
   /** The row's non-secret fields, or `null` when the row did not exist at all. */
   openAIConnection: NonSecretRow | null;
   /** Whether a key was already stored — the reason the row is left alone. */
   openAIKeyWasStored: boolean;
   /** Whether `apply` wrote the connection row (so `restore` must put it back). */
   openAIConnectionWritten: boolean;
+  /**
+   * WHAT THIS FIXTURE ACTUALLY LEFT BEHIND, read back immediately AFTER its own
+   * write, so the restore compares the live row against the fixture's own bytes
+   * rather than against a snapshot of somebody else's earlier state.
+   *
+   * `openAIKeyFingerprint` is a sha256 of the SEALED blob exactly as stored.
+   * Nothing is decrypted to compute it, and the only value it is ever computed
+   * over is this file's own published placeholder — so it carries no credential
+   * material, and it is the one thing that can tell "my placeholder is still
+   * there" from "a real key was stored during the run".
+   */
+  openAIKeyFingerprint: string | null;
+  openAIConnectionAfterWrite: NonSecretRow | null;
   mcpPublicBaseUrl: string | null;
   mcpPublicBaseUrlSource: McpPublicBaseUrlSource;
   mcpWritten: boolean;
+  /** The origin pair read back immediately AFTER this fixture wrote it. */
+  mcpAfterWrite: { publicBaseUrl: string | null; publicBaseUrlSource: McpPublicBaseUrlSource } | null;
   /**
    * Whether the assignment row was ALREADY there before this fixture ran — read
    * before the insert, not derived from it. Recording the insert's own outcome
@@ -168,15 +209,25 @@ interface InstanceSnapshot {
  */
 const MCP_CONNECTOR_ID = MCP_PUBLIC_BASE_URL_METADATA_KEY.replace(/^connector_config:/, "");
 
-function readNonSecretConnection(): { fields: NonSecretRow | null; keyStored: boolean } {
-  // RAW, never unsealed: this file has no business decrypting the operator's key,
-  // and the snapshot has no business holding it.
+/**
+ * The row as this file is allowed to see it: the non-secret fields, whether a key
+ * is stored, and a FINGERPRINT of the sealed key.
+ *
+ * RAW, never unsealed: this file has no business decrypting the operator's key,
+ * and the snapshot has no business holding it. The fingerprint hashes the sealed
+ * blob verbatim, so it identifies the stored value without carrying it.
+ */
+function readNonSecretConnection(): {
+  fields: NonSecretRow | null;
+  keyStored: boolean;
+  keyFingerprint: string | null;
+} {
   const raw = readRawOpenAIConnectionRow();
-  if (!raw) return { fields: null, keyStored: false };
+  if (!raw) return { fields: null, keyStored: false, keyFingerprint: null };
   const { apiKey, ...nonSecret } = raw;
   const keyStored =
     typeof apiKey === "string" ? apiKey.length > 0 : apiKey !== undefined && apiKey !== null;
-  return { fields: nonSecret, keyStored };
+  return { fields: nonSecret, keyStored, keyFingerprint: sealedSecretFingerprint(apiKey) };
 }
 
 /**
@@ -214,12 +265,16 @@ if (MODE === "apply") {
   const mcpWritten = beforeMcp.publicBaseUrl !== BASE;
   const assignedBefore = await readAssignedSkillsForAgentPackage(HELD_TURN_AGENT_PACKAGE);
   const snapshot: InstanceSnapshot = {
+    runToken: currentRunToken() ?? mintRunToken(),
     openAIConnection: before.fields,
     openAIKeyWasStored: before.keyStored,
     openAIConnectionWritten: !before.keyStored,
+    openAIKeyFingerprint: null,
+    openAIConnectionAfterWrite: null,
     mcpPublicBaseUrl: beforeMcp.publicBaseUrl,
     mcpPublicBaseUrlSource: beforeMcp.publicBaseUrlSource,
     mcpWritten,
+    mcpAfterWrite: null,
     assignedSkillExistedBefore: assignedBefore.some((row) => row.skillId === HELD_TURN_SKILL_ID),
     assignedSkillInsert: "not_attempted",
   };
@@ -243,12 +298,31 @@ if (MODE === "apply") {
       ...asConnection(before.fields),
       apiKey: "sk-not-a-real-key-chat-hitl-s9k",
     });
+    // READ BACK WHAT WAS JUST WRITTEN, and record it. This is what makes the
+    // restore able to compare the LIVE row against THIS FIXTURE'S OWN bytes: the
+    // sealed placeholder's fingerprint says whether the key stored at teardown is
+    // still the one written here, and the non-secret fields say whether the row is
+    // still untouched since. Without it the restore could only replay a snapshot,
+    // which is how it came to delete a developer's connection and clear a real key.
+    const afterWrite = readNonSecretConnection();
+    snapshot.openAIKeyFingerprint = afterWrite.keyFingerprint;
+    snapshot.openAIConnectionAfterWrite = afterWrite.fields;
+    writeFileSync(SNAPSHOT_PATH, `${JSON.stringify(snapshot, null, 2)}\n`);
     console.log("[fixture] openai_connection presence placeholder written (no real key)");
   }
 
   // (2) The MCP public base URL — an origin-only value on the connector-config row.
   if (mcpWritten) {
     setMcpPublicBaseUrl(BASE);
+    // Same discipline: the pair as it reads immediately after this write is what
+    // the restore compares against, so an origin somebody changed mid-run is
+    // recognizable and left alone.
+    const afterMcpWrite = getMcpPublicBaseUrl();
+    snapshot.mcpAfterWrite = {
+      publicBaseUrl: afterMcpWrite.publicBaseUrl,
+      publicBaseUrlSource: afterMcpWrite.publicBaseUrlSource,
+    };
+    writeFileSync(SNAPSHOT_PATH, `${JSON.stringify(snapshot, null, 2)}\n`);
     console.log(
       `[fixture] mcp public base url = ${BASE} (was ${beforeMcp.publicBaseUrl ?? "unset"})`,
     );
@@ -289,6 +363,9 @@ if (MODE === "apply") {
 // RESTORE — and PROVE it, by reading the state back.
 // ---------------------------------------------------------------------------
 
+/** The stored key changed under the restore's own compare-and-swap. Not an error. */
+class PlaceholderReplaced extends Error {}
+
 if (MODE === "restore") {
   let snapshot: InstanceSnapshot | null = null;
   try {
@@ -306,45 +383,128 @@ if (MODE === "restore") {
           `undo them: ${String(err)}`,
       );
     }
-    console.log("[fixture] no snapshot — nothing was changed, nothing to restore");
-    console.log("restore verified");
+    console.log("[fixture] no snapshot — nothing was recorded, so this teardown changed nothing");
+    console.log(`restore ${SNAPSHOT_SKIPPED_VERDICT}`);
+  }
+
+  // A SNAPSHOT THIS RUN DID NOT WRITE IS UNTOUCHABLE — no restore, and above all
+  // no `rmSync`. It is the live record of another run's instance state.
+  if (snapshot && snapshotClaim(snapshot.runToken, currentRunToken()) === "foreign") {
+    console.log(
+      `[fixture] the snapshot at ${SNAPSHOT_PATH} was written by another run (token ` +
+        `${JSON.stringify(snapshot.runToken)}, this run ${JSON.stringify(currentRunToken())}) — ` +
+        "it is left exactly as it is, and this teardown changed nothing",
+    );
+    console.log(`restore ${SNAPSHOT_SKIPPED_VERDICT}`);
+    snapshot = null;
   }
 
   if (snapshot) {
-    // (1) The connection row.
-    if (snapshot.openAIConnectionWritten) {
-      if (snapshot.openAIConnection === null) {
-        // A factory-reset row is NOT the same state as no row: `readOpenAIConnection`
-        // answers `null` for the second and a defaults object for the first, and the
-        // instance this suite ran on had the second. So the row this fixture created
-        // is removed, through the shipped metadata writer.
+    // (1) THE CONNECTION ROW — reverted only where the LIVE row is still this
+    //     fixture's own write, never on the strength of the snapshot alone.
+    //
+    //     `connectionRevertPlan` (`state-rules.ts`, unit-covered) decides, from
+    //     the fingerprint of the sealed key recorded straight after `apply`'s
+    //     write and the fingerprint of what is stored now:
+    //
+    //       leave        — the stored key is NOT this fixture's placeholder any
+    //                      more (a real key was added during the run), or there is
+    //                      nothing stored at all. Touch nothing. This is the arm
+    //                      that used to CLEAR a developer's real key.
+    //       delete-row   — the placeholder is still stored AND the row's
+    //                      non-secret fields still read exactly as this fixture
+    //                      left them, so the row present now is the row this
+    //                      fixture created. Remove it, through the shipped
+    //                      metadata writer. A factory-reset row is not the same
+    //                      state as no row, so clearing would not restore it.
+    //                      This is the arm that used to fire unconditionally and
+    //                      delete a connection the developer created mid-run.
+    //       clear-secret — the placeholder is still stored but the row is not
+    //                      solely this fixture's (it pre-existed, or somebody
+    //                      edited its non-secret fields during the run). Only the
+    //                      placeholder goes; every concurrent edit is carried
+    //                      forward by re-reading the row LIVE.
+    //
+    //     HONEST LIMIT, unchanged: `clear-secret` is a read-then-write, not the
+    //     store's own atomic read-modify-write (`mutateOpenAIConnection` is not
+    //     exported), so a write landing inside that window is still lost. The
+    //     window is milliseconds wide instead of the whole suite.
+    const liveConnection = readNonSecretConnection();
+    let connectionPlan = connectionRevertPlan({
+      fixtureWroteConnection: snapshot.openAIConnectionWritten,
+      rowExistedBefore: snapshot.openAIConnection !== null,
+      fixtureKeyFingerprint: snapshot.openAIKeyFingerprint,
+      liveKeyFingerprint: liveConnection.keyFingerprint,
+      fixtureWroteNonSecret: snapshot.openAIConnectionAfterWrite,
+      liveNonSecret: liveConnection.fields,
+    });
+    if (connectionPlan === "delete-row") {
+      // RE-VERIFIED IMMEDIATELY BEFORE THE REMOVAL, so the window between the
+      // decision and the act is one statement wide.
+      //
+      // HONEST LIMIT, and the reason it is a limit rather than a race closed:
+      // there is no CONDITIONAL delete on the metadata row. The store exports a
+      // compare-and-swap for WRITES (which is what makes the clear below atomic)
+      // and an unconditional delete, so "remove this row only while it is still
+      // byte-equal to what I read" is not expressible without widening a
+      // production surface for a test. A row created inside this window is still
+      // removed; the window is two adjacent synchronous statements rather than
+      // the whole suite.
+      const stillOurs = readNonSecretConnection();
+      if (
+        connectionRevertPlan({
+          fixtureWroteConnection: snapshot.openAIConnectionWritten,
+          rowExistedBefore: snapshot.openAIConnection !== null,
+          fixtureKeyFingerprint: snapshot.openAIKeyFingerprint,
+          liveKeyFingerprint: stillOurs.keyFingerprint,
+          fixtureWroteNonSecret: snapshot.openAIConnectionAfterWrite,
+          liveNonSecret: stillOurs.fields,
+        }) === "delete-row"
+      ) {
         deleteMetadataValueInternal(OPENAI_CONNECTION_METADATA_KEY);
       } else {
-        // PUT BACK THE ONE FIELD THIS FIXTURE CHANGED, NOT THE WHOLE ROW.
-        //
-        // `apply` wrote the placeholder OVER the row's own non-secret fields
-        // (`{...asConnection(before.fields), apiKey}`), so `apiKey` is the only
-        // field it touched. Writing the SNAPSHOTTED row back would therefore
-        // erase any non-secret edit made while the suite ran — the developer
-        // switching the configured model, the connector stamping
-        // `lastValidatedAt` or refreshing `availableModels` — and it would do so
-        // under a passing "restore verified", which is worse than not restoring
-        // at all.
-        //
-        // So the row is re-read LIVE and written back with the secret cleared:
-        // every concurrent non-secret change is carried forward, and only the
-        // placeholder key goes. `clearSecret` is only ever reached when NO key was
-        // stored before, so nothing else can be lost.
-        //
-        // HONEST LIMIT: this is a read-then-write, not the store's own atomic
-        // read-modify-write (`mutateOpenAIConnection` is not exported), so a write
-        // landing inside this window is still lost. That window is milliseconds
-        // wide instead of the whole suite, which is the improvement available
-        // without widening a production module's surface for a test.
-        writeOpenAIConnection(asConnection(readNonSecretConnection().fields), {
-          clearSecret: true,
-        });
+        console.log(
+          "[fixture] openai_connection: the row changed between the check and the removal. " +
+            "LEFT UNTOUCHED, and not asserted.",
+        );
+        connectionPlan = "leave";
       }
+    } else if (connectionPlan === "clear-secret") {
+      // ATOMIC, not read-then-write. `writeSealedOpenAIConnectionRow` is the
+      // shipped writer `writeOpenAIConnection` itself delegates to, and given an
+      // UPDATER it re-derives the payload inside each merge-and-swap attempt and
+      // swaps only while the stored row is still byte-equal to the one the
+      // updater just inspected. So the fingerprint is re-checked INSIDE the swap:
+      // a real key stored between the plan above and this write makes the updater
+      // throw, and nothing is written at all. That is the race the previous
+      // read-then-write documented as an honest limit; it is now closed, without
+      // widening any production surface (this writer is already exported for the
+      // store's own mutations).
+      try {
+        writeSealedOpenAIConnectionRow((current) => {
+          if (sealedSecretFingerprint(current?.apiKey) !== snapshot!.openAIKeyFingerprint) {
+            throw new PlaceholderReplaced();
+          }
+          // The secret is dropped from the payload rather than carried: this file
+          // never holds key material, and `preserveExistingSecret: false` is what
+          // clears the stored blob.
+          const nonSecret = { ...(current ?? {}) } as Partial<StoredOpenAIConnectionRow>;
+          delete nonSecret.apiKey;
+          return asConnection(nonSecret as NonSecretRow);
+        }, { preserveExistingSecret: false });
+      } catch (err) {
+        if (!(err instanceof PlaceholderReplaced)) throw err;
+        console.log(
+          "[fixture] openai_connection: a key was stored between the check and the write, so " +
+            "the clear was ABANDONED inside the swap. LEFT UNTOUCHED, and not asserted.",
+        );
+        connectionPlan = "leave";
+      }
+    } else if (snapshot.openAIConnectionWritten) {
+      console.log(
+        "[fixture] openai_connection: what is stored now is not the placeholder this fixture " +
+          "wrote — a key or a row somebody else put there. LEFT UNTOUCHED, and not asserted.",
+      );
     }
 
     // (2) The MCP public base URL — VALUE AND PROVENANCE.
@@ -357,19 +517,65 @@ if (MODE === "restore") {
     //     row read live, so every sibling field stays where it is and the source is
     //     put back as it was. The snapshot holds no part of that row but the origin
     //     and its source, both non-secret.
-    if (snapshot.mcpWritten) {
-      const currentRow = readConnectorConfigFromDatabase<Record<string, unknown>>(
-        MCP_CONNECTOR_ID,
-        {},
-      );
+    //
+    //     AND ONLY WHILE THE ROW STILL HOLDS WHAT THIS FIXTURE WROTE. An origin
+    //     changed during the run belongs to whoever changed it; putting the
+    //     snapshot back over it would be this teardown undoing somebody else's
+    //     write under a passing verdict.
+    const liveMcpBeforeRestore = getMcpPublicBaseUrl();
+    let mcpPlan = mcpRevertPlan({
+      mcpWritten: snapshot.mcpWritten,
+      fixtureWrote: snapshot.mcpAfterWrite,
+      live: liveMcpBeforeRestore,
+    });
+    if (mcpPlan === "restore") {
       const restoredSource =
         snapshot.mcpPublicBaseUrlSource === "tailscale-auto" ||
         snapshot.mcpPublicBaseUrlSource === "tailscale-funnel"
           ? { source: snapshot.mcpPublicBaseUrlSource }
           : undefined;
-      writeConnectorConfigToDatabase(
-        MCP_CONNECTOR_ID,
-        buildMcpPublicBaseUrlRow(currentRow, snapshot.mcpPublicBaseUrl, restoredSource),
+      // RE-CHECK, THEN READ THE ROW, THEN WRITE — in that order, and nothing in
+      // between. The sibling fields the restored row carries forward come from a
+      // read taken AFTER the re-check, so a concurrent edit to any of them is
+      // either seen and carried forward or lands after this write; an earlier
+      // draft read the row before the re-check and would have replayed a stale
+      // copy of those fields over it.
+      //
+      // HONEST LIMIT: `writeConnectorConfigToDatabase` is the shipped writer and
+      // it is not a compare-and-swap. The store DOES export raw-read plus
+      // conditional-swap primitives, but they bypass this writer's own sealing
+      // and connector-config cache eviction, so reaching for them here would
+      // trade a millisecond-wide window for a stale cache and a second sealing
+      // implementation. An origin changed inside the remaining window is still
+      // overwritten.
+      if (
+        mcpRevertPlan({
+          mcpWritten: snapshot.mcpWritten,
+          fixtureWrote: snapshot.mcpAfterWrite,
+          live: getMcpPublicBaseUrl(),
+        }) === "restore"
+      ) {
+        const currentRow = readConnectorConfigFromDatabase<Record<string, unknown>>(
+          MCP_CONNECTOR_ID,
+          {},
+        );
+        writeConnectorConfigToDatabase(
+          MCP_CONNECTOR_ID,
+          buildMcpPublicBaseUrlRow(currentRow, snapshot.mcpPublicBaseUrl, restoredSource),
+        );
+      } else {
+        console.log(
+          "[fixture] mcp public base url: the origin changed between the check and the write. " +
+            "LEFT UNTOUCHED, and not asserted.",
+        );
+        mcpPlan = "leave";
+      }
+    } else if (snapshot.mcpWritten) {
+      console.log(
+        "[fixture] mcp public base url: the origin stored now is not the one this fixture " +
+          `wrote (${JSON.stringify(liveMcpBeforeRestore.publicBaseUrl)}, source ` +
+          `${liveMcpBeforeRestore.publicBaseUrlSource}) — somebody changed it during the run. ` +
+          "LEFT UNTOUCHED, and not asserted.",
       );
     }
 
@@ -380,12 +586,27 @@ if (MODE === "restore") {
       !snapshot.assignedSkillExistedBefore &&
       (snapshot.assignedSkillInsert === "assigned" ||
         snapshot.assignedSkillInsert === "pending");
-    if (fixtureOwnsAssignment) {
+    //     AND ONLY WHILE THE ROW PRESENT NOW IS STILL THIS FIXTURE'S. The delete
+    //     is keyed on (package, skill), so a row somebody removed and re-created
+    //     during the run would answer to it too; `created_by` is what tells them
+    //     apart, and it is this fixture's own actor constant.
+    const liveAssignment = (
+      await readAssignedSkillsForAgentPackage(HELD_TURN_AGENT_PACKAGE)
+    ).find((row) => row.skillId === HELD_TURN_SKILL_ID);
+    const removeAssignment =
+      fixtureOwnsAssignment && liveAssignment?.createdBy === HELD_TURN_FIXTURE_ACTOR;
+    if (removeAssignment) {
       const removed = await deleteAssignedSkill({
         agentPackageName: HELD_TURN_AGENT_PACKAGE,
         skillId: HELD_TURN_SKILL_ID,
       });
       console.log(`[fixture] assigned skill removed: ${removed.deleted}`);
+    } else if (fixtureOwnsAssignment) {
+      console.log(
+        `[fixture] assigned skill ${HELD_TURN_SKILL_ID}: the row present now was created by ` +
+          `${JSON.stringify(liveAssignment?.createdBy ?? null)}, not by this fixture. LEFT ` +
+          "UNTOUCHED, and not asserted.",
+      );
     }
 
     // (4) READ IT BACK. A teardown that only calls the writers proves the calls
@@ -405,29 +626,35 @@ if (MODE === "restore") {
     const afterMcp = getMcpPublicBaseUrl();
     const afterAssigned = await readAssignedSkillsForAgentPackage(HELD_TURN_AGENT_PACKAGE);
     const mismatches: string[] = [];
-    if (snapshot.openAIConnectionWritten) {
-      if (snapshot.openAIConnection === null) {
-        // The fixture created the WHOLE row, so the whole row must be gone — a
-        // factory-reset row is a different state to every reader.
-        if (after.fields !== null) {
-          mismatches.push(
-            "openai_connection: the row this fixture created is still present, read " +
-              `${JSON.stringify(after.fields)}`,
-          );
-        }
-      } else if (after.keyStored !== snapshot.openAIKeyWasStored) {
-        // The row pre-existed and the fixture added exactly one field: the
-        // placeholder key. That is the one thing asserted. The non-secret fields
-        // are deliberately NOT compared — the restore above carried whatever they
-        // now hold forward rather than overwriting them, so a snapshot comparison
-        // here would fail precisely when the restore did the right thing.
+    // EVERY CLAIM IS SCOPED TO WHAT THE RESTORE ACTUALLY DID. Each half asserts
+    // the outcome of the PLAN it took, and the `leave` arms assert nothing at all —
+    // this teardown made no change there, so it has nothing to vouch for, and an
+    // assertion would red on somebody else's write rather than on anything this
+    // suite did.
+    if (connectionPlan === "delete-row") {
+      // The fixture created the WHOLE row, and it was still exactly that row, so
+      // the whole row must be gone — a factory-reset row is a different state to
+      // every reader.
+      if (after.fields !== null) {
+        mismatches.push(
+          "openai_connection: the row this fixture created is still present, read " +
+            `${JSON.stringify(after.fields)}`,
+        );
+      }
+    } else if (connectionPlan === "clear-secret") {
+      // The one field this fixture added was the placeholder key. That is the one
+      // thing asserted. The non-secret fields are deliberately NOT compared — the
+      // restore carried whatever they now hold forward rather than overwriting
+      // them, so a snapshot comparison here would fail precisely when the restore
+      // did the right thing.
+      if (after.keyStored !== snapshot.openAIKeyWasStored) {
         mismatches.push(
           `openai_connection stored key presence: expected ${snapshot.openAIKeyWasStored}, ` +
             `read ${after.keyStored} (the placeholder key this fixture wrote was not dropped)`,
         );
       }
     }
-    if (snapshot.mcpWritten) {
+    if (mcpPlan === "restore") {
       if (afterMcp.publicBaseUrl !== snapshot.mcpPublicBaseUrl) {
         mismatches.push(
           `mcp publicBaseUrl: expected ${snapshot.mcpPublicBaseUrl ?? "unset"}, ` +
@@ -441,12 +668,12 @@ if (MODE === "restore") {
         );
       }
     }
-    // A row this fixture owns must be GONE. A row it does not own gets no claim at
+    // A row this fixture removed must be GONE. A row it left alone gets no claim at
     // all: this teardown neither created nor removed it, and asserting a value for
     // somebody else's row would red on their concurrent write rather than on
     // anything this suite did.
     const assignedNow = afterAssigned.some((row) => row.skillId === HELD_TURN_SKILL_ID);
-    if (fixtureOwnsAssignment && assignedNow) {
+    if (removeAssignment && assignedNow) {
       mismatches.push(
         `agent_assigned_skills for ${HELD_TURN_AGENT_PACKAGE}: ${HELD_TURN_SKILL_ID} is still ` +
           "assigned although this fixture created it",
@@ -461,9 +688,25 @@ if (MODE === "restore") {
 
     console.log(
       `[fixture] restored: openai_connection=${
-        snapshot.openAIConnectionWritten ? "put back" : "never changed"
-      }, mcp=${snapshot.mcpWritten ? "put back" : "never changed"}, assignment=${
-        fixtureOwnsAssignment ? "removed" : "not this fixture's, kept"
+        snapshot.openAIConnectionWritten
+          ? connectionPlan === "delete-row"
+            ? "row removed"
+            : connectionPlan === "clear-secret"
+              ? "placeholder key cleared"
+              : "not this fixture's any more, left untouched"
+          : "never changed"
+      }, mcp=${
+        snapshot.mcpWritten
+          ? mcpPlan === "restore"
+            ? "put back"
+            : "changed during the run, left untouched"
+          : "never changed"
+      }, assignment=${
+        removeAssignment
+          ? "removed"
+          : fixtureOwnsAssignment
+            ? "not this fixture's any more, kept"
+            : "not this fixture's, kept"
       }`,
     );
     rmSync(SNAPSHOT_PATH, { force: true });

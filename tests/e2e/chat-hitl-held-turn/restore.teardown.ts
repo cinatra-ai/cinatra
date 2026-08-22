@@ -34,6 +34,39 @@ import { execFileSync } from "node:child_process";
 import { test as teardown, expect } from "@playwright/test";
 
 import { restoreAccountState } from "./account-state";
+import { SNAPSHOT_SKIPPED_VERDICT } from "./state-rules";
+
+/**
+ * A teardown reports ONE of two things, and never nothing.
+ *
+ *   verified — it restored what it changed and read the result back.
+ *   skipped  — there was no snapshot of ITS OWN to restore from, so it changed
+ *              nothing. A run refused by the account claim lands here, and lands
+ *              here WITHOUT having touched the state of the run that holds the
+ *              claim: the snapshot is stamped with a run token and a teardown
+ *              consumes only its own (`state-rules.ts`).
+ *
+ * The distinction is the whole point. `verified` used to be printed for both, so
+ * the refused run tore the live run's account down and the live run's own teardown
+ * then vouched for a restore that had already been consumed out from under it.
+ */
+function expectVerdict(output: string, half: string, marker: string): void {
+  const verified = output.includes(`${marker}verified`);
+  const skipped = output.includes(`${marker}${SNAPSHOT_SKIPPED_VERDICT}`);
+  // EXACTLY ONE. "At least one" would accept an output carrying both, which is a
+  // teardown that took two paths and cannot mean either of them.
+  expect(
+    verified !== skipped,
+    verified
+      ? `the ${half} teardown printed BOTH a verified verdict and a "${SNAPSHOT_SKIPPED_VERDICT}" ` +
+        "verdict, so neither can be read as its outcome"
+      : `the ${half} teardown printed neither a verified verdict nor an explicit ` +
+        `"${SNAPSHOT_SKIPPED_VERDICT}" — it may have changed state it cannot vouch for`,
+  ).toBe(true);
+  if (skipped) {
+    console.log(`[S9k teardown] ${half}: ${SNAPSHOT_SKIPPED_VERDICT} — nothing was changed`);
+  }
+}
 
 teardown("restore the instance configuration and the account grants", async ({ baseURL }) => {
   const origin = baseURL ?? "http://localhost:3000";
@@ -77,12 +110,6 @@ teardown("restore the instance configuration and the account grants", async ({ b
 
   if (failures.length > 0) throw new Error(failures.join("\n\n"));
 
-  expect(
-    accountOut,
-    "the teardown read the restored account role and membership back and they matched the snapshot",
-  ).toContain("account restore verified");
-  expect(
-    fixtureOut,
-    "the teardown read the restored instance state back and it matched the snapshot",
-  ).toContain("restore verified");
+  expectVerdict(accountOut, "account", "account restore ");
+  expectVerdict(fixtureOut, "instance", "restore ");
 });

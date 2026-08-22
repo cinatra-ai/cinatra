@@ -37,6 +37,19 @@ import { dirname, resolve } from "node:path";
 import { Client } from "pg";
 
 import { DATABASE_URL } from "./probes";
+import {
+  MEMBER_IDENTITY_SQL,
+  SNAPSHOT_SKIPPED_VERDICT,
+  STRIP_ADMIN_ROLE_SQL,
+  currentRunToken,
+  fixtureOwnsMembership,
+  memberIdFor,
+  mintRunToken,
+  roleCarriesAdmin,
+  snapshotClaim,
+} from "./state-rules";
+
+export { memberIdFor, roleCarriesAdmin } from "./state-rules";
 
 /** Beside the storage state, under the suite's own `.auth/`, which `.gitignore` covers. */
 export const ACCOUNT_SNAPSHOT_PATH = resolve(
@@ -45,15 +58,15 @@ export const ACCOUNT_SNAPSHOT_PATH = resolve(
   "account-state.snapshot.json",
 );
 
-/**
- * The membership row id `auth.setup.ts` inserts, derived ONCE here so the setup
- * that creates it and the teardown that removes it can never spell it differently.
- */
-export function memberIdFor(userId: string): string {
-  return `chat-hitl-s9k-member-${userId.slice(0, 8)}`;
-}
-
 export interface AccountSnapshot {
+  /**
+   * WHICH RUN WROTE THIS FILE. Minted once per `playwright test` invocation by the
+   * config's `globalSetup` and inherited by every worker and subprocess, so the
+   * teardown of a run that was REFUSED by the exclusive create above cannot
+   * consume, restore from, or delete the snapshot of the run that holds the claim.
+   * See `state-rules.ts` (`snapshotClaim`).
+   */
+  runToken: string | null;
   userId: string;
   email: string;
   /** The role string EXACTLY as stored before the promotion, `null` included. */
@@ -66,11 +79,21 @@ export interface AccountSnapshot {
   roleChanged: boolean;
   /** Filled in once the agent's owning organization is known. */
   organizationId: string | null;
+  /**
+   * The id this fixture MINTS for a row it creates — never the thing that
+   * identifies the membership. Identity is `(organizationId, userId)`, which is
+   * what `member_org_user_uniq` enforces; this id only lets the teardown refuse to
+   * remove a row bearing an id this fixture could not have written.
+   */
   memberId: string | null;
   /**
-   * Whether the membership row was ALREADY there — read BEFORE the insert, not
-   * derived from it. Deriving it afterwards would leave a window in which a crash
-   * strands a row the teardown believes it never created.
+   * Whether a membership row for `(organizationId, userId)` was ALREADY there —
+   * read BEFORE the insert, against the SAME key the unique index uses, and never
+   * derived from the insert. Reading it against the synthetic id instead answered
+   * a different question from the one the database answers, so an account already
+   * a member under a normally minted id read as "not a member": the insert then
+   * hit the unique violation rather than its do-nothing arm, and the teardown
+   * would have deleted a membership this fixture never created.
    */
   memberExistedBefore: boolean;
   /**
@@ -107,12 +130,6 @@ function persist(snapshot: AccountSnapshot, { claim = false } = {}): void {
 
 function newClient(): Client {
   return new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5_000 });
-}
-
-/** Better Auth comma-splits the role string; the platform-admin check looks for `admin`. */
-function carriesAdmin(role: string | null): boolean {
-  if (!role) return false;
-  return role.split(",").some((part) => part.trim() === "admin");
 }
 
 /** `null` and `""` both mean "no roles"; a restore must not red on the difference. */
@@ -157,10 +174,11 @@ export async function snapshotAccountState(
   if (!r.rowCount) throw new Error(`account-state: no user row to snapshot for ${email}`);
   const role = r.rows[0]!.role;
   const snapshot: AccountSnapshot = {
+    runToken: currentRunToken() ?? mintRunToken(),
     userId,
     email,
     role,
-    roleChanged: !carriesAdmin(role),
+    roleChanged: !roleCarriesAdmin(role),
     organizationId: null,
     memberId: null,
     memberExistedBefore: false,
@@ -176,8 +194,9 @@ export async function snapshotAccountState(
           "put back — either another run is in flight against the same account, or a previous " +
           "run was killed before its teardown. Overwriting it would strand the platform-admin " +
           "role and the owner membership it describes, with nothing left to restore them from. " +
-          "Run the restore teardown, or inspect that file and undo the grants it names, then " +
-          "delete it.",
+          "This run's teardown will NOT consume it — a teardown restores only a snapshot " +
+          "carrying its own run token, so the in-flight run's state is left exactly as it is. " +
+          "Inspect that file, undo the grants it names, then delete it.",
       );
     }
     throw err;
@@ -185,18 +204,26 @@ export async function snapshotAccountState(
   return snapshot;
 }
 
-/** Claim the insert's crash window BEFORE entering it, then persist. */
+/**
+ * Claim the insert's crash window BEFORE entering it, then persist.
+ *
+ * THE PRE-READ ASKS THE QUESTION THE DATABASE ANSWERS. `member_org_user_uniq` is
+ * on `("organizationId", "userId")`, so that pair is what decides whether this
+ * account is already a member — not the id this fixture would mint. The insert
+ * arbitrates on the same pair (`auth.setup.ts`), so the two sides can no longer
+ * disagree about which row is in question.
+ */
 export async function markMemberInsertPending(
   c: Client,
   snapshot: AccountSnapshot,
   organizationId: string,
 ): Promise<void> {
-  const memberId = memberIdFor(snapshot.userId);
-  const existing = await c.query(`SELECT 1 FROM public."member" WHERE id = $1 LIMIT 1`, [
-    memberId,
-  ]);
+  const existing = await c.query(
+    `SELECT id FROM public."member" WHERE ${MEMBER_IDENTITY_SQL} LIMIT 1`,
+    [organizationId, snapshot.userId],
+  );
   snapshot.organizationId = organizationId;
-  snapshot.memberId = memberId;
+  snapshot.memberId = memberIdFor(snapshot.userId, organizationId);
   snapshot.memberExistedBefore = (existing.rowCount ?? 0) > 0;
   snapshot.memberInsert = "pending";
   persist(snapshot);
@@ -211,15 +238,6 @@ export function recordMemberInsert(
   persist(snapshot);
 }
 
-/** Whether the teardown may remove the membership row — see `memberInsert`. */
-function fixtureOwnsMembership(snapshot: AccountSnapshot): boolean {
-  return (
-    !snapshot.memberExistedBefore &&
-    snapshot.memberId !== null &&
-    (snapshot.memberInsert === "inserted" || snapshot.memberInsert === "pending")
-  );
-}
-
 /**
  * PUT THE ACCOUNT BACK, AND PROVE IT.
  *
@@ -229,11 +247,19 @@ function fixtureOwnsMembership(snapshot: AccountSnapshot): boolean {
  * configuration, so `restore.teardown.ts` can assert a verdict rather than an
  * exit code.
  *
- * A MISSING SNAPSHOT IS BENIGN, and only because the snapshot is written before
- * the first mutation: no file means the account was never touched. Any OTHER read
- * or parse failure means a snapshot exists and cannot be read, so the account may
- * still carry the grants with nothing to guide the restore — that fails loudly
- * rather than printing a verdict it did not earn.
+ * A MISSING SNAPSHOT IS NOT A RESTORE, AND IS NEVER REPORTED AS ONE. No file
+ * means nothing was recorded, which is benign only because the snapshot is written
+ * before the first mutation — but "I changed nothing" and "I put back everything I
+ * changed" are different sentences, and printing the verified marker for the first
+ * is how a teardown came to vouch for a restore it never performed. It prints
+ * a `skipped: not this run's snapshot` verdict instead. Any OTHER read or parse failure means a
+ * snapshot exists and cannot be read, so the account may still carry the grants
+ * with nothing to guide the restore — that fails loudly.
+ *
+ * A SNAPSHOT THIS RUN DID NOT WRITE IS UNTOUCHABLE. It records another run's live
+ * grants; restoring from it pulls that run's account out from under it and
+ * deleting it destroys the only record that can put the account back. The run
+ * token decides, and a foreign snapshot yields the same skipped verdict.
  */
 export async function restoreAccountState(): Promise<string> {
   const lines: string[] = [];
@@ -242,12 +268,29 @@ export async function restoreAccountState(): Promise<string> {
     snapshot = JSON.parse(readFileSync(ACCOUNT_SNAPSHOT_PATH, "utf-8")) as AccountSnapshot;
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return "[account] no snapshot — the account was never changed, nothing to restore\naccount restore verified";
+      return (
+        "[account] no snapshot — nothing was recorded, so this teardown changed nothing\n" +
+        `account restore ${SNAPSHOT_SKIPPED_VERDICT}`
+      );
     }
     throw new Error(
       `account-state: the snapshot at ${ACCOUNT_SNAPSHOT_PATH} exists but could not be read — ` +
         "the account may still carry the platform-admin role and the owner membership this " +
         `suite granted, and this teardown cannot undo them: ${String(err)}`,
+    );
+  }
+
+  const claim = snapshotClaim(snapshot.runToken, currentRunToken());
+  if (claim === "foreign") {
+    // NO WRITE, AND NO `rmSync`. The file belongs to the run that holds the
+    // account claim; consuming it here is exactly the false record this gate
+    // exists for.
+    return (
+      `[account] the snapshot at ${ACCOUNT_SNAPSHOT_PATH} was written by another run ` +
+      `(token ${JSON.stringify(snapshot.runToken)}, this run ` +
+      `${JSON.stringify(currentRunToken())}) — it is left exactly as it is, and this ` +
+      "teardown changed nothing\n" +
+      `account restore ${SNAPSHOT_SKIPPED_VERDICT}`
     );
   }
 
@@ -289,26 +332,24 @@ export async function restoreAccountState(): Promise<string> {
       // Kept tokens are returned VERBATIM — `btrim` is used only to compare, so a
       // role somebody else spelled `" editor"` is not silently reformatted.
       // `NULLIF(..., '')` restores the column's own unset state rather than `""`.
-      const updated = await c.query<{ role: string | null }>(
-        `UPDATE public."user"
-            SET role = NULLIF(
-                  array_to_string(
-                    ARRAY(
-                      SELECT t FROM unnest(string_to_array(role, ',')) AS t
-                       WHERE btrim(t) <> 'admin'
-                    ), ','
-                  ), '')
-          WHERE id = $1
-        RETURNING role`,
-        [snapshot.userId],
-      );
+      const updated = await c.query<{ role: string | null }>(STRIP_ADMIN_ROLE_SQL, [
+        snapshot.userId,
+      ]);
       if (updated.rowCount) expectedRole = updated.rows[0]!.role;
     }
 
     // (2) THE MEMBERSHIP, removed ONLY when this fixture is the reason it is
     //     there. Every other state belongs to somebody else.
+    //     KEYED ON THE IDENTITY, and narrowed to the id this fixture MINTS. The
+    //     pair is what the unique index enforces and what the pre-read asked, so
+    //     it is the row in question; the id is the proof that the row present now
+    //     is the one this fixture wrote rather than one a concurrent actor created
+    //     for the same pair inside the crash window.
     if (owns) {
-      await c.query(`DELETE FROM public."member" WHERE id = $1`, [snapshot.memberId]);
+      await c.query(
+        `DELETE FROM public."member" WHERE ${MEMBER_IDENTITY_SQL} AND id = $3`,
+        [snapshot.organizationId, snapshot.userId, snapshot.memberId],
+      );
     }
 
     // (3) READ BOTH BACK. Only the halves the snapshot recorded as CHANGED are
@@ -329,7 +370,7 @@ export async function restoreAccountState(): Promise<string> {
           `public."user".role for ${snapshot.email}: expected ${JSON.stringify(expectedRole)}, ` +
             `read ${JSON.stringify(r.rows[0]!.role)}`,
         );
-      } else if (carriesAdmin(r.rows[0]!.role)) {
+      } else if (roleCarriesAdmin(r.rows[0]!.role)) {
         // The token this suite added must be GONE, whatever else the string now
         // holds. Belt and braces: it catches a promotion that appended `admin`
         // more than once, which the expected-value compare alone would accept.
@@ -340,13 +381,14 @@ export async function restoreAccountState(): Promise<string> {
       }
     }
     if (owns) {
-      const m = await c.query(`SELECT 1 FROM public."member" WHERE id = $1 LIMIT 1`, [
-        snapshot.memberId,
-      ]);
+      const m = await c.query(
+        `SELECT 1 FROM public."member" WHERE ${MEMBER_IDENTITY_SQL} AND id = $3 LIMIT 1`,
+        [snapshot.organizationId, snapshot.userId, snapshot.memberId],
+      );
       if ((m.rowCount ?? 0) > 0) {
         mismatches.push(
-          `public."member" row ${snapshot.memberId} is still present although this fixture ` +
-            "created it",
+          `public."member" row ${snapshot.memberId} for organization ` +
+            `${snapshot.organizationId} is still present although this fixture created it`,
         );
       }
     }

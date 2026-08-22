@@ -38,6 +38,26 @@ const STORAGE_STATE = suitePath("chat-hitl-held-turn", ".auth", "state.json");
 
 export default defineConfig({
   testDir: suitePath("chat-hitl-held-turn"),
+  /**
+   * ONE RUN TOKEN, MINTED BEFORE THE WORKERS EXIST.
+   *
+   * `globalSetup` runs once in the runner process, so the token it puts in the
+   * environment is inherited by the setup worker, the teardown worker and every
+   * fixture subprocess — and is invisible to a concurrent run. The account and
+   * instance snapshots are stamped with it, and each teardown consumes only a
+   * snapshot carrying its own stamp. Without that, a run REFUSED by the exclusive
+   * snapshot create still ran this config's teardown project, which restored from
+   * and then deleted the FIRST run's snapshot while that run was live.
+   */
+  globalSetup: suitePath("chat-hitl-held-turn", "run-token.global-setup.ts"),
+  /**
+   * The suite's unit tier is NOT Playwright's. `__tests__/state-rules.test.ts`
+   * covers the pure decision rules under vitest (it rides `pnpm test:root`), and
+   * its filename matches Playwright's DEFAULT `testMatch`. Every project below
+   * declares its own `testMatch`, so nothing collects it today; stating the ignore
+   * keeps that true if one ever stops.
+   */
+  testIgnore: ["**/__tests__/**"],
   outputDir: repoPath("test-results"),
   // The flow drives two full cold turns end to end. The per-test ceiling has to
   // clear the cold-compile budget the spec documents, or the ceiling fires before

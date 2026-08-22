@@ -109,12 +109,45 @@ afterwards:
   a grant this suite never made;
 - `restore.teardown.ts` attempts **both** halves and asserts **both** verdicts, so a
   teardown that silently failed reds the run;
+- **a teardown restores only ITS OWN run's snapshot.** Each snapshot is stamped with
+  a run token minted once per `playwright test` invocation
+  (`run-token.global-setup.ts`), and a teardown that finds a foreign snapshot — or
+  no snapshot at all — prints `skipped: not this run's snapshot` and changes
+  nothing. It never prints a verified verdict for a restore it did not perform, and
+  it never deletes the other run's snapshot file. Without that stamp, a second run
+  refused by the claim below still tore the FIRST run's account and instance down
+  and consumed its snapshot, after which the first run's own teardown vouched for a
+  restore that had already been taken from it;
 - a snapshot file that is **already there** stops the run before its first write.
   It means an account this suite escalated has not been put back yet: either a run
   is in flight against the same account, or an earlier run was killed before its
   teardown. That file is the only record of the original state, so overwriting it
-  would strand the grants for good. Run the restore, or undo the grants the file
-  names and delete it;
+  would strand the grants for good. Inspect it, undo the grants it names, and
+  delete it — or, for the instance half alone, run
+  `node --conditions=react-server --env-file-if-exists=.env.local --import tsx
+  tests/e2e/chat-hitl-held-turn/fixtures.mts restore` by hand, which is allowed to
+  consume any snapshot precisely because no run token is set in that shell;
+- **nothing is removed or cleared that this fixture did not write.** The restore
+  does not replay the snapshot and does not act on "the snapshot said there was no
+  row": it compares the **live** state against what the fixture itself wrote and
+  reverts only that. The placeholder key's sealed bytes are fingerprinted at write
+  time (a hash of the ciphertext — nothing is decrypted, and the value hashed is
+  this suite's own published placeholder), so a **real key stored during the run is
+  never cleared** and a **connection a developer created during the run is never
+  deleted**. Same rule for the MCP origin pair and the assignment row. The rules
+  live in `state-rules.ts` and are unit-covered by
+  `__tests__/state-rules.test.ts`, which runs in the root vitest tier — no database,
+  no browser, no stack;
+- **the membership is identified by `(organizationId, userId)`**, which is what
+  production's `member_org_user_uniq` enforces, on both the pre-read and the
+  insert's conflict target. The synthetic id is only ever the id this fixture mints
+  for a row it creates, and the delete is narrowed to it so a row a concurrent actor
+  created for the same pair is never removed;
+- **one predicate decides whether the account already carries `admin`.**
+  `roleCarriesAdmin` answers it from the pre-read, and that answer gates the write.
+  The promote and the strip statements are built from a single SQL token expression,
+  so a role spelled `" admin"` can no longer read as absent on one side and present
+  on the other;
 - both halves restore and assert **only what the snapshot recorded as changed**. The
   claim is "everything I changed, I put back", not "nothing on this instance moved
   while the suite ran" — the wider claim would erase a developer's concurrent edit
@@ -125,7 +158,8 @@ afterwards:
   teardown could undo without holding credential material on disk. The snapshot
   carries the row's non-secret fields only, read without decrypting anything;
 - a row this fixture *created* is removed rather than factory-reset, because "no
-  row" and "a default row" are different states to every reader.
+  row" and "a default row" are different states to every reader — but only while it
+  is still, provably, the row this fixture created.
 
 ## The evidence it writes
 

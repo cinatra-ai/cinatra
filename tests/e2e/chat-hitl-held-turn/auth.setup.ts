@@ -32,11 +32,11 @@ import { HELD_TURN_AGENT_PACKAGE } from "./constants";
 import { DATABASE_URL, SCHEMA } from "./probes";
 import {
   markMemberInsertPending,
-  memberIdFor,
   recordMemberInsert,
   snapshotAccountState,
   type AccountSnapshot,
 } from "./account-state";
+import { PROMOTE_ADMIN_ROLE_SQL, memberIdFor } from "./state-rules";
 
 const EMAIL = process.env.E2E_CHAT_HITL_USER_EMAIL ?? "chat-hitl-s9k@local.test";
 const PASSWORD = process.env.E2E_CHAT_HITL_USER_PASSWORD ?? "ChatHitlS9k!2026";
@@ -60,21 +60,20 @@ async function userIdByEmail(c: Client, email: string): Promise<string | null> {
  *
  * THIS IS A PERMANENT PRIVILEGE GRANT, so the string it overwrites is recorded
  * VERBATIM first (`snapshotAccountState`) and put back by the verified teardown.
- * See `account-state.ts` for why the reuse path — an account that already carries
- * `admin` — is left alone on both sides.
+ *
+ * ONE PREDICATE DECIDES, AND IT ALREADY DID. `roleCarriesAdmin` answered "does
+ * this account already carry `admin`?" from the PRE-READ, and `roleChanged` is
+ * that answer — the same answer the restore is gated on. This file no longer
+ * decides it a second time: it writes only when the snapshot says the promotion
+ * changes something. That is what closed the drift, where a role spelled
+ * `" admin"` made the SQL append a duplicate token while the restore recorded the
+ * role as never changed and asserted nothing. The statement's own `EXISTS` arm is
+ * a pure idempotency belt for the window after the pre-read, and it is built from
+ * the SAME token expression the strip uses (`state-rules.ts`).
  */
-async function promoteToPlatformAdmin(c: Client, userId: string): Promise<void> {
-  await c.query(
-    `UPDATE public."user"
-        SET role = CASE
-          WHEN role IS NULL OR btrim(role) = '' THEN 'admin'
-          WHEN ('admin' = ANY (string_to_array(role, ','))
-            OR 'admin' = ANY (regexp_split_to_array(role, '\\s*,\\s*'))) THEN role
-          ELSE role || ',admin'
-        END
-      WHERE id = $1`,
-    [userId],
-  );
+async function promoteToPlatformAdmin(c: Client, snapshot: AccountSnapshot): Promise<void> {
+  if (!snapshot.roleChanged) return;
+  await c.query(PROMOTE_ADMIN_ROLE_SQL, [snapshot.userId]);
 }
 
 /**
@@ -126,10 +125,20 @@ async function orgOwningAgent(
   // `RETURNING id` is what separates "this fixture created the row" from "the
   // conflict arm took it": `ON CONFLICT DO NOTHING` returns no row when the
   // membership was already there, and that row belongs to somebody else.
+  //
+  // THE CONFLICT TARGET IS THE IDENTITY, not the synthetic id. Production enforces
+  // `member_org_user_uniq ON public."member" ("organizationId", "userId")`
+  // (`src/lib/drizzle-store.ts`), so arbitrating on the id asked a question the
+  // database does not answer: an account already a member of this organization
+  // under a normally minted id took the INSERT arm and hit the unique violation,
+  // failing the setup outright. Now the pre-read above and this statement key on
+  // the same pair, so an existing membership takes the do-nothing arm and is
+  // correctly recorded as somebody else's.
   const inserted = await c.query(
     `INSERT INTO public."member" (id, "userId", "organizationId", role, "createdAt")
-       VALUES ($1, $2, $3, 'owner', now()) ON CONFLICT (id) DO NOTHING RETURNING id`,
-    [memberIdFor(userId), userId, orgId],
+       VALUES ($1, $2, $3, 'owner', now())
+       ON CONFLICT ("organizationId", "userId") DO NOTHING RETURNING id`,
+    [memberIdFor(userId, orgId), userId, orgId],
   );
   recordMemberInsert(snapshot, (inserted.rowCount ?? 0) > 0 ? "inserted" : "already_present");
   return orgId;
@@ -157,7 +166,7 @@ setup("create the owner, the org and the instance fixtures", async ({ request, b
     // READ FIRST, WRITE SECOND — persisted before the promotion, so a crash
     // between here and the teardown still leaves the grants undoable.
     const snapshot = await snapshotAccountState(c, userId, EMAIL);
-    await promoteToPlatformAdmin(c, userId);
+    await promoteToPlatformAdmin(c, snapshot);
     orgId = await orgOwningAgent(c, userId, HELD_TURN_AGENT_PACKAGE, snapshot);
   } finally {
     await c.end();
