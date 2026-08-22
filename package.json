@@ -298,6 +298,7 @@
     "build:schema-bootstrap-bundle": "node scripts/build-schema-bootstrap-bundle.mjs",
     "build:exec-service-bundle": "node scripts/build-exec-service-bundle.mjs",
     "test:root": "vitest run --config vitest.config.ts --no-coverage",
+    "test:durable-reload": "vitest run --config vitest.integration-2823.config.ts --no-coverage",
     "test:usage-ledger": "vitest run --config vitest.integration-2578.config.ts",
     "test:unknown-cost": "vitest run --config vitest.integration-2669.config.ts",
     "test:week-window": "vitest run --config vitest.integration-2691.config.ts",
