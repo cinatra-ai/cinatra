@@ -85,8 +85,6 @@
       "@cinatra-ai/agents/pm-link-store": ["./packages/agents/src/pm-link-store.ts"],
       "@cinatra-ai/agents/trigger-store": ["./packages/agents/src/trigger-store.ts"],
       "@cinatra-ai/agents/trigger-schedule-proposal-service": ["./packages/agents/src/trigger-schedule-proposal-service.ts"],
-      "@cinatra-ai/agents/trigger-service": ["./packages/agents/src/trigger-service.ts"],
-      "@cinatra-ai/agents/schedule-proposal-card": ["./packages/agents/src/schedule-proposal-card.tsx"],
       "@cinatra-ai/agents/trigger-schedule-propose": ["./packages/agents/src/trigger-schedule-propose.ts"],
       "@cinatra-ai/agents/trigger-recurrence": ["./packages/agents/src/trigger-recurrence.ts"],
       "@cinatra-ai/agents/auditor-apply": ["./packages/agents/src/auditor-apply.ts"],
