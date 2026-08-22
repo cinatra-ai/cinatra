@@ -462,7 +462,17 @@ describe("the PRODUCTION chat transcript, on a held dispatch turn", () => {
       name: "agent_run",
       result: DURABLE_RESULT,
     });
-    const violations = evaluateHeldTurnProjection(projection, HELD_TURN_ROW);
+    // THE NEGATIVE ARM, ON ITS OWN. The resolver is at its default `none` here,
+    // so the card self-gates to no DOM — a legitimate state, and the one that
+    // isolates what this arm measures: no pointer prose, and no stray anchors
+    // inside a foreign host. `requireMount` is named explicitly because the
+    // POSITIVE arm now defaults ON for this kind (S9b landed the mount and the
+    // obligation row was struck); the mount itself is asserted against the
+    // production view by "the struck row is backed by a card…" below, with the
+    // resolver answering HELD.
+    const violations = evaluateHeldTurnProjection(projection, HELD_TURN_ROW, {
+      requireMount: false,
+    });
     expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
   });
 

@@ -476,10 +476,20 @@ describe("the ratchet goes red in every direction it claims to", () => {
   });
 
   it("a kind with NO conversation cell at all fails the mandatory-host rule", () => {
+    // BOTH halves are stripped, because the rule reads both: a kind satisfies
+    // it by RECORDING the conversation host or by OWING it. Since S9b landed,
+    // `recommendation_hold` records `chat_thread` rather than owing it, so
+    // filtering `owed` alone no longer produces the shape under test. (The
+    // fixture also goes `host-lost`/`host-unratcheted` against the real
+    // observation; the assertion below names the one code this case is about.)
     const stripped = {
       ...LIFECYCLE_HOST_PARITY_RATCHET,
       recommendation_hold: {
-        hosts: LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.hosts,
+        hosts: Object.fromEntries(
+          Object.entries(LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.hosts).filter(
+            ([host]) => host !== MANDATORY_HOST,
+          ),
+        ),
         owed: LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.owed.filter(
           (cell) => cell.host !== MANDATORY_HOST,
         ),
@@ -514,7 +524,10 @@ describe("the ratchet's recorded shape", () => {
   it("serialises every kind with sorted hosts and owed cells", () => {
     const expectations = hostParityExpectations();
     expect(Object.keys(expectations).sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
-    expect(expectations.recommendation_hold.owed).toEqual(["chat_thread", "site_widget"]);
+    // `chat_thread` was struck from this list the day S9b landed the mount; the
+    // cell is recorded in `hosts` instead, and the widget stays owed by S9f.
+    expect(expectations.recommendation_hold.owed).toEqual(["site_widget"]);
+    expect(expectations.recommendation_hold.hosts.chat_thread).toBe("transcript");
     expect(expectations.artifact_review_gate.hosts.page_gate_region).toBe("composition");
   });
 });
