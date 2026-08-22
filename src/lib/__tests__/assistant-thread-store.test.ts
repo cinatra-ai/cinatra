@@ -501,14 +501,25 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
     expect(spineAssistant).toEqual(before);
   });
 
-  it("NEVER overwrites a view the spine already carries", () => {
-    const spineView = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "the-one-on-screen" };
+  it("NEVER re-adds a view the spine already draws at its PRODUCING SLOT", () => {
+    // Exactly the shape the S9i reducer produces for a SLOTTED card
+    // (cinatra#2827): the view is folded onto the tool_call that produced it and
+    // the turn-level `dataParts` key is never created. The absent key is NOT a
+    // dropped save here — it is the normal post-S9i shape — so the fold-in must
+    // not "repair" it into a second, turn-level copy of a card already on screen.
     const spineAssistant = {
       id: "a1",
       role: "assistant",
       content: "here it is",
-      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
-      dataParts: [spineView],
+      parts: [
+        {
+          kind: "tool_call",
+          id: "call-1",
+          name: "artifact_review_gate_render",
+          status: "completed",
+          views: [{ ...REVIEW_VIEW }],
+        },
+      ],
     };
     const payload = assembleThreadPayloadFromParts(
       baseThread,
@@ -519,10 +530,600 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
       [],
       null,
     );
-    expect((payload!.messages as Record<string, unknown>[])[0].dataParts).toEqual([spineView]);
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    // Nothing was owed — the card is already drawn at its slot — so the reader's
+    // own message object comes back untouched, and the transcript draws the card
+    // ONCE (S9i's invariant), at the step that produced it.
+    expect(messages[0]).toBe(spineAssistant);
+    expect(messages[0].dataParts).toBeUndefined();
   });
 
-  it("PINS a run on a spine tool call that lost it, and leaves a pinned one alone", () => {
+  it("restores ONLY the views no slot already draws, when a turn carries both", () => {
+    // Two cards on the durable row; the spine draws one of them at its slot and
+    // lost the other. The unseen one is owed; the seen one is not.
+    const UNSLOTTED_VIEW = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "gate-ref-2" };
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        {
+          kind: "tool_call",
+          id: "call-1",
+          name: "artifact_review_gate_render",
+          status: "completed",
+          views: [{ ...REVIEW_VIEW }],
+        },
+      ],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW, UNSLOTTED_VIEW] }),
+        }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // The slotted one is NOT duplicated into the turn-level list; the lost one is.
+    expect(messages[0].dataParts).toEqual([UNSLOTTED_VIEW]);
+  });
+
+  it("a spine whose SLOTTED cards are all different does not claim the durable turn", () => {
+    // `contradictsDurableTurn` reads the spine's views to catch "this message is
+    // showing a different card entirely". Post-S9i those views can live only at
+    // the slots, and a reader that asked `dataParts` alone would call this spine
+    // SILENT — and silence contradicts nothing, so the run pin below would have
+    // been folded onto a message that is demonstrably another turn.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "a different turn",
+      parts: [
+        {
+          kind: "tool_call",
+          id: "call-1",
+          name: "artifact_review_gate_render",
+          status: "completed",
+          views: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref: "SOME-OTHER-ref" }],
+        },
+      ],
+    };
+    const before = JSON.parse(JSON.stringify(spineAssistant));
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // The contradiction is seen: the durable turn is placed as its OWN message
+    // rather than repairing a spine message that is showing another card.
+    expect(messages).toHaveLength(2);
+    expect(spineAssistant).toEqual(before);
+  });
+
+  // ── the PRODUCING SLOT the reload re-attaches to (round 3, sequencing) ─────
+  // #2879's named follow-up: the live render draws a stamped card INSIDE its
+  // producing step and, until this round, the reload drew it after the turn — a
+  // reloaded card that kept its content and lost its position.
+
+  /** The durable row as the sink writes it once the view was STAMPED. */
+  function slottedDurableTurn(): Record<string, unknown> {
+    return durableTurnContent({ dataParts: [REVIEW_VIEW], dataPartSlots: ["call-1"] });
+  }
+
+  it("folds a SLOTTED durable turn in at its slot, not at turn level", () => {
+    const legacyMsg = { id: "m1", role: "user", content: "hi" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: slottedDurableTurn() }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: legacyMsg }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(2);
+    const assistant = messages[1];
+    expect(assistant.dataParts).toBeUndefined();
+    const call = (assistant.parts as Record<string, unknown>[]).find((p) => p.kind === "tool_call");
+    expect(call!.views).toEqual([REVIEW_VIEW]);
+  });
+
+  it("REPAIRS a dropped card onto the reader's OWN producing part when it has one", () => {
+    // The reader's save landed with the trace but without the card. The card is
+    // owed — and it is owed AT THE STEP, because that is where the reader would
+    // have seen it live. Putting it in the turn-level list would hand back the
+    // content and not the position.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: slottedDurableTurn() }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].dataParts).toBeUndefined();
+    expect((messages[0].parts as Record<string, unknown>[])[0].views).toEqual([REVIEW_VIEW]);
+    // Copy-on-write, as everywhere on this path.
+    expect(spineAssistant.parts[0]).not.toHaveProperty("views");
+  });
+
+  it("repairs a slotted card at TURN LEVEL when the reader's trace lacks that step", () => {
+    // The reader never received the tool round — a Slack-mode turn, or a save
+    // that landed thinner than the server's record. There is no step to draw the
+    // card inside, so it falls back to the turn-level list rather than vanishing.
+    const slackTurn = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      thoughtGroups: [{ id: "main", toolCalls: [{ id: "call-1", name: "x", status: "completed" }] }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: slottedDurableTurn() }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].dataParts).toEqual([REVIEW_VIEW]);
+  });
+
+  it("a PRE-SLOT durable row still folds in at turn level, exactly as before", () => {
+    // Every row written before `dataPartSlots` existed. This is the arm that
+    // says the new placement is opt-in on the writer, not a re-interpretation of
+    // what is already in the table.
+    const legacyMsg = { id: "m1", role: "user", content: "hi" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: legacyMsg }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages[1].dataParts).toEqual([REVIEW_VIEW]);
+    expect((messages[1].parts as Record<string, unknown>[])[1].views).toBeUndefined();
+  });
+
+  it("does NOT re-add a slotted card the reader already draws at that very slot", () => {
+    // The S9i "once, never twice" invariant, now that BOTH sides can slot.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        {
+          kind: "tool_call",
+          id: "call-1",
+          name: "artifact_review_gate_render",
+          status: "completed",
+          views: [{ ...REVIEW_VIEW }],
+        },
+      ],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: slottedDurableTurn() }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toBe(spineAssistant);
+  });
+
+  // ── the SLACK-MODE projection (cinatra#2823) ──────────────────────────────
+  // `projectConversationMessage(state, { slackMode: true })` builds a turn with
+  // NO `parts` — Slack's layout is a whole-turn atomic reveal — while keeping
+  // `dataParts`, because a renderable view is an adjunct like citations. So a
+  // Slack-projected turn saved PERFECTLY carries no `parts` for a tool-call-id
+  // match to read, and before this round it could never be recognised as the
+  // durable turn: the fold-in read it as a save that never happened and folded
+  // the server's copy in beside it. Slack mode engages automatically at two
+  // tagged assistants, so this is the ordinary shape of a multi-assistant
+  // thread, not an edge case.
+
+  /** The turn `projectConversationMessage` builds in Slack mode: content +
+   *  thoughtGroups + citations + dataParts, and deliberately NO `parts`. */
+  function slackProjectedTurn(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      thoughtGroups: [
+        {
+          id: "main",
+          toolCalls: [
+            {
+              id: "call-1",
+              name: "artifact_review_gate_render",
+              status: "completed",
+              resultLabel: "Reviewed",
+              serverLabel: "cinatra",
+            },
+          ],
+        },
+      ],
+      dataParts: [{ ...REVIEW_VIEW }],
+      ...over,
+    };
+  }
+
+  // ── PRE-SLOT (pre-cutover) ROWS: the DISCLOSED consequence ────────────────
+  // `dataPartSlots` is introduced BY this PR, so a durable row written before it
+  // carries no slots and a mirror row written before it folds no card onto a
+  // producing part. Neither side can emit a slot-bound key, so a card-only
+  // legacy mirror row and its pre-slot durable row share NO key and are not
+  // matched. That is not a regression to repair: the standing ruling is NO
+  // backward compatibility for data written before the cutover, and a matcher
+  // that recognised the old shape would be exactly the compat work that ruling
+  // reserves for a separate decision. This test PINS what the ruling costs, so
+  // the cost is a recorded contract rather than a surprise.
+
+  it("a PRE-SLOT card-only mirror row leaves its durable turn VISIBLE, never lost", () => {
+    // The legacy shape at issue: a Slack mirror row carrying only the card —
+    // no `parts` to fold it onto, no `thoughtGroups` to read a call id from —
+    // beside the pre-slot durable row of the same turn (`dataParts`, no
+    // `dataPartSlots`). Under the removed bare-`viewType|ref` fallback these
+    // matched and the transcript came back as ONE message.
+    const preSlotMirror = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      dataParts: [{ ...REVIEW_VIEW }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: preSlotMirror }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // THE DISCLOSED COST: two messages where a post-cutover thread returns one.
+    // The reader sees the turn twice on every reload of a pre-cutover thread.
+    expect(messages).toHaveLength(2);
+    // THE PROPERTY THAT STILL HOLDS, and the reason this is a duplicate rather
+    // than a defect worth compat work: the reader's own message is untouched...
+    expect(messages[0]).toBe(preSlotMirror);
+    // ...and the server's copy is FOLDED IN as a visible row rather than
+    // suppressed. Nothing is silently lost — the failure mode of a WRONG match
+    // (a claimed turn dropped entirely, its card gone) is the one this key
+    // change exists to remove, and it does not happen here.
+    const foldedIn = messages[1];
+    expect(foldedIn).not.toBe(preSlotMirror);
+    expect(foldedIn.role).toBe("assistant");
+    // The card comes back with it, at turn level — the pre-slot row recorded no
+    // slot, so the projection has nowhere else to put it.
+    expect(foldedIn.dataParts).toEqual([REVIEW_VIEW]);
+  });
+
+  it("does NOT duplicate a SLACK-MODE turn whose save SUCCEEDED", () => {
+    // The reviewer's repro: the transcript comes back with THREE messages where
+    // two are right — the user's, the Slack turn that is already drawing the
+    // card, and the server's own copy of the same turn folded in beside it,
+    // carrying the identical `viewType|ref` in the `parts` layout Slack omits.
+    const userMsg = { id: "m1", role: "user", content: "review it" };
+    const slackTurn = slackProjectedTurn();
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: userMsg }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // TWO messages, not three. The save succeeded; there is nothing to repair.
+    expect(messages).toHaveLength(2);
+    // And the reader's own turn comes back reference-identical — nothing was
+    // owed, so nothing was rebuilt.
+    expect(messages[1]).toBe(slackTurn);
+  });
+
+  // ── an ENTITY ref is not a TURN identity ──────────────────────────────────
+  // A lifecycle `ref` names a lifecycle ENTITY, and any number of turns may draw
+  // that entity's card. Keyed on the ref alone, a message that merely SHOWS the
+  // card claims a turn that is not its own — and a claim on this path costs the
+  // durable turn its fold-in entirely, so the claimed turn is SUPPRESSED and its
+  // card is lost. That is the exact defect this leg exists to remove, arriving by
+  // the matcher instead of by the dropped save. The key therefore carries the
+  // card's PRODUCING TOOL CALL — server-minted, per-turn, and recorded by both
+  // copies of a turn since the slot stamp became durable.
+
+  it("an OLDER traceless message showing the same card does NOT claim a LATER turn", () => {
+    // The probe. `a1` is an earlier message that records NO tool call and carries
+    // the same entity's card at turn level. The LATER turn's save was lost, so
+    // the spine does not carry it and the server's copy is the only one left.
+    // On an entity-id key `a1` claimed it and it vanished.
+    const olderCardOnly = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      dataParts: [{ ...REVIEW_VIEW }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW], dataPartSlots: ["call-1"] }),
+        }),
+        turn({ id: "legacy:3:th1:a1", content: olderCardOnly }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // TWO messages: the older one untouched, and the later turn folded in on its
+    // own. The later turn SURVIVES — that is the whole assertion.
+    expect(messages).toHaveLength(2);
+    expect(messages).toContain(olderCardOnly);
+    const foldedIn = messages.find((m) => m !== olderCardOnly)!;
+    const call = (foldedIn.parts as Record<string, unknown>[]).find((p) => p.kind === "tool_call")!;
+    expect(call.views).toEqual([REVIEW_VIEW]);
+  });
+
+  it("a THIRD message re-rendering the entity leaves the clean repair clean", () => {
+    // The second probe. Two traceless messages both draw the entity's card; on an
+    // entity-id key both CLAIMED the durable turn, which made a repair that was
+    // never ambiguous ambiguous. Neither claims now, so the turn that really is
+    // the durable one — matched on its shared tool-call id — is repaired, and
+    // nothing is suppressed.
+    const drewItFirst = {
+      id: "a0",
+      role: "assistant",
+      content: "earlier",
+      dataParts: [{ ...REVIEW_VIEW }],
+    };
+    const drewItAgain = {
+      id: "a2",
+      role: "assistant",
+      content: "later",
+      dataParts: [{ ...REVIEW_VIEW }],
+    };
+    // The reader's own copy of the durable turn, landed WITHOUT its card — the
+    // dropped save this fold-in repairs.
+    const theTurn = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        { kind: "text", content: "here it is" },
+        { kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" },
+      ],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW], dataPartSlots: ["call-1"] }),
+        }),
+        turn({ id: "legacy:3:th1:a0", content: drewItFirst }),
+        turn({ id: "legacy:4:th1:a1", content: theTurn }),
+        turn({ id: "legacy:5:th1:a2", content: drewItAgain }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // THREE messages — nothing suppressed, nothing duplicated.
+    expect(messages).toHaveLength(3);
+    expect(messages.map((m) => m.id)).toEqual(["a0", "a1", "a2"]);
+    // ...and the repair landed on the turn that shares the call id, at its slot.
+    const repaired = messages[1];
+    const call = (repaired.parts as Record<string, unknown>[]).find((p) => p.kind === "tool_call")!;
+    expect(call.views).toEqual([REVIEW_VIEW]);
+    // The bystanders are untouched — a repair only ever fills what is ABSENT.
+    expect(messages[0]).toBe(drewItFirst);
+    expect(messages[2]).toBe(drewItAgain);
+  });
+
+  it("does NOT ref-match a spine turn that carries tool-call ids of its OWN", () => {
+    // The ref path exists for a turn with NO id evidence at all. A turn that DOES
+    // record tool calls and shares none of the durable turn's is showing a
+    // different turn — evidence AGAINST the match, never a reason to fall back to
+    // a weaker key.
+    const otherTurn = {
+      id: "a1",
+      role: "assistant",
+      content: "a different turn",
+      parts: [{ kind: "tool_call", id: "call-OTHER", name: "artifact_review_gate_render", status: "completed" }],
+      dataParts: [{ ...REVIEW_VIEW }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: otherTurn }),
+      ],
+      [],
+      null,
+    );
+    expect(payload!.messages).toHaveLength(2);
+  });
+
+  it("still REPAIRS a Slack-mode turn whose save was genuinely dropped", () => {
+    // The other half of the same discipline: the reader's Slack turn landed
+    // WITHOUT its card (`dataParts` absent — the dropped save this fold-in exists
+    // for). Matching it is now possible, so the card is restored ONTO the
+    // reader's own turn instead of arriving as a second message.
+    const slackTurn = slackProjectedTurn({ dataParts: undefined });
+    delete slackTurn.dataParts;
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].dataParts).toEqual([REVIEW_VIEW]);
+    // Still Slack-shaped: the repair adds what the save dropped and nothing else.
+    expect(messages[0].parts).toBeUndefined();
+  });
+
+  it("REFUSES a Slack-mode match the run pin contradicts", () => {
+    // The corroboration discipline is not loosened by the new evidence: a
+    // thoughtGroup id can be matched, and the contradiction test still runs on
+    // top of it. Here the reader's turn is drawing a DIFFERENT card entirely.
+    const slackTurn = slackProjectedTurn({
+      dataParts: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref: "SOME-OTHER-ref" }],
+    });
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: slackTurn }),
+      ],
+      [],
+      null,
+    );
+    expect(payload!.messages).toHaveLength(2);
+  });
+
+  it("NEVER overwrites a view the spine already carries", () => {
+    // The reader's save DID land with the view on it — the SAME view the server
+    // recorded, because both sides read it off the same wire.
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+      dataParts: [{ ...REVIEW_VIEW }],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1); // repaired-or-left-alone, never doubled
+    // Nothing was owed, so the reader's own message object comes back untouched.
+    expect(messages[0]).toBe(spineAssistant);
+  });
+
+  it("PINS a run on a spine tool call that lost it, and leaves an already-pinned one alone", () => {
+    const durable = durableTurnContent({
+      parts: [
+        { type: "tool_call", id: "call-1", name: "agent_run" },
+        { type: "tool_result", id: "call-1", name: "agent_run", result: "{}" },
+        { type: "tool_call", id: "call-2", name: "agent_run" },
+      ],
+      dataParts: [
+        { kind: "agent_run", toolCallId: "call-1", runId: "run-A" },
+        { kind: "agent_run", toolCallId: "call-2", runId: "run-B" },
+      ],
+    });
+    // call-2 kept its pin through the save; call-1's was dropped. The pin the
+    // reader kept AGREES with the server's — both came off the same wire, and a
+    // pin that disagreed would mean this is not the same turn at all (below).
+    const alreadyPinned = {
+      kind: "tool_call",
+      id: "call-2",
+      name: "agent_run",
+      status: "completed",
+      runId: "run-B",
+    };
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "agent_run", status: "completed" }, alreadyPinned],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durable }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const parts = (payload!.messages as Record<string, unknown>[])[0].parts as Record<string, unknown>[];
+    expect(parts[0].runId).toBe("run-A"); // filled in
+    // The reader's own state wins: the pinned part is not even rewritten.
+    expect(parts[1]).toBe(alreadyPinned);
+  });
+
+  // ── F1: the tool-call match must corroborate before it repairs ────────────
+  // The spine side of a shared tool-call id is content the CLIENT wrote. A bare
+  // id hit is a claim; these three arms are the corroboration it has to pass.
+
+  it("REFUSES the repair when TWO spine messages claim the same tool-call id", () => {
+    const claimant = (id: string) => ({
+      id,
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+    });
+    const first = claimant("a1");
+    const second = claimant("a2");
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: first }),
+        turn({ id: "legacy:3:th1:a2", content: second }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // NEITHER claimant is repaired — picking one would be picking by iteration
+    // order — and the server's own record is folded in rather than dropped.
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toBe(first);
+    expect(messages[1]).toBe(second);
+    expect(messages[2].id).toBe("9f1e-uuid");
+    expect(messages[2].dataParts).toEqual([REVIEW_VIEW]);
+  });
+
+  it("REFUSES the repair when the covering spine message pins a DIFFERENT run on the shared call", () => {
     const durable = durableTurnContent({
       parts: [
         { type: "tool_call", id: "call-1", name: "agent_run" },
@@ -540,7 +1141,9 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
       content: "here it is",
       parts: [
         { kind: "tool_call", id: "call-1", name: "agent_run", status: "completed" },
-        { kind: "tool_call", id: "call-2", name: "agent_run", status: "completed", runId: "already-pinned" },
+        // The same server-minted call, pinned to a run the server never recorded
+        // for it: whatever this message is, it is not this turn.
+        { kind: "tool_call", id: "call-2", name: "agent_run", status: "completed", runId: "some-other-run" },
       ],
     };
     const payload = assembleThreadPayloadFromParts(
@@ -552,9 +1155,188 @@ describe("assembleThreadPayloadFromParts (pure reconstruction + exclusion)", () 
       [],
       null,
     );
-    const parts = (payload!.messages as Record<string, unknown>[])[0].parts as Record<string, unknown>[];
-    expect(parts[0].runId).toBe("run-A"); // filled in
-    expect(parts[1].runId).toBe("already-pinned"); // the reader's own state wins
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toBe(spineAssistant); // call-1 NOT pinned from this turn
+    const folded = messages[1].parts as Record<string, unknown>[];
+    expect(messages[1].id).toBe("9f1e-uuid"); // the server's record survives
+    expect(folded.find((p) => p.id === "call-1")!.runId).toBe("run-A");
+  });
+
+  it("REFUSES the repair when the covering spine message carries a DISJOINT view ref", () => {
+    const spineView = { viewType: "artifact_review_gate", schemaVersion: 1, ref: "a-different-card" };
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [
+        { kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" },
+        { kind: "tool_call", id: "call-9", name: "agent_run", status: "completed" },
+      ],
+      dataParts: [spineView],
+    };
+    const durable = durableTurnContent({
+      parts: [
+        { type: "tool_call", id: "call-1", name: "artifact_review_gate_render" },
+        { type: "tool_result", id: "call-1", name: "artifact_review_gate_render" },
+        { type: "tool_call", id: "call-9", name: "agent_run" },
+      ],
+      dataParts: [REVIEW_VIEW, { kind: "agent_run", toolCallId: "call-9", runId: "run-A" }],
+    });
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durable }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(2);
+    // The reader's message is untouched — not repaired, and NOT run-pinned
+    // either: a refused match refuses the whole repair, not just the views.
+    expect(messages[0]).toBe(spineAssistant);
+    expect(messages[1].dataParts).toEqual([REVIEW_VIEW]);
+  });
+
+  // ── F2: position by SERVER TIME, because the spine is not always a prefix ──
+
+  it("places an uncovered turn by SERVER TIME when the spine is NOT a prefix (stale save)", () => {
+    // A stale tab posted a whole transcript that omitted the assistant turn but
+    // carried a LATER user message; the mirror reconcile deleted the omitted
+    // row. The spine is now [10:00, 10:10] with a 10:05 turn missing from it.
+    const m1 = { id: "m1", role: "user", content: "make me a gate" };
+    const m3 = { id: "m3", role: "user", content: "and now something else" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          createdAt: "2026-07-10T10:05:00.000Z",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW] }),
+        }),
+        turn({ id: "legacy:3:th1:m1", role: "user", createdAt: "2026-07-10T10:00:00.000Z", content: m1 }),
+        turn({ id: "legacy:3:th1:m3", role: "user", createdAt: "2026-07-10T10:10:00.000Z", content: m3 }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    // Its real position, NOT the tail: the turn happened before m3 and the
+    // server's own clock is the only record that still says so.
+    expect(messages.map((m) => m.id)).toEqual(["m1", "9f1e-uuid", "m3"]);
+  });
+
+  it("places an uncovered turn that PRECEDES the whole spine at the head", () => {
+    const m9 = { id: "m9", role: "user", content: "later" };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({
+          id: "9f1e-uuid",
+          runId: "run-1",
+          createdAt: "2026-07-10T09:00:00.000Z",
+          content: durableTurnContent({ dataParts: [REVIEW_VIEW] }),
+        }),
+        turn({ id: "legacy:3:th1:m9", role: "user", createdAt: "2026-07-10T10:00:00.000Z", content: m9 }),
+      ],
+      [],
+      null,
+    );
+    expect((payload!.messages as Record<string, unknown>[]).map((m) => m.id)).toEqual(["9f1e-uuid", "m9"]);
+  });
+
+  // ── F3: an explicitly EMPTY dataParts is an answer, not a gap ─────────────
+
+  it("leaves an explicitly EMPTY dataParts alone (absent is repairable; empty is the reader's answer)", () => {
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+      dataParts: [] as Record<string, unknown>[],
+    };
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        turn({ id: "9f1e-uuid", runId: "run-1", content: durableTurnContent({ dataParts: [REVIEW_VIEW] }) }),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0].dataParts).toEqual([]); // reader wins — nothing was owed
+    expect(messages[0]).toBe(spineAssistant);
+  });
+
+  // ── F5: two rows for one turn elect the LATEST, deliberately ─────────────
+
+  it("ELECTS the LATEST of two durable rows covering the same spine message", () => {
+    const spineAssistant = {
+      id: "a1",
+      role: "assistant",
+      content: "here it is",
+      parts: [{ kind: "tool_call", id: "call-1", name: "artifact_review_gate_render", status: "completed" }],
+    };
+    const row = (id: string, createdAt: string, ref: string) =>
+      turn({
+        id,
+        runId: "run-1",
+        createdAt,
+        content: durableTurnContent({
+          dataParts: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref }],
+        }),
+      });
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        // Query order deliberately puts the EARLIER row second, so a fold-in
+        // that elected by iteration order would still pick "earlier" here.
+        row("turn-late", "2026-07-10T10:09:00.000Z", "the-newest-server-record"),
+        row("turn-early", "2026-07-10T10:01:00.000Z", "an-older-server-record"),
+        turn({ id: "legacy:3:th1:a1", content: spineAssistant }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(1); // one turn, one repair — not two
+    expect(messages[0].dataParts).toEqual([
+      { viewType: "artifact_review_gate", schemaVersion: 1, ref: "the-newest-server-record" },
+    ]);
+  });
+
+  it("ELECTS the LATEST of two durable rows the spine does not carry, folding in ONE", () => {
+    const m1 = { id: "m1", role: "user", content: "hi" };
+    const row = (id: string, createdAt: string, ref: string) =>
+      turn({
+        id,
+        runId: "run-1",
+        createdAt,
+        content: durableTurnContent({
+          dataParts: [{ viewType: "artifact_review_gate", schemaVersion: 1, ref }],
+        }),
+      });
+    const payload = assembleThreadPayloadFromParts(
+      baseThread,
+      [
+        row("turn-late", "2026-07-10T10:09:00.000Z", "the-newest-server-record"),
+        row("turn-early", "2026-07-10T10:01:00.000Z", "an-older-server-record"),
+        turn({ id: "legacy:3:th1:m1", role: "user", content: m1 }),
+      ],
+      [],
+      null,
+    );
+    const messages = payload!.messages as Record<string, unknown>[];
+    expect(messages).toHaveLength(2); // the turn appears ONCE, not twice
+    expect(messages[1].id).toBe("turn-late");
+    expect(messages[1].dataParts).toEqual([
+      { viewType: "artifact_review_gate", schemaVersion: 1, ref: "the-newest-server-record" },
+    ]);
   });
 
   it("reconstructs messages losslessly from turn.content in the given (ordinal) order", () => {
@@ -689,6 +1471,30 @@ describe("reconstructThreadPayload (single snapshot-consistent read)", () => {
     expect(payload!.title).toBe("T");
     expect(payload!.projectId).toBe("proj-9");
     expect(payload!.slackMode).toBe(true); // scalars read back directly
+  });
+
+  it("BOUNDS the widened read in SQL — rows and columns both (round 3, non-blocker 1)", () => {
+    // The widened read (both representations in one snapshot) shipped every
+    // historical raw tool RESULT on every thread read: the durable `tool_result`
+    // part keeps the full payload for faithful reconstruction after Redis loss,
+    // and the assembler then discards it. Both bounds are in the QUERY, so the
+    // bytes never leave Postgres.
+    runPostgresQueriesSync.mockReturnValue([
+      { rows: [] },
+      { rows: [{ id: "th1", created_at: "2026-07-10T10:00:00.000Z", updated_at: "2026-07-10T11:00:00.000Z" }] },
+      { rows: [] },
+      { rows: [] },
+    ]);
+    reconstructThreadPayload("th1");
+    const turnsQuery = runPostgresQueriesSync.mock.calls[0][0].queries[2].text as string;
+    // ROWS: only a run-bound row that could actually have participated in the
+    // fold-in — the SQL twin of `carriesLifecycleRenderState` for this format.
+    expect(turnsQuery).toContain("content->>'format' = 'assistant-turn-v1'");
+    expect(turnsQuery).toContain("jsonb_array_length(content->'dataParts') > 0");
+    // COLUMNS: the unread raw result is stripped from the rows that do come back.
+    expect(turnsQuery).toContain("e.part - 'result'");
+    // ...and NEVER from the spine, whose content must round-trip losslessly.
+    expect(turnsQuery).toContain("WHEN run_id IS NULL THEN content");
   });
 
   it("returns null when the thread row is absent", () => {

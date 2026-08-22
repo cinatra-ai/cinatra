@@ -1187,6 +1187,7 @@ export function upsertChatThreadInDatabase(
     // P2b). Distinct from `orgId` and NEVER falling back to it — option PRESENCE
     // distinguishes explicit null from "unspecified"; set-once SQL keeps it.
     assistantMirrorOrgId?: string | null;
+    actorUserId?: string | null; // TRANSPORT-VERIFIED acting writer, never a payload field — read by ONE statement: the self-harm-only truncation tombstone (src/lib/assistant-turn-supersede.ts). Null authorizes none.
   },
 ) {
   ensurePostgresSchema();
@@ -1241,6 +1242,7 @@ export function upsertChatThreadInDatabase(
           options && "assistantMirrorOrgId" in options
             ? (options.assistantMirrorOrgId ?? null)
             : null,
+        actorUserId: options?.actorUserId ?? null,
       }),
     ],
   });

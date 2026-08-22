@@ -58,11 +58,13 @@ import {
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
 // the Message shape lets the bridge resolve them without the chat path
 // importing @/lib directly.
-import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary, Mention } from "./types";
+import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary } from "./types";
 import type { ChatViewComponents } from "./chat-messages-view";
 import type { ChatPageProps } from "./chat-page-props";
+import { editAndResend as runEditAndResend } from "./message-edit-flow";
+import { createTurnStreamRegistry, type TurnStreamToken } from "./turn-stream-registry";
 import {
-  saveChatThreadViaFetch,
+  saveChatThreadInOrder,
   fetchThreadList,
   fetchThreadById,
   generateId,
@@ -73,7 +75,6 @@ import {
   EXTERNAL_TAKEOVER_MS,
   countMentions,
   shouldEnterSlackModeOnSend,
-  applyExternalMentionsToMessages,
   attachRoutingMentionsToMessage,
   collectNewlyTaggedIds,
   resolveDispatchPlan,
@@ -233,8 +234,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // list has not arrived yet (#283 — the typed created_at column is immutable
   // on conflict, but readChatThreadsFromDatabase reads the payload JSON).
   const loadedThreadCreatedAtRef = useRef<string | null>(null);
-  // Map of assistantId → AbortController for every in-flight streamResponse call.
-  const streamingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  // In-flight turns + ended-but-uncommitted ones (./turn-stream-registry).
+  const streams = useMemo(() => createTurnStreamRegistry(), []);
   // Latest-value ref for messages so re-entrant senders never read a stale
   // snapshot when building the next request's context.
   const messagesRef = useRef<Message[]>([]);
@@ -349,10 +350,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     };
   }, []);
 
-  // Keep messagesRef in sync with state so re-entrant callers read the latest value.
+  // Keep messagesRef in sync so re-entrant callers read the latest value — and,
+  // on the same commit, release the BUBBLE-ID half of every ended turn this
+  // transcript carries, which leaves no window in which a turn is nameable from
+  // neither source. The RUN half waits for a save that LANDED (the registry).
   useEffect(() => {
     messagesRef.current = messages;
-  }, [messages]);
+    streams.noteCommittedTranscript(messages);
+  }, [messages, streams]);
 
   // Keep activeThreadIdRef in sync so streamResponse can detect thread switches.
   // (The auto-scroll lock release that used to sit here moved into
@@ -370,16 +375,16 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
   // Load thread messages when activeThreadId changes.
   useEffect(() => {
-    // Defense in depth: eagerly abort every in-flight stream when the
-    // active thread changes. The stillOnOriginThread guard inside
-    // streamResponse also short-circuits any late setMessages chunks that arrive
-    // after this point, so even if an aborted stream's final reader.read() resolves
-    // mid-switch, it cannot mutate the new thread's messages list.
-    if (streamingAbortControllersRef.current.size > 0) {
-      for (const c of streamingAbortControllersRef.current.values()) c.abort();
-      streamingAbortControllersRef.current.clear();
-      setStreamingCount(0);
-    }
+    // Defense in depth: eagerly abort every in-flight stream when the active
+    // thread changes, and drop the ended-uncommitted ledger with it — its ids
+    // belong to the thread being left and no other thread's transcript would
+    // ever release them. The registry decides that on the THREAD, not on the
+    // stream count: an ended turn stays nameable until its reveal commits, so
+    // the ledger outlives the last stream and a switch made after it still has
+    // to drop it (codex round 2). The stillOnOriginThread guard inside
+    // streamResponse short-circuits any late setMessages chunks arriving after
+    // this point, so an aborted stream cannot mutate the new thread's list.
+    if (streams.resetForThread(activeThreadId)) setStreamingCount(0);
     if (skipNextThreadLoadRef.current) {
       skipNextThreadLoadRef.current = false;
       return;
@@ -554,7 +559,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       slackMode: isSlackMode,
       ownerUserId: userId,
     };
-    saveChatThreadViaFetch(thread).catch(() => {});
+    // A SAVE THAT LANDED releases the ledger's RUN half and adopts the baseline;
+    // ISSUING one releases nothing (codex round 4, finding 1) — a failed one wrote
+    // no mirror row. Fenced on its OWN thread, like every resumed await here.
+    saveChatThreadInOrder(thread).then(() => { if (activeThreadIdRef.current !== thread.id) return; streams.noteSavedTranscript(messages); loadedFingerprintRef.current = fingerprintMessages(messages); }, () => {});
     // Real activity: advance this thread's updatedAt in-place. The sidebar's
     // default "Activity" mode sorts by updatedAt desc, so this re-positions the
     // thread to the top without an explicit array reorder here.
@@ -563,9 +571,6 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         t.id === thread.id ? { ...t, title: thread.title, updatedAt: thread.updatedAt } : t,
       ),
     );
-    // Adopt the persisted message set as the new baseline so an unrelated
-    // re-render with the SAME messages does not bump updatedAt a second time.
-    loadedFingerprintRef.current = fingerprintMessages(messages);
   }, [messages, hasActiveStream, activeThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Emit active thread title so AppShell can show it in the breadcrumb.
@@ -574,19 +579,17 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     publishChatThreadTitle(title);
   }, [activeThreadId, threads]);
 
-  // Register a stream in the registry and bump the count. Must only be called
-  // from inside streamResponse's try block so cleanup is guaranteed in finally.
-  function beginStream(assistantId: string, controller: AbortController) {
-    streamingAbortControllersRef.current.set(assistantId, controller);
+  // Acquired immediately before streamResponse's try, so the finally is sure.
+  // `anchorMessageId` is the PROMPT this turn answers — how the intent tells a turn BELOW an edit point from one above it.
+  function beginStream(assistantId: string, controller: AbortController, anchorMessageId: string | null) {
     setStreamingCount((n) => n + 1);
+    return streams.begin(assistantId, controller, anchorMessageId); // THIS instance's token
   }
 
-  // Remove a stream from the registry and decrement the count. Idempotent —
-  // safe to call even if the key was already deleted (returns without side effect).
-  function endStream(assistantId: string) {
-    if (streamingAbortControllersRef.current.delete(assistantId)) {
-      setStreamingCount((n) => Math.max(0, n - 1));
-    }
+  // Idempotent — the count moves only if this instance really was the live one.
+  // The turn stays NAMEABLE by the truncation intent until its reveal commits.
+  function endStream(token: TurnStreamToken) {
+    if (streams.end(token)) setStreamingCount((n) => Math.max(0, n - 1));
   }
 
   // AG-UI stream driver (cinatra#1218) — the turn drive lives headlessly in
@@ -598,8 +601,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // await — re-reading the ref would guard the WRONG thread after a mid-await switch).
     const originThreadId = threadId;
     const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
+    const token = beginStream(assistantId, abortController, contextMessages[contextMessages.length - 1]?.id ?? null); // never the id
     try {
-      beginStream(assistantId, abortController);
       await driveAssistantChatTurn({
         threadId,
         assistantId,
@@ -623,12 +626,13 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
               else m.delete(assistantId);
               return m;
             }),
+          noteRunId: (runId) => { streams.noteRunId(token, runId); }, // the server's own name for THIS instance
           isWidgetRefreshTool: (name) => widgetRuntime.isWidgetRefreshTool(name),
           onWidgetRefresh: () => setWidgetRefreshKey((k) => k + 1),
         },
       });
     } finally {
-      endStream(assistantId);
+      endStream(token);
     }
   }
 
@@ -717,96 +721,36 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     await streamResponse(updatedMessages);
   }
 
+  // EDIT AND RESEND — the flow lives in ./message-edit-flow (the truncation
+  // intent, the intent save it waits for, the origin-thread guards, the routed
+  // regeneration); this binding is the page's half (./turn-stream-registry).
   async function editAndResend(messageId: string, newContent: string) {
-    if (!newContent.trim()) return;
-    // In ChatGPT mode, keep the existing single-stream block; in Slack mode concurrent streams are allowed.
-    if (!isSlackMode && hasActiveStream) return;
-
-    // Truncate conversation at the edited message and replace it.
-    const idx = messages.findIndex((m) => m.id === messageId);
-    if (idx < 0) return;
-    const prior = messages.slice(0, idx);
-    // Preserve attachments from the original turn so editing the text doesn't
-    // silently drop the file refs from the persisted thread + the re-dispatched
-    // user message.
-    const original = messages[idx];
-    const editedMessage: Message = {
-      id: generateId(),
-      role: "user",
-      content: newContent.trim(),
-      ...(original?.attachments && original.attachments.length > 0
-        ? { attachments: original.attachments }
-        : {}),
-    };
-    const truncated = [...prior, editedMessage];
-    setMessages(truncated);
-
-    // Resolve threadId — edits always happen in an existing thread.
-    const threadId = activeThreadId ?? activeThreadIdRef.current;
-
-    // Persist the truncated history before routing (same as sendMessage).
-    if (threadId) {
-      const now = new Date().toISOString();
-      const title = threads.find((t) => t.id === threadId)?.title ?? deriveThreadTitle(editedMessage.content);
-      // createdAt is immutable: prefer the summary, then the loaded thread's
-      // createdAt (covers the body loading before the summary list), then now
-      // for a genuinely new thread (#283).
-      const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-      saveChatThreadViaFetch({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId } as Record<string, unknown> & { id: string })
-        .catch((err) => console.error("[chat] saveChatThread failed (edit):", err));
-    }
-
-    // ChatGPT (normal) mode — preserve byte-identical behavior.
-    if (!isSlackMode) {
-      await streamResponse(truncated);
-      return;
-    }
-
-    // Slack mode — regenerate through the SAME declaration-driven send-path routing.
-    let editEndpoint = "/api/assistants/chat";
-    let editHandle: string | undefined = activeAssistantHandle;
-    let editAuthorId: string | undefined;
-    let editSelector: string | undefined;
-    // A routing decline (honest no-responder / out-of-band push) must NOT force a
-    // Cinatra regeneration; stays false if routing threw (legacy always-stream).
-    let editDeclined = false;
-    let editPending: Mention[] | undefined;
-
-    try {
-      const routing = await resolveMessageRouting(
-        editedMessage.content,
-        threadId,
+    await runEditAndResend(
+      {
+        messages,
+        setMessages,
+        isSlackMode,
+        hasActiveStream,
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
+        // The pre-RUN_STARTED hold: the intent waits for every turn it could
+        // name by run to settle that identity (./turn-stream-registry).
+        settleRemovableRunIds: (removed) => streams.settleRunIdsForRemoval(removed),
+        activeThreadId,
+        currentThreadId: () => activeThreadIdRef.current,
+        loadedThreadCreatedAt: () => loadedThreadCreatedAtRef.current,
+        threads,
         activeAssistantHandle,
-        {
-          taggedAssistantUserIds,
-          pausedParticipants,
-          handleMap: Object.fromEntries(assistantHandleMap),
-        },
-      );
-      if (routing.chatEndpoint) editEndpoint = routing.chatEndpoint;
-      const nextHandle = routing.activeHandle !== undefined ? (routing.activeHandle || undefined) : activeAssistantHandle;
-      if (routing.activeHandle !== undefined) setActiveAssistantHandle(nextHandle);
-      editHandle = nextHandle ?? activeAssistantHandle;
-      editAuthorId = routing.hostRuntimeMention?.assistantUserId;
-      editSelector = routing.hostRuntimeMention?.handle;
-      // No host reply and no in-band host-runtime target ⇒ nothing streams here.
-      editDeclined = !routing.shouldCallLlm && !routing.hostRuntimeMention;
-      editPending = routing.externalMentions;
-    } catch {
-      // Routing failed — proceed with current assistant context (legacy stream).
-    }
-
-    if (editDeclined) {
-      // Attach any pending push mentions for the connector poll (send-path parity).
-      if (editPending && editPending.length > 0) {
-        const pending = editPending;
-        setMessages((prev) => applyExternalMentionsToMessages(prev, editedMessage.id, pending));
-      }
-      return;
-    }
-
-    // Fire the stream so the user gets a regenerated response on edit.
-    void streamResponse(truncated, editHandle, editEndpoint, editAuthorId, editSelector);
+        setActiveAssistantHandle,
+        taggedAssistantUserIds,
+        pausedParticipants,
+        assistantHandleMap,
+        userId,
+        streamResponse,
+      },
+      messageId,
+      newContent,
+    );
   }
 
   async function sendMessage(text: string) {
@@ -899,7 +843,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       // createdAt is immutable: prefer the summary, then the loaded thread's
       // createdAt, then now for a genuinely new thread (#283).
       const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-      saveChatThreadViaFetch({ id: threadId, title, messages: currentMessages, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId } as Record<string, unknown> & { id: string }).catch((err) => console.error("[chat] saveChatThread failed:", err));
+      saveChatThreadInOrder({ id: threadId, title, messages: currentMessages, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId } as Record<string, unknown> & { id: string }).catch((err) => console.error("[chat] saveChatThread failed:", err));
     }
 
     // -----------------------------------------------------------------------
@@ -936,7 +880,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         // thread's createdAt, then now for a genuinely new thread (#283).
         const createdAt =
           threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-        saveChatThreadViaFetch({
+        saveChatThreadInOrder({
           id: threadId,
           title,
           messages: messagesWithAck,
@@ -1100,8 +1044,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
   // Stable callbacks threaded to the lazily-loaded conversation view.
   const isStreaming = useCallback(
-    (messageId: string) => streamingAbortControllersRef.current.has(messageId),
-    [],
+    (messageId: string) => streams.has(messageId),
+    [streams],
   );
   const handleTogglePause = useCallback((participantId: string, next: boolean) => {
     setPausedParticipants((prev) =>
@@ -1222,7 +1166,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         onSubmit={(value) => void sendMessage(value)}
         submitAriaLabel={hasActiveEmbed ? "Save form" : "Send message"}
         onStop={() => {
-          for (const c of streamingAbortControllersRef.current.values()) c.abort();
+          streams.abortAll();
         }}
         onAttachmentsSelected={handleAttachmentsSelected}
         autosave={autosaveProp}

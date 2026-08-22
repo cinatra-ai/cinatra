@@ -30,11 +30,14 @@
 //                     envelope from the allowlisted cinatra self-MCP (server,
 //                     tool) tuple additionally emits a `DATA_PART { viewType,
 //                     schemaVersion, ref }` — an opaque ref, never content
-//                     (cinatra#2565; see ./lifecycle-view-envelope). Every
-//                     DATA_PART but `citations` is ALSO kept in the durable
-//                     content (cinatra#2823 S9j), because a card the wire
-//                     carries and the durable row drops is a card that renders
-//                     live and is gone after a reload.
+//                     (cinatra#2565; see ./lifecycle-view-envelope) — stamped
+//                     with the PRODUCING `toolCallId` on the event (cinatra#2827)
+//                     so the client can fold the card into the ordered trace at
+//                     that call rather than after the turn. Every DATA_PART but
+//                     `citations` is ALSO kept in the durable content
+//                     (cinatra#2823 S9j), because a card the wire carries and
+//                     the durable row drops is a card that renders live and is
+//                     gone after a reload.
 //   citations       → DATA_PART { kind: "citations", citations }
 //   error           → seal open text, RUN_ERROR (terminal)
 //   done            → seal open text, RUN_FINISHED (terminal)
@@ -106,6 +109,29 @@ export type AgUiTurnDurableContent = {
    * to what it serialized before this field existed.
    */
   dataParts?: Array<Record<string, unknown>>;
+  /**
+   * The PRODUCING SLOT of each entry in `dataParts`, positionally aligned with
+   * it (cinatra#2823 S9j) — the `toolCallId` the event carried,
+   * or `null` for an entry that named no call.
+   *
+   * OUT OF BAND, AND THAT IS THE WHOLE POINT. The slot may not go INSIDE the
+   * view payload: `dataParts[i]` has to stay the byte-identical strict
+   * `{ viewType, schemaVersion, ref }` object a `.strict()` parser accepts on
+   * re-read, and a slot written into it would be re-emitted AS PAYLOAD on reload
+   * and rejected there. So it rides a sibling array, which the reload projection
+   * consumes and never re-emits — the same separation the live wire already
+   * makes, where the stamp rides the EVENT and never `data`
+   * (`DataPartEvent.toolCallId`).
+   *
+   * Without it a reloaded card kept its content and lost its position: the live
+   * render draws it inside its producing step (S9i, #2879) and the reload drew it
+   * after the turn. #2879 named that follow-up; this field is its durable half.
+   *
+   * OMITTED unless at least one entry is stamped, so a turn whose DATA_PARTs
+   * named no call persists byte-identically to what it persisted before this
+   * field existed.
+   */
+  dataPartSlots?: Array<string | null>;
 };
 
 export type AgUiSinkAdapter = {
@@ -180,6 +206,8 @@ export function createAgUiSinkAdapter(params: {
   // `AgUiTurnDurableContent.dataParts` for why the durable row needs them and
   // why `citations` is not one of them.
   const contentDataParts: Array<Record<string, unknown>> = [];
+  /** Positionally aligned with `contentDataParts` — see `dataPartSlots`. */
+  const contentDataPartSlots: Array<string | null> = [];
   let openContentTextPart: { type: "text"; text: string } | null = null;
   // Separate broken flag: a thrown `null`/`undefined` must still trip the
   // sentinel (never keyed on the error VALUE).
@@ -212,10 +240,31 @@ export function createAgUiSinkAdapter(params: {
    * emitted it" and "the sink kept it" the same statement rather than two
    * statements a later edit can separate. `citations` deliberately does NOT come
    * through here — it has its own ordered durable part.
+   *
+   * `producingToolCallId` is the SLOT STAMP (cinatra#2827 S9i): it rides the
+   * EVENT and is deliberately NOT written into `data`, because the durable
+   * payload has to stay the byte-identical strict `{ viewType, schemaVersion,
+   * ref }` object a `.strict()` parser accepts on re-read — a slot written into
+   * the payload would be re-emitted as payload on reload and rejected there.
+   * The DURABLE half of the same separation is `dataPartSlots` — a sibling array
+   * on the persisted content, positionally aligned with `dataParts`, which this
+   * function keeps in step with `contentDataParts` so the wire's stamp and the
+   * row's stamp cannot drift (#2879's named follow-up, closed here). Omitted when
+   * absent, so an unstamped emit is byte-identical to what it was before the
+   * field existed.
    */
-  function emitDurableDataPart(data: Record<string, unknown>): void {
+  function emitDurableDataPart(
+    data: Record<string, unknown>,
+    producingToolCallId?: string,
+  ): void {
     contentDataParts.push(data);
-    emit({ type: "DATA_PART", data, timestamp: Date.now() } as AgUiEvent);
+    contentDataPartSlots.push(producingToolCallId ?? null);
+    emit({
+      type: "DATA_PART",
+      data,
+      ...(producingToolCallId !== undefined ? { toolCallId: producingToolCallId } : {}),
+      timestamp: Date.now(),
+    } as AgUiEvent);
   }
 
   function sealOpenText(): void {
@@ -339,7 +388,14 @@ export function createAgUiSinkAdapter(params: {
             result: d.result,
           });
         if (lifecycleView) {
-          emitDurableDataPart({ ...lifecycleView });
+          // SLOT IDENTITY (cinatra#2827): the producing tool call rides the
+          // EVENT, never the payload — the payload stays the strict
+          // `{ viewType, schemaVersion, ref }` a `.strict()` schema accepts, and
+          // the client folds the card into the ordered trace at this call
+          // instead of appending it after the turn. It rides the durable-emit
+          // helper (cinatra#2823 S9j) so the stamp and the durable keep stay one
+          // statement: this call emits the slotted card AND retains its payload.
+          emitDurableDataPart({ ...lifecycleView }, id);
         }
         return;
       }
@@ -417,6 +473,11 @@ export function createAgUiSinkAdapter(params: {
         // minted no DATA_PART persists exactly the object it persisted before
         // this field existed.
         ...(contentDataParts.length > 0 ? { dataParts: contentDataParts } : {}),
+        // The slot array rides ALONGSIDE, never inside a payload, and only when
+        // something was actually stamped (see `dataPartSlots`).
+        ...(contentDataPartSlots.some((slot) => slot !== null)
+          ? { dataPartSlots: contentDataPartSlots }
+          : {}),
       };
     },
   };

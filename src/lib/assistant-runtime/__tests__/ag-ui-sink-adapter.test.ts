@@ -312,6 +312,53 @@ describe("createAgUiSinkAdapter — durable content accumulation (PR1 EXPAND)", 
     ]);
   });
 
+  // ── the SLOT the durable row records out of band (cinatra#2823 round 3) ────
+
+  it("records the PRODUCING SLOT beside the payload, never inside it", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "agent_run" });
+    adapter.send("tool_result", { id: "t1", name: "agent_run", result: JSON.stringify({ runId: "run-A" }) });
+    adapter.send("tool_call", { id: "t2", name: "artifact_review_gate_render", serverLabel: "cinatra" });
+    adapter.send("tool_result", {
+      id: "t2",
+      name: "artifact_review_gate_render",
+      serverLabel: "cinatra",
+      result: JSON.stringify({ $cinatraLifecycleView: 1, viewType: "artifact_review_gate", ref: "gate-ref-1" }),
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    const durable = adapter.durableContent()!;
+    // The payload is the byte-identical strict object a `.strict()` parser
+    // accepts on re-read — the slot is NOT in it, or reload would re-emit it as
+    // payload and the parser would reject the card.
+    expect(durable.dataParts).toEqual([
+      { kind: "agent_run", toolCallId: "t1", runId: "run-A" },
+      { viewType: "artifact_review_gate", schemaVersion: 1, ref: "gate-ref-1" },
+    ]);
+    // ...and the slot rides a sibling array, positionally aligned. `agent_run`
+    // carries its `toolCallId` as a payload FIELD of that kind and is not a
+    // stamped slot, so its entry is null.
+    expect(durable.dataPartSlots).toEqual([null, "t2"]);
+    // The row's stamp is the WIRE's stamp — one statement, not two.
+    const stamped = published.find(
+      (e) => e.type === "DATA_PART" && (e as { data: { viewType?: string } }).data.viewType,
+    ) as { toolCallId?: string };
+    expect(stamped.toolCallId).toBe("t2");
+  });
+
+  it("OMITS dataPartSlots when nothing was stamped (byte-identical to before)", async () => {
+    const { adapter } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "agent_run" });
+    adapter.send("tool_result", { id: "t1", name: "agent_run", result: JSON.stringify({ runId: "run-A" }) });
+    adapter.send("done", {});
+    await adapter.drain();
+    const durable = adapter.durableContent()!;
+    expect(durable.dataParts).toEqual([{ kind: "agent_run", toolCallId: "t1", runId: "run-A" }]);
+    expect("dataPartSlots" in durable).toBe(false);
+  });
+
   it("keeps NO dataParts for a refused envelope — nothing was minted to keep", async () => {
     const { adapter } = collectingAdapter();
     adapter.start();

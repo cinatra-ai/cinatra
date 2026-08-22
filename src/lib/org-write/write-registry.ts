@@ -1232,6 +1232,32 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     },
   },
 
+  {
+    // cinatra#2823 S9j — the truncation TOMBSTONE, in its own single-purpose
+    // module so this new org-axis statement registers rather than riding the
+    // broad mirror-builder file (see src/lib/assistant-turn-supersede.ts).
+    //
+    // A STATEMENT BUILDER, not an executor, and deliberately so: the tombstone
+    // must commit in the SAME transaction as the truncation whose intent it acts
+    // on, so it is composed into `upsertChatThreadInDatabase`'s single
+    // transaction (the row below) rather than running its own. It is registered
+    // on its own because it is the module's whole export surface and the writer
+    // it belongs to must not be able to gain a new org-axis statement unseen.
+    module: "src/lib/assistant-turn-supersede.ts",
+    exportName: "buildSupersedeRunBoundTurnsQuery",
+    capability: "content.write",
+    orgIdExtractor:
+      "none at the builder boundary (thread-scoped UPDATE; the thread row carries the org axis, and the statement additionally authorizes against that row's owner_user_id)",
+    storageReferences: ["assistant_turns", "assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling; the statement's own authority is the thread's owner_user_id (self-harm-only tombstone)",
+    },
+  },
+
   // — chat thread persistence facade (same sweep, same chat family):
   //   src/lib/database.ts composes its OWN raw-SQL transactions for the chat
   //   thread lifecycle (builders live in project-inheritance.ts /

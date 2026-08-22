@@ -36,8 +36,18 @@ export {
   markNotificationUnreadForUser,
   markNotificationsReadByHrefPrefixForUser,
   deleteNotificationsByDedupeKeyForUser,
+  // cinatra#2835 — the hold-scoped clear: same key, but additionally pinned to the
+  // park id the row carries, so a hold can only ever delete its OWN row.
+  deleteHoldNotificationForUser,
+  // cinatra#2838 — the CTE a fenced insert's RETURNING is bound to. Part of the
+  // fence contract: an `after` statement gates itself on it, so a follow-up never
+  // records a row the insert did not write.
+  NOTIFICATION_WRITE_CTE,
 } from "./service";
 export type { CreateNotificationOptions } from "./service";
+// cinatra#2864 — the write-time precondition a caller fences an insert behind.
+// cinatra#2838 — the statement shape a fenced `after` is expressed in.
+export type { NotificationWriteFence, NotificationWriteStatement } from "./service";
 export type { AgentCreationProgressMilestone } from "./service";
 export type { NotificationsKeysetBefore } from "./service";
 
@@ -56,6 +66,18 @@ export {
 export { resolveRequestActorContext } from "./request-actor";
 
 export { resolveAgentRunHref } from "./agent-run-href";
+
+// cinatra#2882 — THE ASYNC SEAM. Same statements, same guards, over the host's
+// async pooled adapter instead of the synchronous `Atomics.wait` bridge. For
+// callers that already have an `await`; `./service`'s synchronous twins stay
+// exported above, unchanged, for genuinely synchronous hosts.
+export {
+  deleteNotificationsByDedupeKeyForUserAsync,
+  // cinatra#2838's hold-scoped clear, over the same seam: its one production
+  // caller (`onClearRecommendationHold`) is async, and its boolean ack keeps
+  // meaning "the statement committed".
+  deleteHoldNotificationForUserAsync,
+} from "./service";
 
 // Ergonomic-only re-export for NON-boot callers (adapter-mocking tests).
 export {

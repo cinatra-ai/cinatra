@@ -60,6 +60,10 @@ import {
 // non-OK turn response so a rejection BEFORE the stream reads identically to one
 // raised inside it (cinatra#2094 F10).
 import { extractErrorMessage } from "./renderer/stream-normalizers";
+// cinatra#2825 (S9l) — the ONE definition of "a lifecycle slot", shared with
+// the renderer so the projection and the view cannot drift about which parts a
+// layout mode may not suppress.
+import { lifecycleSlotParts, turnCarriesLifecycleItems } from "./assistant-parts";
 import type { UiMessage, UiThread, UiThreadSummary } from "./types";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
@@ -496,6 +500,13 @@ export function projectConversationMessage(
     ...(state.interrupt ? { interrupt: state.interrupt } : {}),
   };
   if (opts.slackMode) {
+    // cinatra#2825 (S9l) — the lifecycle SLOTS of the trace, and only those.
+    // The pinned Slack layout still omits the ordered `parts` below; what it may
+    // not omit is the anchor a held or actionable card mounts at, because a
+    // presentation mode must never be able to hide a decision the reader owes.
+    // Same field-presence discipline as every other optional key: absent unless
+    // this turn actually carries one.
+    const lifecycleParts = lifecycleSlotParts(m.parts);
     return {
       id: opts.assistantId,
       role: "assistant",
@@ -503,6 +514,7 @@ export function projectConversationMessage(
       ...(opts.authorUserId ? { authorUserId: opts.authorUserId } : {}),
       // Slack layout parity: thoughtGroups + flat content, never `parts`.
       ...(m.thoughtGroups.length > 0 ? { thoughtGroups: m.thoughtGroups } : {}),
+      ...(lifecycleParts.length > 0 ? { lifecycleParts } : {}),
       ...(m.citations.length > 0 ? { citations: m.citations } : {}),
       // Carried in Slack mode too: a renderable view is an ADJUNCT (like
       // citations, which Slack already reveals), not part of the pinned
@@ -540,6 +552,19 @@ export type AssistantChatTurnUiPort = {
   /** Widget-refresh parity: the bespoke wire keyed on tool_result's name. */
   isWidgetRefreshTool: (toolName: string) => boolean;
   onWidgetRefresh: () => void;
+  /**
+   * THE SERVER'S OWN NAME FOR THIS TURN (cinatra#2823 S9j), reported as soon as
+   * the wire carries it and on every fold after that — the port implementation
+   * is expected to be idempotent about it.
+   *
+   * The bubble id above is minted in the page, so a turn that never reaches a
+   * saved transcript leaves NO server-side row carrying any name this page knows.
+   * The run id is the one identity both sides hold, and a truncation that removes
+   * a still-streaming or just-ended turn can only be acted on through it
+   * (`packages/chat/src/turn-stream-registry.ts`). OPTIONAL: a surface that never
+   * truncates has nothing to do with it.
+   */
+  noteRunId?: (runId: string) => void;
 };
 
 export type DriveAssistantChatTurnOptions = {
@@ -598,6 +623,14 @@ export async function driveAssistantChatTurn(
 ): Promise<void> {
   const { assistantId, authorUserId, slack, signal, ui } = options;
   let caughtError = "";
+  // The last state the reducer folded — declared HERE, beside `caughtError`,
+  // because the `finally` below is the only reader and it sits outside the try
+  // (cinatra#2825, S9l). Slack reveals nothing until the turn ends, so a
+  // transport failure used to append a bare error bubble and throw the reduced
+  // turn away, including a lifecycle card the run had already produced. The
+  // ChatGPT branch never had that hole: its error is written ONTO the projected
+  // bubble, which already carries the items.
+  let lastState: ConversationViewState | undefined;
   try {
     if (slack) {
       ui.setTypingIndicator(true);
@@ -648,6 +681,7 @@ export async function driveAssistantChatTurn(
         signal,
         onState: (state) => {
           anyEventSeen = true;
+          lastState = state;
           if (slack) return; // whole-turn atomic reveal below
           ui.updateMessages((prev) =>
             prev.map((msg) =>
@@ -658,6 +692,13 @@ export async function driveAssistantChatTurn(
           );
         },
         onEvent: (event, state) => {
+          // THE SERVER'S OWN NAME FOR THIS TURN, as soon as the wire carries it
+          // (cinatra#2823 S9j). Reported for EVERY mode — Slack above all, since
+          // Slack is the mode that lets a user edit while a turn streams, and a
+          // turn removed mid-stream has no other identity the server can act on.
+          // `onEvent` fires on the same fold as `onState` (see `emit`), so this
+          // is live rather than end-of-turn; the port is idempotent about it.
+          if (state.runId) ui.noteRunId?.(state.runId);
           // TOOL_CALL_END carries only the id; the name resolves from the
           // folded state (TOOL_CALL_START recorded it).
           if (event.type === "TOOL_CALL_END" && !widgetRefreshFired.has(event.toolCallId)) {
@@ -694,10 +735,15 @@ export async function driveAssistantChatTurn(
         authorUserId,
         slackMode: true,
       });
+      // A turn is revealed when it has anything to show. Text, a thought group
+      // and an error were the whole test until cinatra#2825 (S9l): a turn whose
+      // ONLY content is a lifecycle card passed all three and was dropped, so
+      // the reader never saw a decision that was waiting for them.
       if (
         revealed.content.length > 0 ||
         (revealed.thoughtGroups?.length ?? 0) > 0 ||
-        revealed.error
+        revealed.error ||
+        turnCarriesLifecycleItems(revealed)
       ) {
         ui.updateMessages((prev) => [...prev, revealed]);
       }
@@ -724,12 +770,37 @@ export async function driveAssistantChatTurn(
     if (slack) {
       ui.setTypingIndicator(false);
       if (caughtError) {
+        // The error bubble keeps this turn's LIFECYCLE ITEMS (cinatra#2825,
+        // S9l). The pinned error shape is otherwise unchanged — no text, no
+        // thought groups — because a stream that failed has nothing to say; what
+        // it may still be holding is a decision, and an unrelated transport
+        // failure must not be what hides it. A turn that produced none (the
+        // failure-before-any-event case) serializes exactly as before.
+        const carried = lastState
+          ? projectConversationMessage(lastState, {
+              assistantId,
+              ...(authorUserId ? { authorUserId } : {}),
+              slackMode: true,
+            })
+          : null;
+        const lifecycleItems = carried
+          ? {
+              ...(carried.dataParts ? { dataParts: carried.dataParts } : {}),
+              ...(carried.lifecycleParts ? { lifecycleParts: carried.lifecycleParts } : {}),
+            }
+          : {};
         ui.updateMessages((prev) => {
           const alreadyInserted = prev.some((m) => m.id === assistantId);
           if (alreadyInserted) return prev;
           return [
             ...prev,
-            { id: assistantId, role: "assistant" as const, content: "", error: caughtError },
+            {
+              id: assistantId,
+              role: "assistant" as const,
+              content: "",
+              ...lifecycleItems,
+              error: caughtError,
+            },
           ];
         });
       }
@@ -773,12 +844,160 @@ export function extractAgentName(text: string): string | null {
   return name && name.length > 0 ? name : null;
 }
 
-export async function saveChatThreadViaFetch(thread: Record<string, unknown> & { id: string }): Promise<void> {
-  await fetch("/api/assistants/threads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(thread),
+/**
+ * HOW LONG ONE THREAD SAVE MAY STAY OPEN before it is abandoned (cinatra#2823
+ * S9j, codex round 4 finding 3).
+ *
+ * A browser applies NO default timeout to `fetch`, and these saves are now
+ * CHAINED per thread, so an unbounded request is not just one lost save: it is
+ * every later save for that thread, for the life of the tab, and `editAndResend`
+ * awaits that chain. The bound is what makes "the chain slot settles" true.
+ *
+ * 30 seconds, because the bound has to sit ABOVE any save that could still
+ * succeed and BELOW the point where waiting is pointless. A whole-transcript
+ * POST carries the entire thread over whatever uplink the reader has and the
+ * route commits it in one transaction, so a slow-but-live save is measured in
+ * seconds, not tens of them, and a request still open at 30s is one whose
+ * connection is gone rather than one that is working. It is a UX-and-liveness
+ * bound, chosen for that shape — not a number read off a server ceiling, and it
+ * is deliberately generous so that abandoning a save that WOULD have returned
+ * stays rare. The cost of being wrong is small in both directions: an abandoned
+ * save that would have landed is re-issued by the next real activity (the
+ * baseline advances only on a save that landed), and the edit path reports the
+ * failure on its never-blank bubble instead of hanging.
+ *
+ * THE RESIDUAL, STATED RATHER THAN IMPLIED (codex, on this change). An abort
+ * stops this client READING the response; it does not stop the server committing
+ * the request it already holds. So ANY attempt this bound abandons — an ordinary
+ * save, a user-message save, a gate-ack save, or either attempt of the truncation
+ * intent — may still commit AFTER the saves the chain issued behind it. Two
+ * consequences, both real: an older whole-transcript body can overwrite newer
+ * content (and carry an older `updatedAt` with it), and any abandoned save that
+ * asserts NO truncation — the ordinary one, the user-message one, the gate-ack
+ * one — can re-create the mirror rows a later intent removed, because its stale
+ * body still carries them. The intent's `attempts` retry does not make its two
+ * attempts race EACH OTHER — they carry the same body, so their order between
+ * themselves cannot matter — but a timed-out first attempt is in this residual
+ * like every other abandoned request, and issuing a second attempt WIDENS the
+ * window in which the first can land late.
+ *
+ * IT IS NOT CLOSED HERE, and the reason is that closing it is a change to the
+ * save CONTRACT: it needs a server-side fence — a per-thread write version the
+ * route rejects a stale save against — which no client-side bound can stand in
+ * for, and which nothing in this leg is allowed to introduce. The bound is still
+ * the right trade: without it the wedge is CERTAIN and permanent for the tab,
+ * while this needs a connection that hangs past 30s AND a server that commits it
+ * late AND another save inside that window.
+ */
+export const CHAT_THREAD_SAVE_TIMEOUT_MS = 30_000;
+
+/**
+ * POST one whole-transcript thread save.
+ *
+ * A NON-OK RESPONSE IS A FAILURE, and it says so (cinatra#2823 S9j).
+ * It used to resolve on any response at all, so "the save landed" and "the
+ * server rejected it" were the same value to every caller. That is tolerable for
+ * a best-effort save whose caller only logs, and it is NOT tolerable for the
+ * TRUNCATION INTENT (`removedMessageIds`), which is the one save whose success
+ * the edit path has to be able to wait on before it does anything irreversible.
+ * Every pre-existing caller already `.catch()`es this, so the only behaviour
+ * change is that a rejected save is now visible to a caller that wants to look.
+ *
+ * AND IT ALWAYS SETTLES: the POST is bound by `CHAT_THREAD_SAVE_TIMEOUT_MS`. The
+ * signal is built here rather than taken from a caller, because the bound is a
+ * property of this save and not of the surface issuing it; `timeoutMs` exists so
+ * an arm can state the bound in test time rather than wall time.
+ */
+export async function saveChatThreadViaFetch(
+  thread: Record<string, unknown> & { id: string },
+  options?: { timeoutMs?: number },
+): Promise<void> {
+  const timeoutMs = options?.timeoutMs ?? CHAT_THREAD_SAVE_TIMEOUT_MS;
+  // A controller plus a cleared timer, not `AbortSignal.timeout`: the same
+  // bound, in every runtime this bundle reaches, and with the timer provably
+  // gone the moment the request settles rather than left to be collected.
+  const bound = new AbortController();
+  const expire = setTimeout(
+    () => bound.abort(new Error(`saveChatThread: POST /api/assistants/threads timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  try {
+    const res = await fetch("/api/assistants/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(thread),
+      signal: bound.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`saveChatThread: POST /api/assistants/threads returned ${res.status}`);
+    }
+  } finally {
+    clearTimeout(expire);
+  }
+}
+
+/**
+ * The per-thread SAVE CHAIN (cinatra#2823 S9j).
+ *
+ * WHY ORDER IS A CORRECTNESS PROPERTY AND NOT A PREFERENCE. Every /chat save
+ * posts the WHOLE transcript, and the server reconciles it by DELETING the
+ * mirror rows the payload no longer carries. Exactly one save also carries an
+ * explicit TRUNCATION INTENT — `editAndResend`'s `removedMessageIds` — and the
+ * server reads the removed turns' identity OUT OF THE VERY ROWS that DELETE
+ * removes. So a plain save from the same tab, carrying the same truncated
+ * transcript and asserting nothing, DESTROYS the evidence the intent needs: if
+ * it commits first, the intent arrives to an empty `removed` set, tombstones
+ * nothing, and the turn the user deliberately edited away folds back in on the
+ * next reload. Permanently.
+ *
+ * Concurrent `fetch`es have no order, so "issued first" did not mean "committed
+ * first". Chaining them per thread makes it mean that: a save is not POSTed until
+ * the previous save to that thread has settled, so same-tab saves commit in the
+ * order the surface issued them.
+ *
+ * KEYED PER THREAD, not globally — two threads have no reconcile in common and
+ * serialising them would only add latency. The chain entry is dropped once its
+ * tail settles, so the map holds only threads with saves in flight.
+ *
+ * `attempts` retries INSIDE the chained slot rather than by re-enqueuing, so a
+ * retry cannot end up behind a save that was issued after it — which for the
+ * truncation intent would put it back in exactly the losing position.
+ *
+ * The returned promise REJECTS when the save ultimately failed (see above). The
+ * chain itself never rejects, so one failed save cannot poison the thread's
+ * later ones.
+ *
+ * EVERY SLOT SETTLES, which is what makes the chain safe to queue behind. Each
+ * POST is bound by `CHAT_THREAD_SAVE_TIMEOUT_MS` (codex round 4, finding 3):
+ * without it a single hung connection wedged this thread's persistence — and the
+ * edit that awaits it — for the life of the tab.
+ */
+const chatThreadSaveChains = new Map<string, Promise<void>>();
+
+export function saveChatThreadInOrder(
+  thread: Record<string, unknown> & { id: string },
+  options?: { attempts?: number; timeoutMs?: number },
+): Promise<void> {
+  const attempts = Math.max(1, options?.attempts ?? 1);
+  const prior = chatThreadSaveChains.get(thread.id) ?? Promise.resolve();
+  const result = prior.then(async () => {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await saveChatThreadViaFetch(thread, { timeoutMs: options?.timeoutMs });
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError;
   });
+  const forget = () => {
+    if (chatThreadSaveChains.get(thread.id) === tail) chatThreadSaveChains.delete(thread.id);
+  };
+  const tail: Promise<void> = result.then(forget, forget);
+  chatThreadSaveChains.set(thread.id, tail);
+  return result;
 }
 
 export async function fetchThreadByIdViaFetch(threadId: string): Promise<Record<string, unknown> | null> {

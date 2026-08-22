@@ -44,6 +44,7 @@
     "./artifact-review-gate-store": "./src/artifact-review-gate-store.ts",
     "./lifecycle-card-runtime": "./src/lifecycle-card-runtime.tsx",
     "./review-gate-card": "./src/review-gate-card.tsx",
+    "./verification-summary-card": "./src/verification-summary-card.tsx",
     "./review-decision-bar": "./src/review-decision-bar.tsx",
     "./review-gate-states": "./src/review-gate-states.tsx",
     "./run-step-rail-panel": "./src/run-step-rail-panel.tsx",
