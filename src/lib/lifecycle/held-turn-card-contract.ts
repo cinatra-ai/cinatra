@@ -390,16 +390,14 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
       '[data-skill-action="skip"]',
     ]),
     ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
-    // §V's terminal acts, on the shipped `RunRecommendationChipRow`.
-    //
-    // RE-READ AFTER THE §V REDRAW (cinatra#2841, corrected here by cinatra#2790).
-    // These used to name the row-level `confirm-run-recommendation` /
-    // `skip-run-recommendation` pair. The ratified drawing decides PER CHIP, the
-    // redraw emits neither name anywhere, and the field's own contract is that it
-    // names what the component REALLY draws — so a matrix arm that reads the
-    // shipped source for these was asserting selectors that had stopped existing.
-    // The `ownerAnchors` above were corrected in the redraw and these were
-    // missed; they are the same three, and the capture contract names them too.
+    // §V's terminal acts, on the shipped `RunRecommendationChipRow` — the SAME
+    // three the owner anchors above and the capture contract
+    // (`decisionControls` in `scripts/ci/lib/capture-record-contract.mjs`)
+    // already name. The §V redraw (cinatra#2841) made the decision PER CHIP, so
+    // the row-level `confirm-run-recommendation` / `skip-run-recommendation`
+    // pair this list used to hold is emitted nowhere; cinatra#2866 renamed the
+    // owner anchors but left this field behind, which is what asserted a
+    // selector the shipped row never draws.
     decisionControls: Object.freeze([
       '[data-skill-action="confirm"]',
       '[data-skill-action="adjust"]',
@@ -575,8 +573,12 @@ export function chatCarriageRootAnchorsFor(
  *
  *   · `trigger_schedule_proposal` — the registry still dispatches it to the S1
  *     shell; S9d (#2788) draws `ScheduleProposalCard` and strikes it.
- *   · `verification_summary` — same shell; S9e (#2789) draws
- *     `VerificationSummaryCard` and strikes it.
+ *
+ * `verification_summary` WAS here for the same reason and is STRUCK by S9e
+ * (cinatra#2789): the registry now dispatches it to `VerificationSummaryCard`,
+ * so the shell no longer owns its chat root. The list is a red done-check in
+ * both directions — leaving the row standing after the owner lands turns the
+ * matrix red, which is exactly how the seam was found.
  *
  * `recommendation_hold` is deliberately NOT repeated here. Its chat mount is
  * owed for its own reason (S9b, #2786) and already ratcheted by
@@ -586,7 +588,6 @@ export function chatCarriageRootAnchorsFor(
  */
 export const SHELL_OWNED_CHAT_KINDS: readonly LifecycleCardKind[] = Object.freeze([
   "trigger_schedule_proposal",
-  "verification_summary",
 ]);
 
 /**

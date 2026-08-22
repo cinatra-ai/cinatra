@@ -16,11 +16,14 @@ const enforceReviewRunAccess = vi.fn();
 const readReviewGateState = vi.fn();
 const readReviewGate = vi.fn();
 const readVerificationRecordForGate = vi.fn();
+const readAdvisoryCommentsForGates = vi.fn(async () => []);
 
 vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
   enforceReviewRunAccess: (...args: unknown[]) => enforceReviewRunAccess(...args),
   readReviewGateState: (...args: unknown[]) => readReviewGateState(...args),
   readReviewGate: (...args: unknown[]) => readReviewGate(...args),
+  readAdvisoryCommentsForGates: (...args: unknown[]) =>
+    readAdvisoryCommentsForGates(...(args as [])),
 }));
 
 vi.mock("@cinatra-ai/agents/lifecycle-verification-read-store", () => ({
@@ -29,8 +32,10 @@ vi.mock("@cinatra-ai/agents/lifecycle-verification-read-store", () => ({
 }));
 
 import {
+  VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH,
+  VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH,
+  VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS,
   VERIFICATION_SUMMARY_MAX_FIELD_DIFF,
-  VERIFICATION_SUMMARY_MAX_SCOPE_PATHS,
   VERIFICATION_SUMMARY_PATH_MAX_LENGTH,
   VERIFICATION_SUMMARY_VALUE_MAX_LENGTH,
   verificationSummaryBodySchema,
@@ -60,6 +65,11 @@ function accessFor(granted: string[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` clears CALLS, not implementations, so a per-test
+  // `mockResolvedValue` would otherwise leak into the next test. The advisory
+  // read's default is "no comments" — the shape most cases want.
+  readAdvisoryCommentsForGates.mockReset();
+  readAdvisoryCommentsForGates.mockResolvedValue([] as never);
 });
 
 describe("the ref codec", () => {
@@ -281,10 +291,132 @@ describe("verification_summary — advisory, and now a reading to draw (§VII)",
         outcome: "verified",
         reviewedRevisionId: "rev-base",
         repairedRevisionId: "rev-fixed",
-        scopePaths: ["content.title"],
-        fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+        // The manifest does NOT travel as a list — §VII draws no region for it
+        // (cinatra#2861). It travels as the row's own `inScope`.
+        fieldDiff: [{ field: "content.title", before: "old", after: "new", inScope: true }],
+        advisoryComments: [],
       },
     });
+  });
+
+  it("carries §VII's advisory comments — where the reading's PROVENANCE lives", async () => {
+    // §VII puts the provenance in the body of a service comment rather than on
+    // a line of its own, so a body without the comments is a verdict with no
+    // provenance on every host that is not the review page. They ride the same
+    // authorized answer as the rest of the reading (epic S9, slice S9e).
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockResolvedValue([
+      {
+        id: "cmt-1",
+        gateId: "gate-row-1",
+        authorId: "svc",
+        authorKind: "service",
+        body: "Core analysis of 1 disclosed field(s). [provenance] lane=core-analysis-lane",
+        createdAt: new Date(0),
+      },
+    ] as never);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    expect(resolved.body).toMatchObject({
+      advisoryComments: [
+        {
+          authorKind: "service",
+          body: "Core analysis of 1 disclosed field(s). [provenance] lane=core-analysis-lane",
+        },
+      ],
+    });
+    // The comment's own row id is NOT addressable from the card.
+    expect(JSON.stringify(resolved.body)).not.toContain("cmt-1");
+    expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
+  });
+
+  it("drops a half-formed comment rather than drawing an empty panel", async () => {
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockResolvedValue([
+      { id: "c1", authorKind: "", body: "no author kind" },
+      { id: "c2", authorKind: "service", body: "" },
+      { id: "c3", authorKind: "agent", body: "kept" },
+    ] as never);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    expect((resolved.body as { advisoryComments: unknown[] }).advisoryComments).toEqual([
+      { authorKind: "agent", body: "kept" },
+    ]);
+  });
+
+  it("clamps the comments to their own ceilings", async () => {
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockResolvedValue(
+      Array.from({ length: 200 }, (_unused, i) => ({
+        id: `c${i}`,
+        authorKind: "service".padEnd(200, "x"),
+        body: "b".repeat(9000),
+      })) as never,
+    );
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    const comments = (resolved.body as {
+      advisoryComments: { authorKind: string; body: string }[];
+    }).advisoryComments;
+    expect(comments).toHaveLength(VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS);
+    expect(comments[0]!.authorKind.length).toBe(VERIFICATION_SUMMARY_AUTHOR_KIND_MAX_LENGTH);
+    expect(comments[0]!.body.length).toBe(VERIFICATION_SUMMARY_COMMENT_MAX_LENGTH);
+    expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
+  });
+
+  it("a comment-store failure keeps the READING, and says the panel is UNKNOWN", async () => {
+    // The verdict and the diff are already authorized; losing the comments must
+    // cost the provenance panel, not the whole card. And it must cost it
+    // HONESTLY (cinatra#2861): `null`, not `[]`. An empty list is the resolver
+    // stating that this analysis carries no comments — a fact it did not
+    // establish here — and the card draws those two answers differently.
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockRejectedValue(new Error("store down") as never);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    expect(resolved.state).toEqual({ state: "advisory" });
+    expect((resolved.body as { advisoryComments: unknown }).advisoryComments).toBeNull();
+    expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
+  });
+
+  it("…and a SYNCHRONOUS throw from that store keeps the reading too", async () => {
+    // A `.catch()` on the call would not cover this shape: a store that throws
+    // before returning a promise throws before the handler is attached, and the
+    // module's outer guard would turn the whole card into an `absent`. The
+    // reading is already authorized at this point; only the panel may be lost.
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockImplementation(() => {
+      throw new TypeError("not a function on this build");
+    });
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    expect(resolved.state).toEqual({ state: "advisory" });
+    expect((resolved.body as { advisoryComments: unknown }).advisoryComments).toBeNull();
   });
 
   it("the body names NO addressable identifier — not the record, gate or artifact", async () => {
@@ -320,17 +452,90 @@ describe("verification_summary — advisory, and now a reading to draw (§VII)",
       actorCtx,
     });
     const body = resolved.body as {
-      scopePaths: string[];
       fieldDiff: { field: string; before: string | null; after: string | null }[];
     };
-    expect(body.scopePaths).toHaveLength(VERIFICATION_SUMMARY_MAX_SCOPE_PATHS);
-    expect(body.scopePaths[0]!.length).toBe(VERIFICATION_SUMMARY_PATH_MAX_LENGTH);
     expect(body.fieldDiff).toHaveLength(VERIFICATION_SUMMARY_MAX_FIELD_DIFF);
     expect(body.fieldDiff[0]!.field.length).toBe(VERIFICATION_SUMMARY_PATH_MAX_LENGTH);
     expect(body.fieldDiff[0]!.before!.length).toBe(VERIFICATION_SUMMARY_VALUE_MAX_LENGTH);
     // A missing side is `null`, never the string "undefined".
     expect(body.fieldDiff[0]!.after).toBeNull();
     // And what it produces is what the wire contract accepts.
+    expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
+  });
+
+  it("decides IN-SCOPE against the WHOLE manifest, not the projection's ceilings", async () => {
+    // cinatra#2861. The manifest used to travel as a bounded, path-clamped list
+    // and the card re-derived the mark from it by set membership. Both ceilings
+    // could then lie: an authorized path past the list ceiling, or one longer
+    // than the path ceiling, would fail the membership test and the card would
+    // mark an AUTHORIZED change as out-of-scope drift — accusing a repair of
+    // going outside what a human allowed, on nothing but a ceiling. The mark is
+    // decided here, where the manifest is whole and untruncated.
+    const longPath = `content.${"deep.".repeat(120)}title`;
+    expect(longPath.length).toBeGreaterThan(VERIFICATION_SUMMARY_PATH_MAX_LENGTH);
+    const buried = "content.buried";
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue({
+      ...RECORD,
+      scopeManifest: {
+        // `buried` sits far past any list ceiling the body used to carry, and
+        // `longPath` is longer than the path ceiling. Both are authorized.
+        paths: [...Array.from({ length: 400 }, (_u, i) => `filler.${i}`), buried, longPath],
+      },
+      fieldDiff: [
+        { field: buried, before: "old", after: "new" },
+        { field: longPath, before: "old", after: "new" },
+        { field: "content.never-authorized", before: null, after: "x" },
+      ],
+    });
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    const rows = (resolved.body as { fieldDiff: { inScope: boolean }[] }).fieldDiff;
+    expect(rows.map((r) => r.inScope)).toEqual([true, true, false]);
+    expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
+  });
+
+  it("PINS the service provenance through the comment clamp", async () => {
+    // §VII fixes the reading's provenance as the body of a SERVICE comment, and
+    // the core APPENDS that comment — so in store order (createdAt ascending)
+    // it is LAST. A plain first-N clamp therefore evicts exactly the row the
+    // spec says must be there: a gate that collected more than the ceiling of
+    // human comments would ship a verdict with no provenance at all
+    // (cinatra#2861). The service rows ride through the clamp; the kept rows
+    // still come out in store order.
+    accessFor(["read"]);
+    readReviewGate.mockResolvedValue({ id: "gate-row-1" });
+    readVerificationRecordForGate.mockResolvedValue(RECORD);
+    readAdvisoryCommentsForGates.mockResolvedValue([
+      ...Array.from({ length: VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS + 30 }, (_u, i) => ({
+        id: `human-${i}`,
+        authorKind: "user",
+        body: `human comment ${i}`,
+      })),
+      { id: "svc-1", authorKind: "service", body: "[provenance] lane=core-analysis-lane" },
+    ] as never);
+    const resolved = await resolveLifecycleCardState({
+      viewType: "verification_summary",
+      ref: REF,
+      actorCtx,
+    });
+    const comments = (
+      resolved.body as { advisoryComments: { authorKind: string; body: string }[] }
+    ).advisoryComments;
+    expect(comments).toHaveLength(VERIFICATION_SUMMARY_MAX_ADVISORY_COMMENTS);
+    // The appended service comment survived…
+    expect(comments.some((c) => c.authorKind === "service")).toBe(true);
+    // …at the END, which is where the store put it: the clamp changes WHICH
+    // rows are kept, never the order they are drawn in.
+    expect(comments[comments.length - 1]).toEqual({
+      authorKind: "service",
+      body: "[provenance] lane=core-analysis-lane",
+    });
+    expect(comments[0]!.body).toBe("human comment 0");
     expect(verificationSummaryBodySchema.safeParse(resolved.body).success).toBe(true);
   });
 

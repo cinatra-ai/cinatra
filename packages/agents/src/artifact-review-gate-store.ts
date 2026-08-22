@@ -318,9 +318,14 @@ async function readReviewGateVia(
 // resolved), ordered by creation so the canonical run view can weave them into
 // the step rail as live steps and as read-only history. It reads the SAME table
 // through the SAME run-scoped index the emit path anchors on
-// (`artifact_review_gates_run_task_uniq`); no schema change. Access enforcement
-// is the aggregate reader's job (readRunDetailAggregate) — this port is a plain
-// read, exactly like `readReviewGate`.
+// (`artifact_review_gates_run_task_uniq`); no schema change. AUTHORIZATION IS
+// THE CALLER'S JOB — the precedent this port set, and the one
+// `lifecycle-policy-store` names when it makes the same choice: this is a plain
+// read, exactly like `readReviewGate`, and each caller clears its OWN door
+// first, by the route that door belongs to. They are not the same call: the
+// review surface enforces `enforceReviewRunAccess`, while the run screens go
+// through the actor-aware `readAgentRunById`, which enforces the run's
+// effective policy in `enforceRunAccess`.
 // ---------------------------------------------------------------------------
 export async function listReviewGatesForRun(runId: string): Promise<ReviewGateRow[]> {
   const rows = await db

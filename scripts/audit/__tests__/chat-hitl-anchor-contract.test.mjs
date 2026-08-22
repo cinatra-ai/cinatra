@@ -135,9 +135,14 @@ describe("every digest input is really an input", () => {
     ).toContain("the anchor digest is stale");
   });
 
+  // The added cell must be one the contract does NOT already record, or the
+  // clone is byte-identical and the discriminator proves nothing.
+  // `verification_summary` stopped being that example when S9e (cinatra#2789)
+  // landed its run-card and gate-region mounts; `trigger_schedule_proposal`
+  // still reaches the two conversation hosts only.
   it("a HOST CELL added to the parity row invalidates the digest", () => {
     const drifted = clone(contract());
-    drifted.domExpectations.hostParity.verification_summary.hosts.run_card = "composition";
+    drifted.domExpectations.hostParity.trigger_schedule_proposal.hosts.run_card = "composition";
     expect(
       auditAnchorContract({ anchorContract: drifted, manifest: manifest() }).join("\n"),
     ).toContain("the anchor digest is stale");

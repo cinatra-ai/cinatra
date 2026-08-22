@@ -203,6 +203,15 @@ export type SurfaceMountOptions = {
    * thread through the shared turn engine and ignores this.
    */
   threadId?: string;
+  /**
+   * Mount the CHAT arm in the SLACK layout (cinatra#2825, S9l) — the two-mention
+   * turn shape, whose pinned layout omits the ordered `parts` trace. `/chat`
+   * chooses this per thread, so a survival check has to be able to mount BOTH
+   * layouts on the same transcript. Default `false` keeps every existing arm
+   * mounting exactly what it mounted before. The widget arm resolves its own
+   * layout through the shared turn engine and ignores this.
+   */
+  slackMode?: boolean;
 };
 
 /**
@@ -226,7 +235,7 @@ export function chatSurfaceElement(options: SurfaceMountOptions = {}): ReactElem
       <ConversationColumn
         host={CHAT_THREAD_HOST}
         messages={messages}
-        isSlackMode={false}
+        isSlackMode={options.slackMode ?? false}
         animating={false}
         theme="github-light"
         userId="user-1"
@@ -844,8 +853,12 @@ const VERIFICATION_BODY = {
   outcome: "verified",
   reviewedRevisionId: "rev-base",
   repairedRevisionId: "rev-fixed",
-  scopePaths: ["content.title"],
-  fieldDiff: [{ field: "content.title", before: "old", after: "new" }],
+  // The authorization travels as each ROW's own mark, decided server-side
+  // against the whole manifest (cinatra#2861) — never as a `scopePaths` list.
+  // The body schema is `.strict()`, so a stub still sending the retired list,
+  // or omitting `inScope`, is rejected and the card fails closed.
+  fieldDiff: [{ field: "content.title", before: "old", after: "new", inScope: true }],
+  advisoryComments: [],
 };
 
 /** A live proposal — the schedule kind's own body. */

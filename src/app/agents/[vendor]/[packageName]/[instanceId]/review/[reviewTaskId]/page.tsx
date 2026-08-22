@@ -34,7 +34,6 @@ import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/stor
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/agents/run-stepper-steps";
 import {
   readReviewGate,
-  readAdvisoryCommentsForGates,
   enforceReviewRunAccess,
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-verification-store";
@@ -111,7 +110,7 @@ async function loadRunStepsContext(
 }
 
 export default async function AgentRunReviewPage({ params, searchParams }: PageProps) {
-  const { vendor, packageName, instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
+  const { instanceId: rawInstanceId, reviewTaskId: rawTaskId } = await params;
   // The run instance id IS the review's run id (the review lives under the run).
   const runId = decodeURIComponent(rawInstanceId);
   const reviewTaskId = decodeURIComponent(rawTaskId);
@@ -139,11 +138,14 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
         </ReviewShell>
       );
     }
-    const [record, advisory] = await Promise.all([
-      readVerificationRecordForGate(gate.id),
-      readAdvisoryCommentsForGates([gate.id]),
-    ]);
-    const backHref = `/agents/${vendor}/${packageName}/${encodeURIComponent(runId)}/review/${encodeURIComponent(reviewTaskId)}`;
+    // The RECORD is still read here, but only for the page-only adjunct below:
+    // the pinned visual pair needs the reviewed target and the record's own
+    // out-of-scope paths, and both are server-side store reads. §VII's READING
+    // is no longer projected here at all — the card resolves it from its ref
+    // against the live reader (cinatra#2789, epic #2784 S9e), which is also
+    // where the ADVISORY COMMENTS now travel, so this branch no longer reads
+    // them either.
+    const record = await readVerificationRecordForGate(gate.id);
     // S6 (#2044 L-D): the field diff's VISUAL counterpart — the reviewed proposal
     // beside the page as it actually landed, with the read-back's own
     // out-of-scope paths outlined on the applied side. A pure store read of the
@@ -159,19 +161,15 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
             .map((f) => f.field),
         )
       : null;
+    // The audit card's ref — the SAME gate-scoped ticket the run card and a chat
+    // transcript address the card with (both kinds hang off the gate, so both
+    // share one codec). Minted per request here because the page reaches the
+    // gate by route params and has no envelope to read.
+    const verificationCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
     return (
       <ReviewShell>
         {record ? (
-          <VerificationView
-            outcome={record.outcome}
-            reviewedRevisionId={record.reviewedTarget.representationRevisionId}
-            repairedRevisionId={record.repairedTarget.representationRevisionId}
-            fieldDiff={record.fieldDiff}
-            scopePaths={record.scopeManifest.paths}
-            advisoryComments={advisory.map((c) => ({ id: c.id, authorKind: c.authorKind, body: c.body }))}
-            gateHref={backHref}
-            visualPair={visualPair}
-          />
+          <VerificationView cardRef={verificationCardRef} visualPair={visualPair} />
         ) : (
           <ReviewGateBlocked reason="no-longer-pending" />
         )}

@@ -102,7 +102,11 @@ import {
 import {
   mintReviewIslandCredential,
   reviewIslandUrl,
+  verifyReviewIslandCredential,
 } from "@/lib/lifecycle/review-island-credential";
+// cinatra#2754 — the single-use ledger. A minted address is worth one paint, and
+// the grant that makes it worth one is written HERE, at the one mint site.
+import { recordIslandCredentialGrant } from "@/lib/lifecycle/review-island-grant-store";
 
 // Re-exported so every S8a import path still resolves here — the split is an
 // internal one, not a move of this module's public surface. The former
@@ -358,6 +362,11 @@ export async function resolveWidgetLifecycleActorContext(input: {
  * would be a bearer sitting in a transcript. The card re-resolves on mount, on
  * focus and on reload, and each resolve mints a fresh short-lived URL.
  *
+ * AND EACH ONE IS WORTH EXACTLY ONE PAINT (cinatra#2754). Minting now also
+ * RECORDS a grant keyed by the credential's SHA-256; the island spends it as
+ * its last act. That is what makes every later copy of the address — in a log,
+ * a HAR, a history entry — inert rather than merely short-lived.
+ *
  * `null` when the credential cannot be expressed (a missing signing key, an
  * out-of-bounds id): the caller renders no island rather than a broken frame.
  *
@@ -391,5 +400,27 @@ export function mintWidgetReviewIslandUrl(input: {
     reviewTaskId: input.reviewTaskId,
   });
   if (!credential) return null;
+
+  // THE GRANT THAT MAKES IT SINGLE USE (cinatra#2754). The expiry is read back
+  // OUT of the credential we just sealed rather than recomputed here: the
+  // ledger and the seal must agree about when this address dies, and the only
+  // way two clocks cannot disagree is for there to be one. A credential that
+  // does not re-open is not one we will hand out.
+  const sealed = verifyReviewIslandCredential(credential);
+  if (!sealed) return null;
+  const granted = recordIslandCredentialGrant({
+    credential,
+    orgId: sealed.orgId,
+    userId: sealed.userId,
+    jti: sealed.jti,
+    runId: sealed.runId,
+    reviewTaskId: sealed.reviewTaskId,
+    expiresAtSeconds: sealed.expiresAt,
+  });
+  // NO GRANT, NO ADDRESS. Handing out a credential whose one use cannot be
+  // spent would be handing out the replayable credential this ruling removed;
+  // the caller renders no island, which is a state the card already draws.
+  if (!granted) return null;
+
   return reviewIslandUrl({ ref: input.ref, credential });
 }

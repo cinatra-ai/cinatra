@@ -25,7 +25,7 @@ import "server-only";
 //      THE SIGN-OUT HALF OF THAT SENTENCE IS NEW, and it is the correction of a
 //      residual this slice originally disclosed rather than fixed. S8e was
 //      written against a tree where a `cwu_` row outlived an ordinary sign-out,
-//      so a copied island URL stayed usable for the remainder of its 120 s. The
+//      so a copied island URL stayed usable for the remainder of its life. The
 //      binding that closes it landed separately (#2684); this module adopts it
 //      at the 2026-08-13 rebase, which is why the residual no longer appears
 //      below and must not be re-stated as though it still held.
@@ -37,6 +37,29 @@ import "server-only";
 //      platform tier, all through the same assembly the widget lifecycle actor
 //      uses. Not a copy of it: literally that function, so the island and the
 //      card can never drift apart.
+//
+//   5. AND ONLY THEN IS THE GRANT SPENT (cinatra#2754). The address is worth one
+//      paint, and this is where it is paid for: one atomic
+//      `DELETE ... RETURNING` against the ledger the mint wrote, keyed by the
+//      SHA-256 of the credential the browser presented. THE ORDER IS THE WHOLE
+//      GUARANTEE — a refusal at any rung above returns before reaching this, so
+//      it never burns a grant the reader's retry still needs, and a success
+//      always spends exactly one, so a replay of the same address (a reload, a
+//      copied link, a line lifted out of a log) finds nothing and draws the
+//      empty island. Keyed by the credential HASH and never by `jti`: one
+//      transcript can frame several review cards off one `cwu_`, and a
+//      per-token slot would let the second card kill the first.
+//
+//      AND IT IS THE LAST RUNG OF *THIS FUNCTION*, WHICH IS NOT THE LAST THING
+//      THE REQUEST DOES. The page still hands the actor to
+//      `loadReviewGateSurface`, and that can answer `not-authorized`, `blocked`
+//      or fail — after the grant is already spent. That is the accepted shape,
+//      not an oversight: the ruling put the consume here, the two refusing
+//      answers are not answers a retry of the SAME address would change, and a
+//      transient failure costs the reader nothing because the card's retry
+//      re-resolves and re-mints (`onRetryResolve`). The alternative — carrying
+//      an unspent grant out of the resolver and spending it in the page — would
+//      put the security decision two modules away from the checks it depends on.
 //
 // AND THEN THE ORDINARY ACCESS CHECK STILL RUNS. This module returns an actor;
 // the page hands it to `loadReviewGateSurface`, which re-runs the reader's run
@@ -82,6 +105,9 @@ import {
   verifyReviewIslandCredential,
   type VerifiedReviewIslandCredential,
 } from "@/lib/lifecycle/review-island-credential";
+// cinatra#2754 — the single-use ledger. The LAST rung below spends the grant the
+// mint recorded, so the second presentation of the same address finds nothing.
+import { consumeIslandCredentialGrant } from "@/lib/lifecycle/review-island-grant-store";
 
 /** The table the hosted PKCE login mints `cwu_` rows into. */
 const USER_TOKEN_TABLE = "widget_user_tokens";
@@ -164,7 +190,7 @@ function readLiveIslandPrincipal(jti: string): LiveIslandPrincipal | null {
     // too. READ-ONLY, like the rest of this probe: the token verifier deletes a
     // dead row, this one only declines to paint from it.
     //
-    // IT IS WHAT MAKES THE 120-SECOND WINDOW HONEST. Without it a copied island
+    // IT IS WHAT MAKES THE ONE-MINUTE WINDOW HONEST. Without it a copied island
     // URL stayed usable for its whole life after the person signed out — the
     // residual S8e wrote down and could not fix, because the binding did not
     // exist yet. #2684 landed it; the island adopts it here rather than being
@@ -304,6 +330,28 @@ export async function resolveIslandCredentialReader(input: {
       projectGrants: grants.projectGrants,
     }),
   };
+
+  // 5. THE LAST RUNG: SPEND THE GRANT (cinatra#2754). Everything that can
+  //    refuse has refused by now, so this consume is the point of no return in
+  //    both directions — it is never reached by a refusal, and it always runs on
+  //    a success. `false` means the address was already spent (a replay), was
+  //    never granted, or has outlived its sealed minute against the DATABASE
+  //    clock; all three draw the same empty island as every other refusal here.
+  const spent = consumeIslandCredentialGrant({
+    credential: encoded,
+    jti: verified.jti,
+    runId: verified.runId,
+    reviewTaskId: verified.reviewTaskId,
+  });
+  if (!spent) {
+    emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
+      actor: live.userId,
+      orgId: live.orgId,
+      agentSlug: live.agentSlug,
+      reason: "island_credential_spent",
+    });
+    return null;
+  }
 
   emitWidgetAuthAudit("widget_lifecycle_read_authorized", {
     actor: live.userId,
