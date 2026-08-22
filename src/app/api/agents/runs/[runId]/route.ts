@@ -36,10 +36,21 @@ import { WIDGET_AGENT_RUN_SEED_GRANT } from "@/lib/widget-conversation-grants";
 // must not be rescued by — it would hand the frame whoever else is signed in on
 // that browser, and a run is somebody's work.
 //
-// THE WIDGET BRANCH'S REFUSAL IS UNIFORM. A rejected credential, a run that does
-// not exist, a run in another tenant and a run this reader may not see all
-// answer with the SAME status and the SAME body, and none of them reads a
-// message or a template first. The first-party branch keeps its 403/404 split,
+// THE WIDGET BRANCH'S REFUSAL IS UNIFORM ACROSS RUN OUTCOMES, which is the
+// property that matters and is narrower than "one answer to everything". A run
+// that does not exist, a run in another tenant and a run this reader may not see
+// all answer with the SAME 404 and the SAME body, and none of them reads a
+// message or a template first — so no answer here distinguishes "no such run"
+// from "not yours", and existence is never disclosed across tenants.
+//
+// A REJECTED CREDENTIAL IS A SEPARATE 401 `{"error":"Unauthorized"}`, deliberately
+// NOT folded into that 404. It is an answer about the CALLER, not about any run:
+// it is returned before any run is read, so it distinguishes nothing about which
+// runs exist, and collapsing it into the 404 would tell a widget whose token
+// merely expired that its run had vanished. Both refusals are pinned by
+// `route.widget-branch.test.ts`.
+//
+// The first-party branch keeps its 403/404 split,
 // which is a distinction its caller is already entitled to; on a third-party
 // page that same split is an existence oracle for runs the asker has no standing
 // to learn about.
@@ -51,6 +62,34 @@ import { WIDGET_AGENT_RUN_SEED_GRANT } from "@/lib/widget-conversation-grants";
 // ---------------------------------------------------------------------------
 
 type RouteContext = { params: Promise<{ runId: string }> };
+
+/**
+ * `requireAuthSession()` answers an unauthenticated caller by calling Next's
+ * `redirect()`, which does not return — it THROWS a control-flow signal carrying
+ * a `NEXT_REDIRECT` digest. That is right for a page and wrong for this route:
+ * caught by the handler's generic error arm it became a 500 whose body was the
+ * framework's own signal string, so an ordinary unauthenticated poll of the seed
+ * read as a server fault and leaked an internal token to the caller.
+ *
+ * Recognised here by the digest contract rather than by an instanceof, because
+ * the signal is a plain Error the framework tags — and answered as the 401 it
+ * actually is.
+ */
+function isNextRedirectSignal(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "digest" in err &&
+    typeof (err as { digest?: unknown }).digest === "string" &&
+    ((err as { digest: string }).digest === "NEXT_REDIRECT" ||
+      (err as { digest: string }).digest.startsWith("NEXT_REDIRECT;"))
+  );
+}
+
+/** The one answer to an unauthenticated caller, on either branch. */
+function unauthorized(): NextResponse {
+  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+}
 
 /** The widget branch's ONE answer to every refusal. */
 function widgetRefusal(): NextResponse {
@@ -126,7 +165,7 @@ async function widgetSeed(request: Request, decodedRunId: string): Promise<NextR
     WIDGET_AGENT_RUN_SEED_GRANT,
   );
   // No session fallback behind a failed widget consume.
-  if (!authed) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!authed) return unauthorized();
 
   let run: Awaited<ReturnType<typeof readAgentRunById>>;
   try {
@@ -158,10 +197,20 @@ export async function GET(request: Request, context: RouteContext) {
       return await widgetSeed(request, decodedRunId);
     }
 
-    const session = await requireAuthSession();
+    // A first-party poll with NO cookie reaches here (the guard admits the path
+    // cookieless for the widget's sake, so this branch — not the guard — is what
+    // refuses it). Catch the redirect signal explicitly so it becomes the 401
+    // this is, never the generic 500 below.
+    let session: Awaited<ReturnType<typeof requireAuthSession>>;
+    try {
+      session = await requireAuthSession();
+    } catch (err) {
+      if (isNextRedirectSignal(err)) return unauthorized();
+      throw err;
+    }
     const actorUserId = session?.user?.id ?? null;
     if (!actorUserId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return unauthorized();
     }
 
     // Thread the caller through readAgentRunById so enforceRunAccess runs the
@@ -199,6 +248,9 @@ export async function GET(request: Request, context: RouteContext) {
 
     return await seedResponse(run);
   } catch (err) {
+    // Backstop: no redirect signal may reach the 500 arm from ANY depth, because
+    // that arm echoes `err.message` and would put framework text in the body.
+    if (isNextRedirectSignal(err)) return unauthorized();
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Internal error" },
       { status: 500 },

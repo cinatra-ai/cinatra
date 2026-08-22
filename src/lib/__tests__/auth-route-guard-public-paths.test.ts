@@ -520,6 +520,86 @@ describe("auth-route-guard - cinatra#2902 inline run panel seed matcher", () => 
     }
   });
 
+  // ---------------------------------------------------------------------
+  // METHOD (cinatra#2902 convergence F1). The exemption is a READ exemption.
+  // Before this pin, admission was decided on the PATHNAME ALONE, so ANY verb
+  // on a matching path skipped the cookie guard. Nothing was exploitable today
+  // — the route module exports GET alone, so Next answers a POST there with 405
+  // — but the guard was relying on a fact stated in another file, and a writing
+  // verb added to this path later would have silently inherited a cookieless
+  // exemption written for a read. These rows pin the rule where it is decided.
+  // ---------------------------------------------------------------------
+  function methodRequest(pathname: string, method: string, search = ""): NextRequest {
+    return {
+      nextUrl: { pathname, search },
+      url: `http://localhost${pathname}${search}`,
+      method,
+      cookies: { get: () => undefined },
+      headers: new Headers(),
+    } as unknown as NextRequest;
+  }
+
+  it("a cookieless GET on a matching path IS admitted (the seed still reaches its handler)", async () => {
+    const res = await guardAppRoute(methodRequest(`/api/agents/runs/${RUN}`, "GET"));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it.each(["POST", "PUT", "DELETE", "PATCH"])(
+    "%s on a matching path is NOT admitted cookieless — it meets the session guard",
+    async (method) => {
+      const res = await guardAppRoute(methodRequest(`/api/agents/runs/${RUN}`, method));
+      expect(isNext(res)).toBe(false);
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    },
+  );
+
+  it.each(["POST", "PUT", "DELETE", "PATCH"])(
+    "%s is refused for the `run_` and `run-` id shapes too (the pin is on the rule, not one row)",
+    async (method) => {
+      for (const id of [`run_${RUN}`, `run-${RUN}`]) {
+        const res = await guardAppRoute(methodRequest(`/api/agents/runs/${id}`, method));
+        expect(isNext(res)).toBe(false);
+      }
+    },
+  );
+
+  // A QUERY STRING CANNOT WIDEN ADMISSION. `nextUrl.pathname` excludes the query
+  // (that is `nextUrl.search`), so the rule is evaluated on the path alone: a
+  // query neither creates a match on a non-matching path nor rescues a non-GET.
+  // A matching GET therefore STAYS ADMITTED whatever query it carries, and that
+  // is safe because admission means only "reach the handler" — the handler's own
+  // credential branch, not this guard, decides who may read the run, and it
+  // reads no query parameter at all.
+  it("a query string does not widen admission: a matching GET stays admitted with any query", async () => {
+    for (const search of ["?a=1", "?redirect=/etc", "?x=%2Fapi%2Fagents%2Fruns"]) {
+      const res = await guardAppRoute(methodRequest(`/api/agents/runs/${RUN}`, "GET", search));
+      expect(isNext(res)).toBe(true);
+    }
+  });
+
+  it("a query string does not rescue a non-GET on a matching path", async () => {
+    const res = await guardAppRoute(methodRequest(`/api/agents/runs/${RUN}`, "POST", "?a=1"));
+    expect(isNext(res)).toBe(false);
+  });
+
+  it("a query string cannot make a NON-matching path match (the guarded neighbours stay guarded)", async () => {
+    for (const path of [
+      "/api/agents/runs",
+      `/api/agents/runs/${RUN}/stream`,
+      "/api/agents/runs/not-a-uuid",
+    ]) {
+      const res = await guardAppRoute(methodRequest(path, "GET", `?id=${RUN}`));
+      expect(isNext(res)).toBe(false);
+    }
+  });
+
+  it("SOURCE PIN: admission is method-gated, not pathname-only", () => {
+    expect(guardSource).toMatch(/method === "GET" && isAgentRunByIdPath\(pathname\)/);
+    // …and the one caller actually feeds the request's method in.
+    expect(guardSource).toMatch(/isPublicPath\(pathname, request\.method/);
+  });
+
   it("SOURCE PIN: the matcher is a UUID-shaped structural regex, never an /api/agents prefix, with an in-handler-auth comment", () => {
     expect(guardSource).toMatch(/AGENT_RUN_BY_ID_PATH/);
     expect(guardSource).toMatch(

@@ -70,6 +70,22 @@ console.log(`capture reader role after setup: ${finalRole}`);
 if (finalRole === "admin") throw new Error("the capture reader is still a platform admin — the unbound-run control would be vacuous");
 await client.end();
 
-const out = { orgId, userId, readerRole: finalRole, templates: tpl.rows, cookie: cookieHeader() };
+// The session cookie is NOT serialized. It is a live credential for the
+// capture's signed-in reader, and an intermediate artifact is exactly the file
+// that gets
+// pasted into an issue or swept into evidence by accident. The capture recorder
+// already sets the standard this follows: it records a cookie's NAME and flags
+// and never its value (`cookieJar` in capture-results.json). Downstream drivers
+// sign in themselves and hold their own jar, so nothing reads this field.
+// Presence markers keep the diagnostic value — "did setup end signed in" — with
+// nothing to steal.
+const out = {
+  orgId,
+  userId,
+  readerRole: finalRole,
+  templates: tpl.rows,
+  sessionCookie: jar.size > 0 ? "present" : "absent",
+  sessionCookieNames: [...jar.keys()],
+};
 fs.writeFileSync(process.env.OUT_JSON, JSON.stringify(out, null, 2));
 console.log(JSON.stringify({ orgId, userId, templates: tpl.rows.map(r => r.package_name) }, null, 2));

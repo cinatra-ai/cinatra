@@ -315,7 +315,7 @@ const SETUP_PATH_PREFIXES = [
   "/configuration/apps/openai",
 ];
 
-function isPublicPath(pathname: string) {
+function isPublicPath(pathname: string, method: string) {
   if (pathname.startsWith("/_next")) {
     return true;
   }
@@ -384,7 +384,16 @@ function isPublicPath(pathname: string) {
   // A bounded UUID-shaped segment terminating there; the descendant `/stream`
   // and the bare collection stay guarded. The handler's own credential-branched
   // auth is the gate. See AGENT_RUN_BY_ID_PATH.
-  if (isAgentRunByIdPath(pathname)) {
+  //
+  // METHOD-PINNED. The exemption is a READ exemption, so it is spent on GET and
+  // on nothing else. The path rule alone was method-blind: any verb on a
+  // matching path skipped the cookie guard. Today that is only latent — the
+  // route module exports GET alone, so Next answers a POST there with 405 —
+  // but the guard must not be the layer that depends on it. If a writing verb
+  // is ever added to this path, it inherits the cookie guard by default instead
+  // of silently inheriting a cookieless exemption written for a read. A non-GET
+  // falls through to the checks below and then to the session guard.
+  if (method === "GET" && isAgentRunByIdPath(pathname)) {
     return true;
   }
 
@@ -582,7 +591,14 @@ export async function guardAppRoute(request: NextRequest) {
 async function guardProtectedRoute(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
-  if (isPublicPath(pathname)) {
+  // `pathname` EXCLUDES the query string (that is `nextUrl.search`), so no
+  // `?...` can widen a path rule — admission is decided on the path alone, and
+  // a matching GET stays admitted whatever it carries as query. That is safe
+  // because admission here only means "reach the handler": the handler's own
+  // credential branch, not this guard, decides who may read the run.
+  // `?? "GET"` matches the framework default and keeps test doubles that stub
+  // only `nextUrl.pathname` on the read path they are written for.
+  if (isPublicPath(pathname, request.method ?? "GET")) {
     return NextResponse.next();
   }
 

@@ -14,10 +14,12 @@
 //   3. The run is BOUND to the credential: the same `readAgentRunById` ladder the
 //      first-party read runs, threaded with the widget principal and the org the
 //      TOKEN is bound to.
-//   4. Every refusal on this branch is UNIFORM — one status, one body — and none
-//      of them reads a message or a template first. A 403/404 split on a
-//      third-party page is an existence oracle for runs the asker has no standing
-//      to learn about.
+//   4. Every refusal ABOUT A RUN on this branch is UNIFORM — one status, one
+//      body — and none of them reads a message or a template first. A 403/404
+//      split on a third-party page is an existence oracle for runs the asker has
+//      no standing to learn about. A REJECTED CREDENTIAL is the separate 401
+//      asserted below: it is an answer about the caller, returned before any run
+//      is read, so it distinguishes nothing about which runs exist.
 //   5. The first-party branch is UNCHANGED, pinned by a preservation control: it
 //      still splits 403 from 404 and still never presents a widget grant.
 //
