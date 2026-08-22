@@ -39,7 +39,9 @@
  * (`noteCommittedTranscript`, driven from the page's `messages` effect, which by
  * definition runs after the commit). So the two states are exhaustive rather than
  * adjacent — a turn is in flight, or it is in the transcript, or it is named by
- * the ledger — and there is no instant at which it is in none of them.
+ * the ledger — and there is no instant at which it is in none of them. (The
+ * entry's OTHER half, the run id, is released later and by a different event —
+ * see "the two halves release on different events" below.)
  *
  * WHY OVER-NAMING IS THE SAFE DIRECTION HERE, and why the ledger may hold an id
  * that is never released (an aborted turn reveals nothing, so no transcript ever
@@ -83,11 +85,40 @@
  * The identity both sides genuinely hold is the RUN ID: minted by the turn route,
  * delivered to this page on the wire (`RUN_STARTED`), and the run-bound row's own
  * column. So the registry records it per turn instance (`noteRunId`) and offers
- * it beside the ids (`removableRunIds`), under exactly the release discipline the
- * ids get — a run id leaves when its turn's id does, i.e. when a committed
- * transcript proves the turn landed and the ordinary mirror-row key takes over.
+ * it beside the ids (`removableRunIds`).
  * `noteRunId` is gated on the INSTANCE TOKEN for the same reason `end` is: a late
  * drive must never stamp its run onto the turn that is wearing its id now.
+ *
+ * ── THE TWO HALVES RELEASE ON DIFFERENT EVENTS ───────────────────────────────
+ *
+ * The run half used to leave when the id half did — one release, on the committed
+ * transcript — and that conflated two different proofs (codex round 4, finding 1).
+ *
+ * A COMMITTED TRANSCRIPT proves the render's own `messages` snapshot NAMES the
+ * turn. That is exactly what the bubble-id half is for: `editAndResend` reads its
+ * removed set out of that same snapshot, so once the turn is in it the ledger has
+ * nothing to add. The id half's release is therefore honest as it stands.
+ *
+ * A SAVE THAT LANDED is what proves the server has a MIRROR ROW for the turn —
+ * the row every other key is read out of, and the whole reason the run half
+ * exists. The transcript reaching the screen does not write that row: the save
+ * does, and the save is a separate event that can be SKIPPED (the page holds its
+ * ordinary save while anything is in flight, and Slack streams turns
+ * concurrently, so a turn that reveals beside a still-streaming sibling gets no
+ * save at all) or can simply FAIL (the ordinary save is best-effort and silent).
+ * Between the reveal and the landed save the turn is on screen with no row, so
+ * its run is the ONLY identity an edit can assert about it — and releasing the
+ * run on the reveal is precisely what lost it, permanently, for the turn shape
+ * the run arm was added for.
+ *
+ * So `noteCommittedTranscript` releases the ID half and `noteSavedTranscript` —
+ * driven from the page's save continuation, and only when the save resolved —
+ * releases the entry outright. A ledger entry with no run id has no second half
+ * to hold and leaves on the commit as it always did, so the split costs retention
+ * only where there is a run to retain. Releasing LATE is safe in the direction
+ * that matters: a run whose anchor prompt is gone from the transcript can never
+ * be offered again, so a retained entry is inert, capped, and dropped with the
+ * thread. Releasing EARLY is the defect.
  *
  * A turn whose run id never arrived (aborted before `RUN_STARTED`, or a wire that
  * carried none) simply contributes no run id. It is still named by its id, and
@@ -258,9 +289,18 @@ export type TurnStreamRegistry = {
    *  follows). The FIRST thread observed is adopted rather than switched to —
    *  but only if the registry is EMPTY at that moment. */
   resetForThread(threadId: string | null): boolean;
-  /** A COMMITTED transcript landed: every turn it carries is now nameable from
-   *  the transcript itself, so the ledger releases those ids. */
+  /** A COMMITTED transcript rendered: every turn it carries is now nameable from
+   *  the transcript itself, so the ledger releases those turns' IDS. It does NOT
+   *  release their runs — rendering writes no mirror row (see the release
+   *  section above). An entry with no run id is dropped outright: there is no
+   *  second half to hold. */
   noteCommittedTranscript(messages: ReadonlyArray<{ id?: unknown }>): void;
+  /** A SAVE LANDED carrying these messages: every turn in it now has a mirror
+   *  row, the ordinary key takes over, and the ledger releases those turns
+   *  ENTIRELY. Call this ONLY from a save that resolved — a rejected, timed-out
+   *  or skipped save persisted nothing, and releasing on it is the defect this
+   *  method exists to separate out. */
+  noteSavedTranscript(messages: ReadonlyArray<{ id?: unknown }>): void;
   /** Every turn an edit must name BESIDE the ones in its own transcript slice:
    *  the in-flight turns and the ended-but-uncommitted ones. */
   removableTurnIds(): string[];
@@ -291,11 +331,16 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
    *  streaming. A second `begin` for the same id supersedes the first: the map
    *  holds one instance per id, and only that instance's token can end it. */
   const inFlight = new Map<string, RegisteredTurn>();
-  /** Ended, and not yet seen in a committed transcript: assistantId → the run the
-   *  turn streamed under and the prompt it answered (either may be null when the
-   *  wire or the caller never named one). Insertion-ordered, which is what makes
-   *  "evict the oldest" meaningful at the cap. */
-  const endedUncommitted = new Map<string, { runId: string | null; anchorId: string | null }>();
+  /** Ended, and not yet PERSISTED: assistantId → the run the turn streamed under,
+   *  the prompt it answered (either may be null when the wire or the caller never
+   *  named one), and whether a committed transcript has carried it yet. That last
+   *  flag is the ID half's release; the entry itself leaves when a save lands.
+   *  Insertion-ordered, which is what makes "evict the oldest" meaningful at the
+   *  cap. */
+  const endedUncommitted = new Map<
+    string,
+    { runId: string | null; anchorId: string | null; inTranscript: boolean }
+  >();
   /** The thread these ids belong to, once one has been observed. */
   let heldThreadId: string | null = null;
   let threadObserved = false;
@@ -321,7 +366,7 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       const oldest = endedUncommitted.keys().next().value;
       if (typeof oldest === "string") endedUncommitted.delete(oldest);
     }
-    endedUncommitted.set(assistantId, { runId, anchorId });
+    endedUncommitted.set(assistantId, { runId, anchorId, inTranscript: false });
   }
 
   /** Is the registry holding anything at all? The two sets ARE its state — see
@@ -432,13 +477,30 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       if (endedUncommitted.size === 0) return;
       for (const message of messages) {
         const id = message?.id;
+        if (typeof id !== "string") continue;
+        const entry = endedUncommitted.get(id);
+        if (!entry) continue;
+        // THE ID HALF ONLY. The render proves the edit's own snapshot names this
+        // turn; it proves nothing about a mirror row. An entry with no run has
+        // nothing left to hold, so it goes now rather than sitting in the cap.
+        if (entry.runId === null) endedUncommitted.delete(id);
+        else entry.inTranscript = true;
+      }
+    },
+    noteSavedTranscript(messages) {
+      if (endedUncommitted.size === 0) return;
+      for (const message of messages) {
+        const id = message?.id;
+        // THE SAVE LANDED, so this turn has a mirror row and the ordinary key
+        // takes over for BOTH halves. Only a resolved save may reach here.
         if (typeof id === "string") endedUncommitted.delete(id);
       }
     },
     removableTurnIds() {
       const ids: string[] = [];
       for (const id of inFlight.keys()) ids.push(id);
-      for (const id of endedUncommitted.keys()) if (!inFlight.has(id)) ids.push(id);
+      for (const [id, rec] of endedUncommitted)
+        if (!rec.inTranscript && !inFlight.has(id)) ids.push(id);
       return ids;
     },
     removableRunIds(removedMessageIds) {

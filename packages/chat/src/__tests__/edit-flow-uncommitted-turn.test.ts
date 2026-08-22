@@ -192,26 +192,65 @@ describe("editAndResend carries the SERVER's name for a turn with no mirror row"
     expect(saved[0].removedRunIds as string[]).toEqual(["run-live-1"]);
   });
 
-  it("omits the run of a turn the committed transcript already carries", async () => {
-    // The release rule, read for the other identity: the run id leaves exactly
-    // when its turn's id does, so a turn the transcript names is removed through
-    // its mirror row and asserts no run at all.
+  it("omits the run of a turn whose SAVE has landed — the mirror row is the key now", async () => {
+    // WHAT CHANGED, AND WHY (codex round 4, finding 1). This arm used to release the
+    // run on the committed transcript alone, on the rule "a run id leaves
+    // exactly when its turn's id does". That rule assumed "the transcript names
+    // it" and "the server has a row for it" are one thing, and they are not: the
+    // save that writes the row is a separate, fallible event. So the release is
+    // keyed on the SAVE here, and the arm below states the half that used to be
+    // lost between the two.
     const streams = createTurnStreamRegistry();
     const token = streams.begin("a1", new AbortController(), "u1");
     streams.noteRunId(token, "run-a1");
     streams.end(token);
     streams.noteCommittedTranscript(STALE_SNAPSHOT);
+    streams.noteSavedTranscript(STALE_SNAPSHOT);
 
     await editAndResend(
       deps({
         removableTurnIds: () => streams.removableTurnIds(),
         removableRunIds: (removed) => streams.removableRunIds(removed),
       }),
-      "u2",
+      "u1",
       "edited",
     );
 
     expect(saved[0].removedRunIds).toBeUndefined();
+  });
+
+  it("STILL posts the run of a revealed turn whose save never landed — the Slack sibling shape", async () => {
+    // CODEX ROUND 4, FINDING 1, THE REGRESSION ARM. Slack dispatches concurrently, so
+    // turn A can reveal into `messages` while sibling B is still streaming — and
+    // the page skips its ordinary save for as long as anything is in flight. A
+    // is therefore on screen with NO mirror row. The old release rule dropped
+    // A's run on that reveal, so this edit named A's bubble id (which reaches no
+    // row) and asserted no run (the only key that would have reached one): A's
+    // run-bound row stayed unsuperseded and folded back in above the edited
+    // prompt on the next reload, made permanent by the next whole-transcript
+    // save. `assistant-turn-supersede.ts` is driven on a real database for the
+    // other half of this — that an asserted run tombstones exactly that row.
+    const streams = createTurnStreamRegistry();
+    const revealed = streams.begin("a1", new AbortController(), "u1");
+    streams.noteRunId(revealed, "run-a1");
+    const sibling = streams.begin("a-sibling", new AbortController(), "u1");
+    streams.noteRunId(sibling, "run-sibling");
+    streams.end(revealed); // A's drive unwound...
+    streams.noteCommittedTranscript(STALE_SNAPSHOT); // ...and its reveal committed
+    // No save landed: `a-sibling` is still in flight, so the page's ordinary
+    // save never ran. Nothing calls `noteSavedTranscript`.
+
+    await editAndResend(
+      deps({
+        removableTurnIds: () => streams.removableTurnIds(),
+        removableRunIds: (removed) => streams.removableRunIds(removed),
+      }),
+      "u1",
+      "edited",
+    );
+
+    expect(saved[0].removedMessageIds as string[]).toContain("a1");
+    expect(saved[0].removedRunIds as string[]).toContain("run-a1");
   });
 
   it("omits the run of a CONCURRENT turn whose prompt the edit KEPT", async () => {

@@ -100,7 +100,15 @@ describe("saveChatThreadInOrder", () => {
     const fetchStub = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { id: string; title?: string };
       issued.push(`${body.id}:${body.title ?? ""}`);
-      return new Promise<Response>((resolve) => release.push(resolve));
+      // A held request that HONOURS its signal — otherwise "the save is bound"
+      // could not be stated here at all, because the stub would be the one thing
+      // in the chain that never abandons a connection.
+      return new Promise<Response>((resolve, reject) => {
+        release.push(resolve);
+        init?.signal?.addEventListener("abort", () =>
+          reject((init.signal as AbortSignal).reason ?? new Error("aborted")),
+        );
+      });
     });
     vi.stubGlobal("fetch", fetchStub);
     return {
@@ -168,6 +176,31 @@ describe("saveChatThreadInOrder", () => {
     expect(net.issued).toEqual(["t1:intent", "t1:intent", "t1:ordinary"]);
     net.settle(2);
     await ordinary;
+  });
+
+  it("a save that never answers is BOUNDED, and does not wedge the one behind it", async () => {
+    // CODEX ROUND 4, FINDING 3. A browser applies no default timeout to `fetch`,
+    // and these saves are chained: before the bound, one hung connection blocked
+    // every later save for that thread for the life of the tab — and
+    // `editAndResend` awaits that chain, so an edit hung with it. The arm never
+    // settles the first request; the BOUND is what makes it settle.
+    const net = heldFetch();
+    const hung = saveChatThreadInOrder({ id: "t1", title: "hung" }, { timeoutMs: 5 });
+    const next = saveChatThreadInOrder({ id: "t1", title: "next" });
+    await net.drain();
+    expect(net.issued).toEqual(["t1:hung"]);
+
+    // Nothing answers it. It gives up on its own, and says why — which is what
+    // the edit path reports on its never-blank bubble instead of hanging.
+    await expect(hung).rejects.toThrow(/timed out after 5ms/);
+
+    await net.drain();
+    expect(net.issued, "the chain was still wedged behind the abandoned save").toEqual([
+      "t1:hung",
+      "t1:next",
+    ]);
+    net.settle(1);
+    await next;
   });
 
   it("chains PER THREAD — two threads share no reconcile and are not serialised", async () => {

@@ -845,6 +845,28 @@ export function extractAgentName(text: string): string | null {
 }
 
 /**
+ * HOW LONG ONE THREAD SAVE MAY STAY OPEN before it is abandoned (cinatra#2823
+ * S9j, codex round 4 finding 3).
+ *
+ * A browser applies NO default timeout to `fetch`, and these saves are now
+ * CHAINED per thread, so an unbounded request is not just one lost save: it is
+ * every later save for that thread, for the life of the tab, and `editAndResend`
+ * awaits that chain. The bound is what makes "the chain slot settles" true.
+ *
+ * 30 seconds, because the bound has to sit ABOVE any save that could still
+ * succeed and BELOW the point where waiting is pointless. A whole-transcript
+ * POST carries the entire thread over whatever uplink the reader has and the
+ * route commits it in one transaction, so a slow-but-live save is measured in
+ * seconds, not tens of them; and the route itself runs under a request ceiling
+ * of the same order, so a request still open at 30s is not going to return. The
+ * cost of being wrong is small in both directions: an abandoned save that would
+ * have landed is re-issued by the next real activity (the baseline advances only
+ * on a save that landed), and the edit path reports the failure on its
+ * never-blank bubble instead of hanging.
+ */
+export const CHAT_THREAD_SAVE_TIMEOUT_MS = 30_000;
+
+/**
  * POST one whole-transcript thread save.
  *
  * A NON-OK RESPONSE IS A FAILURE, and it says so (cinatra#2823 S9j).
@@ -855,15 +877,37 @@ export function extractAgentName(text: string): string | null {
  * the edit path has to be able to wait on before it does anything irreversible.
  * Every pre-existing caller already `.catch()`es this, so the only behaviour
  * change is that a rejected save is now visible to a caller that wants to look.
+ *
+ * AND IT ALWAYS SETTLES: the POST is bound by `CHAT_THREAD_SAVE_TIMEOUT_MS`. The
+ * signal is built here rather than taken from a caller, because the bound is a
+ * property of this save and not of the surface issuing it; `timeoutMs` exists so
+ * an arm can state the bound in test time rather than wall time.
  */
-export async function saveChatThreadViaFetch(thread: Record<string, unknown> & { id: string }): Promise<void> {
-  const res = await fetch("/api/assistants/threads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(thread),
-  });
-  if (!res.ok) {
-    throw new Error(`saveChatThread: POST /api/assistants/threads returned ${res.status}`);
+export async function saveChatThreadViaFetch(
+  thread: Record<string, unknown> & { id: string },
+  options?: { timeoutMs?: number },
+): Promise<void> {
+  const timeoutMs = options?.timeoutMs ?? CHAT_THREAD_SAVE_TIMEOUT_MS;
+  // A controller plus a cleared timer, not `AbortSignal.timeout`: the same
+  // bound, in every runtime this bundle reaches, and with the timer provably
+  // gone the moment the request settles rather than left to be collected.
+  const bound = new AbortController();
+  const expire = setTimeout(
+    () => bound.abort(new Error(`saveChatThread: POST /api/assistants/threads timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  try {
+    const res = await fetch("/api/assistants/threads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(thread),
+      signal: bound.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`saveChatThread: POST /api/assistants/threads returned ${res.status}`);
+    }
+  } finally {
+    clearTimeout(expire);
   }
 }
 
@@ -897,12 +941,17 @@ export async function saveChatThreadViaFetch(thread: Record<string, unknown> & {
  * The returned promise REJECTS when the save ultimately failed (see above). The
  * chain itself never rejects, so one failed save cannot poison the thread's
  * later ones.
+ *
+ * EVERY SLOT SETTLES, which is what makes the chain safe to queue behind. Each
+ * POST is bound by `CHAT_THREAD_SAVE_TIMEOUT_MS` (codex round 4, finding 3):
+ * without it a single hung connection wedged this thread's persistence — and the
+ * edit that awaits it — for the life of the tab.
  */
 const chatThreadSaveChains = new Map<string, Promise<void>>();
 
 export function saveChatThreadInOrder(
   thread: Record<string, unknown> & { id: string },
-  options?: { attempts?: number },
+  options?: { attempts?: number; timeoutMs?: number },
 ): Promise<void> {
   const attempts = Math.max(1, options?.attempts ?? 1);
   const prior = chatThreadSaveChains.get(thread.id) ?? Promise.resolve();
@@ -910,7 +959,7 @@ export function saveChatThreadInOrder(
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
-        await saveChatThreadViaFetch(thread);
+        await saveChatThreadViaFetch(thread, { timeoutMs: options?.timeoutMs });
         return;
       } catch (err) {
         lastError = err;

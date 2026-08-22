@@ -325,15 +325,62 @@ describe("the run id — the identity the server shares with these turns", () =>
     expect(streams.removableRunIds(removing("u1", "a1"))).toEqual([]);
   });
 
-  it("keeps the run after the stream ENDS, and drops it when the transcript proves the turn landed", () => {
+  it("releases the ID half on a committed transcript and the RUN half only on a save that LANDED", () => {
+    // CODEX ROUND 4, FINDING 1 — THE RULE THIS ARM REPLACES WAS WRONG. It read "a run
+    // id leaves exactly when its turn's id does", so ONE event released both
+    // halves. The two halves prove different things. A committed transcript
+    // proves the render's own `messages` slice can NAME the turn, which is all
+    // the bubble-id half is for. Only a save that LANDED proves the server has a
+    // MIRROR ROW to read a key out of. Between those two events the turn is on
+    // screen and has no row, so its RUN is the only identity an edit can assert
+    // about it — and releasing the run there is what lost it (a Slack sibling
+    // still streaming skips the save entirely; a lone turn's best-effort save
+    // can simply fail).
     const streams = createTurnStreamRegistry();
     const token = streams.begin("a1", controller(), "u1");
     streams.noteRunId(token, "run-1");
     streams.end(token);
     expect(streams.removableRunIds(removing("u1"))).toEqual(["run-1"]); // ended, still nameable
+
+    // The reveal commits. The transcript slice names the bubble from here, so
+    // the ledger has nothing left to add to the ID half...
     streams.noteCommittedTranscript([{ id: "a1" }]);
     expect(streams.removableTurnIds()).toEqual([]);
+    // ...and the RUN half is still held, because no save has landed and the turn
+    // therefore still has no mirror row.
+    expect(streams.removableRunIds(removing("u1"))).toEqual(["run-1"]);
+
+    // The save lands. The mirror row exists, the ordinary key takes over, and
+    // the registry holds nothing for this turn at all — the release is real, not
+    // a leak dressed as one.
+    streams.noteSavedTranscript([{ id: "a1" }]);
     expect(streams.removableRunIds(removing("u1"))).toEqual([]);
+    expect(streams.removableTurnIds()).toEqual([]);
+    expect(streams.retainedIdCount()).toBe(0);
+  });
+
+  it("a landed save that does NOT carry the turn releases nothing", () => {
+    // The release is keyed on the transcript the save actually persisted, not on
+    // "some save landed": a save issued for a slice this turn is not in proves
+    // no mirror row for it.
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a1", controller(), "u1");
+    streams.noteRunId(token, "run-1");
+    streams.end(token);
+    streams.noteCommittedTranscript([{ id: "a1" }]);
+    streams.noteSavedTranscript([{ id: "u1" }, { id: "a-other" }]);
+    expect(streams.removableRunIds(removing("u1"))).toEqual(["run-1"]);
+  });
+
+  it("a turn whose run never arrived leaves the ledger on the transcript commit", () => {
+    // There is no second half to hold. Keeping such an entry past the commit
+    // would grow the registry's footprint for nothing, so the entry goes as it
+    // always did — the split costs retention only where a run exists to retain.
+    const streams = createTurnStreamRegistry();
+    streams.end(streams.begin("a1", controller(), "u1"));
+    streams.noteCommittedTranscript([{ id: "a1" }]);
+    expect(streams.removableTurnIds()).toEqual([]);
+    expect(streams.retainedIdCount()).toBe(0);
   });
 
   it("a turn whose run never arrived contributes NO run — and is still named by its id", () => {

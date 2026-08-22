@@ -351,9 +351,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   }, []);
 
   // Keep messagesRef in sync so re-entrant callers read the latest value — and,
-  // on the same commit, release every ended turn this transcript provably
-  // carries. That commit is the ledger's ONLY release event, which is precisely
-  // what leaves no window in which a turn is nameable from neither source.
+  // on the same commit, release the BUBBLE-ID half of every ended turn this
+  // transcript carries, which leaves no window in which a turn is nameable from
+  // neither source. The RUN half waits for a save that LANDED (the registry).
   useEffect(() => {
     messagesRef.current = messages;
     streams.noteCommittedTranscript(messages);
@@ -559,7 +559,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       slackMode: isSlackMode,
       ownerUserId: userId,
     };
-    saveChatThreadInOrder(thread).catch(() => {});
+    // A SAVE THAT LANDED releases the ledger's RUN half and adopts the baseline;
+    // ISSUING one releases nothing (codex round 4, finding 1) — this save is best-
+    // effort, a failed one wrote no mirror row, and its turns stay assertable.
+    saveChatThreadInOrder(thread).then(() => { streams.noteSavedTranscript(messages); loadedFingerprintRef.current = fingerprintMessages(messages); }, () => {});
     // Real activity: advance this thread's updatedAt in-place. The sidebar's
     // default "Activity" mode sorts by updatedAt desc, so this re-positions the
     // thread to the top without an explicit array reorder here.
@@ -568,9 +571,6 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         t.id === thread.id ? { ...t, title: thread.title, updatedAt: thread.updatedAt } : t,
       ),
     );
-    // Adopt the persisted message set as the new baseline so an unrelated
-    // re-render with the SAME messages does not bump updatedAt a second time.
-    loadedFingerprintRef.current = fingerprintMessages(messages);
   }, [messages, hasActiveStream, activeThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Emit active thread title so AppShell can show it in the breadcrumb.
