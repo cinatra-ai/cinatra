@@ -36,11 +36,14 @@ import "server-only";
 // proposal token: it is the answer to "which run did this proposal create?",
 // which the settled card asks on every reload, long after the token's own TTL.
 //
-// THE RATCHET RETIRES ITSELF INSTEAD. It cannot cascade from a run — the row
-// exists precisely before one does — so it is bounded by shape: ONE row per
-// lineage, upserted and never appended, and worthless the moment `expires_at`
-// passes. A reaper may delete any expired row at any time with no coordination
-// and no correctness cost. `..._expires_idx` is there for that pass.
+// THE RATCHET IS SWEPT INSTEAD. It cannot cascade from a run — the row exists
+// precisely before one does — so its shape bounds it only in COUNT: ONE row per
+// lineage, upserted and never appended. Nothing there bounds it in TIME, and
+// the row is worthless the moment `expires_at` passes, so `sweepExpiredLineage`
+// below deletes expired rows and the `audit-retention-enforce` background job
+// calls it once per daily cycle (cinatra#2908). The pass needs no coordination
+// and costs no correctness — an expired row is only ever read in order to be
+// overwritten — and `..._expires_idx` is the index it deletes through.
 //
 // WHY THE INSTALL IS AN INTENT AND NOT AN INSTALL. The BullMQ scheduler is not
 // in the database, so it cannot join that transaction. Installing it inline
@@ -376,6 +379,97 @@ export async function claimLineageReproposal(input: {
   // token here that this function may honestly call the lineage's. Say so; the
   // caller re-claims into the slot it now knows is free.
   return { outcome: "vanished" };
+}
+
+/** What one retention cycle did. */
+export type LineageRetentionSweepResult = {
+  /** Rows this cycle actually deleted. */
+  deleted: number;
+  /** The per-cycle ceiling this cycle ran under. */
+  limit: number;
+  /** The ceiling was reached — there may be more expired rows waiting. */
+  more: boolean;
+};
+
+/**
+ * Rows one retention cycle may delete. A CEILING, not a target: the pass is a
+ * daily maintenance tick sharing a worker with everything else in this
+ * process, and an unbounded `DELETE` over a table nobody has swept before is
+ * one statement that can hold a lock for as long as the backlog is deep. The
+ * remainder is not lost — it is simply the next cycle's, and no correctness
+ * ever depended on any particular row being gone (see `sweepExpiredLineage`).
+ */
+export const LINEAGE_RETENTION_SWEEP_LIMIT = 500;
+
+/**
+ * THE RETENTION PASS — delete lineage rows whose replacement has expired.
+ *
+ * WHY DELETING IS SAFE, in the ratchet's own terms: an expired row is only ever
+ * read in order to be OVERWRITTEN. `claimLineageReproposal`'s condition already
+ * treats `expires_at <= now()` as a free slot, so losing the row costs at most
+ * one fresh mint — exactly what the next Adjust would have done anyway — and
+ * the store already names that outcome (`vanished`) rather than mistaking it
+ * for an error. Nothing coordinates with this pass and nothing has to.
+ *
+ * WHY IT EXISTS AT ALL is data minimisation, not correctness. The row carries
+ * `latest_token` — a replacement's ciphertext, which after a live Adjust exists
+ * in NO other durable place (the transcript kept the ORIGINAL ref; the
+ * replacement's is React-local) — plus `org_id`, `template_id`,
+ * `reproposed_by`, `created_at` and `updated_at` in plaintext. Keeping that for
+ * the one TTL the row is useful for is the promise; keeping it forever was the
+ * gap (cinatra#2908).
+ *
+ * ONE STATEMENT, BOUNDED, AND EXPIRY-REASSERTING — the three properties that
+ * make it safe to run uncoordinated:
+ *
+ *   BOUNDED. Postgres has no `LIMIT` on `DELETE`, so the ceiling is applied in
+ *   a MATERIALIZED CTE that names at most `limit` victims, oldest expiry first.
+ *   `more` reports that the ceiling was hit so a caller can say so; the pass
+ *   itself never loops.
+ *
+ *   EXPIRY-REASSERTING. The `DELETE` repeats `expires_at <= now()` in its OWN
+ *   `WHERE` rather than trusting the keys the CTE handed it, and that
+ *   conjunct is load-bearing: a row this statement selected can be legitimately
+ *   ROLLED FORWARD before the delete reaches it, because
+ *   `claimLineageReproposal` overwrites on `expires_at <= now() OR latest_token
+ *   = <the token being superseded>` and a live Adjust takes the second disjunct
+ *   at any moment. Postgres re-evaluates a `DELETE`'s qualification against the
+ *   row version it finds after waiting on a concurrent writer, so the refreshed
+ *   row fails the reasserted predicate and survives. Without the conjunct the
+ *   key match alone would still hold and the pass would delete a LIVE slot,
+ *   handing the next press a token the ratchet is no longer holding.
+ *
+ *   IDEMPOTENT AND UNCOORDINATED. No lease, no lock, no cursor. A second run —
+ *   concurrent or immediately after — deletes whatever is still expired and
+ *   nothing else, so a repeated cycle is a no-op rather than a hazard.
+ *
+ * The cutoff is `now()` and nothing else: it is the SAME instant in both halves
+ * of the statement (Postgres freezes `now()` per statement), and there is no
+ * caller-supplied cutoff because there is no honest use for one — a row is
+ * either past the expiry the ratchet itself wrote or it is not.
+ */
+export async function sweepExpiredLineage(
+  opts: { limit?: number } = {},
+): Promise<LineageRetentionSweepResult> {
+  const limit = Math.max(
+    1,
+    Math.floor(opts.limit ?? LINEAGE_RETENTION_SWEEP_LIMIT),
+  );
+  const res = await db.execute(sql`
+    WITH victims AS MATERIALIZED (
+      SELECT consume_key
+        FROM ${triggerScheduleProposalLineage}
+       WHERE expires_at <= now()
+       ORDER BY expires_at ASC
+       LIMIT ${limit}
+    )
+    DELETE FROM ${triggerScheduleProposalLineage}
+     WHERE consume_key IN (SELECT consume_key FROM victims)
+       AND expires_at <= now()
+    RETURNING consume_key
+  `);
+  const deleted = (res.rows as Array<{ consume_key: string }>).length;
+  return { deleted, limit, more: deleted >= limit };
 }
 
 // ---------------------------------------------------------------------------

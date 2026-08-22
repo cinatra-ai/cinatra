@@ -104,11 +104,14 @@ export const BACKGROUND_JOB_NAMES = {
   // expired `deriving` leases) whose one-shot enqueue was lost / crashed. The
   // backstop that guarantees eventual derivation of every captured output.
   UNBOUND_OUTPUT_DERIVE_SWEEP: "unbound-output-derive-sweep",
-  // Durable audit-log retention sweep. Deletes authz
-  // audit events older than the configured window (default 12 months;
-  // admin-configurable). Self-scheduling at 24h cadence, matching the
-  // LITELLM_PRICING_SYNC pattern. Seeded once at boot in
-  // instrumentation.node.ts (jobId "audit-retention-daily" dedups restarts).
+  // Durable RETENTION sweep — the deployment's one always-on retention pass, so
+  // a bounded time-based cleanup rides it instead of adding a loop of its own.
+  // Two subjects per cycle: authz audit events older than the configured window
+  // (default 12 months; admin-configurable), then expired
+  // `trigger_schedule_proposal_lineage` rows, bounded per cycle and swept
+  // through the boot-registered runner slot (cinatra#2908). Self-scheduling at
+  // 24h cadence, matching the LITELLM_PRICING_SYNC pattern. Seeded once at boot
+  // in instrumentation.node.ts (jobId "audit-retention-daily" dedups restarts).
   AUDIT_RETENTION_ENFORCE: "audit-retention-enforce",
   // Periodic Verdaccio → Cinatra Marketplace
   // catalog reconciliation. Pulls `/-/all` from the configured Verdaccio

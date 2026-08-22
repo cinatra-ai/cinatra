@@ -81,6 +81,23 @@ export function systemLoopPhases(): BootPhase[] {
       run: async () => {
         // Seed the daily audit-log retention sweep (one-time at startup; BullMQ
         // dedups by jobId). The worker handler self-reschedules at 24h cadence.
+        //
+        // The same cycle also sweeps expired `trigger_schedule_proposal_lineage`
+        // rows (cinatra#2908). That sweep is registered HERE, through the runner
+        // slot, rather than imported into background-jobs-registry — same
+        // route-graph-ratchet posture as the seeds below: the registry sits in
+        // the LOCKED dev-perf routes' graph, so the agents db + schema graph must
+        // not be reachable from it, even dynamically. Register BEFORE seeding so
+        // the loop never observes an empty slot on a healthy boot.
+        const { registerTriggerScheduleLineageRetentionRunner } = await import(
+          "@/lib/background-jobs-registry"
+        );
+        const { sweepExpiredLineage } = await import(
+          "@cinatra-ai/agents/trigger-schedule-proposal-store"
+        );
+        registerTriggerScheduleLineageRetentionRunner({
+          sweep: () => sweepExpiredLineage(),
+        });
         const {
           enqueueBackgroundJob,
           BACKGROUND_JOB_NAMES,
@@ -97,7 +114,9 @@ export function systemLoopPhases(): BootPhase[] {
             inheritActorContext: false,
           },
         );
-        console.log("[authz/audit] daily retention sweep scheduled (24h delay)");
+        console.log(
+          "[authz/audit] daily retention sweep scheduled (24h delay); schedule-proposal lineage sweep bound",
+        );
       },
     },
     {

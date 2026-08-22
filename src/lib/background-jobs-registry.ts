@@ -356,6 +356,56 @@ function resolveLeaseExpiryFinalizerRunner(): LeaseExpiryFinalizerRunner | null 
 }
 
 // ---------------------------------------------------------------------------
+// Trigger-schedule lineage retention runner slot (cinatra#2908).
+//
+// `trigger_schedule_proposal_lineage` had an `expires_at` index and a documented
+// retention story but no code that ever deleted a row, so the replacement
+// ciphertext plus `org_id` / `template_id` / `reproposed_by` / timestamps
+// outlived the single TTL the schema promised, indefinitely. The sweep now rides
+// AUDIT_RETENTION_ENFORCE — the deployment's existing durable retention pass —
+// rather than adding a loop of its own; a daily cadence is right because nothing
+// about correctness ever depended on any row being gone.
+//
+// Same slot posture as the runners above: the sweep lives in
+// `@cinatra-ai/agents/trigger-schedule-proposal-store`, which reaches the agents
+// db + schema graph, and this registry sits in the LOCKED dev-perf routes'
+// reachable graph — so it is BOOT-REGISTERED by the system-loops phase and never
+// imported here, not even dynamically. An empty slot skips the lineage half of
+// the cycle loudly and leaves the audit half untouched; a skipped cycle costs
+// nothing, because the same rows are still expired tomorrow.
+// ---------------------------------------------------------------------------
+
+// Declared LOCALLY rather than imported from the store — even a type-only
+// cross-package import grows this locked registry's reachable graph.
+type TriggerScheduleLineageRetentionSummary = {
+  deleted: number;
+  limit: number;
+  more: boolean;
+};
+
+type TriggerScheduleLineageRetentionRunner = {
+  sweep: () => Promise<TriggerScheduleLineageRetentionSummary>;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraTriggerScheduleLineageRetentionRunner:
+    | TriggerScheduleLineageRetentionRunner
+    | undefined;
+}
+
+/** Boot-time registration (system-loops phase). Idempotent (last write wins). */
+export function registerTriggerScheduleLineageRetentionRunner(
+  runner: TriggerScheduleLineageRetentionRunner,
+): void {
+  globalThis.__cinatraTriggerScheduleLineageRetentionRunner = runner;
+}
+
+function resolveTriggerScheduleLineageRetentionRunner(): TriggerScheduleLineageRetentionRunner | null {
+  return globalThis.__cinatraTriggerScheduleLineageRetentionRunner ?? null;
+}
+
+// ---------------------------------------------------------------------------
 // Background-job handler registry (cinatra#304).
 //
 // One name-keyed registry replaces the monolithic `switch(job.name)` that
@@ -1092,6 +1142,12 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     // createdAt, cutoff))`): a platform retention policy over org-attributed rows.
     // NOT no-org-write (deletes org-attributed data); NOT content.write (the audit
     // sink is deliberately OUTSIDE the kernel write universe) → non-mintable/[].
+    //
+    // cinatra#2908 adds a SECOND retention subject on the same cycle: expired
+    // `trigger_schedule_proposal_lineage` rows. Identical classification and so
+    // no reclassification — that table carries `org_id` on every row, and the
+    // sweep is again a GLOBAL cutoff (`expires_at <= now()`) with no per-org
+    // predicate, deleting only rows the ratchet has already finished with.
     authority: {
       authorityKind: "system-maintenance",
       actorSource: "dispatcher-system-identity",
@@ -1119,6 +1175,26 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           console.log(
             `[audit-retention] swept: cutoff=${result.cutoffIso} retentionDays=${result.retentionDays} deleted=${result.deleted}`,
           );
+          // Expired schedule-proposal lineage rows, through the boot-registered
+          // slot (kept out of this registry's route graph — cinatra#2908). It
+          // runs AFTER the audit sweep, so an empty slot or a throw here cannot
+          // cost the half that already succeeded; a throw propagates to
+          // runRecurringLoop, which reports it and re-delays. A skipped cycle is
+          // safe either way — the same rows are still expired on the next one,
+          // and nothing reads an expired row except in order to overwrite it.
+          const lineage = resolveTriggerScheduleLineageRetentionRunner();
+          if (!lineage) {
+            console.warn(
+              "[schedule-proposal-lineage-retention] runner slot empty — skipping cycle",
+            );
+            return;
+          }
+          const swept = await lineage.sweep();
+          if (swept.deleted > 0 || swept.more) {
+            console.log(
+              `[schedule-proposal-lineage-retention] deleted=${swept.deleted} limit=${swept.limit} more=${swept.more}`,
+            );
+          }
         },
       });
     },

@@ -1297,8 +1297,11 @@ export type TriggerScheduleProposalConsumeRow =
  * any moment; the window rolls by at most one TTL per real expiry.
  *
  * NO `run_id`, and therefore no cascade: this row exists precisely BEFORE any
- * run does. It is bounded by being UPSERTED rather than appended — one row per
- * lineage, ever — and every row is discardable the moment `expires_at` passes,
+ * run does. Being UPSERTED rather than appended bounds the table in COUNT — one
+ * row per lineage, ever — but in nothing else, so expired rows are SWEPT:
+ * `sweepExpiredLineage` (in `trigger-schedule-proposal-store.ts`) deletes them,
+ * called once per daily cycle by the `audit-retention-enforce` background job
+ * (cinatra#2908). Every row is discardable the moment `expires_at` passes,
  * because the only consequence of losing it is the fresh mint that would have
  * happened anyway. `expires_at` is indexed for that pass.
  */

@@ -28,8 +28,8 @@
 //     replacement it is currently holding open; while that replacement is
 //     un-expired, Adjust HANDS IT BACK instead of minting another. One live
 //     token per lineage at any moment, and the confirmation window rolls by at
-//     most one TTL per real expiry. Full argument on
-//     `reproposeExpiredScheduleProposal`.
+//     most one TTL per real expiry. Swept once expired (see below). Full
+//     argument on `reproposeExpiredScheduleProposal`.
 //
 //   trigger_schedule_install_outbox — the install INTENT. A trigger has two
 //     halves in two systems (the durable row and the BullMQ scheduler), so
@@ -47,13 +47,17 @@
 // oversight: the ratchet row exists precisely BEFORE any run does — a lineage
 // that is re-proposed and never confirmed has no run to hang from, and the row
 // whose whole job is to bound minting cannot be keyed on the thing minting has
-// not produced. It is bounded instead by its own shape: ONE row per lineage,
-// UPSERTED and never appended, so the table is the set of proposals a person
-// actually pressed Adjust on after they expired. Every row is worthless the
-// moment `expires_at` passes — a reaper may delete any of them at any time with
-// no coordination and no correctness cost, because the only consequence is that
-// the next Adjust mints a fresh replacement, which is exactly what it would
-// have done anyway. `..._expires_idx` is there for that pass.
+// not produced. Its own shape bounds it only in COUNT: ONE row per lineage,
+// UPSERTED and never appended, so the table is the set of lineages a person has
+// ever adjusted — live or expired. Nothing about that shape bounds any row in
+// TIME, so the row is SWEPT: every row is worthless the moment `expires_at`
+// passes, and `sweepExpiredLineage` in
+// `packages/agents/src/trigger-schedule-proposal-store.ts` deletes the expired
+// ones, called once per daily cycle by the `audit-retention-enforce` background
+// job (cinatra#2908). The pass needs no coordination and costs no correctness,
+// because the only consequence of losing a row is that the next Adjust mints a
+// fresh replacement — exactly what it would have done anyway.
+// `..._expires_idx` is the index that pass deletes through.
 
 export function triggerScheduleProposalSchemaQueries(
   schemaName: string,
@@ -86,9 +90,14 @@ export function triggerScheduleProposalSchemaQueries(
     // lineage has exactly one, and it names the replacement currently holding
     // the window open. Adjust returns that token while `expires_at` is in the
     // future and only mints past it, which is what makes the act IDEMPOTENT
-    // WHILE LIVE. `latest_token` is the proposal ciphertext — the same
-    // authenticated, reader-bound, org-bound bytes the transcript already
-    // persists in `assistant_turns.content`, held here for at most one TTL.
+    // WHILE LIVE. `latest_token` is the REPLACEMENT's ciphertext — authenticated,
+    // reader-bound and org-bound like any proposal token, but NOT the bytes the
+    // transcript holds: a replacement inherits only the nonce, and "everything
+    // else about the replacement is fresh: a fresh IV, a fresh ciphertext, a
+    // fresh `iat`/`exp`" (`trigger-schedule-proposal-token.ts`, `mint`). The
+    // transcript keeps the ORIGINAL ref; after a live Adjust the replacement's
+    // ref is React-local, so this column is the only durable copy of it — which
+    // is why it is swept rather than kept (see the header).
     // NO run reference: the row exists before any run does, which is the point.
     { text: `CREATE TABLE IF NOT EXISTS "${s}"."trigger_schedule_proposal_lineage" (
       consume_key text PRIMARY KEY,
@@ -100,8 +109,10 @@ export function triggerScheduleProposalSchemaQueries(
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
-    // Non-unique, for the retention pass described in the header: every row is
-    // discardable the moment its replacement expires.
+    // Non-unique, for the retention pass described in the header
+    // (`sweepExpiredLineage`, run by `audit-retention-enforce`): every row is
+    // discardable the moment its replacement expires, and the pass finds the
+    // discardable ones oldest-first through this index.
     { text: `CREATE INDEX IF NOT EXISTS trigger_schedule_proposal_lineage_expires_idx ON "${s}"."trigger_schedule_proposal_lineage" (expires_at)` },
     // trigger_schedule_install_outbox: the schedule-INSTALL intent (cinatra#2569).
     // A trigger has two halves in two systems — the durable row and the BullMQ
