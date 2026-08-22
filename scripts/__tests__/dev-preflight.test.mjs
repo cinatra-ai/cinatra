@@ -2468,6 +2468,77 @@ describe("whole-stack entry points — the guard the Makefile and package.json a
     expect(result.reached).toBe(true);
     expect(result.exported.CINATRA_REDIS_HOST_PORT).toBe("6379");
   });
+
+  // ---------------------------------------------------------------------------
+  // 3a-ter. The LIFECYCLE targets (cinatra#2849) — `make down`, `make logs`,
+  // `make clean` (`docker compose down -v`, destructive) and
+  // `pnpm services:down`. Startup resolves a compose project; these did not —
+  // each ran a BARE `docker compose …`, which Compose resolves against the
+  // directory-basename project because it does NOT read COMPOSE_PROJECT_NAME
+  // from `.env.local`. On a scoped lane that means `make down` leaves the
+  // lane's own stack running (it acted on the operator's project instead) and
+  // `make clean` wipes the OPERATOR'S volumes rather than the lane's own.
+  //
+  // The fix is not a second resolver: it is the exact same guarded chain
+  // `make dev` runs, minus `--require-manageable` (that flag exists only to
+  // make a WHOLE-STACK `up` honor a per-service stand-down; down/logs/clean
+  // never start anything, so there is nothing to stand down).
+  // ---------------------------------------------------------------------------
+
+  const MAKE_DOWN_GUARD = () => guardOf(makefileRecipe("down"));
+  const MAKE_LOGS_GUARD = () => guardOf(makefileRecipe("logs"));
+  const MAKE_CLEAN_GUARD = () => guardOf(makefileRecipe("clean"));
+  const SERVICES_DOWN_GUARD = () => guardOf(PKG.scripts["services:down"]);
+
+  const BASE_GUARD =
+    'CINATRA_COMPOSE_ENV="$(node scripts/dev-compose-env.mjs)" && eval "$CINATRA_COMPOSE_ENV"';
+
+  it("wires down/logs/clean and services:down to the SAME guard `make dev` runs, not a second resolver", () => {
+    expect(MAKE_DOWN_GUARD()).toBe(BASE_GUARD);
+    expect(MAKE_LOGS_GUARD()).toBe(BASE_GUARD);
+    expect(MAKE_CLEAN_GUARD()).toBe(BASE_GUARD);
+    expect(SERVICES_DOWN_GUARD()).toBe(BASE_GUARD);
+    // `make dev`'s own guard is this exact chain plus the whole-stack-only flag
+    // passed to the shared step — one shared prefix, never a fork.
+    expect(MAKE_DEV_GUARD()).toBe(BASE_GUARD.replace(".mjs)", ".mjs --require-manageable)"));
+  });
+
+  for (const [name, guardFn] of [
+    ["make down", MAKE_DOWN_GUARD],
+    ["make logs", MAKE_LOGS_GUARD],
+    ["make clean", MAKE_CLEAN_GUARD],
+    ["pnpm services:down", SERVICES_DOWN_GUARD],
+  ]) {
+    // The unscoped checkout: today's behavior, unchanged. No COMPOSE_PROJECT_NAME
+    // is resolved, so the bare `docker compose …` form Compose would run is
+    // equivalent to what it always ran here.
+    it(`${name} resolves the unscoped checkout to no project name — bare form, exactly as before`, () => {
+      const result = runGuard(guardFn());
+      expect(result.status).toBe(0);
+      expect(result.reached).toBe(true);
+      expect(result.exported.COMPOSE_PROJECT_NAME).toBeUndefined();
+    });
+
+    // The scoped lane: this is the blocker. Before the fix, `makefileRecipe`
+    // above cannot even find a guarded recipe line for these targets — proving
+    // the bare-compose form carries no `-p` / COMPOSE_PROJECT_NAME at all. After
+    // the fix, the lane's project name is exported here exactly as `make dev`
+    // exports it for the SAME `.env.local`.
+    it(`${name} resolves a scoped lane to the SAME project name \`make dev\` resolves for it`, () => {
+      const result = runGuard(guardFn(), { envLocal: LANE });
+      const devResult = runGuard(MAKE_DEV_GUARD(), { envLocal: LANE });
+      expect(result.status).toBe(0);
+      expect(result.reached).toBe(true);
+      expect(result.exported.COMPOSE_PROJECT_NAME).toBe("p2839");
+      expect(result.exported.COMPOSE_PROJECT_NAME).toBe(devResult.exported.COMPOSE_PROJECT_NAME);
+    });
+  }
+
+  it("setup.sh's stop-infra hint points at the guarded `make down`, not a bare `docker compose down`", () => {
+    const setupSh = readFileSync(path.join(REPO_ROOT, "scripts", "setup.sh"), "utf8");
+    expect(setupSh).not.toContain('echo "  Stop infra:       docker compose down"');
+    expect(setupSh).toMatch(/Stop infra:\s*make down/);
+  });
 });
 
 // ---------------------------------------------------------------------------

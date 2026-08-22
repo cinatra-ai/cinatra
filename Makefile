@@ -69,8 +69,15 @@ dev:
 	pnpm dev
 
 # Stop infrastructure (keeps data).
+#
+# Routed through the SAME shared step `dev` uses (cinatra#2849): a bare
+# `docker compose down` here acted on the DEFAULT project, because Compose does
+# not read COMPOSE_PROJECT_NAME from `.env.local` — so on a scoped lane it left
+# the lane's own stack running while claiming to have stopped it. No
+# `--require-manageable`: that flag exists only to make a WHOLE-STACK `up`
+# honor a per-service stand-down, and `down` starts nothing.
 down:
-	docker compose down
+	CINATRA_COMPOSE_ENV="$$(node scripts/dev-compose-env.mjs)" && eval "$$CINATRA_COMPOSE_ENV" && docker compose down
 
 # Soft reset: drop auth/app data, flush Redis, rebuild schemas and connections.
 reset:
@@ -82,9 +89,16 @@ reset-full:
 	pnpm exec cinatra reset dev --yes --full --rebuild-env
 
 # Show infrastructure logs.
+#
+# Same shared step as `dev` (cinatra#2849) — a bare `docker compose logs` on a
+# scoped lane tailed the OPERATOR'S containers, not the lane's own.
 logs:
-	docker compose logs -f
+	CINATRA_COMPOSE_ENV="$$(node scripts/dev-compose-env.mjs)" && eval "$$CINATRA_COMPOSE_ENV" && docker compose logs -f
 
 # Remove Docker volumes (data wipe without rebuild).
+#
+# Same shared step as `dev` (cinatra#2849) — DESTRUCTIVE, and a bare
+# `docker compose down -v` on a scoped lane wiped the OPERATOR'S volumes
+# (or another lane's) instead of this lane's own.
 clean:
-	docker compose down -v
+	CINATRA_COMPOSE_ENV="$$(node scripts/dev-compose-env.mjs)" && eval "$$CINATRA_COMPOSE_ENV" && docker compose down -v
