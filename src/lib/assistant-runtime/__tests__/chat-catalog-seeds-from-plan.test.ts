@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
 // THE CATALOG'S SEEDING SITE (cinatra#2817 slice 1).
@@ -50,5 +52,89 @@ describe("the chat catalog seeds from the request-scoped capability plan", () =>
 
   it("an unemitted plan reads as EMPTY, never as everything", () => {
     expect(mcpServerSource).toContain("return { entries: [], outcomes: [], servable: [] };");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE SAME SEAM, ASSERTED ON THE MODULE GRAPH (cinatra#2817 review round).
+//
+// The literal-fragment checks above are brittle in BOTH directions: splitting
+// `buildDelegatedChatCapabilityPlan({` across lines turns them red with no
+// behaviour change, and a rename that happens to preserve the substring keeps
+// them green. They stay, because they pin the CALL SHAPE that a graph check
+// cannot see. This block pins the REACHABILITY instead, which survives any
+// reformatting: the seeding site can still get to the builder, and the deleted
+// static accessor cannot come back through ANY path in that graph, not just
+// through this one file's own text.
+// ---------------------------------------------------------------------------
+
+const APP_ROOT = resolve(fileURLToPath(new URL("../../../..", import.meta.url)));
+
+/** Resolve one specifier to an app-owned .ts/.tsx file, or null. */
+function resolveAppModule(spec: string, fromFile: string): string | null {
+  let base: string;
+  if (spec.startsWith("@/")) base = resolve(APP_ROOT, "src", spec.slice(2));
+  else if (spec.startsWith(".")) base = resolve(dirname(fromFile), spec);
+  else return null; // workspace package or node_modules: not the app graph
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
+    if (candidate.endsWith(".ts") || candidate.endsWith(".tsx")) {
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+/** Every app-owned module reachable from `entry`, static and dynamic edges alike. */
+function reachableAppModules(entry: string): Set<string> {
+  const seen = new Set([entry]);
+  const queue = [entry];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    let source: string;
+    try {
+      source = readFileSync(current, "utf8");
+    } catch {
+      continue;
+    }
+    const specs = new Set<string>();
+    for (const re of [
+      /\b(?:import|export)\s[^'"`;]*?\bfrom\s*["']([^"']+)["']/g,
+      /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+    ]) {
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(source)) !== null) specs.add(m[1]);
+    }
+    for (const spec of specs) {
+      const abs = resolveAppModule(spec, current);
+      if (abs && !seen.has(abs)) {
+        seen.add(abs);
+        queue.push(abs);
+      }
+    }
+  }
+  return seen;
+}
+
+describe("the seeding site's module graph", () => {
+  const runtimeModule = resolve(APP_ROOT, "src/lib/assistant-runtime/runtime.ts");
+  const builderModule = resolve(APP_ROOT, "src/lib/mcp-server.ts");
+  const graph = reachableAppModules(runtimeModule);
+
+  it("resolveChatMcpCatalogState can REACH the plan builder's module", () => {
+    expect(graph.has(builderModule)).toBe(true);
+  });
+
+  it("that module is the one that EXPORTS the builder", () => {
+    expect(readFileSync(builderModule, "utf8")).toMatch(
+      /export\s+(?:async\s+)?function\s+buildDelegatedChatCapabilityPlan\b/,
+    );
+  });
+
+  it("the deleted static accessor is not reachable through ANY path in that graph", () => {
+    const offenders = [...graph].filter((file) =>
+      /\bdelegatedChatAllowedToolNames\b/.test(readFileSync(file, "utf8")),
+    );
+    expect(offenders.map((f) => f.slice(APP_ROOT.length + 1))).toEqual([]);
   });
 });
