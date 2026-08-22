@@ -550,6 +550,63 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     expect(root.textContent).toContain("Skill A");
   });
 
+  // THE RUNTIME INSTANCE CONTRACT ON EVERY HOST THAT ENUMERATES A PRODUCTION
+  // ADAPTER (cinatra#2790, epic #2784 S9f). The run card was the only such host
+  // until this slice; the widget conversation column and the review page's gate
+  // region are the two it added, so the count that makes "one rendered instance
+  // per kind x host" true has to be taken on all three rather than on one and
+  // generalized to the rest.
+  //
+  // THE WIDGET HOST IS DRIVEN THROUGH ITS OWN TRANSPORT, which is the point of
+  // driving it at all: a credential-declaring surface never reaches the
+  // cookie-bound server action, so the run through it proves the broker read
+  // paints the same single row — and the assertion that the action was NOT
+  // called is what keeps that honest.
+  it("every host with a production adapter draws EXACTLY ONE chip row", async () => {
+    const WIDGET_AUTH = {
+      headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }),
+      credentials: "omit" as RequestCredentials,
+    };
+    const brokerFetch = vi.fn(async () => ({ ok: true, json: async () => HELD }) as unknown as Response);
+    vi.stubGlobal("fetch", brokerFetch);
+    try {
+      // The hosts are named as literals, one per line, because this test IS the
+      // record of which hosts were actually driven.
+      for (const host of ["run_card", "site_widget", "page_gate_region"] as const) {
+        const viaBroker = host === "site_widget";
+        holdStateMock.mockClear();
+        brokerFetch.mockClear();
+        holdStateMock.mockImplementation(async () => HELD);
+        const { container, unmount } = await mountCard({
+          wireRef: "hold-ref-1",
+          host,
+          ...(viaBroker ? { auth: WIDGET_AUTH } : {}),
+        });
+        await waitFor(() =>
+          expect(container.querySelector("[data-run-recommendation-chip-row]")).not.toBeNull(),
+        );
+        // EXACTLY ONE instance on this host. A second adapter drawing beside
+        // this one is the failure the one-card rule exists to prevent, and it
+        // is only visible as a COUNT on rendered DOM.
+        expect(container.querySelectorAll("[data-run-recommendation-chip-row]")).toHaveLength(1);
+        const root = container.querySelector("[data-run-recommendation-chip-row]")!;
+        expect(root.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
+        expect(root.getAttribute("data-lifecycle-card-host")).toBe(host);
+        expect(root.getAttribute("data-lifecycle-card-state")).toBe("held");
+        expect(root.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
+        expect(root.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
+        expect(root.querySelector('[data-skill-action="skip"]')).not.toBeNull();
+        // …and the row really came from the transport this host declares.
+        expect(brokerFetch.mock.calls.length > 0).toBe(viaBroker);
+        expect(holdStateMock.mock.calls.length > 0).toBe(!viaBroker);
+        unmount();
+        cleanup();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("draws nothing at all for a run that was never held", async () => {
     holdStateMock.mockImplementation(async () => ({ state: "none" }));
     const { container } = await mountCard({ wireRef: null });

@@ -439,7 +439,25 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     openObligations: [],
     hosts: {
       chat_thread: null,
-      site_widget: null,
+      // THE CONVERSATION HOST THIS SLICE BOUND (cinatra#2790, epic #2784 S9f).
+      // Enumerated under `site_widget` and under no other conversation host,
+      // because that is the only one this callsite draws on: the column mounts
+      // the card through `BrokerHostRecommendationHold`, which returns `null`
+      // whenever `useCookieSessionSurface()` is TRUE, and the widget embed is
+      // the one conversation surface that declares a credential instead of a
+      // cookie (`src/app/embed/assistant/embed-assistant-client.tsx` passes
+      // `host: "site_widget"` down to this same column; `/chat` takes the
+      // module's `chat_thread` default). So on `chat_thread` this module draws
+      // nothing at all, and naming it there would claim a mount the tree does
+      // not have.
+      site_widget: [
+        {
+          module: "packages/chat/src/chat-messages-view.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the widget conversation column draws the run-start chip row itself, as a SIBLING of the inline run card for the `agent_run` step that started the run — on this host the run panel carries no card of its own (every path it seeds and drives itself with is cookie-bound), so this is the only mount that can draw the question there",
+        },
+      ],
       run_card: [
         {
           module: "packages/agents/src/agentic-run-panel.tsx",
@@ -460,7 +478,20 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           why: "the Dev Stepper's child-run preview row, which draws only while a dev preview child is open and addresses that child's own run — enumerated because it is a real callsite, and marked dev_preview because it is not one of the production adapters",
         },
       ],
-      page_gate_region: null,
+      // THE REVIEW-PAGE APPEARANCE (cinatra#2790, epic #2784 S9f). Its position
+      // is the plan's, not a layout choice: §6.4 item 6 puts the same row on the
+      // review page, ahead of the gate it would authorize, "where it is mostly
+      // seen in its decided form". The page declares the host on the gate
+      // region's root and keys the card by the run and nothing else.
+      page_gate_region: [
+        {
+          module:
+            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+          adapter: "mount",
+          surface: "production",
+          why: "the review page mounts the same chip row inside its gate region, above the review card and under that region's own `page_gate_region` host declaration; the page composes no recommendation drawing of its own and passes only the run id, so the card decides whether it draws and in which state",
+        },
+      ],
     },
     exclusions: {
       run_card: {
@@ -473,7 +504,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       },
     },
     hostGap:
-      "Three of the four hosts carry no mount. The chat thread is RULED and belongs to the chat-origin slice: the card mounts in the assistant dispatch turn, keyed by the run identity off the tool result, and NOT through the renderable-view registry. The site widget and the page gate region belong to the host-parity slice, which binds route, identity and authorization reader before it implements either.",
+      "The chat thread is the one host that carries no mount, and it is RULED to the chat-origin slice: the card mounts in the assistant dispatch turn, keyed by the run identity off the tool result, and NOT through the renderable-view registry. The conversation column's own adapter enumerated above stands down there rather than covering it — it draws only where the surface declares a credential instead of a cookie. The site widget and the page gate region were the other two, and the host-parity slice bound route, identity and authorization reader and then mounted both.",
     // The row's own root, because the lifecycle-card identity is the open
     // obligation below. When that obligation closes, this becomes
     // `[data-lifecycle-card="recommendation_hold"]` in the same change.
@@ -485,10 +516,14 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
       testName: "host run_card draws EXACTLY ONE chip row, carrying the ratified decisions",
     },
+    // ONE COUNTED PROOF PER HOST THAT ENUMERATES A PRODUCTION ADAPTER. The named
+    // test drives all three in one loop and counts the rendered roots on each,
+    // so "exactly one instance" is read off real DOM per host rather than
+    // asserted once and generalized.
     instanceProof: {
       file: "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
-      testName: "host run_card draws EXACTLY ONE chip row, carrying the ratified decisions",
-      hosts: ["run_card"],
+      testName: "every host with a production adapter draws EXACTLY ONE chip row",
+      hosts: ["run_card", "site_widget", "page_gate_region"],
     },
   },
 
