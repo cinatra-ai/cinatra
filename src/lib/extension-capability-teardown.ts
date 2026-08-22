@@ -23,6 +23,8 @@ import "server-only";
 // would need the test expanded too.
 
 import { removeExtensionMcpToolsForPackage } from "@/lib/extension-mcp-registry";
+import { revokeDelegatedChatAdmissionsForPackage } from "@/lib/delegated-chat-admission-store";
+import { bumpAdmissionPolicyGeneration } from "@/lib/delegated-chat-admission-generation";
 import {
   invalidateProvidersForPackage,
   hasCapabilityProvidersForPackage,
@@ -176,6 +178,48 @@ export function teardownExtensionCapabilities(packageName: string): {
   ) {
     bumpActivationGeneration("teardown", packageName);
   }
+
+  // cinatra#2817 slice 2 — a teardown also WITHDRAWS every delegated-chat
+  // admission the package held.
+  //
+  // OUTSIDE the guarded bump, deliberately. The guard asks "did this process
+  // still hold a live in-memory registration?", and the answer is NO after a
+  // restart, after a partial activation, or after a registry loss — while the
+  // DURABLE approval is unaffected by any of those. Gating the withdrawal on
+  // the guard would leave exactly those uninstalls with their admissions
+  // intact, and a same-version reinstall would inherit a review it never got.
+  //
+  // The generation bump is SYNCHRONOUS and unconditional, so cached
+  // authorization is invalidated in this process before the next request, and
+  // it does not depend on the durable write landing.
+  bumpAdmissionPolicyGeneration("revoke", packageName);
+  // Stamped BEFORE the detached write so a review that lands after this moment
+  // — a same-version reinstall being re-admitted while the write is still in
+  // flight — is not withdrawn by a teardown that predates it.
+  const teardownAt = new Date().toISOString();
+  // FIRE-AND-FORGET, and only here: the in-memory perimeter is already closed
+  // synchronously above, so this is the durable record catching up. The
+  // teardown chokepoint is a SYNC hook (`setExtensionCapabilityTeardownHook`),
+  // so it cannot await; a failure is therefore reported loudly rather than
+  // swallowed, because an approval the store still holds after an uninstall is
+  // something an operator must see.
+  void revokeDelegatedChatAdmissionsForPackage(packageName, { reviewedNotAfter: teardownAt })
+    .then((ok) => {
+      if (!ok) {
+        console.error(
+          `[extension-teardown] delegated-chat admissions for "${packageName}" were NOT revoked ` +
+            "in the durable store — this process's caches are invalidated, but the reviewed " +
+            "approval is still recorded. Re-run the revocation.",
+        );
+      }
+    })
+    .catch((err) => {
+      console.error(
+        `[extension-teardown] delegated-chat admission revocation FAILED for "${packageName}":`,
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+
   return {
     removedTools,
     removedTypes,
