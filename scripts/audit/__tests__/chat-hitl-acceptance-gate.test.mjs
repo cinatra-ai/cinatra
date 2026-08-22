@@ -305,7 +305,7 @@ describe("the REAL manifest", () => {
     // The move says what CHANGED between the two documents, not merely that one
     // happened, and it does not claim an approval it cannot see.
     expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
-    expect(m.specCommitDrift.whoRatified).toMatch(/NOT been through/);
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-22/);
   });
 
   it("both flipped rows keep the proofs they had — a flip withdraws a claim, not evidence", () => {
