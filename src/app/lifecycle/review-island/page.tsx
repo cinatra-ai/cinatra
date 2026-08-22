@@ -189,7 +189,11 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     reviewTaskId,
     actorCtx,
   });
-  // `not-authorized` and `blocked` both draw nothing here — see the header.
+  // `not-authorized`, `blocked` and `settled` all draw nothing here — see the
+  // header. `settled` (cinatra#2904) belongs in that list for the same reason
+  // the other two do: the island's job is §III's target ladder for a gate that
+  // is still open, and a decided gate's card draws no island at all. It is one
+  // empty document either way, so a reader still cannot tell WHY it is empty.
   if (surface.kind !== "ready") return EMPTY_ISLAND;
 
   return (
