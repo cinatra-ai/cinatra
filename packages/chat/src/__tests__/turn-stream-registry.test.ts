@@ -461,6 +461,62 @@ describe("the run id — the identity the server shares with these turns", () =>
   });
 });
 
+describe("the anchored bubble ids — what an edit's REBUILT transcript may not carry", () => {
+  // `removableTurnIds` over-names on purpose: a bubble id the server cannot link
+  // to a row does nothing, so the INTENT unions every uncommitted turn in. The
+  // edit's PAYLOAD cannot be that generous — it is the whole thread, so a turn
+  // dropped out of it is a turn deleted — and a Slack turn can reveal while the
+  // edit is suspended. `condemnedTurnIds` is the same anchor narrowing
+  // `removableRunIds` applies, asked in bubble ids, for exactly that rebuild.
+
+  const removing = (...ids: string[]) => new Set(ids);
+
+  it("names an IN-FLIGHT turn anchored to a removed prompt", () => {
+    const streams = createTurnStreamRegistry();
+    streams.begin("a-for-u2", controller(), "u2");
+    expect(streams.condemnedTurnIds(removing("u2", "a-for-u2"))).toEqual(["a-for-u2"]);
+  });
+
+  it("WITHHOLDS a concurrent turn anchored to a KEPT prompt — the reply survives the edit", () => {
+    const streams = createTurnStreamRegistry();
+    streams.begin("a-for-u1", controller(), "u1");
+    streams.begin("a-for-u2", controller(), "u2");
+    // The union names both; only the one below the edit point is condemned.
+    expect(streams.removableTurnIds()).toEqual(["a-for-u1", "a-for-u2"]);
+    expect(streams.condemnedTurnIds(removing("u2", "a-for-u1", "a-for-u2"))).toEqual([
+      "a-for-u2",
+    ]);
+  });
+
+  it("WITHHOLDS a turn with NO anchor — it cannot show it sits below the edit point", () => {
+    const streams = createTurnStreamRegistry();
+    streams.begin("a1", controller());
+    expect(streams.removableTurnIds()).toEqual(["a1"]);
+    expect(streams.condemnedTurnIds(removing("u1", "a1"))).toEqual([]);
+  });
+
+  it("names an ENDED turn too, whatever a committed render has carried", () => {
+    // The ledger's `inTranscript` flag is the ID half's release from the INTENT.
+    // It says a render carried the turn; it says nothing about whether the turn
+    // sits below an edit point, so it must not exempt one from the rebuild.
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a-for-u2", controller(), "u2");
+    streams.noteRunId(token, "run-for-u2");
+    streams.end(token);
+    streams.noteCommittedTranscript([{ id: "a-for-u2" }]);
+    expect(streams.removableTurnIds()).toEqual([]);
+    expect(streams.condemnedTurnIds(removing("u2", "a-for-u2"))).toEqual(["a-for-u2"]);
+  });
+
+  it("prefers the LIVE instance over a ledger entry under the same id", () => {
+    const streams = createTurnStreamRegistry();
+    const stale = streams.begin("a1", controller(), "u2");
+    streams.end(stale); // ledger: anchored to the removed prompt
+    streams.begin("a1", controller(), "u1"); // live: anchored ABOVE the edit
+    expect(streams.condemnedTurnIds(removing("u2", "a1"))).toEqual([]);
+  });
+});
+
 describe("the pre-RUN_STARTED window: the edit HOLDS until the run is settled", () => {
   const removing = (...ids: string[]) => new Set(ids);
 

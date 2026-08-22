@@ -53,11 +53,17 @@ const STALE_SNAPSHOT: Message[] = [msg("u1", "user"), msg("a1", "assistant"), ms
 function deps(over: Partial<EditAndResendDeps> = {}): EditAndResendDeps {
   return {
     messages: STALE_SNAPSHOT,
+    // The LIVE transcript the save's payload is rebuilt from. These arms are
+    // about the INTENT, and nothing reveals during them, so it is the same
+    // transcript the snapshot holds — the rebuild is driven in
+    // `edit-flow-pre-run-started-window.test.ts`.
+    currentMessages: () => STALE_SNAPSHOT,
     setMessages: () => {},
     isSlackMode: true,
     hasActiveStream: false,
     removableTurnIds: () => [],
     removableRunIds: () => [],
+    condemnedTurnIds: () => [],
     // THE DEFERRAL for the pre-`RUN_STARTED` window. Nothing here is inside
     // that window — every arm's turn either has its run already or never gets
     // one — so the default settles at once and these arms measure what they

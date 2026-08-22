@@ -728,11 +728,13 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     await runEditAndResend(
       {
         messages,
+        currentMessages: () => messagesRef.current,
         setMessages,
         isSlackMode,
         hasActiveStream,
         removableTurnIds: () => streams.removableTurnIds(),
         removableRunIds: (removed) => streams.removableRunIds(removed),
+        condemnedTurnIds: (removed) => streams.condemnedTurnIds(removed),
         settleRemovableRunIds: (removed) => streams.settleRunIdsForRemoval(removed),
         activeThreadId,
         currentThreadId: () => activeThreadIdRef.current,

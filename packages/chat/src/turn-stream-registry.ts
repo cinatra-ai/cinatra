@@ -370,6 +370,17 @@ export type TurnStreamRegistry = {
    *  no anchor, or whose run id never arrived, contributes nothing. Deduplicated;
    *  the caller treats it as a SET. */
   removableRunIds(removedMessageIds: Iterable<string>): string[];
+  /** THE SAME ANCHOR NARROWING, IN BUBBLE IDS: the turns whose ANCHOR PROMPT is
+   *  among `removedMessageIds`, and therefore the turns an edit's TRUNCATED
+   *  TRANSCRIPT must not carry. `removableTurnIds` deliberately over-names (a
+   *  bubble id the server cannot link to a row does nothing), and that generosity
+   *  is safe for the INTENT and wrong for the PAYLOAD: a transcript rebuilt after
+   *  the edit's suspension points has to keep a turn that revealed for a prompt
+   *  the edit KEPT, while dropping one that revealed for a prompt it removed.
+   *  This is that distinction, asked of the one place that records the anchor.
+   *  Both states are read, in-flight and ledger, because either can reveal while
+   *  an edit is holding. Deduplicated; the caller treats it as a SET. */
+  condemnedTurnIds(removedMessageIds: Iterable<string>): string[];
   /** THE DEFERRAL. Resolve once every turn this edit could name by RUN has
    *  SETTLED that identity: each registered turn whose anchor is among
    *  `removedMessageIds` and whose run is still unknown has either reported one
@@ -658,6 +669,25 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       for (const registered of inFlight.values()) offer(registered.runId, registered.anchorId);
       for (const [id, rec] of endedUncommitted) if (!inFlight.has(id)) offer(rec.runId, rec.anchorId);
       return runIds;
+    },
+    condemnedTurnIds(removedMessageIds) {
+      const removed = removedMessageIds instanceof Set ? removedMessageIds : new Set(removedMessageIds);
+      // THE ANCHOR RULE `removableRunIds` APPLIES, ASKED FOR THE OTHER HALF. A
+      // turn whose anchor prompt this edit removed is a turn below the edit
+      // point, whether it has a run yet or not — and NO ANCHOR IS NO CLAIM here
+      // too, in the same direction: a turn that cannot show it sits below the
+      // edit point is left in the transcript rather than dropped out of it.
+      const anchoredBelow = (anchorId: string | null) =>
+        typeof anchorId === "string" && anchorId.length > 0 && removed.has(anchorId);
+      const ids: string[] = [];
+      for (const [id, registered] of inFlight) if (anchoredBelow(registered.anchorId)) ids.push(id);
+      // The ledger too, and WITHOUT the `inTranscript` filter `removableTurnIds`
+      // uses: that flag says a committed render carried the turn, which is a
+      // reason to stop naming it in the INTENT and no reason at all to let it
+      // survive a truncation it sits below.
+      for (const [id, rec] of endedUncommitted)
+        if (!inFlight.has(id) && anchoredBelow(rec.anchorId)) ids.push(id);
+      return ids;
     },
     settleRunIdsForRemoval(removedMessageIds, options) {
       const removed =

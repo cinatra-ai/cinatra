@@ -24,7 +24,14 @@ import type { UiMessage as Message, UiThreadSummary as ThreadSummary, Mention } 
 /** Everything the flow reads from the page, handed in explicitly so the slice
  *  stays testable without mounting the page. */
 export type EditAndResendDeps = {
+  /** The render's SNAPSHOT, which is what the removal is computed against: the
+   *  reader edited the transcript they were looking at. */
   messages: Message[];
+  /** The LIVE transcript, read after this flow's suspension points. The removal
+   *  is the snapshot's; the transcript the save posts is not, because a save
+   *  posts the WHOLE thread and a concurrent Slack turn can reveal into it while
+   *  this flow is holding (see the rebuild below). */
+  currentMessages: () => Message[];
   /** The page's `setMessages` verbatim — the updater form and the direct form
    *  both, exactly as React's setter takes them. */
   setMessages: (next: Message[] | ((prev: Message[]) => Message[])) => void;
@@ -40,6 +47,10 @@ export type EditAndResendDeps = {
    *  dispatched for a prompt this edit KEPT must not be offered
    *  (`./turn-stream-registry`). */
   removableRunIds: (removedMessageIds: ReadonlySet<string>) => Iterable<string>;
+  /** The same anchor narrowing in BUBBLE IDS: the turns whose anchor prompt this
+   *  edit removed, and so the turns its rebuilt transcript must not carry. Read
+   *  LIVE, at rebuild time (`./turn-stream-registry`). */
+  condemnedTurnIds: (removedMessageIds: ReadonlySet<string>) => Iterable<string>;
   /** THE DEFERRAL for the pre-`RUN_STARTED` window: resolve once every turn this
    *  edit could name by RUN has settled that identity — the handshake delivered
    *  one, or the stream ended without one. Awaited BEFORE `removableRunIds` is
@@ -94,7 +105,6 @@ export async function editAndResend(
   // Truncate conversation at the edited message and replace it.
   const idx = messages.findIndex((m) => m.id === messageId);
   if (idx < 0) return;
-  const prior = messages.slice(0, idx);
   // Preserve attachments from the original turn so editing the text doesn't
   // silently drop the file refs from the persisted thread + the re-dispatched
   // user message.
@@ -107,7 +117,6 @@ export async function editAndResend(
       ? { attachments: original.attachments }
       : {}),
   };
-  const truncated = [...prior, editedMessage];
   // The user edited `messageId`, so it and everything below it is deliberately
   // gone — INCLUDING a Slack turn whose message is not in `messages`: one still
   // streaming, and one that just ENDED into a reveal this render has not
@@ -153,6 +162,64 @@ export async function editAndResend(
   // `streamAgUiResponse` uses for its delayed stream updates.
   const originThreadId = threadId;
   const stillOnOriginThread = () => deps.currentThreadId() === originThreadId;
+
+  // THE TRUNCATED TRANSCRIPT IS BUILT HERE, AFTER THE HOLD — NOT BEFORE IT.
+  // The removal above is the SNAPSHOT'S and stays that way: the reader removed
+  // the prompt they were looking at. The TRANSCRIPT is a different question,
+  // because the save posts the WHOLE thread and the hold is an await. A Slack
+  // turn anchored ABOVE the edit point is correctly neither waited on nor named
+  // by run — and it can REVEAL while this edit waits. Posting the pre-await
+  // slice would overwrite the thread without that reply: a message missing from
+  // the payload is a message removed from the server.
+  //
+  // So the KEPT REGION IS RE-READ LIVE and the removed set is unchanged. Out
+  // stays every message the edit deliberately removed (the edited prompt and
+  // its successors in the snapshot), and out stays every turn whose ANCHOR
+  // PROMPT this edit removed — the narrowing `removableRunIds` applies, asked
+  // in bubble ids, because a turn that revealed for a removed prompt must not
+  // survive the truncation and one that revealed for a KEPT prompt must. The
+  // union of `removableTurnIds` is deliberately NOT used here: over-naming is
+  // safe for the intent (the server intersects it) and is exactly the bug for
+  // the payload (it would drop the kept prompt's reply).
+  //
+  // With nothing arriving — every ordinary edit — this is the transcript the
+  // pre-await slice built, message for message.
+  //
+  // THE RESIDUAL, STATED: A REVEAL THAT IS QUEUED BUT NOT COMMITTED. The live
+  // read is the page's post-commit `messages` ref, so a reveal whose
+  // `setMessages` React has not committed yet is invisible here — the same
+  // zero-source window `./turn-stream-registry` is built around, arriving at
+  // this line instead of at the intent. That reply is then missing from the
+  // payload exactly as it was before this rebuild existed, so this is a
+  // NARROWING and not a new hole: it went from EVERY kept-prompt reply that
+  // revealed during the hold to only one that revealed in the last microtasks
+  // of it. Closing it needs the page to keep that ref in step SYNCHRONOUSLY,
+  // which is a change to how `/chat` tracks its transcript and not to this
+  // flow. What bounds the loss meanwhile is the same thing that bounds it for
+  // an aborted turn: the reply's prompt was KEPT, so its run is withheld from
+  // `removedRunIds`, its run-bound row is never tombstoned, and the reload
+  // folds it back in.
+  //
+  // OFF THE ORIGIN THREAD THE LIVE READ IS NOT THIS THREAD'S. Leaving during
+  // the hold replaces the page's transcript with another thread's, so the save
+  // below — which still goes out, because an unrecorded truncation is the
+  // silent degradation this leg exists to remove — falls back to the snapshot
+  // it was built from rather than posting a stranger's transcript under this
+  // thread's id.
+  //
+  // AND THE EDITED PROMPT KEEPS ITS PLACE AT THE EDIT POINT. Whatever ARRIVED
+  // during the hold arrived AFTER the reader submitted this edit — a reply that
+  // revealed, and in Slack mode a message the reader themselves posted, because
+  // re-entry is allowed while a turn streams. Rebuilding as "everything live,
+  // then the edit" would order the edit behind messages it preceded. So the
+  // transcript is assembled in the three parts it actually has.
+  const live = stillOnOriginThread() ? deps.currentMessages() : messages;
+  const keptIds = new Set(messages.slice(0, idx).map((m) => m.id));
+  const inSnapshot = new Set(messages.map((m) => m.id));
+  const condemned = new Set(deps.condemnedTurnIds(removedIdSet));
+  const kept = live.filter((m) => keptIds.has(m.id));
+  const arrived = live.filter((m) => !inSnapshot.has(m.id) && !condemned.has(m.id));
+  const truncated = [...kept, editedMessage, ...arrived];
 
   // THE INTENT SAVE GOES FIRST, AND THIS FLOW WAITS FOR IT. It used to be
   // fire-and-forget, with the truncation applied and the regeneration started

@@ -67,11 +67,13 @@ const SNAPSHOT: Message[] = [msg("u1", "user"), msg("a1", "assistant"), msg("u2"
 function deps(streams: TurnStreamRegistry, over: Partial<EditAndResendDeps> = {}): EditAndResendDeps {
   return {
     messages: SNAPSHOT,
+    currentMessages: () => SNAPSHOT,
     setMessages: () => {},
     isSlackMode: true,
     hasActiveStream: true,
     removableTurnIds: () => streams.removableTurnIds(),
     removableRunIds: (removed) => streams.removableRunIds(removed),
+    condemnedTurnIds: (removed) => streams.condemnedTurnIds(removed),
     settleRemovableRunIds: (removed) => streams.settleRunIdsForRemoval(removed),
     activeThreadId: "th1",
     currentThreadId: () => "th1",
@@ -85,6 +87,13 @@ function deps(streams: TurnStreamRegistry, over: Partial<EditAndResendDeps> = {}
     ...over,
   };
 }
+
+/** The posted transcript as an ORDER, with the edited prompt named by its
+ *  content: `generateId` is mocked with a counter that runs across the whole
+ *  file, so the replacement's id is not stable per arm and only its POSITION is
+ *  the claim. */
+const shape = (messages: Message[], edited = "actually, ask something else") =>
+  messages.map((m) => (m.content === edited ? "<edit>" : m.id));
 
 /** Let every already-queued microtask run, without letting a timer fire. */
 const drainMicrotasks = async () => {
@@ -185,6 +194,131 @@ describe("an edit made inside the pre-RUN_STARTED window", () => {
     expect(intent.removedMessageIds).toContain("u2");
     // ...and the run is not asserted, because it never arrived here to assert.
     expect(intent).not.toHaveProperty("removedRunIds");
+  });
+
+  it("KEEPS a reply that reveals for a kept prompt while the edit is holding", async () => {
+    // THE OTHER SIDE OF THE HOLD, and the defect it opened. The wait is an
+    // await, and a Slack turn anchored ABOVE the edit point keeps streaming
+    // through it — correctly unwaited-on and correctly unnamed by run. When it
+    // REVEALS mid-hold, the transcript the save posts must carry it: a save
+    // posts the WHOLE thread, so a reply missing from the payload is a reply
+    // deleted from the server by an edit that never touched its prompt.
+    const streams = createTurnStreamRegistry();
+    // The turn this edit caught mid-handshake — the reason it holds at all.
+    const held = streams.begin("a-held", new AbortController(), "u2");
+    // The concurrent turn for the prompt ABOVE the edit point.
+    streams.begin("a-kept", new AbortController(), "u1");
+
+    const live: Message[] = [...SNAPSHOT];
+    const flow = editAndResend(
+      deps(streams, { currentMessages: () => live }),
+      "u2",
+      "actually, ask something else",
+    );
+    await drainMicrotasks();
+    expect(saved, "the edit posted before the run was known").toHaveLength(0);
+
+    // THE REVEAL, mid-hold: `driveAssistantChatTurn` appends the finished turn.
+    live.push(msg("a-kept", "assistant"));
+
+    expect(streams.noteRunId(held, "run-held")).toBe(true);
+    await flow;
+
+    expect(saved).toHaveLength(1);
+    const intent = saved[0] as {
+      messages: Message[];
+      removedMessageIds?: string[];
+      removedRunIds?: string[];
+    };
+    expect(
+      intent.messages.map((m) => m.id),
+      "the kept prompt's reply was overwritten out of the thread by an edit below it",
+    ).toContain("a-kept");
+    // THE WHOLE ORDER, not just the membership. The kept region comes back as it
+    // was, the edited prompt holds the EDIT POINT, and what arrived during the
+    // hold follows it — it arrived after the reader submitted this edit.
+    expect(shape(intent.messages)).toEqual(["u1", "a1", "<edit>", "a-kept"]);
+    // ...and the edit's own removal still happened.
+    expect(intent.removedMessageIds).toContain("u2");
+    expect(intent.removedRunIds).toEqual(["run-held"]);
+  });
+
+  it("KEEPS a message the reader POSTS during the hold, after the edited prompt", async () => {
+    // Slack mode allows re-entry while a turn streams, so the reader can send a
+    // new message while their own edit is still holding. It arrived AFTER the
+    // edit, so it belongs after it — and it must not be overwritten away by a
+    // save whose payload predates it.
+    const streams = createTurnStreamRegistry();
+    const held = streams.begin("a-held", new AbortController(), "u2");
+
+    const live: Message[] = [...SNAPSHOT];
+    const flow = editAndResend(
+      deps(streams, { currentMessages: () => live }),
+      "u2",
+      "actually, ask something else",
+    );
+    await drainMicrotasks();
+
+    live.push(msg("u3", "user"));
+
+    expect(streams.noteRunId(held, "run-held")).toBe(true);
+    await flow;
+
+    const intent = saved[0] as { messages: Message[] };
+    expect(
+      shape(intent.messages),
+      "a message posted during the hold was lost, or ordered ahead of the edit that preceded it",
+    ).toEqual(["u1", "a1", "<edit>", "u3"]);
+  });
+
+  it("posts exactly the pre-await slice when NOTHING arrives during the hold", async () => {
+    // The overwhelmingly common edit: no concurrent turn, nothing revealed,
+    // nothing posted. The live read must produce what `[...prior, edited]` did.
+    const streams = createTurnStreamRegistry();
+    await editAndResend(deps(streams), "u2", "just fix the typo");
+
+    const intent = saved[0] as { messages: Message[] };
+    expect(shape(intent.messages, "just fix the typo")).toEqual(["u1", "a1", "<edit>"]);
+    // ...and the kept region is carried through, not rebuilt: the SAME message
+    // objects the render held, in the same order.
+    expect(intent.messages[0]).toBe(SNAPSHOT[0]);
+    expect(intent.messages[1]).toBe(SNAPSHOT[1]);
+    expect(intent.messages[2]?.content).toBe("just fix the typo");
+  });
+
+  it("DROPS a reply that reveals for a prompt this edit removed", async () => {
+    // The same live read, in the direction that must not leak: a turn anchored
+    // to a prompt the edit REMOVED is below the edit point wherever its reveal
+    // happens to land, so re-reading the transcript must not carry it back in.
+    // Over-naming is safe for the INTENT and is the bug for the PAYLOAD, which
+    // is why the rebuild asks for the ANCHORED set rather than the union.
+    const streams = createTurnStreamRegistry();
+    const held = streams.begin("a-held", new AbortController(), "u2");
+    const early = streams.begin("a-below", new AbortController(), "u2");
+    expect(streams.noteRunId(early, "run-below")).toBe(true);
+
+    const live: Message[] = [...SNAPSHOT];
+    const flow = editAndResend(
+      deps(streams, { currentMessages: () => live }),
+      "u2",
+      "actually, ask something else",
+    );
+    await drainMicrotasks();
+
+    // The sibling turn for the SAME removed prompt finishes while the edit is
+    // still holding for the one that has no run yet.
+    live.push(msg("a-below", "assistant"));
+
+    expect(streams.noteRunId(held, "run-held")).toBe(true);
+    await flow;
+
+    const intent = saved[0] as { messages: Message[]; removedRunIds?: string[] };
+    expect(
+      intent.messages.map((m) => m.id),
+      "a turn answering the edited-away prompt survived the truncation",
+    ).not.toContain("a-below");
+    expect(shape(intent.messages)).toEqual(["u1", "a1", "<edit>"]);
+    expect(intent.removedRunIds).toEqual(expect.arrayContaining(["run-below", "run-held"]));
   });
 
   it("does NOT hold for a concurrent turn whose prompt this edit KEPT", async () => {
