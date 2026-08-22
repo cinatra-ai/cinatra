@@ -451,3 +451,71 @@ describe("the core migration preserved the surface", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SNAPSHOT IS IMMUTABLE ALL THE WAY DOWN (codex whole-diff round #1).
+//
+// The snapshot rides the request context so the in-process self-invoker can
+// inherit it — which put its records within reach of code running inside a
+// delegated handler. A frozen ARRAY of mutable records is not an immutable
+// snapshot: flipping one `revoked` back to `false` would re-admit a withdrawn
+// primitive for the rest of the request, and every surface reading that same
+// snapshot would agree with the forgery.
+// ---------------------------------------------------------------------------
+describe("the request snapshot cannot be rewritten from inside the request", () => {
+  it("freezes every record reachable through lookup, records and recordsForPrimitive", () => {
+    const snapshot = snapshotOf([{ ...reviewed(), revoked: true }]);
+    // The snapshot also holds every migrated CORE record, so pick the one under
+    // test rather than whichever happens to sort first.
+    const viaRecords = snapshot.records.find((r) => r.primitiveName === CONNECTOR_PRIMITIVE)!;
+    expect(Object.isFrozen(snapshot.records)).toBe(true);
+    expect(Object.isFrozen(viaRecords)).toBe(true);
+
+    const viaPrimitive = snapshot.recordsForPrimitive(CONNECTOR_PRIMITIVE);
+    expect(Object.isFrozen(viaPrimitive)).toBe(true);
+    expect(viaPrimitive.every((r) => Object.isFrozen(r))).toBe(true);
+
+    // The attack, attempted: silently in sloppy mode, throwing in strict — the
+    // observable that matters is that the value did not change.
+    expect(() => {
+      (viaRecords as { revoked: boolean }).revoked = false;
+    }).toThrow();
+    expect(viaRecords.revoked).toBe(true);
+  });
+
+  it("a forged un-revocation does not make the primitive callable", async () => {
+    const snapshot = snapshotOf([{ ...reviewed(), revoked: true }]);
+    for (const record of snapshot.records) {
+      try {
+        (record as { revoked: boolean }).revoked = false;
+      } catch {
+        /* frozen — which is the point */
+      }
+    }
+    expect(snapshot.records.find((r) => r.primitiveName === CONNECTOR_PRIMITIVE)!.revoked).toBe(true);
+    const built = await build({
+      snapshot,
+      registrations: [{ name: CONNECTOR_PRIMITIVE, declaredClass: "read" }],
+    });
+    expect(built.advertised).not.toContain(CONNECTOR_PRIMITIVE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE PERIMETER MEANS EVERY RULE (codex whole-diff round #3).
+// ---------------------------------------------------------------------------
+describe("the call-time guard applies the canonical-name rule too", () => {
+  it("refuses a mixed-case name at call time, not only at registration", async () => {
+    // Registered UNFILTERED under a mixed-case name, then called in a delegated
+    // frame. The evaluator case-folds, so without the canonical check the
+    // admission below would match and the call would be served — under a name
+    // the delegated registration filter refuses outright.
+    const built = await build({
+      unrestricted: true,
+      snapshot: snapshotOf([reviewed()]),
+      registrations: [{ name: "Acme_Widget_Catalog_List", declaredClass: "read" }],
+    });
+    expect(built.advertised).toContain("Acme_Widget_Catalog_List");
+    await expect(built.call("Acme_Widget_Catalog_List")).resolves.toBe("CHAT_DENIED");
+  });
+});

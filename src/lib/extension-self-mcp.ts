@@ -231,6 +231,19 @@ export async function callHostPrimitive(
         (await (
           await import("@/lib/delegated-chat-admission-store")
         ).loadDelegatedChatAdmissionSnapshot());
+      // THE SAME CANONICAL-NAME RULE THE TRANSPORT APPLIES (codex whole-diff
+      // round #2). The live delegated perimeter refuses a registration whose
+      // served name differs from the normalized one it reasoned about; the
+      // self-capture keeps mixed-case registrations, so without this a reviewed
+      // `Acme_Thing_List` would be absent from the catalog and absent from the
+      // live server, yet reachable in-process — the evaluator case-folds, so the
+      // admission key would match. Parity here is the whole point of this path.
+      if (captured.planned.registeredName !== captured.planned.name) {
+        throw new Error(
+          `[extension-self-mcp] "${primitiveName}" is not available to delegated chat MCP ` +
+            "requests: non_canonical_primitive_name.",
+        );
+      }
       const identity = await resolveCallerBoundIdentity(captured.planned);
       if (!identity) {
         throw new Error(

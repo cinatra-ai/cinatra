@@ -312,7 +312,17 @@ export async function createMcpRuntimeServer(input: {
     // request snapshot the registration filter used, so a tool that somehow
     // slipped registration is still refused — and so registration and call time
     // can never disagree about one primitive within one request.
-    if (ctx?.delegatedRestricted) return chatDecision(planned).allowed;
+    //
+    // INCLUDING the canonical-name rule (codex whole-diff round #3). "The same
+    // perimeter" has to mean every rule, not just the evaluator: a tool that
+    // reached this server through an unfiltered path would otherwise be admitted
+    // under a mixed-case name that registration refuses outright, because the
+    // evaluator case-folds. Defense in depth that skips one of the rules is not
+    // depth.
+    if (ctx?.delegatedRestricted) {
+      if (planned.registeredName !== planned.name) return false;
+      return chatDecision(planned).allowed;
+    }
     return true;
   };
 

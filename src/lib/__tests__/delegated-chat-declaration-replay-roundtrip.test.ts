@@ -314,3 +314,34 @@ describe("call time: the SAME shared evaluator, over the SAME planned identity",
     await expect(callHostPrimitive("acme_thing_list", {})).resolves.toEqual({ ok: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SELF-INVOKER APPLIES THE TRANSPORT'S CANONICAL-NAME RULE (codex
+// whole-diff round #2).
+//
+// The live delegated perimeter refuses a registration whose SERVED name differs
+// from the normalized name the policy reasoned about. The in-process capture
+// keeps mixed-case registrations, and the evaluator case-folds — so without the
+// same rule here, a reviewed `Acme_Thing_List` would be absent from the
+// delegated catalog AND absent from the live server, yet reachable through
+// `callHostPrimitive`. Parity with the transport is this path's entire job.
+// ---------------------------------------------------------------------------
+describe("the self-invoker refuses a non-canonical name, exactly as the transport does", () => {
+  it("a REVIEWED but mixed-case primitive is NOT self-invocable", async () => {
+    roundTrip("Acme_Thing_List", "read");
+    snapshotRecords = [
+      admissionRecordFor({
+        ownerPackage: PKG,
+        resolvedVersion: PKG_VERSION,
+        // Reviewed under the normalized name — the key the evaluator would
+        // build. The refusal must land BEFORE that lookup can match.
+        primitiveName: "acme_thing_list",
+        declaredClass: "read",
+      }),
+    ];
+    await expect(callHostPrimitive("Acme_Thing_List", {})).rejects.toThrow(
+      /non_canonical_primitive_name/,
+    );
+    expect(pinnedDispatches).toEqual([]);
+  });
+});
