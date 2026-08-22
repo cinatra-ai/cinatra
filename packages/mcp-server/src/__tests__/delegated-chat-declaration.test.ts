@@ -2,14 +2,22 @@ import { describe, it, expect } from "vitest";
 import {
   DELEGATED_CHAT_TOOL_CLASSES,
   declarationPermitsDelegatedChat,
-  delegatedChatAllowedToolNames,
-  interimDelegatedChatClassFor,
-  isDelegatedChatMcpToolAllowed,
   normalizeDelegatedChatToolClass,
   readDeclaredDelegatedChatClass,
-  resolveDelegatedChatClass,
   type DelegatedChatToolClass,
 } from "../delegated-chat-tool-policy";
+import { planPrimitiveRegistration } from "../capability-plan";
+import {
+  HOST_PRIMITIVE_OWNER_PACKAGE,
+  HOST_PRIMITIVE_RELEASE_VERSION,
+} from "../host-primitive-identity";
+import { evaluateDelegatedChatAdmission } from "../delegated-chat-evaluator";
+import {
+  coreDelegatedChatAdmissionSnapshot,
+  coreDelegatedChatAdmittedNames,
+  isCoreDelegatedChatAdmitted,
+} from "../core-delegated-chat-surface";
+import { hostDeclaredDelegatedChatClass } from "../host-primitive-declarations";
 
 // The typed delegated-chat declaration (cinatra#2771, owner ruling
 // 2026-08-15).
@@ -129,16 +137,29 @@ describe("declaration: reading the manifest-discovered `(name, config, handler)`
 });
 
 describe("declaration: NEVER sufficient authorization", () => {
-  // The composition the runtime actually applies, mirrored exactly: admission
-  // FIRST, then the class IN FORCE (the registration's own, else the interim
-  // one the legacy allowlist implies) as an AND on top. Both the choke point
-  // and the call-time self-invoker compose it this way; keeping the mirror
-  // exact is what makes the assertions below statements about the runtime.
+  // The composition the runtime actually applies, mirrored EXACTLY: plan the
+  // registration (which resolves the declaration in force and the owning
+  // identity), then run the shared evaluator over it. That is what the
+  // registration choke point, the call-time guard and the self-invoker all do,
+  // so the assertions below are statements about the runtime rather than about
+  // a re-implementation of it.
+  //
+  // The snapshot is the CORE one, so "admitted" here means "this build's
+  // migrated core admissions admit it" — the same substitution the projection
+  // makes, and the reason an unlisted connector name is refused below.
   const registrable = (name: string, config: unknown): boolean =>
-    isDelegatedChatMcpToolAllowed(name) &&
-    declarationPermitsDelegatedChat(
-      resolveDelegatedChatClass(name, readDeclaredDelegatedChatClass(config)),
-    );
+    evaluateDelegatedChatAdmission(
+      planPrimitiveRegistration({
+        name,
+        config,
+        order: 0,
+        host: {
+          packageName: HOST_PRIMITIVE_OWNER_PACKAGE,
+          version: HOST_PRIMITIVE_RELEASE_VERSION,
+        },
+      }),
+      coreDelegatedChatAdmissionSnapshot(),
+    ).allowed;
 
   it("cannot rescue a DENIED FAMILY prefix, whatever it declares", () => {
     for (const cls of DELEGATED_CHAT_TOOL_CLASSES) {
@@ -161,157 +182,85 @@ describe("declaration: NEVER sufficient authorization", () => {
     }
   });
 
-  it("cannot admit an UNLISTED name — declaring `read` grants nothing", () => {
-    // The extensibility gap #2817 owns: a hot-installed connector's primitive
-    // is still unreachable until the admission SOURCE changes. This PR does
-    // not move that line, and this test pins that it did not.
-    expect(isDelegatedChatMcpToolAllowed("acme_widget_catalog_list")).toBe(false);
+  it("SELF-CLASSIFICATION grants nothing — declaring `read` on an unreviewed name loses", () => {
+    // The heart of the issue's first refusal case. Nothing has been reviewed
+    // for this primitive, so the only classification in existence is the
+    // registration's own — and that is not a review.
     expect(registrable("acme_widget_catalog_list", { delegatedChat: "read" })).toBe(false);
+    const decision = evaluateDelegatedChatAdmission(
+      planPrimitiveRegistration({
+        name: "acme_widget_catalog_list",
+        config: { delegatedChat: "read" },
+        order: 0,
+        host: {
+          packageName: HOST_PRIMITIVE_OWNER_PACKAGE,
+          version: HOST_PRIMITIVE_RELEASE_VERSION,
+        },
+      }),
+      coreDelegatedChatAdmissionSnapshot(),
+    );
+    expect(decision).toEqual({ allowed: false, reason: "self_classified_only" });
   });
 
-  it("DOES narrow: `none` removes a name the host admits", () => {
-    const admitted = delegatedChatAllowedToolNames()[0];
+  it("DOES narrow: `none` removes a name the host would otherwise admit", () => {
+    const admitted = coreDelegatedChatAdmittedNames()[0]!;
     expect(admitted).toBeTruthy();
     expect(registrable(admitted, undefined)).toBe(true);
     expect(registrable(admitted, { delegatedChat: "none" })).toBe(false);
     expect(registrable(admitted, { delegatedChat: "nonsense" })).toBe(false);
-    expect(registrable(admitted, { delegatedChat: "read" })).toBe(true);
-  });
-
-  it("leaves the whole admitted set intact when nothing declares", () => {
-    // Behavior-identity proof for the current tree, and the reason the interim
-    // shim exists. No registration declares, and since the ruling a missing
-    // declaration means NONE — so without the shim this assertion would go to
-    // `[]` and the entire delegated-chat catalog would empty. It holds because
-    // the shim supplies the class the legacy allowlist implies, for exactly the
-    // names that allowlist admits.
-    const withoutConfig = delegatedChatAllowedToolNames().filter((n) => registrable(n, undefined));
-    const withBareConfig = delegatedChatAllowedToolNames().filter((n) =>
-      registrable(n, { title: n, description: n }),
+    // Re-declaring the SAME class the host declares is a no-op; re-declaring a
+    // DIFFERENT one changes the digest and misses the reviewed record.
+    expect(registrable(admitted, { delegatedChat: hostDeclaredDelegatedChatClass(admitted) })).toBe(
+      true,
     );
-    expect(withoutConfig).toEqual([...delegatedChatAllowedToolNames()]);
-    expect(withBareConfig).toEqual([...delegatedChatAllowedToolNames()]);
   });
 
-  it("withdraws an admitted name the interim shim does NOT cover", () => {
-    // The pin that proves the previous test is carried by the shim and not by
-    // a surviving fail-open. Compose the same way, but with a host that admits
-    // a name the shim has never heard of: no class is in force, so the ruling
-    // applies and the name is withdrawn.
+  it("a RE-DECLARED class misses the reviewed record — an admission does not follow a change", () => {
+    const admitted = coreDelegatedChatAdmittedNames().find(
+      (n) => hostDeclaredDelegatedChatClass(n) === "read",
+    )!;
+    expect(admitted).toBeTruthy();
+    expect(registrable(admitted, { delegatedChat: "read" })).toBe(true);
+    // Same name, same owner, same version — a different declaration. The digest
+    // moves, so the review that approved `read` does not carry over.
+    expect(registrable(admitted, { delegatedChat: "discovery" })).toBe(false);
+  });
+
+  it("the whole CORE surface stays admitted when nothing declares at registration", () => {
+    // Behaviour-identity proof for the current tree. No core module declares in
+    // its own config, and a missing declaration means NONE — so this would go
+    // to `[]` if the host did not declare FOR its own primitives. It holds
+    // because it does, and because those declarations are what the migrated
+    // admission records were written against.
+    const names = [...coreDelegatedChatAdmittedNames()];
+    expect(names.filter((n) => registrable(n, undefined))).toEqual(names);
+    expect(names.filter((n) => registrable(n, { title: n, description: n }))).toEqual(names);
+  });
+
+  it("a name the host does NOT declare for is withdrawn, not defaulted", () => {
     const uncovered = "acme_widget_catalog_list";
-    expect(interimDelegatedChatClassFor(uncovered)).toBeUndefined();
-    expect(
-      declarationPermitsDelegatedChat(resolveDelegatedChatClass(uncovered, undefined)),
-    ).toBe(false);
+    expect(hostDeclaredDelegatedChatClass(uncovered)).toBeUndefined();
+    expect(registrable(uncovered, undefined)).toBe(false);
   });
 });
 
 describe("declaration: the proposal override stays a SEPARATE audited exception", () => {
   it("is not collapsed into the `dispatch` class", () => {
-    // The ruling is explicit: `ALLOWED_PROPOSAL_OVERRIDE` remains its own
-    // mechanism. It is accepted ABOVE the verb backstop by the policy itself,
-    // which no declaration can reproduce — declaring `dispatch` on the same
-    // name gets nothing extra, and declaring anything on a non-override name
-    // that carries a denied verb token still loses.
-    const override = delegatedChatAllowedToolNames().find((n) => n === "dashboards_create");
-    expect(override).toBe("dashboards_create");
-    // It survives BECAUSE the override admits it, not because of any class:
-    // "create" is a denied verb token, so nothing but the override gets it
-    // past the backstop.
-    expect(isDelegatedChatMcpToolAllowed("dashboards_create")).toBe(true);
-    // A sibling name carrying the same verb token, absent from the override,
-    // is refused no matter what it declares.
-    expect(isDelegatedChatMcpToolAllowed("acme_thing_create")).toBe(false);
+    // The override remains its own mechanism, accepted ABOVE the verb backstop,
+    // which no declaration can reproduce: declaring `dispatch` on a non-override
+    // name that carries a denied verb token still loses.
+    expect(coreDelegatedChatAdmittedNames()).toContain("dashboards_create");
+    // It survives BECAUSE the override lets it past the backstop — "create" is
+    // a denied verb token — and then because it is admitted like anything else.
+    expect(isCoreDelegatedChatAdmitted("dashboards_create")).toBe(true);
+    // A sibling name carrying the same verb token, absent from the override, is
+    // refused no matter what it declares.
+    expect(isCoreDelegatedChatAdmitted("acme_thing_create")).toBe(false);
     for (const cls of DELEGATED_CHAT_TOOL_CLASSES) {
       expect(
-        isDelegatedChatMcpToolAllowed("acme_thing_create") &&
+        isCoreDelegatedChatAdmitted("acme_thing_create") &&
           declarationPermitsDelegatedChat(cls as DelegatedChatToolClass),
       ).toBe(false);
     }
-  });
-});
-
-describe("the INTERIM shim for the legacy allowlist (cinatra#2817 deletes it)", () => {
-  // The shim is what lets the ruling's semantics — missing means none — hold
-  // TODAY, while admission still seeds from `delegatedChatAllowedToolNames()`
-  // and nothing in the tree declares. These tests are its whole contract: it
-  // covers exactly the legacy allowlist, it changes no catalog byte, and it
-  // never overrides a real declaration.
-
-  it("covers EXACTLY the names the legacy allowlist admits, in both directions", () => {
-    // Both directions matter. A missing entry would silently withdraw a
-    // primitive that works in production today; an extra entry would be a
-    // class sitting on a name the allowlist does not admit, which is how a
-    // future edit to `ALLOWED_EXACT` could quietly inherit an old opinion.
-    const admitted = [...delegatedChatAllowedToolNames()].sort();
-    const uncovered = admitted.filter((name) => interimDelegatedChatClassFor(name) === undefined);
-    expect(uncovered).toEqual([]);
-
-    // And nothing beyond it: every name carrying an interim class must still be
-    // one the policy admits on its own.
-    for (const name of admitted) {
-      expect(isDelegatedChatMcpToolAllowed(name)).toBe(true);
-    }
-  });
-
-  it("assigns every covered name one of the three CHAT-ELIGIBLE classes", () => {
-    // `none` in the shim would be a withdrawal dressed as a classification —
-    // the shim's job is to reproduce today's catalog, not to edit it.
-    for (const name of delegatedChatAllowedToolNames()) {
-      const cls = interimDelegatedChatClassFor(name);
-      expect({ name, cls }).toEqual({
-        name,
-        cls: expect.stringMatching(/^(read|discovery|dispatch)$/),
-      });
-    }
-  });
-
-  it("leaves the resolved catalog BYTE FOR BYTE what it was before the ruling", () => {
-    // The invariant the whole shape exists to protect. `delegatedChatAllowedToolNames()`
-    // is the production seeding source; running every member through the exact
-    // composition the runtime now applies must return the same array, in the
-    // same order, with nothing added and nothing dropped.
-    const before = [...delegatedChatAllowedToolNames()];
-    const after = before.filter(
-      (name) =>
-        isDelegatedChatMcpToolAllowed(name) &&
-        declarationPermitsDelegatedChat(resolveDelegatedChatClass(name, undefined)),
-    );
-    expect(after).toEqual(before);
-    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
-  });
-
-  it("cannot admit anything the host refuses — it is consulted strictly after admission", () => {
-    // The shim is a name→class map with no view of admission, so the guarantee
-    // has to come from the ORDER its callers apply it in. Mirrored here: a
-    // denied family, a denied verb and an unlisted name all lose at step one,
-    // and it makes no difference that step two would have had an opinion.
-    for (const name of ["permissions_grant_list", "objects_delete", "acme_widget_catalog_list"]) {
-      expect(isDelegatedChatMcpToolAllowed(name)).toBe(false);
-      expect(interimDelegatedChatClassFor(name)).toBeUndefined();
-    }
-  });
-
-  it("never overrides a REAL declaration, in either direction", () => {
-    const admitted = delegatedChatAllowedToolNames()[0]!;
-    expect(interimDelegatedChatClassFor(admitted)).toBeTruthy();
-    // A registration that declines wins over the shim's class...
-    expect(resolveDelegatedChatClass(admitted, "none")).toBe("none");
-    expect(declarationPermitsDelegatedChat(resolveDelegatedChatClass(admitted, "none"))).toBe(
-      false,
-    );
-    // ...and so does a registration that declares a DIFFERENT eligible class.
-    expect(resolveDelegatedChatClass(admitted, "dispatch")).toBe("dispatch");
-  });
-
-  it("keeps the proposal override enumerated SEPARATELY from the exact allowlist", () => {
-    // The override is admitted ABOVE the destructive-verb backstop and stays
-    // its own audited exception (the describe above pins the policy half). The
-    // shim mirrors that split in its source: `dashboards_create` carries a
-    // denied verb token and is classified only because the override admits it,
-    // while a sibling name with the same token is neither admitted nor covered.
-    expect(interimDelegatedChatClassFor("dashboards_create")).toBe("dispatch");
-    expect(isDelegatedChatMcpToolAllowed("acme_thing_create")).toBe(false);
-    expect(interimDelegatedChatClassFor("acme_thing_create")).toBeUndefined();
   });
 });

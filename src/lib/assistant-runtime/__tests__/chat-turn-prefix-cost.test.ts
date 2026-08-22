@@ -30,7 +30,7 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { delegatedChatAllowedToolNames } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { coreDelegatedChatAdmittedNames } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 // #2777's landed, state-derived resolver — the one the production builder
 // calls. Imported, never copied.
 import {
@@ -140,12 +140,13 @@ vi.mock("@/lib/mcp-server", () => ({
   buildDelegatedChatCapabilityPlan: async (input?: {
     resolveCapabilityKey?: (name: string) => string | null | undefined;
   }) => {
-    const policy = await import("@cinatra-ai/mcp-server/delegated-chat-tool-policy");
-    const servable = policy.delegatedChatAllowedToolNames().map((name, order) => ({
+    const core = await import("@cinatra-ai/mcp-server/core-delegated-chat-surface");
+    const decls = await import("@cinatra-ai/mcp-server/host-primitive-declarations");
+    const servable = core.coreDelegatedChatAdmittedNames().map((name, order) => ({
       name,
       registeredName: name,
       order,
-      declaredClass: policy.resolveDelegatedChatClass(name, undefined),
+      declaredClass: decls.hostDeclaredDelegatedChatClass(name),
       ownerPackage: "@cinatra-ai/host",
       resolvedVersion: "2817.1.0",
       capabilityKey: input?.resolveCapabilityKey?.(name) ?? null,
@@ -235,7 +236,7 @@ import { runAssistantTurn } from "../runtime";
 import { CHAT_SYSTEM_POLICY_TRAILER } from "../chat-system-prefix";
 import { buildCinatraAssistantRuntimeConfig } from "../cinatra-assistant-config";
 
-const ALL_ALLOWED = delegatedChatAllowedToolNames();
+const ALL_ALLOWED = coreDelegatedChatAdmittedNames();
 
 // ---------------------------------------------------------------------------
 // The resolver's DECLARED INPUT, named (codex round-2, finding 3).

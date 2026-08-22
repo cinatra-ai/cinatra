@@ -12,6 +12,7 @@ export type {
   ReplayedExtensionRegistration,
 } from "./extension-mcp-registry";
 import type { CapabilityPlan, PrimitiveDispatchTarget } from "@cinatra-ai/mcp-server/capability-plan";
+import type { DelegatedChatAdmissionSnapshot } from "@cinatra-ai/mcp-server/delegated-chat-admission";
 import {
   resolveDurableRunContext,
   recordMcpRunContextServedBy,
@@ -431,8 +432,20 @@ export async function registerAllCapabilities(
 export async function buildDelegatedChatCapabilityPlan(input?: {
   requestContext?: RegisterCapabilitiesRequestContext;
   resolveCapabilityKey?: (name: string) => string | null | undefined;
+  /**
+   * The snapshot to decide against. Supply one when the caller already holds
+   * the request's snapshot; otherwise it is loaded here, so the plan and the
+   * catalog derived from it are still decided against a real admission state
+   * rather than an absent one (which would return an EMPTY plan).
+   */
+  admissionSnapshot?: DelegatedChatAdmissionSnapshot;
 }): Promise<CapabilityPlan> {
   let captured: CapabilityPlan | undefined;
+  const snapshot =
+    input?.admissionSnapshot ??
+    (await (
+      await import("@/lib/delegated-chat-admission-store")
+    ).loadDelegatedChatAdmissionSnapshot());
   await createMcpRuntimeServer({
     name: "cinatra-mcp-server",
     version: "0.2.0",
@@ -440,6 +453,7 @@ export async function buildDelegatedChatCapabilityPlan(input?: {
     registerCapabilities: registerAllCapabilities,
     registerRequestContext: input?.requestContext,
     resolveCapabilityKey: input?.resolveCapabilityKey,
+    delegatedChatAdmissionSnapshot: snapshot,
     onCapabilityPlan: (plan) => {
       captured = plan;
     },
@@ -653,6 +667,16 @@ export const mcpServerMount = createMcpServerMount({
   resolvePrimitiveCapabilityKeys: async () => {
     const { buildCatalogCapabilityKeyResolver } = await import("@/lib/connector-inventory.server");
     return buildCatalogCapabilityKeyResolver();
+  },
+  // cinatra#2817 slice 3 — ONE immutable admission snapshot per MCP request,
+  // loaded BEFORE registration. Registration filtering, the plan the catalog is
+  // derived from, and the call-time guard all decide against this same object,
+  // so a revocation landing mid-request cannot make them disagree.
+  loadDelegatedChatAdmissionSnapshot: async () => {
+    const { loadDelegatedChatAdmissionSnapshot } = await import(
+      "@/lib/delegated-chat-admission-store"
+    );
+    return loadDelegatedChatAdmissionSnapshot();
   },
   readConfiguredLlmProviders: async () => {
     const providers = ["openai", "anthropic", "gemini"] as const;

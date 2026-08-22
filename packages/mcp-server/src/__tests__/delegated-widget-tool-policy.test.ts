@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "../core-delegated-chat-surface";
 import {
   DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
   carriesDelegatedWidgetDeniedVerb,
@@ -116,10 +116,10 @@ describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
     //   · everything chat reaches of this family, the widget reaches (no
     //     widget reduction — the half the correction is about).
     for (const tool of DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS) {
-      expect(isDelegatedChatMcpToolAllowed(tool), tool).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(tool), tool).toBe(true);
     }
     const chatLifecyclePulls = LIFECYCLE_PULL_PRIMITIVES.filter((name) =>
-      isDelegatedChatMcpToolAllowed(name),
+      isCoreDelegatedChatAdmitted(name),
     );
     expect([...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS].sort()).toEqual(
       [...chatLifecyclePulls].sort(),

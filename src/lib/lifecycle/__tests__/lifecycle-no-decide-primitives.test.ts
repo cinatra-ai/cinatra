@@ -25,7 +25,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 import {
   isDelegatedWidgetMcpToolAllowed,
   type WidgetDelegationKind,
@@ -117,7 +117,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
   it("the generated inventory contains no chat-reachable lifecycle decision primitive", () => {
     const reachable = inventoryPrimitiveNames()
       .filter((name) => isLifecycleName(name) && carriesDecisionVerb(name))
-      .filter((name) => isDelegatedChatMcpToolAllowed(name));
+      .filter((name) => isCoreDelegatedChatAdmitted(name));
     expect(reachable).toEqual([]);
   });
 
@@ -139,7 +139,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     // chat gains that the widget is quietly denied.
     const chatReachable = inventoryPrimitiveNames()
       .filter(isLifecycleName)
-      .filter((name) => isDelegatedChatMcpToolAllowed(name))
+      .filter((name) => isCoreDelegatedChatAdmitted(name))
       .sort();
     for (const kind of WIDGET_KINDS) {
       const widgetReachable = inventoryPrimitiveNames()
@@ -156,7 +156,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     // surface, and the AI transport resolves nothing on any of them.
     const chatReachable = inventoryPrimitiveNames()
       .filter(isLifecycleName)
-      .filter((name) => isDelegatedChatMcpToolAllowed(name))
+      .filter((name) => isCoreDelegatedChatAdmitted(name))
       .sort();
     expect(chatReachable).toEqual([
       "artifact_review_gate_render",
@@ -168,7 +168,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
 
   for (const name of FORBIDDEN_LIFECYCLE_NAMES) {
     it(`${name} is refused by BOTH delegated policies`, () => {
-      expect(isDelegatedChatMcpToolAllowed(name), `chat: ${name}`).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name), `chat: ${name}`).toBe(false);
       for (const kind of WIDGET_KINDS) {
         expect(isDelegatedWidgetMcpToolAllowed(kind, name), `${kind}: ${name}`).toBe(
           false,
@@ -183,7 +183,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     // expose it, so a future edit cannot open the class with a one-line change.
     for (const verb of ["decide", "approve", "reject", "resume", "confirm", "arm"]) {
       expect(
-        isDelegatedChatMcpToolAllowed(`artifact_review_gate_${verb}`),
+        isCoreDelegatedChatAdmitted(`artifact_review_gate_${verb}`),
         verb,
       ).toBe(false);
     }
@@ -208,7 +208,7 @@ describe("the read-only pull primitives are reachable from BOTH delegated perime
       // handlers resolve their own principal from the request frame — for a
       // widget frame that means the signed `lifecycle.read` grant plus a live
       // standing resolution — and refuse generically otherwise.
-      expect(isDelegatedChatMcpToolAllowed(name)).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name)).toBe(true);
       for (const kind of WIDGET_KINDS) {
         expect(isDelegatedWidgetMcpToolAllowed(kind, name), kind).toBe(true);
       }

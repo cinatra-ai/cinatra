@@ -55,8 +55,25 @@ vi.mock("@cinatra-ai/mcp-server", () => ({
     getStore: () => undefined,
     run: (_ctx: unknown, fn: () => unknown) => fn(),
   },
-  isDelegatedChatMcpToolAllowed: () => true,
 }));
+
+// The SECOND cache axis (cinatra#2817 slice 2/3). The map is keyed by the
+// activation generation AND the admission snapshot's identity, so this test
+// drives both: `admissionGeneration` stands in for a review/revocation landing.
+let admissionGeneration = 0;
+vi.mock("@/lib/delegated-chat-admission-store", async () => {
+  const admission = await vi.importActual<
+    typeof import("@cinatra-ai/mcp-server/delegated-chat-admission")
+  >("@cinatra-ai/mcp-server/delegated-chat-admission");
+  return {
+    loadDelegatedChatAdmissionSnapshot: async () =>
+      admission.createDelegatedChatAdmissionSnapshot({
+        rawRecords: [],
+        activationGeneration: 0,
+        admissionGeneration,
+      }),
+  };
+});
 
 // Boundary always allows for this test (we're testing cache keying, not authz).
 vi.mock("@/lib/authz/mcp-boundary", () => ({
@@ -71,11 +88,12 @@ import {
 
 beforeEach(() => {
   buildSpy.mockClear();
+  admissionGeneration = 0;
   __resetHostSelfPrimitiveHandlers();
   __resetActivationGenerationForTests();
 });
 
-describe("self-MCP handler cache keyed by control-plane generation", () => {
+describe("self-MCP handler cache keyed by control-plane AND admission generation", () => {
   it("builds the handler map ONCE while the generation is unchanged", async () => {
     await callHostPrimitive("echo_primitive", { a: 1 });
     await callHostPrimitive("echo_primitive", { a: 2 });
@@ -94,6 +112,24 @@ describe("self-MCP handler cache keyed by control-plane generation", () => {
     expect(buildSpy).toHaveBeenCalledTimes(2);
 
     // No further transition → no further rebuild.
+    await callHostPrimitive("echo_primitive", { a: 3 });
+    expect(buildSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("REBUILDS after an ADMISSION-POLICY change, with no lifecycle transition", async () => {
+    // The axis a single activation-keyed cache MISSES. A marketplace revocation
+    // moves no lifecycle transition at all, so a map keyed on activation alone
+    // would keep serving a revoked primitive's captured handler until something
+    // unrelated happened to be installed.
+    await callHostPrimitive("echo_primitive", { a: 1 });
+    expect(buildSpy).toHaveBeenCalledTimes(1);
+
+    admissionGeneration += 1; // a review lands, or an admission is revoked
+
+    await callHostPrimitive("echo_primitive", { a: 2 });
+    expect(buildSpy).toHaveBeenCalledTimes(2);
+
+    // No further admission change → no further rebuild.
     await callHostPrimitive("echo_primitive", { a: 3 });
     expect(buildSpy).toHaveBeenCalledTimes(2);
   });

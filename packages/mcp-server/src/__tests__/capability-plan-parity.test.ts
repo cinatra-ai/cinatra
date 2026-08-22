@@ -10,7 +10,11 @@ import {
   readPrimitiveProvenance,
   type CapabilityPlan,
 } from "../capability-plan";
-import { delegatedChatAllowedToolNames } from "../delegated-chat-tool-policy";
+import {
+  coreDelegatedChatAdmissionSnapshot,
+  coreDelegatedChatAdmittedNames,
+} from "../core-delegated-chat-surface";
+import { HOST_PRIMITIVE_DECLARATIONS } from "../host-primitive-declarations";
 
 // ---------------------------------------------------------------------------
 // REQUEST-SCOPED CAPABILITY PLAN ↔ ACTUAL REGISTRATION PARITY (cinatra#2817
@@ -57,6 +61,11 @@ async function buildWithPlan(input: {
     name: "test",
     version: "0.0.0",
     toolPolicyMode: input.mode ?? "delegated-chat",
+    // The request's admission snapshot. The CORE one: these cases are about the
+    // plan/registration relationship, so the core surface stands in for a live
+    // request's snapshot. A build handed NONE admits nothing (which the
+    // fail-closed case below pins separately).
+    delegatedChatAdmissionSnapshot: coreDelegatedChatAdmissionSnapshot(),
     onCapabilityPlan: (p) => {
       plan = p;
     },
@@ -99,8 +108,8 @@ function extensionStamp(pkg: string, version: string, name: string, kind: "exten
 
 // A legacy-admitted core name, so a case that is meant to REGISTER actually can
 // under today's (pre-slice-3) delegated-chat perimeter.
-const CORE_ADMITTED = delegatedChatAllowedToolNames()[0]!;
-const CORE_ADMITTED_2 = delegatedChatAllowedToolNames()[1]!;
+const CORE_ADMITTED = coreDelegatedChatAdmittedNames()[0]!;
+const CORE_ADMITTED_2 = coreDelegatedChatAdmittedNames()[1]!;
 
 describe("plan ↔ actually-registered parity", () => {
   it("DEFAULT case: the plan's servable set is exactly what the SDK holds", async () => {
@@ -144,31 +153,50 @@ describe("plan ↔ actually-registered parity", () => {
     expect(entry?.declaredClass).toBe("read");
     const outcome = plan.outcomes.find((o) => o.planned.name === "acme_widget_catalog_list");
     expect(outcome?.registered).toBe(false);
-    expect(outcome?.reason).toBe("host_admission_denied");
+    // Nothing has been reviewed for this connector primitive, so the only
+    // classification in existence is its own registration's.
+    expect(outcome?.reason).toBe("self_classified_only");
   });
 
   it("COLLISION case: a duplicate name registers ONCE and the plan says so", async () => {
+    // Two HOST registrations of the same core name: both pass admission, so the
+    // second reaches the SDK and the SDK rejects the duplicate.
     const { plan, registered } = await buildWithPlan({
-      registrations: [
-        { name: CORE_ADMITTED },
-        {
-          name: CORE_ADMITTED,
-          config: extensionStamp("@acme/shadow", "1.0.0", CORE_ADMITTED),
-          expectThrow: true,
-        },
-      ],
+      registrations: [{ name: CORE_ADMITTED }, { name: CORE_ADMITTED, expectThrow: true }],
     });
     expect(registered.filter((n) => n === CORE_ADMITTED)).toHaveLength(1);
     expect(plannedServableNames(plan)).toEqual(registered);
-    // Two PLANNED entries, one servable — and the loser is attributed to the
-    // package that lost, never folded into the winner's identity.
     const planned = plan.entries.filter((e) => e.name === CORE_ADMITTED);
     expect(planned).toHaveLength(2);
-    expect(planned[0]!.ownerPackage).toBe(HOST_PRIMITIVE_OWNER_PACKAGE);
-    expect(planned[1]!.ownerPackage).toBe("@acme/shadow");
     const outcomes = plan.outcomes.filter((o) => o.planned.name === CORE_ADMITTED);
     expect(outcomes.map((o) => o.registered)).toEqual([true, false]);
     expect(outcomes[1]!.reason).toBe("register_tool_threw");
+  });
+
+  it("COLLISION-LOSING case: an extension SHADOWING a core name is refused at admission", async () => {
+    // It never reaches the SDK at all — the core admission belongs to the HOST,
+    // and the owner is part of the lookup key, so a same-name registration by
+    // another package cannot inherit it. This is the refusal the issue names
+    // "collision-losing", and it is why a same-name collision cannot transfer
+    // an approval.
+    const { plan, registered } = await buildWithPlan({
+      registrations: [
+        {
+          name: CORE_ADMITTED,
+          config: {
+            delegatedChat: HOST_PRIMITIVE_DECLARATIONS[CORE_ADMITTED],
+            ...extensionStamp("@acme/shadow", "1.0.0", CORE_ADMITTED),
+          },
+        },
+      ],
+    });
+    expect(registered).not.toContain(CORE_ADMITTED);
+    expect(plannedServableNames(plan)).toEqual(registered);
+    const outcome = plan.outcomes.find((o) => o.planned.name === CORE_ADMITTED);
+    expect(outcome).toEqual(
+      expect.objectContaining({ registered: false, reason: "collision_lost" }),
+    );
+    expect(outcome!.planned.ownerPackage).toBe("@acme/shadow");
   });
 
   it("MALFORMED-SCHEMA case: a registration the SDK rejects is servable in NEITHER", async () => {

@@ -19,7 +19,7 @@ import {
   buildLifecycleViewEnvelope,
   recognizeLifecycleViewEnvelope,
 } from "@/lib/assistant-runtime/lifecycle-view-envelope";
-import { isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 import { isDelegatedWidgetMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-widget-tool-policy";
 import { SCHEDULE_PROPOSAL_TOOL_NAME } from "../schedule-proposal-mcp";
 import inventory from "@/lib/authz/__generated__/inventory.json";
@@ -142,7 +142,7 @@ describe("the tool NAME is discoverable, classified, and pinned", () => {
 
 describe("the tool NAME keeps the decision-verb backstop intact", () => {
   it("is chat-reachable", () => {
-    expect(isDelegatedChatMcpToolAllowed(SCHEDULE_PROPOSAL_TOOL_NAME)).toBe(true);
+    expect(isCoreDelegatedChatAdmitted(SCHEDULE_PROPOSAL_TOOL_NAME)).toBe(true);
   });
 
   it("carries none of the denied verb tokens — so it needs no override entry", () => {
@@ -234,7 +234,7 @@ describe("the tool NAME keeps the decision-verb backstop intact", () => {
       "schedule_proposal_arm",
       "trigger_schedule_create",
     ]) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(false);
     }
   });
 });

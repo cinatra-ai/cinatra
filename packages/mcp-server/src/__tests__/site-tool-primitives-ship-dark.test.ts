@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "../core-delegated-chat-surface";
 import { isDelegatedWidgetMcpToolAllowed } from "../delegated-widget-tool-policy";
 
 // cinatra#2017 S2 — ship-dark invariant. The two governed invoker primitives
@@ -18,7 +18,7 @@ const PRIMITIVES = ["wordpress_site_tool_call", "wordpress_site_tools_list"];
 describe("chat perimeter: governed invoker primitives are now reachable (cinatra#2022 S7 PR-δ)", () => {
   it("delegated-chat perimeter ALLOWS both primitives post-δ", () => {
     for (const name of PRIMITIVES) {
-      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+      expect(isCoreDelegatedChatAdmitted(name), name).toBe(true);
     }
   });
 });

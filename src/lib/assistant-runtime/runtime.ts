@@ -33,10 +33,7 @@ import {
   DEFAULT_CONNECTOR_INVENTORY_DEPS,
 } from "@/lib/connector-inventory.server";
 import { connectionSubjectUserId } from "@/lib/connection-use-gate";
-import {
-  resolveDelegatedChatClass,
-  isDelegatedChatMcpToolAllowed,
-} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+
 import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
 import {
   detectExplicitDispatchDirective,
@@ -670,13 +667,20 @@ async function resolveChatMcpCatalogState(input: {
     });
     const servable: ServableChatPrimitive[] = plan.servable.map((entry) => ({
       name: entry.name,
-      declaredClass: resolveDelegatedChatClass(entry.name, entry.declaredClass),
+      declaredClass: entry.declaredClass,
       capabilityKey: entry.capabilityKey,
     }));
 
+    // HOST ADMISSION IS THE PLAN (cinatra#2817 slice 3). The plan's servable
+    // subset is exactly what the shared evaluator admitted under this request's
+    // admission snapshot, so membership in it IS host approval. Re-deriving the
+    // answer here from a name would be the second answer this issue removes —
+    // and a name-keyed predicate could not express the decision anyway, which
+    // is about an owner at a version with a reviewed declaration.
+    const admitted = new Set(servable.map((primitive) => primitive.name));
     return {
       servable,
-      isHostApproved: isDelegatedChatMcpToolAllowed,
+      isHostApproved: (name) => admitted.has(name),
       isCapabilityAvailable: (key) => authorizedKeys.has(key),
     };
   } catch {

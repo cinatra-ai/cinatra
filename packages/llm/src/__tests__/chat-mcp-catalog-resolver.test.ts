@@ -50,10 +50,10 @@ import {
   type ServableChatPrimitive,
 } from "../mcp-access";
 import {
-  delegatedChatAllowedToolNames,
-  isDelegatedChatMcpToolAllowed,
-  resolveDelegatedChatClass,
-} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+  coreDelegatedChatAdmittedNames,
+  isCoreDelegatedChatAdmitted,
+} from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
+import { hostDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/host-primitive-declarations";
 
 const ACTOR = {
   delegation: "chat" as const,
@@ -64,9 +64,9 @@ const ACTOR = {
 
 /**
  * One primitive AS THE HOST SEEDS IT (`resolveChatMcpCatalogState` in
- * src/lib/assistant-runtime/runtime.ts): the class in force is resolved through
- * the policy, which today yields the interim class the legacy allowlist implies
- * because nothing in the tree declares yet.
+ * src/lib/assistant-runtime/runtime.ts). The class in force rides on the
+ * PLANNED entry there; for a core primitive that is the host's own declaration,
+ * which is what this stands in for.
  *
  * Seeding is not optional decoration. Since the owner's ruling (cinatra#2771) a
  * primitive with NO class in force is unexposed, so a state built without it
@@ -78,12 +78,12 @@ function seeded(
   name: string,
   extra: Partial<ServableChatPrimitive> = {},
 ): ServableChatPrimitive {
-  return { name, declaredClass: resolveDelegatedChatClass(name, undefined), ...extra };
+  return { name, declaredClass: hostDeclaredDelegatedChatClass(name), ...extra };
 }
 
-/** Everything the policy admits today, as if all of it were registered. */
+/** Everything the CORE surface admits today, as if all of it were registered. */
 function servableFromPolicy(): ServableChatPrimitive[] {
-  return delegatedChatAllowedToolNames().map((name) => seeded(name));
+  return coreDelegatedChatAdmittedNames().map((name) => seeded(name));
 }
 
 function stateOf(
@@ -92,7 +92,7 @@ function stateOf(
 ): ChatMcpCatalogState {
   return {
     servable,
-    isHostApproved: isDelegatedChatMcpToolAllowed,
+    isHostApproved: isCoreDelegatedChatAdmitted,
     isCapabilityAvailable: () => true,
     ...overrides,
   };
@@ -101,7 +101,7 @@ function stateOf(
 describe("chat MCP catalog: forward direction", () => {
   it("never exposes a name the authoritative policy would refuse", () => {
     const resolved = resolveChatMcpAllowedTools(stateOf(servableFromPolicy()));
-    const refused = resolved.filter((name) => !isDelegatedChatMcpToolAllowed(name));
+    const refused = resolved.filter((name) => !isCoreDelegatedChatAdmitted(name));
     expect(refused).toEqual([]);
   });
 
@@ -162,17 +162,17 @@ describe("chat MCP catalog: backward direction", () => {
     // The load-bearing case. Anything the policy admits and the instance can
     // serve must appear, or the catalog is silently hiding capability.
     const resolved = resolveChatMcpAllowedTools(stateOf(servableFromPolicy()));
-    expect(resolved).toEqual([...delegatedChatAllowedToolNames()].sort());
+    expect(resolved).toEqual([...coreDelegatedChatAdmittedNames()].sort());
   });
 
   it("exposes a primitive this test has never heard of once it is servable", () => {
     // A connector installed after this file was written registers a primitive
     // whose name no table here knows. With host approval it must appear.
     const NOVEL = "acme_widget_catalog_list";
-    expect(delegatedChatAllowedToolNames()).not.toContain(NOVEL);
+    expect(coreDelegatedChatAdmittedNames()).not.toContain(NOVEL);
     const resolved = resolveChatMcpAllowedTools(
       stateOf([seeded("agent_list"), { name: NOVEL, declaredClass: "read" }], {
-        isHostApproved: (name) => name === NOVEL || isDelegatedChatMcpToolAllowed(name),
+        isHostApproved: (name) => name === NOVEL || isCoreDelegatedChatAdmitted(name),
       }),
     );
     expect(resolved).toContain(NOVEL);

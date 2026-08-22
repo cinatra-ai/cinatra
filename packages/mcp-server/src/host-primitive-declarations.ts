@@ -32,7 +32,7 @@
 import {
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
-} from "./capability-plan";
+} from "./host-primitive-identity";
 import {
   admissionRecordFor,
   type DelegatedChatAdmissionRecord,
@@ -78,7 +78,19 @@ const CORE_EXACT = {
   metric_cost_timeseries: "read",
   metric_usage_events: "read",
   metric_usage_summary: "read",
+  // Dry-run only (no mutation, no audit row) — see ADMIN_REQUIRED_TOOLS in
+  // packages/extensions/src/mcp/registry.ts.
   extensions_purge: "read",
+  // THE ONE UNCOMFORTABLE ENTRY, recorded rather than smoothed over. This
+  // primitive EXECUTES the destructive purge saga; it is in that package's
+  // MUTATING_TOOLS and admin-gated there. None of the three chat-eligible
+  // classes describes it honestly — the module header says chat must not reach
+  // raw mutations at all, and this name only survives the destructive-verb
+  // backstop because neither "purge" nor "execute" is a denied token.
+  // Classified `dispatch` as the least-wrong fit (it hands a saga to an
+  // executor). Whether it should be admitted AT ALL is a live question, carried
+  // forward from #2771 unresolved: removing it here would change the production
+  // catalog, which this migration's byte-for-byte invariant exists to prevent.
   extensions_purge_execute: "dispatch",
   agent_list: "discovery",
   agent_get: "read",
@@ -117,10 +129,36 @@ const CORE_EXACT = {
   email_outreach_campaign_list: "read",
   email_outreach_campaign_get: "read",
   media_feeds_list: "discovery",
+  // THE ADMISSION RATIONALE, carried forward with the entry (it used to sit
+  // beside this name in the deleted allowlist). Safe on the
+  // injection-hardened perimeter for three reasons:
+  //
+  //   1. FIELD ALLOWLIST. The result is a fixed, snapshot-tested projection —
+  //      connector key, display name, authorized-connection presence, the
+  //      POST-AUTHORIZATION connection ids, and the catalog's MCP
+  //      primitive-name prefixes (build-time catalog data, no actor state, no
+  //      grant). Never a credential, token, secret ref, owner identity,
+  //      organization id, or the raw Nango connection identifier (the
+  //      token-vault address). The projector is the only constructor of a
+  //      result row and a field-allowlist test fails on any added field, so
+  //      widening the model-facing surface cannot happen silently
+  //      (src/lib/connector-inventory.server.ts).
+  //   2. NO SCOPE OR ACTOR INPUT. The schema is empty and strict; identity
+  //      comes from the trusted MCP request frame. A prompt-injected LLM has
+  //      nothing to ask another tenant's inventory WITH.
+  //   3. PER-ROW AUTHORIZATION, NOT ID SECRECY. The underlying reader returns
+  //      the whole org's live connection rows (fine for the page's aggregate
+  //      math, a leak if serialized), so every row passes the canonical
+  //      per-connection `use` gate before it can be emitted.
   connector_inventory_list: "discovery",
   gmail_aliases_list: "discovery",
   linkedin_accounts_list: "discovery",
   drupal_instances_list: "discovery",
+  // The governed-invoker pair (#2022 S7 PR-delta): one enumerates a site's
+  // forwardable tools, the other forwards one call to the site. The only
+  // admitted names with mutation reach, compensated by the S5
+  // destructive-confirmation hook and the per-instance tool-policy floor — see
+  // the module header of `delegated-chat-tool-policy.ts`.
   wordpress_site_tools_list: "discovery",
   wordpress_site_tool_call: "dispatch",
   dashboards_list: "read",

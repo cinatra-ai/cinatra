@@ -8,10 +8,13 @@ import {
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
-  declarationPermitsDelegatedChat,
-  isDelegatedChatMcpToolAllowed,
-  resolveDelegatedChatClass,
-} from "./delegated-chat-tool-policy";
+  evaluateDelegatedChatAdmission,
+  type DelegatedChatDecision,
+} from "./delegated-chat-evaluator";
+import {
+  unavailableDelegatedChatAdmissionSnapshot,
+  type DelegatedChatAdmissionSnapshot,
+} from "./delegated-chat-admission";
 import {
   isDelegatedWidgetMcpToolAllowed,
   type WidgetDelegationKind,
@@ -159,6 +162,20 @@ export async function createMcpRuntimeServer(input: {
    * disagreement class this seam exists to end.
    */
   onCapabilityPlan?: (plan: CapabilityPlan) => void;
+  /**
+   * The ONE immutable admission snapshot this request decides against
+   * (cinatra#2817 slice 3).
+   *
+   * Loaded BEFORE registration and used for every decision the request makes —
+   * registration filtering, the call-time guard, and (through the plan it
+   * produces) the catalog. One snapshot per request is what stops those from
+   * disagreeing when a revocation lands mid-request.
+   *
+   * ABSENT MEANS CLOSED, not open: a delegated-chat build with no snapshot gets
+   * an explicitly UNAVAILABLE one and admits nothing. A caller that forgets to
+   * wire this loses the chat surface; it does not silently open it.
+   */
+  delegatedChatAdmissionSnapshot?: DelegatedChatAdmissionSnapshot;
 }) {
   const server = new McpServer(
     {
@@ -216,12 +233,29 @@ export async function createMcpRuntimeServer(input: {
   // catalog, the call-time guard, the self-invoker — is made about that same
   // entry rather than about a name re-looked-up later.
   //
-  // NARROW-ONLY, and the AND ordering below is the proof: host admission is
-  // evaluated FIRST and a declaration is only ever consulted to REMOVE a name
-  // it already admitted. No declaration value can reach `true` on a name
-  // `isDelegatedChatMcpToolAllowed` refused, so a connector cannot
+  // THE DECLARATION ADMITS NOTHING BY ITSELF, and the evaluator's order is the
+  // proof: the family denies and the verb backstop run BEFORE any declaration
+  // is read, and a declaration that survives them still has to match a
+  // reviewed, version-bound admission record. So a connector cannot
   // self-classify its way past a denied family, the destructive-verb backstop,
-  // or the exact-name admission.
+  // or admission — a class it asserts about itself matches no review and is
+  // refused as `self_classified_only`.
+  // ABSENT MEANS CLOSED. A delegated-chat build handed no snapshot decides
+  // against an explicitly unavailable one, so every primitive is refused with
+  // `admission_store_unavailable` rather than slipping through an
+  // unconditional branch.
+  const admissionSnapshot: DelegatedChatAdmissionSnapshot =
+    input.delegatedChatAdmissionSnapshot ??
+    unavailableDelegatedChatAdmissionSnapshot({
+      reason: "no_admission_snapshot_supplied",
+      activationGeneration: -1,
+      admissionGeneration: -1,
+    });
+
+  /** The shared evaluator, applied to one planned entry under this snapshot. */
+  const chatDecision = (planned: PlannedPrimitive): DelegatedChatDecision =>
+    evaluateDelegatedChatAdmission(planned, admissionSnapshot);
+
   const registrationRefusal = (planned: PlannedPrimitive): string | null => {
     // A CLOSED perimeter decides about the normalized name but the SDK serves
     // the name as registered. When the two differ, the thing the policy
@@ -235,15 +269,8 @@ export async function createMcpRuntimeServer(input: {
       return "non_canonical_primitive_name";
     }
     if (policyMode === "delegated-chat") {
-      if (!isDelegatedChatMcpToolAllowed(planned.name)) return "host_admission_denied";
-      if (
-        !declarationPermitsDelegatedChat(
-          resolveDelegatedChatClass(planned.name, planned.declaredClass),
-        )
-      ) {
-        return "declaration_declines_chat";
-      }
-      return null;
+      const decision = chatDecision(planned);
+      return decision.allowed ? null : decision.reason;
     }
     if (policyMode === "delegated-widget") {
       // The widget perimeter is its own CLOSED, kind-keyed allowlist and is
@@ -280,9 +307,12 @@ export async function createMcpRuntimeServer(input: {
       // Case-SENSITIVE by design — same reason as the registration filter.
       return isDelegatedWidgetMcpToolAllowed(actor.kind, planned.registeredName);
     }
-    // Legacy chat gate keyed on `delegatedRestricted` (set only for the chat
-    // delegation at the transport boundary).
-    if (ctx?.delegatedRestricted) return isDelegatedChatMcpToolAllowed(planned.name);
+    // Chat gate keyed on `delegatedRestricted` (set only for the chat delegation
+    // at the transport boundary). Re-runs the SAME evaluator against the SAME
+    // request snapshot the registration filter used, so a tool that somehow
+    // slipped registration is still refused — and so registration and call time
+    // can never disagree about one primitive within one request.
+    if (ctx?.delegatedRestricted) return chatDecision(planned).allowed;
     return true;
   };
 

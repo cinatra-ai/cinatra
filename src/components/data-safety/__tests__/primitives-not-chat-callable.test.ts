@@ -5,7 +5,7 @@
 // can't accidentally add these to the chat allowlist.
 
 import { describe, expect, it } from "vitest";
-import { isDelegatedChatMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
 
 describe("operational primitives are NOT delegated-chat callable", () => {
   for (const name of [
@@ -14,7 +14,7 @@ describe("operational primitives are NOT delegated-chat callable", () => {
     "remote_effect_attempt_retry",
   ]) {
     it(`${name} is absent from the delegated-chat allowlist`, () => {
-      expect(isDelegatedChatMcpToolAllowed(name)).toBe(false);
+      expect(isCoreDelegatedChatAdmitted(name)).toBe(false);
     });
   }
 });

@@ -19,7 +19,7 @@ import {
   coreDelegatedChatAdmissionRecords,
   hostDeclaredDelegatedChatClass,
 } from "../host-primitive-declarations";
-import { delegatedChatAllowedToolNames } from "../delegated-chat-tool-policy";
+import { coreDelegatedChatAdmittedNames } from "../core-delegated-chat-surface";
 
 // ---------------------------------------------------------------------------
 // VERSION- AND DECLARATION-BOUND ADMISSION (cinatra#2817 slice 2).
@@ -266,7 +266,7 @@ describe("the snapshot", () => {
 describe("core host-owned declarations and their migrated admissions", () => {
   it("declares exactly the names the legacy allowlist admits, in both directions", () => {
     expect(Object.keys(HOST_PRIMITIVE_DECLARATIONS).sort()).toEqual(
-      [...delegatedChatAllowedToolNames()].sort(),
+      [...coreDelegatedChatAdmittedNames()].sort(),
     );
   });
 

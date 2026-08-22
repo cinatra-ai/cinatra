@@ -54,7 +54,7 @@ import { writeMcpServerLogFile } from "@/lib/mcp-logging";
 import { betterAuthPool } from "@/lib/better-auth-db";
 import { readServiceAccountByClientId } from "./service-accounts";
 import { resolveOrgRoleFromMembership, composeBearerActorContext } from "./actor-identity";
-import { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
+import type { DelegatedChatAdmissionSnapshot } from "./delegated-chat-admission";
 import {
   isTrustedDevHost,
   parseTrustedHosts,
@@ -144,6 +144,11 @@ export type CreateMcpServerMountOptions = {
    *  admission slice cannot decide from). App-wired: the connector catalog is
    *  app-layer state this package must not reach for. */
   resolvePrimitiveCapabilityKeys?: () => Promise<(name: string) => string | null | undefined>;
+  /** cinatra#2817 slice 3 — loads the ONE immutable admission snapshot this
+   *  request decides against, BEFORE registration. App-wired (the durable store
+   *  is app-layer state). Omitting it closes the delegated-chat surface; it
+   *  never opens it. */
+  loadDelegatedChatAdmissionSnapshot?: () => Promise<DelegatedChatAdmissionSnapshot>;
   /** #1195 durable run-context binding resolver (run-token-keyed redis binding
    *  written by /api/llm-bridge; resolved via readAgentRunByTokenHash), called ONCE
    *  per request with the RAW bearer. "resolved" beats the header channel;
@@ -793,10 +798,11 @@ export {
   type McpRequestContext,
 } from "./request-context";
 
-// The delegated-chat tool allowlist predicate — re-exported so in-process
-// primitive invokers (e.g. the host self-MCP `ctx.mcp.callPrimitive`) can apply
-// the SAME delegated-chat gate the live transport's `policedRegisterTool` does.
-export { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
+// The delegated-chat DECISION — re-exported so in-process primitive invokers
+// (e.g. the host self-MCP `ctx.mcp.callPrimitive`) apply the SAME evaluator,
+// against the same planned identity and the same request snapshot, that the
+// live transport's registration choke point applies.
+export { evaluateDelegatedChatAdmission } from "./delegated-chat-evaluator";
 
 export function createMcpServerAuthPlugins(
   options: CreateMcpServerAuthPluginsOptions = {},
@@ -954,6 +960,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       experimental: options.serverExperimental,
       resolveCapabilityKey: options.resolvePrimitiveCapabilityKeys
         ? await options.resolvePrimitiveCapabilityKeys()
+        : undefined,
+      delegatedChatAdmissionSnapshot: options.loadDelegatedChatAdmissionSnapshot
+        ? await options.loadDelegatedChatAdmissionSnapshot()
         : undefined,
       // Fail-closed tool-policy dispatch over the VERIFIED delegation type (the
       // widget actor never falls through to "unrestricted"); the kind-scoped

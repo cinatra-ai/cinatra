@@ -11,15 +11,13 @@
  * fixture catalog cannot see that: the bug lives in the relationship between
  * the REAL catalog's slugs and the REAL policy's primitive names. So this file
  * imports both — `listConnectorDescriptors()` and
- * `delegatedChatAllowedToolNames()` — and copies neither.
+ * `coreDelegatedChatAdmittedNames()` — and copies neither.
  */
 import { describe, expect, it } from "vitest";
 
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
-import {
-  delegatedChatAllowedToolNames,
-  resolveDelegatedChatClass,
-} from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import { coreDelegatedChatAdmittedNames } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
+import { hostDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/host-primitive-declarations";
 import {
   resolveChatMcpAllowedTools,
   type ServableChatPrimitive,
@@ -83,9 +81,9 @@ function allowedToolsFor(inventory: Awaited<ReturnType<typeof realInventory>>) {
     inventory.connectors.filter((r) => r.hasAuthorizedConnection).map((r) => r.connectorKey),
   );
   const capabilityKeyFor = buildCapabilityKeyResolver(inventory.connectors);
-  const servable: ServableChatPrimitive[] = delegatedChatAllowedToolNames().map((name) => ({
+  const servable: ServableChatPrimitive[] = coreDelegatedChatAdmittedNames().map((name) => ({
     name,
-    declaredClass: resolveDelegatedChatClass(name, undefined),
+    declaredClass: hostDeclaredDelegatedChatClass(name),
     capabilityKey: capabilityKeyFor(name),
   }));
   return resolveChatMcpAllowedTools({
@@ -106,7 +104,7 @@ describe("chat self-MCP capability keys — derived from the REAL catalog", () =
     expect(gmail, "the real catalog still ships a gmail connector").toBeDefined();
     expect(gmail!.connectorKey).toBe("gmail-connector");
     expect(gmail!.mcpPrimitivePrefixes).toContain("gmail_");
-    expect(delegatedChatAllowedToolNames()).toContain(GMAIL_PRIMITIVE);
+    expect(coreDelegatedChatAdmittedNames()).toContain(GMAIL_PRIMITIVE);
     // The exact shape of the old defect: the primitive is NOT prefixed with
     // the connector key, so a key-based match could never admit it.
     expect(GMAIL_PRIMITIVE.startsWith(`${gmail!.connectorKey}_`)).toBe(false);
@@ -147,7 +145,7 @@ describe("chat self-MCP connection filter — withholding, over the REAL catalog
     const capabilityKeyFor = buildCapabilityKeyResolver(
       (await realInventory([])).connectors,
     );
-    const foreignGated = delegatedChatAllowedToolNames().filter((name) => {
+    const foreignGated = coreDelegatedChatAdmittedNames().filter((name) => {
       const key = capabilityKeyFor(name);
       return key != null && key !== "gmail-connector";
     });
@@ -158,7 +156,7 @@ describe("chat self-MCP connection filter — withholding, over the REAL catalog
   it("every catalog-gated primitive is withheld when nothing is connected", async () => {
     const inventory = await realInventory([]);
     const capabilityKeyFor = buildCapabilityKeyResolver(inventory.connectors);
-    const gated = delegatedChatAllowedToolNames().filter((n) => capabilityKeyFor(n) != null);
+    const gated = coreDelegatedChatAdmittedNames().filter((n) => capabilityKeyFor(n) != null);
     // The regression that shipped: this list was EMPTY, so "all withheld" held
     // vacuously while the filter did nothing.
     expect(gated.length, "the real catalog gates at least one allowlisted name").toBeGreaterThan(0);

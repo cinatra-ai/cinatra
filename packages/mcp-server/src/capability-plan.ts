@@ -34,9 +34,17 @@
 // ---------------------------------------------------------------------------
 
 import {
+  normalizeDelegatedChatToolClass,
   readDeclaredDelegatedChatClass,
   type DelegatedChatToolClass,
 } from "./delegated-chat-tool-policy";
+import { hostDeclaredDelegatedChatClass } from "./host-primitive-declarations";
+import {
+  HOST_PRIMITIVE_OWNER_PACKAGE,
+  HOST_PRIMITIVE_RELEASE_VERSION,
+} from "./host-primitive-identity";
+
+export { HOST_PRIMITIVE_OWNER_PACKAGE, HOST_PRIMITIVE_RELEASE_VERSION };
 
 /**
  * The registration-config key the host uses to stamp a primitive's PROVENANCE
@@ -53,9 +61,6 @@ import {
  * reviewed record, which denies.
  */
 export const PRIMITIVE_PROVENANCE_KEY = "cinatraPrimitive";
-
-/** The host's own identity for core/bundled primitives. */
-export const HOST_PRIMITIVE_OWNER_PACKAGE = "@cinatra-ai/host";
 
 /**
  * WHERE a planned primitive's call actually goes. Slice 3's evaluator resolves
@@ -103,6 +108,17 @@ export type PlannedPrimitive = {
    * exactly as it does there.
    */
   readonly declaredClass: DelegatedChatToolClass | undefined;
+  /**
+   * True when the registration declared something the host could NOT read as a
+   * class (an unknown value, a wrong type, a throwing accessor).
+   *
+   * `declaredClass` already normalizes all of those to `"none"` — fail-closed
+   * in the narrowing direction — so this changes no decision. It exists so the
+   * REFUSAL can say "malformed declaration" instead of "declines chat", which
+   * are the same outcome and completely different bugs to an author staring at
+   * a primitive that will not appear.
+   */
+  readonly declarationMalformed: boolean;
   /** The package that owns the primitive. `null` when identity failed. */
   readonly ownerPackage: string | null;
   /** The EXACT resolved package version. `null` when identity failed. */
@@ -278,21 +294,27 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
   };
 }
 
+
+
 /**
- * The RELEASE version core/bundled primitives are planned and admitted against
- * (cinatra#2817).
+ * Did the registration declare a value the host could not read as a class?
  *
- * Core primitives have no package version of their own — they ship with the
- * host — so admission needs a stated release identity to bind to. This constant
- * IS that identity: the migrated core admission records are written against
- * `(HOST_PRIMITIVE_OWNER_PACKAGE, HOST_PRIMITIVE_RELEASE_VERSION, name,
- * digest)`, and bumping it is a deliberate act that RE-REVIEWS the whole core
- * surface (every core record must be re-migrated at the new version, and the
- * old ones stop matching). It is deliberately not read from package.json: a
- * routine version bump must not silently invalidate — or silently carry
- * forward — a reviewed security decision.
+ * TOTAL and guarded, like every other read of a connector-supplied config. A
+ * present value that is not one of the four classes — including one whose
+ * accessor throws — is malformed. An ABSENT declaration is not malformed; it is
+ * simply undeclared, which is a different refusal with a different fix.
  */
-export const HOST_PRIMITIVE_RELEASE_VERSION = "2817.1.0";
+function readDeclarationIsMalformed(config: unknown): boolean {
+  if (typeof config !== "object" || config === null) return false;
+  let raw: unknown;
+  try {
+    raw = (config as { delegatedChat?: unknown }).delegatedChat;
+  } catch {
+    return true;
+  }
+  if (raw === undefined || raw === null) return false;
+  return normalizeDelegatedChatToolClass(raw) === "none" && raw !== "none";
+}
 
 /** The host identity a stamp-less (core/bundled) registration inherits. */
 export type HostPrimitiveIdentity = {
@@ -320,7 +342,8 @@ export type PlanPrimitiveInput = {
  */
 export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPrimitive {
   const normalized = input.name.toLowerCase();
-  const declaredClass = readDeclaredDelegatedChatClass(input.config);
+  const registrationDeclaredClass = readDeclaredDelegatedChatClass(input.config);
+  const declarationMalformed = readDeclarationIsMalformed(input.config);
   const provenance = readPrimitiveProvenance(input.config);
 
   if (provenance.kind === "failed") {
@@ -328,7 +351,8 @@ export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPri
       name: normalized,
       registeredName: input.name,
       order: input.order,
-      declaredClass,
+      declaredClass: registrationDeclaredClass,
+      declarationMalformed,
       ownerPackage: null,
       resolvedVersion: null,
       capabilityKey: null,
@@ -346,6 +370,26 @@ export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPri
     provenance.kind === "resolved" ? provenance.provenance.capabilityKey ?? null : null;
   const capabilityKey =
     stampedCapability ?? input.resolveCapabilityKey?.(normalized) ?? null;
+  // THE DECLARATION IN FORCE. A registration that declares wins, in BOTH
+  // directions — declaring `none` withdraws a primitive the host would have
+  // declared for. A registration that declares NOTHING inherits the host's own
+  // declaration, and ONLY when the host owns it.
+  //
+  // WHY THAT IS NOT THE DELETED INTERIM SHIM. The shim supplied a synthesized
+  // class for any name a NAME ALLOWLIST admitted, downstream of the admission
+  // decision. This is the opposite direction: core and bundled primitives have
+  // no package of their own to declare in, so the host declares FOR them, in
+  // one reviewable table, and that declaration is what gets digested and
+  // reviewed like any other. It is gated on the OWNER, so an extension can
+  // never reach it: an extension's registration is stamped by host code with
+  // its own package name, and a stamp it wrote itself is either rejected as
+  // malformed or names a package with no core records.
+  const declaredClass =
+    registrationDeclaredClass ??
+    (ownerPackage === HOST_PRIMITIVE_OWNER_PACKAGE
+      ? hostDeclaredDelegatedChatClass(normalized)
+      : undefined);
+
   const dispatchTarget: PrimitiveDispatchTarget =
     (provenance.kind === "resolved" ? provenance.provenance.dispatchTarget : undefined) ?? {
       kind: "host",
@@ -359,6 +403,7 @@ export function planPrimitiveRegistration(input: PlanPrimitiveInput): PlannedPri
     registeredName: input.name,
     order: input.order,
     declaredClass,
+    declarationMalformed,
     ownerPackage,
     resolvedVersion,
     capabilityKey,

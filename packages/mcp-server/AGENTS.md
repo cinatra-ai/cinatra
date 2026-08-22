@@ -13,6 +13,26 @@ This package provides the MCP server transport, OAuth2 authorization, and admini
 
 Both are wired in `src/lib/mcp-server.ts` from `@/lib/mcp-instructions`.
 
+## Delegated-chat admission (cinatra#2817)
+
+Two further optional fields on `CreateMcpServerMountOptions` carry the app-layer state the
+delegated-chat perimeter decides from. Both are app-wired because the package must not reach for
+the connector catalog or the durable store itself:
+
+- `resolvePrimitiveCapabilityKeys?: () => Promise<(name: string) => string | null | undefined>` —
+  resolves each planned primitive's capability key for the request-scoped capability plan.
+- `loadDelegatedChatAdmissionSnapshot?: () => Promise<DelegatedChatAdmissionSnapshot>` — loads the
+  ONE immutable admission snapshot the request decides against, before registration.
+
+**Omitting the snapshot loader CLOSES the delegated-chat surface; it never opens it.** A
+delegated-chat build handed no snapshot decides against an explicitly unavailable one, so every
+primitive is refused with `admission_store_unavailable`. A caller that forgets to wire it loses the
+chat surface rather than silently gaining an ungated one.
+
+The decision itself is `evaluateDelegatedChatAdmission(planned, snapshot)` in
+`src/delegated-chat-evaluator.ts` — one pure function shared by registration filtering, catalog
+derivation, the call-time guard and the in-process self-invoker.
+
 ## Public base URL
 
 Cinatra used to manage a Cloudflare quick tunnel automatically; that lifecycle is gone. The public MCP base URL is now operator-supplied:
