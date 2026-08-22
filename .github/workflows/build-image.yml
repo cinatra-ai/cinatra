@@ -833,7 +833,9 @@ jobs:
       # the same posture `agents-integration-db` takes for its own tier.
       #
       # Own vitest invocation (own process), same as every step above, so its
-      # pool lifecycle never touches theirs. Measured: ~7s of vitest (17 tests).
+      # pool lifecycle never touches theirs. Measured on this branch's merged
+      # head: 45 tests, ~11s of vitest wall clock, against a scratch
+      # postgres:18-alpine with only the `public` Better-Auth tables applied.
       - name: Durable lifecycle stream/store/reload contract (cinatra#2823)
         env:
           CINATRA_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
@@ -3030,8 +3032,11 @@ jobs:
     # stream/store/reload contract has to run in a REQUIRED job with a database
     # (that is the issue's acceptance, not a preference). Making it a prerequisite
     # is what turns "the card comes back after a reload" into a merge gate, and it
-    # costs the critical path NOTHING: the job is budgeted at 10 minutes and has
+    # costs the critical path NOTHING: the job is budgeted at 10 minutes and had
     # measured ~1.8 min, against the 15-minute `test` job it now runs beside.
+    # That measurement predates main's cinatra#2882 async-seam step, which now
+    # shares this job; both steps together stay far inside the 10-minute budget
+    # and inside the `test` job this one runs beside.
     needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate, extension-lifecycle-db-tests]
     # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`/`package-unit-suites`/`hosted-mcp-wire-gate`/`extension-lifecycle-db-tests`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
