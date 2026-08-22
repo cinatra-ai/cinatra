@@ -102,6 +102,43 @@ export type ConversationThreadWrite = {
   createdAt: string;
   updatedAt: string;
   activeAssistantHandle?: string;
+  /**
+   * THE TRUNCATION INTENT (cinatra#2823 S9j) — the message ids this save ASSERTS
+   * the reader removed, present ONLY on a save that follows an edit-and-resend.
+   *
+   * It has to be carried rather than inferred. Every save posts the whole
+   * transcript, so "absent from the payload" is equally what a save from a tab
+   * whose transcript PREDATES a turn looks like, and the server must not treat
+   * that as a removal — repairing it is what the durable fold-in is for. Only the
+   * writer knows which it is, and only after an edit is it a removal.
+   *
+   * The server tombstones the removed turns' run-bound rows under this and
+   * nothing else; without it a widget edit truncates the mirror rows while the
+   * run-bound rows survive, and the reload folds the removed turn back in above
+   * the edited prompt — permanently. Unlike the fields above it is NOT a
+   * projection of the transcript, so it is never carried forward: a save that
+   * does not follow an edit asserts nothing and omits it.
+   */
+  removedMessageIds?: string[];
+  /**
+   * THE STREAMING HALF of the same intent (cinatra#2823 S9j) — the RUN IDS this
+   * save asserts the reader removed, present ONLY on a save that follows an
+   * edit-and-resend.
+   *
+   * Every id above is minted in the column, and the server's link from such an
+   * id to the run-bound row runs through the turn's MIRROR ROW — the row a
+   * whole-transcript save writes. A widget save is best-effort and SILENT, so a
+   * turn whose save never landed has no such row: its bubble id asserts a name
+   * the server has never seen, and the removed turn folds back in above the
+   * edited prompt anyway. The run id, minted by the turn route and delivered on
+   * the wire, is the one identity both sides hold for those turns.
+   *
+   * NARROWER than the ids on purpose. A bubble id the server cannot link to a
+   * row does nothing, so over-naming there is safe; a run id names the run-bound
+   * row outright, so the column offers only the runs of turns anchored to a
+   * prompt this edit invalidated (`turn-stream-registry.ts`).
+   */
+  removedRunIds?: string[];
 };
 
 /**
@@ -120,6 +157,11 @@ export function buildThreadWrite(input: {
   messages: UiMessage[];
   createdAt: string;
   activeAssistantHandle?: string;
+  /** The column's outstanding truncation intent, when it has one. Empty and
+   *  absent are the same thing — an assertion about nothing is no assertion. */
+  removedMessageIds?: string[];
+  /** ...and its RUN half, on exactly the same terms. */
+  removedRunIds?: string[];
 }): ConversationThreadWrite {
   const firstUser = input.messages.find((m) => m.role === "user");
   return {
@@ -130,6 +172,12 @@ export function buildThreadWrite(input: {
     updatedAt: new Date().toISOString(),
     ...(input.activeAssistantHandle
       ? { activeAssistantHandle: input.activeAssistantHandle }
+      : {}),
+    ...(input.removedMessageIds && input.removedMessageIds.length > 0
+      ? { removedMessageIds: input.removedMessageIds }
+      : {}),
+    ...(input.removedRunIds && input.removedRunIds.length > 0
+      ? { removedRunIds: input.removedRunIds }
       : {}),
   };
 }
@@ -166,17 +214,17 @@ export function buildThreadWrite(input: {
 /** One save's own bound. Generous — it carries a whole transcript — but finite. */
 const SAVE_TIMEOUT_MS = 15_000;
 
-const inFlightSaves = new Map<string, Promise<void>>();
+const inFlightSaves = new Map<string, Promise<boolean>>();
 
 export async function saveThreadTranscript(
   thread: ConversationThreadWrite,
   transport?: ConversationServiceTransport,
-): Promise<void> {
-  if (!thread.id) return;
-  const previous = inFlightSaves.get(thread.id) ?? Promise.resolve();
+): Promise<boolean> {
+  if (!thread.id) return false;
+  const previous = inFlightSaves.get(thread.id) ?? Promise.resolve(false);
   const next = previous.then(async () => {
     try {
-      await fetch(
+      const res = await fetch(
         "/api/assistants/threads",
         requestInit(transport, {
           method: "POST",
@@ -189,15 +237,18 @@ export async function saveThreadTranscript(
           signal: AbortSignal.timeout(SAVE_TIMEOUT_MS),
         }),
       );
+      return res.ok;
     } catch {
       /* best-effort: the conversation on screen is unaffected. */
+      return false;
     }
   });
   inFlightSaves.set(thread.id, next);
-  await next;
+  const landed = await next;
   // Drop the chain only while THIS save is still the tail, so a save already
   // queued behind it keeps its ordering guarantee.
   if (inFlightSaves.get(thread.id) === next) inFlightSaves.delete(thread.id);
+  return landed;
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import {
   fetchThreadList,
   fetchThreadById,
   saveChatThreadViaFetch,
+  saveChatThreadInOrder,
 } from "../ag-ui-chat-client";
 
 afterEach(() => {
@@ -67,5 +68,154 @@ describe("fetch wrappers", () => {
     expect(calls[0].url).toBe("/api/assistants/threads");
     expect(calls[0].init?.method).toBe("POST");
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({ id: "t1", title: "T" });
+  });
+
+  it("saveChatThreadViaFetch REJECTS on a non-OK response", async () => {
+    // cinatra#2823 S9j round 5. It used to resolve on any response at all, so
+    // "the save landed" and "the server rejected it" were the same value. The
+    // truncation intent is the one save whose success the edit path has to be
+    // able to wait on, and it cannot wait on a promise that always resolves.
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
+    await expect(saveChatThreadViaFetch({ id: "t1", title: "T" })).rejects.toThrow(/500/);
+  });
+});
+
+/**
+ * cinatra#2823 S9j — the per-thread SAVE CHAIN.
+ *
+ * Every /chat save posts the WHOLE transcript and the server reconciles it by
+ * DELETING the mirror rows the payload no longer carries. Exactly one save also
+ * carries an explicit truncation intent (`removedMessageIds`), and the server
+ * reads the removed turns' identity out of the very rows that DELETE removes.
+ * Two concurrent `fetch`es have no order, so "issued first" did not mean
+ * "committed first" and the silent save could destroy the evidence the intent
+ * needs. These arms drive the ordering for real — the fetch is held open by hand,
+ * so there is no sleep and no scheduling luck in any of them.
+ */
+describe("saveChatThreadInOrder", () => {
+  /** A fetch stub whose responses are released by hand, in the order asked for. */
+  function heldFetch() {
+    const issued: string[] = [];
+    const release: Array<(res: Response) => void> = [];
+    const fetchStub = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id: string; title?: string };
+      issued.push(`${body.id}:${body.title ?? ""}`);
+      // A held request that HONOURS its signal — otherwise "the save is bound"
+      // could not be stated here at all, because the stub would be the one thing
+      // in the chain that never abandons a connection.
+      return new Promise<Response>((resolve, reject) => {
+        release.push(resolve);
+        init?.signal?.addEventListener("abort", () =>
+          reject((init.signal as AbortSignal).reason ?? new Error("aborted")),
+        );
+      });
+    });
+    vi.stubGlobal("fetch", fetchStub);
+    return {
+      issued,
+      /** Settle the Nth issued request; `ok: false` makes it a server rejection. */
+      settle(index: number, ok = true) {
+        release[index](ok ? new Response("{}") : new Response("no", { status: 503 }));
+      },
+      /** Let every pending microtask run, so anything unblocked is issued. */
+      async drain() {
+        for (let i = 0; i < 8; i += 1) await Promise.resolve();
+      },
+    };
+  }
+
+  it("does not POST a thread's next save until the previous one has settled", async () => {
+    const net = heldFetch();
+    const first = saveChatThreadInOrder({ id: "t1", title: "intent" });
+    const second = saveChatThreadInOrder({ id: "t1", title: "ordinary" });
+    await net.drain();
+    // THE POINT: the second save exists, and it is not on the wire. Without the
+    // chain both fetches are in flight here and the server decides the order.
+    expect(net.issued).toEqual(["t1:intent"]);
+
+    net.settle(0);
+    await first;
+    await net.drain();
+    expect(net.issued).toEqual(["t1:intent", "t1:ordinary"]);
+    net.settle(1);
+    await second;
+  });
+
+  it("retries INSIDE its slot — a save issued later cannot land between the attempts", async () => {
+    // A re-enqueued retry would go behind the save that was issued after it,
+    // which for the truncation intent is the losing position all over again.
+    const net = heldFetch();
+    const intent = saveChatThreadInOrder({ id: "t1", title: "intent" }, { attempts: 2 });
+    const ordinary = saveChatThreadInOrder({ id: "t1", title: "ordinary" });
+    await net.drain();
+    expect(net.issued).toEqual(["t1:intent"]);
+
+    net.settle(0, false); // the first attempt is rejected by the server
+    await net.drain();
+    expect(net.issued).toEqual(["t1:intent", "t1:intent"]);
+
+    net.settle(1);
+    await intent;
+    await net.drain();
+    expect(net.issued).toEqual(["t1:intent", "t1:intent", "t1:ordinary"]);
+    net.settle(2);
+    await ordinary;
+  });
+
+  it("rejects when every attempt fails, and does not poison the thread's later saves", async () => {
+    const net = heldFetch();
+    const intent = saveChatThreadInOrder({ id: "t1", title: "intent" }, { attempts: 2 });
+    const ordinary = saveChatThreadInOrder({ id: "t1", title: "ordinary" });
+    await net.drain();
+    net.settle(0, false);
+    await net.drain();
+    net.settle(1, false);
+    await expect(intent).rejects.toThrow(/503/);
+    await net.drain();
+    // The chain carried on: one failed save is not a dead thread.
+    expect(net.issued).toEqual(["t1:intent", "t1:intent", "t1:ordinary"]);
+    net.settle(2);
+    await ordinary;
+  });
+
+  it("a save that never answers is BOUNDED, and does not wedge the one behind it", async () => {
+    // CODEX ROUND 4, FINDING 3. A browser applies no default timeout to `fetch`,
+    // and these saves are chained: before the bound, one hung connection blocked
+    // every later save for that thread for the life of the tab — and
+    // `editAndResend` awaits that chain, so an edit hung with it. The arm never
+    // settles the first request; the BOUND is what makes it settle.
+    const net = heldFetch();
+    const hung = saveChatThreadInOrder({ id: "t1", title: "hung" }, { timeoutMs: 5 });
+    const next = saveChatThreadInOrder({ id: "t1", title: "next" });
+    await net.drain();
+    expect(net.issued).toEqual(["t1:hung"]);
+
+    // Nothing answers it. It gives up on its own, and says why — which is what
+    // the edit path reports on its never-blank bubble instead of hanging.
+    //
+    // WHAT THIS ARM DOES NOT PIN, said plainly: an abort stops the CLIENT, not
+    // the server, so an abandoned request may still commit late. That residual
+    // is stated at `CHAT_THREAD_SAVE_TIMEOUT_MS`; it needs a server-side write
+    // fence, and no client-side arm can observe it.
+    await expect(hung).rejects.toThrow(/timed out after 5ms/);
+
+    await net.drain();
+    expect(net.issued, "the chain was still wedged behind the abandoned save").toEqual([
+      "t1:hung",
+      "t1:next",
+    ]);
+    net.settle(1);
+    await next;
+  });
+
+  it("chains PER THREAD — two threads share no reconcile and are not serialised", async () => {
+    const net = heldFetch();
+    const a = saveChatThreadInOrder({ id: "t1", title: "a" });
+    const b = saveChatThreadInOrder({ id: "t2", title: "b" });
+    await net.drain();
+    expect(net.issued).toEqual(["t1:a", "t2:b"]);
+    net.settle(0);
+    net.settle(1);
+    await Promise.all([a, b]);
   });
 });
