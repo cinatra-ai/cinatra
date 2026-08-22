@@ -18,6 +18,8 @@ import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from 
 // module the CLI can also import (the CLI has no Next path aliases and no
 // `server-only` runtime, so it cannot import this TS file directly).
 import { buildMcpPublicBaseUrlRow } from "./mcp-public-base-url-shape.mjs";
+import { buildMcpAuthPlugins, type McpAuthPlugins } from "./auth-plugins";
+import { buildMcpHandshakeUrls, normalizeMcpBasePath } from "./handshake-urls";
 
 const LLM_MCP_SETTINGS_KEY = "llm_mcp_access";
 const MCP_SERVER_SETTINGS_KEY = "mcp_server";
@@ -291,4 +293,117 @@ export function writeLlmMcpCredentials(
     providers[provider] = { ...creds };
   }
   writeConnectorConfigToDatabase(LLM_MCP_SETTINGS_KEY, { providers, updatedAt: new Date().toISOString() });
+}
+
+
+// ---------------------------------------------------------------------------
+// The Better Auth plugin pair the HOST mounts (cinatra#2817 review round).
+//
+// This factory used to live in the mount barrel (`./index.tsx`). It is the ONLY
+// symbol `src/lib/auth.ts` needed from that barrel, so every route that reaches
+// auth.ts (including /sign-in, which mounts no MCP surface at all) carried the
+// barrel's whole runtime + admin-UI graph. It lives here instead because this
+// module already owns the inputs it computes from: the local/public MCP URLs
+// read out of the database. `./auth-plugins` stays the app-graph-free plugin
+// builder; this is the server-only wrapper that feeds it live state.
+// ---------------------------------------------------------------------------
+
+/** OAuth scopes the MCP authorization server advertises by default. */
+export const DEFAULT_MCP_AUTH_SCOPES = ["openid", "profile", "email", "offline_access", "mcp:connect"] as const;
+
+export type CreateMcpServerAuthPluginsOptions = {
+  authBasePath?: string;
+  mcpBasePath?: string;
+  /** Human-facing admin pages (overview, OAuth client management). */
+  adminBasePath?: string;
+  /** OAuth machine-flow pages (auth / account / consent) advertised to external MCP clients. */
+  handshakeBasePath?: string;
+  scopes?: readonly string[];
+  /**
+   * Additional base path(s) whose `<origin>/<path>` URLs (local + public)
+   * become valid token audiences alongside the MCP base path. The CLI control-plane model adds
+   * `/api/cli` so an authorize with `resource=<origin>/api/cli` mints a JWT
+   * bound to `aud=<origin>/api/cli` — a DEDICATED audience the CLI verifier
+   * pins (reciprocal isolation from the `/api/mcp` audience).
+   */
+  extraAudienceBasePaths?: readonly string[];
+  /**
+   * Scopes EXCLUDED from the DCR default-scope set. A client that does not
+   * EXPLICITLY request these never silently receives them (the CLI control-plane model keeps the
+   * `cli:*` scopes out of DCR defaults). When omitted, the DCR default is the
+   * full `scopes` list (today's behaviour).
+   */
+  clientRegistrationDefaultScopes?: readonly string[];
+  /**
+   * Scopes a DCR client MAY request at registration. The CLI control-plane model keeps `cli:*`
+   * here (so the first-party CLI can register with them) — the real authority
+   * boundary is the verified-subject platform-admin gate, not this list.
+   * When omitted, defaults to the full `scopes` list (today's behaviour).
+   */
+  clientRegistrationAllowedScopes?: readonly string[];
+};
+
+export function createMcpServerAuthPlugins(
+  options: CreateMcpServerAuthPluginsOptions = {},
+): McpAuthPlugins {
+  const mcpBasePath = normalizeMcpBasePath(options.mcpBasePath, "/api/mcp");
+  // OAuth handshake pages (auth/account/consent) advertised to external MCP
+  // clients live under handshakeBasePath; default to the JSON-RPC base.
+  const handshakeBasePath = normalizeMcpBasePath(options.handshakeBasePath, "/api/mcp");
+  const scopes = [...(options.scopes ?? DEFAULT_MCP_AUTH_SCOPES)];
+  const localMcpUrl = getLocalMcpServerUrl(mcpBasePath);
+  // Include the configured public MCP URL (stable HTTPS endpoint set via
+  // /configuration/development?tab=tunnel, or the deployed app origin in
+  // production) so OpenAI's MCP client — which sends `resource=<public URL>`
+  // per RFC 8707 — receives a JWT bound to that audience. Without this entry
+  // the provider's resource check REJECTS the request (`invalid_request`); no
+  // token is issued. Read ONCE per process, so a saved public-base-URL change
+  // needs an app RESTART — see `setMcpPublicBaseUrlAction` (cinatra#2173).
+  const publicMcpUrl = getPublicMcpServerUrl();
+  const validAudiences = publicMcpUrl ? [localMcpUrl, publicMcpUrl] : [localMcpUrl];
+
+  // CLI control-plane: extend validAudiences with `<origin><extraBasePath>` for each
+  // configured extra base path (e.g. /api/cli), on BOTH the local and public
+  // origins, so an authorize with `resource=<origin>/api/cli` mints a JWT
+  // bound to that dedicated audience. The MCP audiences are unchanged — each
+  // verifier still pins its OWN audience (reciprocal isolation).
+  const extraBasePaths = (options.extraAudienceBasePaths ?? []).map((p) =>
+    normalizeMcpBasePath(p, p),
+  );
+  if (extraBasePaths.length > 0) {
+    const origins: string[] = [];
+    try {
+      origins.push(new URL(localMcpUrl).origin);
+    } catch {
+      /* malformed local URL — skip */
+    }
+    if (publicMcpUrl) {
+      try {
+        origins.push(new URL(publicMcpUrl).origin);
+      } catch {
+        /* malformed public URL — skip */
+      }
+    }
+    for (const origin of origins) {
+      for (const basePath of extraBasePaths) {
+        const audience = `${origin}${basePath}`;
+        if (!validAudiences.includes(audience)) validAudiences.push(audience);
+      }
+    }
+  }
+
+  const urls = buildMcpHandshakeUrls(handshakeBasePath);
+  return buildMcpAuthPlugins({
+    validAudiences,
+    scopes,
+    loginPage: urls.loginPage,
+    consentPage: urls.consentPage,
+    signupPage: urls.signupPage,
+    ...(options.clientRegistrationDefaultScopes
+      ? { clientRegistrationDefaultScopes: options.clientRegistrationDefaultScopes }
+      : {}),
+    ...(options.clientRegistrationAllowedScopes
+      ? { clientRegistrationAllowedScopes: options.clientRegistrationAllowedScopes }
+      : {}),
+  });
 }
