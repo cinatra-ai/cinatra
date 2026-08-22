@@ -218,7 +218,29 @@ export type DelegatedChatAdmissionSnapshot = {
   readonly records: readonly DelegatedChatAdmissionRecord[];
 };
 
-/** The composite cache key for anything derived from one snapshot. */
+/**
+ * The composite cache key for anything derived from one snapshot.
+ *
+ * NOTHING CACHES TODAY, AND THAT IS THE DESIGN (cinatra#2817 review round).
+ * The capability plan is rebuilt from scratch on every request that needs it,
+ * so there is no derived state to invalidate and no production consumer of this
+ * function. It is not dead code and it is not an unused key backing a cache
+ * that exists somewhere: it is the CONTRACT any future cache must key on, kept
+ * beside the snapshot it describes so the two cannot drift apart.
+ *
+ * Why the contract has to be stated even with no cache: a plan is only valid
+ * for the pair of generations it was built under. `activationGeneration` moves
+ * when the set of installed/activated packages changes, `admissionGeneration`
+ * when a review is recorded or withdrawn, and either one can change what the
+ * SAME primitive name resolves to. A memo keyed on anything narrower (the name,
+ * the owner, one generation) would serve a decision that was made against a
+ * policy no longer in force. The digest and the availability bit are in the key
+ * for the same reason: a snapshot that could not be read is not interchangeable
+ * with one that could.
+ *
+ * See `resolveChatMcpCatalogState` (src/lib/assistant-runtime/runtime.ts) for
+ * the per-turn rebuild this replaces a cache with.
+ */
 export function admissionSnapshotCacheKey(snapshot: DelegatedChatAdmissionSnapshot): string {
   return `${snapshot.activationGeneration}:${snapshot.admissionGeneration}:${snapshot.policyDigest}:${snapshot.available ? "1" : "0"}`;
 }

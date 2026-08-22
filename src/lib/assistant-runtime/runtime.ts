@@ -661,6 +661,20 @@ async function resolveChatMcpCatalogState(input: {
     // route this runtime is on (and force every test of an unrelated turn seam
     // to stub it). The catalog hint is best-effort and already inside a
     // try/catch, so the import cost is paid only when the hint is built.
+    //
+    // REBUILT EVERY TURN, ON PURPOSE, WITH NO MEMO (cinatra#2817 review round).
+    // The plan is only valid for the (activationGeneration, admissionGeneration)
+    // pair it was built under: an install/activation or a recorded/withdrawn
+    // review changes what the same primitive name resolves to. Caching it would
+    // mean holding a decision made against a policy that may no longer be in
+    // force, and the failure would be SILENT because this whole block is
+    // fail-open (a stale hint looks exactly like a fresh one). Rebuilding is the
+    // conservative direction: the cost is one registration pass plus one store
+    // read per turn, and the hint is best-effort anyway.
+    //
+    // `admissionSnapshotCacheKey` (packages/mcp-server/src/delegated-chat-admission.ts)
+    // states the key any future cache here MUST use. It has no production
+    // consumer for exactly this reason: there is no cache to consume it yet.
     const { buildDelegatedChatCapabilityPlan } = await import("@/lib/mcp-server");
     const plan = await buildDelegatedChatCapabilityPlan({
       resolveCapabilityKey: capabilityKeyFor,
