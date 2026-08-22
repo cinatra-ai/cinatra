@@ -66,6 +66,8 @@ import {
   getLiveProgressStatus,
   shouldShowLiveProgressStatus,
   formatToolName,
+  lifecycleSlotParts,
+  turnCarriesLifecycleItems,
   type AssistantMessagePart,
 } from "./assistant-parts";
 import { resolveAssistantDisplayName } from "./assistant-display-name";
@@ -943,6 +945,56 @@ function MessageRenderableViews({
   ));
 }
 
+/**
+ * The turn's LIFECYCLE SLOTS, drawn wherever the ordered-parts branch did not
+ * draw them (cinatra#2825, S9l).
+ *
+ * A lifecycle card mounted at a slot in the ordered trace — the `agent_run`
+ * anchor the recommendation card sits at (#2786) — used to disappear in two
+ * situations that have nothing to do with the decision it is holding:
+ *
+ *   · THE SLACK LAYOUT pins its own turn shape and omits the ordered `parts`,
+ *     so the anchor was never on the projected turn at all. The projection now
+ *     carries the slots (and only the slots) on `lifecycleParts`.
+ *   · AN ERROR TURN skips the ordered-parts branch entirely and draws the error
+ *     card alone, so a card the run had already produced went with it.
+ *
+ * It draws through `OrderedPartsSection`, the SAME branch the full trace draws a
+ * slot through, so there is one mount path for the inline run card rather than a
+ * second one that could drift. Its own guard — not the caller's — decides
+ * whether that branch already drew them, which is what keeps ONE rendered
+ * instance per kind per host however many ladder branches mount this.
+ */
+function MessageLifecycleSlots({
+  message,
+  theme,
+  detectWidgets,
+  onActiveGateChange,
+}: {
+  message: UiMessage;
+  theme: ThemeName;
+  detectWidgets: (content: string) => DetectedWidget[];
+  onActiveGateChange?: (
+    runId: string,
+    gate: ChatGateDescriptor | null,
+    instanceId: string,
+  ) => void;
+}) {
+  // The ordered-parts branch condition, restated: when it ran, it already drew
+  // every slot in the trace and this mount must draw nothing.
+  if (message.parts && message.parts.length > 0 && !message.error) return null;
+  const slots = lifecycleSlotParts(message.parts ?? message.lifecycleParts);
+  if (slots.length === 0) return null;
+  return (
+    <OrderedPartsSection
+      parts={slots}
+      theme={theme}
+      detectWidgets={detectWidgets}
+      onActiveGateChange={onActiveGateChange}
+    />
+  );
+}
+
 function MessageCitations({ message }: { message: UiMessage }) {
   if (!message.citations || message.citations.length === 0) return null;
   return (
@@ -1321,7 +1373,21 @@ export function ChatMessagesView({
                       </>
                     )}
                     {message.error ? (
-                      <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                      // cinatra#2825 (S9l) — the error card is what this turn
+                      // ENDED as; the lifecycle items are what it is still
+                      // HOLDING. An unrelated stream error must not decide for
+                      // the reader by hiding a card they still owe an answer to,
+                      // so both are drawn, the error first.
+                      <>
+                        <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                        <MessageLifecycleSlots
+                          message={message}
+                          theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
+                          onActiveGateChange={onActiveGateChange}
+                        />
+                        <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
+                      </>
                     ) : (message.parts && message.parts.length > 0) ? (
                       // Rich-content adjuncts (mermaid, charts, citations,
                       // widgets) are computed from `message.content` which
@@ -1367,6 +1433,15 @@ export function ChatMessagesView({
                         />
                         <MessageMermaidEmbeds message={message} />
                         <MessageChartEmbeds message={message} chatViews={chatViews} />
+                        {/* cinatra#2825 (S9l) — in this layout the ordered trace
+                            is omitted by design, so the lifecycle slot it carried
+                            is drawn here, beside the other adjuncts. */}
+                        <MessageLifecycleSlots
+                          message={message}
+                          theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
+                          onActiveGateChange={onActiveGateChange}
+                        />
                         <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                         <MessageCitations message={message} />
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
@@ -1380,6 +1455,19 @@ export function ChatMessagesView({
                           isStreaming={isStreaming}
                           onEditAndResend={onEditAndResend}
                         />
+                      </>
+                    ) : turnCarriesLifecycleItems(message) ? (
+                      // cinatra#2825 (S9l) — a turn with no prose and no trace,
+                      // carrying only a card, used to fall through to `null` and
+                      // render nothing at all.
+                      <>
+                        <MessageLifecycleSlots
+                          message={message}
+                          theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
+                          onActiveGateChange={onActiveGateChange}
+                        />
+                        <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                       </>
                     ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                       <ThinkingIndicator label={getLiveProgressStatus(message)} />
@@ -1465,7 +1553,19 @@ export function ChatMessagesView({
                   </>
                 )}
                 {message.error ? (
-                  <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                  // cinatra#2825 (S9l) — same rule as the render site above: an
+                  // error ends the turn, it does not dismiss the decision the
+                  // turn is holding.
+                  <>
+                    <ErrorCard error={message.error} errorRaw={message.errorRaw} />
+                    <MessageLifecycleSlots
+                      message={message}
+                      theme={theme}
+                      detectWidgets={widgetRuntime.detectWidgets}
+                      onActiveGateChange={onActiveGateChange}
+                    />
+                    <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
+                  </>
                 ) : (message.parts && message.parts.length > 0) ? (
                   // Same rich-content adjuncts treatment as the
                   // ChatGPT-mode render site above.
@@ -1545,6 +1645,19 @@ export function ChatMessagesView({
                       isStreaming={isStreaming}
                       onEditAndResend={onEditAndResend}
                     />
+                  </>
+                ) : turnCarriesLifecycleItems(message) ? (
+                  // cinatra#2825 (S9l) — the card-only turn, in this layout too:
+                  // a `dataParts`-only turn has neither prose nor a trace and
+                  // rendered nothing before.
+                  <>
+                    <MessageLifecycleSlots
+                      message={message}
+                      theme={theme}
+                      detectWidgets={widgetRuntime.detectWidgets}
+                      onActiveGateChange={onActiveGateChange}
+                    />
+                    <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                   </>
                 ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                   <ThinkingIndicator label={getLiveProgressStatus(message)} />

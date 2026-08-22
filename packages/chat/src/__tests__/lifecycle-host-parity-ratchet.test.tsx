@@ -113,6 +113,7 @@ import {
 import { LifecycleCardSurfaceProvider } from "../../../agents/src/lifecycle-card-runtime";
 import { ReviewGateCard } from "../../../agents/src/review-gate-card";
 import { RecommendationHoldCard } from "../../../agents/src/run-recommendation-chip-row";
+import { VerificationSummaryCard } from "../../../agents/src/verification-summary-card";
 import { LifecycleCard } from "../renderable-views/lifecycle-card";
 import {
   LIFECYCLE_RESOLVE_ANSWERS,
@@ -219,6 +220,11 @@ async function observedByTranscript(
 const OWNER_COMPONENTS: Record<string, React.ComponentType<never>> = {
   ReviewGateCard: ReviewGateCard as unknown as React.ComponentType<never>,
   RecommendationHoldCard: RecommendationHoldCard as unknown as React.ComponentType<never>,
+  // §VII's audit card owns `verification_summary` since S9e (cinatra#2789) and
+  // is composed on BOTH direct-mount hosts — the run screen and the review
+  // page's gate region. Without it here the observer throws rather than
+  // dropping the cell, which is the refusal this map is written to make loud.
+  VerificationSummaryCard: VerificationSummaryCard as unknown as React.ComponentType<never>,
   LifecycleCard: LifecycleCard as unknown as React.ComponentType<never>,
 };
 
@@ -374,15 +380,20 @@ describe("an edited array or a bare provider changes nothing", () => {
     expect(scanHostCompositionOwners(source, "run_card")).toEqual([]);
   });
 
+  // The claimed cell must be one the product really does NOT produce, or the
+  // discriminator proves nothing. `trigger_schedule_proposal` still reaches the
+  // two conversation hosts through the shell and is composed nowhere on the run
+  // card; `verification_summary` stopped being that example when S9e
+  // (cinatra#2789) landed its run-card mount.
   it("claiming a host in the ratchet that nothing renders FAILS — the array is not the evidence", () => {
     const edited = {
       ...LIFECYCLE_HOST_PARITY_RATCHET,
-      verification_summary: {
+      trigger_schedule_proposal: {
         hosts: {
-          ...LIFECYCLE_HOST_PARITY_RATCHET.verification_summary.hosts,
+          ...LIFECYCLE_HOST_PARITY_RATCHET.trigger_schedule_proposal.hosts,
           run_card: "composition" as HostObservationMethod,
         },
-        owed: LIFECYCLE_HOST_PARITY_RATCHET.verification_summary.owed,
+        owed: LIFECYCLE_HOST_PARITY_RATCHET.trigger_schedule_proposal.owed,
       },
     };
     const violations = evaluateHostParity({ observed: OBSERVED, ratchet: edited });
@@ -432,11 +443,14 @@ describe("the ratchet goes red in every direction it claims to", () => {
     );
   });
 
+  // Same reason as the claimed-cell discriminator above: the grown cell must be
+  // one the ratchet does not already record, and `verification_summary` records
+  // all four hosts since S9e (cinatra#2789).
   it("a NEW host that nobody recorded fails — growth is not silent either", () => {
     const grown: ObservedHostParity = {
       ...OBSERVED,
-      verification_summary: {
-        ...(OBSERVED.verification_summary ?? {}),
+      trigger_schedule_proposal: {
+        ...(OBSERVED.trigger_schedule_proposal ?? {}),
         run_card: "composition",
       },
     };

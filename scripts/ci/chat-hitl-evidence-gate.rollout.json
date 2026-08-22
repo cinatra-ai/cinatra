@@ -11,7 +11,14 @@
     "",
     "knownFindings grandfathers pre-existing debt ON MAIN by identity, so a branch created after",
     "the cut is not failed for findings it did not create. Each entry names the slice that clears",
-    "it. Clearing an entry is a deliberate edit to this file, in the slice that fixes the finding."
+    "it. Clearing an entry is a deliberate edit to this file, in the slice that fixes the finding.",
+    "",
+    "knownFindings IS EMPTY, and that is a claim about the tree rather than a default. The two entries it held",
+    "-- the S7-era C1 / C2 chat_thread cells -- are CLEARED by cinatra#2791 (S9g): the cells were re-driven",
+    "against a live app, every anchor the current contract requires was observed (including the",
+    "[data-conversation-list] the S7 run never looked for), the records are in",
+    "scripts/ci/chat-hitl-capture-index.json, and the acceptance manifest rows that cited the old names now",
+    "cite the new ones. An entry is removed only when the finding it names is gone, never to quiet a gate."
   ],
   "enforcement": "warn-first",
   "trunkBranch": "main",
@@ -25,12 +32,6 @@
     "fix/2828-skill-text-pending-input",
     "fix/2836-expired-proposal-stays-visible"
   ],
-  "knownFindings": [
-    "evidence/unbound-cell:C1__review-card__chat_thread__pending",
-    "evidence/unbound-cell:C2__review-card__chat_thread__decided"
-  ],
-  "knownFindingNotes": {
-    "evidence/unbound-cell:C1__review-card__chat_thread__pending": "The S7 visuals run photographed this cell but never looked for [data-conversation-list], so no honest record can be written from what it observed. Cleared by the canonical re-capture slice (#2791, S9g), which runs the recorder against a live app.",
-    "evidence/unbound-cell:C2__review-card__chat_thread__decided": "Same run, same gap; the decided cell additionally owes the ABSENCE of its decision controls. Cleared by #2791 (S9g)."
-  }
+  "knownFindings": [],
+  "knownFindingNotes": {}
 }

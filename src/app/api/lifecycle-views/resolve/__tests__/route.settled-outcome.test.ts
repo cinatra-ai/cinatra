@@ -129,7 +129,6 @@ describe("the settled reading reaches the card", () => {
         outcome: "verified",
         reviewedRevisionId: "rev-1",
         repairedRevisionId: "rev-2",
-        scopePaths: [],
         fieldDiff: [],
       },
     });

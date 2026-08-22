@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 import {
   RECORDER_ID,
+  URL_CLASSES,
   bindEvidenceCells,
   parseCellName,
   requiredAssertionsFor,
@@ -57,6 +58,47 @@ function honestChatPending(overrides = {}) {
       { selector: "[data-conversation-list]", scope: "frame", count: 1 },
       {
         selector: '[data-lifecycle-card-host="chat_thread"]',
+        scope: "frame",
+        count: 1,
+      },
+      {
+        selector: '[data-lifecycle-card="artifact_review_gate"]',
+        scope: "frame",
+        count: 1,
+      },
+      {
+        selector: '[data-conformance-id="review-decision-bar"]',
+        scope: "root",
+        count: 1,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+/**
+ * An honest page_gate_region capture, on the SHIPPED gate-region deep link.
+ *
+ * The URL is the real shape a lane records — vendor / package / run UUID /
+ * `review` / a URL-ENCODED review task id (the shipped ids carry a colon, so
+ * `%3A` is what actually lands in `finalUrl`). This fixture exists because the
+ * `review_page` class used to read `^/agents/reviews`, the open-review QUEUE,
+ * which no truthful record of this host could ever satisfy.
+ */
+function honestGateRegionPending(overrides = {}) {
+  return {
+    cell: "C3__review-card__page_gate_region__pending",
+    recorder: RECORDER_ID,
+    declaredHost: "page_gate_region",
+    declaredKind: "artifact_review_gate",
+    declaredState: "pending",
+    finalUrl:
+      "/agents/cinatra-ai/blog-draft-writer-agent/fd104b43-19fd-4404-9d74-0896bba371f5/review/lifecycle-review%3A28c4a63d1b6068e89bdd57f6c24f35ca3c2c47d928531997d2c2b6355b94a8ac",
+    screenshot: IMAGE_B,
+    sha256: hashB,
+    assertions: [
+      {
+        selector: '[data-lifecycle-card-host="page_gate_region"]',
         scope: "frame",
         count: 1,
       },
@@ -234,6 +276,67 @@ describe("validateCaptureRecord", () => {
       .filter((a) => a.selector !== '[data-conformance-id="review-decision-bar"]')
       .concat({ selector: "[data-lifecycle-card-state]", scope: "root", count: 1 });
     expect(validateCaptureRecord(record, { repoRoot })).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE review_page CLASS, against the SHIPPED route (cinatra#2791).
+//
+// The class used to read `^/agents/reviews`. That path is the org's open-review
+// QUEUE — a navigation/volume screen that mounts no lifecycle card — while the
+// surface that declares `host="page_gate_region"` is
+// `/agents/<vendor>/<package>/<runId>/review/<reviewTaskId>`. So the class
+// refused every truthful record of the host it governs and would have accepted
+// a picture of a screen with no card on it. These rows pin the shipped shape in
+// BOTH directions, because a class that only ever says yes is not a class.
+// ---------------------------------------------------------------------------
+describe("the review_page URL class", () => {
+  const SHIPPED =
+    "/agents/cinatra-ai/blog-draft-writer-agent/fd104b43-19fd-4404-9d74-0896bba371f5/review/lifecycle-review%3A28c4a63d1b6068e89bdd57f6c24f35ca3c2c47d928531997d2c2b6355b94a8ac";
+
+  it("matches the shipped gate-region deep link, encoded task id and all", () => {
+    expect(URL_CLASSES.review_page.test(SHIPPED)).toBe(true);
+  });
+
+  it("matches it with a query string and with a trailing slash", () => {
+    expect(URL_CLASSES.review_page.test(`${SHIPPED}?view=verification`)).toBe(true);
+    expect(
+      URL_CLASSES.review_page.test(
+        "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad/",
+      ),
+    ).toBe(true);
+  });
+
+  it("does NOT match the open-review queue, which mounts no card", () => {
+    // The exact path the class used to be written as. A picture of this screen
+    // must never answer a page_gate_region claim.
+    expect(URL_CLASSES.review_page.test("/agents/reviews")).toBe(false);
+    expect(URL_CLASSES.review_page.test("/agents/reviews?open=1")).toBe(false);
+  });
+
+  it("does NOT match a bare run-detail path, nor a truncated review path", () => {
+    expect(
+      URL_CLASSES.review_page.test(
+        "/agents/cinatra-ai/blog-draft-writer-agent/fd104b43-19fd-4404-9d74-0896bba371f5",
+      ),
+    ).toBe(false);
+    // `/review` with no task id is not the gate-region route.
+    expect(
+      URL_CLASSES.review_page.test(
+        "/agents/cinatra-ai/blog-draft-writer-agent/fd104b43-19fd-4404-9d74-0896bba371f5/review",
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts an honest page_gate_region record taken on that route", () => {
+    expect(validateCaptureRecord(honestGateRegionPending(), { repoRoot })).toEqual([]);
+  });
+
+  it("refuses a page_gate_region record taken on the queue instead", () => {
+    const record = honestGateRegionPending({ finalUrl: "/agents/reviews" });
+    expect(codes(validateCaptureRecord(record, { repoRoot }))).toContain(
+      "record/url-class-mismatch",
+    );
   });
 });
 

@@ -3,7 +3,7 @@
 // The table has TWO homes that must agree: the fresh-install bootstrap DDL
 // (`runRecommendationSkipsSchemaQueries`, spread into
 // `buildCreateStoreSchemaQueries`) and the operator-upgrade migration
-// (`migrations/core/core__0094`). A fresh install that gets the table while an
+// (`migrations/core/core__0095`). A fresh install that gets the table while an
 // upgraded instance does not is not a cosmetic split-brain here: the marker
 // write is the RELEASE GATE for a skip, so on an instance without the table
 // every skip would fail verification and refuse, and the run-start hold would
@@ -21,7 +21,7 @@ import {
   RUN_RECOMMENDATION_SKIPS_TABLE,
   runRecommendationSkipsSchemaQueries,
 } from "@/lib/artifacts/artifact-review-gate-schema";
-import { runRecommendationSkipsDdlSql } from "../../../migrations/core/core__0094_run-recommendation-skip-record.mjs";
+import { runRecommendationSkipsDdlSql } from "../../../migrations/core/core__0095_run-recommendation-skip-record.mjs";
 
 const bootstrap = runRecommendationSkipsSchemaQueries("cinatra")
   .map((q) => q.text)

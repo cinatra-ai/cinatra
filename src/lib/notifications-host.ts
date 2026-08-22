@@ -65,6 +65,14 @@ const adapters: NotificationsHostAdapters = {
   // `process.env.SUPABASE_SCHEMA?.trim() || "cinatra"`.
   postgresSchema: process.env.SUPABASE_SCHEMA?.trim() || "cinatra",
   runPostgresQueriesSync,
+  // cinatra#2882 — the ASYNC counterpart, for the package's async seam.
+  // LAZY (dynamic import inside the fn) for the same reason the auth
+  // wrappers below are: this module is boot-reachable via background-jobs.ts,
+  // and @/lib/postgres-async statically imports `pg` through @/lib/db/pooled.
+  // Nothing here needs to be on the boot graph — the seam is only reached at
+  // run time, from an async caller that is already awaiting.
+  runPostgresQueriesAsync: async (input) =>
+    (await import("@/lib/postgres-async")).runPostgresQueriesAsync(input),
   // LAZY async wrappers — dynamic import INSIDE the fn so the
   // @/lib/auth-session -> @/lib/auth top-level-await Google-OAuth/DB chain
   // stays OFF the Next.js boot graph (background-jobs.ts is boot-reachable).
