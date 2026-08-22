@@ -271,6 +271,68 @@ describe("an edit made inside the pre-RUN_STARTED window", () => {
     ).toEqual(["u1", "a1", "<edit>", "u3"]);
   });
 
+  it("ANCHORS its regeneration to the EDITED PROMPT, not to what arrived during the hold", async () => {
+    // THE DISPATCH SIDE OF THE REBUILT TRANSCRIPT. `truncated` is
+    // `[...kept, edited, ...arrived]`, so whenever anything arrived during the
+    // hold the LAST message of the regeneration's context is not the prompt it
+    // answers. The page anchors a turn to that last message unless the caller
+    // names one — which would register this regeneration under a message the
+    // edit KEPT, and a later edit of THAT message would then condemn its bubble
+    // and offer its run: a reply to a prompt nobody removed, tombstoned.
+    const streams = createTurnStreamRegistry();
+    const held = streams.begin("a-held", new AbortController(), "u2");
+
+    const live: Message[] = [...SNAPSHOT];
+    const dispatched: Array<{ tail?: string; anchor?: string | null }> = [];
+    const flow = editAndResend(
+      deps(streams, {
+        currentMessages: () => live,
+        streamResponse: async (contextMessages, _handle, _endpoint, _authorUserId, _assistant, anchorMessageId) => {
+          dispatched.push({ tail: contextMessages[contextMessages.length - 1]?.id, anchor: anchorMessageId });
+        },
+      }),
+      "u2",
+      "actually, ask something else",
+    );
+    await drainMicrotasks();
+
+    // The reader posts while their own edit is still holding (Slack re-entry).
+    live.push(msg("u3", "user"));
+
+    expect(streams.noteRunId(held, "run-held")).toBe(true);
+    await flow;
+
+    const posted = (saved[0] as { messages: Message[] }).messages;
+    expect(shape(posted)).toEqual(["u1", "a1", "<edit>", "u3"]);
+    const editedId = posted.find((m) => m.content === "actually, ask something else")?.id;
+    expect(editedId, "the edited prompt is in the posted transcript").toBeTruthy();
+
+    expect(dispatched).toHaveLength(1);
+    // The tail of the dispatch context IS the message that arrived...
+    expect(dispatched[0]?.tail).toBe("u3");
+    // ...so the anchor cannot be derived from it. It is named, and it is the
+    // prompt this regeneration was dispatched to answer.
+    expect(
+      dispatched[0]?.anchor,
+      "the regeneration is anchored to a message that merely arrived during the hold",
+    ).toBe(editedId);
+
+    // AND THAT IS THE INVARIANT IT BUYS, asked of the registry that enforces it:
+    // a later edit of the arrived message must not reach this turn.
+    const regen = streams.begin("a-regen", new AbortController(), dispatched[0]?.anchor ?? null);
+    expect(streams.noteRunId(regen, "run-regen")).toBe(true);
+    expect(
+      streams.condemnedTurnIds(["u3"]),
+      "editing the arrived message condemned the regeneration's bubble",
+    ).not.toContain("a-regen");
+    expect(
+      streams.removableRunIds(["u3"]),
+      "editing the arrived message offered the regeneration's run for the tombstone",
+    ).not.toContain("run-regen");
+    // ...while an edit of the prompt it actually answers still reaches it.
+    expect(streams.condemnedTurnIds([editedId as string])).toContain("a-regen");
+  });
+
   it("posts exactly the pre-await slice when NOTHING arrives during the hold", async () => {
     // The overwhelmingly common edit: no concurrent turn, nothing revealed,
     // nothing posted. The live read must produce what `[...prior, edited]` did.

@@ -151,7 +151,9 @@ vi.mock("../../../../packages/agents/src/run-recommendation-actions", () => ({
     recommendations: [
       {
         skillId: "@cinatra-ai/reload-harness-agent:harness-skill",
-        skillRevisionId: "00000000-0000-4000-8000-00000000s9j0",
+        // Hex-only: a revision id is a UUID, and "s9j" is not a hex digit — a
+        // stub that cannot be one is a stub the reader can never validate.
+        skillRevisionId: "00000000-0000-4000-8000-000000000590",
         name: "harness-skill",
         score: 1,
         rank: 1,
@@ -2144,7 +2146,7 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     // the screen, and the regeneration does not start.
     const truncationOnScreenAt = body.indexOf("setMessages(truncated)");
     expect(truncationOnScreenAt).toBeGreaterThan(intentSaveAt);
-    for (const regenerate of ["await streamResponse(truncated)", "void streamResponse(truncated,"]) {
+    for (const regenerate of ["await streamResponse(truncated,", "void streamResponse(truncated,"]) {
       expect(body.indexOf(regenerate)).toBeGreaterThan(intentSaveAt);
     }
 

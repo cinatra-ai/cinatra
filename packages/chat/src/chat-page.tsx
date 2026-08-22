@@ -594,14 +594,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
 
   // AG-UI stream driver (cinatra#1218) — the turn drive lives headlessly in
   // ./ag-ui-chat-client. This wrapper owns registry + guard.
-  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string, assistant?: string) {
+  async function streamAgUiResponse(contextMessages: Message[], threadId: string, handle?: string, authorUserId?: string, endpoint?: string, assistant?: string, anchorMessageId?: string | null) {
     const assistantId = generateId();
     const abortController = new AbortController();
     // The ORIGIN thread this turn was dispatched FOR (captured BEFORE the handshake
     // await — re-reading the ref would guard the WRONG thread after a mid-await switch).
     const originThreadId = threadId;
     const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
-    const token = beginStream(assistantId, abortController, contextMessages[contextMessages.length - 1]?.id ?? null); // never the id
+    const token = beginStream(assistantId, abortController, anchorMessageId ?? contextMessages[contextMessages.length - 1]?.id ?? null); // the PROMPT, never the id; the tail is it only when the caller did not name one (cinatra#2823)
     try {
       await driveAssistantChatTurn({
         threadId,
@@ -641,7 +641,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // negotiation surfaces a turn error on a never-blank assistant bubble —
   // there is no legacy fallback to retry over. Externals are webhook-polled
   // and never touch this dispatcher.
-  async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/assistants/chat", authorUserId?: string, assistant?: string) {
+  async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/assistants/chat", authorUserId?: string, assistant?: string, anchorMessageId?: string | null) {
     const threadId = activeThreadIdRef.current;
     if (!threadId) {
       // Unreachable in practice: every caller dispatches inside an active
@@ -665,7 +665,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       );
       return;
     }
-    return streamAgUiResponse(contextMessages, threadId, handle, authorUserId, endpoint, assistant);
+    return streamAgUiResponse(contextMessages, threadId, handle, authorUserId, endpoint, assistant, anchorMessageId);
   }
 
   async function submitEmbed() {

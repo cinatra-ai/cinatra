@@ -69,12 +69,17 @@ export type EditAndResendDeps = {
   pausedParticipants: string[];
   assistantHandleMap: Map<string, string>;
   userId?: string;
+  /** `anchorMessageId` is the PROMPT the dispatched turn answers. The page
+   *  derives it from the tail of `contextMessages` when it is not named, which
+   *  is right for an ordinary send (the tail IS its prompt) and wrong for this
+   *  flow, whose transcript can end in a message that ARRIVED during the hold. */
   streamResponse: (
     contextMessages: Message[],
     handle?: string,
     endpoint?: string,
     authorUserId?: string,
     assistant?: string,
+    anchorMessageId?: string | null,
   ) => Promise<void>;
 };
 
@@ -278,9 +283,21 @@ export async function editAndResend(
 
   setMessages(truncated);
 
+  // AND THE REGENERATION IS ANCHORED TO THE PROMPT IT ANSWERS, EXPLICITLY. The
+  // page anchors a turn to the LAST message of the context it is handed, which
+  // is right for an ordinary send and wrong here: `truncated` ends in whatever
+  // ARRIVED during the hold, not in the prompt this turn is being dispatched
+  // for. Left derived, the regeneration would register under a message the edit
+  // KEPT — and a later edit of THAT message would then condemn this turn's
+  // bubble and offer its run for the tombstone, deleting a reply to a prompt
+  // nobody removed. That is the one over-reach the anchor exists to prevent
+  // (`./turn-stream-registry`, `removableRunIds`), so the anchor is named here
+  // rather than inferred there. The model context is unchanged: it still ends
+  // with everything the reader can see, and the ANCHOR is the position claim.
+  //
   // ChatGPT (normal) mode — preserve byte-identical behavior.
   if (!isSlackMode) {
-    await streamResponse(truncated);
+    await streamResponse(truncated, undefined, undefined, undefined, undefined, editedMessage.id);
     return;
   }
 
@@ -338,5 +355,5 @@ export async function editAndResend(
   }
 
   // Fire the stream so the user gets a regenerated response on edit.
-  void streamResponse(truncated, editHandle, editEndpoint, editAuthorId, editSelector);
+  void streamResponse(truncated, editHandle, editEndpoint, editAuthorId, editSelector, editedMessage.id);
 }
