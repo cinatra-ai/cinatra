@@ -36,6 +36,8 @@ const capturedHandlers = new Map<string, unknown>();
 let pinnedDispatches: { kind: string; packageName: string; name: string; version?: string }[] = [];
 vi.mock("@/lib/mcp-server", () => ({
   buildHostSelfPrimitiveHandlers: async () => capturedHandlers,
+}));
+vi.mock("@/lib/extension-authorized-dispatch", () => ({
   dispatchAuthorizedExtensionPrimitive: async (target: {
     kind: string;
     packageName: string;

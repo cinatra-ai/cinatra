@@ -43,10 +43,6 @@ import "server-only";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { PlannedPrimitive } from "@cinatra-ai/mcp-server/capability-plan";
-import {
-  admissionSnapshotCacheKey,
-  type DelegatedChatAdmissionSnapshot,
-} from "@cinatra-ai/mcp-server/delegated-chat-admission";
 import { getActivationGeneration } from "@/lib/extension-activation-generation";
 
 type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
@@ -63,48 +59,45 @@ type CapturedHostPrimitive = {
   planned: PlannedPrimitive;
 };
 
-// TWO-AXIS CACHE KEY (#310 → cinatra#2817). The host's `name → handler` map is
-// memoised, keyed by the extension CONTROL-PLANE generation AND by the
-// admission snapshot's identity (both generations plus its content digest).
+// GENERATION-KEYED CACHE (#310). The host's `name → handler` map is memoised,
+// keyed by the extension CONTROL-PLANE generation — the one thing it actually
+// depends on. A lifecycle transition (activate / hot-update / rollback /
+// teardown) bumps the generation; this cache compares and REBUILDS iff they
+// differ, so a newly-activated extension's primitives appear (and a torn-down
+// one's disappear) on the next call.
 //
-// One axis is not enough, and the missing one is the dangerous one. The
-// activation generation answers "which primitives EXIST" — it moves on
-// activate / hot-update / rollback / teardown. A marketplace REVOCATION moves
-// none of those, so a map keyed on activation alone would keep serving a
-// revoked primitive's captured handler until something unrelated happened to be
-// installed. Keying on the snapshot too means a revocation invalidates the
-// cached authorization before the next self-invocation can reach the handler.
+// WHY ADMISSION IS NOT A SECOND AXIS (cinatra#2817 slice 3). This map is the
+// UNRESTRICTED union — it holds every primitive, and it caches no authorization
+// decision. Since the perimeter swap, whether a delegated-restricted caller may
+// reach one of them is decided PER CALL by the shared evaluator against that
+// request's own immutable snapshot. So a revocation takes effect on the very
+// next call whether or not this map was rebuilt, which is strictly stronger
+// than invalidating a cache and would be the guarantee even if the map never
+// changed. Keying on the snapshot as well would rebuild the whole map on every
+// review and force an admission-store read onto unrestricted callers, who have
+// no use for one.
 //
-// The content digest is in the key as well as the counter: the counter is
-// process-local, so two processes at the same counter can hold different record
-// sets, and a digest cannot silently match a different set.
-//
-// A Promise so concurrent first-callers share one build; the `{ key, promise }`
-// pairing lets a concurrent caller that started a build for an OLD key be
-// superseded.
-let cached: { key: string; promise: Promise<Map<string, CapturedHostPrimitive>> } | null = null;
+// A Promise so concurrent first-callers share one build; the
+// `{ generation, promise }` pairing lets a concurrent caller that started a
+// build for an OLD generation be superseded.
+let cached: { generation: number; promise: Promise<Map<string, CapturedHostPrimitive>> } | null =
+  null;
 
-function handlerCacheKey(snapshot: DelegatedChatAdmissionSnapshot): string {
-  return `${getActivationGeneration()}|${admissionSnapshotCacheKey(snapshot)}`;
-}
-
-async function getHandlers(
-  snapshot: DelegatedChatAdmissionSnapshot,
-): Promise<Map<string, CapturedHostPrimitive>> {
-  const key = handlerCacheKey(snapshot);
-  if (!cached || cached.key !== key) {
+async function getHandlers(): Promise<Map<string, CapturedHostPrimitive>> {
+  const generation = getActivationGeneration();
+  if (!cached || cached.generation !== generation) {
     cached = {
-      key,
+      generation,
       promise: import("@/lib/mcp-server").then((m) => m.buildHostSelfPrimitiveHandlers()),
     };
   }
-  const startedAt = cached.key;
+  const startedAt = cached.generation;
   const handlers = await cached.promise;
-  // Re-check after the await: a transition or a revocation during the build
-  // moves the key, so the resolved map is stale. Rebuild against the current
-  // key rather than returning it (closes the in-flight window).
-  if (handlerCacheKey(snapshot) !== startedAt) {
-    return getHandlers(snapshot);
+  // Re-check after the await: a transition during the build may have bumped the
+  // generation, so the resolved map is stale. Rebuild against the current
+  // generation rather than returning the stale map (closes the in-flight window).
+  if (getActivationGeneration() !== startedAt) {
+    return getHandlers();
   }
   return handlers;
 }
@@ -170,10 +163,10 @@ async function resolveCallerBoundIdentity(
 
 /**
  * Test/back-compat helper — drop the memoised map so the next call rebuilds it.
- * Production invalidation flows through the two-axis key above (a lifecycle
- * transition or an admission change moves it; this cache compares + rebuilds),
- * so production call sites bump a generation instead of calling this. Kept for
- * tests and for any path that wants an explicit local clear.
+ * Production invalidation flows through the control-plane generation above (a
+ * lifecycle transition bumps it; this cache compares + rebuilds), so production
+ * call sites bump the generation instead of calling this. Kept for tests and for
+ * any path that wants an explicit local clear.
  */
 export function __resetHostSelfPrimitiveHandlers(): void {
   cached = null;
@@ -194,24 +187,8 @@ export async function callHostPrimitive(
   input: unknown,
   options: CallHostPrimitiveOptions = {},
 ): Promise<unknown> {
-  const { mcpRequestContextStorage: ctxStorage } = await import("@cinatra-ai/mcp-server");
-  // ONE snapshot for this whole invocation, and — when this call is nested
-  // inside a live MCP request — the SAME one that request already decided
-  // against (codex round-1 #2). The transport writes it onto the frame it
-  // re-enters around the handler. Loading a fresher one here would let a
-  // self-invocation reach a primitive the enclosing request's own perimeter had
-  // just refused, which is the two-snapshots-in-one-request disagreement the
-  // immutable snapshot exists to prevent.
-  //
-  // Off the transport (worker / cookie) there is no request snapshot to inherit,
-  // so one is loaded — and an unreadable store denies, as everywhere else.
-  const inheritedSnapshot = ctxStorage.getStore()?.delegatedChatAdmissionSnapshot;
-  const admissionSnapshot =
-    inheritedSnapshot ??
-    (await (
-      await import("@/lib/delegated-chat-admission-store")
-    ).loadDelegatedChatAdmissionSnapshot());
-  const handlers = await getHandlers(admissionSnapshot);
+  const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server");
+  const handlers = await getHandlers();
   const captured = handlers.get(primitiveName);
   if (!captured) {
     throw new Error(
@@ -219,7 +196,6 @@ export async function callHostPrimitive(
         `registered under that name. Known primitives are the host's MCP tool set; check the name.`,
     );
   }
-  const mcpRequestContextStorage = ctxStorage;
   // The captured wrapper. A delegated-restricted extension call REPLACES it
   // below with a version-pinned dispatch; everything else runs it as before.
   let handler = captured.handler;
@@ -238,6 +214,23 @@ export async function callHostPrimitive(
     // belonging to another owner or another version cannot authorize the call
     // that is actually about to dispatch.
     if (ctx?.delegatedRestricted) {
+      // THE REQUEST'S SNAPSHOT, INHERITED WHERE THERE IS ONE (codex round-1 #2,
+      // round-2 #2). The transport writes the snapshot it decided against onto
+      // the frame it re-enters around the handler, so a self-invocation nested
+      // in a live request reuses it rather than loading a fresher one — two
+      // snapshots inside one request is exactly the disagreement the immutable
+      // snapshot exists to end.
+      //
+      // Loaded LAZILY and only here. An unrestricted caller has no admission
+      // question to answer, so it must not acquire an admission-store
+      // dependency (and must not start failing when that store is down).
+      // Off the transport there is nothing to inherit, so one is loaded — and an
+      // unreadable store denies, as everywhere else.
+      const admissionSnapshot =
+        ctx.delegatedChatAdmissionSnapshot ??
+        (await (
+          await import("@/lib/delegated-chat-admission-store")
+        ).loadDelegatedChatAdmissionSnapshot());
       const identity = await resolveCallerBoundIdentity(captured.planned);
       if (!identity) {
         throw new Error(
@@ -262,7 +255,9 @@ export async function callHostPrimitive(
       // to drift and the captured handler is already the only thing that runs.
       const pinned = identity.dispatchTarget;
       if (pinned && pinned.kind !== "host") {
-        const { dispatchAuthorizedExtensionPrimitive } = await import("@/lib/mcp-server");
+        const { dispatchAuthorizedExtensionPrimitive } = await import(
+          "@/lib/extension-authorized-dispatch"
+        );
         handler = (pinnedInput: unknown) =>
           dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput);
       }

@@ -91,6 +91,7 @@ import {
   planSelfInvokerRetainedUnion,
 } from "@/lib/extension-edge-bound-serving";
 import { listServableVersionKeyedMcpTools } from "@/lib/extension-version-keyed-serving";
+import { wrapExtensionToolResult } from "@/lib/extension-authorized-dispatch";
 
 const MCP_SERVER_SETTINGS_KEY = "mcp_server";
 
@@ -180,88 +181,6 @@ const connectorModuleHostOptions = {
     return { userId: s?.userId ?? undefined, orgId: s?.organizationId ?? undefined };
   },
 };
-
-/** The MCP result envelope for a plain extension-handler value (mirrors the
- * connector modules): arrays → { items }, objects → as-is, scalars/undefined →
- * { result }. Shared by the live-transport replay and the self-invoker capture
- * so the two surfaces stay byte-identical. */
-function wrapExtensionToolResult(raw: unknown) {
-  const resolved = raw === undefined ? null : raw;
-  return {
-    content: [{ type: "text", text: JSON.stringify(resolved) }],
-    structuredContent: Array.isArray(resolved)
-      ? { items: resolved }
-      : typeof resolved === "object" && resolved !== null
-        ? (resolved as Record<string, unknown>)
-        : { result: resolved },
-  };
-}
-
-// ---------------------------------------------------------------------------
-// THE PINNED DISPATCH FOR A DELEGATED-RESTRICTED SELF-INVOCATION (cinatra#2817
-// slice 3, codex round-1 #1).
-//
-// THE HOLE THIS CLOSES. The self-invoker authorizes against the version the
-// caller's edge resolves to, and then hands the call to the captured wrapper —
-// which resolves the edge AGAIN. Between those two resolutions an activation,
-// a hot update or a rollback can land, and the captured wrapper is deliberately
-// drift-TOLERANT (`dispatchExtensionMcpToolEdgeBound` serves whatever the edge
-// now says). So an admission reviewed for version A could authorize a call that
-// executes version B of the same primitive — precisely the "never applies to
-// another version" rule this issue exists to enforce.
-//
-// So a delegated-restricted call does not use the captured wrapper. It goes
-// through `dispatchPlannedExtensionMcpTool`, which resolves the edge ONCE and
-// REFUSES (`EDGE_BOUND_PLAN_DRIFT`) when the result does not match the identity
-// that was authorized. The authorized version is carried in, not re-derived, so
-// the check is against the decision that was actually made.
-//
-// UNRESTRICTED callers keep the captured wrapper untouched: their reach is not
-// version-bound in the first place, so re-pointing them at a stricter dispatch
-// would refuse calls that are legitimately served across an edge change.
-// ---------------------------------------------------------------------------
-
-/**
- * Dispatch ONE extension primitive at the EXACT identity that was authorized,
- * refusing rather than crossing versions. Returns the same MCP envelope the
- * captured wrapper returns, so the caller's result handling is unchanged.
- */
-export async function dispatchAuthorizedExtensionPrimitive(
-  target: PrimitiveDispatchTarget,
-  input: unknown,
-): Promise<unknown> {
-  if (target.kind === "extension-versioned") {
-    // No global handler to fall back to and none wanted: the point lookup is
-    // keyed on the authorized version, and a drifted edge throws.
-    const raw = await dispatchPlannedExtensionMcpTool(
-      {
-        expected: "versioned",
-        packageName: target.packageName,
-        name: target.name,
-        version: target.version,
-      },
-      input,
-    );
-    return wrapExtensionToolResult(raw);
-  }
-  // `extension-default`: the authorized identity is the DEFAULT registration, so
-  // the raw default handler is the one that may run. It is read from the
-  // registry here rather than taken from the captured map, because the captured
-  // entry holds the drift-tolerant WRAPPER, not the handler underneath it.
-  const tool = listExtensionMcpTools().find(
-    (t) => t.packageName === target.packageName && t.name.toLowerCase() === target.name,
-  );
-  if (!tool) {
-    // The default registration disappeared between capture and dispatch (a
-    // teardown landed). Refuse — never fall back to another version.
-    throw new Error(
-      `[mcp] "${target.name}" is no longer registered by ${target.packageName}; refusing rather ` +
-        "than dispatching across versions",
-    );
-  }
-  const raw = await dispatchPlannedExtensionMcpTool({ expected: "default", tool }, input);
-  return wrapExtensionToolResult(raw);
-}
 
 /** Request-scoped info the transport threads into the per-request registration
  * pass (cinatra#1392 S8 discovery union). `verifiedAgentRunId` is the agent-run
