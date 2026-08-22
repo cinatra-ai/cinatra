@@ -2116,6 +2116,15 @@ export async function resolveConfiguredLlmRuntime(input?: {
     }
   }
 
+  // An EXPLICIT `preferredProviders` pin is walked VERBATIM and its exhaustion
+  // is the answer: the caller named the providers it will accept, so "none of
+  // them resolved" stays `null` (the S6 `explicit-pin` contract, pinned in
+  // resolve-configured-runtime-exact-binding.test.ts) rather than becoming a
+  // runtime the caller never asked for. Only the DEFAULT resolution — the one
+  // that means "whatever this instance is configured with" — may fall through
+  // to the scripted runtime below.
+  if (input?.preferredProviders) return null;
+
   // cinatra#2910 — LAST RESORT, after every real candidate failed to resolve:
   // the deterministic test runtime, so a credential-free development stack can
   // drive the surfaces that resolve through here (`/api/llm-bridge` is the one

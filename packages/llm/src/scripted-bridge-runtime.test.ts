@@ -13,8 +13,9 @@
  *   - resolution yields the scripted runtime when the flag is on and NO adapter
  *     resolves (it used to yield `null`);
  *   - it stays a LAST RESORT — a configured provider still wins;
- *   - execution serves that runtime WITHOUT resolving an adapter, in the shape
- *     the caller declared (`outputSchema`);
+ *   - execution serves that runtime WITHOUT resolving an adapter, in the TYPE
+ *     shape the caller declared (`outputSchema`) — conforming by type, not by
+ *     constraint; the last describe block below pins EXACTLY what that means;
  *   - the production fence bites on BOTH new branches: a set flag outside an
  *     explicit development runtime throws before any scripted output exists;
  *   - with the flag OFF nothing changes (the negative control).
@@ -98,7 +99,11 @@ import {
   runResolvedDeterministicLlmTask,
   runResolvedSkillAwareDeterministicLlmTask,
 } from "./index";
-import { UAT_SENTINEL, SCRIPTED_TEST_MODEL } from "./scripted-test-provider";
+import {
+  UAT_SENTINEL,
+  SCRIPTED_TEST_MODEL,
+  runScriptedBridgeCompletion,
+} from "./scripted-test-provider";
 import type { ResolvedInjectedSkillSet } from "@cinatra-ai/skills/injection";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 
@@ -178,6 +183,32 @@ describe("resolveConfiguredLlmRuntime — the scripted bridge runtime (cinatra#2
     });
   });
 
+  it("an EXHAUSTED explicit pin stays null — the scripted runtime never answers a pin", async () => {
+    enableScriptedDevelopmentRuntime();
+    // The caller named the providers it accepts and none resolved. The pin is
+    // authoritative: "unavailable" is the answer, not a substitute runtime the
+    // caller never asked for.
+    expect(await resolveConfiguredLlmRuntime({ preferredProviders: ["openai"] })).toBeNull();
+    expect(await resolveConfiguredLlmRuntime({ preferredProviders: ["anthropic", "gemini"] })).toBeNull();
+  });
+
+  it("a pin that RESOLVES is unaffected — the pinned provider still wins verbatim", async () => {
+    enableScriptedDevelopmentRuntime();
+    availability.anthropic = true;
+    expect(await resolveConfiguredLlmRuntime({ preferredProviders: ["anthropic"] })).toEqual({
+      provider: "anthropic",
+      model: "anthropic-configured-default",
+    });
+  });
+
+  it("the DEFAULT resolution (no pin) is the only arm the scripted runtime serves", async () => {
+    enableScriptedDevelopmentRuntime();
+    expect(await resolveConfiguredLlmRuntime({ openaiConnection: null })).toEqual({
+      provider: "scripted",
+      model: SCRIPTED_TEST_MODEL,
+    });
+  });
+
   it("FENCE: a production-shaped runtime REFUSES rather than resolving a scripted runtime", async () => {
     process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
     process.env.CINATRA_RUNTIME_MODE = "production";
@@ -213,7 +244,7 @@ describe("executing the scripted runtime (cinatra#2910)", () => {
     expect(createAdapter).not.toHaveBeenCalled();
   });
 
-  it("answers in the SHAPE the caller declared, so a structured-output step parses", async () => {
+  it("answers in the TYPE SHAPE the caller declared, so a structured-output step parses", async () => {
     enableScriptedDevelopmentRuntime();
     const runtime = await resolveConfiguredLlmRuntime();
     const response = await runResolvedSkillAwareDeterministicLlmTask({
@@ -297,5 +328,163 @@ describe("executing the scripted runtime (cinatra#2910)", () => {
         actorContext: ACTOR,
       }),
     ).rejects.toThrow(/unavailable/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// The structured-output contract (cinatra#2910).
+//
+// The scripted completion is NOT a JSON-Schema implementation, and these cases
+// are the honest statement of that: they pin what IS honored and — just as
+// deliberately — DOCUMENT what is not, so a caller reads the boundary here
+// instead of discovering it in a validator. Anything outside the honored set
+// yields a minimal conforming-BY-TYPE value.
+// ---------------------------------------------------------------------------
+describe("the scripted structured-output contract — conforming by TYPE, not by constraint", () => {
+  /** Parse the completion's text for one declared schema. */
+  function scriptedOutputFor(outputSchema: Record<string, unknown>): unknown {
+    enableScriptedDevelopmentRuntime();
+    const response = runScriptedBridgeCompletion({ user: "produce it", outputSchema });
+    return JSON.parse(response.text ?? "");
+  }
+
+  describe("HONORED", () => {
+    it("`const` is the pinned value and `enum` is its FIRST member", () => {
+      expect(
+        scriptedOutputFor({
+          type: "object",
+          required: ["kind", "status"],
+          properties: {
+            kind: { const: "report" },
+            status: { type: "string", enum: ["draft", "published"] },
+          },
+        }),
+      ).toEqual({ kind: "report", status: "draft" });
+    });
+
+    it("`required` names the members; an object without it takes every declared property", () => {
+      expect(
+        Object.keys(
+          scriptedOutputFor({
+            type: "object",
+            properties: { a: { type: "boolean" }, b: { type: "integer" } },
+          }) as Record<string, unknown>,
+        ).sort(),
+      ).toEqual(["a", "b"]);
+    });
+
+    it("a required name with NO declared property schema still appears", () => {
+      expect(
+        scriptedOutputFor({ type: "object", required: ["undeclared"], properties: {} }),
+      ).toEqual({ undeclared: expect.stringContaining(UAT_SENTINEL) });
+    });
+
+    it("each scalar type takes its minimal value and every string carries the sentinel", () => {
+      expect(
+        scriptedOutputFor({
+          type: "object",
+          required: ["s", "n", "i", "b", "z"],
+          properties: {
+            s: { type: "string" },
+            n: { type: "number" },
+            i: { type: "integer" },
+            b: { type: "boolean" },
+            z: { type: "null" },
+          },
+        }),
+      ).toEqual({
+        s: expect.stringContaining(UAT_SENTINEL),
+        n: 0,
+        i: 0,
+        b: false,
+        z: null,
+      });
+    });
+
+    it("`oneOf` / `anyOf` take their FIRST member", () => {
+      expect(
+        scriptedOutputFor({
+          type: "object",
+          required: ["one", "any"],
+          properties: {
+            one: { oneOf: [{ type: "boolean" }, { type: "string" }] },
+            any: { anyOf: [{ type: "integer" }, { type: "string" }] },
+          },
+        }),
+      ).toEqual({ one: false, any: 0 });
+    });
+  });
+
+  describe("NOT honored — documented, not implied", () => {
+    it("`allOf` is the FIRST member only: later members' properties are NOT composed in", () => {
+      // A caller that splits one object across `allOf` members gets only the
+      // first member's shape. This is the cap, stated: it is not a merge.
+      expect(
+        scriptedOutputFor({
+          allOf: [
+            { type: "object", required: ["first"], properties: { first: { type: "string" } } },
+            { type: "object", required: ["second"], properties: { second: { type: "string" } } },
+          ],
+        }),
+      ).toEqual({ first: expect.stringContaining(UAT_SENTINEL) });
+    });
+
+    it("numeric bounds are IGNORED — a number is always 0, even under `minimum`", () => {
+      expect(
+        scriptedOutputFor({
+          type: "object",
+          required: ["score"],
+          properties: { score: { type: "integer", minimum: 5, maximum: 10, multipleOf: 5 } },
+        }),
+      ).toEqual({ score: 0 });
+    });
+
+    it("`minItems` is IGNORED — an array is always exactly one element", () => {
+      const out = scriptedOutputFor({
+        type: "object",
+        required: ["rows"],
+        properties: { rows: { type: "array", minItems: 3, items: { type: "integer" } } },
+      }) as { rows: unknown[] };
+      expect(out.rows).toEqual([0]);
+    });
+
+    it("`minLength` / `pattern` / `format` are IGNORED — a string is the sentinel string", () => {
+      const out = scriptedOutputFor({
+        type: "object",
+        required: ["code"],
+        properties: {
+          code: { type: "string", minLength: 64, pattern: "^[0-9]+$", format: "uuid" },
+        },
+      }) as { code: string };
+      expect(out.code).toContain(UAT_SENTINEL);
+      expect(out.code).not.toMatch(/^[0-9]+$/);
+    });
+
+    it("DEPTH CAP: past six levels a node yields a STRING whatever type it declared", () => {
+      // Eight nested objects, each `{next: <the next one>}`. The root is
+      // produced at depth 0, so the object reached by the Nth `next` is
+      // produced at depth N — and the cap (`depth > 6`) bites at depth 7.
+      // The bound is what keeps a `$ref`-recursive schema terminating; the
+      // cost is that a node stops matching its own declaration there, and that
+      // cost is DOCUMENTED here rather than implied away.
+      let schema: Record<string, unknown> = { type: "object", properties: {} };
+      for (let i = 0; i < 8; i += 1) {
+        schema = { type: "object", required: ["next"], properties: { next: schema } };
+      }
+      const out = scriptedOutputFor(schema);
+
+      const step = (value: unknown, times: number): unknown => {
+        let node = value;
+        for (let i = 0; i < times; i += 1) node = (node as Record<string, unknown>).next;
+        return node;
+      };
+
+      // Depth 6 — the last honored level: still the declared object.
+      expect(typeof step(out, 6)).toBe("object");
+      // Depth 7 — past the cap: a declared OBJECT comes back as a string.
+      expect(typeof step(out, 7)).toBe("string");
+      expect(step(out, 7)).toContain(UAT_SENTINEL);
+    });
   });
 });

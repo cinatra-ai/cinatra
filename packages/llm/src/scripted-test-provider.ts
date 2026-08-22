@@ -758,17 +758,51 @@ export function isScriptedLlmRuntime(
   return runtime?.provider === "scripted";
 }
 
+/**
+ * The depth past which a node yields a plain string instead of its declared
+ * type. A bound is required — a `$ref`-recursive schema would otherwise not
+ * terminate — and the cap is part of the documented contract above, not an
+ * implementation detail a caller may assume away.
+ */
 const SCRIPTED_SCHEMA_MAX_DEPTH = 6;
 
 /**
- * A deterministic value for one JSON-schema node.
+ * A deterministic value for one JSON-schema node — CONFORMING BY TYPE, not by
+ * constraint.
  *
  * The bridge's callers ask for structured output (`output_schema`) and parse
- * the response as JSON, so a scripted completion has to answer in the SHAPE the
- * caller declared or the run fails one frame later on a parse/validation error
+ * the response as JSON, so a scripted completion has to answer in the TYPE
+ * SHAPE the caller declared or the run fails one frame later on a parse error
  * instead of a 503. Every string leaf carries `UAT_SENTINEL`, so a scripted
  * value is recognisable wherever it surfaces and can never be mistaken for a
  * model's own words.
+ *
+ * This is NOT a JSON-Schema implementation, and callers must not read it as
+ * one. EXACTLY these keywords are honored:
+ *
+ *  - `const` — the pinned value (it is the only conforming one);
+ *  - `enum` — the FIRST member;
+ *  - `oneOf` / `anyOf` / `allOf` — the FIRST member, recursively. `allOf` is
+ *    therefore NOT composed: constraints declared in its later members are not
+ *    applied, so an `allOf` that splits a shape across members yields only the
+ *    first member's shape;
+ *  - `type` — `object` (the members named in `required`, or every declared
+ *    property when `required` is absent; a required name with no declared
+ *    property schema still appears), `array` (EXACTLY ONE element),
+ *    `string`, `number` / `integer`, `boolean`, `null`. A node with no usable
+ *    type yields a string;
+ *  - depth — a node deeper than `SCRIPTED_SCHEMA_MAX_DEPTH` yields a STRING
+ *    whatever its declared type, so a deeply nested or recursive schema stops
+ *    matching its own declaration at that depth.
+ *
+ * Everything else is IGNORED, and the value is only conforming-by-type:
+ * numeric bounds (`minimum` / `maximum` / `multipleOf` — numbers are always
+ * `0`), size bounds (`minItems` / `maxItems` — arrays are always length 1;
+ * `minLength` / `maxLength` — strings are always the sentinel string),
+ * `pattern` / `format`, `additionalProperties`, `not`, `if` / `then` / `else`,
+ * `dependent*`, and `$ref` / `$defs`. A caller that validates a scripted
+ * response against a schema carrying any of those may see it rejected — which
+ * is correct: this provider stands in for a model's SHAPE, not its judgement.
  */
 function scriptedValueForSchema(
   schema: unknown,
@@ -786,6 +820,8 @@ function scriptedValueForSchema(
 
   // A union declaration picks its FIRST member — deterministic, and the member
   // an author lists first is the one they described the shape with.
+  // FIRST member only — including for `allOf`, which is therefore not composed
+  // (see the contract above).
   const union = ["oneOf", "anyOf", "allOf"].find((k) => Array.isArray(node[k]));
   if (union) {
     const members = node[union] as unknown[];
@@ -795,6 +831,8 @@ function scriptedValueForSchema(
   }
 
   const type = Array.isArray(node.type) ? node.type[0] : node.type;
+  // Value keywords only: NO bound (`minimum`, `minItems`, `minLength`, …) is
+  // read here. See the contract above — conforming by type, not by constraint.
   switch (type) {
     case "object": {
       const properties = (node.properties ?? {}) as Record<string, unknown>;
@@ -813,8 +851,9 @@ function scriptedValueForSchema(
       return out;
     }
     case "array":
-      // ONE element: enough for a consumer that iterates, small enough that a
-      // scripted payload never grows unbounded.
+      // ONE element, ALWAYS: enough for a consumer that iterates, small enough
+      // that a scripted payload never grows unbounded — and `minItems` is not
+      // consulted, so a schema demanding more is not satisfied.
       return [scriptedValueForSchema(node.items, `${propertyName} item`, depth + 1)];
     case "number":
     case "integer":
