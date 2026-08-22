@@ -461,39 +461,222 @@ describe("the run id — the identity the server shares with these turns", () =>
   });
 });
 
-describe("the run-id residual: an edit inside the pre-RUN_STARTED window", () => {
-  // PINNED, not fixed. A run is assertable only once the wire names it, and an
-  // anchor is checkable only while the prompt is still in the transcript. An
-  // edit dispatched between a turn's dispatch and its `RUN_STARTED` removes the
-  // prompt while the turn has no run to offer; the run arrives afterwards, and
-  // no later edit's removed set can carry a prompt the transcript no longer has.
-  // EVERY turn caught in that window keeps its run-bound row and folds back in —
-  // Slack dispatches concurrently, so one edit can catch several at once.
-  //
-  // The tempting close — CONDEMN the turn when its anchor is first removed, and
-  // offer the run whenever it shows up — re-opens the hole the anchor exists
-  // for: a Slack reveal can COMMIT into the transcript after the truncation, so
-  // a condemned turn can be on screen, with a mirror row, when a later edit
-  // offers its run, and tombstoning it then costs that visible turn its card
-  // permanently. That is the wrong side of the trade the tombstone module states
-  // outright. Closing this honestly means asserting the removal when the run id
-  // arrives, i.e. a SECOND save carrying the intent, and "the edit is the only
-  // save that asserts a truncation" is a pinned invariant of this leg.
+describe("the pre-RUN_STARTED window: the edit HOLDS until the run is settled", () => {
+  const removing = (...ids: string[]) => new Set(ids);
 
-  it("a turn whose run arrives AFTER its anchor was removed is never offered", () => {
+  // WHAT THE WINDOW IS. `/chat` registers a turn BEFORE it dispatches and learns
+  // its run only at `RUN_STARTED`. Between those two moments the turn has no run
+  // to offer, and an edit made in that window removes the turn's anchor prompt —
+  // so the run that arrives a moment later can never be offered again, because
+  // no later edit's removed set can carry a prompt the transcript no longer has.
+  //
+  // THIS USED TO BE PINNED AS THE FAILURE. It is CLOSED now, and the close is
+  // the FIRST of the two the review offered: the edit DEFERS its intent until
+  // every turn it would name by run has settled that identity — `RUN_STARTED`
+  // arrived, or the stream terminated without one. `removableRunIds` is
+  // unchanged and still refuses a run whose anchor is gone; what changed is that
+  // the anchor is no longer gone by the time the run lands, because the edit
+  // waited for it (`settleRunIdsForRemoval`, and `message-edit-flow.ts` for the
+  // flow that awaits it).
+  //
+  // The close does NOT re-open the over-reach the anchor exists to prevent. A
+  // held turn is by construction anchored to a prompt THIS edit removes, so it
+  // is a turn below the edit point; nothing is condemned, no latch outlives the
+  // edit, and a turn whose prompt the edit KEPT is never waited on and never
+  // offered.
+
+  it("holds until RUN_STARTED arrives — and then the run IS offered", async () => {
     const streams = createTurnStreamRegistry();
     const token = streams.begin("a-slow-start", controller(), "u2");
-    // The edit happens FIRST — the turn has no run yet, so it offers none.
-    expect(streams.removableRunIds(new Set(["u2", "a-slow-start"]))).toEqual([]);
-    // ...and RUN_STARTED lands afterwards.
+    const removed = removing("u2", "a-slow-start");
+
+    let settled = false;
+    const held = streams.settleRunIdsForRemoval(removed).then(() => {
+      settled = true;
+    });
+    // The edit is in the window: the turn is registered, its run is not known,
+    // and its anchor is one of the prompts this edit removes.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled, "the intent went out while the run was still unknown").toBe(false);
+    expect(streams.removableRunIds(removed)).toEqual([]);
+
+    // RUN_STARTED lands.
     expect(streams.noteRunId(token, "run-slow")).toBe(true);
-    // A later edit's removed set cannot contain `u2` — the transcript no longer
-    // has it — so the run stays withheld.
+    await held;
+    expect(settled).toBe(true);
+    // THE CLOSE. The anchor is still in this edit's removed set, because the
+    // edit never left, so the run is assertable exactly when it becomes known.
     expect(
-      streams.removableRunIds(new Set(["u3", "a-slow-start"])),
-      "the residual closed itself — the registry grew a way to offer a run whose anchor is gone; re-read the residual note in turn-stream-registry.ts, because the same mechanism is what would tombstone a turn that revealed after the truncation",
-    ).toEqual([]);
-    // The turn is still NAMED by its bubble id, which is what it always was.
-    expect(streams.removableTurnIds()).toEqual(["a-slow-start"]);
+      streams.removableRunIds(removed),
+      "the hold released but the run was still withheld — the pre-RUN_STARTED window is open again",
+    ).toEqual(["run-slow"]);
+  });
+
+  it("releases when the stream terminates WITHOUT a run — the turn is provably runless", async () => {
+    // The other settling event. An aborted-before-`RUN_STARTED` turn has no run
+    // to wait for, and holding the edit for one that will never arrive would
+    // hang the edit rather than close anything.
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a-cut", controller(), "u2");
+    const removed = removing("u2", "a-cut");
+    let settled = false;
+    const held = streams.settleRunIdsForRemoval(removed).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(streams.end(token)).toBe(true);
+    await held;
+    expect(settled).toBe(true);
+    // Still named by its id, and it contributes no run — the honest residual.
+    expect(streams.removableTurnIds()).toEqual(["a-cut"]);
+    expect(streams.removableRunIds(removed)).toEqual([]);
+  });
+
+  it("waits for nothing when there is nothing to wait for", async () => {
+    const streams = createTurnStreamRegistry();
+    // No turn at all.
+    await streams.settleRunIdsForRemoval(removing("u2"));
+    // A turn whose run is ALREADY known settles nothing further.
+    const token = streams.begin("a1", controller(), "u2");
+    streams.noteRunId(token, "run-1");
+    await streams.settleRunIdsForRemoval(removing("u2"));
+    expect(streams.removableRunIds(removing("u2"))).toEqual(["run-1"]);
+  });
+
+  it("does NOT wait on a turn whose prompt this edit KEPT", async () => {
+    // The anchor filter, applied to the hold itself. Slack streams turns
+    // concurrently: a turn dispatched for a prompt ABOVE the edit point is none
+    // of this edit's business, and holding the edit for its handshake would make
+    // every concurrent turn a latency tax on every edit.
+    const streams = createTurnStreamRegistry();
+    streams.begin("a-other", controller(), "u1"); // answers a KEPT prompt
+    let settled = false;
+    await streams.settleRunIdsForRemoval(removing("u2")).then(() => {
+      settled = true;
+    });
+    expect(settled).toBe(true);
+    expect(streams.removableRunIds(removing("u2"))).toEqual([]);
+  });
+
+  it("does NOT wait on a turn with no anchor — it could never be offered anyway", async () => {
+    const streams = createTurnStreamRegistry();
+    streams.begin("a-anchorless", controller(), null);
+    let settled = false;
+    await streams.settleRunIdsForRemoval(removing("u2")).then(() => {
+      settled = true;
+    });
+    expect(settled).toBe(true);
+  });
+
+  it("is BOUNDED — a hung stream cannot hold the edit forever", async () => {
+    // THE COST OF THE CLOSE, stated. A stream that neither reports a run nor
+    // terminates would otherwise hold the user's edit open with nothing on the
+    // screen changing. The hold is finite; past it the edit goes out with the
+    // residual it always had for that one turn.
+    const streams = createTurnStreamRegistry();
+    streams.begin("a-hung", controller(), "u2");
+    await streams.settleRunIdsForRemoval(removing("u2"), { timeoutMs: 0 });
+    expect(streams.removableRunIds(removing("u2"))).toEqual([]);
+  });
+
+  it("a SUPERSEDED instance settles the hold that was waiting on it", async () => {
+    // CODEX ROUND 5 SECOND PASS, FINDING 1. A second `begin` for the same id
+    // replaces the registered instance, and the displaced one can never settle
+    // again: `noteRunId` and `end` both gate on being the registered instance.
+    // A held edit waiting on it would sit out its whole bound and learn nothing.
+    const streams = createTurnStreamRegistry();
+    streams.begin("x", controller(), "u2");
+    let settled = false;
+    const held = streams.settleRunIdsForRemoval(removing("u2")).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    // The same id, a new drive. The first instance is gone for good.
+    const second = streams.begin("x", controller(), "u2");
+    await held;
+    expect(settled, "the edit was left waiting on an instance nothing can settle").toBe(true);
+    // And the hold released on the DISPLACED instance only — the live one is
+    // still free to report its own run, which a later edit reads normally.
+    expect(streams.noteRunId(second, "run-second")).toBe(true);
+    expect(streams.removableRunIds(removing("u2"))).toEqual(["run-second"]);
+  });
+
+  it("cannot be asked for an UNBOUNDED hold", async () => {
+    // CODEX ROUND 5, FINDING 2. A bound that a caller can switch off is not a
+    // bound: a non-finite or negative request would have left the waiter — and
+    // the reader's edit — pending with no event that could ever release it. Such
+    // a request takes the default instead.
+    const streams = createTurnStreamRegistry();
+    streams.begin("a-hung", controller(), "u2");
+    let settled = false;
+    const held = streams
+      .settleRunIdsForRemoval(removing("u2"), { timeoutMs: Number.POSITIVE_INFINITY })
+      .then(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    // Still HELD — the default bound is generous, so this is not an instant
+    // release dressed up as one. `timeoutMs` may only SHORTEN the hold, so a
+    // caller cannot extend the bound either, and the population bound the module
+    // states stays a property of the module.
+    expect(settled).toBe(false);
+    // ...and it is a real hold that a real event still ends.
+    streams.end(streams.begin("a-hung", controller(), "u2"));
+    streams.abortAll();
+    streams.reset();
+    await held;
+    expect(settled).toBe(true);
+  });
+
+  it("leaving the thread releases the hold", async () => {
+    // `resetForThread` aborts and drops everything; the drives unwind
+    // afterwards, so nothing else would ever settle this waiter.
+    const streams = createTurnStreamRegistry();
+    expect(streams.resetForThread("t-a")).toBe(false);
+    streams.begin("a1", controller(), "u2");
+    let settled = false;
+    const held = streams.settleRunIdsForRemoval(removing("u2")).then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(streams.resetForThread("t-b")).toBe(true);
+    await held;
+    expect(settled).toBe(true);
+  });
+
+  it("holds for EVERY turn the edit caught in the window, not just the first", async () => {
+    // Slack dispatches concurrently, so one edit can catch several turns mid-
+    // handshake. The hold is over the whole set.
+    const streams = createTurnStreamRegistry();
+    const first = streams.begin("a-1", controller(), "u2");
+    const second = streams.begin("a-2", controller(), "u2");
+    const removed = removing("u2", "a-1", "a-2");
+    let settled = false;
+    const held = streams.settleRunIdsForRemoval(removed).then(() => {
+      settled = true;
+    });
+    streams.noteRunId(first, "run-1");
+    await Promise.resolve();
+    expect(settled, "the edit went out while a second turn was still runless").toBe(false);
+    streams.noteRunId(second, "run-2");
+    await held;
+    expect(streams.removableRunIds(removed)).toEqual(["run-1", "run-2"]);
+  });
+
+  it("the registry's footprint is unchanged by a hold that settled", async () => {
+    // A waiter is transient state, not per-id state: `retainedIdCount` is still
+    // the whole footprint, which is the invariant the cap arms rest on.
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a1", controller(), "u2");
+    const held = streams.settleRunIdsForRemoval(removing("u2"));
+    streams.noteRunId(token, "run-1");
+    await held;
+    streams.end(token);
+    streams.noteSavedTranscript([{ id: "a1" }]);
+    expect(streams.retainedIdCount()).toBe(0);
   });
 });

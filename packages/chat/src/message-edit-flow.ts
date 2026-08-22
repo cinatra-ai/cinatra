@@ -40,6 +40,13 @@ export type EditAndResendDeps = {
    *  dispatched for a prompt this edit KEPT must not be offered
    *  (`./turn-stream-registry`). */
   removableRunIds: (removedMessageIds: ReadonlySet<string>) => Iterable<string>;
+  /** THE DEFERRAL for the pre-`RUN_STARTED` window: resolve once every turn this
+   *  edit could name by RUN has settled that identity — the handshake delivered
+   *  one, or the stream ended without one. Awaited BEFORE `removableRunIds` is
+   *  read, and bounded by the registry so a hung stream cannot hold the edit
+   *  (`./turn-stream-registry`). Resolves immediately when nothing is
+   *  outstanding, which is every ordinary edit. */
+  settleRemovableRunIds: (removedMessageIds: ReadonlySet<string>) => Promise<void>;
   activeThreadId: string | null;
   /** Latest-value read of the active thread, for the post-await guards. */
   currentThreadId: () => string | null;
@@ -108,6 +115,25 @@ export async function editAndResend(
   // registry is the second source and covers the whole gap between them
   // (`buildTruncationIntent`, `./turn-stream-registry`).
   const removedMessageIds = buildTruncationIntent(messages, idx, deps.removableTurnIds());
+  const removedIdSet = new Set(removedMessageIds);
+  // THE PRE-`RUN_STARTED` HOLD. The page registers a turn BEFORE it dispatches
+  // and learns the server's name for it only at `RUN_STARTED`, and Slack mode is
+  // exactly the mode that lets a reader edit while a turn streams. An edit
+  // dispatched inside that handshake removes the turn's anchor prompt while the
+  // turn has no run to assert — and the run that arrives a moment later can
+  // never be asserted afterwards, because no later edit's removed set can carry
+  // a prompt the transcript no longer has. The turn's run-bound row would fold
+  // back in above the edited prompt on every reload, permanently.
+  //
+  // So the intent WAITS for those turns to settle their identity: `RUN_STARTED`
+  // arrived, or the stream terminated without one. The anchor is still in the
+  // removed set while this edit is holding, so the run becomes assertable
+  // exactly when it becomes knowable. Only turns anchored to a prompt THIS edit
+  // removes are waited on, so nothing is condemned and no concurrent turn the
+  // reader kept is touched (`./turn-stream-registry`). This resolves immediately
+  // for every edit that caught no handshake, and the registry bounds it so a
+  // hung stream cannot hold the edit open.
+  await deps.settleRemovableRunIds(removedIdSet);
   // ...and the SERVER'S name for the ones the transcript could not name. Naming
   // them by bubble id alone asserts something the server has never seen: those
   // turns have no mirror row, and the mirror row is what every other key is read
@@ -115,7 +141,7 @@ export async function editAndResend(
   // asked with the ids ABOVE, so it can withhold the run of a concurrent turn
   // whose prompt this edit kept — a run id reaches the row outright, and that is
   // the one assertion here that over-naming would not be safe for.
-  const removedRunIds = buildRemovedRunIntent(deps.removableRunIds(new Set(removedMessageIds)));
+  const removedRunIds = buildRemovedRunIntent(deps.removableRunIds(removedIdSet));
 
   // Resolve threadId — edits always happen in an existing thread.
   const threadId = deps.activeThreadId ?? deps.currentThreadId();

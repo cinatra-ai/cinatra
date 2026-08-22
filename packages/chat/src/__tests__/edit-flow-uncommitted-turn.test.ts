@@ -58,6 +58,12 @@ function deps(over: Partial<EditAndResendDeps> = {}): EditAndResendDeps {
     hasActiveStream: false,
     removableTurnIds: () => [],
     removableRunIds: () => [],
+    // THE DEFERRAL for the pre-`RUN_STARTED` window. Nothing here is inside
+    // that window — every arm's turn either has its run already or never gets
+    // one — so the default settles at once and these arms measure what they
+    // always measured. The window itself is driven in
+    // `edit-flow-pre-run-started-window.test.ts`.
+    settleRemovableRunIds: async () => {},
     activeThreadId: "th1",
     currentThreadId: () => "th1",
     loadedThreadCreatedAt: () => "2026-08-01T00:00:00.000Z",

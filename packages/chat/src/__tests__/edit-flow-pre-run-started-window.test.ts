@@ -1,0 +1,203 @@
+/**
+ * THE PRE-`RUN_STARTED` WINDOW, CLOSED THROUGH THE EDIT FLOW (cinatra#2823 S9j).
+ *
+ * `/chat` registers a turn BEFORE it dispatches (`beginStream`) and learns the
+ * server's name for it only at `RUN_STARTED`. Slack mode is exactly the mode
+ * that lets a reader edit while a turn streams, so an edit can be dispatched
+ * INSIDE that handshake: it removes the turn's anchor prompt while the turn has
+ * no run to assert, the run arrives a moment later, and no later edit's removed
+ * set can ever carry that prompt again — the transcript no longer has it. The
+ * turn's run-bound row stays live and folds back in above the edited prompt on
+ * every reload, permanently, which is the pre-cinatra#2823 behaviour for exactly
+ * those turns.
+ *
+ * THE CLOSE IS A DEFERRAL. The flow holds its truncation intent until every turn
+ * it would name by RUN has settled that identity — `RUN_STARTED` arrived, or the
+ * stream terminated without one — and only then builds and posts the save. The
+ * anchor filter is untouched: a held turn is by construction anchored to a
+ * prompt THIS edit removes, so it is a turn below the edit point, and a turn
+ * whose prompt the edit KEPT is never waited on and never offered. Nothing is
+ * condemned and no latch outlives the edit, so the over-reach the anchor exists
+ * to prevent — tombstoning a visible turn that revealed after the truncation —
+ * is not re-introduced.
+ *
+ * These arms drive the REAL `editAndResend` against the REAL registry, with the
+ * window held open by construction rather than raced into: the run is reported
+ * only after the flow has started and is provably still holding.
+ *
+ * LOCAL NOTE: this suite runs under the chat package's own vitest config.
+ *
+ *   pnpm --filter @cinatra-ai/chat exec vitest run \
+ *     src/__tests__/edit-flow-pre-run-started-window.test.ts
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const saved: Array<Record<string, unknown>> = [];
+
+vi.mock("../ag-ui-chat-client", () => ({
+  saveChatThreadInOrder: vi.fn(async (thread: Record<string, unknown>) => {
+    saved.push(thread);
+  }),
+  generateId: (() => {
+    let n = 0;
+    return () => `gen-${++n}`;
+  })(),
+  deriveThreadTitle: (s: string) => s.slice(0, 20),
+}));
+
+vi.mock("../actions", () => ({
+  resolveMessageRouting: vi.fn(async () => ({ shouldCallLlm: true })),
+}));
+
+vi.mock("../chat-routing", () => ({
+  applyExternalMentionsToMessages: vi.fn((prev: unknown) => prev),
+}));
+
+import { editAndResend, type EditAndResendDeps } from "../message-edit-flow";
+import { createTurnStreamRegistry, type TurnStreamRegistry } from "../turn-stream-registry";
+import type { UiMessage as Message } from "../types";
+
+const msg = (id: string, role: "user" | "assistant"): Message =>
+  ({ id, role, content: id }) as Message;
+
+/** u1 · a1 · u2 — the reader edits `u2` while a turn dispatched for `u2` is
+ *  still inside its handshake. */
+const SNAPSHOT: Message[] = [msg("u1", "user"), msg("a1", "assistant"), msg("u2", "user")];
+
+function deps(streams: TurnStreamRegistry, over: Partial<EditAndResendDeps> = {}): EditAndResendDeps {
+  return {
+    messages: SNAPSHOT,
+    setMessages: () => {},
+    isSlackMode: true,
+    hasActiveStream: true,
+    removableTurnIds: () => streams.removableTurnIds(),
+    removableRunIds: (removed) => streams.removableRunIds(removed),
+    settleRemovableRunIds: (removed) => streams.settleRunIdsForRemoval(removed),
+    activeThreadId: "th1",
+    currentThreadId: () => "th1",
+    loadedThreadCreatedAt: () => "2026-08-01T00:00:00.000Z",
+    threads: [{ id: "th1", title: "t", createdAt: "2026-08-01T00:00:00.000Z" }] as never,
+    setActiveAssistantHandle: () => {},
+    taggedAssistantUserIds: [],
+    pausedParticipants: [],
+    assistantHandleMap: new Map(),
+    streamResponse: async () => {},
+    ...over,
+  };
+}
+
+/** Let every already-queued microtask run, without letting a timer fire. */
+const drainMicrotasks = async () => {
+  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+};
+
+beforeEach(() => {
+  saved.length = 0;
+});
+
+describe("an edit made inside the pre-RUN_STARTED window", () => {
+  it("HOLDS the intent, then asserts the run the handshake delivered", async () => {
+    // THE REGRESSION ARM. Before the deferral this posted `removedMessageIds`
+    // with no `removedRunIds` at all: the turn had no run at intent-build time,
+    // and by the time `RUN_STARTED` landed its anchor was gone from every
+    // transcript, so the run could never be asserted by anything.
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a-slow-start", new AbortController(), "u2");
+
+    const flow = editAndResend(deps(streams), "u2", "actually, ask something else");
+
+    // The flow is holding: nothing has been POSTed while the run is unknown.
+    await drainMicrotasks();
+    expect(saved, "the intent went out before the run was known").toHaveLength(0);
+
+    // `RUN_STARTED` lands, exactly as `driveAssistantChatTurn` reports it.
+    expect(streams.noteRunId(token, "run-slow")).toBe(true);
+    await flow;
+
+    expect(saved).toHaveLength(1);
+    const intent = saved[0] as { removedMessageIds?: string[]; removedRunIds?: string[] };
+    // The turn is named by its bubble id, as it always was...
+    expect(intent.removedMessageIds).toContain("a-slow-start");
+    expect(intent.removedMessageIds).toContain("u2");
+    // ...and by the one identity the server can actually act on for a turn no
+    // saved transcript ever carried. This is the close.
+    expect(
+      intent.removedRunIds,
+      "the pre-RUN_STARTED window is open again — the run-bound row folds back in on reload",
+    ).toEqual(["run-slow"]);
+  });
+
+  it("releases the hold when the stream is CUT before its run ever arrives", async () => {
+    // The other settling event, and the residual it leaves stated rather than
+    // discovered: a turn that never learned a run contributes none, and is
+    // still named by its bubble id.
+    const streams = createTurnStreamRegistry();
+    const token = streams.begin("a-cut", new AbortController(), "u2");
+
+    const flow = editAndResend(deps(streams), "u2", "never mind");
+    await drainMicrotasks();
+    expect(saved).toHaveLength(0);
+
+    expect(streams.end(token)).toBe(true); // the drive's `finally`
+    await flow;
+
+    expect(saved).toHaveLength(1);
+    const intent = saved[0] as { removedMessageIds?: string[]; removedRunIds?: string[] };
+    expect(intent.removedMessageIds).toContain("a-cut");
+    expect(intent).not.toHaveProperty("removedRunIds");
+  });
+
+  it("a THREAD SWITCH during the hold releases it, and the truncation is still recorded", async () => {
+    // THE RESIDUAL, PINNED (codex round 5, finding 1). Leaving the thread aborts
+    // every drive and drops the ledger, so the held edit resumes with its turn
+    // still runless — and it posts anyway, for the thread it was made in,
+    // because a truncation that is not recorded is the silent degradation this
+    // leg exists to remove. The turn keeps its run-bound row.
+    //
+    // That is the SAME residual as any stream cut before `RUN_STARTED`, arriving
+    // through a different door: the identity never reached this client, so there
+    // is nothing here to assert. It is not a new hole — it is the
+    // pre-cinatra#2823 behaviour, narrowed from EVERY edit inside the window to
+    // an edit inside the window whose reader also left the thread.
+    const streams = createTurnStreamRegistry();
+    expect(streams.resetForThread("th1")).toBe(false);
+    streams.begin("a-slow-start", new AbortController(), "u2");
+
+    let liveThread = "th1";
+    const flow = editAndResend(
+      deps(streams, { currentThreadId: () => liveThread }),
+      "u2",
+      "ask something else",
+    );
+    await drainMicrotasks();
+    expect(saved).toHaveLength(0);
+
+    // The reader opens another thread. Every drive is aborted and the ledger,
+    // whose ids belong to the thread being left, goes with it.
+    liveThread = "th2";
+    expect(streams.resetForThread("th2")).toBe(true);
+    await flow;
+
+    // The truncation IS durably recorded for the thread the edit was made in...
+    expect(saved).toHaveLength(1);
+    const intent = saved[0] as { id?: string; removedMessageIds?: string[]; removedRunIds?: string[] };
+    expect(intent.id).toBe("th1");
+    expect(intent.removedMessageIds).toContain("u2");
+    // ...and the run is not asserted, because it never arrived here to assert.
+    expect(intent).not.toHaveProperty("removedRunIds");
+  });
+
+  it("does NOT hold for a concurrent turn whose prompt this edit KEPT", async () => {
+    // The latency the close costs is paid only by the turns the edit is about.
+    // A Slack turn answering a prompt ABOVE the edit point is none of its
+    // business, and its run is withheld for the same reason it always was.
+    const streams = createTurnStreamRegistry();
+    streams.begin("a-above", new AbortController(), "u1");
+
+    await editAndResend(deps(streams), "u2", "edit the later prompt");
+
+    expect(saved).toHaveLength(1);
+    const intent = saved[0] as { removedRunIds?: string[] };
+    expect(intent).not.toHaveProperty("removedRunIds");
+  });
+});

@@ -2001,8 +2001,20 @@ describe("the shipped writer still runs the mirror this tier drives", () => {
     // turn anchored to a prompt this edit KEPT is withheld: a run id reaches the
     // run-bound row outright, and over-naming is not free there the way it is
     // for a bubble id.
+    expect(flow).toContain("const removedIdSet = new Set(removedMessageIds);");
     expect(flow).toContain(
-      "const removedRunIds = buildRemovedRunIntent(deps.removableRunIds(new Set(removedMessageIds)));",
+      "const removedRunIds = buildRemovedRunIntent(deps.removableRunIds(removedIdSet));",
+    );
+    // ...and it WAITS, before it asks, for every turn it could name by run to
+    // settle that identity: the pre-`RUN_STARTED` window is closed by DEFERRING
+    // the intent, not by condemning a turn on one edit and asserting it on a
+    // later one (which would tombstone a turn that revealed after a truncation).
+    // The hold is bounded by the registry and resolves at once when the edit
+    // caught no handshake.
+    const settleAt = flow.indexOf("await deps.settleRemovableRunIds(removedIdSet);");
+    expect(settleAt).toBeGreaterThan(-1);
+    expect(settleAt).toBeLessThan(
+      flow.indexOf("const removedRunIds = buildRemovedRunIntent("),
     );
     // ...and posts both with the truncated transcript, in the same save.
     expect(flow).toContain("messages: truncated");

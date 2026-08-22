@@ -145,40 +145,74 @@
  * because a missed removal costs a turn that folds back in and a wrong one costs
  * a kept turn its card forever.
  *
- * ── THE RESIDUAL THIS LEAVES, STATED RATHER THAN DISCOVERED ──────────────────
+ * ── THE WINDOW THIS LEFT OPEN, AND THE DEFERRAL THAT CLOSES IT ───────────────
  *
  * A turn is nameable by its run only once the wire has named that run, and the
  * anchor is only checkable while the anchor is still in the transcript. An edit
  * dispatched in the window BETWEEN a turn's dispatch and its `RUN_STARTED`
- * therefore removes that turn's prompt while the turn has no run to assert; the
- * run arrives afterwards, and by then no later edit's removed set can contain
- * the prompt, because that prompt is gone from the transcript. EVERY turn caught
- * in that window keeps its run-bound row — Slack dispatches turns concurrently,
- * so one edit can catch several at once — and each of them folds back in on the
+ * therefore reaches a turn that has no run to assert; the run arrives
+ * afterwards, and by then no later edit's removed set can contain that turn's
+ * prompt, because the prompt is gone from the transcript. EVERY turn caught in
+ * that window kept its run-bound row — Slack dispatches turns concurrently, so
+ * one edit can catch several at once — and each of them folded back in on the
  * next reload: the pre-cinatra#2823 behaviour, for exactly those turns.
  *
- * IT IS NOT CLOSED HERE, AND THE REASON IS THE TOMBSTONE'S OWN RULE. The obvious
- * close is to CONDEMN a turn when its anchor is first seen in a removed set and
- * offer its run whenever that run shows up. But a Slack turn's reveal can COMMIT
- * into the transcript AFTER the truncation — its drive appends to whatever the
- * thread holds then — so a condemned turn can be on screen, with a mirror row of
- * its own, by the time a later edit offers its run. Tombstoning it then costs
- * that visible turn its card permanently, and
+ * ── THE PRE-`RUN_STARTED` WINDOW: THE EDIT WAITS ─────────────────────────────
+ *
+ * THE CLOSE IS A DEFERRAL, and it is `settleRunIdsForRemoval`. Before it builds
+ * its intent, the edit asks the registry which of the turns it would name by RUN
+ * have not settled that identity yet — registered, anchored to a prompt THIS
+ * edit removes, and still runless — and waits for each of them to settle:
+ * `RUN_STARTED` arrives (`noteRunId`), or the stream terminates without one
+ * (`end`). Then it reads `removableRunIds` and posts. The anchor is still in the
+ * removed set at that moment, because the edit never left, so the run is
+ * assertable exactly when it becomes knowable.
+ *
+ * NOTHING ELSE MOVES. `removableRunIds` is unchanged and still refuses a run
+ * whose anchor is not in the set it is handed. A held turn is by construction
+ * anchored to a prompt this edit removes, so it is a turn BELOW the edit point;
+ * no turn is condemned, no latch outlives the edit, and a turn whose prompt the
+ * edit KEPT is neither waited on nor offered. That is why this close does not
+ * re-open the over-reach the anchor exists to prevent: the rejected close was to
+ * CONDEMN a turn on one edit and let a LATER edit assert its run — and a Slack
+ * reveal can COMMIT into the transcript after a truncation, so the later edit
+ * would tombstone a turn that is on screen with a mirror row of its own.
  * `src/lib/assistant-turn-supersede.ts` states the governing trade outright: a
  * refused tombstone costs a turn that has to be removed again, an over-eager one
- * costs a kept turn its card forever. Clearing the latch on
- * `noteCommittedTranscript` narrows the window but does not remove it, and it
- * buys that by re-introducing the exact class of over-reach the anchor exists to
- * prevent — for a mechanism that, by construction, can only ever help a
- * SUBSEQUENT edit.
+ * costs a kept turn its card forever. A deferral asserts within the ONE edit
+ * that removed the turn, so it never reaches a turn any other edit kept.
  *
- * The honest close is to assert the removal at the moment the run id arrives,
- * which is a SECOND save carrying the truncation intent — and "edit-and-resend is
- * the only /chat save that asserts a truncation" is a pinned invariant of this
- * leg, because an ordinary save carrying the field is how a stale tab tombstones
- * turns it never observed. That is a change to the intent's CONTRACT. So the
- * residual is PINNED in `__tests__/turn-stream-registry.test.ts` rather than
- * half-closed here.
+ * AND IT NEEDS NO SECOND SAVE. "Edit-and-resend is the only /chat save that
+ * asserts a truncation" is a pinned invariant of this leg — an ordinary save
+ * carrying the field is how a stale tab would tombstone turns it never observed
+ * — and the deferral keeps it: the edit still posts exactly one intent, just
+ * later than it used to.
+ *
+ * WHAT THE HOLD COSTS, stated rather than discovered. The edit is a suspension
+ * point already (it waits for its own intent save before it truncates the
+ * screen), and this puts the handshake latency in front of that — but only when
+ * the edit actually caught a turn mid-handshake, which is the case that was
+ * broken. A stream that neither reports a run nor terminates would hold the edit
+ * open forever, so the hold is BOUNDED (`RUN_ID_SETTLE_TIMEOUT_MS`); past the
+ * bound the edit goes out with the residual it always had, for that one turn.
+ *
+ * THE RESIDUAL THIS LEAVES, and it is ONE residual with two doors. A turn whose
+ * stream is CUT before `RUN_STARTED` reaches the client contributes no run: the
+ * server may well have minted the row, and the client simply never learned the
+ * name, so there is nothing here to assert. That turn is named by its bubble id
+ * alone, which is where it always was.
+ *
+ * The second door is the same cut arriving as a THREAD SWITCH (codex round 5,
+ * finding 1). Leaving the thread aborts every drive and drops the ledger, so a
+ * held edit is released with its turns still runless — and the edit's save goes
+ * out for the thread it was made in anyway, because a truncation that is not
+ * recorded is the silent degradation this whole leg exists to remove
+ * (`message-edit-flow.ts` states that trade at the guard). The turn caught in
+ * the handshake therefore keeps its run-bound row, exactly as an aborted turn
+ * does. It is NOT a new hole — it is the pre-cinatra#2823 behaviour, narrowed
+ * from "every edit inside the window" to "an edit inside the window whose reader
+ * also left the thread before the handshake finished" — and nothing on this side
+ * can close it, because the identity never arrived.
  *
  * ── THE INSTANCE TOKEN, CONTINUED ────────────────────────────────────────────
  *
@@ -229,6 +263,21 @@
 export const MAX_ENDED_UNCOMMITTED_TURN_IDS = 256;
 
 /**
+ * THE DEFERRAL'S BOUND: how long an edit may wait for a turn it caught inside
+ * the `RUN_STARTED` handshake to settle its run identity.
+ *
+ * The wait normally ends in milliseconds — `RUN_STARTED` is the first thing the
+ * turn route emits — and it ends early on ANY settling event, including the
+ * stream being cut. What the number buys is the pathological case: a stream that
+ * neither reports a run nor terminates would otherwise hold the reader's edit
+ * open with nothing on the screen changing, which is a worse failure than the
+ * one the deferral closes. Generous enough for a cold producer handshake,
+ * finite so a hung stream cannot take the edit with it. Past the bound the edit
+ * goes out with the residual it always had, for that one turn.
+ */
+export const RUN_ID_SETTLE_TIMEOUT_MS = 5_000;
+
+/**
  * THE HANDLE ON ONE REGISTERED TURN INSTANCE, minted by `begin` and consumed by
  * `end`. Opaque on purpose: the only thing a caller may do with it is hand it
  * back. Its IDENTITY is the whole mechanism — two `begin` calls with the same
@@ -275,12 +324,16 @@ export type TurnStreamRegistry = {
   /** How many turns are in flight. Deliberately NOT a proxy for "the registry is
    *  empty": the ledger outlives every stream in it. */
   size(): number;
-  /** THE REGISTRY'S WHOLE FOOTPRINT: how many distinct ids it holds anything for
-   *  at all — in-flight instances plus ledger entries, and by construction
-   *  nothing else. This is the invariant that says the registry cannot grow
-   *  without limit: the ledger is capped, the in-flight map holds one entry per
-   *  live drive, and `reset`/`resetForThread` drop both. Read by the arms that
-   *  pin it; there is no other per-id state for them to miss. */
+  /** THE REGISTRY'S WHOLE PER-ID FOOTPRINT: how many distinct ids it holds
+   *  anything for at all — in-flight instances plus ledger entries, and by
+   *  construction nothing else. This is the invariant that says the registry
+   *  cannot grow without limit: the ledger is capped, the in-flight map holds
+   *  one entry per live drive, and `reset`/`resetForThread` drop both. Read by
+   *  the arms that pin it; there is no other per-id state for them to miss.
+   *
+   *  It deliberately does NOT count the deferral waiters — those are keyed on a
+   *  holding EDIT rather than on a turn id, and they carry their own bound (a
+   *  timer each; see `settleRunIdsForRemoval`). */
   retainedIdCount(): number;
   /** Abort every in-flight turn, leaving the registry populated — each drive's
    *  own `finally` calls `end`. The composer's Stop button. */
@@ -317,6 +370,25 @@ export type TurnStreamRegistry = {
    *  no anchor, or whose run id never arrived, contributes nothing. Deduplicated;
    *  the caller treats it as a SET. */
   removableRunIds(removedMessageIds: Iterable<string>): string[];
+  /** THE DEFERRAL. Resolve once every turn this edit could name by RUN has
+   *  SETTLED that identity: each registered turn whose anchor is among
+   *  `removedMessageIds` and whose run is still unknown has either reported one
+   *  (`noteRunId`) or ended without one (`end`). Call it BEFORE `removableRunIds`
+   *  — that is the whole close for the pre-`RUN_STARTED` window, because the
+   *  anchor is still in the removed set while the edit is waiting and is gone
+   *  from every transcript afterwards.
+   *
+   *  Resolves IMMEDIATELY when nothing is outstanding, which is every ordinary
+   *  edit. Waits only on turns anchored to a prompt THIS edit removes: a turn
+   *  above the edit point, or one with no anchor, could never be offered and is
+   *  never waited on. Leaving the thread releases the hold with everything else.
+   *  BOUNDED so a hung stream cannot hold the edit open, and it never rejects.
+   *  `timeoutMs` may only SHORTEN the hold — it is clamped to
+   *  `RUN_ID_SETTLE_TIMEOUT_MS`, so no caller can extend or disable the bound. */
+  settleRunIdsForRemoval(
+    removedMessageIds: Iterable<string>,
+    options?: { timeoutMs?: number },
+  ): Promise<void>;
 };
 
 /** The registered instance: the token a caller holds, plus what the registry
@@ -349,6 +421,39 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
   /** The thread these ids belong to, once one has been observed. */
   let heldThreadId: string | null = null;
   let threadObserved = false;
+  /** THE OUTSTANDING DEFERRALS — one per edit that is currently HOLDING, each
+   *  waiting on the exact turn INSTANCES it caught mid-handshake.
+   *
+   *  NOT per-id state, and not covered by `retainedIdCount` (which is the ID
+   *  footprint and says so). Its own bound is a different one and is stated
+   *  here: a waiter is created by a call that is already awaiting it, every
+   *  waiter carries a timer, and a released waiter is deleted — so the standing
+   *  population is "the edits dispatched in the last `RUN_ID_SETTLE_TIMEOUT_MS`
+   *  that caught a turn mid-handshake", which drains on its own with no further
+   *  event (codex round 5, finding 2). */
+  type RunIdWaiter = {
+    pending: Set<TurnStreamToken>;
+    resolve: () => void;
+    timer: ReturnType<typeof setTimeout> | null;
+  };
+  const runIdWaiters = new Set<RunIdWaiter>();
+
+  function releaseWaiter(waiter: RunIdWaiter): void {
+    if (!runIdWaiters.delete(waiter)) return;
+    if (waiter.timer !== null) clearTimeout(waiter.timer);
+    waiter.resolve();
+  }
+
+  /** This instance's run identity is now settled — it reported a run, or its
+   *  stream ended without one. Either way no edit has anything left to wait for
+   *  from it. */
+  function settleWaitersFor(token: TurnStreamToken): void {
+    if (runIdWaiters.size === 0) return;
+    for (const waiter of [...runIdWaiters]) {
+      if (!waiter.pending.delete(token)) continue;
+      if (waiter.pending.size === 0) releaseWaiter(waiter);
+    }
+  }
 
   /** Record an ended turn — and the run it streamed under — under the ledger's
    *  cap. */
@@ -391,6 +496,11 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
     // replaced it.
     inFlight.clear();
     endedUncommitted.clear();
+    // Every held edit was waiting on turns that belong to the thread being left.
+    // Nothing here will ever settle them now — the drives unwind against tokens
+    // this registry no longer knows — so the holds are released rather than left
+    // to their timeout.
+    for (const waiter of [...runIdWaiters]) releaseWaiter(waiter);
   }
 
   return {
@@ -398,7 +508,15 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       const token: TurnStreamToken = { assistantId };
       const anchorId =
         typeof anchorMessageId === "string" && anchorMessageId.length > 0 ? anchorMessageId : null;
+      // A SECOND `begin` FOR THE SAME ID SUPERSEDES THE FIRST, and the displaced
+      // instance can never settle again: `noteRunId` and `end` both gate on
+      // being the registered instance, so neither will ever reach it. A held
+      // edit waiting on it would sit out its whole bound and learn nothing
+      // (codex round 5 second pass, finding 1). Settle it here instead — its run
+      // identity is now as settled as it will ever be.
+      const displaced = inFlight.get(assistantId);
       inFlight.set(assistantId, { token, controller, runId: null, anchorId });
+      if (displaced) settleWaitersFor(displaced.token);
       return token;
     },
     noteRunId(token, runId) {
@@ -415,6 +533,8 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       // run makes those idempotent without the caller having to be careful.
       if (registered.runId !== null) return false;
       registered.runId = runId;
+      // THE HANDSHAKE LANDED. Any edit deferring on this turn can go now.
+      settleWaitersFor(token);
       return true;
     },
     end(token) {
@@ -433,6 +553,12 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       // turn whose reveal never came is exactly the one the ledger has to keep.
       if (token.assistantId.length > 0)
         rememberEnded(token.assistantId, registered.runId, registered.anchorId);
+      // THE OTHER SETTLING EVENT. The stream is over: whatever run it had is the
+      // run it will ever have, and a turn that ended with none is provably
+      // runless as far as this page can ever know. Either way an edit deferring
+      // on it has nothing left to wait for. Recorded into the ledger FIRST, so a
+      // release that resumes synchronously reads the entry.
+      settleWaitersFor(token);
       return true;
     },
     has(assistantId) {
@@ -532,6 +658,44 @@ export function createTurnStreamRegistry(): TurnStreamRegistry {
       for (const registered of inFlight.values()) offer(registered.runId, registered.anchorId);
       for (const [id, rec] of endedUncommitted) if (!inFlight.has(id)) offer(rec.runId, rec.anchorId);
       return runIds;
+    },
+    settleRunIdsForRemoval(removedMessageIds, options) {
+      const removed =
+        removedMessageIds instanceof Set ? removedMessageIds : new Set(removedMessageIds);
+      // THE SET IS SNAPSHOTTED AT CALL TIME, and it is the turns already
+      // registered. A turn dispatched DURING the hold is anchored to a prompt
+      // this edit is not removing — the reader is mid-edit, and a new dispatch
+      // anchors to the message it was sent for — so waiting for arrivals as well
+      // would be a hold with no end condition the edit can state.
+      const pending = new Set<TurnStreamToken>();
+      for (const registered of inFlight.values()) {
+        if (registered.runId !== null) continue; // already settled
+        // The SAME anchor rule `removableRunIds` applies. A turn this edit could
+        // never offer is a turn it must never wait for: holding on a concurrent
+        // turn above the edit point would make every Slack handshake a latency
+        // tax on every edit, and buy nothing.
+        const anchorId = registered.anchorId;
+        if (typeof anchorId !== "string" || anchorId.length === 0) continue;
+        if (!removed.has(anchorId)) continue;
+        pending.add(registered.token);
+      }
+      if (pending.size === 0) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const waiter: RunIdWaiter = { pending, resolve, timer: null };
+        runIdWaiters.add(waiter);
+        // ALWAYS A TIMER, AND NEVER A LONGER ONE THAN THE BOUND. `timeoutMs`
+        // may only SHORTEN the hold: a caller that asks for more — or for a
+        // non-finite or negative value — gets `RUN_ID_SETTLE_TIMEOUT_MS`. That
+        // is what makes the stated population bound ("the edits dispatched in
+        // the last `RUN_ID_SETTLE_TIMEOUT_MS`") a property of this module rather
+        // than of whoever calls it (codex round 5, findings 2 and 2').
+        const asked = options?.timeoutMs;
+        const timeoutMs =
+          typeof asked === "number" && Number.isFinite(asked) && asked >= 0
+            ? Math.min(asked, RUN_ID_SETTLE_TIMEOUT_MS)
+            : RUN_ID_SETTLE_TIMEOUT_MS;
+        waiter.timer = setTimeout(() => releaseWaiter(waiter), timeoutMs);
+      });
     },
   };
 }
