@@ -872,13 +872,14 @@ export function extractAgentName(text: string): string | null {
  * save, a user-message save, a gate-ack save, or either attempt of the truncation
  * intent — may still commit AFTER the saves the chain issued behind it. Two
  * consequences, both real: an older whole-transcript body can overwrite newer
- * content (and carry an older `updatedAt` with it), and an abandoned ordinary
- * save can re-create the mirror rows a later intent removed. The intent's
- * `attempts` retry does not make its two attempts race EACH OTHER — they carry
- * the same body, so their order between themselves cannot matter — but a
- * timed-out first attempt is in this residual like every other abandoned
- * request, and issuing a second attempt WIDENS the window in which the first can
- * land late.
+ * content (and carry an older `updatedAt` with it), and any abandoned save that
+ * asserts NO truncation — the ordinary one, the user-message one, the gate-ack
+ * one — can re-create the mirror rows a later intent removed, because its stale
+ * body still carries them. The intent's `attempts` retry does not make its two
+ * attempts race EACH OTHER — they carry the same body, so their order between
+ * themselves cannot matter — but a timed-out first attempt is in this residual
+ * like every other abandoned request, and issuing a second attempt WIDENS the
+ * window in which the first can land late.
  *
  * IT IS NOT CLOSED HERE, and the reason is that closing it is a change to the
  * save CONTRACT: it needs a server-side fence — a per-thread write version the
