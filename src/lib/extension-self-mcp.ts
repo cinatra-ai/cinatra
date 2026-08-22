@@ -138,18 +138,33 @@ async function resolveCallerBoundIdentity(
   // A fail-closed edge refusal is exactly that: the dispatch would throw, so the
   // decision must not pretend an identity exists.
   if (decision.kind === "refuse") return null;
-  if (decision.kind === "versioned") {
-    return {
-      ...planned,
-      resolvedVersion: decision.version,
-      dispatchTarget: { ...target, kind: "extension-versioned", version: decision.version },
-    };
+  const servingVersion = decision.kind === "versioned" ? decision.version : null;
+
+  // THE DECLARATION TRAVELS WITH THE VERSION, SO THE VERSION MAY NOT MOVE ALONE
+  // (codex round-1 #3). The captured entry carries ONE registration's declared
+  // class and malformed state — the union winner's. Re-pinning only the version
+  // would build a primitive that never existed: version B's identity wearing
+  // version A's declaration, digested into a tuple no review ever approved, or
+  // worse, one that another review did.
+  //
+  // The union is keyed by NAME, so the losing version's own planned entry is not
+  // reachable from here to substitute. Rather than synthesize, this REFUSES: an
+  // edge-pinned caller whose pin names a version the captured entry does not
+  // describe gets `identity_unresolved`, and the transport — which plans
+  // per-request and therefore holds the RIGHT entry — remains the way to reach
+  // it. Narrowing, deliberately, and only in the case where the alternative is
+  // deciding against a declaration that belongs to something else.
+  if (target.kind === "extension-versioned") {
+    // A retained-only union entry: it serves ONLY under a pin naming its own
+    // version. `none` / `default` means this caller's edges do not pin it, and
+    // the strict versioned-only dispatch would refuse anyway.
+    return servingVersion === target.version ? planned : null;
   }
-  // `none` / `default`: the DEFAULT version serves. A RETAINED-only union entry
-  // has no default to fall back to — the strict versioned-only dispatch would
-  // refuse an unpinned caller — so the identity is unresolved rather than
-  // silently the default's.
-  if (target.kind === "extension-versioned") return null;
+  // A default union entry serves ONLY while the caller resolves to the default.
+  // A pin to any version — including one that happens to equal the default's
+  // resolved version string — is a different registration with its own
+  // declaration, so it is not this entry's to authorize.
+  if (servingVersion !== null) return null;
   return planned;
 }
 
@@ -179,13 +194,23 @@ export async function callHostPrimitive(
   input: unknown,
   options: CallHostPrimitiveOptions = {},
 ): Promise<unknown> {
-  const { loadDelegatedChatAdmissionSnapshot } = await import(
-    "@/lib/delegated-chat-admission-store"
-  );
-  // ONE snapshot for this whole invocation — the same shape the live transport
-  // uses for a request, so the handler-map key, the identity resolution and the
-  // decision below cannot be made against three different admission states.
-  const admissionSnapshot = await loadDelegatedChatAdmissionSnapshot();
+  const { mcpRequestContextStorage: ctxStorage } = await import("@cinatra-ai/mcp-server");
+  // ONE snapshot for this whole invocation, and — when this call is nested
+  // inside a live MCP request — the SAME one that request already decided
+  // against (codex round-1 #2). The transport writes it onto the frame it
+  // re-enters around the handler. Loading a fresher one here would let a
+  // self-invocation reach a primitive the enclosing request's own perimeter had
+  // just refused, which is the two-snapshots-in-one-request disagreement the
+  // immutable snapshot exists to prevent.
+  //
+  // Off the transport (worker / cookie) there is no request snapshot to inherit,
+  // so one is loaded — and an unreadable store denies, as everywhere else.
+  const inheritedSnapshot = ctxStorage.getStore()?.delegatedChatAdmissionSnapshot;
+  const admissionSnapshot =
+    inheritedSnapshot ??
+    (await (
+      await import("@/lib/delegated-chat-admission-store")
+    ).loadDelegatedChatAdmissionSnapshot());
   const handlers = await getHandlers(admissionSnapshot);
   const captured = handlers.get(primitiveName);
   if (!captured) {
@@ -194,9 +219,11 @@ export async function callHostPrimitive(
         `registered under that name. Known primitives are the host's MCP tool set; check the name.`,
     );
   }
-  const handler = captured.handler;
+  const mcpRequestContextStorage = ctxStorage;
+  // The captured wrapper. A delegated-restricted extension call REPLACES it
+  // below with a version-pinned dispatch; everything else runs it as before.
+  let handler = captured.handler;
 
-  const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server");
   const { evaluateDelegatedChatAdmission } = await import(
     "@cinatra-ai/mcp-server/delegated-chat-evaluator"
   );
@@ -224,6 +251,20 @@ export async function callHostPrimitive(
           `[extension-self-mcp] "${primitiveName}" is not available to delegated chat MCP ` +
             `requests: ${decision.reason}.`,
         );
+      }
+      // (a2) PIN THE DISPATCH TO THE IDENTITY THAT WAS AUTHORIZED (codex
+      // round-1 #1). The captured wrapper re-resolves the caller's edge and is
+      // drift-TOLERANT by design, so an activation landing between the decision
+      // above and the call below could execute a version this admission never
+      // covered. The pinned dispatch resolves once and REFUSES on any mismatch.
+      //
+      // Host primitives are unaffected: they have no edges, so there is nothing
+      // to drift and the captured handler is already the only thing that runs.
+      const pinned = identity.dispatchTarget;
+      if (pinned && pinned.kind !== "host") {
+        const { dispatchAuthorizedExtensionPrimitive } = await import("@/lib/mcp-server");
+        handler = (pinnedInput: unknown) =>
+          dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput);
       }
     }
     // (b) Deny-by-default MCP boundary — identical gate to the live transport.

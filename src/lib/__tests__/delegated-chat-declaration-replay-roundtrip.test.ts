@@ -29,8 +29,22 @@ const capturedHandlers = new Map<string, unknown>();
 // returns the map THIS FILE built through the real seams, which live alongside
 // the extension registry — a module with no connector/DB graph — so every hop
 // under test is real code.
+// The PINNED DISPATCH (cinatra#2817 slice 3). A delegated-restricted extension
+// call does not run the captured, drift-tolerant wrapper — it runs a dispatch
+// pinned to the identity that was authorized. Recorded here so a case can
+// assert WHICH identity the call was pinned to, not merely that it succeeded.
+let pinnedDispatches: { kind: string; packageName: string; name: string; version?: string }[] = [];
 vi.mock("@/lib/mcp-server", () => ({
   buildHostSelfPrimitiveHandlers: async () => capturedHandlers,
+  dispatchAuthorizedExtensionPrimitive: async (target: {
+    kind: string;
+    packageName: string;
+    name: string;
+    version?: string;
+  }) => {
+    pinnedDispatches.push(target);
+    return { structuredContent: { ok: true } };
+  },
 }));
 
 // A delegated-chat request frame. The declaration is only ever consulted inside
@@ -134,6 +148,7 @@ function roundTrip(name: string, declared?: DelegatedChatToolClass): CapturedHos
 beforeEach(() => {
   delegatedRestricted = true;
   snapshotRecords = [];
+  pinnedDispatches = [];
   _resetExtensionMcpForTests();
   capturedHandlers.clear();
   __resetHostSelfPrimitiveHandlers();
@@ -189,6 +204,11 @@ describe("call time: the SAME shared evaluator, over the SAME planned identity",
     roundTrip("acme_thing_list", "read");
     review("acme_thing_list", "read");
     await expect(callHostPrimitive("acme_thing_list", {})).resolves.toEqual({ ok: true });
+    // AND it dispatched at the identity that was ADMITTED — the default
+    // registration of this package — never across a version.
+    expect(pinnedDispatches).toEqual([
+      { kind: "extension-default", packageName: PKG, version: PKG_VERSION, name: "acme_thing_list" },
+    ]);
   });
 
   it("refuses the SAME primitive at a DIFFERENT version — an admission does not cross versions", async () => {

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { OboCeilingChain } from "./obo-ceiling";
+import type { DelegatedChatAdmissionSnapshot } from "./delegated-chat-admission";
 
 /**
  * Discriminated union of the two delegated MCP actor flavors.
@@ -231,6 +232,25 @@ export type McpRequestContext = {
    */
   delegatedActor?: DelegatedMcpActor | null;
   delegatedRestricted?: boolean;
+  /**
+   * The ONE immutable admission snapshot this request is deciding against
+   * (cinatra#2817 slice 3).
+   *
+   * Written by `createMcpRuntimeServer`'s policed wrapper onto the frame it
+   * re-enters around the user handler, so anything the handler calls IN-PROCESS
+   * — notably the self-invoker's `callHostPrimitive` — decides against the
+   * SAME snapshot the transport already used to filter registration and to
+   * guard this call, instead of loading a fresher one of its own.
+   *
+   * That mattered: a snapshot loaded mid-request could carry an admission the
+   * request's own perimeter had refused, and a nested self-invocation would
+   * then reach a primitive the very same request had declined to advertise.
+   *
+   * ABSENT MEANS "LOAD ONE", not "admit": a self-invocation off the transport
+   * (worker / cookie path) has no request snapshot to inherit and loads its own,
+   * which denies when the store is unreadable.
+   */
+  delegatedChatAdmissionSnapshot?: DelegatedChatAdmissionSnapshot;
   /**
    * A2A actor context injected by src/app/api/a2a/route.ts after
    * `verifyA2AAccessToken` succeeds. Trust boundary: only the A2A route

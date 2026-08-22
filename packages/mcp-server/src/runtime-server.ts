@@ -402,7 +402,18 @@ export async function createMcpRuntimeServer(input: {
       // sibling reads succeed. Minimal,
       // null-safe: if no ctx was captured, the bare callback runs (matches
       // the behavior for unauthenticated dev probes).
-      return ctx ? mcpRequestContextStorage.run(ctx, () => cb(...cbArgs)) : cb(...cbArgs);
+      //
+      // ONE SNAPSHOT PER REQUEST, ACROSS THE IN-PROCESS HOP TOO (cinatra#2817
+      // slice 3). The frame re-entered here carries the snapshot this request
+      // decided against, so a self-invocation the handler makes reuses it
+      // instead of loading a fresher one. Two snapshots inside one request is
+      // exactly the disagreement class the immutable snapshot exists to end:
+      // the later one could admit what this request's perimeter refused.
+      const frame =
+        policyMode === "delegated-chat" && ctx
+          ? { ...ctx, delegatedChatAdmissionSnapshot: admissionSnapshot }
+          : ctx;
+      return frame ? mcpRequestContextStorage.run(frame, () => cb(...cbArgs)) : cb(...cbArgs);
       });
     } catch (error) {
       // The SDK refused it (a duplicate name, an unusable schema). The entry is
