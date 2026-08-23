@@ -541,25 +541,30 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // the paraphrase instead would make this gate assert that the card
       // consumes fields the server never sends.
       //
-      // `superseded` JOINS THIS LIST (PR #2939), and that closes half of the
-      // gap this comment used to record. It and `scheduleCopy` were both sent
-      // and drawn by nobody; removing the "Armed ·" line took away
-      // `scheduleCopy`'s only reader, which would have deleted cinatra#2859's
-      // superseded warning outright, so the card now draws that warning from
-      // the two of them together. `agentName` is still sent and read by no part
-      // of the drawing — that half of the gap is real and belongs to whoever
-      // ratifies where it appears.
+      // `superseded` AND `scheduleCopy` ARE NOT ON THIS LIST, and the reason is
+      // the plan rather than an omission. Both were briefly drawn as a warning
+      // line above the settled rows; the S9d capture round graded that line a
+      // conformance FAIL against plan (A) §7.2 — "the same card, with the same
+      // option rows, shows the schedule as it stands — no label, no summary
+      // box" — so the renderer stopped drawing it. `superseded` remains a
+      // RESOLVER answer (cinatra#2859: does this card's own token hold the rows
+      // the family settled on?) and remains on the wire, because Confirm
+      // refuses on the same comparison; what it no longer is, is chrome.
+      // `scheduleCopy` lost its only reader with that line, for the same reason
+      // the "Armed ·" line has none: the settled card IS the form. `agentName`
+      // is likewise sent and read by no part of the drawing. All four are
+      // server fields no host draws — pruning them from the protocol is a wire
+      // change with its own version story (the schema is `.strict()`) and is
+      // deliberately NOT folded into this rework. Listed here so the gap is
+      // discovered by reading rather than by a later gate failure.
       //
-      // THREE FIELDS LEAVE THIS LIST, and they leave because the drawing that
-      // read them is gone, not because the server stopped sending them:
-      // `runId` (the "Open the run" link), `triggerType` and `gatedSteps` (the
-      // Trigger configuration summary and the held-steps tree). Plan (A) §7.2
-      // as amended 2026-08-23 removes all three drawings. The settled view
-      // schema still CARRIES the three, so the server now computes fields no
-      // host draws; pruning them from the protocol is a wire change with its
-      // own version story (the schema is `.strict()`) and is deliberately NOT
-      // folded into this rework. Listed here so it is discovered by reading
-      // rather than by a later gate failure.
+      // `triggerType` IS BACK, because a drawing reads it again: plan (A) §7.2
+      // closes the fired one-off to changes ("once a one-off has fired it
+      // cannot be changed"), and the card tells a fired one-off from a released
+      // or still-arming schedule by reading `triggerType` beside `canSave`.
+      // `runId` (the "Open the run" link) and `gatedSteps` (the held-steps
+      // tree) stay off the list: §7.2 as amended 2026-08-23 removes both
+      // drawings.
       fields: [
         "state",
         "phase",
@@ -567,8 +572,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "durationCopy",
         "canConfirm",
         "restrictedReason",
-        "scheduleCopy",
-        "superseded",
+        "triggerType",
         "timezone",
         "released",
         "arming",

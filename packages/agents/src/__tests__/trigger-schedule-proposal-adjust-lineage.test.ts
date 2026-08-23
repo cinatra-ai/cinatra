@@ -938,3 +938,123 @@ describe("the refusals name the schedule, not a proposal by the assistant", () =
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// WHAT A FIRED ONE-OFF RESOLVES TO (cinatra#2788, S9d capture round C6)
+//
+// The settled card withholds its whole floor for a one-off that has fired —
+// plan (A) §7.2, "once a one-off has fired it cannot be changed" — and it
+// recognises that state off the resolved body. So the body itself has to be
+// pinned here, against the resolver, or the card's reading would be checked
+// only against a hand-written fixture that agrees with it by construction.
+//
+// THE FIELD THAT MATTERS IS `released`. Natural firing runs the release job,
+// which calls `markTriggerReleased`; that writes `releasedAt` and NOTHING ELSE
+// — the stated `scheduledAt` is left exactly as installed — and the settled
+// resolution reads `released` straight off that stamp. The rows below keep the
+// schedule that was confirmed for precisely that reason: a fired trigger row is
+// the installed row plus a release stamp, not a rewritten one.
+//
+// THE INSTALL INTENT IS RETAINED, not deleted. `markInstallIntentDone` leaves
+// the row behind with `status: "done"`, which is what makes `arming` false; a
+// vanished intent would model a state the outbox never produces.
+// ---------------------------------------------------------------------------
+
+describe("a fired one-off resolves to the state the card reads it by", () => {
+  /** Far enough ahead that Confirm accepts it, as the reader's own card did. */
+  const RUN_AT = "2099-03-04T09:00";
+  const RUN_AT_INSTANT = new Date("2099-03-04T08:00:00.000Z");
+
+  const ONE_OFF: ProposalSchedule = {
+    kind: "scheduled",
+    runAt: RUN_AT,
+    timezone: "Europe/Berlin",
+  };
+
+  /** The install intent as `markInstallIntentDone` leaves it. */
+  const DONE_INTENT = {
+    runId: "run_1",
+    triggerType: "scheduled",
+    scheduledAt: RUN_AT_INSTANT,
+    cronExpression: null,
+    timezone: "Europe/Berlin",
+    status: "done",
+  };
+
+  /** The durable trigger row as the installer wrote it. */
+  function installedRow(over: Record<string, unknown> = {}) {
+    return {
+      runId: "run_1",
+      triggerType: "scheduled",
+      scheduledAt: RUN_AT_INSTANT,
+      cronExpression: null,
+      timezone: "Europe/Berlin",
+      releasedAt: null,
+      ...over,
+    };
+  }
+
+  /** Confirm the card the way the reader did — while its moment was ahead. */
+  async function settle() {
+    const proposal = mintLive(ONE_OFF);
+    const confirmed = await service.confirmTriggerScheduleProposal(READER, proposal.token);
+    expect(confirmed.ok).toBe(true);
+    return proposal.token;
+  }
+
+  /** Re-open that card later, against the durable row as it stands then. */
+  async function reopen(token: string, row: Record<string, unknown>) {
+    // The outbox drained: the intent stays, marked done.
+    readInstallIntent.mockResolvedValue(DONE_INTENT);
+    readRunTriggerByRunId.mockResolvedValue(row);
+    return service.resolveProposalForReader(token, READER);
+  }
+
+  it("released by its own firing, and unsaveable — both, not one", async () => {
+    // The release job stamps `releasedAt` on the row it found, one second after
+    // the instant it was installed for.
+    const token = await settle();
+    const resolved = await reopen(
+      token,
+      installedRow({ releasedAt: new Date(RUN_AT_INSTANT.getTime() + 1000) }),
+    );
+
+    expect(resolved.phase).toBe("settled");
+    if (resolved.phase !== "settled") return;
+    expect(resolved.triggerType).toBe("scheduled");
+    expect(resolved.released).toBe(true);
+    expect(resolved.arming).toBe(false);
+    expect(resolved.canSave).toBe(false);
+  });
+
+  it("its moment has passed but the release job has not run: NOT released, and unsaveable", async () => {
+    // Real time is moved past the installed instant; nothing else changes. This
+    // is the state the card deliberately does NOT call fired — the gate is
+    // still shut, so Cancel is still the server's to grant.
+    const token = await settle();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(RUN_AT_INSTANT.getTime() + 60 * 60 * 1000));
+      const resolved = await reopen(token, installedRow());
+
+      expect(resolved.phase).toBe("settled");
+      if (resolved.phase !== "settled") return;
+      expect(resolved.released).toBe(false);
+      expect(resolved.arming).toBe(false);
+      expect(resolved.canSave).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a one-off whose moment is still ahead stays saveable — the control is not withdrawn early", async () => {
+    const token = await settle();
+    const resolved = await reopen(token, installedRow());
+
+    expect(resolved.phase).toBe("settled");
+    if (resolved.phase !== "settled") return;
+    expect(resolved.released).toBe(false);
+    expect(resolved.arming).toBe(false);
+    expect(resolved.canSave).toBe(true);
+  });
+});

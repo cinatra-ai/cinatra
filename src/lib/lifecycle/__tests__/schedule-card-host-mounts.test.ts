@@ -235,13 +235,22 @@ describe("the owner's contract, read off its own source", () => {
     // this kind, read off `triggerScheduleProposalViewBodySchema` rather than
     // paraphrased, and this pin exists to say the card consumes it. Two lists
     // that mean the same thing are two lists that drift, and this one had:
-    // it still named `.triggerType`, `.gatedSteps` and `.runId` after the
-    // chrome removal took away the drawings that read them — the Trigger
-    // configuration summary, the held-steps tree and the "Open the run" link.
-    // The gate dropped all three (plan (A) §7.2 removes the drawings); the card
-    // draws none of them; so a pin demanding them was demanding the chrome back
-    // through a test. `.restrictedReason` and `.superseded` join for the same
-    // reason in reverse — the gate authorizes them and the card reads them.
+    // it still named `.gatedSteps` and `.runId` after the chrome removal took
+    // away the drawings that read them — the held-steps tree and the "Open the
+    // run" link. The gate dropped both (plan (A) §7.2 removes the drawings);
+    // the card draws neither; so a pin demanding them was demanding the chrome
+    // back through a test. `.restrictedReason` joins for the same reason in
+    // reverse — the gate authorizes it and the card reads it.
+    //
+    // `.scheduleCopy` AND `.superseded` LEAVE, and `.triggerType` COMES BACK.
+    // The S9d capture round graded the supersede warning above the settled rows
+    // a conformance FAIL against §7.2 — "the same card, with the same option
+    // rows, shows the schedule as it stands — no label, no summary box" — so
+    // the renderer stopped drawing it, and the two fields it read went with it.
+    // `.triggerType` returns because §7.2's other sentence gave it a reader
+    // again: "once a one-off has fired it cannot be changed", and the card
+    // tells a fired one-off from a released or still-arming schedule by reading
+    // `triggerType` beside `canSave`.
     //
     // THE CARD IS NOT CHANGED TO SATISFY THIS. The direction of the fix is the
     // one the seam has always had: the gate says what the server sends, the
@@ -253,8 +262,7 @@ describe("the owner's contract, read off its own source", () => {
       ".durationCopy",
       ".canConfirm",
       ".restrictedReason",
-      ".scheduleCopy",
-      ".superseded",
+      ".triggerType",
       ".timezone",
       ".released",
       ".arming",

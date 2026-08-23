@@ -1063,3 +1063,317 @@ describe("the rework — the step is the form and nothing else", () => {
     expect(releaseStrip?.textContent).not.toContain("trigger");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE TWO CONFORMANCE FAILS OF THE S9d CAPTURE ROUND (PR #2939, C2 and C6)
+//
+// Both are the settled card drawing chrome plan (A) §7.2 does not define. They
+// are pinned as their own block because each one is a sentence of the plan read
+// literally, not a refinement of the shape the block above pins.
+// ---------------------------------------------------------------------------
+
+describe("the settled card draws the schedule as it stands, and nothing else", () => {
+  const ALL_HOSTS = ["chat_thread", "site_widget", "run_card", "page_gate_region"] as const;
+
+  /** A one-off whose time has PASSED — the state the plan closes to changes. */
+  const FIRED_ONE_OFF: ProposedSchedule = {
+    kind: "scheduled",
+    runAt: "2020-03-04T09:00",
+    timezone: "Europe/Berlin",
+  };
+
+  /**
+   * C2 — an ADJUSTED-THEN-CONFIRMED schedule re-opens on the SETTLED rows.
+   *
+   * Plan (A) §7.2: "the same card, with the same option rows, shows the
+   * schedule as it stands — no label, no summary box". `superseded` is the
+   * resolver's answer to a sibling question (cinatra#2859) — whether THIS
+   * card's own token holds the rows the family settled on — and the rows it
+   * guards are already right, because the resolver reads them back off the
+   * installed row. The plan defines no chrome for it, so the renderer draws
+   * none: the card re-opens on the armed rows and says nothing above them.
+   */
+  it("a settled card marked superseded draws the ARMED rows and no supersede line", async () => {
+    for (const host of ALL_HOSTS) {
+      mockTransport(
+        { state: "settled" },
+        settledBody({
+          superseded: true,
+          scheduleCopy:
+            "This card was adjusted before it was set — open the run to see the schedule that was set.",
+        }),
+      );
+      const view = renderOn(host);
+      await waitFor(() =>
+        expect(
+          view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
+        ).not.toBeNull(),
+      );
+      expect(
+        view.container.querySelector('[data-conformance-id="schedule-superseded"]'),
+      ).toBeNull();
+      expect(view.container.textContent).not.toContain("adjusted before it was set");
+      expect(view.container.textContent).not.toContain("open the run");
+      // The rows are the ARMED ones and they are still the only thing above the
+      // floor: a superseded card is an ordinary settled card to the reader.
+      expect(
+        (
+          view.container.querySelector(
+            '[data-field="recurring-timezone"]',
+          ) as HTMLInputElement | null
+        )?.value,
+      ).toBe("Europe/Berlin");
+      view.unmount();
+      cleanup();
+    }
+  });
+
+  /**
+   * C6 — a FIRED one-off offers nothing to press.
+   *
+   * Plan (A) §7.2: "once a one-off has fired it cannot be changed", and **Save
+   * changes** is defined for the changeable state only — "As long as the
+   * schedule has not fired, you can change it". A disabled Save changes is
+   * still the card offering the control the plan withdrew, so the fired card
+   * draws no floor at all and its rows simply stand.
+   *
+   * THE BODY BELOW IS THE STATE THE SERVER ACTUALLY PRODUCES, not a setting of
+   * a flag chosen to match the renderer's reading. Natural firing runs the
+   * release job, which marks the trigger released (`markTriggerReleased` →
+   * `releasedAt`), so the resolver reads back `released: true` — and with it
+   * `canSave: false`, `canCancel: false`, `canRelease: false`. An earlier draft
+   * of this fix keyed off `canSave` alone and demanded `!released`, which is
+   * the one shape a fired one-off never has; it is spelled out here so that
+   * cannot come back.
+   *
+   * `trigger-schedule-proposal-adjust-lineage.test.ts` pins the same body
+   * against the resolver itself, so this file is not the only place that says
+   * what a fired one-off looks like.
+   */
+  it("a FIRED one-off draws no Save changes, no operations, and read-only rows", async () => {
+    for (const host of ALL_HOSTS) {
+      mockTransport(
+        { state: "settled" },
+        settledBody({
+          triggerType: "scheduled",
+          schedule: FIRED_ONE_OFF,
+          scheduleCopy: "Once, at 2020-03-04 09:00",
+          canSave: false,
+          canCancel: false,
+          canRelease: false,
+          released: true,
+          arming: false,
+        }),
+      );
+      const view = renderOn(host);
+      await waitFor(() =>
+        expect(
+          view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
+        ).not.toBeNull(),
+      );
+      expect(view.container.querySelector('[data-action="save-schedule-changes"]'), host).toBeNull();
+      expect(
+        view.container.querySelector('[data-action="cancel-trigger-schedule"]'),
+        host,
+      ).toBeNull();
+      expect(view.container.querySelector('[data-action="release-trigger-now"]'), host).toBeNull();
+      expect(
+        view.container.querySelector('[data-action="confirm-schedule-proposal"]'),
+        host,
+      ).toBeNull();
+      expect(view.container.textContent, host).not.toContain("Save changes");
+      // The whole floor is gone, not just its controls.
+      expect(
+        view.container.querySelector('[data-conformance-id="schedule-proposal-floor"]'),
+        host,
+      ).toBeNull();
+      // And no status label stands in for them — "the rows simply stand".
+      expect(
+        view.container.querySelector('[data-conformance-id="schedule-released"]'),
+        host,
+      ).toBeNull();
+      expect(view.container.textContent, host).not.toContain("Released —");
+      // The rows stand — read-only, showing the schedule that fired.
+      expect(
+        isDisabled(view.container.querySelector('[data-field="schedule-run-at"]')),
+        host,
+      ).toBe(true);
+      view.unmount();
+      cleanup();
+    }
+  });
+
+  /**
+   * FIRING IS THE LINE, and this is the state on the other side of it. A
+   * one-off whose moment has passed while the release job has not drained yet
+   * has NOT fired: its gate is shut and **Cancel schedule** still acts on a
+   * live job, so the server keeps authorizing it (`canCancel: true`) even
+   * though it refuses a save. That card is UNCHANGED by this fix — the floor
+   * stands, with Save changes dead and Cancel live — because widening "fired"
+   * to reach it would take away an operation the server is still granting.
+   */
+  it("a one-off past its moment but NOT yet released keeps the floor it always had", async () => {
+    mockTransport(
+      { state: "settled" },
+      settledBody({
+        triggerType: "scheduled",
+        schedule: FIRED_ONE_OFF,
+        scheduleCopy: "Once, at 2020-03-04 09:00",
+        canSave: false,
+        canCancel: true,
+        canRelease: true,
+        released: false,
+        arming: false,
+      }),
+    );
+    const { container } = renderOn("run_card");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
+    );
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    expect(isDisabled(container.querySelector('[data-action="cancel-trigger-schedule"]'))).toBe(
+      false,
+    );
+    expect(container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull();
+  });
+
+  /**
+   * THE ARMING/RELEASE RACE. The installer exposes the schedule to the
+   * scheduler before it marks the install intent done, so a near-term one-off
+   * can fire while the intent still reads as arming. The card must call that
+   * fired — a floor standing over a schedule that has already run is the C6
+   * failure with a different cause.
+   */
+  it("a one-off released while its install intent still reads as arming is fired", async () => {
+    mockTransport(
+      { state: "settled" },
+      settledBody({
+        triggerType: "scheduled",
+        schedule: FIRED_ONE_OFF,
+        scheduleCopy: "Once, at 2020-03-04 09:00",
+        canSave: false,
+        canCancel: false,
+        canRelease: false,
+        released: true,
+        arming: true,
+      }),
+    );
+    const { container } = renderOn("run_card");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
+    );
+    expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
+    expect(container.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
+    // And NEITHER status line above the rows — this body satisfies both — since
+    // each exists to explain a withheld control and this card has none left to
+    // explain.
+    expect(container.querySelector('[data-conformance-id="schedule-arming"]')).toBeNull();
+    expect(container.textContent).not.toContain("Arming");
+    expect(container.querySelector('[data-conformance-id="schedule-released"]')).toBeNull();
+    expect(container.textContent).not.toContain("Released —");
+  });
+
+  /**
+   * A confirm strip cannot outlive the floor that opened it. The card
+   * re-resolves on focus without remounting `SettledPhase`, so a reader who
+   * opens "Cancel this schedule?" on a still-changeable one-off and comes back
+   * after it has fired would otherwise be left holding a live confirm button
+   * over a card that no longer offers the operation.
+   */
+  it("an open confirm strip is withdrawn when the card re-resolves as fired", async () => {
+    let settled = settledBody({
+      triggerType: "scheduled",
+      schedule: { kind: "scheduled", runAt: "2099-03-04T09:00", timezone: "Europe/Berlin" },
+      scheduleCopy: "Once, at 2099-03-04 09:00",
+      canSave: true,
+      canCancel: true,
+      canRelease: true,
+    });
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const isDecision = typeof init?.body === "string" && init.body.includes('"op"');
+      return new Response(
+        JSON.stringify(
+          isDecision
+            ? { kind: "confirmed", runId: "run-777", alreadyConfirmed: false }
+            : { kind: "trigger_schedule_proposal", state: { state: "settled" }, body: settled },
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { container } = renderOn("run_card");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull(),
+    );
+    fireEvent.click(container.querySelector('[data-action="cancel-trigger-schedule"]')!);
+    expect(
+      container.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
+    ).not.toBeNull();
+
+    // The reader also starts editing the rows and never saves.
+    fireEvent.change(container.querySelector('[data-field="schedule-run-at"]')!, {
+      target: { value: "2098-01-01T07:30" },
+    });
+    expect(
+      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
+    ).toBe("2098-01-01T07:30");
+
+    // The schedule fires underneath the open strip, and the card re-resolves.
+    settled = settledBody({
+      triggerType: "scheduled",
+      schedule: FIRED_ONE_OFF,
+      scheduleCopy: "Once, at 2020-03-04 09:00",
+      canSave: false,
+      canCancel: false,
+      canRelease: false,
+      released: true,
+    });
+    fireEvent.focus(window);
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
+      ).toBeNull(),
+    );
+    expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
+    // AND THE UNSAVED EDIT IS GONE WITH IT. The rows now stand read-only, so
+    // whatever they show is a claim about what ran — it must be the server's
+    // schedule, never the draft nobody armed.
+    expect(
+      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
+    ).toBe("2020-03-04T09:00");
+  });
+
+  /**
+   * THE CHANGEABLE STATE IS UNTOUCHED, and this is the half that makes the one
+   * above a fix rather than a deletion: "As long as the schedule has not fired,
+   * you can change it" (§7.2). A one-off still ahead of its time keeps the
+   * whole floor, and so does a recurring schedule.
+   */
+  it("a one-off that has NOT fired keeps Save changes, and so does a recurring schedule", async () => {
+    mockTransport(
+      { state: "settled" },
+      settledBody({
+        triggerType: "scheduled",
+        schedule: { kind: "scheduled", runAt: "2099-03-04T09:00", timezone: "Europe/Berlin" },
+        scheduleCopy: "Once, at 2099-03-04 09:00",
+        canSave: true,
+      }),
+    );
+    const upcoming = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(upcoming.container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    expect(isDisabled(upcoming.container.querySelector('[data-field="schedule-run-at"]'))).toBe(false);
+    upcoming.unmount();
+    cleanup();
+
+    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+    const recurring = renderOn("run_card");
+    await waitFor(() =>
+      expect(recurring.container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    expect(recurring.container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull();
+    expect(recurring.container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull();
+  });
+});
