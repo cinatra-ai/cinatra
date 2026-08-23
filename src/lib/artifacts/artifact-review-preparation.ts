@@ -59,10 +59,30 @@ export type ReviewMountFloorReason =
   /** The artifact's type ships no semantic detail renderer — the generic floor. */
   | "no-semantic-renderer";
 
+/**
+ * The FORM-RENDERING RUNG's first-party arm (plan `PLAN: Agents Lifecycle (B)`
+ * §5): the declared text forms the HOST itself renders — markdown and escaped
+ * plain text. This is the rung the card was missing: the artifact page consumed
+ * it before its fallback and the review path did not, so the same markdown draft
+ * that renders on its own page showed "cannot render" under review.
+ *
+ * A CLOSED SET, and deliberately a local one. The pure core must not import the
+ * route-scoped `pickHandler` (it reaches the server-only artifact-read module),
+ * so the arm names are declared here and a structural test pins them to the
+ * handler kinds `pickHandler` can actually return. Widening the host floor
+ * therefore fails that test rather than silently drifting the two apart.
+ *
+ * It is an ARM, not the rung: once an artifact extension ships its own renderer
+ * for a text type, the semantic tier wins above this and the arm is only a
+ * floor — which is exactly why it is consumed BEFORE the fallback and not
+ * instead of a package's renderer.
+ */
+export type ReviewFormArm = "markdown" | "text";
+
 /** The single renderer the review surface mounts for a target. Semantic `detail`
- * slot this release. Every field (generatedKey / packageName / descriptor) is
- * HOST-resolved from the artifact type — the client receives it, it never
- * supplies it. */
+ * slot this release. Every field (generatedKey / packageName / descriptor /
+ * form) is HOST-resolved from the artifact type — the client receives it, it
+ * never supplies it. */
 export type ReviewTargetMount =
   | { kind: "build-map"; slot: "detail"; packageName: string; generatedKey: string }
   | {
@@ -71,6 +91,10 @@ export type ReviewTargetMount =
       packageName: string;
       descriptor: SerializedRuntimeRendererDescriptor;
     }
+  /** The form-rendering rung: the host's own renderer for a declared text form,
+   * server-rendered against the PINNED revision. `arm` names which arm of the
+   * rung was consumed, so a later package arm is a new arm and not a new kind. */
+  | { kind: "form"; slot: "detail"; arm: "first-party"; form: ReviewFormArm }
   | { kind: "floor"; slot: "detail"; packageName: string | null; reason: ReviewMountFloorReason };
 
 /** One prepared target: its display props (null when there is no artifact /
@@ -106,6 +130,7 @@ export type RevisionMemberOutcome = { mime: string } | null;
 export type ResolvedRendererMount =
   | { kind: "build-map"; packageName: string; generatedKey: string }
   | { kind: "runtime"; packageName: string; descriptor: SerializedRuntimeRendererDescriptor }
+  | { kind: "form"; arm: "first-party"; form: ReviewFormArm }
   | { kind: "floor"; packageName: string | null; reason: "requires-rebuild" | "no-semantic-renderer" };
 
 export interface PrepareReviewPorts {
@@ -259,6 +284,16 @@ async function prepareOneTarget(
       target,
       props,
       mount: { kind: "runtime", slot: "detail", packageName: resolved.packageName, descriptor: resolved.descriptor },
+    };
+  }
+  if (resolved.kind === "form") {
+    // The form rung reaches the reviewer with the SAME pinned props every other
+    // mount kind carries — the host renders the frozen revision, never the
+    // artifact's latest.
+    return {
+      target,
+      props,
+      mount: { kind: "form", slot: "detail", arm: resolved.arm, form: resolved.form },
     };
   }
   return { target, props, mount: floor(resolved.packageName, resolved.reason) };

@@ -261,6 +261,10 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
     expect(MODEL).toMatch(/case "build-map":\s*\n\s*return "review-provenance-native"/);
     expect(MODEL).toMatch(/case "runtime":\s*\n\s*return "review-provenance-marketplace"/);
     expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
+    // cinatra#2931 W4: the form rung's first-party arm is a build-time renderer
+    // that ships in the host release, so it reads on §III's NATIVE axis — the
+    // three drawn tiers stay three.
+    expect(MODEL).toMatch(/case "form":\s*\n\s*return "review-provenance-native"/);
   });
 
   it("a runtime provenance additionally shows its package identity (§III)", () => {
@@ -268,11 +272,24 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
     expect(TARGET_PANEL).toMatch(/provenance\.packageName/);
   });
 
-  it("the representation slot mounts through the host ReviewTargetMount with a generic-floor fallback", () => {
+  it("the representation slot mounts through the host ReviewTargetMount, on the host's org scope", () => {
     expect(TARGET_PANEL).toMatch(/ReviewTargetMount/);
-    expect(TARGET_PANEL).toMatch(/fallback=\{genericFloor\}/);
-    // The floor renders from host display-only props, never the raw bytes.
-    expect(TARGET_PANEL).toMatch(/ReviewGenericFloor/);
+    expect(TARGET_PANEL).toMatch(/orgId=\{orgId\}/);
+  });
+
+  // cinatra#2931 W4 — plan (B) §5: "The fallback face dies with its wrong
+  // diagnosis." The sentence, the table of technical fields and the Preview /
+  // Download links are gone from the card; what remains is the mount's own
+  // sanitized diagnostic for a genuine no-renderer state and for each defensive
+  // state, which keep their honest readings.
+  it("carries NO fallback face — no 'no renderer resolved' sentence, no field table, no Preview/Download", () => {
+    const panel = stripComments(TARGET_PANEL);
+    expect(panel).not.toMatch(/No type renderer resolved/);
+    expect(panel).not.toMatch(/ReviewGenericFloor/);
+    expect(panel).not.toMatch(/genericFloor/);
+    expect(panel).not.toMatch(/urls\.preview|urls\.download/);
+    expect(panel).not.toMatch(/>\s*Download\s*</);
+    expect(TARGET_PANEL).toMatch(/fallback=\{null\}/);
   });
 });
 

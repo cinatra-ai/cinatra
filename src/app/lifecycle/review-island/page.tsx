@@ -223,6 +223,10 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
         >
           <ReviewTargetPanel
             prepared={prepared}
+            // The TRUSTED organization scope, from the reader this island just
+            // authorized — never from the query string and never from the
+            // display props. The form rung reads the pinned bytes under it.
+            orgId={actorCtx.orgId}
             capturePair={surface.pinnedCapturePairs[pinnedCaptureKey(prepared.target)] ?? null}
           />
         </Suspense>

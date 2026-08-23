@@ -264,7 +264,7 @@
     },
     {
      "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
-     "testName": "the representation slot mounts through the host ReviewTargetMount with a generic-floor fallback"
+     "testName": "the representation slot mounts through the host ReviewTargetMount, on the host's org scope"
     },
     {
      "file": "src/app/lifecycle/review-island/__tests__/page.test.tsx",

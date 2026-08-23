@@ -143,6 +143,13 @@ export function reviewProvenanceConformanceId(
   switch (mount.kind) {
     case "build-map":
       return "review-provenance-native";
+    // The FORM RUNG's first-party arm (plan (B) §5) is a build-time renderer
+    // that ships in the host release, so it reads on §III's NATIVE axis. It is
+    // deliberately not a fourth axis: §III draws three tiers and this slice
+    // redraws no screen — what changed is which tier a markdown draft lands on,
+    // not how many tiers there are.
+    case "form":
+      return "review-provenance-native";
     case "runtime":
       return "review-provenance-marketplace";
     case "floor":
@@ -158,13 +165,19 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
   slot: string;
   packageName: string | null;
 } {
-  if (mount.kind === "build-map") {
-    return { kind: "build-time", slot: mount.slot, packageName: mount.packageName };
+  switch (mount.kind) {
+    case "build-map":
+      return { kind: "build-time", slot: mount.slot, packageName: mount.packageName };
+    // The form rung reads as the build-time tier and names NO package, because
+    // there is none: the host itself renders the declared text form. A package
+    // name invented here would be a claim about an extension that never ran.
+    case "form":
+      return { kind: "build-time", slot: mount.slot, packageName: null };
+    case "runtime":
+      return { kind: "runtime", slot: mount.slot, packageName: mount.packageName };
+    case "floor":
+      return { kind: "floor", slot: mount.slot, packageName: mount.packageName };
   }
-  if (mount.kind === "runtime") {
-    return { kind: "runtime", slot: mount.slot, packageName: mount.packageName };
-  }
-  return { kind: "floor", slot: mount.slot, packageName: mount.packageName };
 }
 
 // ---------------------------------------------------------------------------

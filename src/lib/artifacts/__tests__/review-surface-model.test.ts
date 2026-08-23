@@ -27,6 +27,13 @@ import {
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
 import { LIFECYCLE_SETTLED_OUTCOMES } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
+const form: ReviewTargetMount = {
+  kind: "form",
+  slot: "detail",
+  arm: "first-party",
+  form: "markdown",
+};
+
 const buildMap: ReviewTargetMount = {
   kind: "build-map",
   slot: "detail",
@@ -53,12 +60,18 @@ describe("§III — provenance conformance id from the OPAQUE mount kind", () =>
     expect(reviewProvenanceConformanceId(buildMap)).toBe("review-provenance-native");
     expect(reviewProvenanceConformanceId(runtime)).toBe("review-provenance-marketplace");
     expect(reviewProvenanceConformanceId(floor)).toBe("review-target-floor");
+    // cinatra#2931 W4 — the form rung reads on the NATIVE axis (a build-time,
+    // host-shipped renderer), so §III keeps its three drawn tiers.
+    expect(reviewProvenanceConformanceId(form)).toBe("review-provenance-native");
   });
 
   it("provenance label kind + package identity for a runtime; 'Floor' for a floor", () => {
     expect(reviewProvenanceLabel(buildMap).kind).toBe("build-time");
     expect(reviewProvenanceLabel(runtime)).toMatchObject({ kind: "runtime", packageName: "@acme/support" });
     expect(reviewProvenanceLabel(floor).kind).toBe("floor");
+    // The form rung names NO package: the host itself rendered the declared
+    // text form, and a package name here would claim an extension that never ran.
+    expect(reviewProvenanceLabel(form)).toMatchObject({ kind: "build-time", packageName: null });
   });
 });
 

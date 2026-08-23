@@ -83,6 +83,27 @@ async function renderIsland(
   })) as ReactElement;
 }
 
+/** Every target panel the island put in its tree, with the props it handed it.
+ * cinatra#2931 W4: the panel's organization scope must come from the reader the
+ * island just authorized, so the test reads what was actually passed. */
+function panelProps(el: ReactElement): Array<Record<string, unknown>> {
+  const found: Array<Record<string, unknown>> = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child);
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    const props = (node as { props?: Record<string, unknown> }).props;
+    if (!props) return;
+    if ("prepared" in props) found.push(props);
+    walk(props.children);
+    walk(props.fallback);
+  };
+  walk(el);
+  return found;
+}
+
 /** The island's ONE empty answer, however it was reached. */
 function isEmptyIsland(el: ReactElement): boolean {
   const props = el.props as { "data-conformance-id"?: string };
@@ -126,6 +147,20 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
     const el = await renderIsland(REF);
     const props = el.props as { "data-target-count"?: number };
     expect(props["data-target-count"]).toBe(3);
+  });
+
+  it("hands each panel the TRUSTED organization scope of the reader it authorized", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets: [target("a1"), target("a2")],
+      pinnedCapturePairs: {},
+      permissions: { canDecide: true, canComment: true },
+    });
+    const el = await renderIsland(REF);
+    const panels = panelProps(el);
+    expect(panels).toHaveLength(2);
+    for (const p of panels) expect(p.orgId).toBe(ACTOR.orgId);
   });
 
   it("carries NO decision chrome — the floor belongs to the card outside the frame", async () => {

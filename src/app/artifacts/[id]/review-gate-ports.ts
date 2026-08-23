@@ -132,15 +132,28 @@ export async function prepareReviewTargets(args: {
 // DECIDE — the full SubmitDecisionPorts the decision core consumes.
 // ---------------------------------------------------------------------------
 
-/** Map the type-resolved mount to audit provenance (host-authoritative). */
-function provenanceFromResolvedMount(resolved: ResolvedRendererMount): ReviewRendererProvenance {
-  if (resolved.kind === "build-map") {
-    return { kind: "build-map", packageName: resolved.packageName, digest: null };
+/** Map the type-resolved mount to audit provenance (host-authoritative).
+ * Exported for its own unit test — the submit-time port that calls it needs a
+ * database, and the mapping is exactly what must not drift when a mount kind is
+ * added (cinatra#2931 W4). */
+export function provenanceFromResolvedMount(resolved: ResolvedRendererMount): ReviewRendererProvenance {
+  switch (resolved.kind) {
+    case "build-map":
+      return { kind: "build-map", packageName: resolved.packageName, digest: null };
+    case "runtime":
+      return {
+        kind: "runtime",
+        packageName: resolved.packageName,
+        digest: resolved.descriptor.tuple.digest,
+      };
+    // The FORM RUNG, re-resolved at submit time like every other kind, so a
+    // rendered text target is recorded as RENDERED. Recording it as a floor
+    // would put a fallback on the audit row of a review the reader read in full.
+    case "form":
+      return { kind: "first-party", packageName: null, digest: null };
+    case "floor":
+      return { kind: "floor", packageName: resolved.packageName, digest: null };
   }
-  if (resolved.kind === "runtime") {
-    return { kind: "runtime", packageName: resolved.packageName, digest: resolved.descriptor.tuple.digest };
-  }
-  return { kind: "floor", packageName: resolved.packageName, digest: null };
 }
 
 /** Bind every decision port (run access + gate state + submit-time membership +

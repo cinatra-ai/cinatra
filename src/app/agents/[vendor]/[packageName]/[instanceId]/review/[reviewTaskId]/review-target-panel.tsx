@@ -1,9 +1,7 @@
 import "server-only";
 
 import type { ReactNode } from "react";
-import Link from "next/link";
 
-import { Button } from "@/components/ui/button";
 import type { PreparedReviewTarget } from "@/lib/artifacts/artifact-review-preparation";
 import { ReviewTargetMount } from "@/app/artifacts/[id]/review-target-mount";
 import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
@@ -25,15 +23,29 @@ import {
  * type-agnostic: it keys on the OPAQUE host mount kind only (G1-clean).
  *
  * Conformance anchors (design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891): the panel is `review-target`; the
- * provenance region is `review-provenance-native` (build-time), `review-
- * provenance-marketplace` (runtime), or `review-target-floor` (any floor) — the
- * §III axis derived from the mount kind.
+ * provenance region is `review-provenance-native` (build-time, the form rung's
+ * first-party arm included), `review-provenance-marketplace` (runtime), or
+ * `review-target-floor` (any floor) — the §III axis derived from the mount kind.
+ *
+ * THE FALLBACK FACE IS GONE (plan `PLAN: Agents Lifecycle (B)` §5). The panel
+ * used to pass a generic "no type renderer resolved" card — a sentence, a table
+ * of technical fields, and Preview / Download links — as the floor node beneath
+ * every degrade. A download link is never the body of a review, and inside a
+ * third-party application those links were dead ends demanding a login that
+ * never exists there. What remains is the sanitized diagnostic the mount draws
+ * for a genuine no-renderer state and for each defensive state (a deleted or
+ * unreadable target, a display mid-upgrade, a runtime failure), which keep their
+ * own honest readings.
  */
 export function ReviewTargetPanel({
   prepared,
+  orgId,
   capturePair = null,
 }: {
   prepared: PreparedReviewTarget;
+  /** The reviewing surface's TRUSTED organization scope, from the host that
+   * already authorized this reader — the form rung reads bytes under it. */
+  orgId: string;
   /** S6 (#2044 L-B + L-D): the visual before/after PAIR pinned at gate creation
    * for this target — the live page beside the proposal composed into its chrome.
    * `null` for every target that has no captures, which renders nothing: the
@@ -48,12 +60,6 @@ export function ReviewTargetPanel({
   const revision = reviewRevisionMarker(target.representationRevisionId);
   const provenance = reviewProvenanceLabel(mount);
   const provenanceConformanceId = reviewProvenanceConformanceId(mount);
-
-  // The never-blank generic FLOOR fallback (§III): a type-level floor renders it
-  // BENEATH the diagnostic (there is an authorized representation); an artifact-
-  // level floor (props null) has nothing to show, so the fallback is empty and
-  // ReviewTargetMount shows the sanitized diagnostic alone.
-  const genericFloor: ReactNode = props ? <ReviewGenericFloor prepared={prepared} /> : null;
 
   return (
     <div
@@ -114,55 +120,9 @@ export function ReviewTargetPanel({
       {/* The representation slot — the type renderer mounts here, or the floor.
           S6: the PINNED before/after pair follows as non-decisional visual context. */}
       <div className="p-4" data-review-representation-slot="">
-        <ReviewTargetMount mount={mount} props={props} fallback={genericFloor} />
+        <ReviewTargetMount mount={mount} props={props} orgId={orgId} fallback={null} />
         <ReviewPinnedCapture pair={capturePair} />
       </div>
-    </div>
-  );
-}
-
-/**
- * The generic, read-only floor content (§III) — a design-neutral view built from
- * the host display-only props: the artifact title, a muted note that no type
- * renderer resolved, and the host-authorized (version-pinned) preview / download
- * links. Never the raw bytes; never blank. Shown BENEATH the ReviewTargetMount
- * sanitized diagnostic for a type-level floor.
- */
-function ReviewGenericFloor({ prepared }: { prepared: PreparedReviewTarget }): ReactNode {
-  const { props } = prepared;
-  if (!props) return null;
-  return (
-    <div className="rounded-control bg-surface p-3">
-      <div className="font-sans text-xs font-bold text-foreground">
-        {props.artifact.title ?? props.artifact.id}
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        No type renderer resolved for this artifact — showing the generic read-only view.
-      </p>
-      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-badge-xs text-muted-foreground">
-        <dt>type</dt>
-        <dd className="text-foreground">{props.artifact.objectType}</dd>
-        <dt>mime</dt>
-        <dd className="text-foreground">{props.artifact.mime}</dd>
-        <dt>revision</dt>
-        <dd className="text-foreground">{props.representation?.revisionId ?? "—"}</dd>
-      </dl>
-      {props.urls.preview || props.urls.download ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {props.urls.preview ? (
-            <Button asChild variant="link" size="sm" className="h-auto px-0">
-              <Link href={props.urls.preview}>Preview</Link>
-            </Button>
-          ) : null}
-          {props.urls.download ? (
-            <Button asChild variant="link" size="sm" className="h-auto px-0">
-              <Link href={props.urls.download} download>
-                Download
-              </Link>
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 }

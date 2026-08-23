@@ -11,6 +11,8 @@ import type {
 import { ExtensionRendererSlot } from "./extension-renderer-slot";
 import { DynamicRendererLoader } from "./dynamic-renderer-loader";
 import { runRuntimeRendererFreshnessPreflight } from "./runtime-renderer-preflight";
+import { MarkdownHandler } from "./handlers/markdown-handler";
+import { PlainTextHandler } from "./handlers/plain-text-handler";
 
 /**
  * The client artifact-MOUNT BRIDGE for the generic review surface (cinatra#1795,
@@ -34,8 +36,19 @@ import { runRuntimeRendererFreshnessPreflight } from "./runtime-renderer-preflig
  *     BOUND fail-closed freshness preflight (marketplace-installed, zero host
  *     rebuild). A descriptor that already carries a pre-import `reason` floors in
  *     the loader without importing.
+ *   - `form`      → the FORM-RENDERING RUNG (plan `PLAN: Agents Lifecycle (B)`
+ *     §5): the host's own renderer for a declared text form, server-rendered
+ *     here — inside the card's authenticated island — against the PINNED
+ *     revision the gate froze. It is the rung the card was missing, and the
+ *     reason the same markdown draft that renders on its own page used to show
+ *     "cannot render" under review.
  *   - `floor`     → the never-blank host floor: a sanitized, telemetry-safe
  *     diagnostic + the caller's generic fallback node.
+ *
+ * THE ORGANIZATION SCOPE COMES FROM THE HOST. The form arm reads artifact bytes,
+ * so it needs a tenant, and it takes it as a prop from the surface that already
+ * authorized the reader — never from the display props (which are a client-
+ * facing snapshot) and never from ambient request state.
  *
  * This bridge is type-agnostic PLUMBING. The decision chrome that WRAPS it (the
  * approve/reject/comment affordances + the review context) is a design-surface
@@ -46,6 +59,7 @@ import { runRuntimeRendererFreshnessPreflight } from "./runtime-renderer-preflig
 export async function ReviewTargetMount({
   mount,
   props,
+  orgId,
   fallback,
 }: {
   mount: ReviewTargetMountDescriptor;
@@ -53,6 +67,10 @@ export async function ReviewTargetMount({
    * an artifact-level floor (unknown / read-denied / non-member revision) where
    * there is no authorized artifact to render props from. */
   props: ArtifactRendererProps | null;
+  /** The reviewing surface's TRUSTED organization scope — supplied by the host
+   * that already resolved and authorized the reader. The form arm reads bytes
+   * under it; every other mount kind ignores it. */
+  orgId: string;
   /** The host's generic floor node — rendered on EVERY non-mount state. */
   fallback: ReactNode;
 }): Promise<ReactNode> {
@@ -82,6 +100,24 @@ export async function ReviewTargetMount({
         fallback={fallback}
         preflight={preflight}
       />
+    );
+  }
+
+  if (mount.kind === "form") {
+    // The pinned revision is the ONE the gate froze: it travels on the host-built
+    // props, which the preparation core built from the gate's pinned target, so
+    // this arm can never render the artifact's latest.
+    const revisionId = props?.representation?.revisionId ?? null;
+    if (!props || !revisionId) {
+      return reviewFloor(null, mount.slot, "no-representation", fallback);
+    }
+    if (mount.form === "markdown") {
+      return (
+        <MarkdownHandler artifactId={props.artifact.id} revisionId={revisionId} orgId={orgId} />
+      );
+    }
+    return (
+      <PlainTextHandler artifactId={props.artifact.id} revisionId={revisionId} orgId={orgId} />
     );
   }
 
