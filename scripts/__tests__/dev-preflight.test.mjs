@@ -48,6 +48,7 @@ import {
   formatConnectPortMismatch,
   formatGuardedComposeCommand,
   formatStandDownUnreachable,
+  formatUnusableServiceUrl,
   formatUnmanagedServices,
   isLinkedWorktree,
   normalizeComposeProjectName,
@@ -280,6 +281,125 @@ describe("classifyServiceUrl", () => {
       state: "theirs",
       url: "http://localhost/nango",
     });
+  });
+
+  // THE SHAPE ENUMERATION (cinatra#2839, round-4 finding). Every non-empty
+  // value a service URL can hold, and the ONE question that decides what a
+  // surface may say about it: does the value name an address, or does it not?
+  //
+  // `theirs` and `unusable` are both stood down and are NOT interchangeable in
+  // speech. A `theirs` row has an address the app really dials, so "not
+  // reachable yet at <address>" is a fact about it. An `unusable` row has none,
+  // and every address a local surface could print for it comes from
+  // `parseHostPort`'s FALLBACK — which is how `REDIS_URL=not a url` was reported
+  // as "not reachable yet at 127.0.0.1:6379", an address the app never uses.
+  //
+  // The right-hand column is the truth this table asserts, one row at a time.
+  it.each([
+    // stated value                          | state          | why it is that state
+    ["not a url", "unusable", "no scheme, no host, no port: `new URL` rejects it outright"],
+    ["/var/run/redis.sock", "unusable", "a bare path is not a URL either"],
+    ["redis://", "unusable", "parses, and states no host at all"],
+    ["redis:///0", "unusable", "a path with no authority — still no host"],
+    ["unix:///var/run/redis.sock", "unusable", "may be a fine value for the client, and states no host and port"],
+    ["redis://127.0.0.1:0/0", "unusable", "port 0 is outside 1-65535; nothing can listen there"],
+    ["redis://127.0.0.1:65536", "unusable", "out of range — `new URL` rejects it, so it reads as unparseable"],
+    ["redis://127.0.0.1:-1", "unusable", "same: rejected by the parser"],
+    ["redis://127.0.0.1:6379", "ours", "explicit-port loopback URL — this checkout's own claim"],
+    ["redis://:pw@127.0.0.1:16379", "ours", "userinfo is dropped before the port is read"],
+    ["redis://[::1]:6379/0", "ours", "IPv6 loopback, unwrapped before the loopback test"],
+    ["redis://host.docker.internal:16379", "ours", "maps to loopback in the classifier and the parser alike"],
+    ["http://localhost:80", "ours", "a stated default port is a claim, even where WHATWG normalizes it away"],
+    ["redis://127.0.0.1/0", "theirs", "loopback with no port — a REAL address (the scheme default), not ours"],
+    ["redis://localhost", "theirs", "same, by name"],
+    ["redis://[::1]/0", "theirs", "same, over IPv6"],
+    ["redis://0.0.0.0/0", "theirs", "same; 0.0.0.0 is in the loopback set"],
+    ["redsi://127.0.0.1/0", "unusable", "a one-letter scheme typo: loopback, no port, and no scheme default to fall back on"],
+    ["foo://localhost", "unusable", "same shape, by name"],
+    ["rediss://cache.example.com:6380", "theirs", "somebody else's service, at an address it really answers on"],
+    ["https://nango.example.com", "theirs", "remote, no port stated — the scheme default is a real address"],
+  ])("classifies %s as %s (%s)", (value, state) => {
+    expect(classifyServiceUrl(value).state).toBe(state);
+  });
+
+  // The defect is named, not merely flagged, because the line an operator reads
+  // says a different true thing for each one.
+  it("names WHY a stated URL is unusable", () => {
+    expect(classifyServiceUrl("not a url")).toEqual({
+      state: "unusable",
+      url: "not a url",
+      reason: "unparseable",
+    });
+    expect(classifyServiceUrl("redis://")).toEqual({
+      state: "unusable",
+      url: "redis://",
+      reason: "no-host",
+    });
+    expect(classifyServiceUrl("redis://127.0.0.1:0/0")).toEqual({
+      state: "unusable",
+      url: "redis://127.0.0.1:0/0",
+      reason: "unusable-port",
+      port: 0,
+    });
+    // Out of range never reaches the port test: the parser refuses the value
+    // first, which is a different (and equally true) sentence.
+    expect(classifyServiceUrl("redis://127.0.0.1:65536").reason).toBe("unparseable");
+  });
+
+  // WHY THE UNKNOWN-SCHEME RULE IS RESTRICTED TO LOOPBACK. "No explicit port and
+  // no known scheme default" describes real remote URIs too: a Neo4j Aura
+  // `neo4j+s://….databases.neo4j.io` states neither, and it is perfectly good
+  // configuration. The defect is not the unknown scheme — it is that a LOCAL
+  // address gets invented for it and then probed, reported and remedied as
+  // though the operator had stated it. A remote host is never probed and never
+  // has a local address printed for it, so it stays `theirs`.
+  it("condemns an unknown scheme only where an address would be invented for it", () => {
+    expect(classifyServiceUrl("redsi://127.0.0.1/0")).toEqual({
+      state: "unusable",
+      url: "redsi://127.0.0.1/0",
+      reason: "no-known-port",
+    });
+    expect(classifyServiceUrl("neo4j+s://x.databases.neo4j.io").state).toBe("theirs");
+    expect(classifyServiceUrl("redsi://cache.example.com/0").state).toBe("theirs");
+    // A known scheme resolves its own default, so nothing is invented and the
+    // URL keeps naming a real address.
+    expect(classifyServiceUrl("redis://127.0.0.1/0").state).toBe("theirs");
+    // …and an explicit port answers the question before the scheme is consulted.
+    expect(classifyServiceUrl("redsi://127.0.0.1:16379/0").state).toBe("ours");
+  });
+
+  // THE COST OF AN INCOMPLETE TABLE, pinned so the next scheme added to a
+  // service URL cannot quietly become a false accusation. Once
+  // `PROTOCOL_DEFAULT_PORTS` decides whether a portless URL states a port at
+  // all, every omission from it condemns a real address-bearing URI. A local
+  // Neo4j behind TLS is spelled with the secure schemes, and `NEO4J_URI` is
+  // classified on the reporting surface.
+  it.each([
+    "neo4j+s://localhost",
+    "neo4j+ssc://127.0.0.1",
+    "bolt+s://localhost",
+    "bolt+ssc://127.0.0.1",
+  ])("keeps %s addressable — its scheme default is known", (value) => {
+    expect(classifyServiceUrl(value).state).toBe("theirs");
+  });
+
+  // …and the table is no WIDER than those services either. A scheme listed
+  // there is one the classifier accepts on every variable, so a scheme nothing
+  // in this repo speaks stays out and its loopback URL is condemned — which on
+  // a `REDIS_URL` is the true answer, since it names no Redis to be found.
+  it.each(["ws://127.0.0.1/x", "wss://localhost/x"])(
+    "condemns %s — this repo speaks no such service",
+    (value) => {
+      expect(classifyServiceUrl(value).reason).toBe("no-known-port");
+    },
+  );
+
+  // The question this module does NOT ask: whether the scheme suits the
+  // variable. `http://127.0.0.1/x` states :80, so :80 is reported — the address
+  // is the URL's own, and a Redis client's opinion of HTTP is a different
+  // matter. Pinned because the boundary is easy to mistake for an oversight.
+  it("does not judge whether a scheme suits the service", () => {
+    expect(classifyServiceUrl("http://127.0.0.1/x").state).toBe("theirs");
   });
 });
 
@@ -1320,6 +1440,9 @@ describe("formatStandDownUnreachable", () => {
       hostPortVar: "CINATRA_REDIS_HOST_PORT",
       host: "127.0.0.1",
       port: 6379,
+      // The shape this line is FOR, stated rather than implied: a loopback URL
+      // with no port, whose address really is the scheme default the app dials.
+      url: "redis://127.0.0.1/0",
     });
     expect(line).toContain("Redis not reachable yet at 127.0.0.1:6379");
     expect(line).toContain("that service is not ours to publish");
@@ -1344,9 +1467,141 @@ describe("formatStandDownUnreachable", () => {
       hostPortVar: "CINATRA_REDIS_HOST_PORT",
       host: "127.0.0.1",
       port: 6379,
+      url: "redis://127.0.0.1/0",
     });
     expect(line).toContain("CINATRA_REDIS_HOST_PORT must name the same one if it is set at all");
     expect(line).not.toContain("or set CINATRA_REDIS_HOST_PORT");
+  });
+
+  // THE ROUND-4 FINDING, at the formatter that produced it. `host`/`port` come
+  // from `parseHostPort`, which falls back to the bundled `127.0.0.1:6379`
+  // whenever the stated URL yields nothing — so this function was handed an
+  // address the app never dials and described it as the configured one.
+  //
+  // The guard lives HERE and not at the call site on purpose: whatever a caller
+  // has worked out about the address, handing this function an unusable URL
+  // cannot produce a sentence about that address. The call site's ordering is a
+  // second line of defence, not the guarantee.
+  it("never describes a derived fallback address as the configured one", () => {
+    const line = formatStandDownUnreachable({
+      service: "Redis",
+      urlVar: "REDIS_URL",
+      hostPortVar: "CINATRA_REDIS_HOST_PORT",
+      // Exactly what the launcher had in hand for `REDIS_URL=not a url`.
+      host: "127.0.0.1",
+      port: 6379,
+      url: "not a url",
+    });
+    expect(line).not.toContain("6379");
+    expect(line).not.toContain("not reachable yet");
+    // …and it says the true thing instead.
+    expect(line).toContain("REDIS_URL does not state a usable address for Redis");
+    expect(line).toContain("REDIS_URL=not a url does not parse as a URL at all");
+  });
+
+  // The third shape of the same defect, and the one an operator reaches by
+  // typo rather than by pasting: the scheme is one letter off, so no default
+  // port exists for it and `parseHostPort` supplies the bundled 6379 — an
+  // address that appears nowhere in what was stated.
+  it("never describes an invented port as the configured one either", () => {
+    const line = formatStandDownUnreachable({
+      service: "Redis",
+      urlVar: "REDIS_URL",
+      hostPortVar: "CINATRA_REDIS_HOST_PORT",
+      host: "127.0.0.1",
+      port: 6379,
+      url: "redsi://127.0.0.1/0",
+    });
+    expect(line).not.toContain("6379");
+    expect(line).not.toContain("not reachable yet");
+    expect(line).toContain("knows no default port for the `redsi:` scheme");
+  });
+
+  // The other shape the finding names: the address is real, and the remedy is
+  // the impossible one. Nothing listens on port 0, so "start Redis where it is
+  // configured" cannot be carried out — and the line must not offer it.
+  it("does not prescribe starting a service at a port nothing can listen on", () => {
+    const line = formatStandDownUnreachable({
+      service: "Redis",
+      urlVar: "REDIS_URL",
+      hostPortVar: "CINATRA_REDIS_HOST_PORT",
+      host: "127.0.0.1",
+      port: 0,
+      url: "redis://127.0.0.1:0/0",
+    });
+    expect(line).not.toContain("not reachable yet");
+    expect(line).toContain("states port 0, and a host port is 1-65535");
+    expect(line).toContain("is a remedy no operator can carry out");
+  });
+});
+
+describe("formatUnusableServiceUrl", () => {
+  const redis = (url, standDown = true) =>
+    formatUnusableServiceUrl({
+      service: "Redis",
+      urlVar: "REDIS_URL",
+      url,
+      hostPortVar: "CINATRA_REDIS_HOST_PORT",
+      standDown,
+    });
+
+  // One head for every defect, then the sentence that is true of THAT defect.
+  // The head is "does not state a usable address" and not "is not a usable
+  // URL", because a `unix:///…` value may be perfectly good for the client and
+  // is still no host and port this preflight can probe.
+  it("names the defect, and never an address", () => {
+    for (const url of [
+      "not a url",
+      "redis://",
+      "unix:///var/run/redis.sock",
+      "redis://127.0.0.1:0/0",
+      "redsi://127.0.0.1/0",
+    ]) {
+      const line = redis(url);
+      expect(line).toContain("REDIS_URL does not state a usable address for Redis");
+      expect(line).not.toContain("127.0.0.1:6379");
+      expect(line).not.toContain("not reachable yet");
+    }
+    expect(redis("redis://")).toContain("states no host, so it names no address for Redis at all");
+    expect(redis("unix:///var/run/redis.sock")).toContain("states no host");
+  });
+
+  // The two halves of the finding, each on the shape it is true of: an invented
+  // address for the shapes that HAVE no address, an impossible remedy for the
+  // one whose address is real and unlistenable. Saying "fallback" about
+  // `127.0.0.1:0` would be a new false statement.
+  it("says the address was invented only where it was", () => {
+    expect(redis("not a url")).toContain("is this checkout's own fallback");
+    expect(redis("redis://")).toContain("is this checkout's own fallback");
+    expect(redis("redsi://127.0.0.1/0")).toContain("knows no default port for the `redsi:` scheme");
+    expect(redis("redsi://127.0.0.1/0")).toContain("is this checkout's own fallback");
+    expect(redis("redis://127.0.0.1:0/0")).not.toContain("fallback");
+    expect(redis("redis://127.0.0.1:0/0")).toContain("Nothing can ever listen there");
+  });
+
+  // `pnpm services` keeps the one role it is allowed: the thing that refuses,
+  // never the fix — and the host-port variable stays a constraint on the URL.
+  it("carries the publishing half only for a service that IS stood down", () => {
+    const stoodDown = redis("not a url", true);
+    expect(stoodDown).toContain("`pnpm services` refuses this plan");
+    expect(stoodDown).not.toContain("start them with `pnpm services`");
+    expect(stoodDown).toContain("the URL is the fix");
+    expect(stoodDown).toContain("CINATRA_REDIS_HOST_PORT must name the same port if it is set at all");
+
+    // postgres is not a service this plan parameterizes, so it can never stand
+    // down — and a line claiming this checkout will not start it would be
+    // contradicted the moment compose published 5434.
+    const published = formatUnusableServiceUrl({
+      service: "PostgreSQL",
+      urlVar: "SUPABASE_DB_URL",
+      url: "not a url",
+      hostPortVar: undefined,
+      standDown: false,
+    });
+    expect(published).toContain("SUPABASE_DB_URL does not state a usable address for PostgreSQL");
+    expect(published).not.toContain("will not start");
+    expect(published).not.toContain("pnpm services");
+    expect(published).not.toContain("undefined");
   });
 });
 
@@ -3198,24 +3453,59 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
     expect(redisCalls(result.calls)).toEqual([]);
   });
 
-  // Case C′ — the OTHER half of the stand-down, and the one the round-3 finding
-  // is about: stood down AND nothing listening. The service must still be
-  // PROBED and still be spoken about; skipping the probe with the diagnosis is
-  // what replaced main's "not reachable yet" with silence and then an
-  // ECONNREFUSED in app boot.
+  // Case C′ — the stated URL that names NO address (cinatra#2839, round-4
+  // finding), end to end through the real launcher.
   //
-  // `redis://127.0.0.1:0/0` is the same stand-down branch as case C —
-  // `classifyServiceUrl` reads it as "theirs" because 0 is not a usable port, so
-  // the plan reports redis `unmanaged` exactly as the portless URL does — but it
-  // is reached at an address that is DOWN on every host that will ever run this
-  // suite. Nothing can listen on port 0: `bind(0)` asks the OS for an ephemeral
-  // port instead, so the probe can only be refused or time out. That is the only
-  // way to state this expectation without measuring the test host, since the
-  // portless form's connect address is redis's own 6379 (case C).
+  // WHAT THIS CASE USED TO BE, and why it changed. It carried the round-3
+  // assertion "a stood-down service is probed, and the result said out loud",
+  // on `redis://127.0.0.1:0/0` — chosen because nothing can listen on port 0,
+  // so the reachability sentence was host-independent. Round 4 found that the
+  // sentence itself was the defect on that shape: "not reachable yet at
+  // 127.0.0.1:0 … start Redis where it is configured" prescribes a remedy no
+  // operator can carry out. The same shape now takes the validation branch, so
+  // this case pins THAT, and it does so on the harder of the two values —
+  // `not a url`, where the address the old build printed (127.0.0.1:6379) was
+  // not even the URL's, but `parseHostPort`'s bundled fallback.
+  //
+  // HOST-INDEPENDENT BY CONSTRUCTION, and more so than what it replaced: the
+  // row is settled before the probe, so nothing here opens a socket for redis
+  // at all. On the old build this case is red whatever the host does — with
+  // 6379 occupied the launcher printed NOTHING for redis (the operator's own
+  // service answered), and with it free it printed the false address.
   //
   // The container is simulated exactly as in case C, so a build that diagnosed
   // this service would touch `docker` and exit 1 rather than warn.
-  it("probes a stood-down service that is down, and says so without sending the operator to `pnpm services`", () => {
+  it("says a stated URL names no address, instead of naming one it invented", () => {
+    const result = runLauncher(laneEnv("REDIS_URL=not a url"), {
+      containerPorts: '{"6379/tcp":null}',
+    });
+    expect(
+      result.status,
+      `launcher exited ${result.status}\nstderr:\n${result.stderr}`,
+    ).toBe(0);
+    expect(result.stderr).not.toContain("Docker host-port drift");
+    expect(result.stderr).toContain("REDIS_URL does not state a usable address for Redis");
+    expect(result.stderr).toContain("REDIS_URL=not a url does not parse as a URL at all");
+    // The finding itself: no address for redis, invented or otherwise, and no
+    // claim about its reachability.
+    expect(result.stderr).not.toContain("127.0.0.1:6379");
+    expect(result.stderr).not.toMatch(/Redis not reachable yet/);
+    expect(result.stderr).not.toContain("PostgreSQL, Redis not reachable yet");
+    // The remedy still may not be `pnpm services`, which refuses this plan.
+    expect(result.stderr).not.toMatch(/Redis[^\n]*start them with/);
+    expect(result.stderr).toContain("CINATRA_REDIS_HOST_PORT");
+    // PostgreSQL is down at its own reserved port and IS this checkout's to
+    // publish, so the ordinary sentence still exists, unchanged, beside it.
+    expect(result.stderr).toContain("PostgreSQL not reachable yet — start them with");
+    // Still not this checkout's to diagnose: no container inspected for redis.
+    expect(redisCalls(result.calls)).toEqual([]);
+  });
+
+  // The second shape, at the launcher: an address that IS the URL's and that
+  // nothing can ever answer on. The line must not send the operator to start a
+  // service on port 0 — and must not go quiet either, which is what skipping
+  // the row would do.
+  it("does not tell an operator to start a service at a port nothing can listen on", () => {
     const result = runLauncher(laneEnv("REDIS_URL=redis://127.0.0.1:0/0"), {
       containerPorts: '{"6379/tcp":null}',
     });
@@ -3224,21 +3514,30 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
       `launcher exited ${result.status}\nstderr:\n${result.stderr}`,
     ).toBe(0);
     expect(result.stderr).not.toContain("Docker host-port drift");
-    // Probed, and the result said out loud — the whole point of the finding.
-    expect(result.stderr).toContain("Redis not reachable yet at 127.0.0.1:0");
-    expect(result.stderr).toContain("that service is not ours to publish");
-    // …with the remedy that works. `pnpm services` REFUSES a plan that stands a
-    // service down, so it may be named as the thing that will not help, never as
-    // the fix, and the ordinary joint sentence must not swallow the row.
+    expect(result.stderr).toContain("states port 0, and a host port is 1-65535");
+    expect(result.stderr).toContain("is a remedy no operator can carry out");
+    expect(result.stderr).not.toContain("Redis not reachable yet at 127.0.0.1:0");
+    expect(result.stderr).not.toContain("Start Redis where it is configured");
     expect(result.stderr).not.toContain("PostgreSQL, Redis not reachable yet");
-    expect(result.stderr).not.toMatch(/Redis not reachable yet[^\n]*start them with/);
-    expect(result.stderr).toContain("CINATRA_REDIS_HOST_PORT");
-    // PostgreSQL is down at its own reserved port and IS this checkout's to
-    // publish, so the ordinary sentence still exists, unchanged, beside it.
-    expect(result.stderr).toContain("PostgreSQL not reachable yet — start them with");
-    // Still not this checkout's to diagnose: no container inspected for redis.
     expect(redisCalls(result.calls)).toEqual([]);
   });
+
+  // AND THE ROUND-3 PIN THAT COULD NOT SURVIVE THE ROUND-4 FIX, stated as a
+  // boundary rather than dropped in silence.
+  //
+  // "A stood-down service that is DOWN gets its own reachability sentence" is
+  // still the behaviour, and it can no longer be measured end-to-end without
+  // measuring the test host. The reason is structural: a row is stood down only
+  // when its URL is not an explicit-port loopback URL, and it is probed only
+  // when its connect host IS loopback — so every shape that reaches the
+  // sentence states NO port, and its address is therefore the scheme default
+  // (redis: 6379), the operator's own. `:0` used to escape that and now takes
+  // the validation branch, correctly. The sentence is pinned at the formatter
+  // instead (`formatStandDownUnreachable`, above); what remains host-independent
+  // HERE is that the row is never swallowed by the joint `pnpm services`
+  // sentence, which case C asserts. Do not "fix" this by writing 6379 into a
+  // launcher case: that measures the host, which is what two rounds of this PR
+  // removed.
 
   // The regression pin: the operator's UNSCOPED checkout states no project name,
   // so the diagnosis behaves exactly as it did before any of this work —
@@ -4055,6 +4354,31 @@ describe("check-services.mjs, run against a fixture .env.local", () => {
   it("still says nothing to an unscoped checkout that stated no host port", () => {
     const out = run([`REDIS_URL=redis://127.0.0.1:${upPort}`]);
     expect(out).not.toContain("is published on host port");
+  });
+
+  // BOTH CALLERS, ONE SENTENCE (cinatra#2839, round-4 finding). The launcher
+  // stops speaking about an address for a stated URL that names none; this
+  // surface reports the same services from the same plan and must say the same
+  // thing about them. The line comes from one exported formatter, so a build
+  // that taught only the launcher about the shape fails here.
+  //
+  // DISCLOSED: the printed Redis ROW still carries `parseHostPort`'s fallback
+  // address, because building the rows is upstream of the plan this loop reads
+  // and re-shaping a required-tier row's address (and therefore this command's
+  // exit code) is not what the finding asked for. This case asserts the NOTE,
+  // which now disowns that address out loud, and never the row — so nothing
+  // here depends on what answers at 6379 on the host.
+  it("tells an operator their REDIS_URL names no address, in the launcher's words", () => {
+    const out = run(["COMPOSE_PROJECT_NAME=p2913lane", "REDIS_URL=not a url"]);
+    expect(out).toContain("REDIS_URL does not state a usable address for Redis");
+    expect(out).toContain("REDIS_URL=not a url does not parse as a URL at all");
+    // Stood down on a lane, so the publishing half is there too — and
+    // `pnpm services` only ever as the thing that refuses.
+    expect(out).toContain("`pnpm services` refuses this plan");
+    expect(out).toContain("CINATRA_REDIS_HOST_PORT must name the same port if it is set at all");
+    // Nothing about this service was judged against the fallback address.
+    expect(out).not.toContain("is published on host port");
+    expect(out).not.toContain("Docker host-port drift");
   });
 
   // The plan's stand-down still reaches this surface unchanged: a refused plan
