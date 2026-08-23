@@ -25,8 +25,8 @@ import {
   RunTransitionError,
   readAgentRunById,
   readAgentTemplateById,
-  createAgentRunPendingInput,
 } from "./store";
+import { advanceAgentRun, launchAgentRun } from "./lifecycle-coordinator";
 // cinatra#1939 wave 2 (§2b): this scheduler has NO session — it mints the
 // SYSTEM `agent-run-dispatch` authority (run.execute + run.complete) per fire to
 // ground the run's armed/pending→queued/stopped transitions, scoped to the run's
@@ -215,16 +215,35 @@ export async function runAgentRunTriggerReleaseJob(
     // the transition below). The clone shares sourceRun.orgId (non-null,
     // checked above == newRun.orgId).
     const releaseAuthority = mintTriggerReleaseAuthority(sourceRun.orgId);
-    const newRun = await createAgentRunPendingInput(
-      {
-        templateId: sourceRun.templateId,
-        runBy: sourceRun.runBy,
-        orgId: sourceRun.orgId,
-        inputParams: sourceRun.inputParams ?? {},
-        projectId: sourceRun.projectId,
+    // A RECURRING TICK IS A LAUNCH, not a release (cinatra#2928): each tick is a
+    // FRESH copy of the run, so it goes through the coordinator's launch entry
+    // like every other way of starting an agent. It stays headless — nobody is
+    // present for a schedule firing, so no moment applies and the schedule the
+    // run was given is what applies. The dispatch stays here because this branch
+    // arms the copy's own immediate trigger and opens its gate first.
+    const launched = await launchAgentRun({
+      producer: "recurring_trigger_tick",
+      frame: null,
+      authority: releaseAuthority,
+      create: {
+        kind: "pre_dispatch",
+        input: {
+          templateId: sourceRun.templateId,
+          runBy: sourceRun.runBy,
+          orgId: sourceRun.orgId,
+          inputParams: sourceRun.inputParams ?? {},
+          projectId: sourceRun.projectId,
+        },
       },
-      releaseAuthority,
-    );
+      dispatch: {
+        kind: "await_trigger",
+        why: "the copy is armed as immediate and its gate opened below before it is enqueued",
+      },
+    });
+    if (launched.carrier.kind !== "run") {
+      throw new Error("the recurring tick's launch answered with a carrier that is not a run");
+    }
+    const newRun = launched.carrier.run;
     // Arm the new run as immediate so the gate opens at run-start.
     // We call createOrUpdateRunTrigger directly here (we are inside the worker
     // — no actor context). The setRunTriggerForActor service is for
@@ -237,19 +256,20 @@ export async function runAgentRunTriggerReleaseJob(
       jobSchedulerId: null,
     });
     await markTriggerReleased(newRun.id);
-    try {
-      await transitionRunStatus(newRun.id, "pending_input", "queued", undefined, releaseAuthority);
-    } catch (err) {
-      if (
-        !(err instanceof RunTransitionError && err.code === "stale_from_status")
-      ) {
-        throw err;
-      }
-    }
-    await enqueueAgentRun(
-      { runId: newRun.id },
-      { jobId: `agent-builder-${newRun.id}` },
-    );
+    // …and the copy is RELEASED through advance, so a tick's two halves — the
+    // fresh run and letting it go — are the same two entries every other surface
+    // uses. The coordinator clears the moment before the run moves, so a copy
+    // cannot start while still stating one.
+    await advanceAgentRun({
+      run: newRun,
+      release: {
+        reason: "trigger_fired",
+        from: "pending_input",
+        to: "queued",
+        dispatch: { kind: "enqueue", options: { jobId: `agent-builder-${newRun.id}` } },
+      },
+      authority: releaseAuthority,
+    });
     console.log(
       `[trigger-release] recurring tick — created new run ${newRun.id} from ${data.runId}`,
     );
@@ -269,8 +289,21 @@ export async function runAgentRunTriggerReleaseJob(
     return;
   }
   const releaseAuthority = mintTriggerReleaseAuthority(runForFire.orgId);
+  // A ONE-OFF FIRING IS ADVANCE (cinatra#2928): the run already exists and is
+  // parked at its schedule moment, and the schedule is what says to let it go.
+  // The enqueue stays below rather than riding the release, because this branch
+  // has its own compensation for a scope denial that the enqueue can raise.
   try {
-    await transitionRunStatus(data.runId, "armed", "queued", undefined, releaseAuthority);
+    await advanceAgentRun({
+      run: runForFire,
+      release: {
+        reason: "trigger_fired",
+        from: "armed",
+        to: "queued",
+        dispatch: { kind: "caller_dispatches", why: "the scope-denial compensation below owns this enqueue" },
+      },
+      authority: releaseAuthority,
+    });
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       // Run was not armed (e.g. immediate trigger fired without going through

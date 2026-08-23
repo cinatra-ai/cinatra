@@ -71,8 +71,8 @@ export {
   type ProposeScheduleInput,
   type ProposeScheduleResult,
 };
+import { launchAgentRun } from "./lifecycle-coordinator";
 import {
-  createAgentRunPendingInput,
   readAgentRunById,
   readAgentTemplateById,
   transitionRunStatus,
@@ -221,35 +221,57 @@ export async function confirmTriggerScheduleProposal(
 
   let runId: string;
   try {
-    const created = await createAgentRunPendingInput(
-      {
-        templateId: proposal.templateId,
-        runBy: actor.userId,
-        inputParams: {},
-        orgId: actor.orgId,
-        // Interactive: the reader is looking at the card they just pressed.
-        // cinatra#2067 — the run may park at the recommendation interception
-        // before it dispatches, exactly as every other interactive run-start.
-        humanPresent: true,
-        // `scopeActor` is deliberately left to the default, as every other
-        // interactive create does: the #2485 C scope guard resolves the run's
-        // OWN owner (`runBy`, the confirming human) and the acting principal is
-        // already this session. Passing a hand-built actor here would be the
-        // only call site in the codebase doing so.
-        // The one transaction. See `spendProposalWithinTx`.
-        withinCreateTx: async (tx, run) =>
-          spendProposalWithinTx(tx, {
-            consumeKey,
-            runId: run.id,
-            orgId: run.orgId,
-            templateId: proposal.templateId,
-            consumedBy: actor.userId,
-            install,
-          }),
-      },
+    // CONFIRM IS LAUNCH, NOT ADVANCE (cinatra#2928). Until this moment there is
+    // no run: the carrier is the schedule the person stated, held in its signed
+    // reference, and nothing has been written. Confirm consumes that reference
+    // and creates the run WITH its schedule in one transaction — which is why
+    // this launch uses the pre-dispatch creator and hands it the companion
+    // write. Routing it through the coordinator is what makes "every way of
+    // starting an agent calls launch" true of the schedule card too.
+    //
+    // The run is left pre-dispatch on purpose: the install drain below arms the
+    // schedule before it exposes it, and a run enqueued here would start now
+    // rather than when the person asked for.
+    const launched = await launchAgentRun({
+      producer: "schedule_confirm",
+      // The reader is looking at the card they just pressed, under a live cookie
+      // session this action already re-derived the user and org from.
+      frame: { userId: actor.userId },
+      interactive: true,
       authority,
-    );
-    runId = created.id;
+      create: {
+        kind: "pre_dispatch",
+        input: {
+          templateId: proposal.templateId,
+          runBy: actor.userId,
+          inputParams: {},
+          orgId: actor.orgId,
+          // `scopeActor` is deliberately left to the default, as every other
+          // interactive create does: the #2485 C scope guard resolves the run's
+          // OWN owner (`runBy`, the confirming human) and the acting principal is
+          // already this session. Passing a hand-built actor here would be the
+          // only call site in the codebase doing so.
+          // The one transaction. See `spendProposalWithinTx`.
+          withinCreateTx: async (tx, run) =>
+            spendProposalWithinTx(tx, {
+              consumeKey,
+              runId: run.id,
+              orgId: run.orgId,
+              templateId: proposal.templateId,
+              consumedBy: actor.userId,
+              install,
+            }),
+        },
+      },
+      dispatch: {
+        kind: "await_trigger",
+        why: "the install drain arms the schedule before it exposes it; this run starts when the schedule says so",
+      },
+    });
+    if (launched.carrier.kind !== "run") {
+      return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+    }
+    runId = launched.carrier.run.id;
   } catch (err) {
     if (err instanceof ProposalAlreadyConsumedError) {
       // The race we designed for: a concurrent Confirm won. Our run rolled back

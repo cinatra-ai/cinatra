@@ -69,7 +69,6 @@ import {
   readAgentVersionById,
   createAgentTemplate,
   createAgentVersion,
-  createAgentRun,
   createShareBinding,
   createAgentFork,
   checkRegistryPermission,
@@ -89,7 +88,7 @@ import type {
   AgentTemplateRecord,
   CreateAgentRunInput,
 } from "./store";
-import { maybeHoldRunForRecommendation } from "./recommendation-hold";
+import { launchAgentRun } from "./lifecycle-coordinator";
 import type { AgentRunEnqueueOptions } from "@/lib/agent-run-enqueue";
 import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
 import { compileWorkflow } from "./compiler";
@@ -1296,27 +1295,43 @@ export async function runFromRegistry(
   // (capability run.execute) — mint the member session authority for it.
   const authority = await verifySessionAuthority(userId, orgId);
 
-  // Pin entry.versionId (not the latest version)
-  const run = await createAgentRun(
-    {
-      id: randomUUID(),
-      templateId: entry.templateId,
-      versionId: entry.versionId,
-      runBy: userId,
-      inputParams,
-      orgId,
-      // Registry server-action path is not chat-bound; there is no project
-      // context to inherit. Project-scoped runs originate from the chat MCP path
-      // (agent_run handler) or A2A.
-      projectId: null,
+  // Pin entry.versionId (not the latest version).
+  //
+  // Routed through the coordinator (cinatra#2928): this is a person pressing Run
+  // in the product, so it is an INTERACTIVE producer and says so — presence is
+  // then derived from that claim together with the session user this action
+  // already resolved, and the run may reach the recommendation moment exactly as
+  // the same act from a conversation does.
+  const runId = randomUUID();
+  // The template the moment is decided against — its manifest lifecycle is what
+  // says whether a recommendation applies at all.
+  const entryTemplate = await readAgentTemplateById(entry.templateId);
+  await launchAgentRun({
+    producer: "registry_run_action",
+    frame: { userId },
+    interactive: true,
+    create: {
+      kind: "full",
+      input: {
+        id: runId,
+        templateId: entry.templateId,
+        versionId: entry.versionId,
+        runBy: userId,
+        inputParams,
+        orgId,
+        // Registry server-action path is not chat-bound; there is no project
+        // context to inherit. Project-scoped runs originate from the chat MCP path
+        // (agent_run handler) or A2A.
+        projectId: null,
+      },
+    },
+    template: {
+      packageName: entryTemplate?.packageName ?? "",
+      lifecycleConfig: entryTemplate?.lifecycleConfig ?? null,
     },
     authority,
-  );
-
-  await enqueueAgentRun(
-    { runId: run.id },
-    { jobId: run.id },
-  );
+    dispatch: { kind: "enqueue", options: { jobId: runId } },
+  });
 
   redirect("/agents");
 }
@@ -1590,204 +1605,47 @@ export type LaunchedRun = {
   held: boolean;
 };
 
+/**
+ * The `agent_run` primitive's run-start, now a THIN CALL onto the lifecycle
+ * coordinator (cinatra#2928, epic #2926 W2a).
+ *
+ * The create-parked → evaluate → release-or-park sequence this function used to
+ * carry — and which `run-actions.ts` carried a second copy of — lives in
+ * `launchAgentRun` (`./lifecycle-coordinator`), which generalizes it over every
+ * producer and, on the way, states the moment the run is waiting at on the run
+ * itself. `scripts/audit/run-creation-fence.mjs` is what keeps it the only
+ * creator; this wrapper stays because the primitive's caller wants the
+ * `held` reading rather than the coordinator's moment.
+ *
+ * The PRESENCE rule changed with the move, and deliberately. It used to be "the
+ * frame came through a chat surface", which the chat pre-router stamps as a
+ * constant — so a non-human principal reaching that pre-router produced a run
+ * stamped human-present with no owner (cinatra#2892). Presence now needs the
+ * verified surface AND a resolvable human owner; `isChatLaunchFrame` above is
+ * still the surface half, and the coordinator holds both.
+ */
 export async function createAgentRunForLaunchFrame(input: {
-  /** The VERIFIED actor envelope. Two readers, and no others:
-   *  `isChatLaunchFrame` above derives the launch origin from it, and the
-   *  authority resolver below reads the authority it already carries. */
+  /** The VERIFIED actor envelope. */
   frame: unknown;
   create: LaunchFrameCreateInput;
   template: Pick<AgentTemplateRecord, "packageName"> & { lifecycleConfig?: string | null };
   enqueueOptions: AgentRunEnqueueOptions;
 }): Promise<LaunchedRun> {
-  const { frame, create, template, enqueueOptions } = input;
-  const actor = (frame ?? {}) as {
-    orgWriteAuthority?: Parameters<typeof createAgentRun>[1];
-    userId?: string;
-  };
-
-  // cinatra#1940 P3 (Decision 2): resolve whichever authority this frame already
-  // carries — a session frame's forwarded orgWriteAuthority (fast path), else
-  // the delegating principal (an OBO/agent-as-tool frame's run-bound authority
-  // never satisfies can("run.execute"), so it falls through by construction).
-  //
-  // ONE authority grounds all three writes below — the create, the dispatch CAS
-  // and its compensation revert. That is deliberate: a compensation that could
-  // not be authorized would leave the very falsely-queued row this function
-  // promises never to produce.
-  const authority = await resolveRunCreationAuthority(create.orgId, {
-    orgWriteAuthority: actor.orgWriteAuthority,
-    userId: actor.userId,
+  const answer = await launchAgentRun({
+    producer: "chat_or_widget_dispatch",
+    frame: input.frame,
+    create: { kind: "full", input: input.create },
+    template: input.template,
+    dispatch: { kind: "enqueue", options: input.enqueueOptions },
   });
-
-  // SERVER-DERIVED. A chat launch is human-present and may pause; every other
-  // frame is headless and keeps the create-and-enqueue shape it always had.
-  const launchedFromChat = isChatLaunchFrame(frame);
-
-  const run = await createAgentRun(
-    {
-      ...create,
-      initialStatus: launchedFromChat ? "pending_input" : "queued",
-      humanPresent: launchedFromChat ? true : undefined,
-    },
-    authority,
-  );
-
-  if (launchedFromChat) {
-    // BEST-EFFORT, on the same contract as every other interactive run-start: a
-    // recommendation must never fail a run, so any throw fails OPEN to a normal
-    // dispatch.
-    let heldForRecommendation = false;
-    try {
-      const hold = await maybeHoldRunForRecommendation({
-        run,
-        template: {
-          packageName: template.packageName,
-          lifecycleConfig: template.lifecycleConfig,
-        },
-      });
-      heldForRecommendation = hold.held;
-    } catch (holdErr) {
-      // The run id is a request-influenced value, so it is passed as a discrete
-      // ARGUMENT and never interpolated into the format string — a `%`-bearing
-      // id must not be read as a util.format specifier (CodeQL
-      // js/tainted-format-string).
-      console.warn(
-        "[agent_run] recommendation hold evaluation failed for run",
-        run.id,
-        "— dispatching normally:",
-        holdErr instanceof Error ? holdErr.message : String(holdErr),
-      );
-    }
-    if (heldForRecommendation) {
-      // PARKED. No transition, no enqueue. The run card in the conversation
-      // draws the recommendation card, and its Confirm/Skip releases the park
-      // and dispatches through the canonical trigger path — which performs the
-      // very CAS + enqueue this branch skipped.
-      return { run, status: "pending_input", held: true };
-    }
-
-    try {
-      await transitionRunStatus(run.id, "pending_input", "queued", undefined, authority);
-    } catch (transitionErr) {
-      if (
-        transitionErr instanceof RunTransitionError &&
-        transitionErr.code === "stale_from_status"
-      ) {
-        // A concurrent writer already moved the run off `pending_input`, so it
-        // owns the dispatch. Enqueueing here too would be the second enqueue
-        // this path promises never to make.
-        //
-        // What this branch may NOT do is guess. The previous default answered
-        // `pending_input` whenever the re-read failed or found nothing, which
-        // reports a run as parked-and-decidable when nobody knows what it is:
-        // no enqueue was made here, no park is live, and the card has nothing
-        // to settle. The caller would show a waiting run that never moves.
-        //
-        // So the re-read is the only source of the answer, and when it cannot
-        // answer, this call says so. The run is untouched either way — the
-        // other writer owns it — and the outer boundary turns the throw into an
-        // error result naming the run rather than a false state.
-        let current: Awaited<ReturnType<typeof readAgentRunById>> | null = null;
-        try {
-          current = await readAgentRunById(run.id);
-        } catch (rereadErr) {
-          throw new Error(
-            `Run ${run.id} lost the dispatch race and its state could not be re-read: ${
-              rereadErr instanceof Error ? rereadErr.message : String(rereadErr)
-            }`,
-          );
-        }
-        if (!current) {
-          throw new Error(
-            `Run ${run.id} lost the dispatch race and no longer reads back.`,
-          );
-        }
-        return { run, status: current.status, held: false };
-      }
-      throw transitionErr;
-    }
-  }
-
-  try {
-    await enqueueAgentRun({ runId: run.id }, enqueueOptions);
-  } catch (enqueueErr) {
-    // Compensate this function's OWN CAS so a failed enqueue cannot leave the
-    // run sitting in `queued` with no job behind it. The headless branch made
-    // no transition of its own, so it has nothing to undo.
-    //
-    // A LADDER, not a catch-and-log. `queued` with no job is the one state
-    // nothing recovers on its own: no worker will ever pick it up, and no
-    // surface offers a person a way to move it. Logging the failed revert and
-    // walking away leaves exactly that row behind.
-    //
-    //   1. back to `pending_input` — the run is decidable again and the person
-    //      can retry it from the conversation;
-    //   2. failing that, to `failed` with the reason — a terminal, visible run
-    //      beats a phantom queued one, and the surfaces already render it;
-    //   3. failing that too, the process cannot land the run in any honest
-    //      state, so the error says the run is STRANDED and names it, instead
-    //      of reporting only the enqueue failure that started it.
-    //
-    // WHY REVERTING IS SAFE EVEN WHEN THE ENQUEUE ERROR WAS AMBIGUOUS. A Redis
-    // failure can surface after the job was already accepted, so this branch
-    // may not assume no job exists. It does not need to. Exactly-once dispatch
-    // is enforced by the RUN ROW, not by the queue: the execution worker's
-    // first act is `if (run.status !== "queued") … skipping`
-    // (`packages/agents/src/execution.ts`), and the work itself sits behind a
-    // `queued → running` CAS. A job that outlived an ambiguous enqueue finds
-    // this run back on `pending_input` and quietly skips; if it instead arrives
-    // after the person retried, either it wins the CAS and the retry's job then
-    // finds `running` and skips, or it loses and skips. One execution, either
-    // way, and no jobId dedup is relied on for it (this path passes no `jobId`,
-    // so BullMQ assigns its own — job-level dedup is not available here and is
-    // not what the invariant rests on).
-    //
-    // The residual runs the OTHER direction, and it is the benign one: an
-    // enqueue that actually succeeded but reported ambiguously is compensated
-    // away, so the run waits on `pending_input` for a person to retry it. A
-    // lost dispatch on a visible, decidable run — never a duplicate one.
-    if (launchedFromChat) {
-      let recovered: "pending_input" | "failed" | null = null;
-      try {
-        await transitionRunStatus(run.id, "queued", "pending_input", undefined, authority);
-        recovered = "pending_input";
-      } catch (revertErr) {
-        console.error(
-          "[agent_run] enqueue compensation revert failed for run",
-          run.id,
-          revertErr,
-        );
-        try {
-          await transitionRunStatus(
-            run.id,
-            "queued",
-            "failed",
-            {
-              error: `Dispatch failed and the run could not be returned to its waiting state: ${
-                enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)
-              }`,
-            },
-            authority,
-          );
-          recovered = "failed";
-        } catch (failErr) {
-          console.error(
-            "[agent_run] could not land run in any terminal state after a failed enqueue",
-            run.id,
-            failErr,
-          );
-        }
-      }
-      if (recovered === null) {
-        throw new Error(
-          `Run ${run.id} is STRANDED: its dispatch failed, it could not be returned to a waiting state, and it could not be failed. It is queued with no job behind it. Original dispatch error: ${
-            enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)
-          }`,
-        );
-      }
-    }
-    throw enqueueErr;
-  }
-
-  return { run, status: "queued", held: false };
+  return {
+    run: answer.carrier.kind === "run" ? answer.carrier.run : (() => {
+      // Unreachable: `launchAgentRun` answers with a run carrier for every
+      // launch. Stated as a throw rather than a cast so a future carrier cannot
+      // be silently mis-read as a run.
+      throw new Error("the launch answered with a carrier that is not a run");
+    })(),
+    status: answer.status,
+    held: answer.moment === "recommendation",
+  };
 }
