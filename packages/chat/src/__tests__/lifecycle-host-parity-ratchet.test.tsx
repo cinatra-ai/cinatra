@@ -114,6 +114,7 @@ import { LifecycleCardSurfaceProvider } from "../../../agents/src/lifecycle-card
 import { ReviewGateCard } from "../../../agents/src/review-gate-card";
 import { RecommendationHoldCard } from "../../../agents/src/run-recommendation-chip-row";
 import { VerificationSummaryCard } from "../../../agents/src/verification-summary-card";
+import { ScheduleProposalCard } from "../../../agents/src/schedule-proposal-card";
 import { LifecycleCard } from "../renderable-views/lifecycle-card";
 import {
   LIFECYCLE_RESOLVE_ANSWERS,
@@ -230,6 +231,10 @@ const OWNER_COMPONENTS: Record<string, React.ComponentType<never>> = {
   // page's gate region. Without it here the observer throws rather than
   // dropping the cell, which is the refusal this map is written to make loud.
   VerificationSummaryCard: VerificationSummaryCard as unknown as React.ComponentType<never>,
+  // §VI's schedule card owns `trigger_schedule_proposal` since S9d
+  // (cinatra#2788) and is composed on the same two direct-mount hosts — the run
+  // screen and the review page's gate region — for the same reason.
+  ScheduleProposalCard: ScheduleProposalCard as unknown as React.ComponentType<never>,
   LifecycleCard: LifecycleCard as unknown as React.ComponentType<never>,
 };
 
@@ -386,29 +391,45 @@ describe("an edited array or a bare provider changes nothing", () => {
   });
 
   // The claimed cell must be one the product really does NOT produce, or the
-  // discriminator proves nothing. `trigger_schedule_proposal` still reaches the
-  // two conversation hosts through the shell and is composed nowhere on the run
-  // card; `verification_summary` stopped being that example when S9e
-  // (cinatra#2789) landed its run-card mount.
+  // discriminator proves nothing — and the subject has moved twice for exactly
+  // that reason. `verification_summary` stopped being the example when S9e
+  // (cinatra#2789) landed its run-card mount; `trigger_schedule_proposal`
+  // stopped being it when S9d (cinatra#2788) landed its two composition mounts.
+  // `recommendation_hold` on `page_gate_region` is what is left: the kind is a
+  // typed interrupt with no gate-region mount, and that cell is neither
+  // recorded nor owed, so a claim on it is a claim on nothing.
   it("claiming a host in the ratchet that nothing renders FAILS — the array is not the evidence", () => {
     const edited = {
       ...LIFECYCLE_HOST_PARITY_RATCHET,
-      trigger_schedule_proposal: {
+      recommendation_hold: {
         hosts: {
-          ...LIFECYCLE_HOST_PARITY_RATCHET.trigger_schedule_proposal.hosts,
-          run_card: "composition" as HostObservationMethod,
+          ...LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.hosts,
+          page_gate_region: "composition" as HostObservationMethod,
         },
-        owed: LIFECYCLE_HOST_PARITY_RATCHET.trigger_schedule_proposal.owed,
+        owed: LIFECYCLE_HOST_PARITY_RATCHET.recommendation_hold.owed,
       },
     };
     const violations = evaluateHostParity({ observed: OBSERVED, ratchet: edited });
     expect(violations.map((v) => v.code)).toContain("host-lost");
   });
 
-  it("the DECLARED per-host list claims cells the product does not produce", () => {
+  it("the DECLARED per-host list is now MATCHED cell-for-cell by what renders", () => {
     // `lifecycleViewTypesForHost` answers all three data-part kinds for all four
-    // hosts — twelve cells. The render-observed set is strictly smaller, which is
-    // the whole reason a declaration cannot stand in for an observation.
+    // hosts — twelve cells. This arm used to assert the render-observed set was
+    // STRICTLY SMALLER, because it was: two of the three kinds drew the S1 shell
+    // in a transcript and were composed nowhere. S9e (cinatra#2789) and S9d
+    // (cinatra#2788) closed both gaps, so the twelve declared cells are now
+    // twelve OBSERVED cells — §IX met for every data-part kind.
+    //
+    // The arm is kept rather than deleted, and it kept the half that is a
+    // property rather than a snapshot: CONTAINMENT, in both directions. A
+    // declaration still may not be the evidence for a cell nobody rendered —
+    // what makes the twelve true is the four render-observed rows above, not
+    // this list — and a cell that renders without being declared is equally a
+    // drift. The "declaration cannot stand in for an observation" discriminator
+    // itself has NOT gone away; it moved to the two arms below, which drive
+    // `host-lost` and `host-unratcheted` on `recommendation_hold`, the one kind
+    // whose host set is genuinely incomplete.
     const declared = LIFECYCLE_CARD_HOSTS.flatMap((host) =>
       lifecycleViewTypesForHost(host).map((kind) => `${kind}@${host}`),
     );
@@ -416,8 +437,7 @@ describe("an edited array or a bare provider changes nothing", () => {
       Object.keys(OBSERVED[kind] ?? {}).map((host) => `${kind}@${host}`),
     );
     expect(declared.length).toBe(12);
-    expect(observedCells.length).toBeLessThan(declared.length);
-    for (const cell of observedCells) expect(declared).toContain(cell);
+    expect([...observedCells].sort()).toEqual([...declared].sort());
   });
 });
 
@@ -449,14 +469,17 @@ describe("the ratchet goes red in every direction it claims to", () => {
   });
 
   // Same reason as the claimed-cell discriminator above: the grown cell must be
-  // one the ratchet does not already record, and `verification_summary` records
-  // all four hosts since S9e (cinatra#2789).
+  // one the ratchet does not already record. `verification_summary` records all
+  // four hosts since S9e (cinatra#2789) and `trigger_schedule_proposal` does
+  // since S9d (cinatra#2788), so the subject is `recommendation_hold` on
+  // `page_gate_region` — neither recorded nor owed, so observing it is growth
+  // nobody wrote down rather than an owed row coming due.
   it("a NEW host that nobody recorded fails — growth is not silent either", () => {
     const grown: ObservedHostParity = {
       ...OBSERVED,
-      trigger_schedule_proposal: {
-        ...(OBSERVED.trigger_schedule_proposal ?? {}),
-        run_card: "composition",
+      recommendation_hold: {
+        ...(OBSERVED.recommendation_hold ?? {}),
+        page_gate_region: "composition",
       },
     };
     expect(evaluateHostParity({ observed: grown }).some((v) => v.code === "host-unratcheted")).toBe(

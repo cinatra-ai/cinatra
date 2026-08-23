@@ -419,6 +419,13 @@ describe("the four-kind carriage matrix (cinatra#2827)", () => {
         join(process.cwd(), "packages/agents/src/run-recommendation-chip-row.tsx"),
         "utf8",
       ),
+      // Added by S9d (cinatra#2788): §VI's owner is drawn, so its two controls
+      // stop being a named obligation and become a claim about a shipped
+      // component — read off that component, like the two above.
+      trigger_schedule_proposal: readFileSync(
+        join(process.cwd(), "packages/agents/src/schedule-proposal-card.tsx"),
+        "utf8",
+      ),
     };
     for (const [kind, source] of Object.entries(sources)) {
       for (const control of carriageRowFor(kind as never).decisionControls) {

@@ -472,7 +472,18 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     // reconciles the rail-head presentation.
     expect(RUN_CHIP_ROW).toMatch(/data-conformance-id="run-chip-row"/);
     // The rail is suppressed for a pending_input (run-start) run in the screen.
-    expect(RUN_SURFACE).toMatch(/run\.status !== "pending_input" && rail\.entries\.length > 0/);
+    // Since S9d (#2788) that predicate is NAMED (`railDraws`) and derived above
+    // the left column instead of being written inline on the mount: the plan's
+    // §7.2 step 5 puts the SCHEDULE step above "1 Review", so the column may
+    // have to draw when the run's own rail does not, and the two conditions
+    // could no longer share one expression. The invariant is unchanged — the
+    // same two conjuncts, wrapped by the formatter — so the pin follows the
+    // wrapping rather than the old single line, and is re-anchored to the mount
+    // the predicate now gates so it still measures the rail and not a comment.
+    expect(RUN_SURFACE).toMatch(
+      /run\.status !== "pending_input"\s*&&\s*rail\.entries\.length > 0/,
+    );
+    expect(RUN_SURFACE).toMatch(/railDraws \?\s*\(?\s*<RunStepRailPanel/);
   });
 
   it("the decision floor stays LOCKED at Approve/Reject/Comment — the run-embedded anchors add no fourth affordance", () => {

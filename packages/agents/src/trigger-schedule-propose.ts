@@ -24,6 +24,7 @@ import "server-only";
 import {
   mintTriggerScheduleProposalToken,
   verifyTriggerScheduleProposalToken,
+  verifyTriggerScheduleProposalTokenDetailed,
   type ProposalSchedule,
 } from "@/lib/trigger-schedule-proposal-token";
 import { readAgentTemplateById } from "./store";
@@ -166,6 +167,66 @@ export async function adjustTriggerSchedule(
   // closed. An expired proposal is re-proposed through the EXPIRED path, which
   // is the reading Confirm may not act on; this one adjusts a LIVE card.
   if (!prior) return { ok: false };
+
+  return mintProposal(
+    {
+      templateId: prior.templateId,
+      userId: input.userId,
+      orgId: input.orgId,
+      schedule: input.schedule,
+    },
+    prior.nonce,
+  );
+}
+
+/**
+ * RE-PROPOSE FROM AN EXPIRED CARD — the Confirm press on the expired face
+ * (cinatra#2836; plan (A) §7.2 step 2, "an expired card **stays visible**,
+ * still editable, with **Confirm** to set the schedule again").
+ *
+ * The expired token is unspendable, so that press cannot be a bare Confirm.
+ * It re-proposes first and confirms the replacement — the SAME composite an
+ * EDITED live proposal already performs, which is why the reader sees one
+ * control doing one thing and no new endpoint appears on the wire.
+ *
+ * WHY NOT SIMPLY WIDEN `adjustTriggerSchedule`. That function is the LIVE
+ * card's path and is reached by callers for whom an expired token must stay a
+ * refusal; widening it would have made "adjust" silently start accepting a
+ * proposal whose window closed on every one of them. Two named paths, each
+ * refusing exactly what it should, is the difference between a decision and an
+ * accident.
+ *
+ * IT IS NOT A WEAKER DOOR. `verifyTriggerScheduleProposalTokenDetailed` reports
+ * `expired` only for a token that decrypted under this server's key, carried an
+ * unstretched lifetime, and was minted for EXACTLY this reader in EXACTLY this
+ * org — every other input, an expired-but-foreign one included, is the same
+ * flat `refused` this function turns into the same `{ ok: false }`. So the
+ * authority required here is identical to Adjust's; only the freshness demanded
+ * of the token differs.
+ *
+ * THE LINEAGE RULE IS UNTOUCHED (cinatra#2859). The replacement inherits the
+ * expired proposal's nonce, exactly as Adjust's does, so the expired card and
+ * its re-proposal remain ONE row in the consume table and at most one member of
+ * the family can ever become a run. There is no new double-arm surface: the
+ * member being replaced here could not be spent in the first place.
+ *
+ * A STILL-LIVE TOKEN IS ACCEPTED TOO, deliberately. The caller routes on a
+ * resolve taken a moment earlier, and refusing a token that has not yet expired
+ * would turn that harmless staleness into a spurious refusal. It widens
+ * nothing: re-proposing from a live token is precisely what
+ * `adjustTriggerSchedule` already permits the same reader to do.
+ */
+export async function reproposeExpiredSchedule(
+  input: AdjustScheduleInput,
+): Promise<ProposeScheduleResult> {
+  const verified = verifyTriggerScheduleProposalTokenDetailed({
+    token: input.priorToken,
+    expectedUserId: input.userId,
+    expectedOrgId: input.orgId,
+  });
+  // One answer for a forged ref and a foreign one — expired or not.
+  if (verified.outcome === "refused") return { ok: false };
+  const prior = verified.proposal;
 
   return mintProposal(
     {

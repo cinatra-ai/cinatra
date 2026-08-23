@@ -1,10 +1,3 @@
 $ node scripts/audit/chat-hitl-one-card-gate.mjs
-[chat-hitl-one-card] 1 violation(s):
-
-  scripts/audit/chat-hitl-one-card-gate.mjs:1  [R5]  'trigger_schedule_proposal' has no card of its own (§VI (the schedule proposal card)) — The card is not drawn. The registry dispatches this kind to the S1 shell, which calls itself not-yet-drawn; the server already returns the proposal body and the client parses only the state name; the confirm action has no user interface caller. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.
-
-The epic's structural rule is ONE card per interaction, rendered on every host —
-only the frame adapts. A second renderer is not a smaller feature; it is a second
-place where 'approved' can come to mean something different — and a kind with NO
-renderer is not one implementation either, however few duplicates it has.
-exit 1
+[chat-hitl-one-card] clean — every lifecycle card kind is drawn, consumed, mounted and proven.
+exit 0

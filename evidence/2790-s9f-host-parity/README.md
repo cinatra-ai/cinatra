@@ -453,6 +453,17 @@ by a run failing on it rather than by guesswork.
 
 ## Cells DELIVERED — the review page (the decided form)
 
+> **`R1` and `R3` ARE RETIRED, and the two images with them** (the S9d
+> merge-forward, PR #2890). Both declared `framing: "card-root"` — a close-up of
+> the card with the page cropped away — and the ratified framing vocabulary is
+> `window` or `page` and nothing else, because the maintainer asked for the
+> surrounding after seeing exactly such close-ups. Nothing is owed for them: the
+> SAME reading of the SAME run is recorded at page framing by `R2` and `R4`. The
+> two rows below are kept as the record of what was retired and why; their
+> pictures are gone, because a picture kept beside a retired record is the next
+> round's false evidence.
+
+
 | Cell | Pixels | What is VISIBLY on screen |
 |---|---|---|
 | `R1__recommendation-card__page_gate_region__decided` | 2096×52 | The settled row on its own root: **`Blog Post Matcher Skill ✓ CONFIRMED`**, **`Blog Writing Skill ⇄ ADJUSTED`**, **`Web Research Skill ✓ CONFIRMED`** — one chip per kept skill, each naming the owning extension's manifest `displayName` and its own outcome. **Nothing to press.** |

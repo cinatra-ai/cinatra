@@ -99,6 +99,12 @@ export default defineConfig({
         root,
         "packages/agents/src/verification-summary-card.tsx",
       ),
+      // cinatra#2788 — the registry now dispatches the schedule kind to its own
+      // drawn card, so the column's DOM tests have to resolve it too.
+      "@cinatra-ai/agents/schedule-proposal-card": path.join(
+        root,
+        "packages/agents/src/schedule-proposal-card.tsx",
+      ),
       // cinatra#2683 — the conversation column mounts the REAL message list in
       // a DOM test, so the leaves that list reaches must resolve here as they do
       // in tsconfig.json. Subpath keys, so they stay above the bare entry.

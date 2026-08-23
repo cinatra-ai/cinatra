@@ -29,9 +29,9 @@
     "lane database, not a hand-assembled set. The A / B / C groups are described here; the V, D",
     "and I groups arrived with later slices, as did the S9b chat_thread group, the S9f widget /",
     "review-page groups (H / W / R), the run_card per-chip-control / zero-chip group (C0 / C1 /",
-    "C3 / C4), the settled review-page group (P) and the S9f CHAT-SEQUENCE group (S1 / S2 / S3 /",
-    "S4 -- one run walked end to end in a real conversation, whole browser windows) -- each",
-    "record carries its own `note`:",
+    "C3 / C4), the settled review-page group (P), the S9f CHAT-SEQUENCE group (S1 / S2 / S3 /",
+    "S4 -- one run walked end to end in a real conversation, whole browser windows) and the S9d",
+    "SCHEDULE group (S9d-C1 / C2 / C5) -- each record carries its own `note`:",
     "",
     "  A1 / A3 / A4 / A5 - cinatra#2855 (PR #2862), evidence/2855-settled-outcome. A1 is the gate",
     "  region on the review page. A3 / A4 / A5 are chat_thread: a real gate PENDING, the same card",
@@ -96,7 +96,58 @@
     "record in this file, because every record here is a measurement of a card, and asking the recorder for",
     "one would be asking it to measure a card that must not exist. Those two pictures (P6 / P7) and their",
     "counted anchors live in the round's own capture-results.json and its README grading table instead,",
-    "where they read as what they are: a negative control."
+    "where they read as what they are: a negative control.",
+    "",
+    "THE SCHEDULE GROUP IS NOT HERE - cinatra#2788 (PR #2939, S9d), and its absence is the honest",
+    "state rather than an omission. This file used to carry TEN records of the schedule card from",
+    "S9d round 1 (evidence/2788-s9d-schedule-card): A1 / A2 and B1 / B2 in a transcript, R1 / R2 on",
+    "the run page, P1 / P2 on the review page, and E1 / E2 - two records whose cell names carried",
+    "`standin`, because that round could not reach the expired phase through the server and stood in",
+    "the RESOLVE RESPONSE. All ten are RETIRED here, for two separate reasons that both stand on",
+    "their own:",
+    "",
+    "  · THE CARD THEY PHOTOGRAPH NO LONGER EXISTS. The S9d rework removed the summary box, the",
+    "    held-steps block and the status label from every host, renamed the two run-page controls",
+    "    (Cancel trigger -> Cancel schedule, Release now -> Run now), and moved the schedule from a",
+    "    card in the gate region to a STEP in the left rail. Every one of the ten shows drawings the",
+    "    shipped card does not draw any more. A record whose anchors still hash to a real image of a",
+    "    retired reading is not evidence for the card that ships; it is evidence against it.",
+    "",
+    "  · TWO OF THEM WERE NEVER A CAPTURE OF THE THING CLAIMED. The `standin` pair says so in its own",
+    "    names, and a stand-in is not acceptable evidence at any tier.",
+    "",
+    "WHAT REPLACES THEM IS NOW RECORDED. The rework's walk was driven THROUGH THIS RECORDER -",
+    "`node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2788-s9d-rework/capture-walk.json",
+    "--merge` - over the shipped product: a schedule stated into the /chat composer, answered by the",
+    "shipped `schedule_proposal_render` producer, one press of Confirm, the run page's schedule step",
+    "opened by a real press of the rail row, and the expired reading after the shipped 30-minute window",
+    "actually ran out. The eight cells it produced - S9d-C1 / C2 / C3 / C5, light and dark - are",
+    "registered below, and every assertion on each is a count the recorder took on the screen that",
+    "cell's picture shows, validated at the AUDIT tier before anything was written. C4 is DROPPED and",
+    "stated rather than staged: the schedule is armed and has not fired, so the run has produced",
+    "nothing for anybody to review - see that round's TIMELINE.md.",
+    "",
+    "THE WALK IS A COMMITTED PLAN. evidence/2788-s9d-rework/capture-walk.json is that same path written",
+    "as a plan this driver executes (`--walk`), with the eight cells it produces and the ten cells above",
+    "named as the ones it retires. It closes the gap that made the earlier round unrecordable:",
+    "`driveCapture` knows one shape of capture - open a URL, wait, shoot - and C1 and C2 are ONE card",
+    "before and after ONE press, on a thread the product minted, which no URL can reach.",
+    "",
+    "TWO CARD-ROOT RECORDS ARE RETIRED HERE, and their absence is the honest state",
+    "rather than a loss. R1 and R3 (`recommendation-card__page_gate_region__decided`,",
+    "light and dark) declared `framing: \"card-root\"` — a close-up of the card with the",
+    "page cropped away. The ratified framing vocabulary is `window` or `page` and",
+    "nothing else: the maintainer asked for the surrounding after seeing close-ups",
+    "(\"close ups of the card, but I cannot tell the surrounding\"), and the recorder's",
+    "own CAPTURE_FRAMINGS records that ruling. A record that names a framing the",
+    "vocabulary does not have is refused, and widening the vocabulary to admit these",
+    "two would undo the ruling that produced it.",
+    "",
+    "NOTHING IS OWED FOR THEM. The SAME reading of the SAME run is already recorded at",
+    "page framing by R2 and R4 (`…__above-gate`, light and dark): the decided row in",
+    "its page, uncropped and full-length, with the review gate card beneath it still",
+    "awaiting its decision. The two images go with the two records — a picture kept",
+    "beside a retired record is the next round's false evidence."
   ],
   "schemaVersion": 1,
   "recorder": "cinatra-lifecycle-capture-recorder@1",
@@ -4799,139 +4850,6 @@
       "note": "The SAME settled row framed on its own root, in place: four chips, each naming its skill by the owning extension's manifest displayName and stating its own recorded outcome. No Confirm / Adjust / Skip anywhere on the row."
     },
     {
-      "cell": "R1__recommendation-card__page_gate_region__decided",
-      "declaredHost": "page_gate_region",
-      "declaredKind": "recommendation_hold",
-      "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e/review/lifecycle-review:912fa2b6c5928615f67701a03bf895a81f6bb148ee2e5d2db55903290026f117",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R1__recommendation-card__page_gate_region__decided.png",
-      "sha256": "84aba5f61faa92571979866655c94a0bae0b315d747f99e30c4430a9c02f55be",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
-          "scope": "frame",
-          "count": 2
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"review-gate-card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"review-decision-bar\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-skill-action=\"confirm\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-skill-action=\"adjust\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-skill-action=\"skip\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-recommendation-chip]",
-          "scope": "root",
-          "count": 3
-        },
-        {
-          "selector": "[data-conformance-id=\"run-chip-row\"]",
-          "scope": "frame",
-          "count": 1
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-22T17:30:21.550Z",
-      "runtime": "dev-runtime — Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
-      "note": "The recommendation row on the run review page in its DECIDED form, framed on the card root. One settled chip per kept skill, each printing the owning extension's manifest displayName and its own outcome — Confirmed / Adjusted — and NOTHING to press. This is the record of what was chosen before the run started; the decision itself was taken on the run page through the card's own per-chip controls (see logs/real-sequence.log), never here.",
-      "rootAttributes": {
-        "data-run-recommendation-chip-row": "",
-        "data-conformance-id": "run-chip-row",
-        "data-lifecycle-card": "recommendation_hold",
-        "data-lifecycle-card-state": "decided",
-        "data-lifecycle-card-host": "page_gate_region",
-        "data-run-recommendation-decision": "confirmed",
-        "data-run-recommendation-settled": "true",
-        "data-variant": "inline"
-      },
-      "chips": [
-        {
-          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
-          "mark": "confirmed",
-          "forced": false,
-          "label": "Blog Post Matcher Skill",
-          "text": "Blog Post Matcher SkillConfirmed",
-          "actions": []
-        },
-        {
-          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
-          "mark": "adjusted",
-          "forced": false,
-          "label": "Blog Writing Skill",
-          "text": "Blog Writing SkillAdjusted",
-          "actions": []
-        },
-        {
-          "skillId": "@cinatra-ai/web-research-skill:web-research",
-          "mark": "confirmed",
-          "forced": false,
-          "label": "Web Research Skill",
-          "text": "Web Research SkillConfirmed",
-          "actions": []
-        }
-      ],
-      "order": {
-        "card": true,
-        "gate": true,
-        "cardTop": 191,
-        "gateTop": 233,
-        "cardAboveGate": true,
-        "domOrder": "card-then-gate"
-      },
-      "gate": {
-        "state": "pending",
-        "host": "page_gate_region",
-        "decisionBar": true,
-        "decisionButtons": [
-          "Comment",
-          "Reject",
-          "Approve"
-        ]
-      },
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
-      "framing": "card-root",
-      "clip": {
-        "x": 376,
-        "y": 191,
-        "width": 1048,
-        "height": 26
-      },
-      "pageErrors": []
-    },
-    {
       "cell": "R2__recommendation-card__page_gate_region__decided__above-gate",
       "declaredHost": "page_gate_region",
       "declaredKind": "recommendation_hold",
@@ -5057,139 +4975,6 @@
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
       "framing": "page",
       "clip": null,
-      "pageErrors": []
-    },
-    {
-      "cell": "R3__recommendation-card__page_gate_region__decided__dark",
-      "declaredHost": "page_gate_region",
-      "declaredKind": "recommendation_hold",
-      "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/e7c77fc6-da28-4bca-80f7-46c56867772e/review/lifecycle-review:912fa2b6c5928615f67701a03bf895a81f6bb148ee2e5d2db55903290026f117",
-      "screenshot": "evidence/2790-s9f-host-parity/captures/R3__recommendation-card__page_gate_region__decided__dark.png",
-      "sha256": "c0efd4af306a4647e2cb62d66dafe39e662a34b962d29fa7b24048010cdd57e4",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
-          "scope": "frame",
-          "count": 2
-        },
-        {
-          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"review-gate-card\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-conformance-id=\"review-decision-bar\"]",
-          "scope": "frame",
-          "count": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1
-        },
-        {
-          "selector": "[data-skill-action=\"confirm\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-skill-action=\"adjust\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-skill-action=\"skip\"]",
-          "scope": "root",
-          "count": 0
-        },
-        {
-          "selector": "[data-recommendation-chip]",
-          "scope": "root",
-          "count": 3
-        },
-        {
-          "selector": "[data-conformance-id=\"run-chip-row\"]",
-          "scope": "frame",
-          "count": 1
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-22T17:30:22.657Z",
-      "runtime": "dev-runtime — Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
-      "note": "The SAME decided row, same run, same clip rectangle, in the dark palette — the class next-themes writes when the shipped theme control is pressed. Nothing else changed.",
-      "rootAttributes": {
-        "data-run-recommendation-chip-row": "",
-        "data-conformance-id": "run-chip-row",
-        "data-lifecycle-card": "recommendation_hold",
-        "data-lifecycle-card-state": "decided",
-        "data-lifecycle-card-host": "page_gate_region",
-        "data-run-recommendation-decision": "confirmed",
-        "data-run-recommendation-settled": "true",
-        "data-variant": "inline"
-      },
-      "chips": [
-        {
-          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
-          "mark": "confirmed",
-          "forced": false,
-          "label": "Blog Post Matcher Skill",
-          "text": "Blog Post Matcher SkillConfirmed",
-          "actions": []
-        },
-        {
-          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
-          "mark": "adjusted",
-          "forced": false,
-          "label": "Blog Writing Skill",
-          "text": "Blog Writing SkillAdjusted",
-          "actions": []
-        },
-        {
-          "skillId": "@cinatra-ai/web-research-skill:web-research",
-          "mark": "confirmed",
-          "forced": false,
-          "label": "Web Research Skill",
-          "text": "Web Research SkillConfirmed",
-          "actions": []
-        }
-      ],
-      "order": {
-        "card": true,
-        "gate": true,
-        "cardTop": 191,
-        "gateTop": 233,
-        "cardAboveGate": true,
-        "domOrder": "card-then-gate"
-      },
-      "gate": {
-        "state": "pending",
-        "host": "page_gate_region",
-        "decisionBar": true,
-        "decisionButtons": [
-          "Comment",
-          "Reject",
-          "Approve"
-        ]
-      },
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
-      "framing": "card-root",
-      "clip": {
-        "x": 376,
-        "y": 191,
-        "width": 1048,
-        "height": 26
-      },
       "pageErrors": []
     },
     {
@@ -5797,6 +5582,450 @@
       "recordedAt": "2026-08-23T10:27:11.056Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the WayFlow runtime from this repository's own compose file; CINATRA_TEST_LLM_PROVIDER=scripted serves the agent's own model bridge; no model credential on this host",
       "note": "The same review page framing for the same run, in the dark palette."
+    },
+    {
+      "cell": "S9d-C1__schedule-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ebac4b7c-743c-4827-8a0a-1eaca28fb762",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-before-confirm__light.png",
+      "sha256": "154ef77f50109d369b96bce6d0dc500443a5fd4fbe2a704e5757b97f146d457e",
+      "capturedAt": "2026-08-23T15:32:20.111Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "proposal",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C1__schedule-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ebac4b7c-743c-4827-8a0a-1eaca28fb762",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-before-confirm__dark.png",
+      "sha256": "72a11f872b694c6e03d2a3402cc96b66fced3913dd0741c290e1b8c49e58ce61",
+      "capturedAt": "2026-08-23T15:32:26.794Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "proposal",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C2__schedule-card__chat_thread__decided",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ebac4b7c-743c-4827-8a0a-1eaca28fb762",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-after-confirm__light.png",
+      "sha256": "531cb5fea1dddb1433e6b22c0f8ebddedeeae2ae7fc455baa9105ab2e4eff34c",
+      "capturedAt": "2026-08-23T15:32:28.714Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C2__schedule-card__chat_thread__decided__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ebac4b7c-743c-4827-8a0a-1eaca28fb762",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-after-confirm__dark.png",
+      "sha256": "f6e24ae341bb428e18bb50405ccc038e363e870694e7951c7a3d4956b868d016",
+      "capturedAt": "2026-08-23T15:32:33.634Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C5__schedule-card__chat_thread__pending__expired",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c40d9526-4f74-4deb-b4d9-e90064bd84fe",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__light.png",
+      "sha256": "1ff764d4b3427da94a30ba64ad2c5cbcd4c12fd2b646b16676162de4824a85e3",
+      "capturedAt": "2026-08-23T16:04:46.870Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "expired",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C5__schedule-card__chat_thread__pending__expired__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c40d9526-4f74-4deb-b4d9-e90064bd84fe",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__dark.png",
+      "sha256": "79a3afaf442f641ad2f862df27f20c083ba9ce6d7007b3216e311013c93d10cf",
+      "capturedAt": "2026-08-23T16:04:51.358Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "expired",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
     }
   ]
 }

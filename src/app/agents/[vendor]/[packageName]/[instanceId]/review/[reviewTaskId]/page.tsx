@@ -57,12 +57,17 @@ import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/ren
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
 import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-chip-row";
-import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
+import {
+  encodeLifecycleGateRef,
+  encodeScheduleRunRef,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 
 import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
+import { ScheduleRailStep } from "@cinatra-ai/agents/schedule-rail-step";
 import { ReviewPromptWindow } from "./review-prompt-window";
 import { VerificationView } from "./verification-view";
 
@@ -246,61 +251,110 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   // has no envelope to read.
   const gateCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
 
+  // §VI's card as THE SCHEDULE STEP IN THE RAIL (cinatra#2788, epic #2784 S9d).
+  //
+  // NEVER BESIDE THE REVIEW CARD. Plan (A) §7.2 step 5: "On the run page and the
+  // review page the schedule is a **dedicated step in the step rail on the left,
+  // above '1 Review'**: open that step to see the configuration or change it —
+  // it opens to the right of the steps, never directly under a step … The
+  // schedule is never drawn as a card among the review cards — a trigger decides
+  // *when* the agent runs, and a review card exists only after the agent has run
+  // and produced something — so the two can never appear together." So the step
+  // heads the rail and its configuration opens in the region on the RIGHT, in
+  // place of the review card, which is how the two can never be drawn together.
+  // The page opens on the review card: the reviewer came here to decide it.
+  //
+  // THE REF IS THE RUN'S. This page reaches its subject by route params and
+  // holds no turn, so the card is addressed by a run-scoped ref minted here,
+  // whose resolver re-derives the proposal's (viewer, organization, template)
+  // binding from its own consume row.
+  //
+  // THE STEP IS DRAWN ONLY FOR A RUN THAT HAS A SCHEDULE. A run with no trigger
+  // row has nothing for the step to open onto, and the card would resolve
+  // `absent` and draw no DOM — so the rail shows no schedule step at all rather
+  // than an empty one. Presence of the row is all this read decides; WHAT the
+  // step may show is still re-resolved against the live reader on the endpoint,
+  // which answers `absent` for a run this reader did not confirm a proposal for.
+  const scheduleCardRef = (await readRunTriggerByRunId(runId).catch(() => null))
+    ? encodeScheduleRunRef({ runId })
+    : null;
+
   return (
     <ReviewShell>
-      <div className="flex items-start gap-6">
-        {/* owner ruling (2) — the agent run STEPS on the left as run context. */}
-        <ReviewRunSteps steps={steps} activeStep={activeStep} />
+      <div className="flex items-start gap-6" data-run-detail-contract="">
+        {(() => {
+          // The agent run STEPS on the left, as run context (cinatra#2063).
+          const railNode = (
+            <ReviewRunSteps steps={steps} activeStep={activeStep} scheduleCardRef={scheduleCardRef} />
+          );
+          /* The gate REGION on the right (cinatra#2566, epic #2564 S2). The page's
+          own composition — gate header, the stacked target panels, the decision
+          bar — is GONE from here and lives in `ReviewGateCard`, the one renderer
+          the chat thread and the run card mount too. The page keeps its deeper
+          chrome (the run step rail beside it, the prompt window below, the
+          verification view) and supplies two things the card cannot derive: the
+          server-minted ref that addresses this gate, and the ROUTE-BOUND decision
+          action it has always used, so the page's decision transport is exactly
+          what it was before the move.
+          
+          When the ref cannot be minted (no instance auth secret), the page falls
+          back to nothing rather than to a second composition — there is only one
+          drawing of a review, and an instance that cannot mint refs is a
+          configuration fault to fix, not a reason to fork the surface. */
+          const detailNode = (
+            <LifecycleCardSurfaceProvider host="page_gate_region">
+              {/* THE RUN-START SKILLS QUESTION, at its plan-designated position
+                  (cinatra#2790, epic #2784 S9f; plan §6.4 "the same row appears on
+                  the run page, ahead of the steps it would authorize, and on the
+                  review page, where it is mostly seen in its decided form", and §9
+                  "review page — keyed by the run").
 
-        {/* The gate REGION on the right (cinatra#2566, epic #2564 S2). The page's
-            own composition — gate header, the stacked target panels, the decision
-            bar — is GONE from here and lives in `ReviewGateCard`, the one renderer
-            the chat thread and the run card mount too. The page keeps its deeper
-            chrome (the run step rail beside it, the prompt window below, the
-            verification view) and supplies two things the card cannot derive: the
-            server-minted ref that addresses this gate, and the ROUTE-BOUND decision
-            action it has always used, so the page's decision transport is exactly
-            what it was before the move.
+                  ABOVE the gate card, and that ordering is the design's, not a
+                  layout choice: the recommendation is the decision taken BEFORE
+                  the run produced anything, and the review is the decision taken
+                  after. Reading down the gate region is reading the run in order.
 
-            When the ref cannot be minted (no instance auth secret), the page falls
-            back to nothing rather than to a second composition — there is only one
-            drawing of a review, and an instance that cannot mint refs is a
-            configuration fault to fix, not a reason to fork the surface. */}
-        <div className="flex min-w-0 flex-1 flex-col gap-4">
-          <LifecycleCardSurfaceProvider host="page_gate_region">
-            {/* THE RUN-START SKILLS QUESTION, at its plan-designated position
-                (cinatra#2790, epic #2784 S9f; plan §6.4 "the same row appears on
-                the run page, ahead of the steps it would authorize, and on the
-                review page, where it is mostly seen in its decided form", and §9
-                "review page — keyed by the run").
-
-                ABOVE the gate card, and that ordering is the design's, not a
-                layout choice: the recommendation is the decision taken BEFORE
-                the run produced anything, and the review is the decision taken
-                after. Reading down the gate region is reading the run in order.
-
-                ONE RENDERER, NO FORK. This is the same `RecommendationHoldCard`
-                the run panel and the widget mount — the card owns whether it
-                draws, which state it is in, and when it re-reads — so it is
-                keyed by the run and nothing else, and it renders NOTHING when
-                the run never held or the reader may not see it. On this page
-                that is usually its settled reading, which is exactly what §9
-                says is mostly seen here. The host declaration is the one on the
-                root of this region: a card is a `page_gate_region` mount because
-                THIS provider says so, per the anchor contract. */}
-            <RecommendationHoldCard runId={runId} />
-            {gateCardRef ? (
-              <ReviewGateCard
-                view={{
-                  viewType: "artifact_review_gate",
-                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-                  ref: gateCardRef,
-                }}
-                submitAction={submitAction}
+                  ONE RENDERER, NO FORK. This is the same `RecommendationHoldCard`
+                  the run panel and the widget mount — the card owns whether it
+                  draws, which state it is in, and when it re-reads — so it is
+                  keyed by the run and nothing else, and it renders NOTHING when
+                  the run never held or the reader may not see it. On this page
+                  that is usually its settled reading, which is exactly what §9
+                  says is mostly seen here. The host declaration is the one on the
+                  root of this region: a card is a `page_gate_region` mount because
+                  THIS provider says so, per the anchor contract. */}
+              <RecommendationHoldCard runId={runId} />
+              {gateCardRef ? (
+                <ReviewGateCard
+                  view={{
+                    viewType: "artifact_review_gate",
+                    schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                    ref: gateCardRef,
+                  }}
+                  submitAction={submitAction}
+                />
+              ) : null}
+            </LifecycleCardSurfaceProvider>
+          );
+          if (scheduleCardRef) {
+            return (
+              <ScheduleRailStep
+                host="page_gate_region"
+                cardRef={scheduleCardRef}
+                displayStep={1}
+                rail={railNode}
+                detail={detailNode}
+                initialSelection="detail"
               />
-            ) : null}
-          </LifecycleCardSurfaceProvider>
-        </div>
+            );
+          }
+          return (
+            <>
+              {railNode}
+              <div className="flex min-w-0 flex-1 flex-col gap-4">{detailNode}</div>
+            </>
+          );
+        })()}
       </div>
 
       {/* owner ruling (1) — the REAL conversational prompt window (the
