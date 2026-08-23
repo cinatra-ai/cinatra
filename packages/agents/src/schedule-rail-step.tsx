@@ -47,6 +47,8 @@
 import { useState, type ReactElement } from "react";
 import { CalendarClock, ChevronDown, ChevronRight } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 import { ScheduleProposalCard } from "./schedule-proposal-card";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
@@ -88,12 +90,20 @@ export function ScheduleRailStep({
       data-schedule-rail-open={open ? "true" : "false"}
       className="flex flex-col gap-2"
     >
-      <button
+      {/* The disclosure control is the shadcn <Button>, not a raw <button> —
+          the design-system boundary (eslint `no-restricted-syntax`) admits no
+          raw control JSX outside the vendored primitives, and the sibling
+          control in `ScheduleProposalCard` takes the same shape. `ghost` plus
+          the size/hover neutralisers is what keeps a rail ROW looking like a
+          rail row rather than a pill: no chrome at rest, no muted fill while
+          it is open, and the same `hover:opacity-90` the row had. */}
+      <Button
         type="button"
+        variant="ghost"
         data-action="open-schedule-step"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-control px-0 py-0.5 text-left hover:opacity-90"
+        className="h-auto justify-start gap-2 rounded-control px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 aria-expanded:bg-transparent aria-expanded:text-foreground dark:hover:bg-transparent"
       >
         <span
           data-conformance-id="schedule-rail-indicator"
@@ -108,7 +118,7 @@ export function ScheduleRailStep({
         ) : (
           <ChevronRight aria-hidden="true" className="size-3.5 text-muted-foreground" />
         )}
-      </button>
+      </Button>
 
       {/* THE CONFIGURATION. The same component the chat thread, the widget and
           the other page mount — the option rows, the estimated duration, Save
