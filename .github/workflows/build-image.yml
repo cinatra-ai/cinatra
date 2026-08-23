@@ -3104,6 +3104,15 @@ jobs:
       CINATRA_RUNTIME_MODE: development
       A2A_DEV_BYPASS: "true"
       CINATRA_E2E_SETUP_BYPASS: "true"
+      # `pnpm dev`'s launcher opens with a Docker preflight and, finding no Nango
+      # connector service, tries `docker compose up -d nango-server` before it
+      # starts Next at all — 29 seconds of the first run (07:33:59Z-07:34:28Z)
+      # spent failing at it. This suite needs no connector service: it points
+      # WayFlow at an unreachable port ON PURPOSE and the pre-router dispatch it
+      # measures touches neither. Skipping the preflight is not only faster — had
+      # Docker cooperated it would have added a whole extra container to a job
+      # whose failure below is a memory-headroom failure.
+      CINATRA_SKIP_DEV_PREFLIGHT: "1"
     steps:
       - name: Guard — detect must have succeeded
         if: ${{ needs.detect.result != 'success' }}
@@ -3165,6 +3174,80 @@ jobs:
         # import graph and statically refuses the transitive `import "server-only"`.
         run: node scripts/apply-public-schema.mjs
 
+      # ---- RUNNER HEADROOM ----
+      #
+      # This job's FIRST real run (32625788704) did not time out and did not fail
+      # a test. It ran out of the box. Boot was never the problem: the webServer
+      # answered `/api/health` 85s after the step began and Playwright printed
+      # "Running 3 tests using 1 worker" at 07:35:22Z, against a 600s webServer
+      # budget. Then, at 07:39:40Z, EVERY producer of output on the machine went
+      # quiet at once — the dev server, the perpetual system loops, the BullMQ
+      # heartbeats and Playwright — for six minutes. The one line that came back
+      # out at 07:45:39Z dates the stall precisely: a 90s `Atomics.wait` ceiling
+      # (`POSTGRES_SYNC_TIMEOUT_MS=90000`, set by the suite's own webServer
+      # command) returned "timed-out" only after ~6 minutes of wall clock, and the
+      # request holding it logged `GET /api/assistants/threads 500 in 6.0min`. A
+      # ceiling that overshoots itself four-fold is a scheduling report, not a
+      # database report. At 07:47:52Z the step was CANCELLED mid-command with
+      # every later step skipped — the uploads and even the `Post` steps — which
+      # is a reclaimed runner, not a timeout: the job's 50-minute cap and the
+      # 45-minute shell `timeout` were both still minutes away.
+      #
+      # None of that is particular to this suite, and both siblings already say
+      # so in their own comments. `e2e-rbac` above adds a swapfile because
+      # "the postgres/redis sidecars OOM/swap-thrash and the runner gets
+      # RECLAIMED mid-build". `wp-drupal-uat.yml`'s gate — the job THIS suite's
+      # config is modelled on — records the same finding in almost the same
+      # words: "when it runs out of headroom the box stops making progress
+      # ENTIRELY: the suite emits nothing further, no Playwright per-test timeout
+      # can fire (its own process is wedged), and the job is torn down with no
+      # diagnosis." This job co-hosts a Turbopack DEV server, a Playwright
+      # Chromium and the postgres/redis sidecars on one 4-vCPU / 16-GB
+      # `ubuntu-latest` and shipped with NEITHER mitigation — it had the image's
+      # stock 3G swap while `e2e-rbac`, on an identical runner in the same run,
+      # gave itself 20G more.
+      #
+      # The obvious other lever is not available from here: the `dev` script
+      # hard-sets `NODE_OPTIONS='… --max-old-space-size=8192'` itself, so job env
+      # cannot lower the dev server's heap ceiling without editing product code.
+      # Headroom is what this job can give, so it gives it — the wp-drupal-uat
+      # recipe, unchanged in intent. Nothing here touches what the flow asserts.
+      - name: Reclaim runner disk (so the swapfile below has room)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # Same reclaim the UAT gate does before enlarging swap. Disk was never
+        # this job's constraint; this exists only so the 16G file below fits with
+        # room to spare.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Enlarge swap + record the memory baseline
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # Turns the cliff into a slowdown the suite can still finish and REPORT
+        # THROUGH, which is the part that matters for a required gate: a slow red
+        # names a failing test, a reclaimed runner names nothing. The baseline is
+        # printed so the next investigation starts from a measurement.
+        run: |
+          set -euo pipefail
+          # ADDITIVE — a dedicated swapfile alongside whatever the image ships.
+          # Deliberately no `swapoff -a`: dropping the existing device first would
+          # leave the box with LESS headroom for the window it takes to build the
+          # new one.
+          if swapon --show=NAME --noheadings | grep -qx /mnt/cinatra-s9k-swap; then
+            sudo swapoff /mnt/cinatra-s9k-swap
+          fi
+          sudo rm -f /mnt/cinatra-s9k-swap
+          sudo fallocate -l 16G /mnt/cinatra-s9k-swap
+          sudo chmod 600 /mnt/cinatra-s9k-swap
+          sudo mkswap /mnt/cinatra-s9k-swap
+          sudo swapon /mnt/cinatra-s9k-swap
+          # Prefer reclaiming page cache over swapping; swap here is the cliff
+          # guard of last resort, not a routine tier.
+          sudo sysctl -w vm.swappiness=10
+          swapon --show
+          free -m
+          nproc
+
       # NO PRODUCTION BUILD, AND NO SERVER STARTED HERE — that is the point of the
       # job rather than an omission. #2824 asks for a DEV-RUNTIME proof, because
       # that is the runtime the 2026-08-13 capture ruling labels and the runtime the
@@ -3182,10 +3265,28 @@ jobs:
         # artifact uploads below run as ordinary steps — a job-level cancellation
         # skips even `always()` cleanup, which is how earlier rounds lost their
         # diagnostics. The captured code is asserted at the end.
+        #
+        # The ticker below writes one memory line every 30s into THIS STEP'S LOG
+        # rather than into a file — on purpose. The failure this job has already
+        # hit destroys the runner, and a reclaimed runner never reaches an upload
+        # step, so anything staged for an artifact is exactly the evidence that
+        # goes missing. The job log is streamed as it is written, so every line
+        # printed before the teardown survives it. It emits numbers and a clock
+        # and nothing else, and it can neither fail the step nor outlive it.
         run: |
           set +e
+          (
+            while true; do
+              printf '[resource] %s ' "$(date -u +%H:%M:%SZ)"
+              free -m | awk 'NR==2 {printf "mem_used=%sMi mem_avail=%sMi ", $3, $7} NR==3 {printf "swap_used=%sMi of %sMi\n", $3, $2}'
+              sleep 30
+            done
+          ) &
+          ticker=$!
           timeout --kill-after=60 2700 pnpm test:e2e:chat-hitl-held-turn
           code=$?
+          kill "${ticker}" 2>/dev/null
+          wait "${ticker}" 2>/dev/null
           echo "code=${code}" >> "$GITHUB_OUTPUT"
           echo "playwright exited with ${code}"
           exit 0
