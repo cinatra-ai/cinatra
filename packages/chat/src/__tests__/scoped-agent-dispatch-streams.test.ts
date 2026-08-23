@@ -179,7 +179,7 @@ describe("cinatra#2820 — the seam: the literal the client streams is the liter
     ).toBe(AGENT_ONLY_PACKAGE);
   });
 
-  it("SEAM — the legacy underscore form crosses the seam in both cases", async () => {
+  it("SEAM — the legacy underscore form crosses the seam in its own lowercase shape", async () => {
     // No mention token at all, so the client streams by the no-mention default;
     // the server maps `cinatra_<slug>` onto the canonical package.
     const LEGACY = "use cinatra_contact-discovery-agent to find leads at Acme";
@@ -189,11 +189,25 @@ describe("cinatra#2820 — the seam: the literal the client streams is the liter
     expect(detectExplicitDispatchPackage([{ role: "user", content: LEGACY }])).toBe(
       AGENT_ONLY_PACKAGE,
     );
+    // ...and ONLY in that shape (cinatra#2912 review, NEW-1). This arm asserted
+    // the opposite for one round and pinned a widening as correct. The case fold
+    // exists to keep the server matcher in parity with the client tokenizer, and
+    // the tokenizer only ever lexes `@`-mentions — this form produces no mention
+    // token at all, as the arm above depends on. With no client behaviour to be
+    // in parity with, folding case here bought nothing and cost a great deal: it
+    // made ordinary SHOUTED identifiers the tree already ships (`CINATRA_THEME`,
+    // `CINATRA_ID`, `CINATRA_STATUS`) fire a hard pre-model agent dispatch. So a
+    // capitalized legacy ref carries no dispatch intent the server may act on.
     expect(
       detectExplicitDispatchPackage([
         { role: "user", content: "Use Cinatra_Contact-Discovery-Agent to find leads at Acme" },
       ]),
-    ).toBe(AGENT_ONLY_PACKAGE);
+    ).toBeNull();
+    expect(
+      detectExplicitDispatchPackage([
+        { role: "user", content: "Use CINATRA_THEME to change the look" },
+      ]),
+    ).toBeNull();
   });
 
   it("SEAM — the honest no-responder is still on the CLIENT side of the seam", async () => {

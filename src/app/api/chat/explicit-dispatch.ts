@@ -32,8 +32,20 @@ export const CANONICAL_PKG_RE = /@cinatra-ai\/([a-z][a-z0-9-]*)/g;
 /**
  * Legacy `cinatra_<slug>` "tool" wording from the per-agent function-tool
  * form. Still appears in fixtures and operator prompts; maps to the canonical
- * `@cinatra-ai/<slug>` package. Lowercase-only for the same reason as
- * `CANONICAL_PKG_RE`, and matched against the same lowercased text.
+ * `@cinatra-ai/<slug>` package.
+ *
+ * Lowercase-only AND matched against the RAW message text — deliberately NOT
+ * the case-folded text the canonical matcher reads (cinatra#2912 review,
+ * NEW-1). The canonical form folds case to stay in parity with the client
+ * mention tokenizer; that argument does not reach here, because the tokenizer
+ * only ever lexes `@`-mentions and this form produces no mention token at all
+ * (pinned at `packages/chat/src/__tests__/scoped-agent-dispatch-streams.test.ts`
+ * — "No mention token at all"). With no client behaviour to be in parity with,
+ * folding case here only widens the matcher onto ordinary SHOUTED identifiers:
+ * the tree ships `CINATRA_THEME`, `CINATRA_ID`, `CINATRA_STATUS` and more, and
+ * a user asking a configuration question about one of them would trip the hard
+ * pre-model short-circuit at `src/lib/assistant-runtime/runtime.ts` and get a
+ * spurious failed agent dispatch instead of an answer.
  */
 export const LEGACY_CINATRA_SLUG_RE =
   /\bcinatra_([a-z][a-z0-9-]+)(?:[-_ ]tool|\b)/g;
@@ -47,8 +59,11 @@ export const LEGACY_CINATRA_SLUG_RE =
  * about @cinatra-ai/foo" → no verb → null. "Use @cinatra-ai/foo" →
  * matches both → `"@cinatra-ai/foo"`.
  *
- * Case-INSENSITIVE, to stay in parity with the client mention tokenizer:
- * `Use @Cinatra-AI/Some-Agent …` resolves to `@cinatra-ai/some-agent`.
+ * Case-INSENSITIVE for the CANONICAL `@vendor/slug` form only, to stay in
+ * parity with the client mention tokenizer: `Use @Cinatra-AI/Some-Agent …`
+ * resolves to `@cinatra-ai/some-agent`. The legacy `cinatra_<slug>` form stays
+ * case-SENSITIVE — it has no client counterpart, so it has no parity argument
+ * (cinatra#2912 review, NEW-1).
  */
 export function detectExplicitDispatchPackage(
   messages: Array<{ role: string; content: string }>,
@@ -60,25 +75,35 @@ export function detectExplicitDispatchPackage(
   if (messages.length === 0) return null;
   const last = messages[messages.length - 1];
   if (last.role !== "user" || typeof last.content !== "string") return null;
-  // CASE PARITY WITH THE CLIENT (cinatra#2820 review). The client mention
-  // tokenizer lexes scoped refs case-insensitively and lowercases vendor+slug
+  const raw = last.content;
+  // `EXPLICIT_DISPATCH_VERB_RE` carries `/i`, so the raw text is the right
+  // input for the hedge whichever matcher fires below.
+  if (!EXPLICIT_DISPATCH_VERB_RE.test(raw)) return null;
+
+  // CASE PARITY WITH THE CLIENT, FOR THE CANONICAL FORM ONLY (cinatra#2820
+  // review; narrowed by the cinatra#2912 review). The client mention tokenizer
+  // lexes scoped refs case-insensitively and lowercases vendor+slug
   // (`packages/chat/src/mention-tokenizer.ts` — `MENTION_RE`, the `/gi` flags),
   // so `Use @Cinatra-AI/Some-Agent …` produces the SAME `agent-dispatch`
   // classification as the all-lowercase form and takes the streaming route
   // (`packages/chat/src/route-decision.ts`). Matching the raw text here would
   // then find nothing and dispatch nothing — the #2820 defect exactly, on a case
-  // variant: the message streams and the agent never runs. Lowercasing once, up
-  // front, keeps both matchers reading the same string; the lowercased match IS
-  // the canonical packageName, because npm scope/package names are lowercase.
-  const text = last.content.toLowerCase();
-  if (!EXPLICIT_DISPATCH_VERB_RE.test(text)) return null;
-
-  // Try canonical first; fall back to legacy form.
-  const canonicalMatches = Array.from(text.matchAll(CANONICAL_PKG_RE));
+  // variant: the message streams and the agent never runs. The lowercased match
+  // IS the canonical packageName, because npm scope/package names are lowercase
+  // by definition.
+  //
+  // The fold stops at this matcher. The legacy `cinatra_<slug>` form below reads
+  // the RAW text: it has no client counterpart, so it has no parity argument to
+  // stand on, and folding case for it would make ordinary SHOUTED identifiers
+  // such as `CINATRA_THEME` fire a hard agent dispatch. See
+  // `LEGACY_CINATRA_SLUG_RE`.
+  const canonicalMatches = Array.from(
+    raw.toLowerCase().matchAll(CANONICAL_PKG_RE),
+  );
   if (canonicalMatches.length > 0) {
     return `@cinatra-ai/${canonicalMatches[0][1]}`;
   }
-  const legacyMatches = Array.from(text.matchAll(LEGACY_CINATRA_SLUG_RE));
+  const legacyMatches = Array.from(raw.matchAll(LEGACY_CINATRA_SLUG_RE));
   if (legacyMatches.length > 0) {
     return `@cinatra-ai/${legacyMatches[0][1]}`;
   }
