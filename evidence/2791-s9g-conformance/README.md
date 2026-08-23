@@ -10,35 +10,6 @@ the evidence gate had been carrying as grandfathered debt since #2821.
 Both are addressed here. Nothing is rounded up: the cells that could not be
 driven are listed with the exact line of shipped code that stops them.
 
-## RE-SHOT at cinatra#2945 — G5 and G6, for the label in the pixels
-
-`#2945` renamed the audit lane's display strings. `G5` and `G6` were photographed
-before that landed, so their pixels read the old word in three places at once:
-the card heading, the run rail's entry and the advisory body. **Both are
-replaced** — new bytes, new hashes, and their records replaced IN PLACE in
-`scripts/ci/chat-hitl-capture-index.json`. They now read **Audit** in all three,
-and the advisory body reads *"Audit of 3 disclosed field(s)."*
-
-The re-shoot did NOT re-use this round's `seedRepairVerification` call. The
-verification record and the advisory behind the new pictures come from a repair
-this lane drove through the shipped writers on a real run —
-`recordChangesRequested` → a real successor artifact → `submitRepairResponse`,
-whose own trigger wrote the record and ran the audit lane. The walk, the
-recorder, the grading table and the store's own timestamps are in
-`evidence/2945-audit-label/`; the timestamps are also in `TIMELINE.md` beside this
-file.
-
-`G8` is **untouched**: the §V row draws none of the renamed strings.
-
-**`G1`, `G2` and `G3` are untouched too, and that is a residual rather than a
-clean result.** They are review-gate cells whose gate carries suggestions, so
-they draw §VIII's block heading — and opening them shows it still reads
-`CORE ANALYSIS · SUGGESTIONS`. They were outside the six cells this round was
-scoped to, so they are neither re-shot nor re-recorded here; the finding is
-written down instead of being left for the next reader to discover. Whether any
-of the other suggestion-carrying cells elsewhere in the index read the old word
-was NOT swept in this round, and no claim is made about them.
-
 ## What is captured, and against what
 
 The authority on **which kind reaches which host today** is not a table in an
@@ -185,31 +156,30 @@ Every row below was graded by **looking at the pixels** beside the counts.
 - **Verdict: CONFORMS.** One card implementation, two hosts, differing only in
   the frame.
 
-### `G5__audit-card__run_card__advisory.png` — 2456×2960 (re-shot at #2945)
+### `G5__audit-card__run_card__advisory.png` — 2456×2960
 
 - **Requires** (§VII, run_card, advisory): the card root declaring
   `data-lifecycle-card="verification_summary"` and
   `data-lifecycle-card-host="run_card"`, on a run-detail URL. §VII asks nothing,
   so it owes **no** control.
-- **Shows** (as re-shot): `Audit` with the outcome pill **`Out-of-scope drift`**; the
+- **Shows**: `Core analysis` with the outcome pill **`Out-of-scope drift`**; the
   sentence that explains what that means; the revision pins
   (`98d31a95… → 5ef2e3fc…`); the before/after table with one row,
   `representation.resource`, carrying its own **`OUT OF SCOPE`** authorization
   mark, the before struck through and the after in place; and the
-  `ADVISORY COMMENTS` panel with its `SERVICE` author-kind, the body
-  *"Audit of 3 disclosed field(s)."* and the analysis provenance. The run rail's
-  own entry beside it reads **Audit DRIFTED**. Nothing on the card can be pressed.
+  `ADVISORY COMMENTS` panel with its `SERVICE` author-kind and the analysis
+  provenance. Nothing on the card can be pressed.
 - **Counted**: host declaration 1/1 frame-wide and 1/1 in the root; card root
   1/1.
 - **Verdict: CONFORMS.** This kind had **zero** cells before this round.
 
-### `G6__audit-card__page_gate_region__advisory.png` — 2456×2960 (re-shot at #2945)
+### `G6__audit-card__page_gate_region__advisory.png` — 2456×2960
 
 - **Requires**: the same, with `data-lifecycle-card-host="page_gate_region"`, on
   the review page's verification region (`?view=verification`, the run rail's
   Core-analysis entry).
-- **Shows** (as re-shot): the **same renderer**, same chrome, same `Audit`
-  heading, same pill, same pins, same marked row, same advisory panel — sitting unframed in the page column, with
+- **Shows**: the **same renderer**, same chrome, same pill, same pins, same
+  marked row, same advisory panel — sitting unframed in the page column, with
   **no back link and no floor**, exactly as the plan's §8.4 sequence describes
   the as-designed page.
 - **Counted**: host declaration 1/1 frame-wide and 1/1 in the root; card root

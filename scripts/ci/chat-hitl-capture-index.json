@@ -335,414 +335,432 @@
     {
       "cell": "B1__review-card__page_gate_region__pending",
       "declaredHost": "page_gate_region",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cf5b5fa9-e3cb-4588-940f-490571c9e5a4/review/lifecycle-review%3A706fdfebc45dc11e1f19f73af0738c442806af93c8527f42e23997856736d5b0",
-      "build": "development",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad3439044b074b6ab84204166618303667e9c9a968482d3ee99e9cec08813b",
       "screenshot": "evidence/2852-before-after/captures/B1__review-card__page_gate_region__pending.png",
-      "sha256": "907d297eeda19ba0e9698da5b0a53be254aa5f17e7a112de5ebd307765eefd46",
-      "capturedAt": "2026-08-23T17:25:37.396Z",
+      "sha256": "b92701b75ed185036257c0f0d2f7a41fd09cc60a7087fe473dc2321a7c30415d",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"review-decision-bar\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
         },
         {
-          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "selector": "[data-lifecycle-card-state]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"suggestion-chips\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+          "scope": "root",
+          "count": 0
         },
         {
           "selector": "[data-conformance-id=\"suggestion-before-after\"]",
           "scope": "root",
-          "count": 3,
-          "frame": "main",
-          "expect": "present",
-          "visible": 3,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"before\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"after\"]",
+          "scope": "root",
+          "count": 3
         },
         {
           "selector": "[data-suggestion-state=\"accepted\"]",
           "scope": "root",
-          "count": 3,
-          "frame": "main",
-          "expect": "present",
-          "visible": 3,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 3
         },
         {
           "selector": "[data-suggestion-state=\"dismissed\"]",
           "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"approve-review -> resolved\"]",
+          "scope": "root",
+          "count": 1
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "declaredKind": "artifact_review_gate",
-      "declaredState": "pending",
-      "instance": {
-        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-        "matched": 1,
-        "index": 0,
-        "id": null,
-        "attributes": {
-          "class": "flex w-full flex-col gap-3",
-          "data-lifecycle-card": "artifact_review_gate",
-          "data-lifecycle-card-state": "pending",
-          "data-lifecycle-card-host": "page_gate_region",
-          "data-conformance-id": "review-gate-card"
-        }
-      },
-      "runtime": "dev-runtime",
-      "note": "The arrival state on the review page gate region: the suggestion block heading and its three before/after pairs, every chip accepted, with the decision floor below."
+      "recordedAt": "2026-08-19T23:47:15.404Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
+      "note": "RE-SHOT for the count line's new home. Every suggestion in its arrival state (accepted) on the review page's gate region, each with its own before/after panel, and the count line composed INSIDE the decision floor above the terminal row."
     },
     {
       "cell": "B2__review-card__page_gate_region__pending",
       "declaredHost": "page_gate_region",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cf5b5fa9-e3cb-4588-940f-490571c9e5a4/review/lifecycle-review%3A706fdfebc45dc11e1f19f73af0738c442806af93c8527f42e23997856736d5b0",
-      "build": "development",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/6a4f9c78-a6d5-4da6-a09b-f8c947c48026/review/lifecycle-review%3Aa9ad3439044b074b6ab84204166618303667e9c9a968482d3ee99e9cec08813b",
       "screenshot": "evidence/2852-before-after/captures/B2__review-card__page_gate_region__pending.png",
-      "sha256": "43c7d686735dfba5eb8657c2cd1eed025a4c9d3a09d2f40abe4156a7f01724e5",
-      "capturedAt": "2026-08-23T17:26:10.882Z",
+      "sha256": "1e7aa38e54c0294a2b458dc871d58f3be1a6453da7028867fd54106192d22591",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"review-decision-bar\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
         },
         {
-          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "selector": "[data-lifecycle-card-state]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"suggestion-chips\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+          "scope": "root",
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"suggestion-before-after\"]",
           "scope": "root",
-          "count": 3,
-          "frame": "main",
-          "expect": "present",
-          "visible": 3,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"before\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"after\"]",
+          "scope": "root",
+          "count": 3
         },
         {
           "selector": "[data-suggestion-state=\"accepted\"]",
           "scope": "root",
-          "count": 2,
-          "frame": "main",
-          "expect": "present",
-          "visible": 2,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 2
         },
         {
           "selector": "[data-suggestion-state=\"dismissed\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"approve-review -> resolved\"]",
+          "scope": "root",
+          "count": 1
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "declaredKind": "artifact_review_gate",
-      "declaredState": "pending",
-      "instance": {
-        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-        "matched": 1,
-        "index": 0,
-        "id": null,
-        "attributes": {
-          "class": "flex w-full flex-col gap-3",
-          "data-lifecycle-card": "artifact_review_gate",
-          "data-lifecycle-card-state": "pending",
-          "data-lifecycle-card-host": "page_gate_region",
-          "data-conformance-id": "review-gate-card"
-        }
-      },
-      "runtime": "dev-runtime",
-      "note": "The SAME row after the middle chip was pressed once in this browser: it is drawn dismissed and keeps its before/after panel, and the count line follows it."
+      "recordedAt": "2026-08-19T23:54:29.749Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
+      "note": "RE-SHOT. The SAME row after the middle chip was pressed once: 2 accepted, 1 dismissed, still 3 before/after panels, and the count line - now reading 2 of 3 - composed in the decision floor, not at the foot of the chips block."
     },
     {
       "cell": "B3__review-card__chat_thread__pending",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/49ac13d5-f66b-4e25-9cc5-1b14214be708",
-      "build": "development",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
       "screenshot": "evidence/2852-before-after/captures/B3__review-card__chat_thread__pending.png",
-      "sha256": "591a968bfbb9f14edd031721fc964cee3ebb7cfdd6e696c9fc1480e9e4ef3ce0",
-      "capturedAt": "2026-08-23T17:22:32.431Z",
+      "sha256": "e37f4c9cd4716dffc99dcbb19f8dfff848b4c6a0eba7ceae894a8da1c7aa1d47",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"review-decision-bar\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
         },
         {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "selector": "[data-lifecycle-card-state]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"suggestion-chips\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+          "scope": "root",
+          "count": 0
         },
         {
           "selector": "[data-conformance-id=\"suggestion-before-after\"]",
           "scope": "root",
-          "count": 3,
-          "frame": "main",
-          "expect": "present",
-          "visible": 3,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"before\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"after\"]",
+          "scope": "root",
+          "count": 3
         },
         {
           "selector": "[data-suggestion-state=\"accepted\"]",
           "scope": "root",
-          "count": 3,
-          "frame": "main",
-          "expect": "present",
-          "visible": 3,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 3
         },
         {
           "selector": "[data-suggestion-state=\"dismissed\"]",
           "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"approve-review -> resolved\"]",
+          "scope": "root",
+          "count": 1
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "declaredKind": "artifact_review_gate",
-      "declaredState": "pending",
-      "instance": {
-        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-        "matched": 1,
-        "index": 0,
-        "id": null,
-        "attributes": {
-          "class": "my-3 flex w-full flex-col gap-3",
-          "data-lifecycle-card": "artifact_review_gate",
-          "data-lifecycle-card-state": "pending",
-          "data-lifecycle-card-host": "chat_thread",
-          "data-conformance-id": "review-gate-card"
-        }
-      },
-      "runtime": "dev-runtime",
-      "note": "The same card and the same three suggestions in a REAL transcript: the browser typed the sentence into the chat composer, the turn called the shipped lifecycle pull primitives, and the card came back in the reply."
+      "recordedAt": "2026-08-19T23:47:56.420Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
+      "note": "RE-SHOT. The same card and the same three suggestions in a real chat transcript, all accepted, with the count line in the decision floor."
     },
     {
       "cell": "B4__review-card__chat_thread__pending",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/00bb9420-2834-4d8a-bb45-0d4d3d5ac8e4",
-      "build": "development",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/before-after-reshot",
       "screenshot": "evidence/2852-before-after/captures/B4__review-card__chat_thread__pending.png",
-      "sha256": "c51311adb1965caa09c41216afb1db32354836e7a2d256942f1b6549802e0e21",
-      "capturedAt": "2026-08-23T17:15:53.180Z",
+      "sha256": "054622e2d885a66c5dbb84d080c9fcb832928315d242223b8647cf58ab3b09d2",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
           "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"review-decision-bar\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
         },
         {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "selector": "[data-lifecycle-card-state]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"suggestion-chips\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted\"]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-dismissed\"]",
+          "scope": "root",
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"suggestion-before-after\"]",
           "scope": "root",
-          "count": 3,
-          "frame": "main",
-          "expect": "present",
-          "visible": 3,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"before\"]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-suggestion-panel=\"after\"]",
+          "scope": "root",
+          "count": 3
         },
         {
           "selector": "[data-suggestion-state=\"accepted\"]",
           "scope": "root",
-          "count": 2,
-          "frame": "main",
-          "expect": "present",
-          "visible": 2,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 2
         },
         {
           "selector": "[data-suggestion-state=\"dismissed\"]",
           "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"dismiss-suggestion -> dismissed\"]",
+          "scope": "root",
+          "count": 2
+        },
+        {
+          "selector": "[data-action=\"accept-suggestion -> accepted\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"suggestion-chips\"] [data-conformance-id=\"suggestion-accepted-count\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"approve-review -> resolved\"]",
+          "scope": "root",
+          "count": 1
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "declaredKind": "artifact_review_gate",
-      "declaredState": "pending",
-      "instance": {
-        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
-        "matched": 1,
-        "index": 0,
-        "id": null,
-        "attributes": {
-          "class": "my-3 flex w-full flex-col gap-3",
-          "data-lifecycle-card": "artifact_review_gate",
-          "data-lifecycle-card-state": "pending",
-          "data-lifecycle-card-host": "chat_thread",
-          "data-conformance-id": "review-gate-card"
-        }
-      },
-      "runtime": "dev-runtime",
-      "note": "A second real turn in its own transcript, with the middle chip dismissed by a press in this browser — the same two drawn states on the second host, from the one renderer."
+      "recordedAt": "2026-08-19T23:54:48.498Z",
+      "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. Head under proof f5ae7b401, unmodified.",
+      "note": "RE-SHOT. The chat-hosted row with one chip dismissed - the same two drawn states on the second host, from the one renderer, with the count line in the decision floor on this host too."
     },
     {
       "cell": "C1__review-card__site_widget__pending",
@@ -2993,11 +3011,11 @@
     {
       "cell": "G5__audit-card__run_card__advisory",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/82934b44-2d28-42e8-bcd0-230fecd50513",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/f64a35b7-750b-43eb-b9d4-4c8a38950005",
       "build": "development",
       "screenshot": "evidence/2791-s9g-conformance/captures/G5__audit-card__run_card__advisory.png",
-      "sha256": "1345f9a79f0020df04c0c49fdbd867a019f30af3376aff53f9c7c462a853228b",
-      "capturedAt": "2026-08-23T17:10:30.913Z",
+      "sha256": "b05dc3b1a1fe60bcc9e360b0c581376823b53b2dd6518ec6020e3d53f7f09faa",
+      "capturedAt": "2026-08-21T23:31:48.642Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -3022,33 +3040,6 @@
           "frame": "main",
           "expect": "present",
           "visible": 1,
-          "within": "[data-lifecycle-card=\"verification_summary\"]"
-        },
-        {
-          "selector": "[data-verification-advisory]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"verification_summary\"]"
-        },
-        {
-          "selector": "[data-advisory-comment=\"0\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"verification_summary\"]"
-        },
-        {
-          "selector": "[data-advisory-unavailable]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
           "within": "[data-lifecycle-card=\"verification_summary\"]"
         }
       ],
@@ -3069,16 +3060,16 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "Section VII audit card on the RUN CARD host, advisory — the run screen composes VerificationSummaryCard per verification record the run carries."
+      "note": "§VII audit card on the RUN CARD host, advisory — the run screen composes VerificationSummaryCard per verification record the run carries."
     },
     {
       "cell": "G6__audit-card__page_gate_region__advisory",
       "declaredHost": "page_gate_region",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/82934b44-2d28-42e8-bcd0-230fecd50513/review/lifecycle-review%3Arepair%3A1872fdbf-b066-456e-a627-1a9009518b83%3A1?view=verification",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/f64a35b7-750b-43eb-b9d4-4c8a38950005/review/lifecycle-review%3Arepair%3A0db50f40-4a20-4e82-ba2c-14b40c16e286%3A1?view=verification",
       "build": "development",
       "screenshot": "evidence/2791-s9g-conformance/captures/G6__audit-card__page_gate_region__advisory.png",
-      "sha256": "d600c90b9692179cd4669211936fa12f5d464fbd83184dd58216ea6da719e1c7",
-      "capturedAt": "2026-08-23T17:10:50.805Z",
+      "sha256": "7441c9c7c65b8945c908248d1d7f6d0aa0361523c187f174077c6c380bb1305c",
+      "capturedAt": "2026-08-21T23:37:36.495Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
@@ -3104,33 +3095,6 @@
           "expect": "present",
           "visible": 1,
           "within": "[data-lifecycle-card=\"verification_summary\"]"
-        },
-        {
-          "selector": "[data-verification-advisory]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"verification_summary\"]"
-        },
-        {
-          "selector": "[data-advisory-comment=\"0\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"verification_summary\"]"
-        },
-        {
-          "selector": "[data-advisory-unavailable]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"verification_summary\"]"
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
@@ -3150,7 +3114,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "Section VII audit card in the review page verification region, advisory — the same renderer, the page composing around it."
+      "note": "§VII audit card in the review page verification region (the run rail Core-analysis entry), advisory — S9e composes the shared renderer and the page adjuncts around it."
     },
     {
       "cell": "G8__recommendation-card__run_card__held",
