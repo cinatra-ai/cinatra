@@ -218,7 +218,7 @@ export interface LifecycleRunDecision {
   representationRevisionId: string;
   emitter: string;
   /** Point V. The other two checkpoints project through their own surfaces (the
-   * run-start recommendation chip row; the rail's "Core analysis" verification
+   * run-start recommendation chip row; the rail's "Audit" verification
    * entry), so the outbox projection is review-only by construction. */
   checkpoint: "review";
   outcome: LifecycleRunDecisionOutcome;

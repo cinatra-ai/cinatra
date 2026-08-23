@@ -121,7 +121,7 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   const actorCtx = await resolveReviewActorContext();
   if (!actorCtx) redirect(await signInRedirectTarget());
 
-  // S4 (cinatra#2042): the run rail's "Core analysis" entry deep-links here with
+  // S4 (cinatra#2042): the run rail's "Audit" entry deep-links here with
   // `?view=verification` — the before/after field diff of a repaired revision. It
   // is READ-ONLY and works for a resolved gate (unlike the pending-gate decision
   // surface), so it enforces run READ access directly rather than through the

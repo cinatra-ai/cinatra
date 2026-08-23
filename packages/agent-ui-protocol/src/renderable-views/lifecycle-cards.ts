@@ -671,7 +671,7 @@ export type TriggerScheduleProposalView = z.infer<
 // that state.
 //
 // IT IS THE SHIPPED CORE-ANALYSIS READING, SANITIZED. The fields below are the
-// ones the run's own "Core analysis" surface already shows the SAME reader,
+// ones the run's own "Audit" surface already shows the SAME reader,
 // after the SAME run-read check: the verdict, the two pinned revisions, the
 // before/after field diff and §VII's advisory comments.
 //
