@@ -186,6 +186,35 @@ export const WIDGET_CHAT_PENDING_CALLS_ROUTE_PATH = "/api/chat/pending-tool-call
 export const WIDGET_CHAT_UNDO_ROUTE_PATH = "/api/chat/undo-candidate";
 
 /**
+ * The inline RUN PANEL's seed (cinatra#2902) — "draw the agent run this message
+ * is about".
+ *
+ * The route is `/api/agents/runs/[runId]`; the audience names the SURFACE
+ * (`/api/agents/runs`) rather than one rendered path, for the same reason the
+ * thread-read audience above does: a token cannot be minted per run, and an
+ * audience that had to be is an audience nobody could check. WHICH run a caller
+ * may read is decided by the per-run authorization ladder behind the door, never
+ * by this string.
+ *
+ * IT JOINS `conversation.read` RATHER THAN MINTING A SCOPE. The panel is part of
+ * the conversation: it draws a run the reader's own transcript already refers to,
+ * with the reader's own standing, and it changes nothing. That is the same thing
+ * the parked-call list and the undo chip are, and a person consenting to "show
+ * your own conversation and the things around it" is consenting to exactly this.
+ *
+ * A SESSION MINTED BEFORE THIS SLICE CARRIES THE SCOPE AND NOT THIS AUDIENCE, so
+ * it fails closed at the consume and the panel stays as it was until the person
+ * opens the assistant login again (AC-1). That is the designed cutover: an
+ * already-minted token never acquires a grant.
+ *
+ * THE SEED ONLY. The panel's live transports — the run's stream and its
+ * creation-progress notifications — are separately session-only and are NOT
+ * declared here. Naming an audience this slice does not serve would be consent
+ * for a capability that does not exist.
+ */
+export const WIDGET_AGENT_RUN_SEED_ROUTE_PATH = "/api/agents/runs";
+
+/**
  * The grammar of a single set member. Deliberately strict and whitespace-free:
  * the set encoding IS the whitespace, so a value carrying any is not one member
  * but several, and a member assembled from an attacker-influenced string could
@@ -572,6 +601,10 @@ export const WIDGET_EXTENSION_SCOPES = {
       WIDGET_CHAT_SETTINGS_ROUTE_PATH,
       WIDGET_CHAT_PENDING_CALLS_ROUTE_PATH,
       WIDGET_CHAT_UNDO_ROUTE_PATH,
+      // cinatra#2902 — the inline run panel's seed. The transcript already
+      // refers to the run; this is what lets the panel beside that reference
+      // draw it, under the reader's own standing.
+      WIDGET_AGENT_RUN_SEED_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant.
@@ -581,7 +614,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * sentence that admits to it changing in the same edit.
      */
     consentCopy:
-      "Show your own conversation with this assistant — your earlier messages, the people and assistants you can mention, the actions waiting for your confirmation, and whether a run can still be undone — using the same permissions you have in Cinatra.",
+      "Show your own conversation with this assistant — your earlier messages, the people and assistants you can mention, the actions waiting for your confirmation, the agent run a message refers to, and whether a run can still be undone — using the same permissions you have in Cinatra.",
   },
   [WIDGET_CONVERSATION_WRITE_SCOPE]: {
     audiences: [

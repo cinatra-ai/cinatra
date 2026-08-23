@@ -35,6 +35,11 @@ import {
   type HitlGateContext,
 } from "@cinatra-ai/agents/client-entry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  brokerRequestInit,
+  useConversationCredential,
+  type ConversationCredential,
+} from "./conversation-credential";
 import { useAgentCreationProgress } from "./use-agent-creation-progress";
 
 /**
@@ -108,12 +113,54 @@ type SeedData = {
   hitlContext?: HitlGateContext | null;
 };
 
-type LoadFailureReason = "not-found" | "forbidden" | "transient";
+type LoadFailureReason = "not-found" | "forbidden" | "transient" | "unaddressable";
 
 function classifyStatus(status: number): LoadFailureReason {
   if (status === 404) return "not-found";
   if (status === 401 || status === 403) return "forbidden";
   return "transient";
+}
+
+/** The seed's address. One definition, so the two branches cannot drift apart. */
+const SEED_ROUTE = "/api/agents/runs";
+
+/**
+ * THE REQUEST THE SEED IS MADE WITH (cinatra#2902).
+ *
+ * The panel's first act is to read the run it must draw, and until this slice it
+ * could only ask one way: with whatever cookie the browser happened to hold. On
+ * the embedded widget — a frame same-origin to the Cinatra app on a page served
+ * by another site — that request carried no cookie at all (a `Lax` session cookie
+ * does not travel cross-site), so the guard answered it before the handler ran
+ * and the panel drew its failure line for ever.
+ *
+ * It now asks with whichever credential the host declared, and this is the ONE
+ * place that reads it. The three answers are the column's own three:
+ *
+ *   · COOKIE — a first-party host. The request is UNCHANGED, to the byte: the
+ *     same URL, the same `Accept`, the same `cache: "no-store"`, and no
+ *     `credentials` field, so the ambient session rides it exactly as it always
+ *     has. A preservation control pins this.
+ *   · BROKER — the widget. The broker headers travel on the request and
+ *     `credentials` is `"omit"`, both supplied by the one shared builder so a
+ *     caller cannot forget the mode and send a cookie it must not send.
+ *   · REFUSED — a host that cannot say who is asking. It asks NOTHING. A run is
+ *     somebody's work, and an unclear surface must not learn about one by
+ *     issuing the request that would answer as whoever else is signed in.
+ */
+function seedRequest(
+  credential: ConversationCredential,
+  runId: string,
+): { url: string; init: RequestInit } | null {
+  if (credential.kind === "refused") return null;
+  const url = `${SEED_ROUTE}/${encodeURIComponent(runId)}`;
+  const base: RequestInit = {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  };
+  if (credential.kind === "cookie") return { url, init: base };
+  return { url, init: brokerRequestInit(credential.auth, base) };
 }
 
 export function InlineAgentRunCard({
@@ -134,6 +181,11 @@ export function InlineAgentRunCard({
 }) {
   const [seed, setSeed] = useState<SeedData | null>(null);
   const [loadError, setLoadError] = useState<LoadFailureReason | null>(null);
+  // THE CREDENTIAL THIS SURFACE ASKS WITH (cinatra#2902). Memoized on the two
+  // context values it derives from, which is load-bearing rather than tidy: it
+  // is an effect dependency below, and a fresh object every render would make
+  // the seed re-fire on every render — a polling loop, not a mount load.
+  const credential = useConversationCredential();
 
   useEffect(() => {
     let cancelled = false;
@@ -149,13 +201,19 @@ export function InlineAgentRunCard({
     const RETRY_DELAYS_MS = [250, 750];
     let attempt = 0;
 
+    const request = seedRequest(credential, runId);
+    if (!request) {
+      // A host that declared no usable credential asks nothing at all, and says
+      // so rather than sitting on the loading line for ever.
+      setLoadError("unaddressable");
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const load = async (): Promise<void> => {
       try {
-        const res = await fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, {
-          method: "GET",
-          headers: { Accept: "application/json" },
-          cache: "no-store",
-        });
+        const res = await fetch(request.url, request.init);
         if (cancelled) return;
         if (!res.ok) {
           const reason = classifyStatus(res.status);
@@ -191,7 +249,7 @@ export function InlineAgentRunCard({
     return () => {
       cancelled = true;
     };
-  }, [runId]);
+  }, [runId, credential]);
 
   if (loadError) {
     const message =
@@ -199,7 +257,9 @@ export function InlineAgentRunCard({
         ? `Agent run ${runId.slice(0, 8)} is not available yet.`
         : loadError === "forbidden"
           ? "You do not have access to this agent run."
-          : `Could not load agent run ${runId.slice(0, 8)} — please try again.`;
+          : loadError === "unaddressable"
+            ? `Agent run ${runId.slice(0, 8)} cannot be shown here.`
+            : `Could not load agent run ${runId.slice(0, 8)} — please try again.`;
     return (
       <div className="soft-panel rounded-panel p-3 my-2 text-sm text-muted-foreground">
         {message}

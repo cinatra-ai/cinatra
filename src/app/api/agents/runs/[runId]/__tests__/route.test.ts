@@ -54,6 +54,67 @@ describe("GET /api/agents/runs/[runId]", () => {
     expect(readAgentRunById).not.toHaveBeenCalled();
   });
 
+  // -----------------------------------------------------------------------
+  // cinatra#2902 convergence F2 — the UNAUTHENTICATED first-party poll.
+  //
+  // The guard admits GET on this path cookieless (for the widget's sake), so a
+  // first-party poll with no cookie and no widget header now reaches the handler
+  // and `requireAuthSession()` is what refuses it. It refuses by calling Next's
+  // `redirect()`, which does NOT return — it throws a control-flow signal tagged
+  // with a `NEXT_REDIRECT` digest. The handler's generic error arm caught that
+  // signal and answered 500 with `err.message` as the body, so the ordinary
+  // signed-out case read as a server fault AND put the framework's internal
+  // token on the wire. These rows pin the 401 and the silence.
+  // -----------------------------------------------------------------------
+  function nextRedirectSignal() {
+    // The shape Next actually throws: a plain Error the framework tags.
+    return Object.assign(new Error("NEXT_REDIRECT"), {
+      digest: "NEXT_REDIRECT;replace;/sign-in?redirectTo=%2Fchat;307;",
+    });
+  }
+
+  it("401s — not 500 — when the unauthenticated poll trips requireAuthSession's redirect", async () => {
+    requireAuthSession.mockRejectedValue(nextRedirectSignal());
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(401);
+    await expect(res.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(readAgentRunById).not.toHaveBeenCalled();
+    expect(readAgentRunMessages).not.toHaveBeenCalled();
+  });
+
+  it("the refusal body carries NO framework text (no NEXT_REDIRECT, no sign-in URL)", async () => {
+    requireAuthSession.mockRejectedValue(nextRedirectSignal());
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    const body = await res.text();
+    expect(body).not.toMatch(/NEXT_REDIRECT/);
+    expect(body).not.toMatch(/sign-in/);
+    expect(body).not.toMatch(/redirectTo/);
+    expect(body).toBe(JSON.stringify({ error: "Unauthorized" }));
+  });
+
+  it("a bare digest-only redirect signal is recognised too", async () => {
+    requireAuthSession.mockRejectedValue(
+      Object.assign(new Error("x"), { digest: "NEXT_REDIRECT" }),
+    );
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(401);
+  });
+
+  it("PRESERVATION: a genuine fault is still a 500 — the redirect arm swallowed nothing", async () => {
+    requireAuthSession.mockRejectedValue(new Error("connection terminated"));
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toEqual({ error: "connection terminated" });
+  });
+
+  it("PRESERVATION: a digest that is not a redirect is NOT treated as one", async () => {
+    requireAuthSession.mockRejectedValue(
+      Object.assign(new Error("boom"), { digest: "NEXT_NOT_FOUND" }),
+    );
+    const res = await GET(new Request("https://app.test/x"), ctx("run-1"));
+    expect(res.status).toBe(500);
+  });
+
   it("threads the actor + org/admin hints into readAgentRunById", async () => {
     requireAuthSession.mockResolvedValue(sessionFor("user-self", "org-1"));
     readAgentRunById.mockResolvedValue({ id: "run-1", templateId: "tpl-1", status: "completed" });
