@@ -796,15 +796,29 @@ describe("a superseded card resolves to the truth, not to its own rows", () => {
       READER,
     );
     // Whole-object, so a stray field change on the settled card fails here too.
+    //
+    // TWO FIELDS JOINED THE SETTLED RESOLUTION (cinatra#2788): `schedule` — the
+    // armed SELECTIONS, read back off the installed row so the settled card can
+    // draw the same option rows the proposal did — and `canSave`, the reading
+    // behind its Save-changes floor. They are asserted here rather than loosened
+    // out of the comparison, which is the whole point of a whole-object check:
+    // the winning member's rows are the ones it was adjusted TO (08:00), and it
+    // cannot be saved yet because the install is still arming.
     expect(resolved).toEqual({
       phase: "settled",
       runId: "run_1",
       agentName: "Weekly digest",
       triggerType: "recurring",
+      schedule: {
+        kind: "recurring",
+        timezone: "Europe/Berlin",
+        selection: { ...WEEKDAYS_8AM.selection },
+      },
       scheduleCopy: service.describeProposalSchedule(WEEKDAYS_8AM),
       timezone: "Europe/Berlin",
       released: false,
       arming: true,
+      canSave: false,
       superseded: false,
     });
   });

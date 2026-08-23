@@ -28,18 +28,42 @@
 //
 //   proposal → the standard scheduling step: "When should this run?" over the
 //              three option rows with the chosen one taking the indigo edge and
-//              tint and owning its fields, then Estimated run duration, then
-//              §VI's floor — Adjust · Confirm. Nothing exists yet.
-//   settled  → the trigger's own chrome: the read-only Trigger configuration
-//              summary, the steps held until the trigger fires, and two quiet
-//              right-aligned controls — Cancel trigger, and Release now for an
-//              administrator.
+//              tint and owning its fields, then Estimated run duration, then the
+//              floor — Confirm, and nothing else. Nothing exists yet.
+//   settled  → THE SAME CARD AND THE SAME ROWS, now showing the armed schedule,
+//              with Save changes to re-arm. On the run page and the review page
+//              — where this card IS the schedule step in the rail — the same
+//              body additionally carries the trigger's own chrome: the read-only
+//              Trigger configuration summary, the steps held until the trigger
+//              fires, and the two quiet controls Cancel trigger and Release now
+//              for an administrator.
 //   expired  → the proposal's thirty minutes ran out with nobody pressing
-//              anything. It STAYS VISIBLE with Adjust to propose again (plan §7
-//              step 5; §9.1 row 8). Not an error, and emphatically not `absent`
-//              — that rung is reserved for a reader who may not see the subject
-//              at all, and answering it deleted the card, and the question it
-//              asked, out of the reader's own transcript.
+//              anything. It STAYS VISIBLE and EDITABLE, with Confirm to propose
+//              again (plan (A) §7.2 step 2; §9.1 row 8). Not an error, and
+//              emphatically not `absent` — that rung is reserved for a reader
+//              who may not see the subject at all, and answering it deleted the
+//              card, and the question it asked, out of the reader's transcript.
+//
+// THREE THINGS THE PLAN FIXES THAT THIS CARD IS THE WHOLE IMPLEMENTATION OF:
+//
+//   1. NO ADJUST STEP. "The option rows are editable as they stand: until you
+//      confirm, you change the proposal directly on the card — the rows are
+//      never locked behind a separate step. The floor is **Confirm**" (§7.2).
+//      There is no `Adjust` control on any phase. The re-propose it used to open
+//      still happens — a proposal is single-use, so EDITED rows are re-proposed
+//      and then confirmed, on the new ref — but it is an implementation of one
+//      press, not a step the reader has to find.
+//   2. NO SECOND CARD AFTER CONFIRM. "No second card is drawn for the confirmed
+//      state: the same card, with the same option rows, now shows the armed
+//      schedule; to change it you return to the card, change the rows and press
+//      **Save changes**, which re-arms the trigger" (§7.2). The settled body
+//      therefore carries the armed SELECTIONS, read back from the installed row,
+//      and the rows are the same component in both phases.
+//   3. THE TRIGGER'S CHROME IS NOT IN THE CONVERSATION. "**Cancel trigger** and
+//      **Release now** for an administrator — lives on the run page's schedule
+//      step, not in the conversation" (§7.2). That is the ONE thing this
+//      renderer reads its host for, and it reads it through a total map so a new
+//      host cannot be added without deciding the question.
 //
 // THE EXPIRED PHASE IS SHARED WITH cinatra#2836 (PR #2837), NOT FORKED FROM IT.
 // That branch lands the today-fix: the token read that tells "expired" apart
@@ -70,10 +94,10 @@
 // real cookie session rather than offering a link that would answer as somebody
 // else or 404.
 //
-// THE ROWS ARE REPRODUCED, THE FLOOR IS NEW. §VI says so in as many words: "the
-// same scheduling step everywhere else arms its trigger directly on Continue
-// … On a proposal nothing exists until you confirm", and "this floor is the only
-// new drawing in this section — the rows above it are reproduced unchanged". So
+// THE ROWS ARE REPRODUCED, THE FLOOR IS NEW. The plan says so in as many words:
+// "the same scheduling step everywhere else arms its trigger directly on
+// **Continue**, because there the thing already exists. On a proposal nothing
+// exists until you confirm; **Confirm** arms it" (§7.2). So
 // the rows here carry the shipped scheduling step's own structure, classes and
 // selection vocabulary — `trigger-recurrence` is the ONE module that says what a
 // selection means, imported by the form, by the server's proposal producer and
@@ -94,6 +118,13 @@
 // verified token names. A body that could name either would be a way to operate
 // a trigger this card never drew.
 //
+// WHERE THE DRAWING AND THE PLAN DISAGREE, THE PLAN WINS. The ratified §VI
+// drawing still shows an `Adjust · Confirm` floor and a settled card that is the
+// trigger's chrome wherever it is drawn. The plan page supersedes both readings
+// (§7.2, §7.4 "As designed", §9), and the design page needs the amendment — the
+// same shape §9.1 already records for the chip row and the pinned capture pair.
+// It is named here rather than silently implemented around.
+//
 // THE PROMPT-WINDOW SEAM (cinatra#2853, plan §2.2: "make it 8 in the morning on
 // weekdays and confirm"). That issue owns the language — which card is active,
 // what the words mean, whether they were an instruction at all. It does not own
@@ -106,7 +137,7 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useMemo, useState, type ReactElement } from "react";
-import { CalendarClock, Check, Pencil, Repeat, Zap } from "lucide-react";
+import { CalendarClock, Check, Repeat, Zap } from "lucide-react";
 
 import type {
   LifecycleCardHost,
@@ -164,19 +195,49 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   site_widget: "my-3 flex w-full flex-col gap-3",
 };
 
+/**
+ * Does THIS host draw the settled trigger's own chrome — the read-only Trigger
+ * configuration summary, the steps held until the trigger fires, and the two
+ * quiet controls Cancel trigger and Release now?
+ *
+ * ONLY THE TWO PAGE HOSTS, and the plan says exactly that: the chrome "lives on
+ * the run page's schedule step, not in the conversation" (§7.2), and §7.4's
+ * as-designed step 6 puts Cancel and Release there and Save changes here. On
+ * those two hosts this card IS that step (§7.2 step 5, §7.4 step 7), so the
+ * chrome has nowhere else to live.
+ *
+ * A TOTAL MAP, like `HOST_FRAME`, for the same reason: this is the one question
+ * this renderer answers differently per host, so a new host cannot be added
+ * without someone deciding it. It is not a second drawing — the rows, the
+ * duration line and the Save-changes floor are byte-identical on all four hosts;
+ * a page host draws an ADDITIONAL region the conversation is ruled not to have.
+ */
+const HOST_SHOWS_TRIGGER_CHROME: Record<LifecycleCardHost, boolean> = {
+  chat_thread: false,
+  site_widget: false,
+  run_card: true,
+  page_gate_region: true,
+};
+
 // ---------------------------------------------------------------------------
 // The ACTION SURFACE — exported so #2853's prompt window calls the card's own
 // act rather than inventing a second one.
 // ---------------------------------------------------------------------------
 
-/** What one press (or one typed instruction) asks for. */
-export type ScheduleDecisionOp = "confirm" | "adjust" | "cancel" | "release";
+/** What one press (or one typed instruction) asks for.
+ *
+ *  `adjust` is not a control any more — the rows are editable as they stand
+ *  (plan (A) §7.2) — but it is still the OP the server takes to re-propose, and
+ *  an edited Confirm composes with it. `save` is plan §7.2's "Save changes,
+ *  which re-arms the trigger": the armed card's own floor. */
+export type ScheduleDecisionOp = "confirm" | "adjust" | "save" | "cancel" | "release";
 
 /** What the endpoint answers. `reproposed` carries the NEW ref: Adjust mints a
  *  fresh proposal and the card swaps to it, because a proposal is single-use. */
 export type ScheduleDecisionOutcome =
   | { kind: "confirmed"; runId: string; alreadyConfirmed: boolean }
   | { kind: "reproposed"; ref: string; expiresAt: number }
+  | { kind: "saved"; runId: string }
   | { kind: "cancelled" }
   | { kind: "released" }
   | { kind: "not-permitted"; message: string }
@@ -318,6 +379,7 @@ export function ScheduleProposalCard({
         setLiveRef(outcome.ref);
       } else if (
         outcome.kind === "confirmed" ||
+        outcome.kind === "saved" ||
         outcome.kind === "cancelled" ||
         outcome.kind === "released"
       ) {
@@ -352,19 +414,20 @@ export function ScheduleProposalCard({
     ) : body.phase === "expired" ? (
       <ExpiredPhase
         body={body}
+        // CONFIRM ON AN EXPIRED CARD PROPOSES AGAIN AND CONFIRMS THE REPLACEMENT
+        // (plan (A) §7.2 step 2). The expired token is unspendable, so a bare
+        // confirm could never land; the composite is what makes one press mean
+        // what the plan says it means. It is the SAME composite an edited live
+        // proposal performs, on the same endpoint, under the same authorization.
         onRepropose={async (schedule) => {
-          const outcome = await submitScheduleDecision({
-            ref: liveRef,
-            op: "adjust",
-            schedule,
-            auth,
-          });
+          const outcome = await adjustAndConfirmSchedule({ ref: liveRef, schedule, auth });
           if (outcome.kind === "reproposed") setLiveRef(outcome.ref);
+          if (outcome.kind === "confirmed") refresh();
           return outcome;
         }}
       />
     ) : (
-      <SettledPhase body={body} onDecide={decide} />
+      <SettledPhase body={body} host={host} onDecide={decide} />
     );
 
   return (
@@ -382,7 +445,7 @@ export function ScheduleProposalCard({
 }
 
 // ---------------------------------------------------------------------------
-// PROPOSAL — the standard scheduling step, then §VI's new floor
+// PROPOSAL — the standard scheduling step, then the Confirm floor
 // ---------------------------------------------------------------------------
 
 function ProposalPhase({
@@ -396,16 +459,19 @@ function ProposalPhase({
   onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
   onAdjustAndConfirm: (schedule: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
 }): ReactElement {
-  // §VI: "Adjust opens the same option rows IN PLACE". So the rows are always
-  // the same rows — Adjust makes them writable, it does not swap in a second
-  // form. Until it is pressed they are the reader's own proposal, read-only.
-  const [adjusting, setAdjusting] = useState(false);
+  // THE ROWS ARE EDITABLE AS THEY STAND. Plan (A) §7.2: "until you confirm, you
+  // change the proposal directly on the card — the rows are never locked behind
+  // a separate step." There is no `adjusting` flag any more, and no control that
+  // would set one: `editable` is simply true, and the reader's edits accumulate
+  // in `draft` until they press the one thing on the floor.
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
-  const [pending, setPending] = useState<null | "confirm" | "adjust">(null);
+  const [pending, setPending] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
   // §IV: a reader who may see the proposal but not confirm it gets a DRAWN card
-  // with a disabled floor and the reason on screen — never a dropped one.
+  // with a disabled floor and the reason on screen — never a dropped one. The
+  // rows stay read-only for them for the same reason the floor is dead: editing
+  // a proposal they cannot confirm would be an offer the server refuses.
   const canConfirm = state.state === "pending" && body.canConfirm;
   const reason =
     !canConfirm
@@ -421,12 +487,15 @@ function ProposalPhase({
 
   const confirm = async () => {
     setRefusal(null);
-    setPending("confirm");
-    // An EDITED proposal is re-proposed before it is confirmed, in that order,
+    setPending(true);
+    // AN EDITED PROPOSAL IS RE-PROPOSED BEFORE IT IS CONFIRMED, in that order,
     // on the new ref — the same composite §2.2's typed "…and confirm" performs.
-    // Confirming the original ref would arm the schedule the reader just fixed.
+    // A proposal is single-use, so confirming the ORIGINAL ref would arm the
+    // schedule the reader just corrected away from. This is what replaced the
+    // Adjust button: the re-propose still happens, and the reader never has to
+    // know it did.
     const outcome = edited ? await onAdjustAndConfirm(draft) : await onDecide("confirm");
-    setPending(null);
+    setPending(false);
     if (outcome.kind === "not-permitted" || outcome.kind === "error") {
       setRefusal(outcome.message);
     }
@@ -436,12 +505,12 @@ function ProposalPhase({
     <div className="flex w-full flex-col gap-4 rounded-card border border-line bg-surface-strong p-4">
       <ScheduleOptionRows
         schedule={draft}
-        editable={adjusting}
+        editable={canConfirm}
         onChange={setDraft}
         durationCopy={body.durationCopy}
       />
 
-      {/* §VI — the floor, and the ONE thing this section draws that is new. */}
+      {/* The floor — Confirm and nothing else (plan (A) §7.2). */}
       <div
         data-conformance-id="schedule-proposal-floor"
         className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
@@ -465,25 +534,13 @@ function ProposalPhase({
         ) : null}
         <Button
           type="button"
-          variant="secondary"
-          size="sm"
-          data-action="adjust-schedule-proposal"
-          aria-pressed={adjusting}
-          disabled={pending !== null}
-          onClick={() => setAdjusting((open) => !open)}
-        >
-          <Pencil aria-hidden="true" className="size-3.5" />
-          Adjust
-        </Button>
-        <Button
-          type="button"
           size="sm"
           data-action="confirm-schedule-proposal"
-          disabled={!canConfirm || pending !== null}
+          disabled={!canConfirm || pending}
           onClick={confirm}
         >
           <Check aria-hidden="true" className="size-3.5" />
-          {pending === "confirm" ? "Confirming…" : "Confirm"}
+          {pending ? "Confirming…" : "Confirm"}
         </Button>
       </div>
     </div>
@@ -491,7 +548,8 @@ function ProposalPhase({
 }
 
 // ---------------------------------------------------------------------------
-// EXPIRED — drawn, not dropped (plan §7 step 5, §9.1 row 8; cinatra#2836)
+// EXPIRED — drawn, editable, and still on its Confirm floor
+// (plan (A) §7.2 step 2 and §7.4 as-designed step 5; §9.1 row 8; cinatra#2836)
 // ---------------------------------------------------------------------------
 
 function ExpiredPhase({
@@ -505,10 +563,12 @@ function ExpiredPhase({
   const [pending, setPending] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
-  // NO CONFIRM FLOOR HERE, and that is the whole point of the state: the window
-  // closed and the token is unspendable, so the card can hold the schedule
-  // without holding a decision. Adjust re-proposes — for free, mutating nothing
-  // — and the card swaps to the fresh proposal, back on its live floor.
+  // THE SAME FLOOR AS THE LIVE PROPOSAL. "An expired proposal **stays visible**,
+  // still editable, with **Confirm** to propose again" (§7.2 step 2). The window
+  // closed and the token is unspendable, so the press cannot be a bare confirm:
+  // it re-proposes on the expired ref and confirms the replacement, which is the
+  // same composite an EDITED live proposal performs. The reader sees one
+  // control doing one thing.
   const repropose = async () => {
     setRefusal(null);
     setPending(true);
@@ -526,7 +586,7 @@ function ExpiredPhase({
         className="text-sm text-muted-foreground"
       >
         This schedule proposal expired before it was confirmed. Nothing was
-        scheduled — adjust it to propose again.
+        scheduled — change it if you like, then confirm to propose it again.
       </p>
       <ScheduleOptionRows schedule={draft} editable onChange={setDraft} durationCopy={null} />
       <div
@@ -545,12 +605,12 @@ function ExpiredPhase({
         <Button
           type="button"
           size="sm"
-          data-action="adjust-schedule-proposal"
+          data-action="confirm-schedule-proposal"
           disabled={pending}
           onClick={repropose}
         >
-          <Pencil aria-hidden="true" className="size-3.5" />
-          {pending ? "Proposing…" : "Adjust"}
+          <Check aria-hidden="true" className="size-3.5" />
+          {pending ? "Confirming…" : "Confirm"}
         </Button>
       </div>
     </div>
@@ -558,19 +618,23 @@ function ExpiredPhase({
 }
 
 // ---------------------------------------------------------------------------
-// SETTLED — "the settled card is the trigger's chrome"
+// SETTLED — the same card, the same rows, the armed schedule, Save changes
 // ---------------------------------------------------------------------------
 
 function SettledPhase({
   body,
+  host,
   onDecide,
 }: {
   body: TriggerScheduleProposalSettledView;
-  onDecide: (op: ScheduleDecisionOp) => Promise<ScheduleDecisionOutcome>;
+  host: LifecycleCardHost;
+  onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
 }): ReactElement {
-  const [pending, setPending] = useState<null | "cancel" | "release">(null);
+  const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
+  const [pending, setPending] = useState<null | "save" | "cancel" | "release">(null);
   const [confirming, setConfirming] = useState<null | "cancel" | "release">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
   // The deep link into the armed run is COOKIE-BOUND: it is a first-party app
   // route. Outside a real cookie session it is not offered — a widget reader
   // following it would arrive as whoever else is signed in on that browser, or
@@ -578,6 +642,15 @@ function SettledPhase({
   // answers this correctly, because "declared no credential" is also true of a
   // declaration the provider REFUSED.
   const firstParty = useCookieSessionSurface();
+  // The one host-dependent region, decided by a total map rather than by a
+  // condition someone can forget to extend (plan (A) §7.2: the chrome "lives on
+  // the run page's schedule step, not in the conversation").
+  const showsChrome = HOST_SHOWS_TRIGGER_CHROME[host];
+
+  const edited = useMemo(
+    () => JSON.stringify(draft) !== JSON.stringify(body.schedule),
+    [draft, body.schedule],
+  );
 
   const act = async (op: "cancel" | "release") => {
     setRefusal(null);
@@ -590,47 +663,77 @@ function SettledPhase({
     }
   };
 
-  return (
-    <div
-      data-conformance-id="scheduled-run-chrome"
-      className="flex w-full flex-col gap-4 rounded-card border border-line bg-surface-strong p-4"
-    >
-      {/* Trigger configuration — the read-only summary, reproduced from
-          Components § Persistent trigger tab. */}
-      <div className="flex flex-col gap-2">
-        <h3 className="text-base font-semibold text-foreground">Trigger configuration</h3>
-        <SummaryRow label="Type" value={body.triggerType} />
-        <SummaryRow label="Schedule" value={body.scheduleCopy} />
-        <SummaryRow label="Timezone" value={body.timezone} />
-      </div>
+  // SAVE CHANGES RE-ARMS (plan (A) §7.2 step 6). Nothing is drawn optimistically:
+  // the card re-resolves and reads the new schedule back off the installed row,
+  // so what the rows show after a save is what the scheduler actually holds.
+  const save = async () => {
+    setRefusal(null);
+    setSaved(false);
+    setPending("save");
+    const outcome = await onDecide("save", draft);
+    setPending(null);
+    if (outcome.kind === "saved") setSaved(true);
+    else if (outcome.kind === "not-permitted" || outcome.kind === "error") {
+      setRefusal(outcome.message);
+    }
+  };
 
-      {/* Steps held until trigger fires — the same tree the Trigger tab draws,
-          and the same sentence when there are none. The body carries an empty
-          list rather than a wrong one where the tree has not been read. */}
-      <div className="flex flex-col gap-2" data-conformance-id="schedule-gated-steps">
-        <h3 className="text-sm font-medium text-foreground">
-          Steps held until trigger fires
-        </h3>
-        {body.gatedSteps.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No side-effect steps detected. The trigger acts as a start gate only —
-            the run begins when the trigger fires and runs to completion.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
-            {body.gatedSteps.map((step) => (
-              <li key={step.stepId} className="font-mono text-xs">
-                {step.agentPath.length > 0 ? `${step.agentPath.join(" › ")} › ` : ""}
-                {step.toolName}
-                <span className="ml-2 text-badge-2xs uppercase">{step.inferredOrManual}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+  return (
+    <div className="flex w-full flex-col gap-4 rounded-card border border-line bg-surface-strong p-4">
+      {/* The armed schedule in plain words, over the rows that draw it. One
+          line, in the same card — not a second card (plan (A) §7.2). */}
+      <p data-conformance-id="schedule-armed-summary" className="text-sm text-foreground">
+        <span className="font-medium">Armed</span>
+        <span className="text-muted-foreground"> · {body.scheduleCopy}</span>
+      </p>
+
+      {showsChrome ? (
+        /* THE TRIGGER'S OWN CHROME — the run page's and the review page's
+           schedule step, and only theirs. Reproduced from Components
+           § Persistent trigger tab, exactly as it was, so the step the plan
+           moves this to shows what the Trigger tab always showed. */
+        <div
+          data-conformance-id="scheduled-run-chrome"
+          className="flex flex-col gap-4 rounded-control border border-line bg-surface-muted p-3"
+        >
+          <div className="flex flex-col gap-2">
+            <h3 className="text-base font-semibold text-foreground">Trigger configuration</h3>
+            <SummaryRow label="Type" value={body.triggerType} />
+            <SummaryRow label="Schedule" value={body.scheduleCopy} />
+            <SummaryRow label="Timezone" value={body.timezone} />
+          </div>
+
+          {/* Steps held until trigger fires — the same tree the Trigger tab
+              draws, and the same sentence when there are none. The body carries
+              an empty list rather than a wrong one where the tree has not been
+              read. */}
+          <div className="flex flex-col gap-2" data-conformance-id="schedule-gated-steps">
+            <h3 className="text-sm font-medium text-foreground">
+              Steps held until trigger fires
+            </h3>
+            {body.gatedSteps.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No side-effect steps detected. The trigger acts as a start gate only —
+                the run begins when the trigger fires and runs to completion.
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
+                {body.gatedSteps.map((step) => (
+                  <li key={step.stepId} className="font-mono text-xs">
+                    {step.agentPath.length > 0 ? `${step.agentPath.join(" › ")} › ` : ""}
+                    {step.toolName}
+                    <span className="ml-2 text-badge-2xs uppercase">{step.inferredOrManual}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {/* The state the controls are withheld for, said out loud rather than
-          drawn as two dead buttons. */}
+          drawn as dead buttons. Both hosts draw these: a reader in the
+          conversation whose Save changes is disabled is owed the reason too. */}
       {body.arming ? (
         <p data-conformance-id="schedule-arming" className="text-sm text-muted-foreground">
           Arming… the schedule is still being installed.
@@ -643,9 +746,22 @@ function SettledPhase({
         </p>
       ) : null}
 
-      {/* §VI — "two quiet right-aligned controls". Each asks first, in the words
-          the Trigger tab already asks them in. */}
-      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3">
+      {/* THE SAME OPTION ROWS AS THE PROPOSAL — one component, drawing the armed
+          selections the resolver read back off the installed row. */}
+      <ScheduleOptionRows
+        schedule={draft}
+        editable={body.canSave}
+        onChange={(next) => {
+          setSaved(false);
+          setDraft(next);
+        }}
+        durationCopy={null}
+      />
+
+      <div
+        data-conformance-id="schedule-proposal-floor"
+        className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
+      >
         {refusal ? (
           <p
             data-conformance-id="schedule-proposal-refusal"
@@ -653,6 +769,15 @@ function SettledPhase({
             className="mr-auto text-sm text-destructive"
           >
             {refusal}
+          </p>
+        ) : null}
+        {saved && !refusal ? (
+          <p
+            data-conformance-id="schedule-saved"
+            role="status"
+            className="mr-auto text-sm text-muted-foreground"
+          >
+            Saved — the trigger is re-armed on these rows.
           </p>
         ) : null}
         {firstParty ? (
@@ -667,15 +792,28 @@ function SettledPhase({
         ) : null}
         <Button
           type="button"
-          variant="secondary"
           size="sm"
-          data-action="cancel-trigger-schedule"
-          disabled={!body.canCancel || pending !== null}
-          onClick={() => setConfirming("cancel")}
+          data-action="save-schedule-changes"
+          disabled={!body.canSave || !edited || pending !== null}
+          onClick={save}
         >
-          {pending === "cancel" ? "Cancelling…" : "Cancel trigger"}
+          <Check aria-hidden="true" className="size-3.5" />
+          {pending === "save" ? "Saving…" : "Save changes"}
         </Button>
-        {body.canRelease ? (
+        {/* CANCEL AND RELEASE ARE THE PAGE STEP'S, NOT THE CONVERSATION'S. */}
+        {showsChrome ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            data-action="cancel-trigger-schedule"
+            disabled={!body.canCancel || pending !== null}
+            onClick={() => setConfirming("cancel")}
+          >
+            {pending === "cancel" ? "Cancelling…" : "Cancel trigger"}
+          </Button>
+        ) : null}
+        {showsChrome && body.canRelease ? (
           <Button
             type="button"
             variant="secondary"
@@ -693,7 +831,7 @@ function SettledPhase({
         <ConfirmStrip
           conformanceId="schedule-cancel-confirm"
           title="Cancel scheduled trigger?"
-          description="The run will stay paused. You can re-arm a new trigger from this tab. Already-completed setup steps are preserved."
+          description="The run will stay paused. You can re-arm a new trigger from this step. Already-completed setup steps are preserved."
           dismissLabel="Keep trigger"
           confirmLabel="Cancel trigger"
           onDismiss={() => setConfirming(null)}
@@ -942,7 +1080,10 @@ function ScheduleOptionRows({
           {recurring.frequency === "weekly" ? (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm text-muted-foreground">On</span>
-              <div className="flex gap-1">
+              {/* WRAPS. The rail step's panel is narrower than a chat turn, and
+                  a fixed row clipped the last weekday chip off the right edge
+                  there — a control the reader could see but not press. */}
+              <div className="flex flex-wrap gap-1">
                 {WEEKDAY_LABELS.map((label, i) => (
                   <Button
                     key={label}

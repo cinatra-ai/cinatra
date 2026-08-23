@@ -90,6 +90,11 @@ export const HOST_COMPOSITION_SOURCES: Readonly<
     "packages/agents/src/agentic-run-panel.tsx",
     "packages/agents/src/instance-screens.tsx",
     "packages/agents/src/orchestrator-stepper-panel.tsx",
+    // The run page's SCHEDULE STEP declares its own provider inside the rail
+    // row the screen places (cinatra#2788, S9d): plan (A) §7.2 step 5 moved the
+    // schedule out of the screen body and into the step rail, so the screen file
+    // alone no longer sees every owner this host mounts.
+    "packages/agents/src/schedule-rail-step.tsx",
   ]),
   page_gate_region: Object.freeze([
     "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
@@ -99,6 +104,10 @@ export const HOST_COMPOSITION_SOURCES: Readonly<
     // that stops at the route file would read the audit card's gate-region
     // cell as absent and call the loss a regression.
     "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
+    // The review page's SCHEDULE STEP, for the same reason: the schedule left
+    // the gate region for the rail (cinatra#2788), and the rail row is where its
+    // `page_gate_region` declaration now lives.
+    "packages/agents/src/schedule-rail-step.tsx",
   ]),
 });
 

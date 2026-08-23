@@ -51,19 +51,32 @@ export function RunStepRailPanel({
   entries,
   activeOrdinal,
   reviewHrefBase,
+  stepOffset = 0,
 }: {
   entries: RunStepRailEntry[];
   activeOrdinal: number | null;
   reviewHrefBase: string;
+  /**
+   * How many rows this rail is renumbered by (cinatra#2788, S9d).
+   *
+   * The SCHEDULE STEP sits above the run's other steps — plan (A) §7.2 step 5,
+   * "a **dedicated step in the step rail on the left, above '1 Review'**" — and
+   * it is drawn by the screen rather than by this panel, because the same row
+   * has to head the review page's rail too. So the screen tells this rail how
+   * far to shift its numerals; `1` makes the row that read "1 Review" read
+   * "2 Review". The shift is applied to the item's step value AND the stepper's
+   * active value together, so nothing about completed/active changes with it.
+   */
+  stepOffset?: number;
 }) {
   if (entries.length === 0) return null;
   // The stepper's numeric "value" is the active display index. Map the active
   // ordinal to its 1-based position in the sorted rail; fall back to past-the-end
   // (everything completed) when nothing is active.
   const activeIndex =
-    activeOrdinal == null
+    (activeOrdinal == null
       ? entries.length + 1
-      : Math.max(1, entries.findIndex((e) => e.ordinal === activeOrdinal) + 1);
+      : Math.max(1, entries.findIndex((e) => e.ordinal === activeOrdinal) + 1)) + stepOffset;
 
   return (
     <div
@@ -80,7 +93,7 @@ export function RunStepRailPanel({
       >
         <StepperNav>
           {entries.map((entry, i) => {
-            const displayStep = i + 1;
+            const displayStep = i + 1 + stepOffset;
             const isResolved = entry.status === "resolved";
             const isSkipped = entry.status === "skipped";
             const isPending = entry.status === "pending";

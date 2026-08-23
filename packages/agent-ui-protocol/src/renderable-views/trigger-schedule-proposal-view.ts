@@ -28,11 +28,15 @@
 // question `When should this run?` over the three option rows, the chosen row
 // taking the indigo edge and tint and owning its fields, and the estimated
 // duration beneath", with "no raw cron field: the builder's selections are what
-// the reader sees and confirms", closing on the Adjust / Confirm floor. The
-// settled body is "the read-only Trigger configuration summary — type, the
-// plain-language schedule, timezone — then the steps held until the trigger
-// fires, then two quiet right-aligned controls: Cancel trigger, and Release now
-// for an administrator".
+// the reader sees and confirms". The FLOOR is Confirm and nothing else — plan
+// (A) §7.2: "The option rows are editable as they stand: until you confirm, you
+// change the proposal directly on the card — the rows are never locked behind a
+// separate step. The floor is **Confirm**". The settled body is the SAME rows
+// again, now showing the armed schedule, with **Save changes** to re-arm; the
+// trigger's own chrome — the read-only Trigger configuration summary, the steps
+// held until the trigger fires, and the two quiet controls Cancel trigger and
+// Release now — "lives on the run page's schedule step, not in the
+// conversation", so it is carried in this body and drawn by the page hosts.
 //
 // Tier-neutral: types and zod schemas only. No server-only import.
 // ---------------------------------------------------------------------------
@@ -161,8 +165,11 @@ export const triggerScheduleProposalPendingViewSchema = z
     agentName: z.string().min(1).max(200),
     schedule: proposedScheduleSchema,
     durationCopy: durationCopySchema,
-    /** The floor: Confirm is pressable. Adjust is always available (it only
-     *  re-opens the rows — it mutates nothing, and re-proposing is free). */
+    /** The floor, and the whole floor: Confirm is pressable. There is no second
+     *  control — plan (A) §7.4 as-designed step 3, "Correct the proposal
+     *  directly in the rows if it is not right; press **Confirm** when it is."
+     *  A card whose rows were edited re-proposes and confirms in one press, on
+     *  the new ref, because a proposal is single-use. */
     canConfirm: z.boolean(),
     /** Surface-safe phrase about the READER's own standing when `canConfirm`
      *  is false. Never names the agent, the org, or a policy. */
@@ -191,6 +198,26 @@ export const triggerScheduleProposalSettledViewSchema = z
     /** The run the confirmed proposal created. The card's Cancel / Release
      *  controls act on it, and the reader can already read it. */
     runId: z.string().min(1).max(128),
+    /**
+     * THE ARMED SCHEDULE, AS SELECTIONS — the same vocabulary the proposal
+     * body carries, so the settled card draws THE SAME OPTION ROWS.
+     *
+     * Plan (A) §7.2: "No second card is drawn for the confirmed state: the
+     * same card, with the same option rows, now shows the armed schedule; to
+     * change it you return to the card, change the rows and press **Save
+     * changes**, which re-arms the trigger." Rows cannot be drawn from
+     * `scheduleCopy` — that is prose — so the selections travel too, read back
+     * from what was actually INSTALLED (the trigger row, or the install intent
+     * while it drains) rather than from the token the reader happens to hold.
+     * That is also why a superseded card's rows are right: they come from the
+     * durable row the family settled on, not from this card's own proposal.
+     *
+     * Still no cron field. The recurring expression is parsed back into the
+     * same closed selection vocabulary by the one module that knows what a
+     * selection means, exactly as the scheduling step completes a partial
+     * reading before drawing it.
+     */
+    schedule: proposedScheduleSchema,
     triggerType: z.enum(["immediate", "scheduled", "recurring"]),
     scheduleCopy: z.string().min(1).max(200),
     /** The card was ADJUSTED away from before Confirm landed, so the family
@@ -212,6 +239,18 @@ export const triggerScheduleProposalSettledViewSchema = z
     /** True once the gate has been opened (the trigger fired or was released).
      *  §VI's controls are both disabled past that point. */
     released: z.boolean(),
+    /**
+     * May this reader press **Save changes** — re-arm the trigger from the rows
+     * on this card (plan (A) §7.2 step 6, "change the rows and press **Save
+     * changes** → **End state: re-armed**")?
+     *
+     * False for a released trigger, for one still arming, and for a ONE-OFF
+     * that has already fired: a single delayed job that has run is not a
+     * schedule any more, and re-arming it would silently create a second run.
+     * The server refuses all three regardless — this is the reading that stops
+     * the card offering a control it knows will be refused.
+     */
+    canSave: z.boolean(),
     canCancel: z.boolean(),
     /** "Release now for an administrator" — admin-only, by design. */
     canRelease: z.boolean(),
@@ -237,12 +276,15 @@ export type TriggerScheduleProposalSettledView = z.infer<
  * indistinguishable from a reader who was never entitled to it — and would
  * delete the card, and the question it asked, out of the transcript.
  *
- * It carries no floor. There is nothing to confirm: the window is closed and
- * the token is unspendable, which is exactly why the body can hold the schedule
- * without holding a decision — Adjust re-proposes, it never arms.
+ * IT KEEPS THE SAME FLOOR AS THE LIVE PROPOSAL. Plan (A) §7.2 step 2: "an
+ * expired proposal **stays visible**, still editable, with **Confirm** to
+ * propose again", and §7.4 as-designed step 5 repeats it. So the expired card
+ * is not a dead reading with a second control bolted on: it is the same card,
+ * the same editable rows and the same Confirm — the press simply re-proposes
+ * before it confirms, because the old token is unspendable.
  *
- * `schedule` is the SELECTIONS the expired proposal named, so Adjust re-opens
- * the rows the reader last saw rather than an empty form. Nothing here is new
+ * `schedule` is the SELECTIONS the expired proposal named, so the rows re-open
+ * on what the reader last saw rather than on an empty form. Nothing here is new
  * disclosure: it is the same projection of the same token the pending body
  * already carried to the same reader.
  */

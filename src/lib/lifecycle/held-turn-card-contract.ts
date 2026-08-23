@@ -453,15 +453,23 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     owner: "ScheduleProposalCard",
     ownerAnchors: Object.freeze([`[data-lifecycle-card="trigger_schedule_proposal"]`]),
     ruledRootAnchors: rootAnchorsFor("trigger_schedule_proposal"),
-    // §VI's two acts. Named before they existed, on purpose — an obligation
-    // with no named target is a row that can be struck against nothing — and
-    // now SHIPPED: S9d (cinatra#2788) draws `ScheduleProposalCard` emitting
-    // exactly these two, which the contract suite reads straight off that
-    // component rather than taking this list's word for it.
-    decisionControls: Object.freeze([
-      '[data-action="adjust-schedule-proposal"]',
-      '[data-action="confirm-schedule-proposal"]',
-    ]),
+    // §VI's acts, as the PLAN rules them (cinatra#2788). The row named an
+    // `adjust-schedule-proposal` control before either existed; plan (A) §7.2
+    // then ruled it out in as many words — "The option rows are editable as they
+    // stand: until you confirm, you change the proposal directly on the card —
+    // the rows are never locked behind a separate step. The floor is
+    // **Confirm**" — so the control is gone and the row names what ships.
+    //
+    // ONE MEMBER, and `save-schedule-changes` is deliberately NOT the second.
+    // This list is read as "every one of these renders inside the card's own
+    // root", on the card the chat transcript actually draws — and Confirm and
+    // Save changes are PHASE-EXCLUSIVE by the plan's own design: Confirm is the
+    // undecided floor (proposal and expired), Save changes is the armed card's,
+    // and no reading of §VI ever draws both. Listing the second would demand a
+    // card that cannot exist. Save changes is pinned where it belongs instead:
+    // in the one-card gate's ratified anchor set for this kind, and in the card
+    // suite's own settled cases.
+    decisionControls: Object.freeze(['[data-action="confirm-schedule-proposal"]']),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },

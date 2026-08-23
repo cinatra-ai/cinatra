@@ -429,9 +429,9 @@ const PROPER_CONTRACT = {
   body: { validator: "useCardState", params: ["view"], fields: ["state", "title", "actions"] },
   anchors: ["proper-card", "proper-floor", '[data-lifecycle-card="fixture"]'],
   hosts: {
-    chat_thread: [{ module: "packages/fixture/registry.tsx", adapter: "registry", surface: "production", why: "the fixture transcript dispatch, named here" }],
+    chat_thread: [{ module: "packages/fixture/registry.tsx", adapter: "registry", region: "transcript", surface: "production", why: "the fixture transcript dispatch, named here" }],
     site_widget: null,
-    run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "the fixture run card, named here so a second one is visible" }],
+    run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", region: "run_panel", surface: "production", why: "the fixture run card, named here so a second one is visible" }],
     page_gate_region: null,
   },
   hostGap: "The fixture declares two hosts only; the other two are out of the fixture's scope on purpose.",
@@ -444,8 +444,8 @@ const TWO_ADAPTER_CONTRACT = {
   hosts: {
     ...PROPER_CONTRACT.hosts,
     run_card: [
-      { module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "the leaf-run panel branch of this host" },
-      { module: "packages/fixture/screen.tsx", adapter: "mount", surface: "production", why: "the stepped-run screen branch of the same host" },
+      { module: "packages/fixture/panel.tsx", adapter: "mount", region: "run_panel", surface: "production", why: "the leaf-run panel branch of this host" },
+      { module: "packages/fixture/screen.tsx", adapter: "mount", region: "run_panel", surface: "production", why: "the stepped-run screen branch of the same host" },
     ],
   },
   exclusions: {
@@ -839,7 +839,7 @@ describe("R8 — one declared mount set per host", () => {
         ...PROPER_CONTRACT.hosts,
         run_card: [
           ...PROPER_CONTRACT.hosts.run_card,
-          { module: "packages/fixture/dev-preview.tsx", adapter: "mount", surface: "dev_preview", why: "the dev preview row, which draws only inside an opened preview" },
+          { module: "packages/fixture/dev-preview.tsx", adapter: "mount", region: "run_panel", surface: "dev_preview", why: "the dev preview row, which draws only inside an opened preview" },
         ],
       },
     };
@@ -873,7 +873,7 @@ describe("R8 — one declared mount set per host", () => {
       ...PROPER_CONTRACT,
       hosts: {
         ...PROPER_CONTRACT.hosts,
-        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "" }],
+        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", region: "run_panel", surface: "production", why: "" }],
       },
     };
     const hits = scanHostMounts("fixture", vague, ["packages/fixture/panel.tsx"], registry, () => null);
@@ -885,7 +885,7 @@ describe("R8 — one declared mount set per host", () => {
       ...PROPER_CONTRACT,
       hosts: {
         ...PROPER_CONTRACT.hosts,
-        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", why: "the fixture run card, named here" }],
+        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", region: "run_panel", why: "the fixture run card, named here" }],
       },
     };
     const hits = scanHostMounts("fixture", vague, ["packages/fixture/panel.tsx"], registry, () => null);
@@ -993,10 +993,18 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
       '[data-skill-action="adjust"]',
       '[data-skill-action="skip"]',
     ],
+    // ONE MEMBER JOINED when the plan added the control it names (cinatra#2788):
+    // PLAN: Agents Lifecycle (A) §7.2 — "to change it you return to the card,
+    // change the rows and press **Save changes**, which re-arms the trigger".
+    // An armed card with no Save-changes control does not implement §7, so the
+    // anchor set has to be able to say so. The other five are the placeholder's
+    // verbatim; no `adjust` anchor was ever in the set, which is the one place
+    // the placeholder was already right about the target.
     trigger_schedule_proposal: [
       "schedule-option-rows",
       "schedule-proposal-floor",
       "scheduled-run-chrome",
+      '[data-action="save-schedule-changes"]',
       '[data-action="cancel-trigger-schedule"]',
       '[data-action="release-trigger-now"]',
     ],

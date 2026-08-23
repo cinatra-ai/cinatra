@@ -26,6 +26,7 @@ import { z } from "zod";
 import {
   TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
   gatedStepViewSchema,
+  proposedScheduleSchema,
   triggerScheduleProposalSettledViewSchema,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
@@ -46,11 +47,27 @@ const READER = {
 };
 
 /**
- * The settled schema EXACTLY as it stood before #2859 — copied field for field
- * off `triggerScheduleProposalSettledViewSchema` with the `superseded` entry
- * removed, and `.strict()` kept. This is the parser a stale client bundle is
- * still running; nothing here may be relaxed to make a test pass, because
- * relaxing it is precisely what the shipped bundle cannot do.
+ * The settled schema WITHOUT `superseded`, at the CURRENT body shape — copied
+ * field for field off `triggerScheduleProposalSettledViewSchema` with that one
+ * entry removed and `.strict()` kept. Nothing here may be relaxed to make a
+ * test pass: `.strict()` is the whole property.
+ *
+ * WHAT MOVED, AND WHY IT IS NOT A WEAKENING (cinatra#2788, S9d). This schema
+ * used to be "the settled schema exactly as it stood before #2859", modelling a
+ * client bundle that had not reloaded since. S9d's plan text adds two REQUIRED
+ * fields to the settled body — `schedule` (the armed selections, because the
+ * settled card now draws the same option rows: plan (A) §7.2, "the same card,
+ * with the same option rows, now shows the armed schedule") and `canSave` (its
+ * Save-changes floor). There is no way to draw those rows without sending them,
+ * so a pre-S9d strict parser cannot read a post-S9d settled body, and pinning
+ * that it can would be pinning a promise the plan already broke.
+ *
+ * The pin that is worth keeping is the one this file was written for, and it is
+ * kept intact: an ORDINARY settled card carries no `superseded` key at all, so a
+ * parser that does not know the key still reads it. What changed is which
+ * baseline that parser is at — S9d's, because S9d's is the first shape this card
+ * ever reaches a browser in: on `main` the schedule kind dispatches the
+ * placeholder shell, so no deployed bundle parses a settled body at all.
  */
 const preSupersededSettledViewSchema = z
   .object({
@@ -58,11 +75,13 @@ const preSupersededSettledViewSchema = z
     version: z.literal(TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION),
     agentName: z.string().min(1).max(200),
     runId: z.string().min(1).max(128),
+    schedule: proposedScheduleSchema,
     triggerType: z.enum(["immediate", "scheduled", "recurring"]),
     scheduleCopy: z.string().min(1).max(200),
     timezone: z.string().min(1).max(64),
     gatedSteps: z.array(gatedStepViewSchema).max(50),
     released: z.boolean(),
+    canSave: z.boolean(),
     canCancel: z.boolean(),
     canRelease: z.boolean(),
     arming: z.boolean(),
@@ -79,8 +98,26 @@ function settledResolution(superseded: boolean) {
       ? "This card was adjusted before it was set — open the run to see the schedule that was set."
       : "Every weekday at 09:00",
     timezone: "Europe/Berlin",
+    schedule: {
+      kind: "recurring" as const,
+      timezone: "Europe/Berlin",
+      selection: {
+        frequency: "weekly" as const,
+        interval: 1,
+        weekdays: [1, 2, 3, 4, 5],
+        dayOfMonth: 1,
+        monthlyMode: "date" as const,
+        nthWeek: 1 as const,
+        monthlyWeekday: 1,
+        quarterAnchor: "start" as const,
+        yearlyMonth: 1,
+        hour: 9,
+        minute: 0,
+      },
+    },
     released: false,
     arming: false,
+    canSave: true,
     superseded,
   };
 }
@@ -109,23 +146,41 @@ describe("an ordinary settled card is byte-compatible with a stale client", () =
       triggerType: "recurring",
       scheduleCopy: "Every weekday at 09:00",
       timezone: "Europe/Berlin",
+      schedule: {
+        kind: "recurring",
+        timezone: "Europe/Berlin",
+        selection: {
+          frequency: "weekly",
+          interval: 1,
+          weekdays: [1, 2, 3, 4, 5],
+          dayOfMonth: 1,
+          monthlyMode: "date",
+          nthWeek: 1,
+          monthlyWeekday: 1,
+          quarterAnchor: "start",
+          yearlyMonth: 1,
+          hour: 9,
+          minute: 0,
+        },
+      },
       gatedSteps: [],
       released: false,
       arming: false,
+      canSave: true,
       canCancel: true,
       canRelease: false,
     });
   });
 
-  it("PARSES under the pre-#2859 strict settled schema", async () => {
+  it("PARSES under a strict settled schema that does not know `superseded`", async () => {
     resolveProposalForReader.mockResolvedValue(settledResolution(false));
 
     const { view } = await resolveTriggerScheduleProposalCard(READER);
 
-    // THE PIN. A client bundle that has not reloaded since #2859 landed runs
-    // this exact parser. If the producer ever ships the key unconditionally,
-    // every settled proposal card disappears for that reader — not just the
-    // superseded ones — and this goes red.
+    // THE PIN. A parser that does not know `superseded` runs this exact schema.
+    // If the producer ever ships the key unconditionally, every settled proposal
+    // card disappears for that reader — not just the superseded ones — and this
+    // goes red.
     const parsed = preSupersededSettledViewSchema.safeParse(view);
     expect(parsed.success).toBe(true);
   });

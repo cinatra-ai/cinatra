@@ -31,6 +31,14 @@ const OWNER = "packages/agents/src/schedule-proposal-card.tsx";
 /**
  * The production mounts, per host, exactly as the epic's host-ownership table
  * records them for §VI after this slice.
+ *
+ * THE TWO PAGE HOSTS MOVED (cinatra#2788 rework). They used to be the run
+ * screen's own body and the review page's GATE REGION. Plan (A) §7.2 step 5
+ * rules that out — "the schedule is a **dedicated step in the step rail on the
+ * left, above '1 Review'** … The schedule is never drawn as a card among the
+ * review cards … so the two can never appear together" — so both are now the
+ * ONE rail step component, which declares the host and mounts the card, and the
+ * pages pass it a ref and draw no schedule of their own.
  */
 const MOUNTS = {
   chat_thread: {
@@ -47,17 +55,26 @@ const MOUNTS = {
     providerInModule: false,
   },
   run_card: {
-    module: "packages/agents/src/instance-screens.tsx",
+    module: "packages/agents/src/schedule-rail-step.tsx",
     adapter: "mount",
     providerInModule: true,
   },
   page_gate_region: {
-    module:
-      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+    module: "packages/agents/src/schedule-rail-step.tsx",
     adapter: "mount",
     providerInModule: true,
   },
 } as const;
+
+/** The two PAGES that place the rail step. Neither may mount the card itself. */
+const RAIL_PLACEMENTS = {
+  run_card: "packages/agents/src/instance-screens.tsx",
+  page_gate_region:
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-run-steps.tsx",
+} as const;
+
+const REVIEW_PAGE =
+  "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx";
 
 describe("the four mounts exist and are host-declared", () => {
   it("the transcript hosts are served by the ONE registry row — not by a second table", () => {
@@ -80,52 +97,75 @@ describe("the four mounts exist and are host-declared", () => {
     expect(registry.match(/trigger_schedule_proposal:/g)).toHaveLength(1);
   });
 
-  it("each JSX mount sits under a lifecycle host declaration in its own module", () => {
-    for (const [host, spec] of Object.entries(MOUNTS)) {
-      if (!spec.providerInModule) continue;
-      const source = read(spec.module);
-      expect(source, `${host}: ${spec.module} mounts the card`).toMatch(
+  it("the rail step mounts the card ONCE and declares BOTH page hosts itself", () => {
+    const source = read(MOUNTS.run_card.module);
+    expect(source).toMatch(/<\s*ScheduleProposalCard\b/);
+    // TWO callsites, and exactly two: one per named host, inside the branch that
+    // declares that host. They are mutually exclusive by construction — a
+    // ternary on `host` — so one rendered instance per host still holds.
+    expect(source.match(/<\s*ScheduleProposalCard\b/g)).toHaveLength(2);
+    // The host is the CALLER's, and it is declared BY NAME here — a literal, so
+    // the one-card gate's R3 check and the host-parity ratchet's composition
+    // scan can both see it. One component, two named hosts, no page of its own.
+    expect(source).toContain('<LifecycleCardSurfaceProvider host="run_card">');
+    expect(source).toContain('<LifecycleCardSurfaceProvider host="page_gate_region">');
+    expect(source).toMatch(/host:\s*"run_card"\s*\|\s*"page_gate_region"/);
+  });
+
+  // PLAN §7.2 step 5, read off the two pages: the schedule is a STEP, and the review
+  // page's gate region holds the review card alone.
+  it("both pages place the rail STEP and neither mounts the card — the gate region is the review card's alone", () => {
+    for (const [host, rel] of Object.entries(RAIL_PLACEMENTS)) {
+      const source = read(rel);
+      expect(source, `${host}: ${rel} places the rail step`).toMatch(
+        /<\s*ScheduleRailStep\b/,
+      );
+      expect(
+        source.match(/<\s*ScheduleRailStep\b/g),
+        `${host}: ${rel} places it ONCE`,
+      ).toHaveLength(1);
+      expect(source).toContain(`host="${host}"`);
+      // The page never mounts the card itself any more.
+      expect(source, `${host}: ${rel} mounts no card of its own`).not.toMatch(
         /<\s*ScheduleProposalCard\b/,
       );
-      expect(source, `${host}: ${spec.module} declares the host`).toContain(
-        `<LifecycleCardSurfaceProvider host="${host}">`,
-      );
-      // ONE mount per module — a second JSX callsite is a second instance.
-      expect(source.match(/<\s*ScheduleProposalCard\b/g)).toHaveLength(1);
     }
-  });
-
-  it("the run page's mount is EXCLUSIVE with the persistent Trigger tab, by the screen's own selector", () => {
-    const screens = read(MOUNTS.run_card.module);
-    // The card's ref is minted only where the tab does not draw. The selector is
-    // the screen's own exported branch, pinned by its own test — read here, not
-    // re-derived, so the two cannot drift into drawing the same trigger twice.
-    expect(screens).toMatch(
-      /const scheduleCardRef\s*=\s*\n?\s*run && !showPersistentTab \? encodeScheduleRunRef/,
+    // THE GATE REGION. The review page's `page_gate_region` provider now wraps
+    // the review card and nothing else — the composition the plan requires.
+    const reviewPage = read(REVIEW_PAGE);
+    expect(reviewPage).not.toMatch(/<\s*ScheduleProposalCard\b/);
+    expect(reviewPage).toMatch(/<LifecycleCardSurfaceProvider host="page_gate_region">/);
+    const region = reviewPage.slice(
+      reviewPage.indexOf('<LifecycleCardSurfaceProvider host="page_gate_region">'),
+      reviewPage.indexOf("</LifecycleCardSurfaceProvider>"),
     );
-    expect(screens).toContain("const showPersistentTab = shouldShowPersistentTab(trigger)");
-    // And the card is only drawn when that ref exists.
-    expect(screens).toMatch(/\{scheduleCardRef \? \(/);
+    expect(region).toContain("<ReviewGateCard");
+    expect(region).not.toContain("Schedule");
   });
 
-  it("both page mounts mint a SERVER-side ref and draw nothing when they cannot", () => {
-    const screens = read(MOUNTS.run_card.module);
-    const reviewPage = read(MOUNTS.page_gate_region.module);
+  it("both pages mint a SERVER-side ref and draw no step when they cannot", () => {
+    const screens = read(RAIL_PLACEMENTS.run_card);
+    const reviewPage = read(REVIEW_PAGE);
     for (const source of [screens, reviewPage]) {
       expect(source).toContain("encodeScheduleRunRef");
-      // The client is never handed a run id to name; the ref is the whole binding.
-      expect(source).toMatch(/ref: scheduleCardRef/);
     }
-    // A ref that cannot be minted draws no card rather than a second composition.
-    expect(reviewPage).toMatch(/\{scheduleCardRef \? \(/);
+    // The client is never handed a run id to name; the ref is the whole binding.
+    expect(screens).toMatch(/cardRef=\{scheduleRailRef\}/);
+    expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/cardRef=\{scheduleCardRef\}/);
+    // A run with no schedule row mints no ref, and neither rail draws a step.
+    expect(screens).toMatch(/run && trigger \? encodeScheduleRunRef/);
+    expect(reviewPage).toMatch(/readRunTriggerByRunId\(runId\)/);
+    expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/\{scheduleCardRef \? \(/);
   });
 
   it("the card is defined in exactly ONE module in the whole first-party tree", () => {
     const owner = read(OWNER);
     expect(owner).toMatch(/export function ScheduleProposalCard\b/);
     // Every other module that names it does so as an IMPORT, never a definition.
-    for (const spec of Object.values(MOUNTS)) {
-      const source = read(spec.module);
+    for (const rel of [
+      ...new Set([...Object.values(MOUNTS).map((m) => m.module), ...Object.values(RAIL_PLACEMENTS), REVIEW_PAGE]),
+    ]) {
+      const source = read(rel);
       expect(source).not.toMatch(
         /\b(?:function|const|class)\s+(?:[A-Z][A-Za-z0-9]*)?ScheduleProposalCard\b/,
       );
@@ -151,9 +191,16 @@ describe("the owner's contract, read off its own source", () => {
     ]) {
       expect(owner, anchor).toContain(`data-conformance-id="${anchor}"`);
     }
-    for (const action of ["cancel-trigger-schedule", "release-trigger-now"]) {
+    for (const action of [
+      "save-schedule-changes",
+      "cancel-trigger-schedule",
+      "release-trigger-now",
+    ]) {
       expect(owner, action).toContain(`data-action="${action}"`);
     }
+    // PLAN §7.2, as an absence in the source itself: the retired control cannot
+    // come back through a stray callsite.
+    expect(owner).not.toContain('data-action="adjust-schedule-proposal"');
   });
 
   it("it consumes its AUTHORIZED body through the one resolve seam, and reads every phase", () => {
@@ -172,6 +219,7 @@ describe("the owner's contract, read off its own source", () => {
       ".gatedSteps",
       ".released",
       ".arming",
+      ".canSave",
       ".canCancel",
       ".canRelease",
       ".runId",

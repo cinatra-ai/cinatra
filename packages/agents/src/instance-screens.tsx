@@ -55,9 +55,9 @@ import { OrchestratorStepperPanel } from "./orchestrator-stepper-panel";
 import { TriggerScreenClient } from "./trigger-screen-client";
 import { estimateRunDuration } from "./trigger-duration-estimate";
 import { TriggerTabClient } from "./trigger-tab-client";
-// §VI's card on the `run_card` host (cinatra#2788, epic #2784 S9d) — see the
-// mount below for why it is here and what it is exclusive with.
-import { ScheduleProposalCard } from "./schedule-proposal-card";
+// §VI's card on the `run_card` host (cinatra#2788, epic #2784 S9d), reached
+// through the run page's SCHEDULE STEP — see the mount below.
+import { ScheduleRailStep } from "./schedule-rail-step";
 import { readRunTriggerByRunId } from "./trigger-store";
 import type { GatedStep } from "./trigger-infer-side-effects";
 import cronstrue from "cronstrue";
@@ -397,6 +397,26 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // Trigger gate: if no trigger row exists, replace workspace content
   // with the first-step trigger form.
   const trigger = run ? await readRunTriggerByRunId(run.id) : null;
+  // ── §VI's card, reached through the run page's SCHEDULE STEP ──────────────
+  // (cinatra#2788, epic #2784 S9d)
+  //
+  // WHERE IT DRAWS. Plan (A) §7.2 step 5: "On the run page and the review page
+  // the schedule is a **dedicated step in the step rail on the left, above
+  // '1 Review'**: open that step to see the configuration or change it. The
+  // schedule is never drawn as a card among the review cards." §9's table row
+  // makes it this slice's work: "no schedule step in the rail today; the armed
+  // schedule has Cancel / Release on a Trigger tab → S9d makes the schedule a
+  // dedicated step above '1 Review'". So the card no longer sits in the trigger
+  // screen's body — it is the first ROW of this page's left rail, and the rail
+  // renumbers itself around it (`stepOffset`).
+  //
+  // ONLY FOR A RUN THAT HAS A SCHEDULE. A run with no trigger row has nothing
+  // for the step to open onto — the card would resolve `absent` and draw no DOM
+  // — so no step is drawn at all rather than an empty one. Presence is all this
+  // decides; WHAT the step may show is re-resolved against the live reader on
+  // the endpoint, which answers `absent` for a run this reader did not confirm a
+  // proposal for. A run that cannot mint a ref (no app secret) draws none either.
+  const scheduleRailRef = run && trigger ? encodeScheduleRunRef({ runId: run.id }) : null;
   // cinatra#2487: ONE predicate for the strip on every route (was an inline
   // duplicate of shouldShowPersistentTab here, `!!run` on /trigger, and nothing
   // at all on /permissions — so the strip's contents changed between tabs).
@@ -644,16 +664,41 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           // and not looked up from `activeTab`.
           <AgentPanelBody role="frame">
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
-            {run.status !== "pending_input" && rail.entries.length > 0 && screenHostsStepRail({
-              panel: runDetailPanel,
-              stepperStepCount: stepperSteps.length,
-            }) && (
-              <RunStepRailPanel
-                entries={rail.entries}
-                activeOrdinal={rail.activeOrdinal}
-                reviewHrefBase={reviewHrefBase}
-              />
-            )}
+            {(() => {
+              const railDraws =
+                run.status !== "pending_input" &&
+                rail.entries.length > 0 &&
+                screenHostsStepRail({
+                  panel: runDetailPanel,
+                  stepperStepCount: stepperSteps.length,
+                });
+              if (!railDraws && !scheduleRailRef) return null;
+              return (
+                // ONE LEFT COLUMN, with the schedule step at its head. The
+                // schedule row is drawn by the SCREEN rather than by the rail
+                // panel because the live orchestrator column is the rail on the
+                // flow branch (`screenHostsStepRail`), and the plan puts the
+                // schedule step above the run's steps on every branch — not only
+                // the one where the server-rendered rail happens to draw.
+                <div className="flex shrink-0 flex-col gap-2 pt-1">
+                  {scheduleRailRef ? (
+                    <ScheduleRailStep
+                      host="run_card"
+                      cardRef={scheduleRailRef}
+                      displayStep={1}
+                    />
+                  ) : null}
+                  {railDraws ? (
+                    <RunStepRailPanel
+                      entries={rail.entries}
+                      activeOrdinal={rail.activeOrdinal}
+                      reviewHrefBase={reviewHrefBase}
+                      stepOffset={scheduleRailRef ? 1 : 0}
+                    />
+                  ) : null}
+                </div>
+              );
+            })()}
             {/* A COLUMN with a GAP, not a margin on the row above. The card
                 below resolves its own state on the client and renders NO DOM at
                 all when there is no hold — the overwhelmingly common case — so a
@@ -1170,32 +1215,6 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // Server-side cron preview (mirrors the client-side cronstrue formatting
   // in trigger-screen-client.tsx) so the persistent tab renders the same
   // human-readable schedule label without re-parsing on the client.
-  // ── §VI's card, on the `run_card` host (cinatra#2788, epic #2784 S9d) ──
-  //
-  // THE MOUNT. This screen is the run page's schedule surface: it draws either
-  // the persistent Trigger tab (a scheduled/recurring row exists) or the
-  // first-step scheduling form. The plan (§9) puts the proposal card here —
-  // "the armed schedule has Cancel / Release on the Trigger tab → S9d adds the
-  // proposal state there" — so this is where the card mounts, under its own
-  // `LifecycleCardSurfaceProvider host="run_card"`.
-  //
-  // EXCLUSIVE WITH THE PERSISTENT TAB, BY THE SCREEN'S OWN SELECTOR. Two
-  // renderers of one trigger on one host is exactly what the mount rule
-  // forbids, and `shouldShowPersistentTab` is the branch that already decides
-  // which surface owns the schedule — exported, pinned by its own test, and
-  // read here rather than re-derived. Where the tab draws, the card does not;
-  // where it does not, the card is the run page's only reading of what was
-  // confirmed (an immediate proposal, or a schedule still arming, neither of
-  // which the tab covers).
-  //
-  // THE REF IS RUN-SCOPED AND MINTED SERVER-SIDE. The resolver re-derives the
-  // proposal's (viewer, organization, template) binding from its consume row
-  // and answers `absent` for a run no proposal produced — so a schedule armed
-  // from the form below draws no card at all. A run that cannot mint a ref (no
-  // app secret) draws none either, rather than a second composition.
-  const scheduleCardRef =
-    run && !showPersistentTab ? encodeScheduleRunRef({ runId: run.id }) : null;
-
   let cronPreview: string | null = null;
   if (trigger?.triggerType === "recurring" && trigger.cronExpression) {
     try {
@@ -1269,22 +1288,6 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
           </AgentPanelBody>
         ) : (
           <AgentPanelBody role="narrow">
-          {/* §VI's card (cinatra#2788, S9d) — the run page's reading of a
-              schedule that was CONFIRMED from a proposal, above the form that
-              arms one directly. It draws nothing at all for a run no proposal
-              produced, which is every run whose schedule came from the form
-              below; the resolver decides that, not this mount. */}
-          {scheduleCardRef ? (
-            <LifecycleCardSurfaceProvider host="run_card">
-              <ScheduleProposalCard
-                view={{
-                  viewType: "trigger_schedule_proposal",
-                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-                  ref: scheduleCardRef,
-                }}
-              />
-            </LifecycleCardSurfaceProvider>
-          ) : null}
           {/*
             cinatra#2482 — finished-run CONTEXT, above the form rather than
             instead of it.

@@ -43,6 +43,10 @@ import { verifySessionAuthority } from "@/lib/org-write/authority";
 // dispatch makes, and the monotonic gate write that opens the trigger.
 import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
 import { markTriggerReleased } from "./trigger-gate";
+// SAVE CHANGES translates §VI's selections into the scheduler's fields with the
+// SAME `buildCron` the scheduling step and the proposal producer submit with, so
+// a schedule saved from the card and one armed from the form cannot differ.
+import { buildCron, type RecurringConfig } from "./trigger-recurrence";
 
 /** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
  *  the CODE, not `instanceof`, so a refusal is recognized across the dynamic
@@ -1059,4 +1063,122 @@ export async function releaseTriggerNowForActor(
   }
 
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// SAVE CHANGES — re-arm an already-armed trigger from the card's own rows
+// (cinatra#2788, epic #2784 S9d; plan (A) §7.2 and §7.4 as-designed step 6).
+//
+// THE PLAN'S WORDS: "the same card, with the same option rows, now shows the
+// armed schedule; to change it you return to the card, change the rows and
+// press **Save changes**, which re-arms the trigger" — and, in the interaction
+// sequence, "change the rows and press **Save changes** → **End state:
+// re-armed**".
+//
+// THIS IS NOT A SECOND ARMING PATH. Everything below the refusals delegates to
+// `setRunTriggerForActor`, the one function that validates a cron, cancels the
+// prior scheduler before installing the replacement, persists the row and moves
+// the run's status. What this frame adds is the three refusals a RE-arm has and
+// a first arm does not:
+//
+//   · IDENTITY. `setRunTriggerForActor` already re-checks owner-or-admin on the
+//     actor it is handed; this frame reads the run first so it can refuse a run
+//     that no longer exists with a sentence rather than a throw, and so the
+//     other two refusals are decided against the same snapshot.
+//   · A ONE-OFF THAT HAS ALREADY FIRED. A single delayed job that has run is
+//     not a schedule any more. Re-arming it would quietly produce a SECOND run
+//     from a control whose whole promise is "change this one".
+//   · A RELEASED TRIGGER. The gate is open and the held steps are already
+//     eligible; there is nothing left to hold back on a new schedule.
+//
+// RECURRING CHANGES APPLY TO FUTURE TICKS ONLY, and that is a property of the
+// delegation rather than a rule written here: a recurring tick CLONES the run it
+// was armed from and starts the copy (`trigger-release-job`), so ticks that have
+// already fired are separate runs that this call does not touch, and the only
+// thing replaced is the scheduler that decides the NEXT one. `setRunTriggerForActor`
+// cancels the old `jobSchedulerId` before registering the new expression, so no
+// tick is ever scheduled by both.
+//
+// SWITCHING TO "RUN RIGHT AFTER SETUP" IS REFUSED, deliberately. That row is not
+// a schedule — arming it dispatches the run at once — so accepting it here would
+// make Save changes an undocumented Release now, on a card that (in a
+// conversation) deliberately carries neither Cancel trigger nor Release now.
+// ---------------------------------------------------------------------------
+
+/** §VI's closed selection vocabulary, as this module sees it. Mirrors
+ *  `ProposedSchedule` in the protocol package; typed structurally rather than
+ *  imported so the trigger service keeps no edge onto the view layer. */
+export type SavedScheduleSelection =
+  | { kind: "immediate" }
+  | { kind: "scheduled"; runAt: string; timezone: string }
+  | { kind: "recurring"; selection: RecurringConfig; timezone: string };
+
+export type UpdateTriggerScheduleArgs = {
+  runId: string;
+  schedule: SavedScheduleSelection;
+};
+
+export type UpdateTriggerScheduleResult =
+  | { ok: true; runId: string }
+  | { ok: false; error: string };
+
+/** What the card says when the schedule can no longer be changed. Reader-facing
+ *  copy: it names the state and what to do instead, exactly as the immediate
+ *  ladder's refusals do. */
+export const SAVE_SCHEDULE_REFUSALS = {
+  noTrigger:
+    "There is no armed schedule on this run to change.",
+  released:
+    "This trigger has already been released — its steps are eligible now, so there is no schedule left to change.",
+  firedOneOff:
+    "This one-off schedule has already run. Ask for a new schedule instead of changing this one.",
+  immediate:
+    "\u201cRun right after setup\u201d starts the run now rather than scheduling it. Use Release now on the run page\u2019s schedule step to start an armed run early.",
+} as const;
+
+export async function updateRunTriggerScheduleForActor(
+  actor: TriggerActorContext,
+  args: UpdateTriggerScheduleArgs,
+): Promise<UpdateTriggerScheduleResult> {
+  if (!actor.userId) return { ok: false, error: "unauthorized" };
+
+  const run = await readAgentRunById(args.runId);
+  if (!run) return { ok: false, error: "run not found" };
+  if (!isOwnerOrAdmin(actor, run.runBy ?? null)) {
+    return { ok: false, error: "forbidden" };
+  }
+
+  const existing = await readRunTriggerByRunId(args.runId);
+  if (!existing) return { ok: false, error: SAVE_SCHEDULE_REFUSALS.noTrigger };
+  if (existing.releasedAt) {
+    return { ok: false, error: SAVE_SCHEDULE_REFUSALS.released };
+  }
+  // A one-off whose moment has passed has fired (or is firing). Refused BEFORE
+  // any write, so the prior scheduler is never cancelled on the way to a refusal.
+  if (
+    existing.triggerType === "scheduled" &&
+    (!existing.scheduledAt || existing.scheduledAt.getTime() <= Date.now())
+  ) {
+    return { ok: false, error: SAVE_SCHEDULE_REFUSALS.firedOneOff };
+  }
+  if (args.schedule.kind === "immediate") {
+    return { ok: false, error: SAVE_SCHEDULE_REFUSALS.immediate };
+  }
+
+  const result =
+    args.schedule.kind === "scheduled"
+      ? await setRunTriggerForActor(actor, {
+          runId: args.runId,
+          triggerType: "scheduled",
+          scheduledAt: args.schedule.runAt,
+          timezone: args.schedule.timezone,
+        })
+      : await setRunTriggerForActor(actor, {
+          runId: args.runId,
+          triggerType: "recurring",
+          cronExpression: buildCron(args.schedule.selection),
+          timezone: args.schedule.timezone,
+        });
+
+  return result.ok ? { ok: true, runId: args.runId } : { ok: false, error: result.error };
 }

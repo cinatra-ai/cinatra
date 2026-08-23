@@ -112,6 +112,25 @@ test("baselineGrowth: dropping a tracked route is allowed (route removed from FI
 // ---------------------------------------------------------------------------
 const rec = (from, to, extra = {}) => ({ from, to, reason: "sanctioned growth (#999): test", pr: 999, ...extra });
 
+// `pr: 0` — "there is no pull request yet" (cinatra#2788). A raise measured on a
+// branch before a PR exists still has to be annotated, and the two alternatives
+// are worse than saying so: an invented number sends a reader to somebody else's
+// change, and an unannotated raise is the silent accretion this ratchet exists to
+// stop. Zero is the one value that cannot be mistaken for a real PR.
+test("isStructurallyValidAbsorbRecord: pr 0 is VALID — the raise has no pull request yet", () => {
+  assert.equal(
+    isStructurallyValidAbsorbRecord({ from: 10, to: 12, pr: 0, reason: "measured on a branch with no PR" }),
+    true,
+  );
+});
+
+test("isStructurallyValidAbsorbRecord: a NEGATIVE or fractional pr is still malformed", () => {
+  const base = { from: 10, to: 12, reason: "r" };
+  assert.equal(isStructurallyValidAbsorbRecord({ ...base, pr: -1 }), false);
+  assert.equal(isStructurallyValidAbsorbRecord({ ...base, pr: 1.5 }), false);
+  assert.equal(isStructurallyValidAbsorbRecord({ ...base, pr: "0" }), false);
+});
+
 test("classifyRaises: a raise WITHOUT an absorb record FAILS (silent raise)", () => {
   const base = { routes: { "/a": 100 } };
   const committed = { routes: { "/a": 120 } };

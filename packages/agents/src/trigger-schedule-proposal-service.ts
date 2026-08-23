@@ -660,8 +660,27 @@ export type ProposalResolution =
       triggerType: "immediate" | "scheduled" | "recurring";
       scheduleCopy: string;
       timezone: string;
+      /**
+       * THE ARMED SCHEDULE AS SELECTIONS — what the settled card's option rows
+       * draw (plan (A) §7.2: "the same card, with the same option rows, now
+       * shows the armed schedule"). Read back from what was INSTALLED, never
+       * from the token: the durable trigger row (or the install intent while it
+       * drains) is what the family actually settled on, so a superseded card's
+       * rows are right for the same reason its `scheduleCopy` is honest.
+       */
+      schedule: ProposalSchedule;
       released: boolean;
       arming: boolean;
+      /**
+       * May **Save changes** re-arm from this card (plan (A) §7.2 step 6)?
+       *
+       * The three refusals, and each is the server's rule read forward rather
+       * than a second policy: a RELEASED trigger has already opened its gate,
+       * one still ARMING has no scheduler to replace yet, and a ONE-OFF THAT
+       * HAS ALREADY FIRED is not a schedule any more — re-arming it would make
+       * a second run out of a card that says "change this one".
+       */
+      canSave: boolean;
       /**
        * This card's rows are NOT the ones the family settled on — it was
        * adjusted away from before Confirm landed. `scheduleCopy` says so and
@@ -735,9 +754,30 @@ export async function resolveProposalForReader(
         ? SUPERSEDED_SCHEDULE_COPY
         : describeProposalSchedule(proposal.schedule),
       timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+      // THE ROWS COME FROM THE INSTALLED ROW, not from `proposal.schedule`.
+      // Under #2859's shared consume identity this card's own token may be
+      // holding rows the family was corrected away from; the durable trigger
+      // row is what is armed, and "shows the armed schedule in the same rows"
+      // (plan (A) §7.2) is only true if the rows are read from it.
+      schedule: selectionsFromInstalled({
+        triggerType:
+          (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
+          (intent?.triggerType ?? "immediate"),
+        scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+        cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+        timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+      }),
       released: !!trigger?.releasedAt,
       // "Arming…" rather than controls over a schedule still being installed.
       arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      canSave: canSaveInstalled({
+        triggerType:
+          (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
+          (intent?.triggerType ?? "immediate"),
+        scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+        released: !!trigger?.releasedAt,
+        arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      }),
       superseded,
     };
   }
@@ -824,8 +864,23 @@ export async function resolveProposalForRun(
       cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
     }),
     timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+    // The same read-back the conversation's settled card uses, from the same
+    // durable row, so the run page's schedule step and the chat card cannot
+    // draw two different sets of rows for one armed trigger.
+    schedule: selectionsFromInstalled({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+      timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+    }),
     released: !!trigger?.releasedAt,
     arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+    canSave: canSaveInstalled({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      released: !!trigger?.releasedAt,
+      arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+    }),
     // NEVER superseded on this path, and structurally so rather than by
     // omission (cinatra#2859). `superseded` answers "this CARD is holding rows
     // the family did not settle on", and it can only be asked where the card
@@ -835,6 +890,89 @@ export async function resolveProposalForRun(
     // for the installed schedule to disagree with.
     superseded: false,
   };
+}
+
+/**
+ * The INSTALLED schedule, read back as §VI's SELECTIONS (cinatra#2788, S9d).
+ *
+ * The settled card draws the same three option rows as the proposal — plan (A)
+ * §7.2, "the same card, with the same option rows, now shows the armed
+ * schedule" — and rows cannot be drawn from prose. So the durable row is read
+ * back into the closed selection vocabulary by `parseCronToRecurring`, the ONE
+ * module that says what a selection means, completed against its own defaults
+ * exactly as the scheduling step completes a partial reading before drawing it.
+ * A cron that will not parse falls back to the vocabulary's default selection
+ * rather than inventing one: `scheduleCopy` beside the rows still carries the
+ * raw expression, so nothing is claimed that the row does not say.
+ *
+ * A NAIVE WALL CLOCK is what the one-off row hands back, because that is what
+ * the `datetime-local` control and the wire schema both take. The stored
+ * instant is UTC; it is rendered in the trigger's OWN timezone, so re-saving
+ * an untouched card re-arms the same moment rather than shifting it by the
+ * offset.
+ */
+export function selectionsFromInstalled(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  cronExpression: string | null;
+  timezone: string;
+}): ProposalSchedule {
+  if (input.triggerType === "immediate") return { kind: "immediate" };
+  if (input.triggerType === "scheduled") {
+    return {
+      kind: "scheduled",
+      runAt: naiveWallClockIn(input.scheduledAt ?? new Date(), input.timezone),
+      timezone: input.timezone,
+    };
+  }
+  const partial = input.cronExpression ? parseCronToRecurring(input.cronExpression) : null;
+  return {
+    kind: "recurring",
+    selection: { ...DEFAULT_RECURRING_CONFIG, ...(partial ?? {}) },
+    timezone: input.timezone,
+  };
+}
+
+/** A UTC instant as the timezone-naive "YYYY-MM-DDTHH:MM" the form emits,
+ *  rendered in `timezone`. The inverse of `naiveDatetimeToUtcMs`. */
+function naiveWallClockIn(at: Date, timezone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(at);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const hour = get("hour") === "24" ? "00" : get("hour");
+    return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}`;
+  } catch {
+    return at.toISOString().slice(0, 16);
+  }
+}
+
+/**
+ * May **Save changes** re-arm this installed trigger?
+ *
+ * The reading the server enforces, computed once so the card and the endpoint
+ * cannot disagree about which schedules are still changeable.
+ */
+export function canSaveInstalled(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  released: boolean;
+  arming: boolean;
+}): boolean {
+  if (input.released || input.arming) return false;
+  // A ONE-OFF THAT HAS FIRED IS NOT A SCHEDULE. Re-arming it would create a
+  // second run from a control whose whole promise is "change this one".
+  if (input.triggerType === "scheduled") {
+    return !!input.scheduledAt && input.scheduledAt.getTime() > Date.now();
+  }
+  return true;
 }
 
 /**

@@ -79,12 +79,15 @@ function settledBody(
     version: 1,
     agentName: "Weekly cohort sweep",
     runId: "run-777",
+    // The ARMED selections — the settled card draws the same rows (plan §7.2).
+    schedule: RECURRING,
     triggerType: "recurring",
     scheduleCopy: "Every weekday at 9:00 AM",
     timezone: "Europe/Berlin",
     gatedSteps: [],
     released: false,
     arming: false,
+    canSave: true,
     canCancel: true,
     canRelease: false,
     ...over,
@@ -185,7 +188,7 @@ function decisionInit(fetchMock: ReturnType<typeof mockTransport>): {
 // ---------------------------------------------------------------------------
 
 describe("§VI the schedule proposal card", () => {
-  it("proposal: the option rows, the chosen row marked, the duration, and the Adjust · Confirm floor", async () => {
+  it("proposal: the option rows EDITABLE as they stand, the chosen row marked, the duration, and a Confirm-only floor", async () => {
     mockTransport({ state: "pending", canDecide: true, canComment: false }, proposalBody());
     const { container } = renderOn("chat_thread");
 
@@ -209,7 +212,10 @@ describe("§VI the schedule proposal card", () => {
     ).toContain("About 45s");
     expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).not.toBeNull();
     expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull();
-    expect(container.querySelector('[data-action="adjust-schedule-proposal"]')).not.toBeNull();
+    // …AND NOTHING ELSE. Plan (A) §7.2: "The floor is **Confirm**."
+    expect(container.querySelector('[data-action="adjust-schedule-proposal"]')).toBeNull();
+    // The rows are live on first paint, with no step to open them.
+    expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(false);
     // NO RAW CRON FIELD, anywhere in the drawn card.
     expect(container.innerHTML).not.toMatch(/cron/i);
     // Nothing exists yet — the settled chrome is not drawn beside the proposal.
@@ -239,7 +245,11 @@ describe("§VI the schedule proposal card", () => {
     expect(container.querySelector('[data-lifecycle-card-state="restricted"]')).not.toBeNull();
   });
 
-  it("settled: the trigger's chrome — configuration, held steps, and the two quiet controls", async () => {
+  // PLAN §7.2 step 5 and §7.2, on the PAGE host. The page's schedule step carries the
+  // trigger's own chrome AND the editable rows: plan (A) §7.2 — the chrome
+  // "lives on the run page's schedule step, not in the conversation", and the
+  // step is where you "see the configuration or change it".
+  it("settled on a PAGE host: the trigger's chrome, the SAME editable rows, Save changes, and the two quiet controls", async () => {
     mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
     const { container } = renderOn("run_card");
 
@@ -253,8 +263,151 @@ describe("§VI the schedule proposal card", () => {
     expect(container.textContent).toContain("No side-effect steps detected.");
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull();
     expect(container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull();
-    // The option rows are GONE — the settled card is the chrome, not both.
-    expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).toBeNull();
+    // The SAME option rows the proposal drew, showing the armed schedule and
+    // open to change — one set of them, not two.
+    expect(container.querySelectorAll('[data-conformance-id="schedule-option-rows"]')).toHaveLength(1);
+    expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(false);
+    expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull();
+    // …and no Confirm: this schedule is armed, not proposed.
+    expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
+  });
+
+  // PLAN §7.2, and the whole of it: after Confirm the conversation shows the SAME
+  // card, the SAME rows and a Save-changes control — and NEITHER of the
+  // trigger's own controls. Plan (A) §7.2: "**Cancel trigger** and **Release
+  // now** for an administrator — lives on the run page's schedule step, not in
+  // the conversation."
+  it("settled in a CONVERSATION: the same rows and Save changes, and NO trigger chrome, Cancel or Release", async () => {
+    for (const host of ["chat_thread", "site_widget"] as const) {
+      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      const view = renderOn(host);
+      await waitFor(() =>
+        expect(
+          view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
+        ).not.toBeNull(),
+      );
+      // The armed schedule, in the same rows.
+      expect(
+        view.container.querySelector('[data-schedule-option="recurring"]')?.getAttribute("data-chosen"),
+      ).toBe("true");
+      expect(view.container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull();
+      // The trigger's chrome is NOT here.
+      expect(view.container.querySelector('[data-conformance-id="scheduled-run-chrome"]')).toBeNull();
+      expect(view.container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
+      expect(view.container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
+      expect(view.container.textContent).not.toContain("Cancel trigger");
+      expect(view.container.textContent).not.toContain("Release now");
+      view.unmount();
+      cleanup();
+    }
+  });
+
+  // PLAN §7.4 as-designed step 4 — the identity clause: the card the reader confirmed is the card the
+  // reader is left with — one root, same kind, same host, phase moved.
+  it("the chat card KEEPS ITS IDENTITY across Confirm — one root before and after, never a second card", async () => {
+    let settled = false;
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const raw = typeof init?.body === "string" ? init.body : "";
+      if (raw.includes('"op"')) {
+        settled = true;
+        return new Response(
+          JSON.stringify({ outcome: { kind: "confirmed", runId: "run-777", alreadyConfirmed: false } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify(
+          settled
+            ? { kind: "trigger_schedule_proposal", state: { state: "settled" }, body: settledBody() }
+            : {
+                kind: "trigger_schedule_proposal",
+                state: { state: "pending", canDecide: true, canComment: false },
+                body: proposalBody(),
+              },
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-lifecycle-card-phase="proposal"]')).not.toBeNull(),
+    );
+    const before = container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]');
+    expect(container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]')).toHaveLength(1);
+
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    await waitFor(() =>
+      expect(container.querySelector('[data-lifecycle-card-phase="settled"]')).not.toBeNull(),
+    );
+    // ONE card, and it is the SAME DOM node — not a second card drawn beside it
+    // and not a replacement mounted in its place.
+    expect(container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]')).toHaveLength(1);
+    expect(container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]')).toBe(before);
+    expect(before?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+    expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull();
+  });
+
+  // PLAN §7.2's Save changes, end to end through the card's own transport.
+  it("Save changes posts the EDITED rows as `save` on the card's own ref, and re-resolves rather than drawing optimistically", async () => {
+    const decisions: Record<string, unknown>[] = [];
+    let resolves = 0;
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const raw = typeof init?.body === "string" ? init.body : "";
+      if (raw.includes('"op"')) {
+        decisions.push(JSON.parse(raw) as Record<string, unknown>);
+        return new Response(JSON.stringify({ outcome: { kind: "saved", runId: "run-777" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      resolves += 1;
+      return new Response(
+        JSON.stringify({
+          kind: "trigger_schedule_proposal",
+          state: { state: "settled" },
+          body: settledBody(),
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    // Nothing edited yet — there is nothing to save.
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    const resolvesBefore = resolves;
+
+    fireEvent.change(container.querySelector('[data-field="recurring-timezone"]')!, {
+      target: { value: "Europe/Lisbon" },
+    });
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(false);
+    fireEvent.click(container.querySelector('[data-action="save-schedule-changes"]')!);
+
+    await waitFor(() => expect(decisions).toHaveLength(1));
+    expect(decisions[0].op).toBe("save");
+    expect(decisions[0].ref).toBe(VIEW.ref);
+    expect((decisions[0].schedule as { timezone: string }).timezone).toBe("Europe/Lisbon");
+    // No cron travels — the selections do (§VI).
+    expect(JSON.stringify(decisions[0])).not.toMatch(/cron/i);
+    // A landed save RE-RESOLVES: the server is what says what is armed now.
+    await waitFor(() => expect(resolves).toBeGreaterThan(resolvesBefore));
+  });
+
+  it("Save changes is withheld where the server will refuse it — canSave false draws a dead control", async () => {
+    mockTransport({ state: "settled" }, settledBody({ canSave: false }));
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+    );
+    expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
+    // The rows are read-only too — an offer to edit what cannot be saved is a
+    // control that fails on press, which §IV rules out.
+    expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
   });
 
   it("settled: Release now is admin-only — a non-admin body draws no control at all", async () => {
@@ -317,19 +470,46 @@ describe("§VI the schedule proposal card", () => {
       .toEqual(["1", "2", "3", "4", "5"]);
   });
 
-  it("expired: the card STAYS VISIBLE with Adjust to propose again, and no Confirm", async () => {
+  // PLAN §7.2 step 2, on the expired face. Plan (A) §7.2 step 2: "an expired proposal
+  // **stays visible**, still editable, with **Confirm** to propose again."
+  it("expired: the card STAYS VISIBLE, its rows editable, on the SAME Confirm floor — and no Adjust anywhere", async () => {
     mockTransport({ state: "settled" }, EXPIRED_BODY);
     const { container } = renderOn("chat_thread");
 
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-proposal-expired"]')).not.toBeNull(),
     );
-    // The rows the reader last saw, so Adjust re-opens them rather than a blank form.
+    // The rows the reader last saw, editable — not a blank form and not a locked one.
     expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull();
-    expect(container.querySelector('[data-action="adjust-schedule-proposal"]')).not.toBeNull();
-    // There is nothing to confirm: the window closed and the token is unspendable.
-    expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
+    expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(false);
+    // The floor is Confirm, exactly as it is on a live proposal.
+    expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="adjust-schedule-proposal"]')).toBeNull();
     expect(container.querySelector('[data-lifecycle-card-phase="expired"]')).not.toBeNull();
+  });
+
+  // PLAN §7.2, stated as an absence over the WHOLE card, on every host and every
+  // phase: there is no Adjust control anywhere any more.
+  it("NO Adjust control exists on any phase or any host — the rows are the only way to change a proposal", async () => {
+    for (const host of ["chat_thread", "site_widget", "run_card", "page_gate_region"] as const) {
+      for (const [state, body] of [
+        [{ state: "pending", canDecide: true, canComment: false } as LifecycleCardState, proposalBody()],
+        [{ state: "settled" } as LifecycleCardState, settledBody({ canRelease: true })],
+        [{ state: "settled" } as LifecycleCardState, EXPIRED_BODY],
+      ] as const) {
+        mockTransport(state, body);
+        const view = renderOn(host);
+        await waitFor(() =>
+          expect(
+            view.container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]'),
+          ).not.toBeNull(),
+        );
+        expect(view.container.querySelector('[data-action="adjust-schedule-proposal"]')).toBeNull();
+        expect(view.container.textContent).not.toContain("Adjust");
+        view.unmount();
+        cleanup();
+      }
+    }
   });
 });
 
@@ -409,18 +589,19 @@ describe("§IX every host draws the same card", () => {
       pending.unmount();
       cleanup();
 
-      // The SETTLED half of the same set, on the same host: the trigger's own
-      // chrome and the two quiet controls §VI closes on.
+      // The SETTLED half of the same set, on the same host: the Save-changes
+      // floor everywhere, plus — on the two PAGE hosts, where this card IS the
+      // schedule step — the trigger's own chrome and its two quiet controls.
+      // The conversation is ruled not to have those (plan (A) §7.2), so the
+      // ratified anchors that name them are read on the hosts that draw them.
+      const pageHost = host === "run_card" || host === "page_gate_region";
       mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
       const settled = renderOn(host);
       await waitFor(() =>
         expect(
-          settled.container.querySelector('[data-conformance-id="scheduled-run-chrome"]'),
+          settled.container.querySelector('[data-action="save-schedule-changes"]'),
         ).not.toBeNull(),
       );
-      expect(
-        settled.container.querySelectorAll('[data-conformance-id="scheduled-run-chrome"]'),
-      ).toHaveLength(1);
       expect(
         settled.container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]'),
       ).toHaveLength(1);
@@ -429,12 +610,22 @@ describe("§IX every host draws the same card", () => {
       );
       expect(settledRoot?.getAttribute("data-lifecycle-card-host")).toBe(host);
       expect(settledRoot?.getAttribute("data-lifecycle-card-state")).toBe("settled");
+      // The armed card keeps the SAME option rows (requirement 3).
       expect(
-        settled.container.querySelector('[data-action="cancel-trigger-schedule"]'),
-      ).not.toBeNull();
+        settled.container.querySelectorAll('[data-conformance-id="schedule-option-rows"]'),
+      ).toHaveLength(1);
       expect(
-        settled.container.querySelector('[data-action="release-trigger-now"]'),
-      ).not.toBeNull();
+        settled.container.querySelectorAll('[data-conformance-id="schedule-proposal-floor"]'),
+      ).toHaveLength(1);
+      expect(
+        settled.container.querySelectorAll('[data-conformance-id="scheduled-run-chrome"]'),
+      ).toHaveLength(pageHost ? 1 : 0);
+      expect(
+        settled.container.querySelectorAll('[data-action="cancel-trigger-schedule"]'),
+      ).toHaveLength(pageHost ? 1 : 0);
+      expect(
+        settled.container.querySelectorAll('[data-action="release-trigger-now"]'),
+      ).toHaveLength(pageHost ? 1 : 0);
       settled.unmount();
       cleanup();
     }
@@ -493,7 +684,7 @@ describe("credential-aware decisions", () => {
     mockTransport({ state: "settled" }, settledBody());
     const widget = renderOn("site_widget");
     await waitFor(() =>
-      expect(widget.container.querySelector('[data-conformance-id="scheduled-run-chrome"]')).not.toBeNull(),
+      expect(widget.container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
     );
     expect(widget.container.querySelector('[data-conformance-id="schedule-open-run"]')).toBeNull();
     widget.unmount();
@@ -563,21 +754,39 @@ describe("credential-aware decisions", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ADJUST — re-propose, in place
+// PLAN §7.2 (2) — the rows are editable as they stand, and Confirm is the only floor
 // ---------------------------------------------------------------------------
 
-describe("§VI Adjust re-opens the same rows in place", () => {
-  it("the rows are read-only until Adjust is pressed", async () => {
+describe("the rows are editable as they stand — no Adjust step", () => {
+  it("the rows are LIVE on first paint, with no control to unlock them", async () => {
     mockTransport({ state: "pending", canDecide: true, canComment: false }, proposalBody());
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
       expect(container.querySelector('[data-field="recurring-timezone"]')).not.toBeNull(),
     );
-    expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
-    fireEvent.click(container.querySelector('[data-action="adjust-schedule-proposal"]')!);
+    // Plan (A) §7.2: "The option rows are editable as they stand … the rows are
+    // never locked behind a separate step."
     expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(false);
-    // Still ONE set of rows — Adjust opens them, it does not add a second form.
+    expect(isDisabled(container.querySelector('[data-field="recurring-weekday"]'))).toBe(false);
+    expect(container.querySelector('[data-action="adjust-schedule-proposal"]')).toBeNull();
+    // ONE set of rows, and the floor holds exactly one control.
     expect(container.querySelectorAll('[data-conformance-id="schedule-option-rows"]')).toHaveLength(1);
+    expect(
+      container.querySelectorAll('[data-conformance-id="schedule-proposal-floor"] [data-action]'),
+    ).toHaveLength(1);
+  });
+
+  it("a RESTRICTED reader gets read-only rows, because editing what they cannot confirm is a dead offer", async () => {
+    mockTransport(
+      { state: "restricted", canDecide: false, canComment: false, reason: "You can't dispatch this agent." },
+      proposalBody({ canConfirm: false, restrictedReason: "You can't dispatch this agent." }),
+    );
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-field="recurring-timezone"]')).not.toBeNull(),
+    );
+    expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
+    expect(isDisabled(container.querySelector('[data-action="confirm-schedule-proposal"]'))).toBe(true);
   });
 
   it("an EDITED proposal is re-proposed and THEN confirmed, on the new ref", async () => {
@@ -610,10 +819,10 @@ describe("§VI Adjust re-opens the same rows in place", () => {
 
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
-      expect(container.querySelector('[data-action="adjust-schedule-proposal"]')).not.toBeNull(),
+      expect(container.querySelector('[data-field="recurring-timezone"]')).not.toBeNull(),
     );
-    fireEvent.click(container.querySelector('[data-action="adjust-schedule-proposal"]')!);
-    // The reader corrects the row in place. (The timezone field is driven here
+    // The reader corrects the row in place — no Adjust to press first. (The
+    // timezone field is driven here
     // rather than the hour select because the shipped Select is a Radix listbox
     // that jsdom cannot open; the ADJUST-then-CONFIRM order this test exists to
     // pin is the same whichever field changed.)

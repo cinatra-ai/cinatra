@@ -311,6 +311,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/chat/src/renderable-views/registry.tsx",
           adapter: "registry",
+          region: "transcript",
           surface: "production",
           why: "the transcript dispatch — the chat column declares the host once and every turn resolves inside it",
         },
@@ -319,6 +320,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/chat/src/renderable-views/registry.tsx",
           adapter: "registry",
+          region: "transcript",
           surface: "production",
           why: "the SAME registry row serves the widget transcript; a second table would be a parallel registry",
         },
@@ -327,12 +329,14 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/agents/src/agentic-run-panel.tsx",
           adapter: "mount",
+          region: "run_panel",
           surface: "production",
           why: "the agentic panel branch of the run card",
         },
         {
           module: "packages/agents/src/orchestrator-stepper-panel.tsx",
           adapter: "mount",
+          region: "run_panel",
           surface: "production",
           why: "the stepper branch of the same host: the run-detail review branch, which composes the shared card and defines no drawing of its own",
         },
@@ -342,6 +346,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           module:
             "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
           adapter: "mount",
+          region: "gate_region",
           surface: "production",
           why: "the review page mounts the card in its gate region; the page composes no floor of its own",
         },
@@ -442,6 +447,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/chat/src/chat-messages-view.tsx",
           adapter: "mount",
+          region: "transcript",
           surface: "production",
           why: "the assistant dispatch turn: the card mounts on the run identity read off the tool result, and NOT through the renderable-view registry, because this kind's carriage is an interrupt rather than a data part",
         },
@@ -451,18 +457,21 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/agents/src/agentic-run-panel.tsx",
           adapter: "mount",
+          region: "run_panel",
           surface: "production",
           why: "the agentic panel branch of the run card",
         },
         {
           module: "packages/agents/src/instance-screens.tsx",
           adapter: "mount",
+          region: "run_panel",
           surface: "production",
           why: "the run screen branch: the agentic panel does not render for a run that is pending_input, and a HELD run is exactly that, so this branch draws the held state",
         },
         {
           module: "packages/agents/src/orchestrator-stepper-panel.tsx",
           adapter: "mount",
+          region: "run_panel",
           surface: "dev_preview",
           why: "the Dev Stepper's child-run preview row, which draws only while a dev preview child is open and addresses that child's own run — enumerated because it is a real callsite, and marked dev_preview because it is not one of the production adapters",
         },
@@ -555,19 +564,41 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "gatedSteps",
         "released",
         "arming",
+        "canSave",
         "canCancel",
         "canRelease",
       ],
     },
-    // THE RATIFIED SET, CLOSED — carried over from the placeholder VERBATIM,
-    // which is the outcome a re-reading is allowed to have. The settled card's
-    // two quiet controls were ratified in prose and are now named, in the
-    // existing verb-object convention; the drawing at the pin emits both under
-    // exactly those names, so nothing here is a name chosen after the fact.
+    // THE RATIFIED SET, RE-RATIFIED AGAINST THE PLAN RATHER THAN REFRESHED.
+    // All five members below are the placeholder's, VERBATIM — the option rows,
+    // the floor, the settled trigger's chrome and its two quiet controls all
+    // survive the rework and are all still emitted by the owner. What the plan
+    // moved is WHERE two of them are drawn (the chrome and its controls are the
+    // page hosts' step, never the conversation — §7.2), which is a host reading
+    // rather than an anchor.
+    //
+    // ONE MEMBER IS ADDED, and it is added because the plan added the control it
+    // names: "to change it you return to the card, change the rows and press
+    // **Save changes**, which re-arms the trigger" (§7.2), and §7.4's
+    // as-designed step 6, "change the rows and press **Save changes** →
+    // **End state: re-armed**". An armed card with no Save-changes control does
+    // not implement the plan, so the anchor set has to be able to say so.
+    //
+    // NO `adjust` ANCHOR IS ADDED OR KEPT, and its absence is the point: "the
+    // rows are never locked behind a separate step. The floor is **Confirm**"
+    // (§7.2). The ratified set never named one, which is the one place the
+    // placeholder's list was already right about the target.
+    //
+    // WHERE THE DRAWING AND THE PLAN DISAGREE. §VI at the pinned design commit
+    // still draws `Adjust · Confirm` and a settled card that is the trigger's
+    // chrome wherever it appears. The plan supersedes both, so the design page
+    // needs the amendment — the same shape §9.1 already records for the chip row
+    // and for the pinned capture pair. Named here rather than implemented around.
     anchors: [
       "schedule-option-rows",
       "schedule-proposal-floor",
       "scheduled-run-chrome",
+      '[data-action="save-schedule-changes"]',
       '[data-action="cancel-trigger-schedule"]',
       '[data-action="release-trigger-now"]',
     ],
@@ -577,6 +608,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/chat/src/renderable-views/registry.tsx",
           adapter: "registry",
+          region: "transcript",
           surface: "production",
           why: "the transcript dispatch — the same one registry row the review and verification cards use; the chat column declares the host once and every turn resolves inside it",
         },
@@ -585,25 +617,42 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/chat/src/renderable-views/registry.tsx",
           adapter: "registry",
+          region: "transcript",
           surface: "production",
           why: "the SAME registry row serves the widget transcript; a second table would be a parallel registry",
         },
       ],
+      // THE TWO PAGE HOSTS ARE A STEP IN THE RAIL, NOT A CARD IN A REGION.
+      // Plan (A) §7.2 step 5: "On the run page and the review page the schedule
+      // is a **dedicated step in the step rail on the left, above '1 Review'**:
+      // open that step to see the configuration or change it. The schedule is
+      // never drawn as a card among the review cards — a trigger decides *when*
+      // the agent runs, and a review card exists only after the agent has run
+      // and produced something — so the two can never appear together."
+      //
+      // ONE MODULE SERVES BOTH, and that is why it is a component rather than
+      // two page-local compositions: `ScheduleRailStep` is the rail ROW plus the
+      // disclosure panel, it declares the host itself, and the card inside it is
+      // the same `ScheduleProposalCard` the transcript registry dispatches. The
+      // pages pass it a ref and a host and draw nothing of the schedule
+      // themselves — so "one renderer per kind" survives the move, and the
+      // review page's gate region now holds the review card alone.
       run_card: [
         {
-          module: "packages/agents/src/instance-screens.tsx",
+          module: "packages/agents/src/schedule-rail-step.tsx",
           adapter: "mount",
+          region: "step_rail",
           surface: "production",
-          why: "the run screen draws the confirmed schedule above the form that arms one directly, under its own <LifecycleCardSurfaceProvider host=\"run_card\"> — and draws nothing for a run no proposal produced, which the resolver decides rather than the mount",
+          why: "the run page's schedule STEP: the first row of the run detail's left rail, which declares host=\"run_card\" and opens onto the card — the run screen renumbers its own rail around it and mounts no schedule drawing of its own",
         },
       ],
       page_gate_region: [
         {
-          module:
-            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+          module: "packages/agents/src/schedule-rail-step.tsx",
           adapter: "mount",
+          region: "step_rail",
           surface: "production",
-          why: "the review page mounts the same component inside the gate region's host declaration; the page composes no schedule chrome of its own",
+          why: "the review page's schedule STEP: the same row at the head of ReviewRunSteps, declaring host=\"page_gate_region\" — the page's gate region beside it now holds the review card alone, which is the composition the plan requires",
         },
       ],
     },
@@ -742,6 +791,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/chat/src/renderable-views/registry.tsx",
           adapter: "registry",
+          region: "transcript",
           surface: "production",
           why: "the transcript dispatch — the same one registry row the review card uses; the chat column declares the host once and every turn resolves inside it",
         },
@@ -750,6 +800,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/chat/src/renderable-views/registry.tsx",
           adapter: "registry",
+          region: "transcript",
           surface: "production",
           why: "the SAME registry row serves the widget transcript; a second table would be a parallel registry",
         },
@@ -758,6 +809,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/agents/src/instance-screens.tsx",
           adapter: "mount",
+          region: "run_panel",
           surface: "production",
           why: "the run screen draws one card per verification record the run carries, under its own <LifecycleCardSurfaceProvider host=\"run_card\">",
         },
@@ -767,6 +819,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           module:
             "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
           adapter: "mount",
+          region: "page_region",
           surface: "production",
           why: "the review page's verification region mounts the card and composes only its page-only adjunct around it — R2's 'page-direct-verification-composition' entry is what keeps it from drawing the core itself",
         },
@@ -850,7 +903,7 @@ export function cardDefinitionPattern(component) {
  * parallel drawing of one inside it (cinatra#2861).
  *
  * `revisions` is in this list and must stay: the two revision pins are §VII
- * CORE, not a page adjunct. The page's own ruling names exactly two adjuncts —
+ * CORE, not a page adjunct. The page's own requirement names exactly two adjuncts —
  * the pinned VISUAL pair (#2044 L-D) and the back-to-gate route affordance —
  * and the revision pins are neither. The name collision between "the revision
  * pins" and "the pinned visual pair" is precisely how this anchor was left out
@@ -1013,6 +1066,44 @@ export const RETIRED_PARALLELS = Object.freeze([
     ],
     fix: "The page mounts <ReviewGateCard> in its gate region; the card owns the floor.",
   },
+]);
+
+/**
+ * WHERE ON THE HOST A MOUNT DRAWS — the closed region vocabulary
+ * (cinatra#2788, epic #2784 S9d).
+ *
+ * WHY IT EXISTS. `adapter` says HOW a card is reached (a registry row, or a JSX
+ * mount) and `surface` says whether it ships. Neither says WHERE on the page it
+ * lands, and for one kind that is now a ratified property rather than a layout
+ * detail: plan (A) §7.2 step 5 puts the schedule on the run page and the review
+ * page as "a **dedicated step in the step rail on the left, above '1 Review'**"
+ * and rules out the alternative in the same sentence — "The schedule is never
+ * drawn as a card among the review cards … so the two can never appear
+ * together." A contract that could only say "mount, production" recorded the
+ * composition the plan forbids and the composition it requires identically.
+ *
+ * SMALLEST TRUTHFUL SET. One member per place a lifecycle card is actually
+ * drawn today, named after the region rather than after the file:
+ *
+ *   transcript   a conversation turn (the chat column or the widget frame)
+ *   run_panel    inside the run detail's right-hand panel or screen body
+ *   gate_region  the review page's decision region — where the review card is
+ *   page_region  a page's own non-gate region (the review page's verification
+ *                region, which is a separate reading of the same run)
+ *   step_rail    a STEP in the left step rail, opening onto its configuration
+ *
+ * It is descriptive, not prescriptive: the gate checks that every entry names
+ * one of these, so a mount that moves has to say so here, and a reader of this
+ * table can see that the schedule kind is a rail step on both pages while the
+ * review kind is the gate region. WHICH regions a KIND may use is decided by
+ * the plan, not by this file.
+ */
+export const LIFECYCLE_MOUNT_REGIONS = Object.freeze([
+  "transcript",
+  "run_panel",
+  "gate_region",
+  "page_region",
+  "step_rail",
 ]);
 
 /** R3 — the JSX mounts that are lifecycle CARD mounts. */
@@ -1628,6 +1719,14 @@ export function scanHostMounts(kind, contract, mountedIn, registrySource, readMo
       }
       if (e.surface !== "production" && e.surface !== "dev_preview") {
         push(`'${kind}': the adapter ${e.module} on host '${host}' declares no surface — production or dev_preview`, e.module);
+      }
+      // WHERE ON THE HOST IT DRAWS. A mount that cannot say this cannot be
+      // checked against a plan that rules on it (see LIFECYCLE_MOUNT_REGIONS).
+      if (!LIFECYCLE_MOUNT_REGIONS.includes(e.region)) {
+        push(
+          `'${kind}': the adapter ${e.module} on host '${host}' declares no region — one of ${LIFECYCLE_MOUNT_REGIONS.join(", ")}. A mount that does not say WHERE it draws records "a step in the rail" and "a card beside the review card" identically`,
+          e.module,
+        );
       }
       if (e.adapter === "registry") registryModules.add(e.module);
       else declaredMounts.add(e.module);

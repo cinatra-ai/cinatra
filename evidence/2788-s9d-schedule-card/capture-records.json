@@ -3,11 +3,11 @@
     {
       "cell": "A1__schedule-card__chat_thread__pending",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-light-r6",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-proposal-light-1787455899",
       "build": "development",
       "screenshot": "evidence/2788-s9d-schedule-card/captures/A1__schedule-card__chat_thread__pending.png",
-      "sha256": "dcf2f176dc36651b1e5e85b1fec6ad4bf86e404a53ca42a49ca22581aad0c347",
-      "capturedAt": "2026-08-22T16:46:13.951Z",
+      "sha256": "b01e25aebb51faba7b08148bdbe2cfef1c2b140f3ad2786964e3174797efcee1",
+      "capturedAt": "2026-08-23T03:32:31.447Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -34,12 +34,12 @@
           "visible": 1
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
-          "count": 2,
+          "count": 1,
           "frame": "main",
           "expect": "present",
-          "visible": 2,
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -87,16 +87,16 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -114,15 +114,6 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
           "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 1,
@@ -132,174 +123,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "selector": "[data-action=\"save-schedule-changes\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
           "expect": "absent",
           "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "declaredKind": "trigger_schedule_proposal",
-      "declaredState": "pending",
-      "instance": {
-        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-        "matched": 1,
-        "index": 0,
-        "id": null,
-        "attributes": {
-          "class": "my-3 flex w-full flex-col gap-3",
-          "data-lifecycle-card": "trigger_schedule_proposal",
-          "data-lifecycle-card-state": "pending",
-          "data-lifecycle-card-host": "chat_thread",
-          "data-lifecycle-card-phase": "proposal",
-          "data-conformance-id": "schedule-proposal-card"
-        }
-      },
-      "note": "The proposal as it arrives in the transcript: the question, the three option rows with the RECURRING row chosen and owning its fields, the estimated duration, and §VI's floor — Adjust · Confirm. The schedule the reader is deciding on is on the card, which is what the placeholder box this slice retires never showed.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
-    },
-    {
-      "cell": "A2__schedule-card__chat_thread__pending__adjust-open",
-      "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-light-r6",
-      "build": "development",
-      "screenshot": "evidence/2788-s9d-schedule-card/captures/A2__schedule-card__chat_thread__pending__adjust-open.png",
-      "sha256": "037feae6d8ea4a6ccc3f93d76afb9b32b137bbbf36c0e674c0b39f0f399d1c2b",
-      "capturedAt": "2026-08-22T16:46:15.770Z",
-      "assertions": [
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 2,
-          "frame": "main",
-          "expect": "present",
-          "visible": 2,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-phase=\"proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -321,21 +150,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"][aria-pressed=\"true\"]",
+          "selector": "[data-field=\"recurring-timezone\"]:not([disabled])",
           "scope": "root",
           "count": 1,
           "frame": "main",
           "expect": "present",
           "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-field=\"recurring-weekday\"]:not([disabled])",
-          "scope": "root",
-          "count": 7,
-          "frame": "main",
-          "expect": "present",
-          "visible": 7,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
@@ -356,18 +176,18 @@
           "data-conformance-id": "schedule-proposal-card"
         }
       },
-      "note": "WHAT ADJUST PRODUCES. The same rows, in place, now writable — the weekday buttons, the interval, the hour and the timezone are live and the Adjust control reads pressed. No second form is swapped in and no new card is drawn.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "note": "PLAN §7.2 — the proposal as it arrives in the transcript: the question, the three option rows with the RECURRING row chosen and owning its fields, the estimated duration, and a floor that holds Confirm and nothing else. The rows are LIVE on first paint (the record's editableFields shows every field undisabled) and there is no Adjust control anywhere on the card.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
     },
     {
-      "cell": "A3__schedule-card__chat_thread__settled",
+      "cell": "A2__schedule-card__chat_thread__settled",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-light-r6",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-proposal-light-1787455899",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-schedule-card/captures/A3__schedule-card__chat_thread__settled.png",
-      "sha256": "73f95c5275d38967043b4f15e9b084eb8182a4e05240f1d85bc7cb239e890b9f",
-      "capturedAt": "2026-08-22T16:46:21.440Z",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/A2__schedule-card__chat_thread__settled.png",
+      "sha256": "d9ee39a5770c1083701404294b23cf930927a10992daff0662668a5ff347656c",
+      "capturedAt": "2026-08-23T03:32:46.016Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -412,7 +232,7 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -456,39 +276,39 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"cancel-trigger-schedule\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
           "selector": "[data-conformance-id=\"schedule-option-rows\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -501,7 +321,25 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -527,18 +365,18 @@
           "data-conformance-id": "schedule-proposal-card"
         }
       },
-      "note": "After a real press of Confirm in the same transcript: the card settles IN PLACE into the trigger's own chrome — read-only Trigger configuration, the steps held until the trigger fires, and the quiet controls. Nothing was reloaded and no second card was drawn.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "note": "PLAN §7.2 and §7.4 step 4 — after a real press of Confirm in the same transcript, and after a full route reload: NO second card. The same card, in the same place, showing the armed schedule in the SAME option rows, with Save changes to re-arm. Cancel trigger and Release now are absent — the plan puts them on the run page's schedule step, not in the conversation.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
     },
     {
       "cell": "B1__schedule-card__chat_thread__pending__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-dark-r6",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-proposal-dark-1787455899",
       "build": "development",
       "screenshot": "evidence/2788-s9d-schedule-card/captures/B1__schedule-card__chat_thread__pending__dark.png",
-      "sha256": "a88a8bdd6c4762173b1c9a34a5dc6ebb180148ef5b1c65de198bef897063176e",
-      "capturedAt": "2026-08-22T16:46:28.851Z",
+      "sha256": "53183913a5b2e4e33a5dc8f6104fa3a15e4c5c5bb8bd09bdaee8ff2959f160e4",
+      "capturedAt": "2026-08-23T03:32:53.554Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -565,12 +403,12 @@
           "visible": 1
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
-          "count": 2,
+          "count": 1,
           "frame": "main",
           "expect": "present",
-          "visible": 2,
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -618,16 +456,16 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -645,15 +483,6 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
           "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 1,
@@ -663,174 +492,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "selector": "[data-action=\"save-schedule-changes\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
           "expect": "absent",
           "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        }
-      ],
-      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "declaredKind": "trigger_schedule_proposal",
-      "declaredState": "pending",
-      "instance": {
-        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-        "matched": 1,
-        "index": 0,
-        "id": null,
-        "attributes": {
-          "class": "my-3 flex w-full flex-col gap-3",
-          "data-lifecycle-card": "trigger_schedule_proposal",
-          "data-lifecycle-card-state": "pending",
-          "data-lifecycle-card-host": "chat_thread",
-          "data-lifecycle-card-phase": "proposal",
-          "data-conformance-id": "schedule-proposal-card"
-        }
-      },
-      "note": "The proposal as it arrives in the transcript: the question, the three option rows with the RECURRING row chosen and owning its fields, the estimated duration, and §VI's floor — Adjust · Confirm. The schedule the reader is deciding on is on the card, which is what the placeholder box this slice retires never showed.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
-    },
-    {
-      "cell": "B2__schedule-card__chat_thread__pending__adjust-open__dark",
-      "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-dark-r6",
-      "build": "development",
-      "screenshot": "evidence/2788-s9d-schedule-card/captures/B2__schedule-card__chat_thread__pending__adjust-open__dark.png",
-      "sha256": "eae5cf90142a5a73cb11a65bab21d13f25c29c87caad70a71e153cc72312c2c9",
-      "capturedAt": "2026-08-22T16:46:30.670Z",
-      "assertions": [
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 2,
-          "frame": "main",
-          "expect": "present",
-          "visible": 2,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-phase=\"proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -852,21 +519,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"][aria-pressed=\"true\"]",
+          "selector": "[data-field=\"recurring-timezone\"]:not([disabled])",
           "scope": "root",
           "count": 1,
           "frame": "main",
           "expect": "present",
           "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-field=\"recurring-weekday\"]:not([disabled])",
-          "scope": "root",
-          "count": 7,
-          "frame": "main",
-          "expect": "present",
-          "visible": 7,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
@@ -887,18 +545,18 @@
           "data-conformance-id": "schedule-proposal-card"
         }
       },
-      "note": "WHAT ADJUST PRODUCES. The same rows, in place, now writable — the weekday buttons, the interval, the hour and the timezone are live and the Adjust control reads pressed. No second form is swapped in and no new card is drawn.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "note": "PLAN §7.2 — the proposal as it arrives in the transcript: the question, the three option rows with the RECURRING row chosen and owning its fields, the estimated duration, and a floor that holds Confirm and nothing else. The rows are LIVE on first paint (the record's editableFields shows every field undisabled) and there is no Adjust control anywhere on the card.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
     },
     {
-      "cell": "B3__schedule-card__chat_thread__settled__dark",
+      "cell": "B2__schedule-card__chat_thread__settled__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-dark-r6",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-proposal-dark-1787455899",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-schedule-card/captures/B3__schedule-card__chat_thread__settled__dark.png",
-      "sha256": "23536f15b8d7ad99ad46c885a6001ad654d30f90653379d7e5660eb2cafec6f1",
-      "capturedAt": "2026-08-22T16:46:34.838Z",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/B2__schedule-card__chat_thread__settled__dark.png",
+      "sha256": "5a8636f4d564cc24b41239048b2032a74b3d286dcd4a4c83e630f0b6f99651a3",
+      "capturedAt": "2026-08-23T03:33:06.739Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -943,7 +601,7 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -987,39 +645,39 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"cancel-trigger-schedule\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
           "selector": "[data-conformance-id=\"schedule-option-rows\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -1032,7 +690,25 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -1058,26 +734,26 @@
           "data-conformance-id": "schedule-proposal-card"
         }
       },
-      "note": "After a real press of Confirm in the same transcript: the card settles IN PLACE into the trigger's own chrome — read-only Trigger configuration, the steps held until the trigger fires, and the quiet controls. Nothing was reloaded and no second card was drawn.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "note": "PLAN §7.2 and §7.4 step 4 — after a real press of Confirm in the same transcript, and after a full route reload: NO second card. The same card, in the same place, showing the armed schedule in the SAME option rows, with Save changes to re-arm. Cancel trigger and Release now are absent — the plan puts them on the run page's schedule step, not in the conversation.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
     },
     {
       "cell": "R1__schedule-card__run_card__settled",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/planner-agent/2b43cc9c-eb70-4b97-870e-a54a2a6cebd1/trigger",
+      "finalUrl": "/agents/cinatra-ai/planner-agent/282fdd3a-c926-41dd-b2e7-f834f269a059",
       "build": "development",
       "screenshot": "evidence/2788-s9d-schedule-card/captures/R1__schedule-card__run_card__settled.png",
-      "sha256": "8c61183fa0b5b4657b51f4aab08aecd70d92d78614b1aa7ba405e64be02a5f96",
-      "capturedAt": "2026-08-22T16:46:59.083Z",
+      "sha256": "927e020ca789120e42e9862ff1753b42086a5979f681ddfffdeee7787895a2a7",
+      "capturedAt": "2026-08-23T03:33:25.771Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
           "scope": "frame",
-          "count": 1,
+          "count": 2,
           "frame": "main",
           "expect": "present",
-          "visible": 1
+          "visible": 2
         },
         {
           "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
@@ -1115,6 +791,60 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
           "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
           "scope": "root",
           "count": 1,
@@ -1133,39 +863,20 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 0,
+          "selector": "[data-conformance-id=\"schedule-rail-step\"]",
+          "scope": "frame",
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+          "expect": "present",
+          "visible": 1
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-action=\"release-trigger-now\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
@@ -1186,26 +897,26 @@
           "data-conformance-id": "schedule-proposal-card"
         }
       },
-      "note": "The SAME component on the run page, mounted by TriggerScreen under its own host declaration, addressed by a run-scoped ref minted server-side. The run is the one the confirmed proposal created; a run no proposal produced draws no card here at all.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "note": "PLAN §7.2 step 5 on the run page — the schedule is a DEDICATED STEP in the left step rail, opened by a real press, above the run's other steps and above the Review step. Inside it: the trigger's own chrome (Trigger configuration, Steps held until trigger fires), the same option rows showing the armed schedule, and the floor with Save changes, Cancel trigger and Release now. The gate region draws no schedule card.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
     },
     {
       "cell": "R2__schedule-card__run_card__settled__dark",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/planner-agent/2b43cc9c-eb70-4b97-870e-a54a2a6cebd1/trigger",
+      "finalUrl": "/agents/cinatra-ai/planner-agent/282fdd3a-c926-41dd-b2e7-f834f269a059",
       "build": "development",
       "screenshot": "evidence/2788-s9d-schedule-card/captures/R2__schedule-card__run_card__settled__dark.png",
-      "sha256": "da8c5e1243c2a6a7c1ed56137648050a0dc3ed8a56b73e26d3bf437c1ebeb366",
-      "capturedAt": "2026-08-22T16:47:05.296Z",
+      "sha256": "b826ed9deaa37585e68da0c2c682318b706ef6638b4c00e3dcb122494ed55f22",
+      "capturedAt": "2026-08-23T03:33:31.273Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
           "scope": "frame",
-          "count": 1,
+          "count": 2,
           "frame": "main",
           "expect": "present",
-          "visible": 1
+          "visible": 2
         },
         {
           "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
@@ -1243,6 +954,60 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
           "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
           "scope": "root",
           "count": 1,
@@ -1261,39 +1026,20 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 0,
+          "selector": "[data-conformance-id=\"schedule-rail-step\"]",
+          "scope": "frame",
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+          "expect": "present",
+          "visible": 1
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-action=\"release-trigger-now\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
@@ -1314,18 +1060,342 @@
           "data-conformance-id": "schedule-proposal-card"
         }
       },
-      "note": "The SAME component on the run page, mounted by TriggerScreen under its own host declaration, addressed by a run-scoped ref minted server-side. The run is the one the confirmed proposal created; a run no proposal produced draws no card here at all.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "note": "PLAN §7.2 step 5 on the run page — the schedule is a DEDICATED STEP in the left step rail, opened by a real press, above the run's other steps and above the Review step. Inside it: the trigger's own chrome (Trigger configuration, Steps held until trigger fires), the same option rows showing the armed schedule, and the floor with Save changes, Cancel trigger and Release now. The gate region draws no schedule card.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    },
+    {
+      "cell": "P1__schedule-card__page_gate_region__settled",
+      "declaredHost": "page_gate_region",
+      "finalUrl": "/agents/cinatra-ai/planner-agent/282fdd3a-c926-41dd-b2e7-f834f269a059/review/lifecycle-review:repair:deac3190-4977-4f9b-b99e-3168347e4101:1",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/P1__schedule-card__page_gate_region__settled.png",
+      "sha256": "81c391fad7d89d3dcecf6d3b9bc745f6a949f8ee6f1fbd116d70c755121b0d64",
+      "capturedAt": "2026-08-23T03:33:37.891Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-rail-step\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "page_gate_region",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "PLAN §7.2 step 5 on the review page — the schedule is a STEP in the left rail, ABOVE the Review step, and the gate region beside it holds the REVIEW CARD ALONE. The two are never drawn together as cards, which is the composition the plan forbids and the one the retired page_gate_region mount used to draw.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "P2__schedule-card__page_gate_region__settled__dark",
+      "declaredHost": "page_gate_region",
+      "finalUrl": "/agents/cinatra-ai/planner-agent/282fdd3a-c926-41dd-b2e7-f834f269a059/review/lifecycle-review:repair:deac3190-4977-4f9b-b99e-3168347e4101:1",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-schedule-card/captures/P2__schedule-card__page_gate_region__settled__dark.png",
+      "sha256": "6f061abd6d1ed2096e4ecaf43c7e61c33f5775ee225981e4a6583dda22239580",
+      "capturedAt": "2026-08-23T03:33:45.270Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-rail-step\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "page_gate_region",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      },
+      "note": "PLAN §7.2 step 5 on the review page — the schedule is a STEP in the left rail, ABOVE the Review step, and the gate region beside it holds the REVIEW CARD ALONE. The two are never drawn together as cards, which is the composition the plan forbids and the one the retired page_gate_region mount used to draw.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
     },
     {
       "cell": "E1__schedule-card__chat_thread__pending__expired-face__standin",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-expired-r6",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-proposal-expired-1787455899",
       "build": "development",
       "screenshot": "evidence/2788-s9d-schedule-card/captures/E1__schedule-card__chat_thread__pending__expired-face__standin.png",
-      "sha256": "f76c0d1c88cdeb5c93d810a444f38e61046f2ebe724d6a5868c0237f73e1c2da",
-      "capturedAt": "2026-08-22T16:47:11.617Z",
+      "sha256": "b3d55105da84671976ebdadb9b21292988c524650b91dc19fad90d254a28300c",
+      "capturedAt": "2026-08-23T03:33:52.465Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -1352,7 +1422,7 @@
           "visible": 1
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -1405,12 +1475,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -1423,7 +1493,7 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -1433,6 +1503,15 @@
         },
         {
           "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -1447,6 +1526,24 @@
           "frame": "main",
           "expect": "absent",
           "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-field=\"recurring-timezone\"]:not([disabled])",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
@@ -1467,18 +1564,18 @@
           "data-conformance-id": "schedule-proposal-card"
         }
       },
-      "note": "STAND-IN, NAMED: main's resolver answers an expired proposal `absent` (the vanish defect cinatra#2836 / PR #2837 fixes), so this branch cannot reach the expired PHASE through the server. The card, the transcript, the browser and every counted anchor are real; what is stood in is the RESOLVE RESPONSE, answered with the expired body this branch carries byte-identically from #2837. The reading it proves is the plan's: the card STAYS VISIBLE with the schedule it asked about and an Adjust to propose again, and no Confirm floor.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "note": "PLAN §7.2 step 2 on the expired face. STAND-IN, NAMED: this branch's resolver still answers an expired proposal `absent` (the vanish defect cinatra#2836 owns), so the expired PHASE cannot be reached through the server here. The card, the transcript, the browser and every counted anchor are real; what is stood in is the RESOLVE RESPONSE. The reading it proves is the plan's: the card STAYS VISIBLE, its rows are EDITABLE as they stand, and the floor is Confirm — to propose again. There is no Adjust control.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
     },
     {
       "cell": "E2__schedule-card__chat_thread__pending__expired-face__standin__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/weekly-cohort-sweep-expired-r6",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-proposal-expired-1787455899",
       "build": "development",
       "screenshot": "evidence/2788-s9d-schedule-card/captures/E2__schedule-card__chat_thread__pending__expired-face__standin__dark.png",
-      "sha256": "ad7f21ef7725f8e0f0309d83eb65ee7b7d4f5951b71d2129a4de9b082df2cb3a",
-      "capturedAt": "2026-08-22T16:47:17.649Z",
+      "sha256": "3d262bde396c9098ebf324610d88a7cac4601f8ccb23e16012072330e76a838a",
+      "capturedAt": "2026-08-23T03:34:00.591Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -1505,7 +1602,7 @@
           "visible": 1
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -1558,12 +1655,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -1576,7 +1673,7 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -1586,6 +1683,15 @@
         },
         {
           "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -1600,6 +1706,24 @@
           "frame": "main",
           "expect": "absent",
           "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-field=\"recurring-timezone\"]:not([disabled])",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
@@ -1620,15 +1744,15 @@
           "data-conformance-id": "schedule-proposal-card"
         }
       },
-      "note": "STAND-IN, NAMED: main's resolver answers an expired proposal `absent` (the vanish defect cinatra#2836 / PR #2837 fixes), so this branch cannot reach the expired PHASE through the server. The card, the transcript, the browser and every counted anchor are real; what is stood in is the RESOLVE RESPONSE, answered with the expired body this branch carries byte-identically from #2837. The reading it proves is the plan's: the card STAYS VISIBLE with the schedule it asked about and an Adjust to propose again, and no Confirm floor.",
-      "runtime": "Next.js dev (Turbopack) on a dedicated lane DATABASE (lane2788) on the lane postgres + redis, loopback only, CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted. No model credential exists on this host and none is used.",
+      "note": "PLAN §7.2 step 2 on the expired face. STAND-IN, NAMED: this branch's resolver still answers an expired proposal `absent` (the vanish defect cinatra#2836 owns), so the expired PHASE cannot be reached through the server here. The card, the transcript, the browser and every counted anchor are real; what is stood in is the RESOLVE RESPONSE. The reading it proves is the plan's: the card STAYS VISIBLE, its rows are EDITABLE as they stand, and the floor is Confirm — to propose again. There is no Adjust control.",
+      "runtime": "Next.js dev server (Turbopack) via scripts/dev-server.mjs; CINATRA_RUNTIME_MODE=development; CINATRA_TEST_LLM_PROVIDER=scripted; CINATRA_E2E_SETUP_BYPASS=true; a dedicated lane database and Redis on the loopback verify stack; placeholder-only environment with no model-provider credential on this machine",
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
     }
   ],
   "results": [
     {
       "cell": "A1__schedule-card__chat_thread__pending",
-      "sha256": "dcf2f176dc36651b1e5e85b1fec6ad4bf86e404a53ca42a49ca22581aad0c347",
+      "sha256": "b01e25aebb51faba7b08148bdbe2cfef1c2b140f3ad2786964e3174797efcee1",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -1655,12 +1779,12 @@
           "visible": 1
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
-          "count": 2,
+          "count": 1,
           "frame": "main",
           "expect": "present",
-          "visible": 2,
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -1708,16 +1832,16 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -1735,15 +1859,6 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
           "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 1,
@@ -1753,190 +1868,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "selector": "[data-action=\"save-schedule-changes\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
           "expect": "absent",
           "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        }
-      ],
-      "observed": {
-        "present": true,
-        "rootAttributes": [
-          "data-lifecycle-card=\"trigger_schedule_proposal\"",
-          "data-lifecycle-card-state=\"pending\"",
-          "data-lifecycle-card-host=\"chat_thread\"",
-          "data-lifecycle-card-phase=\"proposal\"",
-          "data-conformance-id=\"schedule-proposal-card\""
-        ],
-        "text": "When should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nAdjust\nConfirm",
-        "rows": {
-          "immediate": {
-            "chosen": "false",
-            "text": "Run right after setup"
-          },
-          "scheduled": {
-            "chosen": "false",
-            "text": "Schedule for later"
-          },
-          "recurring": {
-            "chosen": "true",
-            "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
-          }
-        },
-        "buttons": [
-          {
-            "action": "adjust-schedule-proposal",
-            "pressed": "false",
-            "disabled": false,
-            "text": "Adjust"
-          },
-          {
-            "action": "confirm-schedule-proposal",
-            "pressed": null,
-            "disabled": false,
-            "text": "Confirm"
-          }
-        ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
-      }
-    },
-    {
-      "cell": "A2__schedule-card__chat_thread__pending__adjust-open",
-      "sha256": "037feae6d8ea4a6ccc3f93d76afb9b32b137bbbf36c0e674c0b39f0f399d1c2b",
-      "assertions": [
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 2,
-          "frame": "main",
-          "expect": "present",
-          "visible": 2,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-phase=\"proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -1958,25 +1895,22 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"][aria-pressed=\"true\"]",
+          "selector": "[data-field=\"recurring-timezone\"]:not([disabled])",
           "scope": "root",
           "count": 1,
           "frame": "main",
           "expect": "present",
           "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-field=\"recurring-weekday\"]:not([disabled])",
-          "scope": "root",
-          "count": 7,
-          "frame": "main",
-          "expect": "present",
-          "visible": 7,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
       "observed": {
+        "railPresent": false,
+        "railLabel": null,
+        "railRows": [],
+        "reviewCardsInGateRegion": 0,
+        "scheduleCardsInGateRegion": 1,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "present": true,
         "rootAttributes": [
           "data-lifecycle-card=\"trigger_schedule_proposal\"",
@@ -1985,7 +1919,7 @@
           "data-lifecycle-card-phase=\"proposal\"",
           "data-conformance-id=\"schedule-proposal-card\""
         ],
-        "text": "When should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nAdjust\nConfirm",
+        "text": "When should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nConfirm",
         "rows": {
           "immediate": {
             "chosen": "false",
@@ -2000,13 +1934,57 @@
             "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
           }
         },
-        "buttons": [
+        "editableFields": [
           {
-            "action": "adjust-schedule-proposal",
-            "pressed": "true",
-            "disabled": false,
-            "text": "Adjust"
+            "field": "recurring-interval",
+            "disabled": false
           },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
+          }
+        ],
+        "buttons": [
           {
             "action": "confirm-schedule-proposal",
             "pressed": null,
@@ -2014,13 +1992,12 @@
             "text": "Confirm"
           }
         ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+        "mentionsCron": false
       }
     },
     {
-      "cell": "A3__schedule-card__chat_thread__settled",
-      "sha256": "73f95c5275d38967043b4f15e9b084eb8182a4e05240f1d85bc7cb239e890b9f",
+      "cell": "A2__schedule-card__chat_thread__settled",
+      "sha256": "d9ee39a5770c1083701404294b23cf930927a10992daff0662668a5ff347656c",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -2065,7 +2042,7 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -2109,39 +2086,39 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"cancel-trigger-schedule\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
           "selector": "[data-conformance-id=\"schedule-option-rows\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -2154,7 +2131,25 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -2164,6 +2159,12 @@
         }
       ],
       "observed": {
+        "railPresent": false,
+        "railLabel": null,
+        "railRows": [],
+        "reviewCardsInGateRegion": 0,
+        "scheduleCardsInGateRegion": 1,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "present": true,
         "rootAttributes": [
           "data-lifecycle-card=\"trigger_schedule_proposal\"",
@@ -2172,33 +2173,85 @@
           "data-lifecycle-card-phase=\"settled\"",
           "data-conformance-id=\"schedule-proposal-card\""
         ],
-        "text": "Trigger configuration\nType\nrecurring\nSchedule\nEvery weekday at 09:00\nTimezone\nEurope/Berlin\nSteps held until trigger fires\nNo side-effect steps detected. The trigger acts as a start gate only — the run begins when the trigger fires and runs to completion.\nOpen the run\nCancel trigger\nRelease now",
+        "text": "Armed · Every weekday at 09:00\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nOpen the run\nSave changes",
         "rows": {
-          "immediate": null,
-          "scheduled": null,
-          "recurring": null
+          "immediate": {
+            "chosen": "false",
+            "text": "Run right after setup"
+          },
+          "scheduled": {
+            "chosen": "false",
+            "text": "Schedule for later"
+          },
+          "recurring": {
+            "chosen": "true",
+            "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
+          }
         },
-        "buttons": [
+        "editableFields": [
           {
-            "action": "cancel-trigger-schedule",
-            "pressed": null,
-            "disabled": false,
-            "text": "Cancel trigger"
+            "field": "recurring-interval",
+            "disabled": false
           },
           {
-            "action": "release-trigger-now",
-            "pressed": null,
-            "disabled": false,
-            "text": "Release now"
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
           }
         ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+        "buttons": [
+          {
+            "action": "save-schedule-changes",
+            "pressed": null,
+            "disabled": true,
+            "text": "Save changes"
+          }
+        ],
+        "mentionsCron": false
       }
     },
     {
       "cell": "B1__schedule-card__chat_thread__pending__dark",
-      "sha256": "a88a8bdd6c4762173b1c9a34a5dc6ebb180148ef5b1c65de198bef897063176e",
+      "sha256": "53183913a5b2e4e33a5dc8f6104fa3a15e4c5c5bb8bd09bdaee8ff2959f160e4",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -2225,12 +2278,12 @@
           "visible": 1
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
-          "count": 2,
+          "count": 1,
           "frame": "main",
           "expect": "present",
-          "visible": 2,
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -2278,16 +2331,16 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -2305,15 +2358,6 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
           "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 1,
@@ -2323,190 +2367,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "selector": "[data-action=\"save-schedule-changes\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
           "expect": "absent",
           "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        }
-      ],
-      "observed": {
-        "present": true,
-        "rootAttributes": [
-          "data-lifecycle-card=\"trigger_schedule_proposal\"",
-          "data-lifecycle-card-state=\"pending\"",
-          "data-lifecycle-card-host=\"chat_thread\"",
-          "data-lifecycle-card-phase=\"proposal\"",
-          "data-conformance-id=\"schedule-proposal-card\""
-        ],
-        "text": "When should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nAdjust\nConfirm",
-        "rows": {
-          "immediate": {
-            "chosen": "false",
-            "text": "Run right after setup"
-          },
-          "scheduled": {
-            "chosen": "false",
-            "text": "Schedule for later"
-          },
-          "recurring": {
-            "chosen": "true",
-            "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
-          }
-        },
-        "buttons": [
-          {
-            "action": "adjust-schedule-proposal",
-            "pressed": "false",
-            "disabled": false,
-            "text": "Adjust"
-          },
-          {
-            "action": "confirm-schedule-proposal",
-            "pressed": null,
-            "disabled": false,
-            "text": "Confirm"
-          }
-        ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
-      }
-    },
-    {
-      "cell": "B2__schedule-card__chat_thread__pending__adjust-open__dark",
-      "sha256": "eae5cf90142a5a73cb11a65bab21d13f25c29c87caad70a71e153cc72312c2c9",
-      "assertions": [
-        {
-          "selector": "[data-conversation-list]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 2,
-          "frame": "main",
-          "expect": "present",
-          "visible": 2,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-phase=\"proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-schedule-option=\"recurring\"][data-chosen=\"true\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -2528,25 +2394,22 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"][aria-pressed=\"true\"]",
+          "selector": "[data-field=\"recurring-timezone\"]:not([disabled])",
           "scope": "root",
           "count": 1,
           "frame": "main",
           "expect": "present",
           "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-field=\"recurring-weekday\"]:not([disabled])",
-          "scope": "root",
-          "count": 7,
-          "frame": "main",
-          "expect": "present",
-          "visible": 7,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
       "observed": {
+        "railPresent": false,
+        "railLabel": null,
+        "railRows": [],
+        "reviewCardsInGateRegion": 0,
+        "scheduleCardsInGateRegion": 1,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
         "present": true,
         "rootAttributes": [
           "data-lifecycle-card=\"trigger_schedule_proposal\"",
@@ -2555,7 +2418,7 @@
           "data-lifecycle-card-phase=\"proposal\"",
           "data-conformance-id=\"schedule-proposal-card\""
         ],
-        "text": "When should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nAdjust\nConfirm",
+        "text": "When should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nConfirm",
         "rows": {
           "immediate": {
             "chosen": "false",
@@ -2570,13 +2433,57 @@
             "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
           }
         },
-        "buttons": [
+        "editableFields": [
           {
-            "action": "adjust-schedule-proposal",
-            "pressed": "true",
-            "disabled": false,
-            "text": "Adjust"
+            "field": "recurring-interval",
+            "disabled": false
           },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
+          }
+        ],
+        "buttons": [
           {
             "action": "confirm-schedule-proposal",
             "pressed": null,
@@ -2584,13 +2491,12 @@
             "text": "Confirm"
           }
         ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+        "mentionsCron": false
       }
     },
     {
-      "cell": "B3__schedule-card__chat_thread__settled__dark",
-      "sha256": "23536f15b8d7ad99ad46c885a6001ad654d30f90653379d7e5660eb2cafec6f1",
+      "cell": "B2__schedule-card__chat_thread__settled__dark",
+      "sha256": "5a8636f4d564cc24b41239048b2032a74b3d286dcd4a4c83e630f0b6f99651a3",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -2635,7 +2541,7 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -2679,6 +2585,271 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "observed": {
+        "railPresent": false,
+        "railLabel": null,
+        "railRows": [],
+        "reviewCardsInGateRegion": 0,
+        "scheduleCardsInGateRegion": 1,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "present": true,
+        "rootAttributes": [
+          "data-lifecycle-card=\"trigger_schedule_proposal\"",
+          "data-lifecycle-card-state=\"settled\"",
+          "data-lifecycle-card-host=\"chat_thread\"",
+          "data-lifecycle-card-phase=\"settled\"",
+          "data-conformance-id=\"schedule-proposal-card\""
+        ],
+        "text": "Armed · Every weekday at 09:00\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nOpen the run\nSave changes",
+        "rows": {
+          "immediate": {
+            "chosen": "false",
+            "text": "Run right after setup"
+          },
+          "scheduled": {
+            "chosen": "false",
+            "text": "Schedule for later"
+          },
+          "recurring": {
+            "chosen": "true",
+            "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
+          }
+        },
+        "editableFields": [
+          {
+            "field": "recurring-interval",
+            "disabled": false
+          },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
+          }
+        ],
+        "buttons": [
+          {
+            "action": "save-schedule-changes",
+            "pressed": null,
+            "disabled": true,
+            "text": "Save changes"
+          }
+        ],
+        "mentionsCron": false
+      }
+    },
+    {
+      "cell": "R1__schedule-card__run_card__settled",
+      "sha256": "927e020ca789120e42e9862ff1753b42086a5979f681ddfffdeee7787895a2a7",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
           "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
           "scope": "root",
           "count": 1,
@@ -2697,58 +2868,118 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 0,
+          "selector": "[data-conformance-id=\"schedule-rail-step\"]",
+          "scope": "frame",
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+          "expect": "present",
+          "visible": 1
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-action=\"release-trigger-now\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
       "observed": {
+        "railPresent": true,
+        "railLabel": "1",
+        "railRows": [
+          "1 Schedule Armed · Every weekday at 09:00 Trigger configurat",
+          "ReviewCHANGES_REQUESTED",
+          "Review",
+          "Core analysisDRIFTED",
+          "Review",
+          "Review pending policyCORE-DEFAULT awaiting review orchestrat",
+          "Review pending policyCORE-DEFAULT awaiting review orchestrat"
+        ],
+        "reviewCardsInGateRegion": 0,
+        "scheduleCardsInGateRegion": 0,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "present": true,
         "rootAttributes": [
           "data-lifecycle-card=\"trigger_schedule_proposal\"",
           "data-lifecycle-card-state=\"settled\"",
-          "data-lifecycle-card-host=\"chat_thread\"",
+          "data-lifecycle-card-host=\"run_card\"",
           "data-lifecycle-card-phase=\"settled\"",
           "data-conformance-id=\"schedule-proposal-card\""
         ],
-        "text": "Trigger configuration\nType\nrecurring\nSchedule\nEvery weekday at 09:00\nTimezone\nEurope/Berlin\nSteps held until trigger fires\nNo side-effect steps detected. The trigger acts as a start gate only — the run begins when the trigger fires and runs to completion.\nOpen the run\nCancel trigger\nRelease now",
+        "text": "Armed · Every weekday at 09:00\nTrigger configuration\nType\nrecurring\nSchedule\nEvery weekday at 09:00\nTimezone\nEurope/Berlin\nSteps held until trigger fires\nNo side-effect steps detected. The trigger acts as a start gate only — the run begins when the trigger fires and runs to completion.\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nOpen the run\nSave changes\nCancel trigger\nRelease now",
         "rows": {
-          "immediate": null,
-          "scheduled": null,
-          "recurring": null
+          "immediate": {
+            "chosen": "false",
+            "text": "Run right after setup"
+          },
+          "scheduled": {
+            "chosen": "false",
+            "text": "Schedule for later"
+          },
+          "recurring": {
+            "chosen": "true",
+            "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
+          }
         },
+        "editableFields": [
+          {
+            "field": "recurring-interval",
+            "disabled": false
+          },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
+          }
+        ],
         "buttons": [
+          {
+            "action": "save-schedule-changes",
+            "pressed": null,
+            "disabled": true,
+            "text": "Save changes"
+          },
           {
             "action": "cancel-trigger-schedule",
             "pressed": null,
@@ -2762,150 +2993,20 @@
             "text": "Release now"
           }
         ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
-      }
-    },
-    {
-      "cell": "R1__schedule-card__run_card__settled",
-      "sha256": "8c61183fa0b5b4657b51f4aab08aecd70d92d78614b1aa7ba405e64be02a5f96",
-      "assertions": [
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
-          "scope": "frame",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1
-        },
-        {
-          "selector": "[data-lifecycle-card-state]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-host=\"run_card\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-lifecycle-card-phase=\"settled\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"cancel-trigger-schedule\"]",
-          "scope": "root",
-          "count": 1,
-          "frame": "main",
-          "expect": "present",
-          "visible": 1,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        }
-      ],
-      "observed": {
-        "present": true,
-        "rootAttributes": [
-          "data-lifecycle-card=\"trigger_schedule_proposal\"",
-          "data-lifecycle-card-state=\"settled\"",
-          "data-lifecycle-card-host=\"run_card\"",
-          "data-lifecycle-card-phase=\"settled\"",
-          "data-conformance-id=\"schedule-proposal-card\""
-        ],
-        "text": "Trigger configuration\nType\nimmediate\nSchedule\nRuns right after setup\nTimezone\nUTC\nSteps held until trigger fires\nNo side-effect steps detected. The trigger acts as a start gate only — the run begins when the trigger fires and runs to completion.\nReleased — every held step is eligible now, so there is nothing left to cancel.\nOpen the run\nCancel trigger",
-        "rows": {
-          "immediate": null,
-          "scheduled": null,
-          "recurring": null
-        },
-        "buttons": [
-          {
-            "action": "cancel-trigger-schedule",
-            "pressed": null,
-            "disabled": true,
-            "text": "Cancel trigger"
-          }
-        ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+        "mentionsCron": false
       }
     },
     {
       "cell": "R2__schedule-card__run_card__settled__dark",
-      "sha256": "da8c5e1243c2a6a7c1ed56137648050a0dc3ed8a56b73e26d3bf437c1ebeb366",
+      "sha256": "b826ed9deaa37585e68da0c2c682318b706ef6638b4c00e3dcb122494ed55f22",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
           "scope": "frame",
-          "count": 1,
+          "count": 2,
           "frame": "main",
           "expect": "present",
-          "visible": 1
+          "visible": 2
         },
         {
           "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
@@ -2943,6 +3044,60 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
           "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
           "scope": "root",
           "count": 1,
@@ -2961,43 +3116,38 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
-          "scope": "root",
-          "count": 0,
+          "selector": "[data-conformance-id=\"schedule-rail-step\"]",
+          "scope": "frame",
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+          "expect": "present",
+          "visible": 1
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-action=\"release-trigger-now\"]",
           "scope": "root",
-          "count": 0,
+          "count": 1,
           "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"confirm-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
-          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
-        },
-        {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
-          "scope": "root",
-          "count": 0,
-          "frame": "main",
-          "expect": "absent",
-          "visible": 0,
+          "expect": "present",
+          "visible": 1,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
       "observed": {
+        "railPresent": true,
+        "railLabel": "1",
+        "railRows": [
+          "1 Schedule Armed · Every weekday at 09:00 Trigger configurat",
+          "ReviewCHANGES_REQUESTED",
+          "Review",
+          "Core analysisDRIFTED",
+          "Review",
+          "Review skippedCORE-DEFAULT core default skips review",
+          "Review skippedCORE-DEFAULT core default skips review"
+        ],
+        "reviewCardsInGateRegion": 0,
+        "scheduleCardsInGateRegion": 0,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
         "present": true,
         "rootAttributes": [
           "data-lifecycle-card=\"trigger_schedule_proposal\"",
@@ -3006,27 +3156,581 @@
           "data-lifecycle-card-phase=\"settled\"",
           "data-conformance-id=\"schedule-proposal-card\""
         ],
-        "text": "Trigger configuration\nType\nimmediate\nSchedule\nRuns right after setup\nTimezone\nUTC\nSteps held until trigger fires\nNo side-effect steps detected. The trigger acts as a start gate only — the run begins when the trigger fires and runs to completion.\nReleased — every held step is eligible now, so there is nothing left to cancel.\nOpen the run\nCancel trigger",
+        "text": "Armed · Every weekday at 09:00\nTrigger configuration\nType\nrecurring\nSchedule\nEvery weekday at 09:00\nTimezone\nEurope/Berlin\nSteps held until trigger fires\nNo side-effect steps detected. The trigger acts as a start gate only — the run begins when the trigger fires and runs to completion.\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nOpen the run\nSave changes\nCancel trigger\nRelease now",
         "rows": {
-          "immediate": null,
-          "scheduled": null,
-          "recurring": null
+          "immediate": {
+            "chosen": "false",
+            "text": "Run right after setup"
+          },
+          "scheduled": {
+            "chosen": "false",
+            "text": "Schedule for later"
+          },
+          "recurring": {
+            "chosen": "true",
+            "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
+          }
         },
+        "editableFields": [
+          {
+            "field": "recurring-interval",
+            "disabled": false
+          },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
+          }
+        ],
         "buttons": [
+          {
+            "action": "save-schedule-changes",
+            "pressed": null,
+            "disabled": true,
+            "text": "Save changes"
+          },
           {
             "action": "cancel-trigger-schedule",
             "pressed": null,
-            "disabled": true,
+            "disabled": false,
             "text": "Cancel trigger"
+          },
+          {
+            "action": "release-trigger-now",
+            "pressed": null,
+            "disabled": false,
+            "text": "Release now"
           }
         ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+        "mentionsCron": false
+      }
+    },
+    {
+      "cell": "P1__schedule-card__page_gate_region__settled",
+      "sha256": "81c391fad7d89d3dcecf6d3b9bc745f6a949f8ee6f1fbd116d70c755121b0d64",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-rail-step\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        }
+      ],
+      "observed": {
+        "railPresent": true,
+        "railLabel": "1",
+        "railRows": [
+          "1 Schedule Armed · Every weekday at 09:00 Trigger configurat",
+          "2 Review"
+        ],
+        "reviewCardsInGateRegion": 1,
+        "scheduleCardsInGateRegion": 0,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+        "present": true,
+        "rootAttributes": [
+          "data-lifecycle-card=\"trigger_schedule_proposal\"",
+          "data-lifecycle-card-state=\"settled\"",
+          "data-lifecycle-card-host=\"page_gate_region\"",
+          "data-lifecycle-card-phase=\"settled\"",
+          "data-conformance-id=\"schedule-proposal-card\""
+        ],
+        "text": "Armed · Every weekday at 09:00\nTrigger configuration\nType\nrecurring\nSchedule\nEvery weekday at 09:00\nTimezone\nEurope/Berlin\nSteps held until trigger fires\nNo side-effect steps detected. The trigger acts as a start gate only — the run begins when the trigger fires and runs to completion.\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nOpen the run\nSave changes\nCancel trigger\nRelease now",
+        "rows": {
+          "immediate": {
+            "chosen": "false",
+            "text": "Run right after setup"
+          },
+          "scheduled": {
+            "chosen": "false",
+            "text": "Schedule for later"
+          },
+          "recurring": {
+            "chosen": "true",
+            "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
+          }
+        },
+        "editableFields": [
+          {
+            "field": "recurring-interval",
+            "disabled": false
+          },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
+          }
+        ],
+        "buttons": [
+          {
+            "action": "save-schedule-changes",
+            "pressed": null,
+            "disabled": true,
+            "text": "Save changes"
+          },
+          {
+            "action": "cancel-trigger-schedule",
+            "pressed": null,
+            "disabled": false,
+            "text": "Cancel trigger"
+          },
+          {
+            "action": "release-trigger-now",
+            "pressed": null,
+            "disabled": false,
+            "text": "Release now"
+          }
+        ],
+        "mentionsCron": false
+      }
+    },
+    {
+      "cell": "P2__schedule-card__page_gate_region__settled__dark",
+      "sha256": "6f061abd6d1ed2096e4ecaf43c7e61c33f5775ee225981e4a6583dda22239580",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2,
+          "frame": "main",
+          "expect": "present",
+          "visible": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-phase=\"settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-option-rows\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-armed-summary\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"scheduled-run-chrome\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"cancel-trigger-schedule\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-rail-step\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        }
+      ],
+      "observed": {
+        "railPresent": true,
+        "railLabel": "1",
+        "railRows": [
+          "1 Schedule Armed · Every weekday at 09:00 Trigger configurat",
+          "2 Review"
+        ],
+        "reviewCardsInGateRegion": 1,
+        "scheduleCardsInGateRegion": 0,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+        "present": true,
+        "rootAttributes": [
+          "data-lifecycle-card=\"trigger_schedule_proposal\"",
+          "data-lifecycle-card-state=\"settled\"",
+          "data-lifecycle-card-host=\"page_gate_region\"",
+          "data-lifecycle-card-phase=\"settled\"",
+          "data-conformance-id=\"schedule-proposal-card\""
+        ],
+        "text": "Armed · Every weekday at 09:00\nTrigger configuration\nType\nrecurring\nSchedule\nEvery weekday at 09:00\nTimezone\nEurope/Berlin\nSteps held until trigger fires\nNo side-effect steps detected. The trigger acts as a start gate only — the run begins when the trigger fires and runs to completion.\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nOpen the run\nSave changes\nCancel trigger\nRelease now",
+        "rows": {
+          "immediate": {
+            "chosen": "false",
+            "text": "Run right after setup"
+          },
+          "scheduled": {
+            "chosen": "false",
+            "text": "Schedule for later"
+          },
+          "recurring": {
+            "chosen": "true",
+            "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
+          }
+        },
+        "editableFields": [
+          {
+            "field": "recurring-interval",
+            "disabled": false
+          },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
+          }
+        ],
+        "buttons": [
+          {
+            "action": "save-schedule-changes",
+            "pressed": null,
+            "disabled": true,
+            "text": "Save changes"
+          },
+          {
+            "action": "cancel-trigger-schedule",
+            "pressed": null,
+            "disabled": false,
+            "text": "Cancel trigger"
+          },
+          {
+            "action": "release-trigger-now",
+            "pressed": null,
+            "disabled": false,
+            "text": "Release now"
+          }
+        ],
+        "mentionsCron": false
       }
     },
     {
       "cell": "E1__schedule-card__chat_thread__pending__expired-face__standin",
-      "sha256": "f76c0d1c88cdeb5c93d810a444f38e61046f2ebe724d6a5868c0237f73e1c2da",
+      "sha256": "b3d55105da84671976ebdadb9b21292988c524650b91dc19fad90d254a28300c",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -3053,7 +3757,7 @@
           "visible": 1
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -3106,12 +3810,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -3124,7 +3828,7 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -3134,6 +3838,15 @@
         },
         {
           "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -3149,9 +3862,33 @@
           "expect": "absent",
           "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-field=\"recurring-timezone\"]:not([disabled])",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
       "observed": {
+        "railPresent": false,
+        "railLabel": null,
+        "railRows": [],
+        "reviewCardsInGateRegion": 0,
+        "scheduleCardsInGateRegion": 1,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
         "present": true,
         "rootAttributes": [
           "data-lifecycle-card=\"trigger_schedule_proposal\"",
@@ -3160,7 +3897,7 @@
           "data-lifecycle-card-phase=\"expired\"",
           "data-conformance-id=\"schedule-proposal-card\""
         ],
-        "text": "This schedule proposal expired before it was confirmed. Nothing was scheduled — adjust it to propose again.\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nAdjust",
+        "text": "This schedule proposal expired before it was confirmed. Nothing was scheduled — change it if you like, then confirm to propose it again.\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nConfirm",
         "rows": {
           "immediate": {
             "chosen": "false",
@@ -3175,21 +3912,70 @@
             "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
           }
         },
-        "buttons": [
+        "editableFields": [
           {
-            "action": "adjust-schedule-proposal",
-            "pressed": null,
-            "disabled": false,
-            "text": "Adjust"
+            "field": "recurring-interval",
+            "disabled": false
+          },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
           }
         ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+        "buttons": [
+          {
+            "action": "confirm-schedule-proposal",
+            "pressed": null,
+            "disabled": false,
+            "text": "Confirm"
+          }
+        ],
+        "mentionsCron": false
       }
     },
     {
       "cell": "E2__schedule-card__chat_thread__pending__expired-face__standin__dark",
-      "sha256": "ad7f21ef7725f8e0f0309d83eb65ee7b7d4f5951b71d2129a4de9b082df2cb3a",
+      "sha256": "3d262bde396c9098ebf324610d88a7cac4601f8ccb23e16012072330e76a838a",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -3216,7 +4002,7 @@
           "visible": 1
         },
         {
-          "selector": "[data-action=\"confirm-schedule-proposal\"], [data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -3269,12 +4055,12 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "selector": "[data-action=\"adjust-schedule-proposal\"]",
           "scope": "root",
-          "count": 1,
+          "count": 0,
           "frame": "main",
-          "expect": "present",
-          "visible": 1,
+          "expect": "absent",
+          "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
@@ -3287,7 +4073,7 @@
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         },
         {
-          "selector": "[data-action=\"adjust-schedule-proposal\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
           "scope": "root",
           "count": 1,
           "frame": "main",
@@ -3297,6 +4083,15 @@
         },
         {
           "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"save-schedule-changes\"]",
           "scope": "root",
           "count": 0,
           "frame": "main",
@@ -3312,9 +4107,33 @@
           "expect": "absent",
           "visible": 0,
           "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-field=\"recurring-timezone\"]:not([disabled])",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
         }
       ],
       "observed": {
+        "railPresent": false,
+        "railLabel": null,
+        "railRows": [],
+        "reviewCardsInGateRegion": 0,
+        "scheduleCardsInGateRegion": 1,
+        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
         "present": true,
         "rootAttributes": [
           "data-lifecycle-card=\"trigger_schedule_proposal\"",
@@ -3323,7 +4142,7 @@
           "data-lifecycle-card-phase=\"expired\"",
           "data-conformance-id=\"schedule-proposal-card\""
         ],
-        "text": "This schedule proposal expired before it was confirmed. Nothing was scheduled — adjust it to propose again.\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nAdjust",
+        "text": "This schedule proposal expired before it was confirmed. Nothing was scheduled — change it if you like, then confirm to propose it again.\nWhen should this run?\nRun right after setup\nSchedule for later\nRecurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone\nEstimated run duration\nUnavailable.\nConfirm",
         "rows": {
           "immediate": {
             "chosen": "false",
@@ -3338,16 +4157,65 @@
             "text": "Recurring\nRepeat every\n1\nweek(s)\nOn\nSun\nMon\nTue\nWed\nThu\nFri\nSat\nAt\n09\n:\n00\nTimezone"
           }
         },
-        "buttons": [
+        "editableFields": [
           {
-            "action": "adjust-schedule-proposal",
-            "pressed": null,
-            "disabled": false,
-            "text": "Adjust"
+            "field": "recurring-interval",
+            "disabled": false
+          },
+          {
+            "field": "recurring-frequency",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-weekday",
+            "disabled": false
+          },
+          {
+            "field": "recurring-hour",
+            "disabled": false
+          },
+          {
+            "field": "recurring-minute",
+            "disabled": false
+          },
+          {
+            "field": "recurring-timezone",
+            "disabled": false
           }
         ],
-        "mentionsCron": false,
-        "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+        "buttons": [
+          {
+            "action": "confirm-schedule-proposal",
+            "pressed": null,
+            "disabled": false,
+            "text": "Confirm"
+          }
+        ],
+        "mentionsCron": false
       }
     }
   ]

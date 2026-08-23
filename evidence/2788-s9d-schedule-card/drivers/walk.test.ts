@@ -127,6 +127,48 @@ async function main() {
     saveState({ tokens, templateId });
   }
 
+  // DIAGNOSTIC step (cinatra#2788 rework): what does the card's own resolver
+  // answer for a freshly minted proposal, and why? Used to tell a `restricted`
+  // floor (the reader may not dispatch this agent) apart from an `absent` one
+  // (the token did not verify) without guessing from pixels.
+  if (STEP === "RESOLVE") {
+    const { resolveProposalForReader } = await import(
+      "../../../packages/agents/src/trigger-schedule-proposal-service"
+    );
+    const token = (loadState().tokens as Record<string, string>)[process.env.WALK_SLOT ?? "light"];
+    const resolved = await resolveProposalForReader(token, { userId: USER, orgId: ORG, role: null });
+    say("RESOLVE", resolved);
+    const { assertAgentPackageRunnable } = await import(
+      "../../../packages/agents/src/runtime-install-gate"
+    );
+    const tpl = await sql(`select package_name, package_version from "${schema}".agent_templates where id = $1`, [process.env.WALK_TEMPLATE_ID!]);
+    say("RUNNABLE", {
+      template: tpl[0],
+      verdict: await assertAgentPackageRunnable(
+        tpl[0]?.package_name as string,
+        tpl[0]?.package_name as string,
+        { packageVersion: (tpl[0]?.package_version as string) ?? null },
+      ),
+    });
+  }
+
+  if (STEP === "RUNNABLE_ALL") {
+    const { assertAgentPackageRunnable } = await import(
+      "../../../packages/agents/src/runtime-install-gate"
+    );
+    const rows = await sql(`select id, package_name, package_version from "${schema}".agent_templates order by package_name`);
+    const ok: unknown[] = [];
+    for (const r of rows) {
+      const verdict = await assertAgentPackageRunnable(
+        r.package_name as string,
+        r.package_name as string,
+        { packageVersion: (r.package_version as string) ?? null },
+      );
+      if (verdict === null) ok.push({ id: r.id, pkg: r.package_name });
+    }
+    say("RUNNABLE_ALL", ok);
+  }
+
   if (STEP === "READBACK") {
     say("READBACK", {
       consumes: await sql(

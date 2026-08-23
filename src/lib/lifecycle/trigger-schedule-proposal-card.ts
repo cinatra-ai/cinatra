@@ -128,6 +128,11 @@ export async function resolveTriggerScheduleProposalCard(params: {
       version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
       agentName: resolved.agentName,
       runId: resolved.runId,
+      // THE ARMED ROWS. Plan (A) §7.2: after Confirm "the same card, with the
+      // same option rows, now shows the armed schedule". The selections come
+      // from the resolver's read-back of the INSTALLED row, so the settled card
+      // and the run page's schedule step draw one schedule, not two.
+      schedule: resolved.schedule,
       triggerType: resolved.triggerType,
       scheduleCopy: resolved.scheduleCopy,
       // OMITTED UNLESS TRUE — a wire omission, deliberately NOT a version bump
@@ -157,6 +162,10 @@ export async function resolveTriggerScheduleProposalCard(params: {
       gatedSteps: [],
       released: resolved.released,
       arming: resolved.arming,
+      // "Save changes … re-arms the trigger" (plan (A) §7.2). The reading is
+      // the resolver's — the same predicate the endpoint refuses on — so the
+      // card never offers a control the server is already going to refuse.
+      canSave: resolved.canSave,
       // Cancel acts on a live, un-released, fully-installed schedule. While the
       // install is still draining there is no scheduler to cancel yet.
       canCancel: !resolved.released && !resolved.arming,
@@ -175,11 +184,18 @@ export { describeProposalSchedule };
 // ---------------------------------------------------------------------------
 // The card's DECISIONS (cinatra#2788, epic #2784 S9d).
 //
-// §VI's card operates four things: Confirm and Adjust on the proposal floor,
-// Cancel trigger and Release now on the settled chrome. Until this slice the
-// first two were cookie-bound server actions with zero UI callers and the last
-// two existed only on the run page's Trigger tab — so a card drawn in the
-// widget could show a floor it could never press.
+// §VI's card operates five things. In a CONVERSATION: Confirm on the proposal
+// floor, and Save changes on the armed one — the two the plan puts there, and
+// the only two ("Cancel trigger, and Release now for an administrator … lives
+// on the run page's schedule step, not in the conversation", plan (A) §7.2).
+// On the RUN PAGE and the REVIEW PAGE, where §VI's card is the SCHEDULE STEP in
+// the rail, the same Save changes plus the trigger's own Cancel trigger and
+// Release now. `adjust` is the re-propose the two Confirms compose with; it is
+// no longer a control of its own, because the rows are editable as they stand.
+// Until this slice the confirm/adjust pair were cookie-bound server actions with
+// zero UI callers and the cancel/release pair existed only on the run page's
+// Trigger tab — so a card drawn in the widget could show a floor it could never
+// press.
 //
 // THIS FUNCTION IMPLEMENTS NONE OF THEM. Each op is handed to the canonical
 // path that already owns it, with an ACTOR the caller resolved from a real
@@ -207,13 +223,25 @@ export { describeProposalSchedule };
 export const SCHEDULE_DECISION_REFUSAL =
   "You can't take this action on this schedule.";
 
-export type ScheduleDecisionOp = "confirm" | "adjust" | "cancel" | "release";
+export type ScheduleDecisionOp =
+  | "confirm"
+  | "adjust"
+  /** Re-arm an ALREADY-armed trigger from the card's own rows — plan (A) §7.2
+   *  "Save changes, which re-arms the trigger". Not a second arming path: it
+   *  delegates to `updateRunTriggerScheduleForActor`, which delegates in turn to
+   *  the one `setRunTriggerForActor`. */
+  | "save"
+  | "cancel"
+  | "release";
 
 export type ScheduleDecisionOutcome =
   | { kind: "confirmed"; runId: string; alreadyConfirmed: boolean }
   /** Adjust RE-PROPOSES: the card swaps to the new ref and stays on its floor.
    *  Nothing was armed and nothing was written. */
   | { kind: "reproposed"; ref: string; expiresAt: number }
+  /** Save changes landed: the trigger is re-armed on the rows just saved, and
+   *  the card re-resolves rather than drawing the new schedule optimistically. */
+  | { kind: "saved"; runId: string }
   | { kind: "cancelled" }
   | { kind: "released" }
   | { kind: "not-permitted"; message: string }
@@ -299,10 +327,35 @@ export async function decideTriggerScheduleProposal(params: {
         : { kind: "error", message: PROPOSAL_REFUSALS.invalid };
     }
 
-    // Cancel and Release act on the RUN the card settled into — resolved here,
-    // never named by the caller.
+    // Save, Cancel and Release all act on the RUN the card settled into —
+    // resolved here, never named by the caller.
     const settled = await resolveSettledRunForReader(ref, { userId, orgId });
     if (!settled) return NOT_PERMITTED;
+
+    if (op === "save") {
+      // SAVE CHANGES (plan (A) §7.2). The selections are validated against the
+      // SAME closed vocabulary Adjust is — there is no cron field to put an
+      // expression in — and the run comes from the ref, so a caller cannot
+      // re-point a save at somebody else's trigger.
+      const parsed = proposedScheduleSchema.safeParse(params.schedule);
+      if (!parsed.success) {
+        const { PROPOSAL_REFUSALS } = await import(
+          "@cinatra-ai/agents/trigger-schedule-proposal-service"
+        );
+        return { kind: "error", message: PROPOSAL_REFUSALS.invalid };
+      }
+      const { updateRunTriggerScheduleForActor } = await import(
+        "@cinatra-ai/agents/trigger-service"
+      );
+      const result = await updateRunTriggerScheduleForActor(
+        { userId, role, source: "ui" },
+        { runId: settled, schedule: parsed.data },
+      );
+      if (result.ok) return { kind: "saved", runId: result.runId };
+      return result.error === "forbidden" || result.error === "unauthorized"
+        ? NOT_PERMITTED
+        : { kind: "error", message: result.error };
+    }
 
     if (op === "cancel") {
       const { deleteRunTriggerForActor } = await import(

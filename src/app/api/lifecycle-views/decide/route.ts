@@ -140,7 +140,7 @@ const reviewRequestSchema = z
 // one is handed to the canonical path that already owns it — this route
 // implements no scheduling logic of its own.
 //
-// FOUR OPERATIONS, ALL RE-AUTHORIZED SERVER-SIDE:
+// FIVE OPERATIONS, ALL RE-AUTHORIZED SERVER-SIDE:
 //
 //   confirm — `confirmTriggerScheduleProposal`, the one transaction that spends
 //             the proposal and creates the run. The token is re-verified against
@@ -149,11 +149,16 @@ const reviewRequestSchema = z
 //   adjust  — `adjustTriggerSchedule`, i.e. RE-PROPOSE. It writes nothing. The
 //             template is taken from the VERIFIED token, never from the body:
 //             a caller cannot re-point somebody else's proposal at another agent.
+//   save    — `updateRunTriggerScheduleForActor`, plan (A) §7.2's "Save changes,
+//             which re-arms the trigger". It re-verifies the actor, refuses a
+//             released trigger and a one-off that has already fired, and hands
+//             the rest to the ONE `setRunTriggerForActor` — so a recurring change
+//             cancels the prior scheduler and takes effect on future ticks only.
 //   cancel  — `deleteRunTriggerForActor` (owner-or-admin), the canonical path.
 //   release — `releaseTriggerNowForActor` (admin + install-scope dispatch
 //             authority), the canonical path.
 //
-// THE CLIENT NEVER NAMES A RUN. `cancel` and `release` act on the run the REF
+// THE CLIENT NEVER NAMES A RUN. `save`, `cancel` and `release` act on the run the REF
 // resolves to, server-side, through the same resolver that drew the card. A body
 // carrying a run id would be a way to operate a trigger the card never showed.
 // ---------------------------------------------------------------------------
@@ -163,10 +168,11 @@ const scheduleRequestSchema = z
   .object({
     kind: z.literal("trigger_schedule_proposal"),
     ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
-    op: z.enum(["confirm", "adjust", "cancel", "release"]),
-    /** Present only for `adjust`. Validated as §VI's closed selection
-     *  vocabulary, which HAS no cron field, so a raw expression cannot enter
-     *  through this door however it is spelled. */
+    op: z.enum(["confirm", "adjust", "save", "cancel", "release"]),
+    /** Present for `adjust` (re-propose) and `save` (re-arm an already-armed
+     *  trigger — plan (A) §7.2's "Save changes"). Validated as §VI's closed
+     *  selection vocabulary, which HAS no cron field, so a raw expression
+     *  cannot enter through this door however it is spelled. */
     schedule: proposedScheduleSchema.optional(),
   })
   .strict();
