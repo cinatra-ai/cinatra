@@ -7,9 +7,11 @@
 // run that was dispatched anyway would satisfy every selector in the spec and
 // still be the defect this gate exists to catch.
 import { Client } from "pg";
-import { Queue } from "bullmq";
+import { Queue, type JobType } from "bullmq";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+
+import { JOB_STATES_NAMING_RUN, countJobsNamingRun } from "./state-rules";
 
 function readEnvLocal(): Record<string, string> {
   try {
@@ -185,20 +187,46 @@ export async function readSelectedSkillRevisions(runId: string): Promise<string[
 }
 
 /**
- * HOW MANY QUEUE JOBS NAME THIS RUN — the number #2824 is actually about, and NOT
- * a queue total, which counts every other run on the lane and answers nothing.
+ * COMPILE-TIME PROOF that the pure rule's state list is a list of BullMQ job
+ * types. No cast: if a state name in `JOB_STATES_NAMING_RUN` ever stops being a
+ * `JobType` — a rename upstream, a typo in the rule — this line fails to build
+ * rather than silently sweeping a state BullMQ will refuse at runtime.
+ */
+const SWEPT_STATES: JobType[] = [...JOB_STATES_NAMING_RUN];
+
+/**
+ * HOW MANY EXECUTION DISPATCHES NAME THIS RUN — the suite's headline number, and
+ * NOT a queue total, which counts every other run on the lane and answers nothing.
  *
- * The release path enqueues with `jobId = runId` for BullMQ-level dedup, so a job
- * for this run is addressable by the run id alone. `0` while the run is held is
- * the assertion that separates a genuine hold from a run that was dispatched
- * anyway and merely drawn as held; `1` after the decision is the assertion that
- * the decision actually advanced it, exactly once.
+ * "Names this run" is narrower than it sounds, deliberately: three registered job
+ * names carry a `runId`, and only `agent-builder-execution` is the dispatch this
+ * counts. `RUN_DISPATCH_JOB_NAMES` in `state-rules.ts` says why the other two are
+ * excluded — each can stand beside a single CORRECT dispatch, so counting them
+ * would turn a correct run red.
+ *
+ * THE COUNT LIVES IN `state-rules.ts`, not here. This function is transport and
+ * nothing else: it opens the queue, hands `countJobsNamingRun` a fetcher, closes
+ * the queue. Every decision the number rests on — which states are swept, which job
+ * names qualify, that the run is read from `data.runId` rather than from the job
+ * id, that a job seen twice is one job — is made by a PURE function that
+ * `__tests__/state-rules.test.ts` runs against a queue stub with no Redis. So the
+ * negative control in that tier and this live probe are not merely the same shape;
+ * they are the same function, and the control cannot drift away from what runs
+ * against a real queue.
+ *
+ * `0` while the run is held is the assertion that separates a genuine hold from a
+ * run that was dispatched anyway and merely drawn as held. `1` after the decision
+ * is the assertion that the decision advanced it EXACTLY ONCE — which the previous
+ * spelling of this probe could not make: it asked `queue.getJob(runId)` and
+ * reported existence as `0 | 1`, so a second job carrying the same `data.runId`
+ * under any other id was invisible, and the duplicate dispatch read as the clean
+ * `1`. `jobDispatchesRun` documents the enqueue sites that make that concrete:
+ * most of them do NOT use the bare run id as the job id.
  */
 export async function jobsNamingRun(runId: string): Promise<number> {
   const queue = new Queue(QUEUE_NAME, { connection: { url: REDIS_URL } });
   try {
-    const job = await queue.getJob(runId);
-    return job ? 1 : 0;
+    return await countJobsNamingRun(() => queue.getJobs(SWEPT_STATES), runId);
   } finally {
     await queue.close();
   }

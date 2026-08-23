@@ -97,6 +97,7 @@ import {
   readSelectedSkillRevisions,
   waitFor,
 } from "./probes";
+import { jobCountVerdict } from "./state-rules";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 
@@ -373,6 +374,37 @@ async function runIdFromTranscript(page: Page): Promise<string> {
 }
 
 /**
+ * NAME A DUPLICATE DISPATCH AS ONE, instead of letting it read as a timeout.
+ *
+ * Both invariants below are POLLED until they hold, so an over-count spends the
+ * whole `DECISION_MS` and then reports "timed out", which describes the loop
+ * rather than the defect. The counting probe exists precisely to see that second
+ * job, and a report that buries it undoes the point of counting.
+ *
+ * The claim is about what HAPPENED, not about what the count will read next. An
+ * over-count can in principle fall back on its own — a job can be removed, and the
+ * completed and failed tails are trimmed — but a run observed with two jobs naming
+ * it was dispatched twice, and waiting does not make that untrue. So the high
+ * water mark is what gets reported, not the final reading.
+ *
+ * The over-count is appended to the timeout rather than thrown at once on purpose.
+ * `waitFor(throwOnError: false)` treats a throw from the predicate as "not yet"
+ * and retries it, which is the right reading for the database reads in the same
+ * predicate; changing that for one clause would make a momentary Postgres blip
+ * terminal. So the loop is left exactly as it was and only the REPORT gets sharper.
+ */
+function jobsOverrun(highWater: number, expected: number): string {
+  if (highWater <= expected) return "";
+  return (
+    ` — DUPLICATE DISPATCH: ${highWater} execution jobs named this run at once where ` +
+    `exactly ${expected} may. That is the defect the count exists to catch, not a ` +
+    "slow runtime, and it is reported from the high water mark because a later " +
+    "reading falling back to " +
+    `${expected} would not undo the run having been dispatched ${highWater} times.`
+  );
+}
+
+/**
  * THE HELD INVARIANT, OBSERVED ALL AT ONCE.
  *
  * Four facts, polled TOGETHER until they hold in the same observation rather than
@@ -388,13 +420,15 @@ async function runIdFromTranscript(page: Page): Promise<string> {
  */
 async function expectHeldInvariant(runId: string): Promise<void> {
   let last = "";
+  let dispatchedAnyway = 0;
   await waitFor(
-    `the held invariant for ${runId} (pending_input + human_present + park parked + 0 jobs)`,
+    `the held invariant for ${runId} (pending_input + human_present + park parked + 0 execution jobs)`,
     async () => {
       const facts = await readRunFacts(runId);
       const park = await readRecommendationParkStatus(runId);
       const jobs = await jobsNamingRun(runId);
       last = `status=${facts.status} human_present=${facts.humanPresent} park=${park} jobs=${jobs}`;
+      if (jobCountVerdict(jobs, 0) === "over") dispatchedAnyway = Math.max(dispatchedAnyway, jobs);
       return (
         facts.status === "pending_input" &&
         facts.humanPresent === true &&
@@ -404,13 +438,17 @@ async function expectHeldInvariant(runId: string): Promise<void> {
     },
     { timeoutMs: DECISION_MS },
   ).catch((err) => {
-    throw new Error(`${String(err)} — last observation: ${last}`);
+    throw new Error(
+      `${String(err)} — last observation: ${last}` + jobsOverrun(dispatchedAnyway, 0),
+    );
   });
 }
 
 /**
  * THE RELEASED INVARIANT, likewise observed all at once: the park is released, the
- * run has LEFT `pending_input`, and exactly one queue job names it.
+ * run has LEFT `pending_input`, and exactly one EXECUTION job names it (the
+ * trigger-release and output-derive jobs also carry this run's id and are excluded
+ * by name — see `RUN_DISPATCH_JOB_NAMES`).
  *
  * The "left `pending_input`" clause is the one that is easy to omit and expensive
  * to omit: a build that released the park and enqueued the job while leaving the
@@ -422,19 +460,21 @@ async function expectHeldInvariant(runId: string): Promise<void> {
 async function expectReleasedInvariant(runId: string): Promise<string> {
   let last = "";
   let finalStatus = "";
+  let duplicated = 0;
   await waitFor(
-    `the released invariant for ${runId} (park released + run left pending_input + exactly 1 job)`,
+    `the released invariant for ${runId} (park released + run left pending_input + exactly 1 execution job)`,
     async () => {
       const facts = await readRunFacts(runId);
       const park = await readRecommendationParkStatus(runId);
       const jobs = await jobsNamingRun(runId);
       last = `status=${facts.status} park=${park} jobs=${jobs}`;
       finalStatus = facts.status;
+      if (jobCountVerdict(jobs, 1) === "over") duplicated = Math.max(duplicated, jobs);
       return park === "released" && facts.status !== "pending_input" && jobs === 1;
     },
     { timeoutMs: DECISION_MS },
   ).catch((err) => {
-    throw new Error(`${String(err)} — last observation: ${last}`);
+    throw new Error(`${String(err)} — last observation: ${last}` + jobsOverrun(duplicated, 1));
   });
   return finalStatus;
 }

@@ -155,11 +155,18 @@ interface InstanceSnapshot {
    * write, so the restore compares the live row against the fixture's own bytes
    * rather than against a snapshot of somebody else's earlier state.
    *
-   * `openAIKeyFingerprint` is a sha256 of the SEALED blob exactly as stored.
-   * Nothing is decrypted to compute it, and the only value it is ever computed
-   * over is this file's own published placeholder — so it carries no credential
-   * material, and it is the one thing that can tell "my placeholder is still
-   * there" from "a real key was stored during the run".
+   * `openAIKeyFingerprint` is a pair of FNV-1a passes over the SEALED blob exactly
+   * as stored — a non-cryptographic change detector, NOT a CRYPTOGRAPHIC digest,
+   * and nothing in this suite computes a sha256. `sealedSecretFingerprint`
+   * (`state-rules.ts`) carries the full reasoning.
+   *
+   * Nothing is decrypted to compute it, and the only value ever ASSIGNED to this
+   * field is the fingerprint of this file's own published placeholder: it is set
+   * in exactly one place (`:315`), inside the branch that just wrote that
+   * placeholder, while the `before.keyStored` arm an operator key takes writes
+   * nothing at all (`:301-302`). So it carries no credential material, and it is
+   * the one thing that can tell "my placeholder is still there" from "a real key
+   * was stored during the run".
    */
   openAIKeyFingerprint: string | null;
   openAIConnectionAfterWrite: NonSecretRow | null;

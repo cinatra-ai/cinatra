@@ -17,19 +17,31 @@
 //     identity predicate, the absence of a second `admin` spelling). They are
 //     ratchets against a regression, NOT proof that the statement runs — that
 //     proof is the suite itself, against a live instance.
+//
+// THE QUEUE COUNT IS BEHAVIOURAL HERE TOO, and that is worth being precise about,
+// because "exactly one queue job names this run" sounds like it needs a Redis.
+// It does not: `countJobsNamingRun` takes the queue as a FETCHER, so the live
+// probe and the arms below run the SAME function over the SAME state list and
+// differ only in where the jobs come from. The negative control — a second job
+// enqueued under a different id, carrying the same `data.runId` — therefore
+// exercises the shipped decision itself rather than a re-implementation of it.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  JOB_STATES_NAMING_RUN,
   MEMBER_IDENTITY_SQL,
+  RUN_DISPATCH_JOB_NAMES,
   PROMOTE_ADMIN_ROLE_SQL,
   ROLE_TOKENS_SQL,
   ROLE_TOKEN_TRIMMED_SQL,
   SNAPSHOT_SKIPPED_VERDICT,
   STRIP_ADMIN_ROLE_SQL,
   connectionRevertPlan,
+  countJobsNamingRun,
   fixtureOwnsMembership,
+  jobCountVerdict,
   mcpRevertPlan,
   memberIdFor,
   mintRunToken,
@@ -37,11 +49,32 @@ import {
   sealedSecretFingerprint,
   snapshotClaim,
 } from "../state-rules";
+import type { JobStateNamingRun, QueueJobNamingRun } from "../state-rules";
 
 const SUITE_DIR = resolve(__dirname, "..");
 const read = (file: string): string => readFileSync(resolve(SUITE_DIR, file), "utf-8");
 /** Collapse whitespace, so a re-indent or a line wrap cannot break a shape assertion. */
 const flat = (text: string): string => text.replace(/\s+/g, " ");
+
+/**
+ * The same source with its COMMENTS removed.
+ *
+ * A ratchet that forbids a call has to read code, not prose. These files document
+ * the defects they were fixed for by NAMING the old spelling — `probes.ts` says in
+ * so many words that it used to ask `queue.getJob(runId)` — and that sentence is
+ * the most useful line in the file for the next reader. Matching it as though it
+ * were a live call would force the fix and its own explanation to be mutually
+ * exclusive, so the reader would lose.
+ *
+ * Block comments go whole; only WHOLE-LINE `//` comments go, which leaves a `//`
+ * inside a string literal (a URL, say) alone.
+ */
+const code = (file: string): string =>
+  read(file)
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("//"))
+    .join("\n");
 
 // ---------------------------------------------------------------------------
 // Finding 2 — ONE predicate decides "does this account already carry admin"
@@ -143,6 +176,32 @@ describe("membership identity", () => {
     const b = memberIdFor("user-aaaaaaaa-1111", "org-22222222-y");
     expect(a).not.toBe(b);
     expect(memberIdFor("user-aaaaaaaa-1111", "org-11111111-x")).toBe(a);
+  });
+
+  it("carries both halves WHOLE — an eight-character shared prefix is not a collision", () => {
+    // RED before this round: each half was truncated to `slice(0, 8)`, so these
+    // two DISTINCT pairs minted one id. The insert then failed on `member_pkey`
+    // rather than taking the `ON CONFLICT ("organizationId", "userId")` arm it
+    // arbitrates on — and a conflict on a target the statement does not name is
+    // not absorbed, it aborts the setup.
+    //
+    // The shape is ordinary, not exotic: any id scheme with a fixed prefix meets
+    // eight shared characters routinely.
+    const a = memberIdFor("user_abc_alice", "org_2024_engineering");
+    const b = memberIdFor("user_abc_bob", "org_2024_marketing");
+    expect("user_abc_alice".slice(0, 8)).toBe("user_abc_bob".slice(0, 8));
+    expect("org_2024_engineering".slice(0, 8)).toBe("org_2024_marketing".slice(0, 8));
+    expect(a).not.toBe(b);
+    // And the full identifiers are actually present, not re-truncated.
+    expect(a).toContain("user_abc_alice");
+    expect(a).toContain("org_2024_engineering");
+  });
+
+  it("the join is injective even when an identifier contains the separator", () => {
+    // Without the length prefix, `${userId}-${orgId}` reads the same for these two
+    // pairs, because the ids may themselves contain a `-`.
+    expect(memberIdFor("a-b", "c")).not.toBe(memberIdFor("a", "b-c"));
+    expect(memberIdFor("", "x")).not.toBe(memberIdFor("x", ""));
   });
 
   it("the pre-read asks the identity, not the synthetic id", () => {
@@ -412,5 +471,331 @@ describe("mcpRevertPlan — the same rule for the origin pair", () => {
     expect(mcpRevertPlan({ mcpWritten: true, fixtureWrote: null, live: { ...wrote } })).toBe(
       "leave",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Blocking finding (2026-08-22 re-review) — "exactly one queue job names this
+// run" must be a COUNT, not a probe for one job id
+// ---------------------------------------------------------------------------
+
+/**
+ * A QUEUE STUB, DRIVING THE LIVE PROBE'S OWN FUNCTION.
+ *
+ * This is the whole reason the control is executable here rather than only
+ * against a live Redis. `countJobsNamingRun` takes the queue as a FETCHER, so
+ * `probes.ts` and this file call the SAME function over the SAME state list and
+ * differ only in where the jobs come from — the stub cannot drift into testing a
+ * different shape from the one that ships, because there is only one shape.
+ *
+ * `seenStates` records what the rule asked for, so the sweep itself can be
+ * asserted rather than assumed.
+ */
+function queueStub(byState: Partial<Record<JobStateNamingRun, (QueueJobNamingRun | undefined)[]>>): {
+  fetch: (
+    states: readonly JobStateNamingRun[],
+  ) => Promise<readonly (QueueJobNamingRun | undefined)[]>;
+  seenStates: JobStateNamingRun[][];
+} {
+  const seenStates: JobStateNamingRun[][] = [];
+  return {
+    seenStates,
+    fetch: async (states) => {
+      seenStates.push([...states]);
+      return states.flatMap((state) => byState[state] ?? []);
+    },
+  };
+}
+
+/** The run under test, and the two jobs the blocking finding is about. */
+const RUN = "run-2824-s9k-held-turn";
+/** What the decision path actually enqueues: `jobId === runId` (`run-actions.ts:208`). */
+const DISPATCHED: QueueJobNamingRun = {
+  id: RUN,
+  name: "agent-builder-execution",
+  data: { runId: RUN },
+};
+/**
+ * The DUPLICATE. Same run in the payload, a different id — and not an invented
+ * shape: `agent-builder-${runId}` is what `trigger-service.ts:400` and
+ * `trigger-release-job.ts:302` enqueue for the very same run.
+ */
+const DUPLICATE: QueueJobNamingRun = {
+  id: `agent-builder-${RUN}`,
+  name: "agent-builder-execution",
+  data: { runId: RUN },
+};
+/**
+ * NAMES THE RUN, BUT IS NOT AN EXECUTION DISPATCH. Post-run output derivation
+ * carries `{ runId, orgId }` for this very run (`execution.ts:1874-1886`).
+ */
+const DERIVE: QueueJobNamingRun = {
+  id: `unbound-output-derive__${RUN}`,
+  name: "unbound-output-derive",
+  data: { runId: RUN, orgId: "org-1" },
+};
+/**
+ * ALSO NAMES THE RUN, ALSO NOT A SECOND DISPATCH. The trigger path runs the release
+ * job, which then enqueues the execution job itself (`trigger-release-job.ts:302`),
+ * so the two stand together for ONE correct dispatch — and `removeOnComplete: 200`
+ * keeps the finished release job around to be counted.
+ */
+const RELEASE: QueueJobNamingRun = {
+  id: `trigger-release-${RUN}`,
+  name: "agent-run-trigger-release",
+  data: { runId: RUN },
+};
+
+describe("countJobsNamingRun — the exactly-once count", () => {
+  it("counts the single dispatch as 1", async () => {
+    await expect(countJobsNamingRun(queueStub({ waiting: [DISPATCHED] }).fetch, RUN)).resolves.toBe(
+      1,
+    );
+  });
+
+  it("counts 0 while the run is genuinely held", async () => {
+    await expect(countJobsNamingRun(queueStub({}).fetch, RUN)).resolves.toBe(0);
+  });
+
+  it("NEGATIVE CONTROL — a second job under a DIFFERENT id makes the arm red", async () => {
+    // THE CONTROL THE RE-REVIEW ASKED FOR. A duplicate dispatch is enqueued under
+    // another id while carrying the same `data.runId`, and the count has to see
+    // it: the released invariant asserts EXACTLY one, so 2 can never satisfy it.
+    const count = await countJobsNamingRun(
+      queueStub({ waiting: [DISPATCHED], active: [DUPLICATE] }).fetch,
+      RUN,
+    );
+    expect(count).toBe(2);
+    expect(count).not.toBe(1);
+    expect(jobCountVerdict(count, 1)).toBe("over");
+  });
+
+  it("FAIL-FIRST — the OLD probe shape reads that same duplicate as a clean 1", () => {
+    // The shipped probe was `queue.getJob(runId)` converted to `0 | 1`. Modelled
+    // here over the EXACT two jobs the control above counts as 2, because a
+    // deleted defect leaves no failing test behind and the claim "this used to be
+    // wrong" is otherwise unverifiable by a reader.
+    //
+    // This is the arm that would have been GREEN on the duplicate — which is the
+    // defect: green is the wrong colour for two dispatches of one run.
+    const oldProbeShape = (jobs: QueueJobNamingRun[], runId: string): number =>
+      jobs.some((job) => job.id === runId) ? 1 : 0;
+
+    expect(oldProbeShape([DISPATCHED, DUPLICATE], RUN)).toBe(1);
+    expect(oldProbeShape([DISPATCHED], RUN)).toBe(1);
+    // It cannot even tell the duplicate-only case from the clean one.
+    expect(oldProbeShape([DUPLICATE], RUN)).toBe(0);
+  });
+
+  it("a duplicate is caught in EVERY state a job can sit in, not just one", async () => {
+    // The old probe's blindness was not specific to a state, so neither is the
+    // control. Each swept state is exercised as the duplicate's hiding place.
+    //
+    // The map is MERGED rather than spread with a computed key: `{ waiting: [a],
+    // [state]: [b] }` silently drops the dispatch when `state` is `waiting`, which
+    // made this arm assert 2 against a queue holding one job.
+    for (const state of JOB_STATES_NAMING_RUN) {
+      const byState: Partial<Record<JobStateNamingRun, QueueJobNamingRun[]>> = {
+        waiting: [DISPATCHED],
+      };
+      byState[state] = [...(byState[state] ?? []), DUPLICATE];
+      const count = await countJobsNamingRun(queueStub(byState).fetch, RUN);
+      expect(count, `duplicate hidden in "${state}"`).toBe(2);
+    }
+  });
+
+  it("sweeps every state BullMQ can hold a job in", () => {
+    // Pinned against BullMQ's own fallback list for `getJobs()` with no argument
+    // (`queue-getters.js:53-62`), so a state cannot quietly become a blind spot.
+    expect([...JOB_STATES_NAMING_RUN].sort()).toEqual(
+      [
+        "active",
+        "completed",
+        "delayed",
+        "failed",
+        "paused",
+        "prioritized",
+        "waiting",
+        "waiting-children",
+      ].sort(),
+    );
+    // `repeat` names scheduler keys and `wait` is BullMQ's alias for `waiting`;
+    // sweeping either would double-count or fetch non-jobs.
+    expect(JOB_STATES_NAMING_RUN).not.toContain("repeat");
+    expect(JOB_STATES_NAMING_RUN).not.toContain("wait");
+  });
+
+  it("asks the queue for that whole list, in one call", async () => {
+    const stub = queueStub({ waiting: [DISPATCHED] });
+    await countJobsNamingRun(stub.fetch, RUN);
+    expect(stub.seenStates).toHaveLength(1);
+    expect(stub.seenStates[0]).toEqual([...JOB_STATES_NAMING_RUN]);
+  });
+
+  it("counts ONE job seen in two states once, not twice", async () => {
+    // BullMQ already dedupes ids inside `getRanges`, so this shape does not reach
+    // the rule from a real queue today. The arm pins the rule's OWN behaviour, so
+    // the count stays correct without inheriting that guarantee: a repeated
+    // representation of one job must never read as a second dispatch.
+    const count = await countJobsNamingRun(
+      queueStub({ waiting: [DISPATCHED], active: [{ ...DISPATCHED }] }).fetch,
+      RUN,
+    );
+    expect(count).toBe(1);
+  });
+
+  it("drops the holes `Job.fromId` leaves for a job removed mid-sweep", async () => {
+    const count = await countJobsNamingRun(
+      queueStub({ waiting: [undefined, DISPATCHED, undefined] }).fetch,
+      RUN,
+    );
+    expect(count).toBe(1);
+  });
+
+  it("two id-less jobs count as two, never collapsing into one", async () => {
+    // BullMQ always assigns an id; this is the arm that keeps a malformed entry
+    // from hiding a second dispatch behind a shared empty key.
+    const count = await countJobsNamingRun(
+      queueStub({
+        waiting: [
+          { name: "agent-builder-execution", data: { runId: RUN } },
+          { name: "agent-builder-execution", data: { runId: RUN } },
+        ],
+      }).fetch,
+      RUN,
+    );
+    expect(count).toBe(2);
+  });
+
+  it("ignores every job that does not name THIS run", async () => {
+    const stub = queueStub({
+      waiting: [
+        { id: "other", data: { runId: "some-other-run" } },
+        { id: "no-data", data: undefined },
+        { id: "not-an-object", data: "run-2824-s9k-held-turn" },
+        { id: "no-run-field", data: { skillIds: ["a"] } },
+        // The run id appearing as some OTHER field is not this run being named.
+        { id: "wrong-field", name: "agent-builder-execution", data: { sourceRunId: RUN } },
+        // Both name the run; neither is an execution dispatch.
+        DERIVE,
+        RELEASE,
+        // A dispatch name this suite does not know is NOT counted — the
+        // conservative reading for an "exactly one" assertion.
+        { id: "unknown", name: "some-future-job", data: { runId: RUN } },
+        { id: "nameless", data: { runId: RUN } },
+      ],
+    });
+    await expect(countJobsNamingRun(stub.fetch, RUN)).resolves.toBe(0);
+  });
+
+  it("a correct run with BOTH runId-bearing neighbours alongside it still counts 1", async () => {
+    // THE FALSE POSITIVES THIS NARROWING PREVENTS, and they are not hypothetical:
+    // on the trigger path the release job enqueues the execution job, and after the
+    // run produces output the derive job is enqueued for the same run. With
+    // `removeOnComplete: 200` both are retained. A count over every runId-bearing
+    // payload would read 3 here and report a duplicate dispatch against a run that
+    // was dispatched for execution exactly once.
+    await expect(
+      countJobsNamingRun(
+        queueStub({ completed: [RELEASE, DISPATCHED], waiting: [DERIVE] }).fetch,
+        RUN,
+      ),
+    ).resolves.toBe(1);
+  });
+
+  it("the dispatch-name list matches the registry's runId-bearing set", () => {
+    // RATCHET, and the reason the name filter is not a new blind spot. Exactly
+    // three registered jobs carry a `runId` payload; ONE is the execution dispatch
+    // and the other two can stand beside a correct one. A FOURTH turns this red and
+    // forces the choice, instead of silently landing in whichever bucket the filter
+    // happens to give it.
+    //
+    // Pinned TWO ways on purpose. The block scan below attributes each schema to a
+    // job name but depends on a bounded text window; the total count does not
+    // depend on attribution at all, so a fourth runId payload schema turns this arm
+    // red even if the window drifts and mis-attributes it.
+    //
+    // A RATCHET, NOT A PROOF, and the limit is worth stating rather than trusting:
+    // both reads match the LITERAL `runId: z.string()` spelling, so a schema that
+    // is imported, composed from another object, or spelled differently would slip
+    // past. It catches the shape every runId payload in this registry is written
+    // in today, which is what a ratchet is for; it is not a guarantee that no
+    // fourth runId job can ever exist unnoticed.
+    const registry = read("../../../src/lib/background-jobs-registry.ts");
+    const names = read("../../../src/lib/background-jobs-names.ts");
+    expect(registry.match(/runId: z\.string\(\)/g)).toHaveLength(3);
+    const carriesRunId = [...registry.matchAll(/\[BACKGROUND_JOB_NAMES\.(\w+)\]:\s*\{/g)]
+      .filter((m) => {
+        const block = registry.slice(m.index ?? 0, (m.index ?? 0) + 2500);
+        const schema = /payloadSchema:\s*([\s\S]{0,400})/.exec(block);
+        return Boolean(schema && schema[1]!.includes("runId"));
+      })
+      .map((m) => m[1]!)
+      .sort();
+
+    expect(carriesRunId).toEqual([
+      "AGENT_BUILDER_EXECUTION",
+      "AGENT_RUN_TRIGGER_RELEASE",
+      "UNBOUND_OUTPUT_DERIVE",
+    ]);
+
+    // And the two the count accepts are those constants' actual string values.
+    expect(names).toContain('AGENT_BUILDER_EXECUTION: "agent-builder-execution"');
+    expect(names).toContain('AGENT_RUN_TRIGGER_RELEASE: "agent-run-trigger-release"');
+    expect(names).toContain('UNBOUND_OUTPUT_DERIVE: "unbound-output-derive"');
+    // Only the EXECUTION dispatch is counted. The release job is dispatch-adjacent
+    // but precedes the execution job it enqueues, so counting it would read 2 for
+    // one correct trigger-path dispatch.
+    expect([...RUN_DISPATCH_JOB_NAMES]).toEqual(["agent-builder-execution"]);
+  });
+
+  it("a queue busy with other runs still answers about this one", async () => {
+    // The number is a count of jobs NAMING THE RUN, never a queue total — a queue
+    // total counts every other run on the lane and answers nothing.
+    const noise = Array.from({ length: 40 }, (_, i) => ({
+      id: `noise-${i}`,
+      name: "agent-builder-execution",
+      data: { runId: `run-${i}` },
+    }));
+    await expect(
+      countJobsNamingRun(queueStub({ waiting: [...noise, DISPATCHED] }).fetch, RUN),
+    ).resolves.toBe(1);
+  });
+
+  it.each([
+    // [count, expected, verdict]
+    [0, 0, "ok"],
+    [1, 1, "ok"],
+    [0, 1, "under"],
+    [1, 0, "over"],
+    [2, 1, "over"],
+    [7, 0, "over"],
+  ])("jobCountVerdict(%i, %i) is %s", (count, expected, verdict) => {
+    expect(jobCountVerdict(count as number, expected as number)).toBe(verdict);
+  });
+
+  it("the live probe counts payloads and no longer probes for one job id", () => {
+    // RATCHET. `queue.getJob(runId)` is the exact call the re-review named: it
+    // proves a job addressable by the run id exists, which is a different question
+    // from how many jobs name the run.
+    //
+    // Read as CODE. The probe's own doc block names the old call so the next reader
+    // knows what was wrong with it, and that sentence must not read as a relapse.
+    const source = flat(code("probes.ts"));
+    expect(source).not.toContain("queue.getJob(runId)");
+    expect(source).toContain("countJobsNamingRun(() => queue.getJobs(SWEPT_STATES), runId)");
+    expect(source).toContain("const SWEPT_STATES: JobType[] = [...JOB_STATES_NAMING_RUN];");
+    // The old spelling IS still described in prose — deliberately, and this pins
+    // that the explanation was not deleted along with the defect.
+    expect(flat(read("probes.ts"))).toContain("queue.getJob(runId)");
+  });
+
+  it("the released invariant still demands EXACTLY one, and the held one zero", () => {
+    const source = flat(code("held-turn.spec.ts"));
+    expect(source).toContain('park === "released" && facts.status !== "pending_input" && jobs === 1');
+    expect(source).toContain("jobs === 0");
+    // An over-count is reported as a duplicate dispatch rather than as a timeout,
+    // because waiting can only ever fix a count that is too low.
+    expect(source).toContain("DUPLICATE DISPATCH:");
   });
 });

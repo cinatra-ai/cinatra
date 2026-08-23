@@ -16,7 +16,7 @@
 //     `__tests__/state-rules.test.ts`, which needs no database, no browser and no
 //     stack.
 //
-// The three contracts this file owns:
+// The four contracts this file owns:
 //
 //   1. THE ROLE PREDICATE — `roleCarriesAdmin`, plus the two SQL statements that
 //      act on it, built from ONE token expression so the promote and the strip
@@ -28,6 +28,9 @@
 //      revert plans that compare the LIVE state against what this fixture itself
 //      wrote. A teardown reverts its own writes and nothing else, and it never
 //      removes a row it cannot prove it created.
+//   4. HOW MANY QUEUE JOBS NAME A RUN — the count behind the suite's headline
+//      "exactly once" claim, decided over job PAYLOADS rather than over one job
+//      id, so a duplicate dispatch enqueued under a different id is visible.
 import { randomBytes } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -170,11 +173,30 @@ export const MEMBER_IDENTITY_SQL = `"organizationId" = $1 AND "userId" = $2`;
 
 /**
  * The id this fixture mints for the membership row it creates, derived from the
- * IDENTITY so a row it made can always be recognized, and so the primary key can
- * never collide independently of the unique index the insert arbitrates on.
+ * IDENTITY IN FULL so a row it made can always be recognized.
+ *
+ * BOTH HALVES ARE CARRIED WHOLE, and the length prefix makes the join injective.
+ * An earlier spelling truncated each half to its first eight characters, which
+ * gave the primary key a collision the unique index does not have: two DISTINCT
+ * `(organizationId, userId)` pairs that merely shared those prefixes minted the
+ * same id, so the insert failed on `member_pkey` instead of taking the
+ * `ON CONFLICT ("organizationId", "userId") DO NOTHING` arm it arbitrates on —
+ * and a conflict on a target the statement does not name is not absorbed, it
+ * aborts the setup. Eight shared characters is not an exotic input: any id scheme
+ * with a fixed prefix (`org_`, `user_`, a shared timestamp head) meets it
+ * routinely.
+ *
+ * The length prefix closes the second, rarer shape: a bare `${userId}-${orgId}`
+ * join reads the same for `("a-b", "c")` and `("a", "b-c")`, because the ids may
+ * themselves contain the separator. `<len>-<userId><orgId>` decodes uniquely —
+ * read `len`, take exactly that many characters, the rest is the organization —
+ * so distinct pairs always mint distinct ids.
+ *
+ * Nothing is truncated for width, either: `public."member".id` is `text`
+ * (`src/lib/better-auth-db.ts:748`), so the full pair costs nothing.
  */
 export function memberIdFor(userId: string, organizationId: string): string {
-  return `chat-hitl-s9k-member-${userId.slice(0, 8)}-${organizationId.slice(0, 8)}`;
+  return `chat-hitl-s9k-member-${userId.length}-${userId}-${organizationId}`;
 }
 
 /** The membership half of the account snapshot, as the ownership rule reads it. */
@@ -269,17 +291,36 @@ export const SNAPSHOT_SKIPPED_VERDICT = "skipped: not this run's snapshot";
  * A stable fingerprint of a SEALED secret field, for proving that the value stored
  * now is still the exact value this fixture wrote.
  *
- * It reads the CIPHERTEXT as it was stored — nothing is ever decrypted here, and
- * the only value this is ever computed over is the fixture's own published
- * placeholder. `null` when there is nothing stored.
+ * It reads the CIPHERTEXT as it was stored — nothing is ever decrypted here.
+ * `null` when there is nothing stored.
  *
- * A CHANGE DETECTOR, DELIBERATELY NOT A CRYPTOGRAPHIC HASH. The question it
- * answers is "is what is stored now byte-identical to what I wrote a few minutes
- * ago?", and both sides of that comparison are produced by this same function
- * inside one run. It is not a security control: it authenticates nothing, is never
- * persisted anywhere a reader could use it, and guards no boundary.
+ * WHAT IT IS COMPUTED OVER, STATED HONESTLY: whatever the row holds. The caller
+ * (`fixtures.mts:237`) fingerprints the live `apiKey` on every call, and on an
+ * instance whose row already carries an OPERATOR key, that key is what this
+ * function is handed — before any write (`:270`), again at teardown (`:439`), and
+ * inside the compare-and-swap (`:492`). An earlier version of this comment claimed
+ * the fixture's own placeholder was the only input; it never was.
  *
- * Running a cryptographic digest over a credential field is also the shape
+ * THE TRUE REASON A FOREIGN KEY IS SAFE HERE, in three checkable parts:
+ *
+ *   · NON-CRYPTOGRAPHIC. A pair of 32-bit FNV-1a passes is a change detector, not
+ *     a CRYPTOGRAPHIC digest. It is preimage- and collision-trivial by
+ *     construction, it is not a password hash, it authenticates nothing and it
+ *     guards no boundary, so a foreign key passing through it is not being
+ *     "hashed" in any sense a credential store would mean.
+ *   · NEVER STORED. `snapshot.openAIKeyFingerprint` starts `null`
+ *     (`fixtures.mts:279`) and is assigned in exactly ONE place — inside the
+ *     branch that just wrote this file's own published placeholder (`:315`). The
+ *     `before.keyStored` arm, the arm an operator key takes, writes nothing at all
+ *     (`:301-302`). So a foreign key's fingerprint is computed, compared and
+ *     discarded inside one call; it never reaches the snapshot JSON.
+ *   · NEVER LOGGED. No `console.log` in `fixtures.mts` carries a fingerprint.
+ *
+ * The question the value answers is only "is what is stored now byte-identical to
+ * what I wrote a few minutes ago?", and both sides of that comparison are produced
+ * by this same function inside one run.
+ *
+ * Running a cryptographic digest over a credential field is the shape
  * `js/insufficient-password-hash` flags, and it flags it whatever the digest —
  * the repo carries a dismissed instance of the same rule over the production
  * credential fingerprint (`src/lib/llm-credential-fingerprint.ts`), which uses an
@@ -386,6 +427,194 @@ export function mcpRevertPlan(input: McpRevertInput): "restore" | "leave" {
   if (input.live.publicBaseUrl !== input.fixtureWrote.publicBaseUrl) return "leave";
   if (input.live.publicBaseUrlSource !== input.fixtureWrote.publicBaseUrlSource) return "leave";
   return "restore";
+}
+
+// ---------------------------------------------------------------------------
+// 4. HOW MANY QUEUE JOBS NAME A RUN
+// ---------------------------------------------------------------------------
+
+/**
+ * EVERY STATE BULLMQ CAN HOLD A JOB IN, so no state is a blind spot.
+ *
+ * This is BullMQ's own definition of "all types": it is exactly the list
+ * `QueueGetters.sanitizeJobTypes()` falls back to when `getJobs()` is called with
+ * no argument (`bullmq/dist/esm/classes/queue-getters.js:53-62`). It is written
+ * out rather than left implicit because an implicit sweep cannot be asserted, and
+ * the whole point of this rule is that the count has no hiding place.
+ *
+ * `repeat` and `wait` are the two `JobType`s deliberately NOT here. `repeat` names
+ * the repeat-scheduler key set rather than jobs, and `wait` is BullMQ's alias for
+ * `waiting`, so asking for both would fetch one list twice.
+ */
+export const JOB_STATES_NAMING_RUN = [
+  "waiting",
+  "waiting-children",
+  "prioritized",
+  "paused",
+  "active",
+  "delayed",
+  "completed",
+  "failed",
+] as const;
+
+export type JobStateNamingRun = (typeof JOB_STATES_NAMING_RUN)[number];
+
+/** The only three fields of a BullMQ job this rule reads. */
+export interface QueueJobNamingRun {
+  id?: string | null;
+  name?: string | null;
+  data?: unknown;
+}
+
+/**
+ * THE ONE JOB NAME THAT IS AN EXECUTION DISPATCH OF A RUN.
+ *
+ * Carrying `runId` in the payload is NOT the same as dispatching the run for
+ * execution, and the difference decides whether "exactly one" means anything.
+ * Exactly three registered job names carry a `runId`
+ * (`src/lib/background-jobs-registry.ts:1358`, `:1453`, `:2025`), and only one of
+ * them is the thing this invariant counts:
+ *
+ *   · `agent-builder-execution` — the run-lifecycle worker. THE EXECUTION
+ *     DISPATCH, and what `triggerAgentRun` enqueues (`run-actions.ts:200-208`).
+ *     Two of these for one run IS the duplicate dispatch #2824 is about.
+ *   · `agent-run-trigger-release` — NOT counted, though it is dispatch-adjacent.
+ *     It opens the gate and then enqueues the execution job itself
+ *     (`trigger-release-job.ts:302`), so on the trigger path the release and the
+ *     execution are TWO jobs for ONE correct dispatch. With `removeOnComplete:
+ *     200` the finished release job is still retained, so counting it would read
+ *     `2` on a run dispatched exactly once and turn a correct flow red.
+ *   · `unbound-output-derive` — NOT counted. Post-run output derivation
+ *     (`execution.ts:1874-1886`, payload `{ runId, orgId }`), which runs AFTER the
+ *     run produced output and legitimately coexists with a retained execution job.
+ *
+ * So the rule counts EXECUTION dispatches, and the two neighbours are excluded for
+ * the same reason: each can stand beside a correct single dispatch. A job whose
+ * name is unknown is not counted either, which is the conservative reading for an
+ * "exactly one" assertion. The arm that keeps that from becoming a new blind spot
+ * is in the unit tier, where a ratchet pins BOTH this list and the registry's total
+ * count of runId-bearing payload schemas — so a fourth such job turns it red and
+ * forces the choice rather than silently landing in a bucket.
+ */
+export const RUN_DISPATCH_JOB_NAMES = ["agent-builder-execution"] as const;
+
+/**
+ * Is this job an EXECUTION DISPATCH OF THIS RUN?
+ *
+ * Two questions, both of which have to answer yes.
+ *
+ * THE RUN: read from the PAYLOAD, not from the job id. Every enqueue site that
+ * dispatches a run writes `{ runId }` into `data`, and the registry's payload
+ * schemas require it (`src/lib/background-jobs-registry.ts:1358`, `:1454`), while
+ * the ID each site chooses varies: `runId` bare (`run-actions.ts:208`),
+ * `agent-builder-${runId}` (`trigger-service.ts:400`, `trigger-release-job.ts:302`),
+ * `resume-${reviewTaskId}` (`review-task-actions.ts:464`). The payload is the one
+ * thing all of them agree on, so it is what the count asks about.
+ *
+ * THE OPERATION: read from the job NAME, because naming the run is not the same as
+ * dispatching it for execution. Both `agent-run-trigger-release` and
+ * `unbound-output-derive` carry this very run's id while standing beside a single
+ * correct dispatch, so counting either would report a correct run as a duplicate.
+ * `RUN_DISPATCH_JOB_NAMES` above names the one that qualifies, says why each
+ * neighbour is excluded, and explains how the list is kept honest.
+ */
+export function jobDispatchesRun(
+  job: QueueJobNamingRun | null | undefined,
+  runId: string,
+): boolean {
+  if (!job || !runId) return false;
+  if (!job.name || !(RUN_DISPATCH_JOB_NAMES as readonly string[]).includes(job.name)) return false;
+  const data = job.data;
+  if (!data || typeof data !== "object") return false;
+  return (data as { runId?: unknown }).runId === runId;
+}
+
+/**
+ * HOW MANY EXECUTION DISPATCHES NAME THIS RUN, the number #2824 is actually about.
+ * NOT a queue total, which counts every other run on the lane and answers nothing,
+ * and not every job carrying this run's id either — see `RUN_DISPATCH_JOB_NAMES`
+ * for the two runId-bearing neighbours that stand beside a correct dispatch.
+ *
+ * WHY THIS COUNTS INSTEAD OF PROBING FOR ONE ID. The previous spelling was
+ * `queue.getJob(runId)` converted to `0 | 1`. That answers "is a job addressable
+ * by the run id there?", which is a DIFFERENT question from "how many jobs name
+ * this run?", and the gap between them is exactly the defect this suite exists to
+ * catch: a second job carrying the same `data.runId` under any other id was
+ * invisible to it, so a duplicate dispatch read as the clean `1`. The enqueue
+ * sites listed on `jobDispatchesRun` above show that is not hypothetical, because
+ * most of them do not use the bare run id.
+ *
+ * DEDUPED BY JOB ID, as DEFENCE rather than as a fix for a live defect, and the
+ * difference is worth stating so the next reader does not trust the wrong thing.
+ * BullMQ 5.80.1 already cannot hand back one job twice: `getRanges` reads every
+ * requested state in ONE atomic Lua call and returns `[...new Set(results)]`
+ * (`bullmq/dist/esm/classes/queue-getters.js:356-379`), so there is no window in
+ * which a job moving `waiting` to `active` is seen by two separate fetches. This
+ * loop therefore never fires today.
+ *
+ * It is kept because the count must not INHERIT that guarantee. If a future BullMQ
+ * drops the `Set` or splits the read, the raw array would report `2` for a single
+ * job and turn the released invariant red on timing rather than on truth — a flake
+ * introduced by this fix instead of found by it. The dedup makes the number depend
+ * on the rule rather than on the client's internals.
+ *
+ * `Job.fromId` resolves to `undefined` for a job removed between the id read and
+ * the fetch (`queue-getters.js:388-392`), so holes are dropped before counting.
+ *
+ * WHAT THIS STILL CANNOT SEE, stated rather than papered over: a job already
+ * trimmed out of the completed or failed tails (`removeOnComplete: 200`,
+ * `removeOnFail: 500`, `src/lib/background-jobs.ts:383-387`). The suite's queue is
+ * its own, because `BULLMQ_QUEUE_NAME` is REQUIRED and the probes refuse a shared
+ * default, so reaching either tail inside one flow's decision window is not a
+ * shape this measurement meets. It is the same exposure the id probe had.
+ *
+ * The queue arrives as a FETCHER rather than as a client, which is what keeps this
+ * file pure: no `bullmq` import, no connection, no environment. The live probe
+ * (`probes.ts`) and the unit tier (`__tests__/state-rules.test.ts`) therefore run
+ * this exact function over the exact same state list, and differ only in where the
+ * jobs come from.
+ */
+export async function countJobsNamingRun(
+  fetchJobs: (
+    states: readonly JobStateNamingRun[],
+  ) => Promise<readonly (QueueJobNamingRun | null | undefined)[]>,
+  runId: string,
+): Promise<number> {
+  const jobs = await fetchJobs(JOB_STATES_NAMING_RUN);
+  const seen = new Set<string>();
+  let count = 0;
+  for (let i = 0; i < jobs.length; i += 1) {
+    const job = jobs[i];
+    if (!jobDispatchesRun(job, runId)) continue;
+    // A job with no id cannot be deduped against anything, so it counts once on
+    // its own. BullMQ always assigns one; this is the arm that keeps a malformed
+    // entry from silently collapsing two jobs into one.
+    const key = job!.id == null ? `no-id:${i}` : `id:${job!.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    count += 1;
+  }
+  return count;
+}
+
+/**
+ * What a count means for an invariant that expects EXACTLY `expected`.
+ *
+ * `over` is the arm worth naming separately. Both invariants are polled until they
+ * hold, so a caller that waits on `over` waits out its whole timeout and then
+ * reports a timeout, when what it found was a duplicate dispatch. The verdict lets
+ * it say so instead.
+ *
+ * Not because an over-count is permanent — a job can be removed, and the completed
+ * and failed tails are trimmed, so the number can fall again. Because the EVENT is:
+ * a run observed with two EXECUTION jobs was dispatched for execution twice, and a
+ * later reading of `1` does not undo that. The two runId-bearing neighbours that
+ * could make that reading innocent are excluded by name before the count, so a `2`
+ * here is two of the same operation.
+ */
+export function jobCountVerdict(count: number, expected: number): "ok" | "under" | "over" {
+  if (count === expected) return "ok";
+  return count > expected ? "over" : "under";
 }
 
 /** Structural equality over plain JSON, with object keys ordered so spelling cannot decide it. */
