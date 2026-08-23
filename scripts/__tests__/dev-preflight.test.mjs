@@ -2932,6 +2932,7 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
   let dockerLog;
   let laneRedisPort;
   let laneAltRedisPort;
+  let unscopedRedisPort;
   let lanePgPort;
 
   beforeAll(async () => {
@@ -2944,6 +2945,12 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
     // A SECOND closed port, so a case can state a published port and a connect
     // port that differ without either of them being a port anything runs on.
     laneAltRedisPort = await reserveClosedPort();
+    // A THIRD closed port for the UNSCOPED cases. They need the same guarantee
+    // for a stronger reason: the launcher only reaches the drift diagnosis after
+    // its TCP probe FAILS, so an unscoped case pinned to redis's historical
+    // 6379 measures whether the operator's bundled redis is up — and goes red on
+    // exactly the machine this preflight exists to serve.
+    unscopedRedisPort = await reserveClosedPort();
     lanePgPort = await reserveClosedPort();
 
     // Fake `docker`: records argv, then answers `ps -aq` / `inspect` from the
@@ -3131,24 +3138,81 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
   });
 
   // The regression pin: the operator's UNSCOPED checkout states no project name,
-  // so redis resolves to the historical 6379 and the diagnosis behaves exactly
-  // as it did before any of this work. Nothing here may take `make dev` away.
-  it("still diagnoses the unscoped checkout at the historical default port", () => {
+  // so the diagnosis behaves exactly as it did before any of this work —
+  // compose's own basename derivation, measuring the port THIS checkout
+  // publishes. Nothing here may take `make dev` away.
+  //
+  // Reserved rather than hardcoded, for the reason this block already states
+  // once. Writing the historical 6379 into this case made it measure the test
+  // HOST instead of the launcher: `make dev` publishes redis there, the probe
+  // then answers, the diagnosis is skipped and the launcher exits 0 — so the
+  // case went red on every machine with the bundled stack up, and on the
+  // machines where it passed nobody could tell whether it passed because the
+  // behavior is right or because the port happened to be free.
+  //
+  // The unscoped checkout STATES the reserved port instead, so the plan resolves
+  // the same claim the historical default resolves for it — published and
+  // connect agree, and no host service can answer at the address. That the
+  // UNSTATED port is still the historical 6379 is pinned where it costs no
+  // socket at all: "answers the historical default for the unscoped checkout"
+  // (resolvePublishedHostPort, below) and the companion case underneath.
+  //
+  // The simulated container publishes the GLOBAL 6379 on purpose: a launcher
+  // that regressed to the hardcoded default would find its port published, call
+  // the container healthy and exit 0. Only one that measures the port this
+  // checkout resolved sees the drift.
+  it("still diagnoses the unscoped checkout at the port it publishes, with no -p", () => {
     const result = runLauncher(
       [
         "PORT=13839",
-        "REDIS_URL=redis://127.0.0.1:6379",
+        `CINATRA_REDIS_HOST_PORT=${unscopedRedisPort}`,
+        `REDIS_URL=redis://127.0.0.1:${unscopedRedisPort}`,
+        "NANGO_SERVER_URL=https://nango.example.invalid",
+        `SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${lanePgPort}/postgres`,
+        "",
+      ].join("\n"),
+      { containerPorts: '{"6379/tcp":[{"HostIp":"127.0.0.1","HostPort":"6379"}]}' },
+    );
+    expect(
+      result.status,
+      `launcher exited ${result.status}\nstderr:\n${result.stderr}`,
+    ).toBe(1);
+    expect(result.stderr).toContain("Docker host-port drift");
+    const ps = result.calls.find((c) => c.argv.includes("ps"));
+    // No `-p`: compose's own basename derivation, unchanged.
+    expect(ps.argv.slice(0, 2)).toEqual(["compose", "-f"]);
+  });
+
+  // …and the other half of that pin, end-to-end and still without touching
+  // 6379: an unscoped checkout that STATES no host port publishes the
+  // HISTORICAL DEFAULT, whatever its `REDIS_URL` says. The consequence is
+  // observable without probing that port — the app connects on the reserved
+  // port instead, published and connect disagree, so `shouldDiagnoseDrift`
+  // switches off and no container is inspected for redis. A build in which the
+  // unscoped default moved to the app's port would diagnose here and refuse.
+  //
+  // The note stays silent too: this checkout only OMITTED a host port, which is
+  // the unscoped immunity the mismatch warning keeps (round-4 finding 4 narrowed
+  // it to what a checkout STATES). "Not reachable yet" is the honest answer.
+  it("publishes the historical default for an unscoped checkout that states no host port", () => {
+    const result = runLauncher(
+      [
+        "PORT=13839",
+        `REDIS_URL=redis://127.0.0.1:${unscopedRedisPort}`,
         "NANGO_SERVER_URL=https://nango.example.invalid",
         `SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${lanePgPort}/postgres`,
         "",
       ].join("\n"),
       { containerPorts: '{"6379/tcp":null}' },
     );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Docker host-port drift");
-    const ps = result.calls.find((c) => c.argv.includes("ps"));
-    // No `-p`: compose's own basename derivation, unchanged.
-    expect(ps.argv.slice(0, 2)).toEqual(["compose", "-f"]);
+    expect(
+      result.status,
+      `launcher exited ${result.status}\nstderr:\n${result.stderr}`,
+    ).toBe(0);
+    expect(result.stderr).not.toContain("Docker host-port drift");
+    expect(result.stderr).not.toContain("published on host port");
+    expect(result.stderr).toContain("PostgreSQL, Redis not reachable yet");
+    expect(redisCalls(result.calls)).toEqual([]);
   });
 
   // Item 1 still holds over the whole widened path: the flag's promise is that
