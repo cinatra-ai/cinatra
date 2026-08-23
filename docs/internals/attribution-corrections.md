@@ -121,3 +121,17 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: d7ff228f89addacb8ead2d63832863d7f4b7b3ff
 ```
+
+---
+
+## Correction for `ed215702ae06aa726b2c23ebbe688dbd3455b119`
+
+```
+correction: truthful-attribution record for ed215702a
+
+The record on ed215702a ("fix(runtime): derive the model-bridge output_schema from each node's declared outputs — a credential-free run reaches an artifact (#2949)") is malformed under the ratified record grammar: the Gate-suite line carries an empty version (a shell-quoting failure at merge time swallowed the value). The change itself was gated — all required contexts green at the reviewed head 30eb4b153e4a38f594705333c933361ce031a972 — and is untouched; this corrects the RECORD only.
+
+Gate-suite: cinatra-core@2026.08.3
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: ed215702ae06aa726b2c23ebbe688dbd3455b119```
