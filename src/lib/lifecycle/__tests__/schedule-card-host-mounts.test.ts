@@ -208,20 +208,37 @@ describe("the owner's contract, read off its own source", () => {
     for (const phase of ['"proposal"', '"expired"']) {
       expect(owner).toContain(`body.phase === ${phase}`);
     }
+    // THE LIST IS THE GATE'S, FIELD FOR FIELD. `body.fields` in
+    // `scripts/audit/chat-hitl-one-card-gate.mjs` is the AUTHORIZED body for
+    // this kind, read off `triggerScheduleProposalViewBodySchema` rather than
+    // paraphrased, and this pin exists to say the card consumes it. Two lists
+    // that mean the same thing are two lists that drift, and this one had:
+    // it still named `.triggerType`, `.gatedSteps` and `.runId` after the
+    // chrome removal took away the drawings that read them — the Trigger
+    // configuration summary, the held-steps tree and the "Open the run" link.
+    // The gate dropped all three (plan (A) §7.2 removes the drawings); the card
+    // draws none of them; so a pin demanding them was demanding the chrome back
+    // through a test. `.restrictedReason` and `.superseded` join for the same
+    // reason in reverse — the gate authorizes them and the card reads them.
+    //
+    // THE CARD IS NOT CHANGED TO SATISFY THIS. The direction of the fix is the
+    // one the seam has always had: the gate says what the server sends, the
+    // card draws it, and this file records that the card reads what it draws.
     for (const field of [
+      ".state",
+      ".phase",
       ".schedule",
       ".durationCopy",
       ".canConfirm",
+      ".restrictedReason",
       ".scheduleCopy",
-      ".triggerType",
+      ".superseded",
       ".timezone",
-      ".gatedSteps",
       ".released",
       ".arming",
       ".canSave",
       ".canCancel",
       ".canRelease",
-      ".runId",
     ]) {
       expect(owner, field).toContain(field);
     }

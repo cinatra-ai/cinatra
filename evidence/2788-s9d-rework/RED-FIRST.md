@@ -16,3 +16,23 @@ touched, and all five failed for the stated reason:
 After the change the whole file is green: `Tests  35 passed (35)`. Six
 pre-existing tests that asserted the removed drawings were updated in the same
 commit and are listed in the PR body.
+
+## The mounts pin, red first
+
+One test on this branch asserted a body field the card no longer draws. It was
+red at `c555788` for exactly that reason, and green after the list was aligned
+with the gate's:
+
+| test | failed with |
+|---|---|
+| `schedule-card-host-mounts` › it consumes its AUTHORIZED body through the one resolve seam, and reads every phase | `AssertionError: .triggerType: expected '"use client";\n\n// …' to contain '.triggerType'` |
+
+`Tests  1 failed | 8 passed (9)` before, `Tests  9 passed (9)` after.
+
+The card was NOT changed to satisfy it. `.triggerType`, `.gatedSteps` and
+`.runId` left the one-card gate's authorized body list when the chrome removal
+took away the drawings that read them — the Trigger configuration summary, the
+held-steps tree and the "Open the run" link — and this pin had kept demanding
+them, which is a test asking for the chrome back. The list is now the gate's,
+field for field, which is the only spelling of it that cannot drift again
+without the gate drifting first.

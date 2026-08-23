@@ -110,8 +110,27 @@ async function attributesOfMatches(locator) {
  * — it hands the recorder the matches' own attributes so the pin is recorded.
  */
 export function playwrightPage(page) {
+  /**
+   * THE APP PATH, never the origin.
+   *
+   * A record's `finalUrl` is read for its URL CLASS, and the canonical contract
+   * strips the origin before it classifies — so the host and the port carry no
+   * meaning here at all. What they do carry is the LANE: the machine the walk
+   * ran on and the port it happened to boot the app on, written into a file that
+   * is committed and read for years. Every one of the index's existing records
+   * stores a path for exactly that reason, and a driver that wrote an absolute
+   * URL would make the newest round the only one naming somebody's laptop.
+   */
+  const pathOnly = (value) => {
+    try {
+      const u = new URL(value);
+      return `${u.pathname}${u.search}${u.hash}`;
+    } catch {
+      return value;
+    }
+  };
   const readerFor = (scope, urlOf) => ({
-    url: urlOf,
+    url: async () => pathOnly(await urlOf()),
     count: async (selector) => scope.locator(selector).count(),
     countVisible: async (selector) => paintedCount(scope.locator(selector)),
     identifyWithin: async (selector) => attributesOfMatches(scope.locator(selector)),
@@ -320,6 +339,23 @@ export async function runWalkAction(page, action, { env = process.env, pageOf = 
       // to show the control the record is about to assert. Scrolling moves the
       // operator's eye; it does not touch the DOM, which is why it is in the
       // vocabulary at all.
+      //
+      // `block` IS THE SECOND HALF OF THAT SENTENCE, and it is here because the
+      // default was not enough on one cell. `scrollIntoViewIfNeeded` performs
+      // the MINIMUM scroll: it parks the element flush against the edge of the
+      // scroller and stops, and the chat composer is pinned OVER that edge. The
+      // browser calls such an element in view — the recorder counted the expired
+      // card's Confirm visible, correctly — while the picture showed a sliver of
+      // it behind the composer, which is the one thing a `window`-framed capture
+      // exists to prevent. A step that knows its card is taller than the window
+      // asks for `"block": "center"` and gets the floor in the middle of it.
+      if (action.block) {
+        await page
+          .locator(selector)
+          .first()
+          .evaluate((el, block) => el.scrollIntoView({ block, behavior: "instant" }), action.block);
+        return;
+      }
       await page.locator(selector).first().scrollIntoViewIfNeeded();
       return;
     default:
@@ -342,6 +378,29 @@ export async function driveWalk({
   repoRoot = process.cwd(),
   session = {},
   env = process.env,
+  /**
+   * WHERE THE APP IS, which the plan is not allowed to say.
+   *
+   * A walk step navigates with an app-relative path (`/chat`) because a
+   * committed plan carrying a host and a port is a leak and a plan the next lane
+   * cannot run. Playwright resolves such a path against the context's `baseURL`
+   * and throws without one, so the plan's own note — `export WALK_BASE=...` —
+   * has to be READ somewhere, and this is the only place that can read it
+   * without writing an origin into the plan.
+   */
+  baseURL = env.WALK_BASE ?? null,
+  /**
+   * WHERE EACH CONTEXT ENDED UP, written out when the walk finishes.
+   *
+   * A walk whose clock is real is driven in more than one pass, and the later
+   * pass has to reach a page the earlier one MINTED: the expired proposal lives
+   * in a thread the product addressed, so neither the plan nor the operator
+   * knows its URL until a browser has been there. `followContext` answers this
+   * inside one invocation and cannot answer it across two. So the walk writes
+   * down where it stood — a URL per context, nothing else — and the next pass
+   * supplies it back as the environment value the plan names.
+   */
+  contextsOut = null,
   /**
    * WHICH STEPS THIS INVOCATION DRIVES, by `id`. A walk whose clock is real —
    * S9d's proposal expires after a shipped 30 minutes — is driven in more than
@@ -371,6 +430,7 @@ export async function driveWalk({
           viewport: declared.viewport ?? { width: 1440, height: 900 },
           deviceScaleFactor: declared.deviceScaleFactor ?? 2,
           colorScheme: declared.colorScheme ?? "light",
+          ...(baseURL ? { baseURL } : {}),
           ...(session.storageState ? { storageState: session.storageState } : {}),
         });
         if (session.cookies) await context.addCookies(session.cookies);
@@ -408,6 +468,13 @@ export async function driveWalk({
       }
     }
   } finally {
+    if (contextsOut) {
+      const where = {};
+      for (const [name, { page }] of live.entries()) where[name] = page.url();
+      mkdirSync(dirname(resolve(contextsOut)), { recursive: true });
+      writeFileSync(resolve(contextsOut), `${JSON.stringify(where, null, 2)}\n`);
+      log(`wrote where each context stood -> ${contextsOut}`);
+    }
     for (const { context } of live.values()) await context.close();
     await browser.close();
   }
@@ -429,7 +496,7 @@ async function main(argv) {
   if (!planPath && !walkPath) {
     console.error(
       "usage: chat-hitl-capture-driver.mjs (--plan <plan.json> | --walk <walk.json>) " +
-        "[--out <index.json>] [--merge] [--steps <stepId,stepId>]",
+        "[--out <index.json>] [--merge] [--steps <stepId,stepId>] [--contexts-out <where.json>]",
     );
     return 1;
   }
@@ -442,6 +509,7 @@ async function main(argv) {
     records = await driveWalk({
       plan: walk,
       steps: (arg("--steps") ?? "").split(",").map((x) => x.trim()).filter(Boolean),
+      contextsOut: arg("--contexts-out") ?? null,
       // THE SESSION IS THE OPERATOR'S. A committed plan holds no credential, so
       // the cookie header comes from the environment of the lane driving it.
       session: process.env.WALK_COOKIE

@@ -224,7 +224,7 @@
       "actions": [
         { "action": "goto", "url": "${WALK_EXPIRED_THREAD}" },
         { "action": "waitForSelector", "selector": "[data-conformance-id=\"schedule-proposal-expired\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]" }
+        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
       ],
       "cells": [
         {
@@ -246,7 +246,7 @@
       "actions": [
         { "action": "followContext", "context": "expired-light" },
         { "action": "waitForSelector", "selector": "[data-conformance-id=\"schedule-proposal-expired\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]" }
+        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
       ],
       "cells": [
         {
