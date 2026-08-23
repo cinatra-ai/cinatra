@@ -4529,11 +4529,11 @@
     {
       "cell": "S9d-C1__schedule-card__chat_thread__pending",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ebac4b7c-743c-4827-8a0a-1eaca28fb762",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-before-confirm__light.png",
-      "sha256": "154ef77f50109d369b96bce6d0dc500443a5fd4fbe2a704e5757b97f146d457e",
-      "capturedAt": "2026-08-23T15:32:20.111Z",
+      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__light.png",
+      "sha256": "1b8e9b4998ee646ec228affac81bd4140ee44a613eb9a7a161e8565335560060",
+      "capturedAt": "2026-08-23T21:04:39.310Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4600,11 +4600,11 @@
     {
       "cell": "S9d-C1__schedule-card__chat_thread__pending__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ebac4b7c-743c-4827-8a0a-1eaca28fb762",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-before-confirm__dark.png",
-      "sha256": "72a11f872b694c6e03d2a3402cc96b66fced3913dd0741c290e1b8c49e58ce61",
-      "capturedAt": "2026-08-23T15:32:26.794Z",
+      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__dark.png",
+      "sha256": "8573b88f438348488390b10a97b2871f0523910832a8938077b704758a40a4bc",
+      "capturedAt": "2026-08-23T21:04:44.455Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4671,11 +4671,11 @@
     {
       "cell": "S9d-C2__schedule-card__chat_thread__decided",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ebac4b7c-743c-4827-8a0a-1eaca28fb762",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-after-confirm__light.png",
-      "sha256": "531cb5fea1dddb1433e6b22c0f8ebddedeeae2ae7fc455baa9105ab2e4eff34c",
-      "capturedAt": "2026-08-23T15:32:28.714Z",
+      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__light.png",
+      "sha256": "c3b024963654b5e3c47074f529716648a30bfd6a139fffe40309257aaec63ee8",
+      "capturedAt": "2026-08-23T21:04:45.400Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4751,11 +4751,11 @@
     {
       "cell": "S9d-C2__schedule-card__chat_thread__decided__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/ebac4b7c-743c-4827-8a0a-1eaca28fb762",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-after-confirm__dark.png",
-      "sha256": "f6e24ae341bb428e18bb50405ccc038e363e870694e7951c7a3d4956b868d016",
-      "capturedAt": "2026-08-23T15:32:33.634Z",
+      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__dark.png",
+      "sha256": "81823e5c91936307efc8977c30ec41e11cf1356784460b004ce651b37cabc908",
+      "capturedAt": "2026-08-23T21:04:47.234Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4831,11 +4831,11 @@
     {
       "cell": "S9d-C5__schedule-card__chat_thread__pending__expired",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c40d9526-4f74-4deb-b4d9-e90064bd84fe",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/36dd7069-b611-4249-8b36-7cb41c2dd238",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__light.png",
-      "sha256": "1ff764d4b3427da94a30ba64ad2c5cbcd4c12fd2b646b16676162de4824a85e3",
-      "capturedAt": "2026-08-23T16:04:46.870Z",
+      "sha256": "59c45ffb4f73437d2d10d684161db83825c04043910092de68a6e374ef0430c5",
+      "capturedAt": "2026-08-23T21:22:59.070Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4902,11 +4902,11 @@
     {
       "cell": "S9d-C5__schedule-card__chat_thread__pending__expired__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/c40d9526-4f74-4deb-b4d9-e90064bd84fe",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/36dd7069-b611-4249-8b36-7cb41c2dd238",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__dark.png",
-      "sha256": "79a3afaf442f641ad2f862df27f20c083ba9ce6d7007b3216e311013c93d10cf",
-      "capturedAt": "2026-08-23T16:04:51.358Z",
+      "sha256": "8345fbef5ff93b0e5eb51370a654ade0c8fb54d6d32989e66f46593cb6059671",
+      "capturedAt": "2026-08-23T21:23:01.070Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4966,6 +4966,310 @@
           "data-lifecycle-card-state": "pending",
           "data-lifecycle-card-host": "chat_thread",
           "data-lifecycle-card-phase": "expired",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C3__schedule-card__run_card__decided",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/972d5781-c540-45b0-adfd-d3c31dba6277",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-configured__light.png",
+      "sha256": "eb796975fa197e99b7b40b76096d407bf71fad18148973ce5007b499e00bcf1a",
+      "capturedAt": "2026-08-23T21:09:52.609Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C3__schedule-card__run_card__decided__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/972d5781-c540-45b0-adfd-d3c31dba6277",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-configured__dark.png",
+      "sha256": "5c40280524311292cd08a35a792cd2706c2ba1bcf4596ce567fbbf729c96f3d1",
+      "capturedAt": "2026-08-23T21:09:53.755Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C6__schedule-card__chat_thread__decided__after-fire",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__light.png",
+      "sha256": "061057980105cd7987bc6d6353954ae0322eb4728cbab5915b94d03c86fb24fc",
+      "capturedAt": "2026-08-23T21:22:55.440Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C6__schedule-card__chat_thread__decided__after-fire__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__dark.png",
+      "sha256": "f6d490078f923d361278c9761e112c934fbe11f8f507ca0679e6ecde2e1209de",
+      "capturedAt": "2026-08-23T21:22:57.229Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
           "data-conformance-id": "schedule-proposal-card"
         }
       }

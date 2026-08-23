@@ -150,7 +150,7 @@ describe("the walk plan is judged before the browser opens", () => {
     expect(walkCellsOf(S9D_WALK).some((c) => c.cell.includes("C4"))).toBe(false);
   });
 
-  it("drives to the two card-less stages and declares NO cell on them", () => {
+  it("drives to the card-less stage and declares NO cell on it", () => {
     // A KNOWN GAP, pinned so it stays visible rather than settling in quietly:
     // the maintainer's proof set is three stages x two hosts, and this plan
     // produces the four card cells of it plus C5. C7 (the run's own scheduling
@@ -158,15 +158,41 @@ describe("the walk plan is judged before the browser opens", () => {
     // cannot hold: every record here
     // asserts `[data-lifecycle-card-host]`, and neither screen draws a card —
     // one is the shipped trigger screen, the other lists the schedule as a rail
-    // ROW. The walk still goes there, because that is how the run is armed and
-    // fired; it just does not claim a record it could not honestly make.
-    const cardless = S9D_WALK.steps.filter((s) =>
-      ["setup-scheduling-step", "fire-the-schedule"].includes(s.id),
-    );
-    expect(cardless).toHaveLength(2);
+    // ROW. Both are photographed as PAGE CONTROLS instead
+    // (`evidence/2788-s9d-rework/drivers/page-control.mjs`): measured through the
+    // same reader, filed with their hashes, and given no record.
+    const cardless = S9D_WALK.steps.filter((s) => s.id === "setup-scheduling-step");
+    expect(cardless).toHaveLength(1);
     for (const step of cardless) {
       expect(step.cells).toEqual([]);
       expect(step.why).toContain("NO CELL");
+    }
+  });
+
+  it("NEVER fires the schedule itself", () => {
+    // THE FIRE IS THE SCHEDULER'S. A walk step that pressed `Run now` would make
+    // the C6/C8 stage a picture of a button press rather than of a schedule that
+    // came due, and the whole point of the "ran" stage is that the one-off went
+    // off on its own at the time the person stated. So the plan carries no step
+    // that releases the trigger, and the lane waits for `released_at` instead.
+    const actions = S9D_WALK.steps.flatMap((s) => s.actions ?? []);
+    const selectors = actions.map((a) => a.selector ?? "").join(" ");
+    expect(selectors).not.toContain("release-trigger-now");
+    expect(selectors).not.toContain("confirm-destructive");
+    expect(S9D_WALK.steps.some((s) => s.id === "fire-the-schedule")).toBe(false);
+
+    // AND IT WAITS FOR THE RELEASE RATHER THAN FOR THE SETTLED CARD. Absence of
+    // a release control is only half the property: a settled card exists the
+    // MOMENT Confirm is pressed, so an `after-fire` step that waits only on
+    // `state="settled"` would let a continuous run photograph the "ran" stage
+    // before the schedule was ever due — a picture of a card that had not yet
+    // been released, filed as the card after it fired.
+    for (const id of ["after-fire", "after-fire-dark"]) {
+      const step = S9D_WALK.steps.find((s) => s.id === id);
+      const waits = (step.actions ?? [])
+        .filter((a) => a.action === "waitForSelector")
+        .map((a) => a.selector);
+      expect(waits).toContain('[data-conformance-id="schedule-released"]');
     }
   });
 

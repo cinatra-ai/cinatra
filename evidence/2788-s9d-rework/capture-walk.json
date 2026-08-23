@@ -42,11 +42,18 @@
     "the thread has no address in this file — the product mints it, and the dark context FOLLOWS the",
     "light one to wherever it landed.",
     "",
-    "ONE ONE-OFF, WALKED END TO END. The sentence states a ONE-OFF, because the 'ran' stage is the",
-    "card after a one-off has fired (§7.2: 'once a one-off has fired it cannot be changed'). Confirm",
-    "mints the run; the run page's schedule step is C3; Run now on that same step fires it; and the",
-    "SAME conversation, reopened, is C6. C7 is the only cell on another run, and it has to be: an",
-    "armed run's setup scheduling step is behind it, and only a fresh run still shows it.",
+    "ONE ONE-OFF, AND THE WALK NEVER FIRES IT. The 'ran' stage is the card after a one-off has fired",
+    "(§7.2: 'once a one-off has fired it cannot be changed'), and the whole worth of that stage is",
+    "that the schedule came DUE — so no step here presses 'Run now', and no step releases the trigger.",
+    "Confirm mints the run; the run page's schedule step is C3; the shipped delayed job releases the",
+    "one-off at the time the person stated; and the SAME conversation, reopened afterwards, is C6.",
+    "`after-fire` therefore waits for `[data-conformance-id=\"schedule-released\"]` and not merely for a",
+    "settled card — a settled card exists the moment Confirm is pressed, so waiting on that alone would",
+    "let a continuous run photograph C6 before the schedule was ever due.",
+    "",
+    "C7 is the only cell on another run, and it has to be: an armed run's setup scheduling step is",
+    "behind it, and only a fresh run still shows it. So the proof set is ONE run for every stage the",
+    "schedule passes through, plus that one fresh run for the first-shown stage on the run page.",
     "",
     "TWO PASSES, because the clock is real. `PROPOSAL_TTL_SECONDS = 1800`: the expired reading is",
     "reached by letting the shipped window actually run out, not by moving a clock. Pass 1 starts",
@@ -57,10 +64,14 @@
     "    --steps expired-clock,state-the-schedule,follow-dark,confirm,confirm-dark",
     "  # ...with WALK_RUN_ID and WALK_SETUP_RUN_ID read from the lane:",
     "  node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2788-s9d-rework/capture-walk.json \\",
-    "    --steps setup-scheduling-step,run-page,run-page-dark,fire-the-schedule,after-fire,after-fire-dark",
-    "  # ...after the window elapses, with WALK_EXPIRED_THREAD read from the lane:",
+    "    --steps setup-scheduling-step,run-page,run-page-dark",
+    "  # ...after the one-off has come due on its own, and after the window elapses,",
+    "  # with WALK_THREAD and WALK_EXPIRED_THREAD read from the operator's environment:",
+    "  node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2788-s9d-rework/capture-walk.json \\",
+    "    --steps after-fire,after-fire-dark",
     "  node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2788-s9d-rework/capture-walk.json \\",
     "    --steps expired,expired-dark",
+    "  # C7 and C8 are taken outside the recorder — see drivers/page-control.mjs.",
     "",
     "THE LANE SUPPLIES THE IDS, NOT THIS FILE. `${WALK_BASE}`, `${WALK_COOKIE}`, `${WALK_TEMPLATE_ID}`,",
     "`${WALK_TEMPLATE_SLUG}`, `${WALK_RUN_ID}`, `${WALK_SETUP_RUN_ID}`, `${WALK_THREAD}` and",
@@ -93,12 +104,60 @@
     "E2__schedule-card__chat_thread__pending__expired-face__standin__dark"
   ],
   "contexts": {
-    "light": { "colorScheme": "light", "theme": "cinatra", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
-    "dark": { "colorScheme": "dark", "theme": "dark", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
-    "run-light": { "colorScheme": "light", "theme": "cinatra", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
-    "run-dark": { "colorScheme": "dark", "theme": "dark", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
-    "expired-light": { "colorScheme": "light", "theme": "cinatra", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
-    "expired-dark": { "colorScheme": "dark", "theme": "dark", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 }
+    "light": {
+      "colorScheme": "light",
+      "theme": "cinatra",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2
+    },
+    "dark": {
+      "colorScheme": "dark",
+      "theme": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2
+    },
+    "run-light": {
+      "colorScheme": "light",
+      "theme": "cinatra",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2
+    },
+    "run-dark": {
+      "colorScheme": "dark",
+      "theme": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2
+    },
+    "expired-light": {
+      "colorScheme": "light",
+      "theme": "cinatra",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2
+    },
+    "expired-dark": {
+      "colorScheme": "dark",
+      "theme": "dark",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "deviceScaleFactor": 2
+    }
   },
   "steps": [
     {
@@ -106,25 +165,75 @@
       "context": "expired-light",
       "why": "Start the shipped 30-minute window on a proposal nobody will touch. No cell: this step only makes the clock real.",
       "actions": [
-        { "action": "goto", "url": "/chat" },
-        { "action": "waitForSelector", "selector": "div[contenteditable=\"true\"][role=\"textbox\"]" },
-        { "action": "type", "selector": "div[contenteditable=\"true\"][role=\"textbox\"]", "text": "Schedule ${WALK_TEMPLATE_ID} to run tomorrow at 09:00." },
-        { "action": "press", "key": "Enter" },
-        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]" }
+        {
+          "action": "goto",
+          "url": "/chat"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "div[contenteditable=\"true\"][role=\"textbox\"]"
+        },
+        {
+          "action": "type",
+          "selector": "div[contenteditable=\"true\"][role=\"textbox\"]",
+          "text": "Please schedule ${WALK_TEMPLATE_ID} — I want it to run once, a few minutes from now."
+        },
+        {
+          "action": "press",
+          "key": "Enter"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]"
+        }
       ],
       "cells": []
     },
     {
       "id": "state-the-schedule",
       "context": "light",
-      "why": "STAGE 1 in the conversation: the schedule stated, photographed BEFORE Confirm. There is no going back once it is pressed, so C1 is shot in both themes first.",
+      "why": "STAGE 1 in the conversation: the ONE-OFF as the person states it, photographed BEFORE Confirm. The assistant answers the sentence with the card; the person then states the schedule ON THE CARD — the option rows are editable until Confirm, which is the plan's own sentence — choosing Schedule for later and putting the run-at and the timezone in. There is no going back once Confirm is pressed, so C1 is shot in both themes first.",
       "actions": [
-        { "action": "goto", "url": "/chat" },
-        { "action": "waitForSelector", "selector": "div[contenteditable=\"true\"][role=\"textbox\"]" },
-        { "action": "type", "selector": "div[contenteditable=\"true\"][role=\"textbox\"]", "text": "Schedule ${WALK_TEMPLATE_ID} to run tomorrow at 09:00." },
-        { "action": "press", "key": "Enter" },
-        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
+        {
+          "action": "goto",
+          "url": "/chat"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "div[contenteditable=\"true\"][role=\"textbox\"]"
+        },
+        {
+          "action": "type",
+          "selector": "div[contenteditable=\"true\"][role=\"textbox\"]",
+          "text": "Please schedule ${WALK_TEMPLATE_ID} — I want it to run once, a few minutes from now."
+        },
+        {
+          "action": "press",
+          "key": "Enter"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]"
+        },
+        {
+          "action": "click",
+          "selector": "[data-schedule-option=\"scheduled\"] button"
+        },
+        {
+          "action": "fill",
+          "selector": "[data-field=\"schedule-timezone\"]",
+          "value": "UTC"
+        },
+        {
+          "action": "fill",
+          "selector": "[data-field=\"schedule-run-at\"]",
+          "value": "${WALK_RUN_AT}"
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "block": "center"
+        }
       ],
       "cells": [
         {
@@ -135,18 +244,42 @@
           "framing": "window",
           "build": "development",
           "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__light.png",
-          "requires": "FIRST SHOWN in the conversation: the stated one-off, the three option rows editable with Schedule for later chosen, and Confirm alone on the floor"
+          "requires": "FIRST SHOWN in the conversation: the ONE-OFF the person stated, the three option rows editable with Schedule for later chosen and owning Run at / Timezone, and Confirm alone on the floor"
         }
       ]
     },
     {
       "id": "follow-dark",
       "context": "dark",
-      "why": "The SAME thread in dark. It is followed rather than navigated to: the product minted the thread, so this file does not know its address.",
+      "why": "The SAME thread and the SAME proposal in dark. It is followed rather than navigated to: the product minted the thread, so this file does not know its address. The person's statement is a CLIENT reading until Confirm — the proposal on the server still carries what the assistant proposed — so this context states the same one-off on the same card rather than pretending a reload would carry it.",
       "actions": [
-        { "action": "followContext", "context": "light" },
-        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
+        {
+          "action": "followContext",
+          "context": "light"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]"
+        },
+        {
+          "action": "click",
+          "selector": "[data-schedule-option=\"scheduled\"] button"
+        },
+        {
+          "action": "fill",
+          "selector": "[data-field=\"schedule-timezone\"]",
+          "value": "UTC"
+        },
+        {
+          "action": "fill",
+          "selector": "[data-field=\"schedule-run-at\"]",
+          "value": "${WALK_RUN_AT}"
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "block": "center"
+        }
       ],
       "cells": [
         {
@@ -166,9 +299,19 @@
       "context": "light",
       "why": "THE PRESS, and STAGE 2 in the conversation: one press, on the shipped control, on the card the previous step photographed — which is what makes C2 the same card in the same place rather than another card that looks settled.",
       "actions": [
-        { "action": "click", "selector": "[data-action=\"confirm-schedule-proposal\"]" },
-        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
+        {
+          "action": "click",
+          "selector": "[data-action=\"confirm-schedule-proposal\"]"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]"
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "block": "center"
+        }
       ],
       "cells": [
         {
@@ -188,9 +331,18 @@
       "context": "dark",
       "why": "The configured reading in dark, on the thread this context is already on.",
       "actions": [
-        { "action": "reload" },
-        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
+        {
+          "action": "reload"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]"
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "block": "center"
+        }
       ],
       "cells": [
         {
@@ -210,8 +362,14 @@
       "context": "run-light",
       "why": "STAGE 1 on the run page (C7): the run's own scheduling step — 'When should this run?' over the three option rows and Continue — on a FRESH run that has not been armed. NO CELL: this screen draws no lifecycle card, so it cannot carry a record of this index; the picture is owed to the capture lane (see README).",
       "actions": [
-        { "action": "goto", "url": "/agents/${WALK_TEMPLATE_SLUG}/${WALK_SETUP_RUN_ID}/trigger" },
-        { "action": "waitForSelector", "selector": "form button[type=\"submit\"]" }
+        {
+          "action": "goto",
+          "url": "/agents/${WALK_TEMPLATE_SLUG}/${WALK_SETUP_RUN_ID}/trigger"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "form button[type=\"submit\"]"
+        }
       ],
       "cells": []
     },
@@ -220,11 +378,26 @@
       "context": "run-light",
       "why": "STAGE 2 on the run page (C3): the schedule step of the run the walk armed at `confirm`, reached by a REAL press of the rail row — the rail on the left, the form in the run detail on the right, and no run progress beside it, because this run has not run.",
       "actions": [
-        { "action": "goto", "url": "/agents/${WALK_TEMPLATE_SLUG}/${WALK_RUN_ID}" },
-        { "action": "waitForSelector", "selector": "[data-action=\"open-schedule-step\"]" },
-        { "action": "click", "selector": "[data-action=\"open-schedule-step\"]" },
-        { "action": "waitForSelector", "selector": "[data-run-detail-column] [data-conformance-id=\"schedule-step-detail\"]" },
-        { "action": "waitForSelector", "selector": "[data-conformance-id=\"run-step-rail-column\"] [data-conformance-id=\"schedule-rail-step\"][data-schedule-step-selected=\"true\"]" }
+        {
+          "action": "goto",
+          "url": "/agents/${WALK_TEMPLATE_SLUG}/${WALK_RUN_ID}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"open-schedule-step\"]"
+        },
+        {
+          "action": "click",
+          "selector": "[data-action=\"open-schedule-step\"]"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-run-detail-column] [data-conformance-id=\"schedule-step-detail\"]"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"run-step-rail-column\"] [data-conformance-id=\"schedule-rail-step\"][data-schedule-step-selected=\"true\"]"
+        }
       ],
       "cells": [
         {
@@ -244,10 +417,22 @@
       "context": "run-dark",
       "why": "The same step in dark, on the same run.",
       "actions": [
-        { "action": "goto", "url": "/agents/${WALK_TEMPLATE_SLUG}/${WALK_RUN_ID}" },
-        { "action": "waitForSelector", "selector": "[data-action=\"open-schedule-step\"]" },
-        { "action": "click", "selector": "[data-action=\"open-schedule-step\"]" },
-        { "action": "waitForSelector", "selector": "[data-run-detail-column] [data-conformance-id=\"schedule-step-detail\"]" }
+        {
+          "action": "goto",
+          "url": "/agents/${WALK_TEMPLATE_SLUG}/${WALK_RUN_ID}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-action=\"open-schedule-step\"]"
+        },
+        {
+          "action": "click",
+          "selector": "[data-action=\"open-schedule-step\"]"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-run-detail-column] [data-conformance-id=\"schedule-step-detail\"]"
+        }
       ],
       "cells": [
         {
@@ -263,28 +448,27 @@
       ]
     },
     {
-      "id": "fire-the-schedule",
-      "context": "run-light",
-      "why": "THE FIRE, and STAGE 3 on the run page (C8): Run now on the schedule step releases the one-off, and the run detail then shows the run's own steps with the schedule still listed in the rail. NO CELL: the schedule's surface is not drawn on that screen — it is a rail row — so the screen carries no lifecycle card and cannot hold a record of this index; the picture is owed to the capture lane (see README).",
-      "actions": [
-        { "action": "goto", "url": "/agents/${WALK_TEMPLATE_SLUG}/${WALK_RUN_ID}" },
-        { "action": "waitForSelector", "selector": "[data-action=\"release-trigger-now\"]" },
-        { "action": "click", "selector": "[data-action=\"release-trigger-now\"]" },
-        { "action": "click", "selector": "[data-action=\"confirm-destructive\"]" },
-        { "action": "waitForTimeout", "ms": 5000 },
-        { "action": "reload" },
-        { "action": "waitForSelector", "selector": "[data-conformance-id=\"run-step-rail-column\"] [data-conformance-id=\"schedule-rail-step\"]" }
-      ],
-      "cells": []
-    },
-    {
       "id": "after-fire",
       "context": "light",
-      "why": "STAGE 3 in the conversation (C6): the SAME card in the SAME thread once the one-off has fired — the schedule cannot be changed any more, and the card says so in its own controls.",
+      "why": "STAGE 3 in the conversation (C6): the SAME card in the SAME thread once the one-off has FIRED ON ITS OWN at the time the person stated — the schedule cannot be changed any more, and the card says so in its own controls. Nothing in this walk releases it: the shipped delayed job does, and the lane waits for it.",
       "actions": [
-        { "action": "goto", "url": "${WALK_THREAD}" },
-        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
+        {
+          "action": "goto",
+          "url": "${WALK_THREAD}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"schedule-released\"]"
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "block": "center"
+        }
       ],
       "cells": [
         {
@@ -304,9 +488,23 @@
       "context": "dark",
       "why": "The same reading in dark, on the thread the light context is on.",
       "actions": [
-        { "action": "followContext", "context": "light" },
-        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
+        {
+          "action": "followContext",
+          "context": "light"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"schedule-released\"]"
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "block": "center"
+        }
       ],
       "cells": [
         {
@@ -326,9 +524,19 @@
       "context": "expired-light",
       "why": "The expired reading, after the shipped window has actually run out. The proposal is the one `expired-clock` minted and nothing touched.",
       "actions": [
-        { "action": "goto", "url": "${WALK_EXPIRED_THREAD}" },
-        { "action": "waitForSelector", "selector": "[data-conformance-id=\"schedule-proposal-expired\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
+        {
+          "action": "goto",
+          "url": "${WALK_EXPIRED_THREAD}"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]"
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "block": "center"
+        }
       ],
       "cells": [
         {
@@ -348,9 +556,19 @@
       "context": "expired-dark",
       "why": "The expired reading in dark, on the thread the light context is on.",
       "actions": [
-        { "action": "followContext", "context": "expired-light" },
-        { "action": "waitForSelector", "selector": "[data-conformance-id=\"schedule-proposal-expired\"]" },
-        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]", "block": "center" }
+        {
+          "action": "followContext",
+          "context": "expired-light"
+        },
+        {
+          "action": "waitForSelector",
+          "selector": "[data-conformance-id=\"schedule-proposal-expired\"]"
+        },
+        {
+          "action": "scrollIntoView",
+          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "block": "center"
+        }
       ],
       "cells": [
         {

@@ -1329,6 +1329,18 @@ export const WALK_ACTIONS = Object.freeze({
   followContext: ["context"],
   click: ["selector"],
   type: ["selector", "text"],
+  // SET a form field to an exact value, in one step.
+  //
+  // It is here because §VI's option rows are EDITABLE BY THE PERSON before they
+  // confirm — the plan says so in as many words — and a walk that states a
+  // schedule on the card has to be able to put a value into a `datetime-local`
+  // input. `type` cannot: that control is segmented, so keystrokes land in
+  // whichever segment the click happened to focus and the value that comes out
+  // depends on the browser's locale rather than on the plan. `fill` states the
+  // value and nothing else. It is an INPUT action, exactly like `type` and
+  // `click` — it arranges what the PERSON did, never what the recorder is about
+  // to measure, which is the property the closed vocabulary exists to protect.
+  fill: ["selector", "value"],
   press: ["key"],
   reload: [],
   waitForSelector: ["selector"],

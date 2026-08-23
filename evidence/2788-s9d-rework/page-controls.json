@@ -1,0 +1,82 @@
+[
+  {
+    "control": "C7",
+    "theme": "light",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C7__run-setup-scheduling-step__light.png",
+    "sha256": "d1a21a6ba61245c74ee16c317da3645700f5728d7f89465146af84d1b6b98b46",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/86b4a279-99a9-41a2-bba1-6f248d081820/trigger",
+    "resolvedTheme": "normal",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 0,
+      "[data-run-detail-column]": 0,
+      "form button[type=\"submit\"]": 1,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"agentic-run-progress\"]": 0
+    },
+    "capturedAt": "2026-08-23T21:12:17.628Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
+  },
+  {
+    "control": "C7",
+    "theme": "dark",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C7__run-setup-scheduling-step__dark.png",
+    "sha256": "4765eff1216e9d314bf13394fb6d726e803f548017112d052c6041791a626686",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/86b4a279-99a9-41a2-bba1-6f248d081820/trigger",
+    "resolvedTheme": "dark",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 0,
+      "[data-run-detail-column]": 0,
+      "form button[type=\"submit\"]": 1,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"agentic-run-progress\"]": 0
+    },
+    "capturedAt": "2026-08-23T21:12:21.657Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
+  },
+  {
+    "control": "C8",
+    "theme": "light",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C8__run-detail-after-fire__light.png",
+    "sha256": "55e772fcb20ae68b117dd0ce674cc525ab1c87a270e20cf878dd94d78c4b8c58",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/972d5781-c540-45b0-adfd-d3c31dba6277",
+    "resolvedTheme": "normal",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 1,
+      "[data-run-detail-column]": 1,
+      "[data-conformance-id=\"schedule-rail-step\"]": 1,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"schedule-step-detail\"]": 0
+    },
+    "capturedAt": "2026-08-23T21:23:27.221Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
+  },
+  {
+    "control": "C8",
+    "theme": "dark",
+    "framing": "window",
+    "build": "development",
+    "screenshot": "evidence/2788-s9d-rework/captures/C8__run-detail-after-fire__dark.png",
+    "sha256": "d38d4360d6784bf158c1f326024a2891d060eed491ac99eff77370615b2e2c30",
+    "pixels": "2880x1800",
+    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/972d5781-c540-45b0-adfd-d3c31dba6277",
+    "resolvedTheme": "dark",
+    "visible": {
+      "[data-conformance-id=\"run-step-rail-column\"]": 1,
+      "[data-run-detail-column]": 1,
+      "[data-conformance-id=\"schedule-rail-step\"]": 1,
+      "[data-lifecycle-card-host]": 0,
+      "[data-conformance-id=\"schedule-step-detail\"]": 0
+    },
+    "capturedAt": "2026-08-23T21:23:30.759Z",
+    "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
+  }
+]

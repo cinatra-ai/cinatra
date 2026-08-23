@@ -1,48 +1,50 @@
 # TIMELINE — the one real run behind every capture
 
 Every row is read out of the lane database, not out of a driver's log. The run
-is `7bfbfa9d-41fa-4125-a73f-f0da9f62e970`; the two conversations are real
+is `972d5781-c540-45b0-adfd-d3c31dba6277`; the two conversations are real
 assistant threads written by the shipped chat route —
-`c40d9526-4f74-4deb-b4d9-e90064bd84fe` for the proposal nobody touched, and
-`ebac4b7c-743c-4827-8a0a-1eaca28fb762` for the run.
+`36dd7069-b611-4249-8b36-7cb41c2dd238` for the proposal nobody touched, and
+`6b4165d5-b8fa-4c34-862c-cda396070163` for the run. `RUN-READBACK.md` carries
+the full rows.
 
 There is no seeded transcript and no hand-minted token anywhere in this walk. A
-sentence was typed into the shipped composer; the scripted model bridge
-(`CINATRA_TEST_LLM_PROVIDER=scripted`) answered it by calling the SHIPPED
-producer `schedule_proposal_render` over self-MCP; the proposal ref in the
-DATA_PART is the product's own.
+sentence was typed into the shipped composer; the model layer answered it by
+calling the SHIPPED producer `schedule_proposal_render` over self-MCP; the
+proposal ref in the DATA_PART is the product's own. The person then stated the
+ONE-OFF on the card itself — the option rows are editable until Confirm, which
+is the plan's own sentence — and pressed Confirm.
 
-Capture times are the `capturedAt` of the record each picture is filed with, so
-a reader can line every picture up against the row it belongs to.
+Capture times are the `capturedAt` of the record each picture is filed with (and,
+for the two page controls, of `page-controls.json`), so a reader can line every
+picture up against the row it belongs to.
 
 | UTC | what | where it is recorded |
 |---|---|---|
-| 15:32:11.787986 | the expired cell's schedule stated in a conversation | `cinatra.assistant_turns` (user turn, thread `c40d9526-…`) |
-| 15:32:12.580552 | the assistant answers with the card — **the shipped 30-minute window starts here** | `cinatra.assistant_turns` (assistant turn, same thread) |
-| 15:32:17.094047 | the run's schedule stated in a second conversation | `cinatra.assistant_turns` (user turn, thread `ebac4b7c-…`) |
-| 15:32:17.853087 | the assistant answers with the card, `pending` — **C1** shot at 15:32:20.111 (light) and 15:32:26.794 (dark) | `cinatra.assistant_turns` (assistant turn, same thread) |
-| 15:32:26.949 | **Confirm pressed:** the trigger is armed FIRST — `recurring`, cron `0 9 * * *`, timezone `UTC`, enabled | `cinatra.agent_run_triggers.created_at` |
-| 15:32:27.009638 | and only then is the run exposed: the proposal CONSUMED — single-use, bound to this reader, org and template — and the run created, status `armed` — **C2** shot at 15:32:28.714 and 15:32:33.634 | `cinatra.trigger_schedule_proposal_consumes`, `cinatra.agent_runs` |
-| 15:32:27 | the trigger's scheduler id written (install drained) | `cinatra.agent_run_triggers.updated_at` |
-| 15:34:42.024 | the run page's schedule step opened by a real press of the rail row — **C3** (dark at 15:34:44.277) | the walk's own press, on the run above |
-| ~16:02:12 | the untouched proposal's 30-minute window elapsed | `PROPOSAL_TTL_SECONDS = 1800`, mint at 15:32:12 |
-| 16:04:46.870 | the expired reading captured — **C5** (dark at 16:04:51.358) | the walk reopened the same conversation |
+| 20:46:46.895970 | the expired cell's schedule stated in a conversation | `cinatra.assistant_turns` (user turn, thread `36dd7069-…`) |
+| 20:46:47.256721 | the assistant answers with the card — **the shipped 30-minute window starts here** | `cinatra.assistant_turns` (assistant turn, same thread) |
+| 21:04:37.906315 | the run's schedule stated in a second conversation | `cinatra.assistant_turns` (user turn, thread `6b4165d5-…`) |
+| 21:04:38.243667 | the assistant answers with the card, `pending`; the person then chooses **Schedule for later** on the card and states `2026-08-23 21:22` UTC — **C1** shot at 21:04:39.310 (light) and 21:04:44.455 (dark) | `cinatra.assistant_turns` (assistant turn, same thread) |
+| 21:04:44.786750 | **Confirm pressed:** the proposal CONSUMED — single-use, bound to this reader, org and template — and the run created | `cinatra.trigger_schedule_proposal_consumes`, `cinatra.agent_runs` |
+| 21:04:44.796 | the trigger written: `scheduled`, a ONE-OFF at `2026-08-23 21:22:00+00` UTC, no cron, enabled, delayed job `trigger-release-972d5781-…` — **C2** shot at 21:04:45.400 and 21:04:47.234 | `cinatra.agent_run_triggers` |
+| 21:08:10.765053 | a FRESH run started from the product's own **Run** control, never armed — **C7** (page control) shot at 21:12:17.628 and 21:12:21.657 | `cinatra.agent_runs` (no `agent_run_triggers` row) |
+| 21:09:52.609 | the run page's schedule step opened by a real press of the rail row — **C3** (dark at 21:09:53.755) | the walk's own press, on the run above |
+| **21:22:00.163** | **the one-off FIRES ON ITS OWN.** `released_at` lands 163 ms after the second the person stated, seventeen minutes after the row was written, with no interaction in between. Nothing pressed *Run now*. | `cinatra.agent_run_triggers.released_at` |
+| 21:22:05.409 | the agent has executed and the run is `completed` — its model call went out over the shipped `/api/llm-bridge` against the instance's own sealed provider row | `cinatra.agent_runs.completed_at` |
+| ~21:16:47 | the untouched proposal's 30-minute window elapsed | `PROPOSAL_TTL_SECONDS = 1800`, mint at 20:46:47 |
+| 21:22:55.440 | the conversation's card after the fire — **C6** (dark at 21:22:57.229) | the walk reopened the run's conversation |
+| 21:22:59.070 | the expired reading captured — **C5** (dark at 21:23:01.070) | the walk reopened the untouched conversation |
+| 21:23:27.221 | the run detail after the fire — **C8** (page control; dark at 21:23:30.759) | `evidence/2788-s9d-rework/page-controls.json` |
 
 The end state of the run, read back after the last capture:
-`agent_runs.status = armed`, `started_at` and `completed_at` NULL;
-`agent_run_triggers.released_at` NULL, `enabled = t`. Nothing in this round
-released the schedule or started the agent.
+`agent_runs.status = completed`, `completed_at 21:22:05.409`, no error;
+`agent_run_triggers.released_at 21:22:00.163`, `enabled = t`.
 
 ## Why C4 is not here
 
-C4 asked for the review page carrying **this run's real artifact review**. This
-run has none, and the reason is on the rows above: the schedule is armed and has
-not fired, so the agent has not run, so it has produced nothing for anybody to
-review. A review card exists only after a run produced something.
-
-The obstacle is not the walk's. Reaching an artifact review means letting the
-agent actually execute, and the planner agent needs a real model provider. This
-lane has none and must never have one. Per the standing rule that a stand-in is
-never acceptable, **C4 is DROPPED from this round** rather than staged — there is
-no C4 step in `capture-walk.json` to accidentally answer with the wrong screen.
-It needs a lane that may hold a provider credential.
+C4 asked for the review page carrying **this run's real artifact review**. The
+schedule slice does not produce one: a schedule decides WHEN the agent runs, and
+a review card exists only after a run has produced something a reviewer is asked
+about. This run produced its own output and completed without raising a review
+gate, so there is nothing to photograph. Per the standing rule that a stand-in is
+never acceptable, **C4 stays DROPPED** rather than staged — there is no C4 step in
+`capture-walk.json` to accidentally answer with the wrong screen.
