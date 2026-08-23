@@ -251,6 +251,63 @@ function isAssistantThreadByIdPath(pathname: string) {
   return ASSISTANT_THREAD_BY_ID_PATH.test(pathname);
 }
 
+// cinatra#2902 — GET /api/agents/runs/<runId>, the inline run panel's SEED.
+//
+// WHAT BREAKS WITHOUT IT. Inside the embedded widget, a conversation that
+// references an agent run mounts the inline run panel, and the panel's first act
+// is to read the run it must draw. That read is a cookieless cross-site request,
+// so the guard answered it with a 307 to sign-in before the handler ever ran.
+// `fetch` follows the redirect, the sign-in HTML is not JSON, the seed fails, and
+// the panel draws its "Could not load agent run … — please try again." line for
+// ever. Retrying never helps, because nothing about the request changes.
+//
+// WHY A PATTERN AND NOT AN EXACT ENTRY. The path carries the run id, so there is
+// no literal to list — the same reason the two matchers above take this form.
+//
+// WHY THIS SHAPE IS THE NARROWEST HONEST ONE. A run id is always minted from
+// `randomUUID()`, at the call sites that create a run, and carried into the one
+// creation perimeter (`createAgentRun` in `packages/agents/src/store.ts`). Those
+// call sites mint TWO shapes, and the matcher admits exactly those two:
+//
+//   · the BARE uuid — `packages/agents/src/actions.ts`,
+//     `packages/agents/src/a2a-actions.ts`,
+//     `packages/agents/src/mcp/agent-tools-registry.ts`;
+//   · `run_<uuid>` — `src/lib/project-dispatch.ts` and the two mint sites in
+//     `src/lib/host-content-editor-dispatch.ts`.
+//
+// A matcher that admitted only the bare form would leave every project-dispatch
+// and content-editor run answering the widget with the 307 this entry exists to
+// remove — the defect would survive for exactly the runs a customer's site is
+// most likely to reference.
+//
+// THE RESIDUAL, STATED. `run-<uuid>` (hyphen) is admitted alongside them because
+// the run-id column is opaque `text` with no shape constraint, and the model
+// layer already reads that form off a turn (`AGENT_RUN_ID_PATTERN` in
+// `packages/llm/src/scripted-test-provider.ts`, whose own note records a
+// deployment keyed that way). It widens nothing else: all three alternatives are
+// one segment of fixed length and fixed alphabet, and the matcher terminates
+// there, so a malformed id stays guarded rather than reaching a handler that
+// would only refuse it anyway.
+//
+// WHAT STAYS GUARDED, and each has its own control in the pinned suite: the
+// DESCENDANT `/stream` (the panel's live transport, deliberately out of this
+// slice's scope and still session-only), the SIBLING collection `/api/agents/runs`,
+// a malformed id, and every unrelated path.
+//
+// Reachability only. The handler branches on the presented credential and
+// never falls back — this route is same-origin to the embed frame, so a failed
+// widget consume must refuse rather than drop to whatever Cinatra cookie that
+// browser holds — consumes the widget branch at THIS route's audience under
+// `conversation.read`, and then runs the SAME per-run authorization ladder the
+// first-party read runs, with the widget principal and the org the TOKEN is bound
+// to. A run this caller may not read is refused with the branch's one uniform
+// answer: existence is not disclosed across tenants.
+const AGENT_RUN_BY_ID_PATH =
+  /^\/api\/agents\/runs\/(?:run[-_])?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+function isAgentRunByIdPath(pathname: string) {
+  return AGENT_RUN_BY_ID_PATH.test(pathname);
+}
+
 const SETUP_PATH_PREFIXES = [
   "/setup",
   "/configuration/llm/initial-setup",
@@ -258,7 +315,7 @@ const SETUP_PATH_PREFIXES = [
   "/configuration/apps/openai",
 ];
 
-function isPublicPath(pathname: string) {
+function isPublicPath(pathname: string, method: string) {
   if (pathname.startsWith("/_next")) {
     return true;
   }
@@ -320,6 +377,23 @@ function isPublicPath(pathname: string) {
   // never a deeper path; the handler's own credential-branched auth is the gate.
   // See ASSISTANT_THREAD_BY_ID_PATH.
   if (isAssistantThreadByIdPath(pathname)) {
+    return true;
+  }
+
+  // cinatra#2902 — GET /api/agents/runs/<runId>, the inline run panel's seed.
+  // A bounded UUID-shaped segment terminating there; the descendant `/stream`
+  // and the bare collection stay guarded. The handler's own credential-branched
+  // auth is the gate. See AGENT_RUN_BY_ID_PATH.
+  //
+  // METHOD-PINNED. The exemption is a READ exemption, so it is spent on GET and
+  // on nothing else. The path rule alone was method-blind: any verb on a
+  // matching path skipped the cookie guard. Today that is only latent — the
+  // route module exports GET alone, so Next answers a POST there with 405 —
+  // but the guard must not be the layer that depends on it. If a writing verb
+  // is ever added to this path, it inherits the cookie guard by default instead
+  // of silently inheriting a cookieless exemption written for a read. A non-GET
+  // falls through to the checks below and then to the session guard.
+  if (method === "GET" && isAgentRunByIdPath(pathname)) {
     return true;
   }
 
@@ -517,7 +591,14 @@ export async function guardAppRoute(request: NextRequest) {
 async function guardProtectedRoute(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
 
-  if (isPublicPath(pathname)) {
+  // `pathname` EXCLUDES the query string (that is `nextUrl.search`), so no
+  // `?...` can widen a path rule — admission is decided on the path alone, and
+  // a matching GET stays admitted whatever it carries as query. That is safe
+  // because admission here only means "reach the handler": the handler's own
+  // credential branch, not this guard, decides who may read the run.
+  // `?? "GET"` matches the framework default and keeps test doubles that stub
+  // only `nextUrl.pathname` on the read path they are written for.
+  if (isPublicPath(pathname, request.method ?? "GET")) {
     return NextResponse.next();
   }
 

@@ -28,6 +28,8 @@ import {
   resolveAssistantMirrorOrgId,
   buildAssistantThreadMirrorUpsertQuery,
   buildAssistantTurnMirrorReconcileQueries,
+  extractRemovedMessageIdsFromThread,
+  extractRemovedRunIdsFromThread,
   buildAssistantPauseStateReconcileQueries,
   buildAssistantThreadMirrorQueries,
   buildAssistantThreadMirrorDeleteQuery,
@@ -331,6 +333,252 @@ describe("buildAssistantTurnMirrorReconcileQueries", () => {
     });
     expect(queries).toHaveLength(1);
     expect(queries[0].values).toEqual(["t1", []]);
+  });
+
+  // ── the supersede half (cinatra#2823 S9j), scoped onto an EXPLICIT
+  //    truncation intent ──────────────────────────────────────────────────────
+
+  it("a save that ASSERTS NOTHING emits NO supersede at all", () => {
+    // Round 4, F1 — the whole of the first fix. "The row is in the database and
+    // absent from this payload" is not an assertion of removal: a tab whose
+    // transcript predates a turn omits it without ever having had it, and its
+    // ordinary save would otherwise have tombstoned that turn permanently.
+    for (const removedMessageIds of [undefined, null, []]) {
+      for (const removedRunIds of [undefined, null, []]) {
+        const queries = buildAssistantTurnMirrorReconcileQueries({
+          schemaName: SCHEMA,
+          threadId: "t1",
+          turns,
+          removedMessageIds,
+          removedRunIds,
+        });
+        expect(queries).toHaveLength(2); // delete + insert, and nothing else
+        for (const q of queries) {
+          expect(q.text).not.toContain("superseded_at = now()");
+        }
+      }
+    }
+  });
+
+  it("SUPERSEDES the run-bound turns the save ASSERTS it removed, BEFORE the delete", () => {
+    const [supersede, del] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+    });
+    // Ordered FIRST, because it reads the very rows the DELETE is about to take.
+    expect(supersede.text).toContain(`UPDATE "${SCHEMA}"."assistant_turns" t`);
+    expect(supersede.text).toContain("SET superseded_at = now()");
+    expect(del.text).toContain(`DELETE FROM "${SCHEMA}"."assistant_turns"`);
+    // Its `removed` set is the DELETE's predicate INTERSECTED with the assertion:
+    // a row is tombstoned only when the writer both says it removed the message
+    // AND no longer carries it. The intent can only ever NARROW the reconcile.
+    expect(supersede.text).toContain(`id LIKE '${LEGACY_MIRROR_TURN_ID_PREFIX}%'`);
+    expect(supersede.text).toContain("NOT (id = ANY($2::text[]))");
+    expect(supersede.text).toContain("AND id = ANY($3::text[])");
+    // The asserted ids are mapped into THIS thread's mirror namespace — the only
+    // namespace a legacy write may ever touch, so an assertion can never name a
+    // runtime-minted row.
+    expect(supersede.values).toEqual([
+      "t1",
+      ["legacy:2:t1:m1", "legacy:2:t1:m2"],
+      ["legacy:2:t1:m9"],
+      null,
+      [], // no streaming half asserted here
+    ]);
+  });
+
+  // ── the STREAMING half: a turn that never had a mirror row ────────────────
+
+  it("SUPERSEDES on an asserted RUN ID, with no mirror row to link through", () => {
+    // Every key above is read out of the REMOVED MIRROR ROW, so none of them
+    // reaches a turn that was still streaming, ended into a reveal no committed
+    // transcript carries, or was aborted. Those turns have a run-bound row and no
+    // mirror row ever, so the intent carries the identity they DO share with the
+    // server: the run id, matched against the run-bound row's own column.
+    const [supersede, del] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedRunIds: ["run-7"],
+    });
+    expect(supersede.text).toContain("SET superseded_at = now()");
+    expect(supersede.text).toContain("t.run_id = ANY($5::text[])");
+    expect(del.text).toContain(`DELETE FROM "${SCHEMA}"."assistant_turns"`);
+    // NOT namespaced: a run id is the row's own column, not a mirror id.
+    expect(supersede.values[4]).toEqual(["run-7"]);
+    expect(supersede.values[2]).toEqual([]);
+  });
+
+  it("the run-id arm carries the SAME fences as every other arm", () => {
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedRunIds: ["run-7"],
+      actorUserId: "u-actor",
+    });
+    // Thread-scoped, so an edit in one thread can never reach another's turn.
+    expect(supersede.text).toContain("WHERE t.thread_id = $1");
+    // Self-harm only — the same ownership predicate, in the same statement.
+    expect(supersede.text).toContain("th.owner_user_id = $4::text");
+    expect(supersede.text).toContain("$4::text IS NOT NULL");
+    // ...and the same "could this row even fold in" predicates.
+    expect(supersede.text).toContain("t.run_id IS NOT NULL");
+    expect(supersede.text).toContain("t.superseded_at IS NULL");
+    expect(supersede.text).toContain("t.content->>'format' = 'assistant-turn-v1'");
+  });
+
+  it("both halves ride ONE statement — the truncation and the tombstone commit together", () => {
+    const queries = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+      removedRunIds: ["run-7"],
+    });
+    expect(queries).toHaveLength(3); // supersede + delete + insert
+    expect(queries[0].values[2]).toEqual(["legacy:2:t1:m9"]);
+    expect(queries[0].values[4]).toEqual(["run-7"]);
+  });
+
+  it("is SELF-HARM ONLY: it reaches rows only on a thread the ACTOR personally owns", () => {
+    // The reach argument the tombstone rests on — "a false assertion costs the
+    // writer the repair of its own turn" — holds only where the thread has ONE
+    // writer. A TEAM thread is writable by every member of the team's org and a
+    // legacy UNOWNED thread by anyone who can reach it, so on either, one
+    // member's edit-and-resend would permanently supersede rows belonging to
+    // turns another member is still reading. The statement authorizes itself
+    // against the thread row, inside the write's own transaction.
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+      actorUserId: "u-actor",
+    });
+    expect(supersede.text).toContain(`FROM "${SCHEMA}"."assistant_threads" th`);
+    expect(supersede.text).toContain("th.owner_user_id IS NOT NULL");
+    expect(supersede.text).toContain("th.owner_user_id = $4::text");
+    // A team-owned row is never personal, even if an owner axis is also set.
+    expect(supersede.text).toContain("th.team_id IS NULL");
+    // And a caller that derived no actor authorizes nothing at all.
+    expect(supersede.text).toContain("$4::text IS NOT NULL");
+    expect(supersede.values[3]).toBe("u-actor");
+  });
+
+  it("touches ONLY run-bound, un-superseded, durable-format rows", () => {
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+    });
+    expect(supersede.text).toContain("t.run_id IS NOT NULL");
+    expect(supersede.text).toContain("t.superseded_at IS NULL");
+    expect(supersede.text).toContain("t.content->>'format' = 'assistant-turn-v1'");
+    // It never DELETES: the run-bound row is also the resume/authorization
+    // anchor, so removing it would break a reconnect to a run still in flight.
+    expect(supersede.text).not.toContain("DELETE");
+  });
+
+  it("links the two writers by SERVER-MINTED identity, in every shape it is recorded in", () => {
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+    });
+    // The removed MIRROR rows: the ordinary trace, the Slack-mode layout that
+    // omits it, and the cards folded onto their producing slot.
+    expect(supersede.text).toContain("r.content->'parts'");
+    expect(supersede.text).toContain("r.content->'thoughtGroups'");
+    expect(supersede.text).toContain("p->'views'");
+    // The surviving RUN-BOUND row, in the durable format's own vocabulary
+    // (`type`, not `kind`), and its own copy of the slot stamp.
+    expect(supersede.text).toContain("dp->>'type' = 'tool_call'");
+    expect(supersede.text).toContain("t.content->'dataParts'");
+    expect(supersede.text).toContain("t.content->'dataPartSlots'");
+  });
+
+  it("matches PER REMOVED ROW, on a view key BOUND TO THE PRODUCING CALL", () => {
+    // The identities were once pooled thread-wide and a view-ref hit accepted
+    // unconditionally — but a lifecycle `ref` names an ENTITY, so a later turn
+    // re-rendering the same card had its row tombstoned by the removal of an
+    // unrelated one. The discipline is `claimsDurableTurn`'s, verbatim: per
+    // removed row, and on a key that names a TURN rather than an entity.
+    const [supersede] = buildAssistantTurnMirrorReconcileQueries({
+      schemaName: SCHEMA,
+      threadId: "t1",
+      turns,
+      removedMessageIds: ["m9"],
+    });
+    // Every identity token is keyed to the removed row that carried it — there is
+    // no thread-wide union to match against.
+    expect(supersede.text).toContain("r.id AS removed_id");
+    expect(supersede.text).toContain("SELECT rc.token FROM removed_call rc WHERE rc.removed_id = r.id");
+    expect(supersede.text).toContain("SELECT rv.token FROM removed_view rv WHERE rv.removed_id = r.id");
+    expect(supersede.text).not.toContain("removed_identity");
+    // The view token carries the SLOT — the tool call that produced the card —
+    // on both sides, so a bare `viewType|ref` can never match. That is what makes
+    // the arm safe to offer outright: the old "only when the removed row records
+    // no tool call at all" fence existed to keep a WEAK key away from a row that
+    // was not silent about its identity, and a slot-bound key is not weak.
+    expect(supersede.text).toContain("|| '@' || (p->>'id')");
+    expect(supersede.text).toContain(") ->> (dv.pos::int - 1)");
+    // ...and the durable slots array is only trusted when it lines up with
+    // `dataParts` one-for-one, exactly as the reload projection demands.
+    expect(supersede.text).toContain("jsonb_array_length");
+    expect(supersede.text).not.toContain(
+      "NOT EXISTS (SELECT 1 FROM removed_call rc WHERE rc.removed_id = r.id)",
+    );
+  });
+});
+
+describe("extractRemovedMessageIdsFromThread", () => {
+  // The truncation intent's own reader (round 4, F1). The payload is arbitrary
+  // JSON from many writers, so absence and garbage must both mean "asserts
+  // nothing" rather than failing the user's save.
+  it("null when the field is absent or not an array — the ordinary save", () => {
+    expect(extractRemovedMessageIdsFromThread({ id: "t1" })).toBeNull();
+    expect(extractRemovedMessageIdsFromThread({ removedMessageIds: "m1" })).toBeNull();
+    expect(extractRemovedMessageIdsFromThread({ removedMessageIds: 7 })).toBeNull();
+    expect(extractRemovedMessageIdsFromThread({ removedMessageIds: null })).toBeNull();
+  });
+
+  it("keeps the asserted ids, drops non-strings and duplicates", () => {
+    expect(
+      extractRemovedMessageIdsFromThread({
+        removedMessageIds: ["m1", "", "m2", 3, null, "m1", { id: "m4" }],
+      }),
+    ).toEqual(["m1", "m2"]);
+  });
+
+  it("an empty assertion is still an assertion of nothing", () => {
+    expect(extractRemovedMessageIdsFromThread({ removedMessageIds: [] })).toEqual([]);
+  });
+});
+
+describe("extractRemovedRunIdsFromThread", () => {
+  // The STREAMING half's reader, defensive on exactly the same terms.
+  it("null when the field is absent or not an array — the ordinary save", () => {
+    expect(extractRemovedRunIdsFromThread({ id: "t1" })).toBeNull();
+    expect(extractRemovedRunIdsFromThread({ removedRunIds: "run-1" })).toBeNull();
+    expect(extractRemovedRunIdsFromThread({ removedRunIds: 7 })).toBeNull();
+    expect(extractRemovedRunIdsFromThread({ removedRunIds: null })).toBeNull();
+  });
+
+  it("keeps the asserted runs, drops non-strings and duplicates", () => {
+    expect(
+      extractRemovedRunIdsFromThread({
+        removedRunIds: ["run-1", "", "run-2", 3, null, "run-1", { id: "run-4" }],
+      }),
+    ).toEqual(["run-1", "run-2"]);
+  });
+
+  it("an empty assertion is still an assertion of nothing", () => {
+    expect(extractRemovedRunIdsFromThread({ removedRunIds: [] })).toEqual([]);
   });
 });
 

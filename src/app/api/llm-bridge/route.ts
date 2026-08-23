@@ -1261,6 +1261,16 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
+  // cinatra#2910 — the runtime the resolver returned may be the DETERMINISTIC
+  // TEST runtime (scripted), which is not a provider: it has no capability
+  // matrix and no usage identity. The reads below that are keyed on a PROVIDER
+  // id take this value instead, so a scripted run reports no provider rather
+  // than a fabricated one. The scripted runtime is only constructible under the
+  // test flag AND an explicit development runtime (the resolver asserts it), so
+  // this is `null` on every real install.
+  const resolvedRuntimeProvider: LlmProvider | null =
+    resolvedRuntime.provider === "scripted" ? null : resolvedRuntime.provider;
+
   const maxSteps = Math.min(body.max_steps ?? 6, 20);
 
   // ---------------------------------------------------------------------------
@@ -1569,7 +1579,9 @@ export async function POST(req: Request): Promise<Response> {
     // metric-cost subscriber. Honor-rate analytics: SELECT count(*)
     // FILTER (WHERE requested_provider = effective_provider) / count(*).
     const telemetryEffectiveProvider =
-      dispatch.kind === "dispatch" ? dispatch.effectiveProvider : resolvedRuntime.provider;
+      dispatch.kind === "dispatch"
+        ? dispatch.effectiveProvider
+        : resolvedRuntimeProvider;
     let result;
     try {
       // Partition the caller's `toolbox_ids` into MCP IDs vs built-in
@@ -1652,11 +1664,15 @@ export async function POST(req: Request): Promise<Response> {
       const mcpEffectiveProvider =
         dispatch.kind === "dispatch"
           ? dispatch.effectiveProvider
-          : resolvedRuntime.provider;
+          : resolvedRuntimeProvider;
       const cinatraMcpToolOverride =
         runForPorts?.orgId &&
         runForPorts?.runBy &&
         runForPorts?.id &&
+        // cinatra#2910: no effective PROVIDER (the scripted test runtime) ⇒ no
+        // native-MCP OBO mint. Nothing is elevated and nothing is skipped that
+        // a provider run would have got: there is no provider to mint for.
+        mcpEffectiveProvider !== null &&
         // llm-providers S1 (#1712, AC4): native MCP OBO applies iff the
         // effective provider's DECLARED capability matrix satisfies native_mcp
         // (was: `=== "openai" || === "anthropic"`). Behavior-identical under the

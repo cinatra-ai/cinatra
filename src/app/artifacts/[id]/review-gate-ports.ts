@@ -323,10 +323,11 @@ export async function readReviewGatePinnedTargets(
 // ---------------------------------------------------------------------------
 
 /**
- * Load the review surface for a run's pending gate. Order is security-load-
- * bearing (§V): read access FIRST (a viewer with none never reaches the
- * targets), then the gate must still be pending (else a single blocked state,
- * gate existence never leaked), then prepare the pinned set, then the decision
+ * Load the review surface for a run's gate. Order is security-load-bearing
+ * (§V): read access FIRST (a viewer with none never reaches the targets), then
+ * the gate's own state — a DECIDED gate is `settled` (the card draws its
+ * recorded reading) and an unavailable one is a single blocked state, gate
+ * existence never leaked — then prepare the pinned set, then the decision
  * permissions. Never throws for an authorization/gate-state outcome — those are
  * modelled states, not errors.
  */
@@ -341,12 +342,34 @@ export async function loadReviewGateSurface(args: {
   const readAccess = await enforceReviewRunAccess(runId, actorCtx.actor, "read", actorCtx.roleHints);
   if (!readAccess.ok) return { kind: "not-authorized" };
 
-  // 2. Gate must be a PENDING gate on this run (§V). resolved / unavailable
-  //    (absent, folded) ⇒ blocked "no-longer-pending"; the pinned set is read
-  //    from the gate, so the client never supplies targets.
+  // 2. Gate must be a PENDING gate on this run (§V) for the DECISION surface;
+  //    the pinned set is read from the gate, so the client never supplies
+  //    targets. A non-pending gate is not one outcome but TWO, and they are held
+  //    apart here exactly as the card's own resolver holds them apart
+  //    (`lifecycle-card-refetch`: `resolved` → `settled`, `unavailable` →
+  //    `absent`; cinatra#2904):
+  //
+  //      `resolved`    → `settled`. The gate exists, this reader may read the
+  //                      run, and it has been decided. That is a review this
+  //                      surface CAN show — the card draws the recorded outcome,
+  //                      its decider where one can be named, and the recorded
+  //                      suggestion chips — so the surface says "mount the card"
+  //                      rather than blocking before the card exists. Plan §4.4
+  //                      step 7: everyone looking at that run, in any channel,
+  //                      sees the same settled card.
+  //
+  //      `unavailable` → `blocked`, unchanged. A gate that never existed and a
+  //                      row too corrupt to read are not a decided review, and
+  //                      widening the settled reading over them would let a
+  //                      replayed or garbage ref produce settled-card DOM for
+  //                      nothing at all. Gate existence is still not leaked: the
+  //                      blocked panel is the same panel a stale view draws.
   const gate = await readReviewGateState(runId, reviewTaskId);
-  if (gate.status !== "pending") {
+  if (gate.status === "unavailable") {
     return { kind: "blocked", reason: "no-longer-pending" };
+  }
+  if (gate.status !== "pending") {
+    return { kind: "settled" };
   }
 
   // 3. Prepare EVERY pinned target through the fully-bound core (never-blank
@@ -360,6 +383,12 @@ export async function loadReviewGateSurface(args: {
       case "run-access-denied":
         return { kind: "not-authorized" };
       case "gate-not-pending":
+        // The gate moved between step 2 and here. It stays BLOCKED rather than
+        // becoming `settled`: `prepareReviewTargets` folds "no such gate" into
+        // this same error (`artifact-review-preparation`), so this answer cannot
+        // tell a gate decided under the reviewer from one that was never there,
+        // and only a read that KNOWS it saw a resolved row may mount the settled
+        // card. The reader's Refresh re-enters at step 2, which does know.
         return { kind: "blocked", reason: "no-longer-pending" };
       case "target-substitution":
         return { kind: "blocked", reason: "targets-mismatch" };

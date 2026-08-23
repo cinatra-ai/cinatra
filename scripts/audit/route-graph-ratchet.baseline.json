@@ -1,18 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 219,
-    "/api/mcp": 1670,
-    "/chat": 1762,
-    "/api/a2a": 1675,
-    "/api/llm-bridge": 1685
+    "/sign-in": 221,
+    "/api/mcp": 1672,
+    "/chat": 1767,
+    "/api/a2a": 1677,
+    "/api/llm-bridge": 1687
   },
   "absorbs": {
+    "/api/a2a": {
+      "from": 1676,
+      "to": 1677,
+      "reason": "cinatra#2911 (PR #2919 carries this record): agent_runs.created_at bootstrap backfill moved to a DDL leaf imported by drizzle-store (#2911) — src/lib/agent-run-created-at-schema.ts. The unguarded whole-table `UPDATE ... SET created_at = COALESCE(started_at, completed_at, created_at)` that stood inline in buildCreateStoreSchemaQueries is replaced by three idempotent statements in their own zero-import leaf (add the column NULLABLE, backfill ONLY `created_at IS NULL`, then restore DEFAULT now() + NOT NULL), so a replay of the bootstrap can no longer recompute a run's creation time from columns populated later in its life. The leaf is reached only from src/lib/drizzle-store.ts, which sits under the store graph every locked route reaches, so it is +1 on each of them. It imports NOTHING (a pure string builder, the same leaf shape as review-island-grant-schema.ts): the edge is one module, not a barrel. Measured with the companion extension repos cloned pinned (112/112) on this branch and, as the control, on origin/main (269ceb19449dfa1ba7ed436aef132a59de28f9ae) — the control reproduced the committed main ceilings exactly and the branch measured +1 on each of the five tracked routes.",
+      "pr": 2919
+    },
+    "/api/llm-bridge": {
+      "from": 1686,
+      "to": 1687,
+      "reason": "cinatra#2911 (PR #2919 carries this record): agent_runs.created_at bootstrap backfill moved to a DDL leaf imported by drizzle-store (#2911) — src/lib/agent-run-created-at-schema.ts. The unguarded whole-table `UPDATE ... SET created_at = COALESCE(started_at, completed_at, created_at)` that stood inline in buildCreateStoreSchemaQueries is replaced by three idempotent statements in their own zero-import leaf (add the column NULLABLE, backfill ONLY `created_at IS NULL`, then restore DEFAULT now() + NOT NULL), so a replay of the bootstrap can no longer recompute a run's creation time from columns populated later in its life. The leaf is reached only from src/lib/drizzle-store.ts, which sits under the store graph every locked route reaches, so it is +1 on each of them. It imports NOTHING (a pure string builder, the same leaf shape as review-island-grant-schema.ts): the edge is one module, not a barrel. Measured with the companion extension repos cloned pinned (112/112) on this branch and, as the control, on origin/main (269ceb19449dfa1ba7ed436aef132a59de28f9ae) — the control reproduced the committed main ceilings exactly and the branch measured +1 on each of the five tracked routes.",
+      "pr": 2919
+    },
+    "/api/mcp": {
+      "from": 1671,
+      "to": 1672,
+      "reason": "cinatra#2911 (PR #2919 carries this record): agent_runs.created_at bootstrap backfill moved to a DDL leaf imported by drizzle-store (#2911) — src/lib/agent-run-created-at-schema.ts. The unguarded whole-table `UPDATE ... SET created_at = COALESCE(started_at, completed_at, created_at)` that stood inline in buildCreateStoreSchemaQueries is replaced by three idempotent statements in their own zero-import leaf (add the column NULLABLE, backfill ONLY `created_at IS NULL`, then restore DEFAULT now() + NOT NULL), so a replay of the bootstrap can no longer recompute a run's creation time from columns populated later in its life. The leaf is reached only from src/lib/drizzle-store.ts, which sits under the store graph every locked route reaches, so it is +1 on each of them. It imports NOTHING (a pure string builder, the same leaf shape as review-island-grant-schema.ts): the edge is one module, not a barrel. Measured with the companion extension repos cloned pinned (112/112) on this branch and, as the control, on origin/main (269ceb19449dfa1ba7ed436aef132a59de28f9ae) — the control reproduced the committed main ceilings exactly and the branch measured +1 on each of the five tracked routes.",
+      "pr": 2919
+    },
+    "/chat": {
+      "from": 1766,
+      "to": 1767,
+      "reason": "cinatra#2911 (PR #2919 carries this record): agent_runs.created_at bootstrap backfill moved to a DDL leaf imported by drizzle-store (#2911) — src/lib/agent-run-created-at-schema.ts. The unguarded whole-table `UPDATE ... SET created_at = COALESCE(started_at, completed_at, created_at)` that stood inline in buildCreateStoreSchemaQueries is replaced by three idempotent statements in their own zero-import leaf (add the column NULLABLE, backfill ONLY `created_at IS NULL`, then restore DEFAULT now() + NOT NULL), so a replay of the bootstrap can no longer recompute a run's creation time from columns populated later in its life. The leaf is reached only from src/lib/drizzle-store.ts, which sits under the store graph every locked route reaches, so it is +1 on each of them. It imports NOTHING (a pure string builder, the same leaf shape as review-island-grant-schema.ts): the edge is one module, not a barrel. Measured with the companion extension repos cloned pinned (112/112) on this branch and, as the control, on origin/main (269ceb19449dfa1ba7ed436aef132a59de28f9ae) — the control reproduced the committed main ceilings exactly and the branch measured +1 on each of the five tracked routes.",
+      "pr": 2919
+    },
     "/sign-in": {
-      "from": 218,
-      "to": 219,
-      "pr": 2895,
-      "reason": "cinatra#2754 (PR #2895 carries this record; the ruling on the issue names the mechanism): the single-use island-grant ledger gains ONE module, and it sits on the shared store surface, so it is reachable from every locked route that mounts the store: +1 on all five routes, including /sign-in (the auth surface reads the same store). src/lib/lifecycle/review-island-grant-store.ts — the hash-keyed grant ledger whose atomic spend semantics are unit-assertable against a ledger stand-in without loading the server-only store graph; inlining it into the store was rejected because the spend-once property must be testable in isolation and the file-size ratchet holds the store's ceiling flat. Measured with the pinned extension tree."
+      "from": 220,
+      "to": 221,
+      "reason": "cinatra#2911 (PR #2919 carries this record): agent_runs.created_at bootstrap backfill moved to a DDL leaf imported by drizzle-store (#2911) — src/lib/agent-run-created-at-schema.ts. The unguarded whole-table `UPDATE ... SET created_at = COALESCE(started_at, completed_at, created_at)` that stood inline in buildCreateStoreSchemaQueries is replaced by three idempotent statements in their own zero-import leaf (add the column NULLABLE, backfill ONLY `created_at IS NULL`, then restore DEFAULT now() + NOT NULL), so a replay of the bootstrap can no longer recompute a run's creation time from columns populated later in its life. The leaf is reached only from src/lib/drizzle-store.ts, which sits under the store graph every locked route reaches, so it is +1 on each of them. It imports NOTHING (a pure string builder, the same leaf shape as review-island-grant-schema.ts): the edge is one module, not a barrel. Measured with the companion extension repos cloned pinned (112/112) on this branch and, as the control, on origin/main (269ceb19449dfa1ba7ed436aef132a59de28f9ae) — the control reproduced the committed main ceilings exactly and the branch measured +1 on each of the five tracked routes.",
+      "pr": 2919
     }
   }
 }

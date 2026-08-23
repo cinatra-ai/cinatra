@@ -68,6 +68,20 @@ describe("project-scoped schema migration", () => {
     expect(alter).toBeGreaterThan(create);
   });
 
+  it("T3e assistant_turns.superseded_at timestamptz (deliberate truncation tombstone)", () => {
+    // cinatra#2823 S9j. Additive + nullable, so a DB bootstrapped before this
+    // change gains it on the next boot with no rewrite,
+    // exactly as `content` and `ordinal` did — and a fresh install is born with
+    // it on the CREATE above.
+    expect(
+      has('ALTER TABLE "cinatra_test"."assistant_turns" ADD COLUMN IF NOT EXISTS superseded_at timestamptz'),
+    ).toBe(true);
+    const create = idxOf('CREATE TABLE IF NOT EXISTS "cinatra_test"."assistant_turns"');
+    const alter = idxOf('ALTER TABLE "cinatra_test"."assistant_turns" ADD COLUMN IF NOT EXISTS superseded_at timestamptz');
+    expect(create).toBeGreaterThan(-1);
+    expect(alter).toBeGreaterThan(create);
+  });
+
   // ---- T4: projects.archived_at ----
   it("T4 projects.archived_at column (nullable, no backfill)", () => {
     expect(has('ALTER TABLE "cinatra_test"."projects" ADD COLUMN IF NOT EXISTS archived_at timestamptz')).toBe(true);
