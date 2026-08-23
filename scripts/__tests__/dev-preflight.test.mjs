@@ -47,6 +47,7 @@ import {
   formatComposeCommand,
   formatConnectPortMismatch,
   formatGuardedComposeCommand,
+  formatStandDownUnreachable,
   formatUnmanagedServices,
   isLinkedWorktree,
   normalizeComposeProjectName,
@@ -1303,6 +1304,49 @@ describe("formatUnmanagedServices / unmanagedComposeServices", () => {
     ).toBe("REDIS_URL=rediss://cache.example.com:6380, NANGO_SERVER_URL=http://localhost/nango");
     expect(formatUnmanagedServices()).toBe("");
     expect(unmanagedComposeServices()).toEqual([]);
+  });
+});
+
+describe("formatStandDownUnreachable", () => {
+  // The line an operator gets when a stood-down service is also not answering.
+  // Its whole job is to be the ONE remedy `pnpm services` is not: the derivation
+  // step refuses to run a whole-stack `up` for a plan that stands a service
+  // down, so naming it as the fix sends the operator to a command already rigged
+  // to refuse them.
+  it("names the address, the stand-down and the fix, and never `pnpm services` as that fix", () => {
+    const line = formatStandDownUnreachable({
+      service: "Redis",
+      urlVar: "REDIS_URL",
+      hostPortVar: "CINATRA_REDIS_HOST_PORT",
+      host: "127.0.0.1",
+      port: 6379,
+    });
+    expect(line).toContain("Redis not reachable yet at 127.0.0.1:6379");
+    expect(line).toContain("that service is not ours to publish");
+    expect(line).toContain("REDIS_URL is not an explicit-port loopback URL");
+    // `pnpm services` may only appear as the thing that will NOT help.
+    expect(line).toContain("`pnpm services` refuses this plan");
+    expect(line).not.toContain("start them with `pnpm services`");
+    // The two ways out, in the words the Nango stand-down already uses.
+    expect(line).toContain("Start Redis where it is configured");
+    expect(line).toContain("point REDIS_URL at a 127.0.0.1 port this worktree owns");
+  });
+
+  // The host-port variable is a CONSTRAINT on the fix, never a fix of its own.
+  // Setting it alone ends the stand-down without making anything reachable: the
+  // app keeps dialing the URL's address, so the only change is that
+  // `formatConnectPortMismatch` prints instead of this line. Offering it as an
+  // alternative would be a remedy that cannot work.
+  it("names the host-port variable as a constraint on the URL, not as a second fix", () => {
+    const line = formatStandDownUnreachable({
+      service: "Redis",
+      urlVar: "REDIS_URL",
+      hostPortVar: "CINATRA_REDIS_HOST_PORT",
+      host: "127.0.0.1",
+      port: 6379,
+    });
+    expect(line).toContain("CINATRA_REDIS_HOST_PORT must name the same one if it is set at all");
+    expect(line).not.toContain("or set CINATRA_REDIS_HOST_PORT");
   });
 });
 
@@ -3125,6 +3169,22 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
   // Case C — the plan STOOD REDIS DOWN (a loopback URL with no port states no
   // host-port claim), so no container here is this checkout's to judge. The
   // diagnosis must not run at all, let alone condemn the boot.
+  //
+  // This shape discriminates: a portless `REDIS_URL` resolves the app's connect
+  // address to the SCHEME default 6379, which is also the port the plan would
+  // publish for an un-stood-down redis — so published and connect AGREE, and a
+  // build that lost the stand-down would find the simulated container publishing
+  // nothing, call it drift and exit 1. The exit-0-and-no-docker assertions are
+  // therefore a real pin on the stand-down and not on an accidental mismatch.
+  //
+  // What it deliberately does NOT assert is the reachability line, because that
+  // same 6379 is the operator's own port: whether the probe finds something
+  // there is a fact about the HOST, and pinning a message to it is how the
+  // unscoped case went red on every machine running the bundled stack (see the
+  // reserved-port block below). The one thing that is true on every host is
+  // asserted instead — a stood-down service never rides the `pnpm services`
+  // remedy — and the sentence itself is pinned next door, at an address no host
+  // can occupy.
   it("never diagnoses a service the plan claims no host port for", () => {
     const result = runLauncher(laneEnv("REDIS_URL=redis://127.0.0.1/0"), {
       containerPorts: '{"6379/tcp":null}',
@@ -3134,6 +3194,49 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
       `launcher exited ${result.status}\nstderr:\n${result.stderr}`,
     ).toBe(0);
     expect(result.stderr).not.toContain("Docker host-port drift");
+    expect(result.stderr).not.toContain("PostgreSQL, Redis not reachable yet");
+    expect(redisCalls(result.calls)).toEqual([]);
+  });
+
+  // Case C′ — the OTHER half of the stand-down, and the one the round-3 finding
+  // is about: stood down AND nothing listening. The service must still be
+  // PROBED and still be spoken about; skipping the probe with the diagnosis is
+  // what replaced main's "not reachable yet" with silence and then an
+  // ECONNREFUSED in app boot.
+  //
+  // `redis://127.0.0.1:0/0` is the same stand-down branch as case C —
+  // `classifyServiceUrl` reads it as "theirs" because 0 is not a usable port, so
+  // the plan reports redis `unmanaged` exactly as the portless URL does — but it
+  // is reached at an address that is DOWN on every host that will ever run this
+  // suite. Nothing can listen on port 0: `bind(0)` asks the OS for an ephemeral
+  // port instead, so the probe can only be refused or time out. That is the only
+  // way to state this expectation without measuring the test host, since the
+  // portless form's connect address is redis's own 6379 (case C).
+  //
+  // The container is simulated exactly as in case C, so a build that diagnosed
+  // this service would touch `docker` and exit 1 rather than warn.
+  it("probes a stood-down service that is down, and says so without sending the operator to `pnpm services`", () => {
+    const result = runLauncher(laneEnv("REDIS_URL=redis://127.0.0.1:0/0"), {
+      containerPorts: '{"6379/tcp":null}',
+    });
+    expect(
+      result.status,
+      `launcher exited ${result.status}\nstderr:\n${result.stderr}`,
+    ).toBe(0);
+    expect(result.stderr).not.toContain("Docker host-port drift");
+    // Probed, and the result said out loud — the whole point of the finding.
+    expect(result.stderr).toContain("Redis not reachable yet at 127.0.0.1:0");
+    expect(result.stderr).toContain("that service is not ours to publish");
+    // …with the remedy that works. `pnpm services` REFUSES a plan that stands a
+    // service down, so it may be named as the thing that will not help, never as
+    // the fix, and the ordinary joint sentence must not swallow the row.
+    expect(result.stderr).not.toContain("PostgreSQL, Redis not reachable yet");
+    expect(result.stderr).not.toMatch(/Redis not reachable yet[^\n]*start them with/);
+    expect(result.stderr).toContain("CINATRA_REDIS_HOST_PORT");
+    // PostgreSQL is down at its own reserved port and IS this checkout's to
+    // publish, so the ordinary sentence still exists, unchanged, beside it.
+    expect(result.stderr).toContain("PostgreSQL not reachable yet — start them with");
+    // Still not this checkout's to diagnose: no container inspected for redis.
     expect(redisCalls(result.calls)).toEqual([]);
   });
 
@@ -3161,6 +3264,15 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
   // that regressed to the hardcoded default would find its port published, call
   // the container healthy and exit 0. Only one that measures the port this
   // checkout resolved sees the drift.
+  //
+  // NOTE FOR A LATER READER: this case STATES its host port, so "a plain `make
+  // dev` reaches the drift diagnosis" is proved COMPOSITIONALLY here — the
+  // resolver case below answers the historical 6379 for the unscoped plan that
+  // states nothing, and this case shows the launcher diagnoses whenever
+  // published and connect agree on a loopback address. The launcher branches on
+  // exactly those two facts and never on the literal 6379, so the composition is
+  // the whole property; restoring a hardcoded 6379 here to "close the gap"
+  // would only put the host measurement back.
   it("still diagnoses the unscoped checkout at the port it publishes, with no -p", () => {
     const result = runLauncher(
       [
