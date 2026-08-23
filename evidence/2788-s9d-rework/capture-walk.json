@@ -1,0 +1,265 @@
+{
+  "slice": "2788-s9d-rework",
+  "note": [
+    "THE S9d REAL-PATH WALK, executable (cinatra#2788, PR #2939 round 2).",
+    "",
+    "Round 2 shot four cells on one real run and could register none of them: it drove its own",
+    "Playwright file, so nothing it produced was a recorder observation, and an index record's",
+    "assertions are observations or they are inventions. This file is that same walk written in the",
+    "shape the recorder drives — `scripts/audit/lib/chat-hitl-capture-driver.mjs --walk` — so the",
+    "next pass over this path writes records instead of only pictures.",
+    "",
+    "IT SAYS WHERE TO STAND AND WHAT TO PRESS. It never says what was seen: every assertion in every",
+    "record it produces is counted off the live page by `observeCapture`, and a cell that does not",
+    "come out fails AT THE CELL rather than at the end of a round nobody can repeat.",
+    "",
+    "NOTHING HERE IS SEEDED. The schedule is STATED by typing a sentence into the shipped composer;",
+    "the scripted model bridge answers it by calling the shipped producer `schedule_proposal_render`",
+    "over self-MCP; the proposal ref is the product's own. That is why the sentence is an action and",
+    "the thread has no address in this file — the product mints it, and the dark context FOLLOWS the",
+    "light one to wherever it landed.",
+    "",
+    "TWO PASSES, because the clock is real. `PROPOSAL_TTL_SECONDS = 1800`: the expired reading is",
+    "reached by letting the shipped window actually run out, not by moving a clock. Pass 1 starts",
+    "that window and walks C1/C2; pass 2 runs after it has elapsed and walks C3/C5.",
+    "",
+    "  export WALK_BASE=... WALK_COOKIE=... WALK_TEMPLATE_ID=...",
+    "  node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2788-s9d-rework/capture-walk.json \\",
+    "    --steps expired-clock,state-the-schedule,follow-dark,confirm,confirm-dark",
+    "  # ...after the window elapses, with WALK_RUN_ID and WALK_EXPIRED_THREAD read from the lane:",
+    "  node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2788-s9d-rework/capture-walk.json \\",
+    "    --steps run-page,run-page-dark,expired,expired-dark",
+    "",
+    "THE LANE SUPPLIES THE IDS, NOT THIS FILE. `${WALK_BASE}`, `${WALK_COOKIE}`, `${WALK_TEMPLATE_ID}`,",
+    "`${WALK_RUN_ID}` and `${WALK_EXPIRED_THREAD}` are the operator's environment. A committed plan",
+    "carrying a host, a port, a session or one lane's row ids is a leak and a plan the next lane",
+    "cannot run. The run id is the one thing pass 2 reads out of the lane's own `agent_runs`, which",
+    "is the same source every row of TIMELINE.md is read from.",
+    "",
+    "EVERY CELL IS `window`-FRAMED. That is the maintainer's first rejection of round 1 turned into a",
+    "declaration the record carries: the browser window as the operator sees it — the navigation, both",
+    "conversation turns and the composer around the card — not the scrolled-out document.",
+    "",
+    "C4 IS ABSENT AND STAYS ABSENT. It asked for the review page carrying THIS run's real artifact",
+    "review, and this run has none: Run now released the schedule and the run materialized a",
+    "SETUP-INPUT gate, so an artifact review would need the agent to run past it with a real model",
+    "provider. A lane that may hold one owns that cell. A stand-in is never acceptable, so there is",
+    "no C4 step here to accidentally answer with the wrong screen."
+  ],
+  "retires": [
+    "A1__schedule-card__chat_thread__pending",
+    "A2__schedule-card__chat_thread__settled",
+    "B1__schedule-card__chat_thread__pending__dark",
+    "B2__schedule-card__chat_thread__settled__dark",
+    "R1__schedule-card__run_card__settled",
+    "R2__schedule-card__run_card__settled__dark",
+    "P1__schedule-card__page_gate_region__settled",
+    "P2__schedule-card__page_gate_region__settled__dark",
+    "E1__schedule-card__chat_thread__pending__expired-face__standin",
+    "E2__schedule-card__chat_thread__pending__expired-face__standin__dark"
+  ],
+  "contexts": {
+    "light": { "colorScheme": "light", "theme": "cinatra", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
+    "dark": { "colorScheme": "dark", "theme": "dark", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
+    "run-light": { "colorScheme": "light", "theme": "cinatra", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
+    "run-dark": { "colorScheme": "dark", "theme": "dark", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
+    "expired-light": { "colorScheme": "light", "theme": "cinatra", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 },
+    "expired-dark": { "colorScheme": "dark", "theme": "dark", "viewport": { "width": 1440, "height": 900 }, "deviceScaleFactor": 2 }
+  },
+  "steps": [
+    {
+      "id": "expired-clock",
+      "context": "expired-light",
+      "why": "Start the shipped 30-minute window on a proposal nobody will touch. No cell: this step only makes the clock real.",
+      "actions": [
+        { "action": "goto", "url": "/chat" },
+        { "action": "waitForSelector", "selector": "div[contenteditable=\"true\"][role=\"textbox\"]" },
+        { "action": "type", "selector": "div[contenteditable=\"true\"][role=\"textbox\"]", "text": "Schedule ${WALK_TEMPLATE_ID} to run every day at 09:00." },
+        { "action": "press", "key": "Enter" },
+        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]" }
+      ],
+      "cells": []
+    },
+    {
+      "id": "state-the-schedule",
+      "context": "light",
+      "why": "The one real run: the schedule stated in a second conversation, photographed BEFORE Confirm. There is no going back once it is pressed, so C1 is shot in both themes first.",
+      "actions": [
+        { "action": "goto", "url": "/chat" },
+        { "action": "waitForSelector", "selector": "div[contenteditable=\"true\"][role=\"textbox\"]" },
+        { "action": "type", "selector": "div[contenteditable=\"true\"][role=\"textbox\"]", "text": "Schedule ${WALK_TEMPLATE_ID} to run every day at 09:00." },
+        { "action": "press", "key": "Enter" },
+        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]" },
+        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]" }
+      ],
+      "cells": [
+        {
+          "cell": "S9d-C1__schedule-card__chat_thread__pending",
+          "declaredHost": "chat_thread",
+          "kind": "trigger_schedule_proposal",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-before-confirm__light.png",
+          "requires": "the chat conversation around a card that is not yet confirmed: the three option rows editable, and Confirm"
+        }
+      ]
+    },
+    {
+      "id": "follow-dark",
+      "context": "dark",
+      "why": "The SAME thread in dark. It is followed rather than navigated to: the product minted the thread, so this file does not know its address.",
+      "actions": [
+        { "action": "followContext", "context": "light" },
+        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"pending\"]" },
+        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]" }
+      ],
+      "cells": [
+        {
+          "cell": "S9d-C1__schedule-card__chat_thread__pending__dark",
+          "declaredHost": "chat_thread",
+          "kind": "trigger_schedule_proposal",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-before-confirm__dark.png",
+          "requires": "the same reading in dark"
+        }
+      ]
+    },
+    {
+      "id": "confirm",
+      "context": "light",
+      "why": "THE PRESS. One press, on the shipped control, on the card the previous step photographed — which is what makes C2 the same card in the same place rather than another card that looks settled.",
+      "actions": [
+        { "action": "click", "selector": "[data-action=\"confirm-schedule-proposal\"]" },
+        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]" },
+        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]" }
+      ],
+      "cells": [
+        {
+          "cell": "S9d-C2__schedule-card__chat_thread__decided",
+          "declaredHost": "chat_thread",
+          "kind": "trigger_schedule_proposal",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-after-confirm__light.png",
+          "requires": "the SAME card in the SAME place after Confirm: the same rows, Save changes, no status label, no summary box, no Open-the-run link"
+        }
+      ]
+    },
+    {
+      "id": "confirm-dark",
+      "context": "dark",
+      "why": "The settled reading in dark, on the thread this context is already on.",
+      "actions": [
+        { "action": "reload" },
+        { "action": "waitForSelector", "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"][data-lifecycle-card-state=\"settled\"]" },
+        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]" }
+      ],
+      "cells": [
+        {
+          "cell": "S9d-C2__schedule-card__chat_thread__decided__dark",
+          "declaredHost": "chat_thread",
+          "kind": "trigger_schedule_proposal",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-after-confirm__dark.png",
+          "requires": "the same settled reading in dark"
+        }
+      ]
+    },
+    {
+      "id": "run-page",
+      "context": "run-light",
+      "why": "The run page's schedule step, opened by a REAL press of the rail row — the run the walk armed at `confirm`.",
+      "actions": [
+        { "action": "goto", "url": "/agents/cinatra-ai/planner-agent/${WALK_RUN_ID}" },
+        { "action": "waitForSelector", "selector": "[data-action=\"open-schedule-step\"]" },
+        { "action": "click", "selector": "[data-action=\"open-schedule-step\"]" },
+        { "action": "waitForSelector", "selector": "[data-conformance-id=\"schedule-step-detail\"]" }
+      ],
+      "cells": [
+        {
+          "cell": "S9d-C3__schedule-card__run_card__decided",
+          "declaredHost": "run_card",
+          "kind": "trigger_schedule_proposal",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-schedule-step__light.png",
+          "requires": "the run page's schedule step open: the form and its controls, with the run's other chrome visible around it"
+        }
+      ]
+    },
+    {
+      "id": "run-page-dark",
+      "context": "run-dark",
+      "why": "The same step in dark, on the same run.",
+      "actions": [
+        { "action": "goto", "url": "/agents/cinatra-ai/planner-agent/${WALK_RUN_ID}" },
+        { "action": "waitForSelector", "selector": "[data-action=\"open-schedule-step\"]" },
+        { "action": "click", "selector": "[data-action=\"open-schedule-step\"]" },
+        { "action": "waitForSelector", "selector": "[data-conformance-id=\"schedule-step-detail\"]" }
+      ],
+      "cells": [
+        {
+          "cell": "S9d-C3__schedule-card__run_card__decided__dark",
+          "declaredHost": "run_card",
+          "kind": "trigger_schedule_proposal",
+          "state": "decided",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-schedule-step__dark.png",
+          "requires": "the same step in dark"
+        }
+      ]
+    },
+    {
+      "id": "expired",
+      "context": "expired-light",
+      "why": "The expired reading, after the shipped window has actually run out. The proposal is the one `expired-clock` minted and nothing touched.",
+      "actions": [
+        { "action": "goto", "url": "${WALK_EXPIRED_THREAD}" },
+        { "action": "waitForSelector", "selector": "[data-conformance-id=\"schedule-proposal-expired\"]" },
+        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]" }
+      ],
+      "cells": [
+        {
+          "cell": "S9d-C5__schedule-card__chat_thread__pending__expired",
+          "declaredHost": "chat_thread",
+          "kind": "trigger_schedule_proposal",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__light.png",
+          "requires": "the expired reading: still visible, still editable, Confirm offered and nothing else on the floor"
+        }
+      ]
+    },
+    {
+      "id": "expired-dark",
+      "context": "expired-dark",
+      "why": "The expired reading in dark, on the thread the light context is on.",
+      "actions": [
+        { "action": "followContext", "context": "expired-light" },
+        { "action": "waitForSelector", "selector": "[data-conformance-id=\"schedule-proposal-expired\"]" },
+        { "action": "scrollIntoView", "selector": "[data-conformance-id=\"schedule-proposal-floor\"]" }
+      ],
+      "cells": [
+        {
+          "cell": "S9d-C5__schedule-card__chat_thread__pending__expired__dark",
+          "declaredHost": "chat_thread",
+          "kind": "trigger_schedule_proposal",
+          "state": "pending",
+          "framing": "window",
+          "build": "development",
+          "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__dark.png",
+          "requires": "the same expired reading in dark"
+        }
+      ]
+    }
+  ]
+}
