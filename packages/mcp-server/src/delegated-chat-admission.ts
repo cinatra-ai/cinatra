@@ -120,8 +120,33 @@ export type DelegatedChatAdmissionRecord = {
    * revoked" would turn exactly those into active admissions.
    */
   readonly revoked: boolean;
-  /** ISO-8601 stamp of the review, for audit. Never consulted for a decision. */
+  /**
+   * CANONICAL ISO-8601 UTC millisecond instant of the review — the true wall
+   * clock at the moment the review was recorded.
+   *
+   * Never consulted to ADMIT: no admission decision reads it, and a record
+   * carrying a stamp is neither more nor less admitted than one without. It IS
+   * consulted to REVOKE: the uninstall path withdraws every admission reviewed
+   * at or before the moment the teardown ran, and this field is what that
+   * cutoff orders against. So the spelling is load-bearing rather than audit
+   * decoration — `normalizeAdmissionRecord` refuses any other form of an
+   * instant, because the comparison is made on the STRING and only the
+   * canonical form sorts chronologically.
+   */
   readonly reviewedAt?: string;
+  /**
+   * The tie-break for `reviewedAt`, as `<epoch>.<seq>`: which process minted
+   * the moment, and its position in that process's review order.
+   *
+   * A millisecond wall clock cannot separate an uninstall from a reinstall's
+   * re-review that lands inside the same millisecond, and the revocation used
+   * to resolve that tie by WITHDRAWING the fresh review. The sequence resolves
+   * it correctly for two moments from one process. Across processes there is
+   * nothing to resolve it with, and the revocation revokes — the fail-closed
+   * reading. Absent, unparseable, or from another epoch all mean "cannot be
+   * ordered", which reads the same way.
+   */
+  readonly reviewedMint?: string;
 };
 
 const ADMITTABLE_CLASSES: ReadonlySet<string> = new Set(
@@ -141,6 +166,28 @@ export function admissionKey(key: DelegatedChatAdmissionKey): string {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+/** The exact width of `new Date(ms).toISOString()`: `YYYY-MM-DDTHH:MM:SS.sssZ`. */
+const CANONICAL_REVIEW_STAMP_LENGTH = 24;
+
+/**
+ * Is this a CANONICAL ISO-8601 UTC millisecond instant?
+ *
+ * The uninstall revocation compares `reviewedAt` to the teardown moment as a
+ * STRING. That comparison is chronological only for this one spelling: a real
+ * instant written `2026-05-01T14:00:00.000+02:00`, or without milliseconds, or
+ * as a bare date, sorts by its text and not by its time, so a stamp in any of
+ * those forms could land on the wrong side of a cutoff. Round-tripping the
+ * parsed instant back through `toISOString()` pins the one spelling; the length
+ * check rejects the wider forms that would round-trip while carrying extra
+ * precision.
+ */
+export function isCanonicalReviewStamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length !== CANONICAL_REVIEW_STAMP_LENGTH) return false;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return false;
+  return new Date(ms).toISOString() === value;
 }
 
 /**
@@ -163,7 +210,17 @@ export function normalizeAdmissionRecord(raw: unknown): DelegatedChatAdmissionRe
     !ADMITTABLE_CLASSES.has(r.admittedClass) ||
     // The revocation state must be STATED, as a real boolean. An absent or
     // non-boolean flag makes the record unusable — never "not revoked".
-    typeof r.revoked !== "boolean"
+    typeof r.revoked !== "boolean" ||
+    // A stamp that is PRESENT but not a canonical instant makes the record
+    // unusable rather than un-stamped. The revocation cutoff orders by this
+    // field, so a value the cutoff cannot order is not audit noise: it is a
+    // record whose withdrawal cannot be reasoned about, and dropping it denies.
+    // Silently discarding just the field would be worse than either — it would
+    // turn an unorderable stamp into "predates the stamping", which every
+    // cutoff revokes, so a garbled value would decide the record's fate by
+    // accident. The mint token is NOT validated here on purpose: an
+    // unparseable one already reads as "cannot be ordered", which revokes.
+    (r.reviewedAt !== undefined && !isCanonicalReviewStamp(r.reviewedAt))
   ) {
     return null;
   }
@@ -175,7 +232,8 @@ export function normalizeAdmissionRecord(raw: unknown): DelegatedChatAdmissionRe
     declarationDigest: r.declarationDigest,
     admittedClass: r.admittedClass as Exclude<DelegatedChatToolClass, "none">,
     revoked,
-    ...(isNonEmptyString(r.reviewedAt) ? { reviewedAt: r.reviewedAt } : {}),
+    ...(r.reviewedAt !== undefined ? { reviewedAt: r.reviewedAt as string } : {}),
+    ...(isNonEmptyString(r.reviewedMint) ? { reviewedMint: r.reviewedMint } : {}),
   };
 }
 
@@ -353,7 +411,7 @@ export function unavailableDelegatedChatAdmissionSnapshot(input: {
 /** Mint the admission record a review of `declaration` produces. */
 export function admissionRecordFor(
   declaration: DelegatedChatDeclaration & { declaredClass: Exclude<DelegatedChatToolClass, "none"> },
-  options?: { reviewedAt?: string },
+  options?: { reviewedAt?: string; reviewedMint?: string },
 ): DelegatedChatAdmissionRecord {
   return {
     ownerPackage: declaration.ownerPackage,
@@ -363,6 +421,7 @@ export function admissionRecordFor(
     admittedClass: declaration.declaredClass,
     revoked: false,
     ...(options?.reviewedAt ? { reviewedAt: options.reviewedAt } : {}),
+    ...(options?.reviewedMint ? { reviewedMint: options.reviewedMint } : {}),
   };
 }
 

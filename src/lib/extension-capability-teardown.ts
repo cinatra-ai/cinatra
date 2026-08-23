@@ -26,6 +26,7 @@ import { removeExtensionMcpToolsForPackage } from "@/lib/extension-mcp-registry"
 import {
   bumpAdmissionPolicyGeneration,
   bumpActivationGeneration,
+  nextAdmissionReviewMoment,
 } from "@/lib/extension-activation-generation";
 import {
   invalidateProvidersForPackage,
@@ -197,7 +198,13 @@ export function teardownExtensionCapabilities(packageName: string): {
   // Stamped BEFORE the detached write so a review that lands after this moment
   // — a same-version reinstall being re-admitted while the write is still in
   // flight — is not withdrawn by a teardown that predates it.
-  const teardownAt = new Date().toISOString();
+  // A MOMENT and not a bare `new Date()`: at millisecond resolution a stamp
+  // cannot separate this teardown from a re-review that lands in the same
+  // millisecond, and the revocation used to resolve that tie by withdrawing the
+  // fresh review. The moment carries this process's review sequence alongside
+  // the instant, which orders that tie correctly for reviews minted here and
+  // leaves it fail-closed for reviews minted anywhere else.
+  const teardownAt = nextAdmissionReviewMoment();
   // FIRE-AND-FORGET, and only here: the in-memory perimeter is already closed
   // synchronously above, so this is the durable record catching up. The
   // teardown chokepoint is a SYNC hook (`setExtensionCapabilityTeardownHook`),

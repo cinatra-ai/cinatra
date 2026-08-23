@@ -280,6 +280,7 @@ export function hostDeclaredDelegatedChatClass(
  */
 export function coreDelegatedChatAdmissionRecords(options?: {
   reviewedAt?: string;
+  reviewedMint?: string;
 }): DelegatedChatAdmissionRecord[] {
   const records: DelegatedChatAdmissionRecord[] = [];
   for (const [name, declaredClass] of Object.entries(HOST_PRIMITIVE_DECLARATIONS)) {

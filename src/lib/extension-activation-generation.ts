@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+
 // First-class CONTROL-PLANE GENERATION for the extension activation state.
 //
 // A single monotonic counter that increments on every relevant extension
@@ -293,4 +295,124 @@ export function getAdmissionPolicySnapshot(): AdmissionPolicySnapshot {
 /** @internal Tests only. */
 export function __resetAdmissionPolicyGenerationForTests(): void {
   _admissionState.reset();
+}
+
+// ---------------------------------------------------------------------------
+// THE ADMISSION REVIEW MOMENT (cinatra#2817).
+//
+// WHAT IT IS FOR. The uninstall revocation withdraws every admission reviewed
+// AT OR BEFORE the moment the teardown ran, so it needs to order one review
+// against one teardown. Both used to be `new Date().toISOString()` and the
+// comparison was strict, so an uninstall and a same-version reinstall inside
+// ONE millisecond produced two EQUAL stamps and the revocation withdrew the
+// fresh review — the exact hazard the cutoff exists to prevent.
+//
+// WHY TWO PARTS AND NOT A FASTER CLOCK. The obvious repair — a clock that
+// never returns the same value twice, by handing out `last + 1ms` when the wall
+// clock has not moved — buys the ordering by LYING about the time, and the lie
+// is fail-OPEN. A stamp minted a few milliseconds ahead of the wall clock
+// outlives a teardown that genuinely followed it, because a teardown in another
+// process reads the honest clock and mints a LOWER cutoff. An uninstalled
+// package keeping an approval is the one outcome this perimeter may not
+// produce, so the stamp stays honest and the ordering is carried separately:
+//
+//   `at`   — the TRUE wall-clock instant, canonical ISO-8601 UTC milliseconds.
+//            The only value two PROCESSES can compare, and the audit value.
+//   `mint` — `<epoch>.<seq>`: a per-process epoch and a counter that strictly
+//            increases within it. Compared ONLY when `at` ties, and ONLY when
+//            the epochs match.
+//
+// WHAT EACH CASE RESOLVES TO. Different milliseconds: the wall clock decides,
+// with no skew to be wrong about. Same millisecond, same process: the sequence
+// decides, which is the boundary the plain clock got wrong. Same millisecond,
+// DIFFERENT processes: nothing can order them, and the answer is to REVOKE.
+// That is the fail-closed reading — the marketplace pulled the package, a
+// re-review is cheap, and a surviving approval is not.
+//
+// THE LIMIT THIS DOES NOT REACH, STATED PLAINLY. The last case revokes a
+// re-admission it would ideally keep: two processes, one millisecond, no
+// shared order. Ordering that pair needs a SHARED SEQUENCER — a store-issued
+// token carried into the CAS — and the teardown chokepoint cannot get one. It
+// is a SYNCHRONOUS hook, so it cannot read the store before it stamps, and
+// reading a durable counter later inside the detached revocation would capture
+// the cutoff AFTER the very re-admission it exists to spare, which reopens the
+// original race pointing the other way. The residual is therefore inherent to
+// a sync hook, and it errs toward a re-review rather than toward a surviving
+// approval. cinatra#2937 wires the production admission writer on an ASYNC
+// path; that is where both sides can carry a store-issued sequence and close
+// this properly.
+//
+// WHY IT LIVES HERE. The teardown chokepoint already imports this module
+// statically: it is the dependency-free leaf it can reach on a SYNC hot path
+// without pulling the store graph behind it. The store imports it too. One
+// epoch reachable from both mint sites is what makes `mint` mean anything;
+// hence the same cross-compilation `Symbol.for` anchoring the generations use,
+// so a dual-specifier import cannot split the counter in two.
+// ---------------------------------------------------------------------------
+
+/** One reviewed-at moment: an honest instant, plus a tie-break only its own process can read. */
+export type AdmissionReviewMoment = {
+  /** Canonical ISO-8601 UTC millisecond instant — the true wall clock. */
+  readonly at: string;
+  /** `<epoch>.<seq>`. Orders two moments ONLY when their epochs are equal. */
+  readonly mint: string;
+};
+
+const ADMISSION_REVIEW_CLOCK_KEY = Symbol.for(
+  "@cinatra-ai/host:delegated-chat-admission-review-clock/v1",
+);
+type ReviewClock = { epoch: string; seq: number };
+type ReviewClockHolder = { [k: symbol]: ReviewClock | undefined };
+const _reviewClockHolder = globalThis as unknown as ReviewClockHolder;
+const _reviewClock: ReviewClock =
+  _reviewClockHolder[ADMISSION_REVIEW_CLOCK_KEY] ??
+  (_reviewClockHolder[ADMISSION_REVIEW_CLOCK_KEY] = { epoch: randomUUID(), seq: 0 });
+
+/**
+ * Mint the next review moment.
+ *
+ * `at` is the wall clock, unmodified — this function never invents a time.
+ * `seq` strictly increases, so two moments from THIS process are always
+ * ordered even when they land in the same millisecond.
+ */
+export function nextAdmissionReviewMoment(): AdmissionReviewMoment {
+  _reviewClock.seq += 1;
+  return { at: new Date().toISOString(), mint: `${_reviewClock.epoch}.${_reviewClock.seq}` };
+}
+
+/** Split a `<epoch>.<seq>` mint token, or `null` if it is not one. */
+function parseMint(mint: unknown): { epoch: string; seq: number } | null {
+  if (typeof mint !== "string") return null;
+  const cut = mint.lastIndexOf(".");
+  if (cut <= 0 || cut === mint.length - 1) return null;
+  const seq = Number(mint.slice(cut + 1));
+  if (!Number.isSafeInteger(seq) || seq <= 0) return null;
+  return { epoch: mint.slice(0, cut), seq };
+}
+
+/**
+ * Did `review` happen STRICTLY AFTER `cutoff`?
+ *
+ * `false` for everything it cannot prove, because the caller revokes on
+ * `false`: an absent instant, a tie it cannot break, a mint token from another
+ * process or from no process at all. The one case that answers `true` on a tie
+ * is the one that is provable — same process, higher sequence.
+ */
+export function admissionReviewIsAfter(
+  review: { at?: string; mint?: string } | undefined,
+  cutoff: AdmissionReviewMoment,
+): boolean {
+  if (review?.at === undefined) return false;
+  if (review.at > cutoff.at) return true;
+  if (review.at < cutoff.at) return false;
+  const a = parseMint(review.mint);
+  const b = parseMint(cutoff.mint);
+  if (!a || !b || a.epoch !== b.epoch) return false;
+  return a.seq > b.seq;
+}
+
+/** @internal Tests only — a fresh epoch, as if this were another process. */
+export function __resetAdmissionReviewClockForTests(): void {
+  _reviewClock.epoch = randomUUID();
+  _reviewClock.seq = 0;
 }

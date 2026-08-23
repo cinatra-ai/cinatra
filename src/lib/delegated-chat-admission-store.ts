@@ -50,6 +50,9 @@ import {
   getActivationGeneration,
   bumpAdmissionPolicyGeneration,
   getAdmissionPolicyGeneration,
+  admissionReviewIsAfter,
+  nextAdmissionReviewMoment,
+  type AdmissionReviewMoment,
 } from "@/lib/extension-activation-generation";
 
 /** The metadata row the record set lives in. */
@@ -143,11 +146,15 @@ async function ensureCoreMigration(io: StoreIo): Promise<boolean> {
       if (!record) return false;
       return record.ownerPackage !== HOST_PRIMITIVE_OWNER_PACKAGE;
     });
+    const coreMoment = nextAdmissionReviewMoment();
     const next: AdmissionStorePayload = {
       coreMigratedAtRelease: HOST_PRIMITIVE_RELEASE_VERSION,
       records: [
         ...preserved,
-        ...coreDelegatedChatAdmissionRecords({ reviewedAt: new Date().toISOString() }),
+        ...coreDelegatedChatAdmissionRecords({
+          reviewedAt: coreMoment.at,
+          reviewedMint: coreMoment.mint,
+        }),
       ],
     };
     if (raw === null) {
@@ -281,6 +288,7 @@ export async function admitDelegatedChatDeclaration(
   declaration: DelegatedChatDeclaration & { declaredClass: "read" | "discovery" | "dispatch" },
 ): Promise<boolean> {
   const digest = computeDeclarationDigest(declaration);
+  const moment = nextAdmissionReviewMoment();
   const record: DelegatedChatAdmissionRecord = {
     ownerPackage: declaration.ownerPackage,
     resolvedVersion: declaration.resolvedVersion,
@@ -288,7 +296,8 @@ export async function admitDelegatedChatDeclaration(
     declarationDigest: digest,
     admittedClass: declaration.declaredClass,
     revoked: false,
-    reviewedAt: new Date().toISOString(),
+    reviewedAt: moment.at,
+    reviewedMint: moment.mint,
   };
   const key = admissionKey(record);
   const ok = await mutate((records) => [
@@ -327,22 +336,33 @@ export async function revokeDelegatedChatAdmissionsForPackage(
   ownerPackage: string,
   options?: {
     /**
-     * Revoke only admissions reviewed AT OR BEFORE this ISO-8601 instant.
+     * Revoke only admissions reviewed AT OR BEFORE this moment, which must come
+     * from `nextAdmissionReviewMoment()` — the same mint every `reviewedAt` /
+     * `reviewedMint` pair comes from.
      *
      * The uninstall path passes the moment the teardown ran. Without it, a
      * teardown whose durable write lands late could revoke a FRESH review of a
      * reinstalled package — the write would arrive after the new admission and
-     * silently withdraw it. A record carrying no `reviewedAt` predates the
-     * stamping and is revoked, which is the fail-closed reading.
+     * silently withdraw it.
+     *
+     * EVERYTHING THE ORDER CANNOT PROVE IS REVOKED. `admissionReviewIsAfter`
+     * answers `true` only for a review it can show came later: a strictly later
+     * instant, or the same instant with a higher sequence from the SAME
+     * process. A record with no stamp, a tie between two processes, a mint
+     * token from another epoch — each answers `false` and is withdrawn. That is
+     * the fail-closed reading, and it is why the cutoff is a moment rather than
+     * a bare string: a bare millisecond string forced the same-instant tie to
+     * be decided by the comparison operator, and whichever way it was written
+     * it was wrong in one direction.
      */
-    reviewedNotAfter?: string;
+    reviewedNotAfter?: AdmissionReviewMoment;
   },
 ): Promise<boolean> {
   const cutoff = options?.reviewedNotAfter;
   const ok = await mutate((records) =>
     records.map((r) => {
       if (r.ownerPackage !== ownerPackage) return r;
-      if (cutoff !== undefined && r.reviewedAt !== undefined && r.reviewedAt > cutoff) return r;
+      if (cutoff !== undefined && admissionReviewIsAfter({ at: r.reviewedAt, mint: r.reviewedMint }, cutoff)) return r;
       return { ...r, revoked: true };
     }),
   );

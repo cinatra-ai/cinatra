@@ -5,6 +5,7 @@ import {
   admissionSnapshotCacheKey,
   computeDeclarationDigest,
   createDelegatedChatAdmissionSnapshot,
+  isCanonicalReviewStamp,
   normalizeAdmissionRecord,
   unavailableDelegatedChatAdmissionSnapshot,
   DECLARATION_DIGEST_VERSION,
@@ -155,6 +156,78 @@ describe("normalizeAdmissionRecord", () => {
     // The two values that ARE readable read as themselves.
     expect(normalizeAdmissionRecord({ ...good, revoked: false })?.revoked).toBe(false);
     expect(normalizeAdmissionRecord({ ...good, revoked: true })?.revoked).toBe(true);
+  });
+
+  it("keeps a CANONICAL review stamp and its mint token", () => {
+    const kept = normalizeAdmissionRecord({
+      ...good,
+      reviewedAt: "2026-05-01T12:00:00.000Z",
+      reviewedMint: "epoch-a.7",
+    });
+    expect(kept?.reviewedAt).toBe("2026-05-01T12:00:00.000Z");
+    expect(kept?.reviewedMint).toBe("epoch-a.7");
+    // Absent is fine and stays absent: an unstamped record predates the
+    // stamping, and every cutoff revokes it, which is the fail-closed reading.
+    expect(normalizeAdmissionRecord(good)?.reviewedAt).toBeUndefined();
+    expect(normalizeAdmissionRecord(good)?.reviewedMint).toBeUndefined();
+  });
+
+  it("REFUSES a record whose review stamp cannot be ORDERED", () => {
+    // The uninstall cutoff compares this field as a string. A value it cannot
+    // order chronologically would decide the record's withdrawal by accident,
+    // so the record is unusable — dropping it denies, the safe direction.
+    for (const bad of [
+      "",
+      "yesterday and then some",
+      "2026-05-01",
+      "2026-05-01T12:00:00Z", // a real instant, no milliseconds — sorts wrong
+      "2026-05-01T14:00:00.000+02:00", // the same instant, another spelling
+      "2026-05-01T12:00:00.000000Z", // microsecond precision
+      "+002026-05-01T12:00:00.000Z", // expanded year
+      1747000000000,
+      null,
+    ]) {
+      expect(
+        normalizeAdmissionRecord({ ...good, reviewedAt: bad }),
+        JSON.stringify(bad),
+      ).toBeNull();
+    }
+  });
+
+  it("DROPS an unusable mint token but keeps the record — it already reads as unorderable", () => {
+    // Unlike the instant, a mint token has no safe-vs-unsafe reading to get
+    // wrong: absent and garbled both mean "this tie cannot be broken", and the
+    // revocation revokes on both. Dropping the record over it would withdraw an
+    // admission for a field that decides nothing on its own.
+    for (const bad of ["", 7, null, {}]) {
+      const r = normalizeAdmissionRecord({
+        ...good,
+        reviewedAt: "2026-05-01T12:00:00.000Z",
+        reviewedMint: bad,
+      });
+      expect(r, JSON.stringify(bad)).not.toBeNull();
+      expect(r?.reviewedMint).toBeUndefined();
+    }
+  });
+});
+
+describe("isCanonicalReviewStamp", () => {
+  it("accepts exactly what `new Date(ms).toISOString()` produces", () => {
+    for (const ms of [0, 1, 1747000000000, Date.UTC(2026, 4, 1, 12, 0, 0, 7)]) {
+      expect(isCanonicalReviewStamp(new Date(ms).toISOString())).toBe(true);
+    }
+  });
+
+  it("rejects every other spelling of an instant, so the comparison stays chronological", () => {
+    // Each of these is a REAL instant that a lexical comparison sorts wrongly:
+    // an offset spelling can place a later instant before an earlier one, and a
+    // shorter form can place a stamped record on the wrong side of a cutoff.
+    expect(isCanonicalReviewStamp("2026-05-01T14:00:00.000+02:00")).toBe(false);
+    expect(isCanonicalReviewStamp("2026-05-01T12:00:00Z")).toBe(false);
+    expect(isCanonicalReviewStamp("2026-05-01")).toBe(false);
+    expect(isCanonicalReviewStamp("not a date at all!!!!!!!")).toBe(false);
+    expect(isCanonicalReviewStamp(undefined)).toBe(false);
+    expect(isCanonicalReviewStamp(0)).toBe(false);
   });
 });
 

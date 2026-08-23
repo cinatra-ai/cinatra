@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   DELEGATED_CHAT_ADMISSION_KEY,
   __setDelegatedChatAdmissionStoreIoForTests,
@@ -20,7 +20,9 @@ import {
 } from "@cinatra-ai/mcp-server/capability-plan";
 import {
   __resetAdmissionPolicyGenerationForTests,
+  __resetAdmissionReviewClockForTests,
   bumpActivationGeneration,
+  nextAdmissionReviewMoment,
   __resetActivationGenerationForTests,
 } from "@/lib/extension-activation-generation";
 
@@ -358,7 +360,7 @@ describe("the uninstall race", () => {
     const { io } = memoryIo(null);
     __setDelegatedChatAdmissionStoreIoForTests(io);
     await loadDelegatedChatAdmissionSnapshot();
-    const teardownAt = "2020-01-01T00:00:00.000Z";
+    const teardownAt = { at: "2020-01-01T00:00:00.000Z", mint: "old-epoch.1" };
     await admitDelegatedChatDeclaration(EXT_DECL); // reviewedAt = now, > teardownAt
     await revokeDelegatedChatAdmissionsForPackage("@acme/widgets", {
       reviewedNotAfter: teardownAt,
@@ -372,8 +374,94 @@ describe("the uninstall race", () => {
     await loadDelegatedChatAdmissionSnapshot();
     await admitDelegatedChatDeclaration(EXT_DECL);
     await revokeDelegatedChatAdmissionsForPackage("@acme/widgets", {
-      reviewedNotAfter: new Date(Date.now() + 60_000).toISOString(),
+      reviewedNotAfter: {
+        at: new Date(Date.now() + 60_000).toISOString(),
+        mint: "later-epoch.1",
+      },
     });
+    expect((await loadDelegatedChatAdmissionSnapshot()).lookup(extKey())?.revoked).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE BOUNDARY. The two tests above stand a whole minute either side of the
+  // cutoff, so neither ever asked what happens AT it — and at it was where the
+  // guarantee failed. The stamp and the cutoff were both
+  // `new Date().toISOString()`, so an uninstall and a reinstall's re-review
+  // inside ONE millisecond minted equal strings and the strict comparison
+  // withdrew the fresh review. The wall clock is frozen in these tests to hold
+  // the whole sequence inside one millisecond.
+  // -------------------------------------------------------------------------
+  it("a re-admission in the SAME millisecond as the teardown SURVIVES", async () => {
+    const { io } = memoryIo(null);
+    __setDelegatedChatAdmissionStoreIoForTests(io);
+    await loadDelegatedChatAdmissionSnapshot();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
+      __resetAdmissionReviewClockForTests();
+      // The pre-uninstall review, the uninstall, and the reinstall's re-review
+      // — all three inside ONE frozen millisecond.
+      await admitDelegatedChatDeclaration(EXT_DECL);
+      const teardownAt = nextAdmissionReviewMoment();
+      await admitDelegatedChatDeclaration(EXT_DECL);
+      // The detached teardown write lands LAST, after the re-admission.
+      await revokeDelegatedChatAdmissionsForPackage("@acme/widgets", {
+        reviewedNotAfter: teardownAt,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect((await loadDelegatedChatAdmissionSnapshot()).lookup(extKey())?.revoked).toBe(false);
+  });
+
+  it("an admission in the same millisecond that PRECEDES the teardown is still withdrawn", async () => {
+    // The mirror, and the reason the repair is an ordering and not a relaxed
+    // comparison: keeping every same-instant record would let an admission that
+    // genuinely precedes an uninstall outlive it.
+    const { io } = memoryIo(null);
+    __setDelegatedChatAdmissionStoreIoForTests(io);
+    await loadDelegatedChatAdmissionSnapshot();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
+      __resetAdmissionReviewClockForTests();
+      await admitDelegatedChatDeclaration(EXT_DECL);
+      const teardownAt = nextAdmissionReviewMoment();
+      await revokeDelegatedChatAdmissionsForPackage("@acme/widgets", {
+        reviewedNotAfter: teardownAt,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect((await loadDelegatedChatAdmissionSnapshot()).lookup(extKey())?.revoked).toBe(true);
+  });
+
+  it("a same-millisecond tie this process cannot own is withdrawn, not kept", async () => {
+    // A teardown minted by ANOTHER process carries an epoch this store's
+    // sequence cannot be compared against. Unorderable resolves to REVOKE: an
+    // uninstalled package keeping its approval is the outcome this perimeter
+    // may not produce, and a re-review is the cheap side of the trade.
+    const { io } = memoryIo(null);
+    __setDelegatedChatAdmissionStoreIoForTests(io);
+    await loadDelegatedChatAdmissionSnapshot();
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
+      __resetAdmissionReviewClockForTests();
+      await admitDelegatedChatDeclaration(EXT_DECL);
+      await revokeDelegatedChatAdmissionsForPackage("@acme/widgets", {
+        // Same instant, a sequence far ahead of ours — but a foreign epoch.
+        reviewedNotAfter: { at: "2026-05-01T12:00:00.000Z", mint: "another-process.1" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
     expect((await loadDelegatedChatAdmissionSnapshot()).lookup(extKey())?.revoked).toBe(true);
   });
 });
