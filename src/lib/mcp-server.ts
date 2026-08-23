@@ -673,7 +673,7 @@ export const mcpServerMount = createMcpServerMount({
   // Verify delegated MCP on-behalf-of tokens. Two flavors:
   //   1. chat-OBO (`cinatra.chat.mcp-obo`): the chat user calling via
   //      OpenAI's hosted MCP relay. Resolves to `delegation: "chat"` →
-  //      chat tool-policy allowlist applies.
+  //      declaration-bound chat admission applies.
   //   2. agent-run-OBO (`cinatra.agent-run.mcp-obo`): an agent dispatched
   //      by the chat, calling cinatra-mcp through the bridge. Resolves to
   //      `delegation: "agent_run"` → unrestricted at registration time,

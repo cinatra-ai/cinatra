@@ -6,8 +6,8 @@ import type { DelegatedChatAdmissionSnapshot } from "./delegated-chat-admission"
  * Discriminated union of the two delegated MCP actor flavors.
  *
  * - `chat`: a human chat user calling via OpenAI's hosted MCP relay. The
- *   transport applies the chat tool-policy allowlist
- *   (`isDelegatedChatMcpToolAllowed`) — read + discovery + dispatch only.
+ *   transport applies the version- and declaration-bound admission decision
+ *   (`evaluateDelegatedChatAdmission`) — read + discovery + dispatch only.
  * - `agent_run`: an agent dispatched by the chat, running its work via the
  *   bridge → orchestration → cinatra-mcp tool. The transport leaves the
  *   tool policy UNRESTRICTED because the dispatched agent's job is to

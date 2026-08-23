@@ -742,15 +742,15 @@ function buildConnectorInstanceInvokerDeps(boundConnectorKey: string): Connector
  * The ONLY connectorKey a `chat` delegation may ever host-derive without a
  * signed pin (cinatra#2024 S9 G1 fix). NOT a general kind-lookup: chat's own
  * perimeter (declaration-bound admission, cinatra#2817: the core records in
- * `host-primitive-declarations.ts` evaluated by `evaluateDelegatedChatAdmission`)
+ * `capability-plan.ts` evaluated by `evaluateDelegatedChatAdmission`)
  * only ever routes a chat turn into THIS guard through the
  * `wordpress_site_tool_call`/`wordpress_site_tools_list` primitive names — no
  * `drupal_site_tool_call`/`drupal_site_tools_list` equivalent is chat-
- * allowlisted, and `resolveConnectorInstanceEndpoint` below resolves nothing
+ * admitted, and `resolveConnectorInstanceEndpoint` below resolves nothing
  * for any other connectorKey today. A fixed HOST constant (never read from
  * caller input) rather than a caller-selectable field — extending chat to a
  * second connector kind is a distinct, reviewed change to this constant plus
- * the perimeter allowlist, not a runtime selector.
+ * the host declaration and its admission record, not a runtime selector.
  */
 const CHAT_DERIVABLE_CONNECTOR_KEY = "wordpress";
 
@@ -1413,7 +1413,7 @@ export function registerHostConnectorServices(): void {
   // catalog read (B2). The chat perimeter is what actually routes live
   // chat/agent_run/widget traffic into this guard: `wordpress_site_tool_call`
   // (`dispatch`) and `wordpress_site_tools_list` (`discovery`) carry core
-  // declarations in `host-primitive-declarations.ts` (cinatra#2817), and the
+  // declarations in `capability-plan.ts` (cinatra#2817), and the
   // decision is `evaluateDelegatedChatAdmission`, not a name allowlist.
   register(svc.connectorInstanceInvoker, {
     invokeSiteTool: async (input) => {

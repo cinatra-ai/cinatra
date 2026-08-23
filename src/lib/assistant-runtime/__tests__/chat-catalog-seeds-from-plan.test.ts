@@ -57,7 +57,7 @@ describe("the chat catalog seeds from the request-scoped capability plan", () =>
 
 
 // ---------------------------------------------------------------------------
-// THE SAME SEAM, ASSERTED ON THE MODULE GRAPH (cinatra#2817 review round).
+// THE SAME SEAM, ASSERTED ON THE MODULE GRAPH.
 //
 // The literal-fragment checks above are brittle in BOTH directions: splitting
 // `buildDelegatedChatCapabilityPlan({` across lines turns them red with no

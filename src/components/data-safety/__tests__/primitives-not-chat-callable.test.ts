@@ -1,8 +1,8 @@
 // The operational-visibility primitives must NOT be callable by
-// delegated-chat assistants. The chat uses
-// a strict ALLOWED_EXACT allowlist; a primitive absent from it is deny-by-
+// delegated-chat assistants. The chat reaches only what the host has
+// DECLARED and ADMITTED; a primitive with no admission record is deny-by-
 // default. This pins that absence (the actual enforcement) so a future edit
-// can't accidentally add these to the chat allowlist.
+// can't accidentally declare and admit these.
 
 import { describe, expect, it } from "vitest";
 import { isCoreDelegatedChatAdmitted } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";

@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
 import {
   carriesDeniedDelegatedChatVerbToken,
   delegatedChatProposalOverrideNames,
@@ -10,7 +9,7 @@ import {
   coreDelegatedChatAdmittedNames,
   isCoreDelegatedChatAdmitted,
 } from "../core-delegated-chat-surface";
-import { HOST_PRIMITIVE_DECLARATIONS } from "../host-primitive-declarations";
+import { HOST_PRIMITIVE_DECLARATIONS } from "../capability-plan";
 
 // Regression table for the delegated chat MCP tool perimeter.
 //
@@ -115,8 +114,9 @@ describe("the core delegated-chat surface", () => {
 
   it("allows the WordPress governed-invoker primitives, denies the retired narrow reads they replaced (cinatra#2022 S7 PR-δ)", () => {
     // wordpress_site_tool_call / wordpress_site_tools_list are the S2/S3
-    // governed-invoker primitives, chat-reachable as of this PR (ALLOWED_EXACT
-    // swap). See the file-header AMENDMENT note for the two compensating
+    // governed-invoker primitives, chat-reachable as of this PR (they carry a
+    // host declaration and a migrated core admission). See the file-header
+    // AMENDMENT note for the two compensating
     // controls (S5 destructive-confirmation hook + the per-instance policy
     // floor, now restricted+empty by default) that keep this narrow.
     expect(isCoreDelegatedChatAdmitted("wordpress_site_tool_call")).toBe(true);
@@ -249,8 +249,9 @@ describe("the core delegated-chat surface", () => {
   });
 
   it("denies the lifecycle DECISION class by construction, not just by omission (cinatra#2567)", () => {
-    // The allowlist alone already denies these. The verb backstop is what makes
-    // adding one to ALLOWED_EXACT insufficient to expose it — a review is
+    // The absence of an admission already denies these. The verb backstop is
+    // what makes declaring and admitting one insufficient to expose it — a
+    // review is
     // resolved on a rendered decision surface by a person, never by the model.
     for (const name of [
       "artifact_review_gate_decide",

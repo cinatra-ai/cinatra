@@ -297,7 +297,7 @@ export function writeLlmMcpCredentials(
 
 
 // ---------------------------------------------------------------------------
-// The Better Auth plugin pair the HOST mounts (cinatra#2817 review round).
+// The Better Auth plugin pair the HOST mounts.
 //
 // This factory used to live in the mount barrel (`./index.tsx`). It is the ONLY
 // symbol `src/lib/auth.ts` needed from that barrel, so every route that reaches

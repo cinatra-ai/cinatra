@@ -613,9 +613,9 @@ export async function dispatchVersionedOnlyExtensionMcpTool(
  *
  * It lives in THIS module, which both consumers already import, rather than in
  * `extension-authorized-dispatch.ts`: that module pulls the pinned-dispatch
- * graph, and the live transport needs the envelope WITHOUT it (cinatra#2817
- * review round — `src/lib/mcp-server.ts` used to reach the pinned dispatcher
- * statically for this one pure function). */
+ * graph, and the live transport needs the envelope WITHOUT it
+ * (`src/lib/mcp-server.ts` used to reach the pinned dispatcher statically
+ * for this one pure function). */
 export function wrapExtensionToolResult(raw: unknown) {
   const resolved = raw === undefined ? null : raw;
   return {

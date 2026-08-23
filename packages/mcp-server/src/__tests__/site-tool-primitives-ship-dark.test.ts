@@ -8,7 +8,8 @@ import { isDelegatedWidgetMcpToolAllowed } from "../delegated-widget-tool-policy
 //
 // cinatra#2022 S7 PR-δ: the CHAT perimeter cutover flips here —
 // `wordpress_site_tool_call` / `wordpress_site_tools_list` move from denied
-// to ALLOWED on chat (delegated-chat-tool-policy.ts's amended ALLOWED_EXACT).
+// to ADMITTED on chat (a host declaration in `capability-plan.ts` plus the
+// migrated core admission record it produces).
 // The WIDGET perimeter is untouched by this change — its minimal allowlist is
 // intentionally out of scope — and stays ship-dark permanently, not just
 // until this PR.

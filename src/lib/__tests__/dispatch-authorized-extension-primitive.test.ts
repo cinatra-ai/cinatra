@@ -33,7 +33,7 @@ vi.mock("@/lib/extension-edge-bound-serving", () => ({
   dispatchVersionedOnlyExtensionMcpTool: async () => ({ ok: true }),
   planExtensionToolDiscovery: async () => ({ register: [], skipped: [] }),
   planSelfInvokerRetainedUnion: () => ({ register: [], dedupedExtensionNames: [] }),
-  // The result envelope moved into this module (cinatra#2817 review round) so
+  // The result envelope moved into this module so
   // `src/lib/mcp-server.ts` stops reaching the pinned-dispatch graph for one
   // pure function. This suite mocks the module wholesale, so the envelope has
   // to be restated here. These tests never inspect the envelope (they assert

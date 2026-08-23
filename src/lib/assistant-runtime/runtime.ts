@@ -662,7 +662,7 @@ async function resolveChatMcpCatalogState(input: {
     // to stub it). The catalog hint is best-effort and already inside a
     // try/catch, so the import cost is paid only when the hint is built.
     //
-    // REBUILT EVERY TURN, ON PURPOSE, WITH NO MEMO (cinatra#2817 review round).
+    // REBUILT EVERY TURN, ON PURPOSE, WITH NO MEMO.
     // The plan is only valid for the (activationGeneration, admissionGeneration)
     // pair it was built under: an install/activation or a recorded/withdrawn
     // review changes what the same primitive name resolves to. Caching it would

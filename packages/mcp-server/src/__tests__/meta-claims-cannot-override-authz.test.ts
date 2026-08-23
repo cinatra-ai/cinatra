@@ -42,7 +42,8 @@ import { resourceWithinCeiling, type OboCeilingChain } from "../obo-ceiling";
 //     `serveLegacyEra`, `createModernEraHandler`;
 //   - the per-request runtime server and its registration-time tool filter —
 //     `createMcpRuntimeServer` + `selectDelegatedToolPolicy`;
-//   - the delegated-chat allowlist — `isDelegatedChatMcpToolAllowed`;
+//   - the delegated-chat admission decision —
+//     `evaluateDelegatedChatAdmission`;
 //   - the request-frame composition helpers — `resolveRequestRunContext`,
 //     `shouldMintSessionOrgWriteAuthority`;
 //   - the on-behalf-of ceiling predicate — `resourceWithinCeiling`;

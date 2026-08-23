@@ -69,9 +69,9 @@ describe("hop 1a — the DEFAULT extension MCP registry", () => {
   it("leaves an UNDECLARED registration undeclared — absent, not `none`", () => {
     // Every registration in the tree today takes this path. ABSENCE must stay
     // a distinct third state here even though the decision layer now reads it
-    // as `none` (owner ruling, cinatra#2771): the policy's
-    // `resolveDelegatedChatClass` fills in an interim class for an absent
-    // declaration and must NOT for an explicit `none`, so a registry that
+    // as `none` (owner ruling, cinatra#2771): the plan reads an absent
+    // declaration as `undefined` and an explicit `none` as a refusal, so a
+    // registry that
     // collapsed the two would make a connector's deliberate opt-out
     // indistinguishable from never having said anything.
     registerExtensionMcpTool(PKG, { name: "acme_thing_list", handler });
