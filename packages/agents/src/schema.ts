@@ -380,6 +380,34 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   //   streamed_text precedent; no numbered migration (schema-migration-gate
   //   classifies a new nullable column as additive).
   humanPresent: boolean("human_present"),
+  // ---------------------------------------------------------------------
+  // The LIFECYCLE MOMENT TRIPLE (cinatra#2928, lifecycle-b W2a).
+  //
+  // A run RECORDS which lifecycle moment it is waiting at, which card that
+  // moment mounts, and the card's server-checked reference. Written by the
+  // lifecycle coordinator (`lifecycle-coordinator.ts`) and by nothing else —
+  // it is the one module that decides a moment, so it is the one module that
+  // may state one.
+  //
+  // WHY: today a screen re-derives what a run waits for from the SHAPE of its
+  // pause (a `setup-<runId>` task-id prefix, a `fieldName` on an interrupt).
+  // A wait for a setup field and a wait for a review are two different facts,
+  // and they are recorded here as two different facts.
+  //
+  // NULL is the ordinary reading: the run is at no moment (running, finished,
+  // or created before the columns existed). The AUDIT moment is the one that
+  // records WITHOUT parking — the run goes on, and the triple states what was
+  // read.
+  //
+  // Migration: additive nullable columns via src/lib/drizzle-store.ts, which
+  //   spreads `agentRunLifecycleMomentSchemaQueries` from
+  //   `src/lib/agent-run-lifecycle-moment-schema.ts` — the human_present /
+  //   streamed_text precedent; no numbered migration (schema-migration-gate
+  //   classifies new nullable columns and a non-unique index as additive).
+  // ---------------------------------------------------------------------
+  lifecycleMoment: text("lifecycle_moment"),
+  lifecycleCardKind: text("lifecycle_card_kind"),
+  lifecycleCardRef: text("lifecycle_card_ref"),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -392,6 +420,14 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   parentRunIdIdx:   index("agent_runs_parent_run_id_idx")
     .on(t.parentRunId)
     .where(sql`parent_run_id IS NOT NULL`),
+  // Partial index — matches the DDL the bootstrap leaf
+  // `agentRunLifecycleMomentSchemaQueries` creates (cinatra#2928). Declared
+  // with the same predicate for the same reason the parent-run index above is:
+  // so drizzle-kit does not diff it against the live database and try to
+  // recreate it as a full index.
+  lifecycleMomentIdx: index("agent_runs_lifecycle_moment_idx")
+    .on(t.lifecycleMoment)
+    .where(sql`lifecycle_moment IS NOT NULL`),
   // Index name MUST match the SQL DDL in src/lib/drizzle-store.ts
   // (`agent_runs_org_id_idx`). Drift causes drizzle-kit introspection to drop
   // and recreate the index.

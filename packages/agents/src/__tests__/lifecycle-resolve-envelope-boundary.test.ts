@@ -31,7 +31,10 @@ function readSource(relative: string): string {
 describe("the recommendation hold stays outside the DATA_PART resolve envelope", () => {
   it("is carried as an INTERRUPT, so it is not a resolve-envelope kind", () => {
     expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
-    expect(LIFECYCLE_INTERRUPT_KINDS).toEqual(["recommendation_hold"]);
+    // cinatra#2928 added a second interrupt kind (`agent_hitl_screen`). What
+    // this case is about is that an INTERRUPT kind is outside the data-part
+    // resolve envelope, so it asserts membership rather than the set size.
+    expect(LIFECYCLE_INTERRUPT_KINDS).toContain("recommendation_hold");
     expect(LIFECYCLE_DATA_PART_VIEW_TYPES).not.toContain("recommendation_hold");
   });
 

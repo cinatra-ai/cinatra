@@ -387,10 +387,15 @@ describe("`absent` reveals nothing about the target", () => {
 // ---------------------------------------------------------------------------
 
 describe("the recommendation hold stays outside the DATA_PART envelope", () => {
-  it("is the sole typed-interrupt kind, so it never rides this resolve", () => {
+  it("is typed-interrupt carried, so it never rides this resolve", () => {
     expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
-    expect(LIFECYCLE_INTERRUPT_KINDS).toEqual(["recommendation_hold"]);
+    // cinatra#2928 added a second interrupt kind; what this case is about is
+    // that an INTERRUPT kind has no data-part resolve arm, so it asserts the
+    // membership rather than the size of the set.
+    expect(LIFECYCLE_INTERRUPT_KINDS).toContain("recommendation_hold");
+    expect(LIFECYCLE_INTERRUPT_KINDS).toContain("agent_hitl_screen");
     expect(LIFECYCLE_DATA_PART_VIEW_TYPES).not.toContain("recommendation_hold");
+    expect(LIFECYCLE_DATA_PART_VIEW_TYPES).not.toContain("agent_hitl_screen");
   });
 
   it("has no envelope arm — asking for it fails closed", () => {

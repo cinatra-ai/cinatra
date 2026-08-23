@@ -334,6 +334,13 @@ export type AgentRunRecord = {
   // this column (stale-worker refusal). NULL pre-dispatch.
   executionAttemptId: string | null;
   humanPresent: boolean | null; // cinatra#2067 run-start presence discriminator; true only for interactive UI/chat runs, null/false headless
+  // The LIFECYCLE MOMENT TRIPLE (cinatra#2928, lifecycle-b W2a). Which moment
+  // this run is at, which card that moment mounts, and the card's
+  // server-checked reference. All three are NULL together for a run at no
+  // moment. Written ONLY by the lifecycle coordinator.
+  lifecycleMoment: string | null;
+  lifecycleCardKind: string | null;
+  lifecycleCardRef: string | null;
 };
 
 export type CreateAgentTemplateInput = {
@@ -3396,6 +3403,54 @@ export async function createAgentRunPendingInput(
   const created = await readAgentRunById(id);
   if (!created) throw new Error(`Failed to create pending_input agent run: ${id}`);
   return created;
+}
+
+/**
+ * Write the LIFECYCLE MOMENT TRIPLE onto a run (cinatra#2928, lifecycle-b W2a).
+ *
+ * The run STATES which moment it is waiting at, which card that moment mounts
+ * and the card's server-checked reference, so no screen has to re-derive a
+ * moment from the shape of a pause.
+ *
+ * ONE WRITER, on purpose. The lifecycle coordinator
+ * (`./lifecycle-coordinator`) is the only module that decides a moment, so it
+ * is the only module that may state one; `scripts/audit/run-creation-fence.mjs`
+ * pins that. Nothing else in the codebase calls this.
+ *
+ * Clearing is passing `moment: null` — all three columns go NULL together,
+ * because a card kind or a card ref left behind by a moment that is over is a
+ * card a host would still try to mount.
+ *
+ * GUARDED like every other agent_runs write (cinatra#1940 P3): the authority is
+ * a REQUIRED trailing parameter, so a caller with none observes the seam's own
+ * fail-closed refusal rather than a silently-omitted argument.
+ */
+export async function recordRunLifecycleMoment(
+  input: {
+    runId: string;
+    orgId: string;
+    moment: string | null;
+    cardKind?: string | null;
+    cardRef?: string | null;
+  },
+  authority: OrgWriteAuthority | undefined,
+): Promise<void> {
+  const clearing = input.moment === null;
+  await guardedRunWrite(
+    authority,
+    { orgId: input.orgId, runId: input.runId, capability: "run.execute" },
+    async (tx) => {
+      const dtx = tx as unknown as typeof db;
+      await dtx
+        .update(agentRuns)
+        .set({
+          lifecycleMoment: input.moment,
+          lifecycleCardKind: clearing ? null : (input.cardKind ?? null),
+          lifecycleCardRef: clearing ? null : (input.cardRef ?? null),
+        })
+        .where(eq(agentRuns.id, input.runId));
+    },
+  );
 }
 
 /**

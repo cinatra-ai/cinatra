@@ -1297,8 +1297,14 @@ describe("the two modes on the real tree", () => {
   // ONE kind, not two, since cinatra#2789 drew the verification card. The
   // count is pinned rather than the mere presence of a placeholder, so a kind
   // quietly slipping BACK to placeholder is as visible as one being drawn.
-  it("names the ONE kind that is still a placeholder", () => {
+  it("names the kinds that are still placeholders, and no others", () => {
+    // `agent_hitl_screen` joined the list when cinatra#2928 registered the
+    // fifth kind WITHOUT drawing it — that slice changes no screen. Both rows
+    // are honest records of a card nobody has drawn, and each is struck by the
+    // slice that draws it (S9d for the schedule card, cinatra#2930 for the
+    // HITL screen).
     expect(placeholderKinds().map((p) => p.kind).sort()).toEqual([
+      "agent_hitl_screen",
       "trigger_schedule_proposal",
     ]);
   });
