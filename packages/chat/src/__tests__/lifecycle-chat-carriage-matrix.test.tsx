@@ -715,8 +715,19 @@ describe("what cannot satisfy a row", () => {
   it("a card in the RUN CARD's subtree does not: it is another host's mount", async () => {
     const row = carriageRowFor("recommendation_hold");
     const { root, producingSlot } = await mountKind("recommendation_hold");
-    const runCard = root.querySelector<HTMLElement>("[data-inline-run-card]");
-    expect(runCard, "the inline run card did not mount at the agent_run slot").not.toBeNull();
+    // THE FOREIGN SUBTREE, DECLARED THE WAY THE SHIPPED PANEL DECLARES IT.
+    // A HELD turn draws no run panel at all since cinatra#2790 (the run progress
+    // card waits for the skills decision), so there is no rendered panel to
+    // borrow here — and in this file there never was one either: the run card is
+    // a stand-in that renders exactly these two attributes. The subtree is
+    // therefore planted in the producing container with that same declaration,
+    // which is what the observer keys on.
+    const slot = root.querySelector<HTMLElement>("[data-agent-run-slot]");
+    expect(slot, "the agent_run producing container is not in the transcript").not.toBeNull();
+    const runCard = document.createElement("div");
+    runCard.setAttribute("data-lifecycle-card-host", "run_card");
+    runCard.setAttribute("data-inline-run-card", "");
+    slot!.appendChild(runCard);
     // Plant the row's own anchors INSIDE the run card, as a mislabeled-evidence
     // mount would. The observation must not see them.
     const planted = document.createElement("div");
@@ -742,7 +753,7 @@ describe("what cannot satisfy a row", () => {
     // and their per-chip controls sit inside it.
     const real = root.querySelector<HTMLElement>('[data-lifecycle-card="recommendation_hold"]');
     const before = observeChatCarriage(root, row, producingSlot);
-    runCard!.appendChild(planted);
+    runCard.appendChild(planted);
     const after = observeChatCarriage(root, row, producingSlot);
     expect(after.rootCandidates).toEqual(before.rootCandidates);
     expect(after.rootCandidates.some((c) => c.controls.length === 0)).toBe(false);

@@ -962,10 +962,19 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     const card = read("run-recommendation-chip-row.tsx");
     // The behavioural half of this invariant ("a successful resolve schedules
     // nothing") is the fake-timer test at the top of this file. This half bans
-    // the primitive a poll would be rebuilt from: the only timer in the file is
-    // the bounded FAILURE budget, which `setInterval` could never express.
+    // the primitive a poll would be rebuilt from, and counts the ones that are
+    // allowed to exist. There are TWO, and neither repeats:
+    //
+    //   1. the bounded FAILURE budget — armed only when a resolve threw, spent
+    //      after three delays, and cleared by its own effect;
+    //   2. the one-shot READ DEADLINE (cinatra#2790, epic #2784 S9f) — armed once
+    //      per trigger, so a request that never settles cannot leave the
+    //      conversation withholding the run progress card for ever. It fires at
+    //      most once and is cleared with the effect that armed it.
+    //
+    // `setInterval` could express neither, which is why it stays banned outright.
     expect(card).not.toMatch(/setInterval/);
-    expect([...card.matchAll(/setTimeout\(/g)]).toHaveLength(1);
+    expect([...card.matchAll(/setTimeout\(/g)]).toHaveLength(2);
   });
 });
 

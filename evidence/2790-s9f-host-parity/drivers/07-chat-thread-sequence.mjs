@@ -203,6 +203,40 @@ const RECOMMENDATION_ASSERTIONS = [
   { selector: '[data-action="skip-run-recommendation"]', scope: "frame" },
 ];
 
+/** The inline run progress card, and the skill picker inside it. */
+const INLINE_RUN_CARD = "[data-inline-run-card]";
+const RUN_CARD_SKILL_PICKER = "[data-hitl-skill-picker]";
+
+/**
+ * THE HELD TURN'S SET (cinatra#2790, epic #2784 S9f). The plan:
+ *
+ *   "An agentic run progress card is not visible while the recommended skills
+ *    can be selected, because they are being chosen before the agent actually
+ *    runs."
+ *
+ * So the held cell counts the run card too, and the count it must record is
+ * ZERO. An absence nobody counts is an absence nobody can check.
+ */
+const RECOMMENDATION_HELD_ASSERTIONS = [
+  ...RECOMMENDATION_ASSERTIONS,
+  { selector: INLINE_RUN_CARD, scope: "frame" },
+];
+
+/**
+ * THE DECIDED TURN'S SET. The other half of the same ruling:
+ *
+ *   "The agentic run progress card appears once the skills are decided; no
+ *    skill inside it can be selected."
+ *
+ * The run card is counted (ONE) and the skill picker inside it is counted
+ * (ZERO), so both halves of the sentence are read off the picture's own record.
+ */
+const RECOMMENDATION_DECIDED_ASSERTIONS = [
+  ...RECOMMENDATION_ASSERTIONS,
+  { selector: INLINE_RUN_CARD, scope: "frame" },
+  { selector: RUN_CARD_SKILL_PICKER, scope: "frame" },
+];
+
 const REVIEW_ASSERTIONS_CHAT = [
   { selector: CONVERSATION_LIST, scope: "frame" },
   { selector: '[data-lifecycle-card-host="chat_thread"]', scope: "frame" },
@@ -521,11 +555,11 @@ try {
     kind: "recommendation_hold",
     declaredState: "pending",
     rootSel: CARD_ROOT,
-    assertions: RECOMMENDATION_ASSERTIONS,
+    assertions: RECOMMENDATION_HELD_ASSERTIONS,
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The whole conversation, in one browser window: the person's own turn that started the run, the reply that says the run paused for a decision on the recommended skills, and the recommendation card HELD in that same reply — one chip per skill, each carrying its own Confirm / Adjust / Skip. NOTHING has been produced: representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt).",
+      "The whole conversation, in one browser window: the person's own turn that started the run, the reply that says the run paused for a decision on the recommended skills, and the recommendation card HELD in that same reply — one chip per skill, each carrying its own Confirm / Adjust / Skip. NO agentic run progress card is on screen: the skills are still being chosen, so the run has not started and nothing about its progress is drawn (the run-card count reads ZERO). NOTHING has been produced either: representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt).",
   });
   await setTheme("dark");
   await shoot("S1__recommendation-card__chat_thread__held__dark", {
@@ -533,7 +567,7 @@ try {
     kind: "recommendation_hold",
     declaredState: "pending",
     rootSel: CARD_ROOT,
-    assertions: RECOMMENDATION_ASSERTIONS,
+    assertions: RECOMMENDATION_HELD_ASSERTIONS,
     runId: state.runId,
     dbAt: timeline.at(-1),
     note: "The same window, the same held card in the same conversation, in the dark palette.",
@@ -631,11 +665,11 @@ try {
     kind: "recommendation_hold",
     declaredState: "decided",
     rootSel: CARD_ROOT,
-    assertions: RECOMMENDATION_ASSERTIONS,
+    assertions: RECOMMENDATION_DECIDED_ASSERTIONS,
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, per-chip outcomes, and nothing left to press. The hold reads released in the database at this instant.",
+      "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, per-chip outcomes, and nothing left to press. The agentic run progress card is now on screen BELOW the settled chips — it appears with the decision, not before it — and there is no skill picker inside it (the picker count reads ZERO). The hold reads released in the database at this instant.",
   });
   await setTheme("dark");
   await shoot("S2__recommendation-card__chat_thread__decided__dark", {
@@ -643,7 +677,7 @@ try {
     kind: "recommendation_hold",
     declaredState: "decided",
     rootSel: CARD_ROOT,
-    assertions: RECOMMENDATION_ASSERTIONS,
+    assertions: RECOMMENDATION_DECIDED_ASSERTIONS,
     runId: state.runId,
     dbAt: timeline.at(-1),
     note: "The same settled row in the same conversation, in the dark palette.",

@@ -748,22 +748,58 @@ own sentence: *“The run paused for a decision on the recommended skills.”*
 ## The order, in one run
 
 Read `TIMELINE.md`'s CHAT section: every timestamp there is a database column or
-a runtime log line, named. In short — hold parked `10:25:01`; **S1 shot at
-`10:25:19` with zero output rows**; four chips decided one at a time in the chat,
-written `10:25:29`; hold released `10:25:29`; **S2 shot at `10:25:57`**; the
+a runtime log line, named. In short — hold parked `10:25:01`; the withdrawn S1 was shot at
+`10:25:19` with zero output rows; four chips decided one at a time in the chat,
+written `10:25:29`; hold released `10:25:29`; the withdrawn S2 was shot at
+`10:25:57`; the
 step's model call answered `200` through the bridge and the flow completed
 `10:26:01`; the artifact the step wrote landed `10:26:02`; the shipped sweeper
 opened the review on it `10:26:12`; **S3 shot at `10:26:44`**, **S4 at
 `10:27:09`**.
 
+## Cells WITHDRAWN — the two chat cells this round re-shoots
+
+`S1__recommendation-card__chat_thread__held`,
+`S1__recommendation-card__chat_thread__held__dark`,
+`S2__recommendation-card__chat_thread__decided` and
+`S2__recommendation-card__chat_thread__decided__dark` are **withdrawn**: their
+records are deleted from `scripts/ci/chat-hitl-capture-index.json` and from this
+directory, and the four pictures are deleted with them. They show what the code
+did before this round, and the plan rules both readings out:
+
+> An agentic run progress card is not visible while the recommended skills can be
+> selected, because they are being chosen before the agent actually runs.
+
+> The agentic run progress card appears once the skills are decided; no skill
+> inside it can be selected.
+
+The held cells drew the run progress card beside the chip row, and the decided
+cells drew a `Skills (4)` button row inside it that listed four pressable skills,
+the skipped one among them. What replaces them is the OWED set below.
+
+## Cells OWED — the new proof set
+
+One real run, a full browser window per cell, light and dark, every cell
+recorder-measured (nothing here is hand-written, and no record is filed until the
+recorder files it). `PLAN-WALK.md` carries each cell's plan sentences, the ratified
+drawing it is graded against, and its `requires / shows / verdict` line — every
+verdict reads `owed (capture pending)` until the pictures exist.
+
+| Cell owed | Surface | What it must show |
+|---|---|---|
+| `S1__recommendation-card__chat_thread__held` (+ `__dark`) | the conversation | The reply with the chip row and nothing else a started run would bring: one chip per skill with its own `Confirm` `Adjust` `Skip`, no heading plate, no row-level submit, and **no agentic run progress card in the turn** (the recorder counts `[data-inline-run-card]` and must record **0**). |
+| `S2__recommendation-card__chat_thread__decided` (+ `__dark`) | the conversation | The same slot after every chip is decided: the settled chips in place with nothing left to press, and the run progress card **below** them — with **no skills button row inside it** (the recorder counts `[data-inline-run-card]` = **1** and `[data-hitl-skill-picker]` = **0**). |
+| `R5__recommendation-card__run_card__held` (+ `__dark`) | the run page | The same run held, on the run surface: the step rail on the left and the recommendation read in the run detail on the right, under that same rail. |
+| `R6__recommendation-card__run_card__decided` (+ `__dark`) | the run page | The same run after the decision: the settled chips in place and the run's own progress in the run detail, with **no skills button row inside the card**. |
+
+The run-page pair is numbered `R5`/`R6` because `R1`-`R4` in this directory are
+already the review-page cells; each name carries its host token, which is what
+says which surface it is.
+
 ## Cells DELIVERED — the chat sequence
 
 | Cell | Pixels | What is VISIBLY on screen |
 |---|---|---|
-| `S1__recommendation-card__chat_thread__held` | 2880×3400 | The whole conversation: the person's own turn (`Please run cinatra_blog-draft-writer-agent … inputParams: {…}`), the reply carrying **four chips — `Blog Writing Skill`, `Blog Post Matcher Skill`, `Brand Voice Matcher Skill`, `Web Research Skill`, each with its own `Confirm` `Adjust` `Skip`** — the inline run panel reading `pending input` / *“No messages yet.”*, and the server's line *“The run paused for a decision on the recommended skills.”* Composer in frame. **12 decision affordances; no heading plate; no row-level submit** (the retired `confirm-run-recommendation` / `skip-run-recommendation` controls count **0**). |
-| `S1__recommendation-card__chat_thread__held__dark` | 2880×3400 | The same window, same run, dark palette. |
-| `S2__recommendation-card__chat_thread__decided` | 2880×3400 | The same conversation and the same slot after the four presses, **reloaded first**: the row **settled in place** — `Blog Post Matcher Skill ⇄ ADJUSTED`, `Blog Writing Skill ✓ CONFIRMED`, `Web Research Skill ✓ CONFIRMED` — with **0/0/0** decision affordances inside the card root, and the run panel underneath advanced to `pending approval` with its own `Draft Context` gate and `Continue`. |
-| `S2__recommendation-card__chat_thread__decided__dark` | 2880×3400 | The same settled window, dark palette. |
 | `S3__review-card__chat_thread__pending` | 2880×3400 | The same conversation, all four turns in one window: the decided row still above, the run panel reading **`completed` / “Run complete”**, the person's second turn *“Is there anything waiting on me for review?”*, and beneath it **the review card on `chat_thread`** — *“Review requested / Awaiting your decision”*, the target the run's own step wrote (`CINATRA_UAT_OK: scripted title`, `Blog Post Artifact`, `@cinatra-ai/blog-post-artifact:post · revision 798dc74f-cf0… · text/markdown · updated 2026-08-23T10:26:02.616Z`), the composer-binding row, the rationale field and the decision floor `Comment` · `Reject` · `Approve`. |
 | `S3__review-card__chat_thread__pending__dark` | 2880×3400 | The same window, dark palette. |
 | `S4__recommendation-card__page_gate_region__decided` | 2880×3400 | The **review page for the same run**, whole window: `AGENT RUN / Review`, the step rail `1 Review`, the **decided row above** the review gate card, and the gate still open on the same artifact and the same revision, with `Comment` · `Reject` · `Approve`. Nothing pressable in the row (**0/0/0**). |

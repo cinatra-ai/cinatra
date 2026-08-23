@@ -621,13 +621,19 @@ describe("the REAL card, once it is in the REAL triggering container", () => {
       result: DURABLE_RESULT,
     });
     // A run-card render, in the transcript, is still a run_card render. The
-    // subtree is the one the shipped run panel declares, found in the rendered
-    // turn rather than invented here.
-    const foreign = first.triggerContainer.querySelector<HTMLElement>(
-      '[data-lifecycle-card-host="run_card"]',
-    );
-    expect(foreign, "the turn renders the inline run card's own host subtree").not.toBeNull();
-    mountRealCardInto(foreign!);
+    // subtree carries the declaration the shipped run panel makes — which is
+    // also exactly what this file's stand-in for that panel renders.
+    //
+    // PLANTED RATHER THAN BORROWED since cinatra#2790 (epic #2784 S9f): a HELD
+    // turn draws no run panel, because the run progress card waits for the
+    // skills decision, so the held turn this arm needs has no panel subtree in
+    // it to reach for. What is measured is unchanged — the evaluator's rule that
+    // anchors inside a foreign host's subtree are not this host's mount.
+    const foreign = document.createElement("div");
+    foreign.setAttribute("data-lifecycle-card-host", "run_card");
+    foreign.setAttribute("data-inline-run-card", "");
+    first.triggerContainer.appendChild(foreign);
+    mountRealCardInto(foreign);
     await waitFor(() =>
       expect(root.querySelector('[data-conformance-id="run-chip-row"]')).not.toBeNull(),
     );

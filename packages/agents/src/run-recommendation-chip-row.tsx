@@ -889,6 +889,100 @@ export function RunRecommendationChipRow({
 const RESOLVE_RETRY_DELAYS_MS = [400, 1_500, 4_000] as const;
 
 /**
+ * THE DEADLINE ON THE WHOLE READ (cinatra#2790, epic #2784 S9f).
+ *
+ * The retry budget above only advances when an attempt FINISHES — a request that
+ * never settles never fails, so it never spends the budget. That was harmless
+ * while nothing depended on the answer arriving; it stopped being harmless when
+ * the conversation began WITHHOLDING the run progress card until this read says
+ * whether the skills question is open. A hung endpoint would then hide the run
+ * card for as long as the tab is open, with nothing on screen to say why.
+ *
+ * So the read carries a wall-clock deadline. When it passes with no answer, the
+ * question is reported unreadable and every host that was waiting on it goes back
+ * to what it drew before this rule existed. It is a floor, not a cancellation: a
+ * late answer still lands and still replaces the unreadable reading, and the
+ * retry budget keeps running underneath it.
+ *
+ * Longer than the retry budget it backstops (400 + 1500 + 4000 ms plus the
+ * attempts themselves), so an endpoint that is merely slow is answered by a retry
+ * rather than written off.
+ */
+const RESOLVE_DEADLINE_MS = 8_000;
+
+/**
+ * WHAT THIS RUN'S RECOMMENDATION IS, INCLUDING "NOT KNOWN YET".
+ *
+ *   `resolving`  — the authoritative read is in flight, or is being retried. The
+ *                  answer may still be "held", so a host that must not draw a
+ *                  run progress card over an open question WAITS here.
+ *   `answered`   — `state` is the authority's own answer for this run.
+ *   `unreadable` — the read cannot be completed: the failure budget is spent, or
+ *                  the surface declares no lifecycle host to read on. A host
+ *                  fails OPEN on this and draws what it drew before the rule
+ *                  existed, because a dead read must not be able to empty every
+ *                  conversation of its run cards.
+ */
+export type RunRecommendationHoldResolution = {
+  phase: "resolving" | "answered" | "unreadable";
+  state: RunRecommendationHoldState | null;
+};
+
+/**
+ * MUST THE AGENTIC RUN PROGRESS CARD WAIT? (cinatra#2790, epic #2784 S9f.)
+ *
+ * The plan decides the turn's shape by THIS, not by the presence of a run:
+ * "An agentic run progress card is not visible while the recommended skills can
+ * be selected, because they are being chosen before the agent actually runs."
+ *
+ * So the card waits on a live hold AND on a question that has not been answered
+ * yet. Waiting on the unanswered case is the whole point: mounting on "not yet"
+ * and unmounting on the answer would make the forbidden card VISIBLE — briefly,
+ * and every time — which is what the sentence rules out. The cost is that the run
+ * progress card of an ordinary, never-held run appears one authoritative read
+ * later than it used to.
+ *
+ * IT FAILS OPEN ON `unreadable`, and that is the balance: a read that cannot be
+ * completed leaves the conversation drawing exactly what it drew before this rule
+ * existed, rather than emptying every turn of its run card.
+ */
+export function runCardWaitsForRecommendation(
+  resolution: RunRecommendationHoldResolution,
+): boolean {
+  if (resolution.phase === "resolving") return true;
+  return resolution.phase === "answered" && resolution.state?.state === "held";
+}
+
+/**
+ * WERE THIS RUN'S SKILLS DECIDED ON THE RECOMMENDATION CARD?
+ *
+ * The other half of the same ruling: "The agentic run progress card appears once
+ * the skills are decided; no skill inside it can be selected." A run that was
+ * never held answers `none` and is NOT decided — its own affordances are
+ * untouched by this slice — and an unanswered or unreadable question is not a
+ * decision either.
+ */
+export function recommendationWasDecided(
+  resolution: RunRecommendationHoldResolution,
+): boolean {
+  if (resolution.phase !== "answered") return false;
+  const state = resolution.state?.state;
+  return state === "confirmed" || state === "skipped";
+}
+
+/** The reading a host starts with, before the card has said anything. */
+export const RECOMMENDATION_UNRESOLVED: RunRecommendationHoldResolution = Object.freeze({
+  phase: "resolving",
+  state: null,
+});
+
+/** The reading of a run whose recommendation cannot be read at all. */
+export const RECOMMENDATION_UNREADABLE: RunRecommendationHoldResolution = Object.freeze({
+  phase: "unreadable",
+  state: null,
+});
+
+/**
  * The BROKER READ of one run's hold state (cinatra#2790, epic #2784 S9f).
  *
  * `null` means the read did not complete — a transport failure, a refused
@@ -978,12 +1072,16 @@ function useRecommendationHoldState(params: {
    * the SAME core, so nothing below this line knows which one ran.
    */
   auth: LifecycleCardAuth | null;
-}): RunRecommendationHoldState | null {
+}): RunRecommendationHoldResolution {
   const { runId, wireRef, reloadToken, auth } = params;
   const [resolved, setResolved] = useState<{
     runId: string;
     state: RunRecommendationHoldState;
   } | null>(null);
+  // THE RUN WHOSE READ GAVE UP — every attempt in the failure budget below was
+  // spent without an answer. Filed under the run id, so a later run on the same
+  // card starts asking again rather than inheriting a verdict about another run.
+  const [unreadableRunId, setUnreadableRunId] = useState<string | null>(null);
   // Monotonic request id — mount, a wire change and a focus can overlap, and a
   // slow earlier answer must never overwrite a fresher one. Same guard shape as
   // `useLifecycleCardResolve`; the reason is identical (a superseded answer is
@@ -1026,8 +1124,14 @@ function useRecommendationHoldState(params: {
 
   useEffect(() => {
     if (!runId) return;
+    const requestRunIdForBudget = runId;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // The backstop for a read that never finishes at all — see
+    // `RESOLVE_DEADLINE_MS`. Armed once per trigger and cleared with it.
+    const deadlineTimer = setTimeout(() => {
+      if (!cancelled) setUnreadableRunId(requestRunIdForBudget);
+    }, RESOLVE_DEADLINE_MS);
     let attempt = 0;
     const clearRetry = () => {
       if (retryTimer !== null) {
@@ -1063,7 +1167,15 @@ function useRecommendationHoldState(params: {
         if (settled) attempt = 0;
         return;
       }
-      if (attempt >= RESOLVE_RETRY_DELAYS_MS.length) return;
+      if (attempt >= RESOLVE_RETRY_DELAYS_MS.length) {
+        // The budget is spent and nothing more is scheduled. Say so, rather than
+        // leaving the caller waiting for an answer that will not arrive: a host
+        // that withholds a card until this read lands must be able to stop
+        // withholding it when the read is simply unavailable. A wake resets the
+        // budget and asks again, and a successful answer replaces this reading.
+        setUnreadableRunId(requestRunIdForBudget);
+        return;
+      }
       const delay = RESOLVE_RETRY_DELAYS_MS[attempt];
       attempt += 1;
       retryTimer = setTimeout(() => {
@@ -1096,6 +1208,7 @@ function useRecommendationHoldState(params: {
     document.addEventListener("visibilitychange", onWake);
     return () => {
       cancelled = true;
+      clearTimeout(deadlineTimer);
       clearRetry();
       window.removeEventListener("focus", onWake);
       window.removeEventListener("online", onWake);
@@ -1107,17 +1220,74 @@ function useRecommendationHoldState(params: {
   }, [runId, wireRef, reloadToken, resolve]);
 
   // Read the answer back only while it still belongs to the run on screen.
-  return resolved !== null && resolved.runId === runId ? resolved.state : null;
+  //
+  // THREE READINGS, NOT TWO. "No answer yet" and "no answer is coming" used to
+  // be the same `null`, which is exactly the distinction a caller needs when the
+  // ANSWER decides what it may draw: a host that treats "not yet" as "not held"
+  // draws the run progress card for a frame and then takes it away, which is the
+  // very thing the plan forbids. So the hook says which of the two it is, and
+  // the caller waits on one and fails open on the other.
+  //
+  // ONE OBJECT PER ANSWER, not one per render. The reading is published to the
+  // host through an effect keyed on it, and a fresh object every render would
+  // publish on every render — which, with a host that files it in state, is a
+  // loop rather than a notification.
+  //
+  // AN ANSWER OUTRANKS A LATER FAILURE, and that is deliberate rather than an
+  // oversight of the ordering. Once this run's authority has said "held", a
+  // refresh that fails changes nothing about the run: it is still parked, and
+  // drawing its progress card on the strength of a failed request would show a
+  // person a running run that is not running. The fail-open reading exists for
+  // the case where NOTHING was ever learned about this run, which is the only
+  // case where the pre-rule drawing is the honest one.
+  const answered = resolved !== null && resolved.runId === runId ? resolved.state : null;
+  const unreadable = unreadableRunId === runId;
+  return useMemo<RunRecommendationHoldResolution>(
+    () =>
+      answered !== null
+        ? { phase: "answered", state: answered }
+        : unreadable
+          ? RECOMMENDATION_UNREADABLE
+          : RECOMMENDATION_UNRESOLVED,
+    [answered, unreadable],
+  );
 }
+
+/**
+ * The resolved hold state, re-exported so a HOST can name it. The card publishes
+ * it inside a resolution through `onStateChange`, and the two conversation
+ * surfaces hold that — they reach the card by its own subpath and must not have
+ * to know which module inside the agents package declares the shape.
+ */
+export type { RunRecommendationHoldState };
+
 
 export function RecommendationHoldCard({
   runId,
   agentPackageName,
   wireRef,
+  onStateChange,
 }: {
   runId: string;
   /** Fallback package name for the DECIDED summary (the held state carries its own). */
   agentPackageName?: string;
+  /**
+   * THE RESOLVED STATE, PUBLISHED TO THE HOST THAT MOUNTED THIS CARD
+   * (cinatra#2790, epic #2784 S9f).
+   *
+   * The turn around this card has to draw differently depending on the answer —
+   * the run progress card waits while the row is open and arrives when it is
+   * decided — and the authoritative answer is resolved HERE, once. Publishing it
+   * is what keeps that ONE resolve the only one: a host that asked the same
+   * action itself would be a second reader of the same authority, free to
+   * disagree with this card by a round trip.
+   *
+   * "No answer yet" is published as such: the host needs to tell it apart from
+   * "no hold", because it withholds the run progress card on the first and draws
+   * it on the second. Nothing is invented — an unresolved read says it is
+   * unresolved, and a read that gave up says that instead.
+   */
+  onStateChange?: (resolution: RunRecommendationHoldResolution) => void;
   /**
    * The typed `recommendation_hold` interrupt's ref off the run wire, or `null`
    * when no hold is live. A pure change signal — see `useRecommendationHoldState`.
@@ -1157,12 +1327,28 @@ export function RecommendationHoldCard({
   // Hooks run unconditionally (rules of hooks); the resolve itself is cheap and
   // the ABSENT host is enforced on the render below, so a surface that has not
   // declared itself still draws nothing.
-  const state = useRecommendationHoldState({
+  const resolution = useRecommendationHoldState({
     runId: present ? runId : "",
     wireRef: wireRef ?? null,
     reloadToken,
     auth,
   });
+  const state = resolution.state;
+
+  // A surface with NO declared host never asks, so its reading is not "waiting"
+  // — nothing is coming. Saying so is what stops a host that withholds on
+  // `resolving` from withholding for ever on a surface this card never reads on.
+  const published: RunRecommendationHoldResolution = present
+    ? resolution
+    : RECOMMENDATION_UNREADABLE;
+
+  // Published on every change, and only on a change. `onStateChange` is in the
+  // dependency list, so a caller passing a fresh closure every render is told
+  // again rather than silently ignored; callers hold theirs stable (a state
+  // setter) and see exactly one call per answer.
+  useEffect(() => {
+    onStateChange?.(published);
+  }, [published, onStateChange]);
 
   // The row's decision transport, keyed by the SAME declaration the read is —
   // "a surface that proves itself one way to read and another way to decide is a

@@ -166,8 +166,22 @@ function seedRequest(
 export function InlineAgentRunCard({
   runId,
   onActiveGateChange,
+  recommendationDecided,
 }: {
   runId: string;
+  /**
+   * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
+   * (cinatra#2790, epic #2784 S9f).
+   *
+   * Resolved ONCE by the conversation's own recommendation card and passed
+   * down, because inside a transcript the conversation owns that card and the
+   * panel mounts none of its own — so the panel has nothing to read it from.
+   * The plan's ruling is what it carries: "The agentic run progress card
+   * appears once the skills are decided; no skill inside it can be selected."
+   * The panel draws no skill picker when this is true. Absent/false is the
+   * unchanged reading, for a run that never had a recommendation.
+   */
+  recommendationDecided?: boolean;
   /**
    * Forwarded to AgenticRunPanel so the chat thread can drive an open HITL gate
    * via the prompt window. Fires with a stable descriptor on gate identity
@@ -289,7 +303,13 @@ export function InlineAgentRunCard({
     : null;
 
   return (
-    <div className="my-2">
+    // `data-inline-run-card` names the run this panel was mounted for. Passive —
+    // it draws nothing and drives nothing — and it exists because the panel's
+    // PRESENCE is now a ruled property of the turn: it is withheld while the
+    // recommended skills can still be chosen, so a proof of that state has to be
+    // able to count it and find none. The same name the transcript suites' own
+    // stand-in for this panel has always declared.
+    <div className="my-2" data-inline-run-card={runId}>
       <CreationProgressTimeline runId={runId} />
       <AgenticRunPanel
         runId={runId}
@@ -304,6 +324,7 @@ export function InlineAgentRunCard({
         templateId={seed.templateId}
         initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}
+        recommendationDecided={recommendationDecided}
         surface="chat"
       />
       {runPageHref ? (

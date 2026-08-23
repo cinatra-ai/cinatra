@@ -58,7 +58,13 @@ import { InlineAgentRunCard } from "./inline-agent-run-card";
 // (and into every test that mounts this list), while this leaf is all the
 // transcript needs. Same reason `lifecycle-card-runtime` and `review-gate-card`
 // are subpaths.
-import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
+import {
+  RECOMMENDATION_UNRESOLVED,
+  RecommendationHoldCard,
+  recommendationWasDecided,
+  runCardWaitsForRecommendation,
+  type RunRecommendationHoldResolution,
+} from "@cinatra-ai/agents/run-recommendation-card";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {
@@ -193,6 +199,140 @@ function ThoughtGroupSection({ group, isLive }: { group: UiThoughtGroup; isLive:
 }
 
 // ---------------------------------------------------------------------------
+// The `agent_run` part's own container.
+// ---------------------------------------------------------------------------
+//
+// WHAT IT DRAWS, AND IN WHICH ORDER THE PERSON MEETS IT (plan section 6.2/6.4):
+//
+//   "An agentic run progress card is not visible while the recommended skills
+//    can be selected, because they are being chosen before the agent actually
+//    runs."
+//   "The agentic run progress card appears once the skills are decided; no
+//    skill inside it can be selected."
+//
+// So while the row is open the turn carries the assistant's text and the chip
+// row and nothing else; the decision is what brings the run card in, with the
+// settled chips above it. Both readings live in ONE container — the `agent_run`
+// part's own slot — so the card that arrives lands exactly where the panel
+// always was, not at the end of the turn.
+//
+// ONE RESOLVE ANSWERS BOTH QUESTIONS. The hold's authoritative state is read by
+// the card (the ONE renderer of `recommendation_hold`) and published here; this
+// container asks nothing itself, so the row and the run card cannot disagree
+// about the same run. The same answer travels on into the run card, because the
+// panel inside it must draw no skill picker for a run whose skills were already
+// decided on this row.
+//
+// UNRESOLVED IS NOT "NOT HELD", and the difference is the whole correctness of
+// this. Until the authoritative read lands, the answer may still be "held", so
+// the run card WAITS — drawing it on "not yet" and taking it away on the answer
+// would make the forbidden card visible, briefly and every single time, which is
+// what the sentence above rules out. The price is paid by the ordinary run: its
+// progress card appears one authoritative read later than it used to.
+//
+// A READ THAT CANNOT BE COMPLETED FAILS OPEN. When the card reports its read
+// unreadable — the failure budget spent, or no lifecycle host to read on — the
+// turn draws exactly what it drew before this rule existed. A dead endpoint must
+// not be able to empty every conversation of its run cards.
+//
+// BOTH CONVERSATION HOSTS. This container is shared by `/chat` and the site
+// widget, and nothing here is gated on the surface: the card selects its own
+// transport from the declared host, and the shape of the turn is the same one.
+function AgentRunTurnSlot({
+  runId,
+  slot,
+  onActiveGateChange,
+  children,
+}: {
+  runId: string;
+  /** The part index this container is the slot for (S9i's positional mark). */
+  slot: number;
+  onActiveGateChange?: (
+    runId: string,
+    gate: ChatGateDescriptor | null,
+    instanceId: string,
+  ) => void;
+  /** The renderable views this same step produced, drawn under the run card. */
+  children?: ReactNode;
+}) {
+  const [hold, setHold] = useState<RunRecommendationHoldResolution>(
+    RECOMMENDATION_UNRESOLVED,
+  );
+  const runCardWaits = runCardWaitsForRecommendation(hold);
+  const decided = recommendationWasDecided(hold);
+
+  return (
+    // `data-agent-run-slot` names WHICH run this marked slot belongs to. The
+    // slot index alone says "some marked container" — this view marks three —
+    // and the run panel's own link used to be what told them apart, which stops
+    // being true the moment a held turn draws no panel. It is passive: a name
+    // for the container, driving nothing.
+    <div data-transcript-slot={slot} data-agent-run-slot={runId}>
+      {/* THE §V RECOMMENDATION HOLD, ON THE chat_thread HOST.
+          A chat-started run can PARK on the run-start recommendation hold, and
+          the decision belongs where the person is: in the conversation. This
+          mounts the ONE §V renderer (`RecommendationHoldCard`, which composes
+          the chip row) keyed by the server-produced `agent_run` tool-result
+          runId, under the outer `chat_thread` LifecycleCardSurfaceProvider this
+          view already declares. It resolves through the card's own state
+          action — or, on a credential-declaring host, through the broker.
+
+          AT ITS PRODUCING SLOT, like every other kind (S9i, #2827). Section V's
+          carriage is an INTERRUPT rather than a DATA_PART, so its producing step
+          is the `agent_run` dispatch itself — this very container, which carries
+          the slot mark S9i introduced. The card therefore satisfies the same
+          positional rule as the slotted views below it without going through the
+          wire: same container, same `data-transcript-slot`, drawn once.
+
+          A SIBLING of the inline run panel, never a child of it: nesting these
+          would put one card inside another host's subtree and make "which host
+          drew it" unanswerable.
+
+          AND THE ONLY ONE IN THE TURN. The panel mounts this same card on its
+          own `run_card` host, so a sibling that also drew it would show the
+          person two cards for one run. The panel reads the ambient host and
+          withholds its copy inside ANY conversation host
+          (`runCardOwnsLifecycleCopy`) — the conversation's card owns this run's
+          recommendation here, in EVERY state, and the run page's own panel keeps
+          its copy because no conversation host is in scope there.
+
+          BOTH ARMS OF THE ONE COLUMN (cinatra#2790, epic #2784 S9f). This
+          container is shared by `/chat` and by the site widget, and the mount is
+          deliberately NOT gated on the surface kind. On the widget the card's
+          read and its two decisions travel on the host's own credential — the
+          host declaration selects the transport inside the card itself — so the
+          same mount is correct on both, and the widget's `site_widget` cell is
+          drawn by this line.
+
+          NOT a DATA_PART and NOT registered in `renderable-views`: a registry
+          entry would create a second dispatch path for the same interaction and
+          would reach the shared widget transcript, which this host is not
+          authorized to decide on. That is also why it cannot arrive in the
+          slotted views below and cannot be drawn twice by the two mounts S9i
+          partitions.
+
+          Mounted for every `agent_run` part rather than gated on the tool
+          result's status, exactly as the run panel mounts it: the card
+          self-gates (no live hold ⇒ it renders nothing), which is also what
+          makes it survive a transcript reload and what lets it settle IN PLACE
+          into its confirmed/skipped summary after a decision instead of
+          disappearing. */}
+      <RecommendationHoldCard runId={runId} wireRef={null} onStateChange={setHold} />
+      {runCardWaits ? null : (
+        <InlineAgentRunCard
+          runId={runId}
+          onActiveGateChange={onActiveGateChange}
+          recommendationDecided={decided}
+        />
+      )}
+      {/* Inline undo for a recent restorable change-set produced by this run. */}
+      <UndoActionChip runId={runId} />
+      {children}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Ordered parts renderer (chronologically interleaved text + tool badges)
 // ---------------------------------------------------------------------------
 
@@ -275,72 +415,14 @@ function OrderedPartsSection({
         // The card resolves to its own panel chrome — no extra Card wrapper here.
         if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
           return (
-            <div key={`agent-run-${part.runId}`} data-transcript-slot={idx}>
-              {/* THE §V RECOMMENDATION HOLD, ON THE chat_thread HOST.
-                  A chat-started run can PARK on the run-start recommendation
-                  hold, and the decision belongs where the person is: in the
-                  conversation. This mounts the ONE §V renderer
-                  (`RecommendationHoldCard`, which composes the chip row) keyed
-                  by the server-produced `agent_run` tool-result runId, under
-                  the outer `chat_thread` LifecycleCardSurfaceProvider this view
-                  already declares. It resolves through the card's own
-                  cookie-bound state action.
-
-                  AT ITS PRODUCING SLOT, like every other kind (S9i, #2827).
-                  §V's carriage is an INTERRUPT rather than a DATA_PART, so its
-                  producing step is the `agent_run` dispatch itself — this very
-                  container, which now carries the slot mark S9i introduced. The
-                  card therefore satisfies the same positional rule as the
-                  slotted views below it without going through the wire: same
-                  container, same `data-transcript-slot`, drawn once.
-
-                  A SIBLING of the inline run panel, never a child of it:
-                  nesting these would put one card inside another host's subtree
-                  and make "which host drew it" unanswerable.
-
-                  AND THE ONLY ONE IN THE TURN. The panel mounts this same card
-                  on its own `run_card` host, so a sibling that also drew it
-                  would show the person two cards for one run. The panel now
-                  reads the ambient host and withholds its copy inside ANY
-                  conversation host (`runCardOwnsLifecycleCopy`) — the
-                  conversation's card owns this run's recommendation here, in
-                  EVERY state, and the run page's own panel keeps its copy
-                  because no conversation host is in scope there.
-
-                  BOTH ARMS OF THE ONE COLUMN (cinatra#2790, epic #2784 S9f).
-                  This container is shared by `/chat` and by the site widget, and
-                  the mount is deliberately NOT gated on the surface kind. On the
-                  widget the card's read and its two decisions travel on the
-                  host's own credential — the host declaration selects the
-                  transport inside the card itself — so the same mount is correct
-                  on both, and the widget's `site_widget` cell is drawn by this
-                  line. The credential-keyed withholding that stood here while
-                  the cookie mount was still owed is gone with the obligation
-                  that justified it.
-
-                  NOT a DATA_PART and NOT registered in `renderable-views`: a
-                  registry entry would create a second dispatch path for the
-                  same interaction and would reach the shared widget transcript,
-                  which this host is not authorized to decide on. That is also
-                  why it cannot arrive in `slottedViews` below and cannot be
-                  drawn twice by the two mounts S9i partitions.
-
-                  Mounted for every `agent_run` part rather than gated on the
-                  tool result's status, exactly as the run panel mounts it: the
-                  card self-gates (no live hold ⇒ it renders nothing), which is
-                  also what makes it survive a transcript reload and what lets
-                  it settle IN PLACE into its confirmed/skipped summary after a
-                  decision instead of disappearing. */}
-              <RecommendationHoldCard runId={part.runId} wireRef={null} />
-              <InlineAgentRunCard
-                runId={part.runId}
-                onActiveGateChange={onActiveGateChange}
-              />
-              {/* Inline undo for a recent restorable change-set produced by
-                  this run. */}
-              <UndoActionChip runId={part.runId} />
+            <AgentRunTurnSlot
+              key={`agent-run-${part.runId}`}
+              runId={part.runId}
+              slot={idx}
+              onActiveGateChange={onActiveGateChange}
+            >
               {slottedViews}
-            </div>
+            </AgentRunTurnSlot>
           );
         }
         // A step that produced a view gets its own container at its own slot.

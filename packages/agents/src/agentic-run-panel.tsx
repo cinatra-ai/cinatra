@@ -83,7 +83,12 @@ import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
-import { RecommendationHoldCard } from "./run-recommendation-chip-row";
+import {
+  RECOMMENDATION_UNRESOLVED,
+  RecommendationHoldCard,
+  recommendationWasDecided,
+  type RunRecommendationHoldResolution,
+} from "./run-recommendation-chip-row";
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
@@ -169,6 +174,24 @@ type AgenticRunPanelProps = {
    * still own every later value, so a gate that moves on is never pinned here.
    */
   initialHitlContext?: HitlContext | null;
+  /**
+   * THIS RUN'S SKILLS WERE DECIDED ON THE RECOMMENDATION CARD
+   * (cinatra#2790, epic #2784 S9f).
+   *
+   * The plan: "The agentic run progress card appears once the skills are
+   * decided; no skill inside it can be selected." So a run that came through the
+   * recommendation card draws NO skill picker inside this panel — the settled
+   * chips above it already say what was chosen, and a second, pressable list of
+   * every assigned skill reads as a live choice that disagrees with the one that
+   * was taken.
+   *
+   * IT IS A PROP because of WHERE the panel is. Inside a conversation the
+   * transcript owns the recommendation card and this panel mounts none, so the
+   * conversation's single resolve is passed down. On the run page there is no
+   * conversation host, the panel mounts the card itself, and it reads the answer
+   * off that mount instead — same authority, resolved once either way.
+   */
+  recommendationDecided?: boolean;
 };
 
 export type ChatGateField = {
@@ -326,6 +349,7 @@ export function AgenticRunPanel({
   onActiveGateChange,
   surface = "agent-detail",
   initialHitlContext,
+  recommendationDecided,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
@@ -461,6 +485,27 @@ export function AgenticRunPanel({
   // isPendingApproval is derived below from status; we compute a local guard from
   // initialStatus here so the effect dependency is stable across re-renders.
   const [hitlSkills, setHitlSkills] = useState<SkillForChip[]>([]);
+  // THE RUN'S RECOMMENDATION, as this panel's own card resolved it. Read only on
+  // the run page, where this panel mounts the card (see the mount below); inside
+  // a conversation the transcript owns that card and tells this panel through
+  // `recommendationDecided` instead. Either way ONE resolve answers it.
+  const [ownRecommendation, setOwnRecommendation] =
+    useState<RunRecommendationHoldResolution>(RECOMMENDATION_UNRESOLVED);
+  // Does this panel mount the recommendation card itself? The same condition the
+  // mount below uses, read once so the skill-picker rule can ask whether an
+  // answer is even coming.
+  const panelMountsRecommendationCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);
+  // Was this run's skill set settled on the recommendation card? If it was,
+  // nothing inside this card offers a skill to press. While the panel's own read
+  // is still in flight the picker also stays away — it is a run's OWN skills
+  // being offered, and offering them and then withdrawing them is the flicker
+  // the ruling exists to prevent. A read that gives up (or a host that never
+  // reads) leaves the picker exactly as it was.
+  const skillsDecidedOnCard =
+    recommendationDecided === true || recommendationWasDecided(ownRecommendation);
+  const recommendationStillResolving =
+    panelMountsRecommendationCard && ownRecommendation.phase === "resolving";
+  const drawSkillPicker = !skillsDecidedOnCard && !recommendationStillResolving;
   const isPendingApprovalForEffect = pollStatus === "pending_approval" || initialStatus === "pending_approval";
   useEffect(() => {
     if (!isPendingApprovalForEffect || !agentPackageName) return;
@@ -1337,12 +1382,13 @@ export function AgenticRunPanel({
           prop. The condition itself lives in `runCardOwnsLifecycleCopy` so this
           mount and the transcript's own test cannot drift into two copies of
           the same rule. */}
-      {runCardOwnsLifecycleCopy(ambientLifecycleHost) ? (
+      {panelMountsRecommendationCard ? (
         <LifecycleCardSurfaceProvider host="run_card">
           <RecommendationHoldCard
             runId={runId}
             agentPackageName={agentPackageName ?? ""}
             wireRef={holdWireRef}
+            onStateChange={setOwnRecommendation}
           />
         </LifecycleCardSurfaceProvider>
       ) : null}
@@ -1386,8 +1432,11 @@ export function AgenticRunPanel({
         // Inline HITL bubble.
         <>
           <Separator />
-          {/* Skill chip row — xRenderer HITL surface */}
-          <HitlSkillChips skills={hitlSkills} />
+          {/* Skill chip row — xRenderer HITL surface. WITHHELD for a run whose
+              skills were decided on the recommendation card: "no skill inside
+              it can be selected". Nothing replaces it — the settled chips above
+              the card are the reading. */}
+          {drawSkillPicker ? <HitlSkillChips skills={hitlSkills} /> : null}
           {hitlRendererEntry?.entry || hitlPresentationHint ? (
             <div className="soft-panel rounded-panel p-4 bg-surface-muted flex flex-col gap-4">
               {(() => {
@@ -1572,8 +1621,10 @@ export function AgenticRunPanel({
         // degraded path when no gate context (reviewTaskId) is available to
         // submit against — renderApprovalActionsRow renders nothing then.
         <>
-          {/* Skill chip row — tool-call gate HITL surface */}
-          <HitlSkillChips skills={hitlSkills} />
+          {/* Skill chip row — tool-call gate HITL surface. Same withholding as
+              the xRenderer gate above, for the same ruling: a decided run offers
+              nothing selectable inside its own card. */}
+          {drawSkillPicker ? <HitlSkillChips skills={hitlSkills} /> : null}
           <div className="rounded-control border border-line bg-surface-muted px-4 py-3 flex flex-col gap-2">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm text-muted-foreground">
