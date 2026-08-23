@@ -43,7 +43,7 @@ const VERIFICATION_BODY: VerificationSummaryBody = {
   // §VII's advisory comments (epic S9, slice S9e) — the panel per comment the
   // card closes with, and the only place the reading's PROVENANCE travels.
   advisoryComments: [
-    { authorKind: "service", body: "Core analysis of 2 disclosed field(s). [provenance] lane=core-analysis-lane" },
+    { authorKind: "service", body: "Audit of 2 disclosed field(s). [provenance] lane=core-analysis-lane" },
   ],
 };
 

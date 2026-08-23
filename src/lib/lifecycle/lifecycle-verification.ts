@@ -10,7 +10,7 @@
 //
 //   - fieldDiff        — the before/after field-level diff (the `content_change_
 //                        proposal` shape: {field, before, after}) over every
-//                        changed path (the UI's "Core analysis" before/after view).
+//                        changed path (the UI's "Audit" before/after view).
 //   - unmetFindingIds  — an accepted, field-scoped finding whose field was NOT
 //                        changed by the repair (an IN-SCOPE finding left unapplied).
 //   - outOfScopePaths  — a changed field OUTSIDE the scope manifest (OUT-OF-SCOPE

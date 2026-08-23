@@ -457,7 +457,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // machinery running. Plain run-scoped read behind the access door already cleared.
   const railLifecycleDecisions = run ? await readLifecycleDecisionsForRun(run.id) : [];
   // S4 (cinatra#2042): the run's post-change verification records, keyed to their
-  // gate — woven into the rail as "Core analysis" entries beneath each gate.
+  // gate — woven into the rail as "Audit" entries beneath each gate.
   const railVerifications = railGates.length
     ? await readVerificationRecordsForGates(railGates.map((g) => g.id))
     : [];
@@ -522,7 +522,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
   // ── §VII's audit card, on the `run_card` host (cinatra#2789, epic #2784 S9e) ──
   //
-  // THE MOUNT. The rail above already weaves a "Core analysis" ENTRY beneath
+  // THE MOUNT. The rail above already weaves an "Audit" ENTRY beneath
   // each gate that has a verification record — a link into the review page's
   // `?view=verification`. That entry is navigation; it is not the reading. This
   // is the reading, drawn on the run page itself under its own

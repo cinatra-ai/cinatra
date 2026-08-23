@@ -1193,7 +1193,7 @@ export function SuggestionChips({
       {/* #2042's labelling rule: a CORE lane is chrome, never an agent. The
           producer deliberately left this string to the surface that draws it. */}
       <div className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
-        Core analysis · Suggestions
+        Audit · Suggestions
       </div>
       {suggestions.map((s) => {
         const chipState = stateOf(s);

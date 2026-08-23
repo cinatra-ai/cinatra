@@ -169,7 +169,7 @@ function clamp(value: string, max: number): string {
  *
  * WHAT TRAVELS. The verdict, the two pinned revisions, the before/after field
  * diff with its per-row authorization mark, and §VII's advisory comments — the
- * same reading the run's own "Core analysis" surface already shows this reader,
+ * same reading the run's own "Audit" surface already shows this reader,
  * who has cleared run READ and whose gate and record were both found. Nothing
  * here is new disclosure; it is the existing disclosure, reached through the
  * card instead of the page.
