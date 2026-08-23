@@ -92,6 +92,52 @@ export async function resolveTriggerScheduleProposalCard(params: {
 
     if (resolved.phase === "absent") return ABSENT_PROPOSAL_CARD;
 
+    // EXPIRED — a DRAWN reading, never an absence (cinatra#2836; plan (A) §7.2
+    // step 2, "an expired card **stays visible**, still editable, with
+    // **Confirm** to set the schedule again"; §9.1 row 8).
+    //
+    // This branch is the fix. The resolver used to collapse an expired token
+    // into `absent` together with every forged and foreign one, which deleted
+    // the card — and the question it asked — out of the reader's transcript and
+    // made a reader whose thirty minutes ran out indistinguishable from one who
+    // was never entitled to the proposal at all. §IV reserves `absent` for the
+    // second reader, and only for them.
+    //
+    // NOTHING IS DISCLOSED BY DRAWING IT. The service reaches this arm only for
+    // a token that decrypted under this server's key and was minted for exactly
+    // this reader in exactly this org; an expired-but-foreign token is refused
+    // on the byte-identical path a forged one takes and still answers `absent`.
+    // The body is the same projection of the same token the live card already
+    // showed the same person.
+    //
+    // THE STATE IS THE FLOOR, exactly as it is for a live proposal. The expired
+    // card's Confirm is pressable — the press re-proposes and confirms the
+    // replacement — so the honest rung is `pending`, and a reader the instance
+    // would refuse to run this agent for gets `restricted` for the same reason
+    // and with the same sentence they would get before it expired.
+    if (resolved.phase === "expired") {
+      const state: LifecycleCardState = resolved.canConfirm
+        ? { state: "pending", canDecide: true, canComment: false }
+        : {
+            state: "restricted",
+            canDecide: false,
+            canComment: false,
+            reason: resolved.restrictedReason ?? "You can't confirm this schedule.",
+          };
+      const view: TriggerScheduleProposalViewBody = {
+        phase: "expired",
+        version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
+        agentName: resolved.agentName,
+        // The rows the reader last saw, so the expired card re-opens on their
+        // own schedule rather than on an empty form.
+        schedule: resolved.proposal.schedule,
+        // Read back through the ONE renderer the settled card uses, so "what
+        // expired" is worded exactly as "what was armed" would have been.
+        scheduleCopy: describeProposalSchedule(resolved.proposal.schedule),
+      };
+      return { state, view };
+    }
+
     if (resolved.phase === "proposal") {
       // §IV: `restricted` and `absent` are never drawn for each other. A reader
       // who may SEE the proposal but not confirm it gets a DRAWN card with a
@@ -306,17 +352,39 @@ export async function decideTriggerScheduleProposal(params: {
       // template id would mint a fresh identity and leave the old card
       // spendable for the rest of its TTL — two runs, one on the schedule the
       // reader had just corrected away from.
-      const { resolveProposalForReader, adjustTriggerSchedule, PROPOSAL_REFUSALS } =
-        await import("@cinatra-ai/agents/trigger-schedule-proposal-service");
+      const {
+        resolveProposalForReader,
+        adjustTriggerSchedule,
+        reproposeExpiredSchedule,
+        PROPOSAL_REFUSALS,
+      } = await import("@cinatra-ai/agents/trigger-schedule-proposal-service");
       const resolved = await resolveProposalForReader(ref, { userId, orgId });
-      // Adjust re-opens the rows of a proposal that is still a proposal. A
-      // settled one has a run; an absent one is not this reader's.
-      if (resolved.phase !== "proposal") return NOT_PERMITTED;
+      // Adjust re-opens the rows of a proposal that is still a proposal — or of
+      // an EXPIRED one, which is the Confirm press on the expired card
+      // (cinatra#2836; plan (A) §7.2 step 2). A settled one has a run; an absent
+      // one is not this reader's.
+      //
+      // WHY THE EXPIRED CARD'S CONFIRM ARRIVES AS AN `adjust`. The expired token
+      // is unspendable, so its floor cannot be a bare confirm: the press
+      // re-proposes and confirms the replacement, which is the SAME composite an
+      // EDITED live proposal already performs, on the same endpoint and under
+      // the same authorization. One press, one meaning, no second op on the wire.
+      if (resolved.phase !== "proposal" && resolved.phase !== "expired") {
+        return NOT_PERMITTED;
+      }
       const parsed = proposedScheduleSchema.safeParse(params.schedule);
       if (!parsed.success) {
         return { kind: "error", message: PROPOSAL_REFUSALS.invalid };
       }
-      const proposed = await adjustTriggerSchedule({
+      // TWO NAMED PATHS, EACH REFUSING EXACTLY WHAT IT SHOULD. The live card's
+      // Adjust must keep treating an expired token as a refusal — widening it
+      // would have made every one of its other callers start accepting a closed
+      // window. Both demand the identical authority: a token authentically
+      // minted for THIS reader in THIS org, with everything else, an
+      // expired-but-foreign ref included, refused outright.
+      const repropose =
+        resolved.phase === "expired" ? reproposeExpiredSchedule : adjustTriggerSchedule;
+      const proposed = await repropose({
         priorToken: ref,
         userId,
         orgId,

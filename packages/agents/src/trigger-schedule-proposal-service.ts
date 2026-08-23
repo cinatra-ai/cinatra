@@ -49,6 +49,7 @@ import {
 import {
   proposalConsumeKey,
   verifyTriggerScheduleProposalToken,
+  verifyTriggerScheduleProposalTokenDetailed,
   type ProposalSchedule,
   type TriggerScheduleProposal,
 } from "@/lib/trigger-schedule-proposal-token";
@@ -60,6 +61,7 @@ import {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  reproposeExpiredSchedule,
   type AdjustScheduleInput,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
@@ -69,6 +71,7 @@ export {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  reproposeExpiredSchedule,
   type AdjustScheduleInput,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
@@ -653,6 +656,37 @@ export type ProposalResolution =
       canConfirm: boolean;
       restrictedReason: string | null;
     }
+  /**
+   * EXPIRED, AND STILL THIS READER'S (cinatra#2836). The thirty-minute window
+   * closed with nobody pressing anything, and the token is otherwise perfect:
+   * authentic, unstretched, minted for exactly this reader in exactly this org.
+   *
+   * A READING, NOT AN ABSENCE. Plan (A) §7.2 step 2 — an expired card "stays
+   * visible", still editable, with Confirm to set the schedule again — and
+   * design §IV reserves the undrawn answer for a reader who may not see the
+   * subject AT ALL. Collapsing the two, which is what this resolver did before
+   * this fix, deleted the card and the question it asked out of the reader's
+   * own transcript, and made every timed-out reader indistinguishable from one
+   * who was never entitled to anything.
+   *
+   * Only a reader who OWNS the token can ever reach this arm: the verify
+   * reports `expired` strictly behind both bindings, so an expired token
+   * belonging to somebody else is the same flat refusal a forged one is, and
+   * lands on `absent` exactly as before.
+   *
+   * It carries the same fields the live proposal does. `canConfirm` is still
+   * the floor read against the reader — an agent the instance would refuse to
+   * run cannot be scheduled by re-proposing it either — and `proposal` carries
+   * the rows the reader last saw, so the expired card re-opens on those rather
+   * than on an empty form.
+   */
+  | {
+      phase: "expired";
+      proposal: TriggerScheduleProposal;
+      agentName: string;
+      canConfirm: boolean;
+      restrictedReason: string | null;
+    }
   | {
       phase: "settled";
       runId: string;
@@ -718,12 +752,22 @@ export async function resolveProposalForReader(
   token: string,
   actor: ConfirmProposalActor,
 ): Promise<ProposalResolution> {
-  const proposal = verifyTriggerScheduleProposalToken({
+  // THE FINER READ, AND ONLY HERE (cinatra#2836). Confirm and the live Adjust
+  // keep the collapsing verify, because for them an expired token has nothing
+  // left to spend. RESOLUTION is the one caller that must tell an expired card
+  // apart from an absent one, because it is the caller that decides whether the
+  // card is DRAWN at all — and drawing it is what plan (A) §7.2 step 2 asks for.
+  //
+  // `refused` still swallows everything, on the identical path and with the
+  // identical answer as before this change: forged, foreign, stretched,
+  // future-dated, AND expired-but-foreign all arrive here as one value.
+  const verified = verifyTriggerScheduleProposalTokenDetailed({
     token,
     expectedUserId: actor.userId,
     expectedOrgId: actor.orgId,
   });
-  if (!proposal) return { phase: "absent" };
+  if (verified.outcome === "refused") return { phase: "absent" };
+  const proposal = verified.proposal;
 
   const template = await readAgentTemplateById(proposal.templateId);
   if (!template) return { phase: "absent" };
@@ -788,7 +832,14 @@ export async function resolveProposalForReader(
     { packageVersion: template.packageVersion ?? null },
   );
   return {
-    phase: "proposal",
+    // THE EXPIRY READING IS TAKEN LAST, and that order carries meaning rather
+    // than convenience. An expired token whose family was already CONFIRMED is
+    // a settled card, not an expired one — the run exists and the reader should
+    // see it — so the consume lookup above answers first. An expired token for
+    // a template that has since vanished is still `absent`, for the same reason
+    // a live one is. What is left here is exactly the plan's case: the window
+    // closed and nothing was ever armed.
+    phase: verified.outcome === "expired" ? "expired" : "proposal",
     proposal,
     agentName,
     canConfirm: !notRunnable,
