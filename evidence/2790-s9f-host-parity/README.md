@@ -709,3 +709,198 @@ the only thing said about it anywhere in this directory is that the bridge
 answered `200`.
 
 Assisted-by: Claude Code (claude-opus-5)
+
+---
+
+# The CHAT round — one run, one conversation, whole windows (2026-08-23)
+
+## The two objections, answered in order
+
+**1. "The whole chat should always be visible in the screenshots, not just a
+close-up of the skill recommendation pills."** Every cell in this round is the
+**FULL BROWSER WINDOW** at `1440×1700` CSS px, `deviceScaleFactor: 2` — no
+`fullPage` stitch and no clip rectangle anywhere in the recorder. The window was
+sized to the conversation rather than the conversation cropped to a default
+window, and each record carries the viewport it was shot at plus the transcript's
+own measured geometry (`listTop`, `listBottom`, `listFullyInViewport`). **All six
+chat cells record `listFullyInViewport: true`**: the person's own turn, the
+reply, the card, the run panel and the composer are in one frame.
+
+**2. "The re-shoot does not show the skills recommendation card before the agent
+creates output, only afterwards."** This round photographs it **before**, and
+proves the "before" with the database rather than with prose. At the instant the
+`S1` cells were taken, this run's `cinatra.representation`,
+`cinatra.artifact_produced_outbox` and `cinatra.artifact_review_gates` row counts
+were **0, 0 and 0** — the counts are carried on each `S1` record as `dbAt` and
+the driver **throws** rather than shooting if any of them is non-zero. So the
+card is on screen, held, with all twelve of its per-chip controls live, and the
+run has produced nothing at all.
+
+## The host is the CHAT
+
+Not the widget and not the run page: `chat_thread`, the conversation itself. The
+run is started the way a person starts one from a conversation — one typed turn
+into `/chat`'s own composer. The server-side hard pre-router dispatches it, the
+chat-origin hold parks it before anything is queued, and the transcript draws the
+§V card at the `agent_run` producing slot. The reply beside it is the server's
+own sentence: *“The run paused for a decision on the recommended skills.”*
+
+## The order, in one run
+
+Read `TIMELINE.md`'s CHAT section: every timestamp there is a database column or
+a runtime log line, named. In short — hold parked `10:25:01`; **S1 shot at
+`10:25:19` with zero output rows**; four chips decided one at a time in the chat,
+written `10:25:29`; hold released `10:25:29`; **S2 shot at `10:25:57`**; the
+step's model call answered `200` through the bridge and the flow completed
+`10:26:01`; the artifact the step wrote landed `10:26:02`; the shipped sweeper
+opened the review on it `10:26:12`; **S3 shot at `10:26:44`**, **S4 at
+`10:27:09`**.
+
+## Cells DELIVERED — the chat sequence
+
+| Cell | Pixels | What is VISIBLY on screen |
+|---|---|---|
+| `S1__recommendation-card__chat_thread__held` | 2880×3400 | The whole conversation: the person's own turn (`Please run cinatra_blog-draft-writer-agent … inputParams: {…}`), the reply carrying **four chips — `Blog Writing Skill`, `Blog Post Matcher Skill`, `Brand Voice Matcher Skill`, `Web Research Skill`, each with its own `Confirm` `Adjust` `Skip`** — the inline run panel reading `pending input` / *“No messages yet.”*, and the server's line *“The run paused for a decision on the recommended skills.”* Composer in frame. **12 decision affordances; no heading plate; no row-level submit** (the retired `confirm-run-recommendation` / `skip-run-recommendation` controls count **0**). |
+| `S1__recommendation-card__chat_thread__held__dark` | 2880×3400 | The same window, same run, dark palette. |
+| `S2__recommendation-card__chat_thread__decided` | 2880×3400 | The same conversation and the same slot after the four presses, **reloaded first**: the row **settled in place** — `Blog Post Matcher Skill ⇄ ADJUSTED`, `Blog Writing Skill ✓ CONFIRMED`, `Web Research Skill ✓ CONFIRMED` — with **0/0/0** decision affordances inside the card root, and the run panel underneath advanced to `pending approval` with its own `Draft Context` gate and `Continue`. |
+| `S2__recommendation-card__chat_thread__decided__dark` | 2880×3400 | The same settled window, dark palette. |
+| `S3__review-card__chat_thread__pending` | 2880×3400 | The same conversation, all four turns in one window: the decided row still above, the run panel reading **`completed` / “Run complete”**, the person's second turn *“Is there anything waiting on me for review?”*, and beneath it **the review card on `chat_thread`** — *“Review requested / Awaiting your decision”*, the target the run's own step wrote (`CINATRA_UAT_OK: scripted title`, `Blog Post Artifact`, `@cinatra-ai/blog-post-artifact:post · revision 798dc74f-cf0… · text/markdown · updated 2026-08-23T10:26:02.616Z`), the composer-binding row, the rationale field and the decision floor `Comment` · `Reject` · `Approve`. |
+| `S3__review-card__chat_thread__pending__dark` | 2880×3400 | The same window, dark palette. |
+| `S4__recommendation-card__page_gate_region__decided` | 2880×3400 | The **review page for the same run**, whole window: `AGENT RUN / Review`, the step rail `1 Review`, the **decided row above** the review gate card, and the gate still open on the same artifact and the same revision, with `Comment` · `Reject` · `Approve`. Nothing pressable in the row (**0/0/0**). |
+| `S4__recommendation-card__page_gate_region__decided__dark` | 2880×3400 | The same page framing, dark palette. |
+
+Every cell was **reloaded before it was photographed**, so each picture is the
+durable state of that conversation — what the next reader sees — rather than a
+component that happened to be in the right state.
+
+## How the review reaches the conversation, stated
+
+The plan states the shipped rule (§4.1 *“Where it appears today”*): the run draws
+the review card inline **only for a review it reached through its own
+execution**, because the card's reference travels with the run's own review
+interrupt. This review was opened by the **sweeper** after the run had already
+finished, so it carries no such reference and the run panel says *“Run complete”*
+instead — **measured on this lane, not assumed**: a first pass of this round shot
+`S3` without asking and photographed a conversation with no review card in it,
+and that cell was discarded.
+
+The plan names the affordance that does bring it in, in the same section (§4.1
+step 1): *“You can also ask the assistant ('anything waiting on me?'), and it
+pulls up the longest-waiting open reviews you are allowed to see, as cards”*. So
+the person asks — a real second turn, typed into the same composer, in the same
+conversation, under the decided row. The tool layer on that turn is **real**: the
+provider decides only WHICH primitive to call, the dispatcher carries this
+session's own chat bearer, and the `serverLabel` that lets a card mint rides only
+what the dispatcher actually returned — so a card on screen can only have been
+minted by the producer.
+
+## The runtime, and what is NOT stood in for
+
+`node scripts/dev-server.mjs`, `CINATRA_RUNTIME_MODE=development`,
+`NODE_ENV != production`, `CINATRA_E2E_SETUP_BYPASS=true`, on a **dedicated lane
+database** on the verify Postgres (5634) and the verify Redis (6579),
+loopback-only, with the WayFlow runtime brought up from this repository's own
+compose file. **There is no model credential on this host and none in this
+directory**: `CINATRA_TEST_LLM_PROVIDER=scripted` serves the agent's own model
+call through `POST /api/llm-bridge` (cinatra#2917), which is why the artifact the
+run produced is titled with that provider's own sentinel — `CINATRA_UAT_OK:
+scripted title`. That sentinel is not a blemish on the evidence; it is the
+evidence that the output came from the step's own model call rather than from
+anything staged.
+
+Nothing about the card, the hold, the decision, the release, the dispatch, the
+materialization, the sweeper or either review surface is stood in for. Every
+press is a real press on the shipped control.
+
+## Two findings this round produced, and three lane repairs
+
+**Finding 1 — the scripted provider cannot serve a chat-started run end to end.**
+`runAssistantTurn` resolves a bound provider adapter *before* it reaches the hard
+pre-router, so a chat turn cannot start an agent run on an instance with no
+provider configured — **even though that turn consults no model at all** (the
+pre-router dispatches server-side and returns before `stream()`). Measured: with
+no connection the turn answers *“The configured default LLM provider "openai" is
+not available …”* and no run is created. But `resolveConfiguredLlmRuntime()`
+reaches the scripted runtime only as its LAST RESORT — *“an install WITH a
+configured provider never reaches this line”* — so the presence placeholder the
+chat turn needs is exactly what makes the agent's own model call go to the real
+OpenAI endpoint and answer **401**. Measured on this lane before the window
+below existed.
+
+*How this round handled it, in the open.* The lane holds a provider **presence
+placeholder** — a published non-key, `sk-not-a-real-key-s9f-chat-sequence`,
+written through the shipped sealing writer — only until the run has parked, and
+the driver then removes it through the shipped `clearOpenAIConnection` at
+`10:25:23`, before any model call exists. It is **timeline row 3**, not a quiet
+edit. Nothing photographed before that point depended on it and nothing after it
+did.
+
+**Finding 2 — the scripted bridge cannot answer an artifact-producing agent that
+asks for its JSON in prose.** `runScriptedBridgeCompletion` answers *in the
+declared type shape* when the request carries an `output_schema`, and answers the
+plain sentinel when it does not. **No agent in the extension tree sends one**:
+all three artifact producers ask for their JSON object in the system prompt
+instead, so the bridge's reply is not parseable and materialization fails with
+*“titleFrom output "title" did not resolve to a non-empty string”*. Measured on
+this lane.
+
+*The lane repair, stated.* This lane's copy of
+`extensions/cinatra-ai/blog-draft-writer-agent/cinatra/oas.json` gained an
+`output_schema` on its `/api/llm-bridge` node, **derived mechanically from that
+node's own already-declared `outputs`** (`title`, `excerpt`, `content`,
+`sourcesUsed`, `notes`) — nothing invented, nothing renamed. It is lane data in a
+gitignored extension checkout, it is **not** part of this branch's diff, and it
+changes what the model is asked to return, never the card, the hold, the sweeper,
+the review card or the order any of them happen in. The loader's publish marker
+was re-derived for the edited file, which is the loader's own integrity check
+working as designed.
+
+**Three lane repairs, all consequences of driving a cloned lane database rather
+than a freshly installed instance:**
+
+1. **The `instance_identity` metadata row did not travel with the clone.**
+   Provisioned the way the product provisions it — the shipped `/setup/name`
+   wizard step, filled and submitted in a browser
+   (`drivers/02-provision-instance-identity.mjs`). Nothing written into
+   `cinatra.metadata` by hand.
+2. **The lane registry was empty.** The binding loader reads the run package's
+   artifact bindings from the registry, so this lane brought up the compose
+   file's own Verdaccio and published the branch's own
+   `@cinatra-ai/blog-draft-writer-agent@0.1.2` plus the three artifact extensions
+   it binds into it. Measured: without them the run failed at
+   `404 … no such package available`.
+3. **Skill assignments are keyed by the agent's PACKAGE NAME**, not its template
+   id, and by the **catalog** skill id (`@cinatra-ai/<pkg>:<slug>`), not the
+   installed-package id. A first pass assigned four skills under the template
+   UUID, `getAssignedSkillIdsForAgent` resolved none, and the run dispatched
+   **unheld** — a green walk proving the opposite of what it claims. The
+   assignment step now reports what it wrote AND what the shipped reader resolves
+   back, so that failure cannot recur silently.
+
+## The column that is still not trusted, and one stale quote re-pinned
+
+`agent_runs.created_at` reads byte-identical to `completed_at` on this run — the
+defect reported as issue 2911. Its fix is on `main` and is **not** in this
+branch, so the run's creation is still anchored on
+`lifecycle_continuation_park.created_at`.
+
+`PLAN-WALK.md` carried two quotes (on `W1` and `W2`) that were verbatim when they
+were written and are no longer: the plan page was republished and now reads
+*“Recommendation and schedule decisions … the schedule card's actions have no UI
+caller anywhere”* where it used to read *“Recommendation and schedule-proposal
+decisions … the proposal actions have no UI caller anywhere”*. Both quotes are
+re-pinned to the page's current words; the sentence makes the same claim and the
+two cells' grading is unchanged. **All 79 `PLAN>` lines across all 19 cells are
+now verbatim substrings of the plan page again.**
+
+## Honest notes on what the pictures show
+
+- The **run panel's own `Skills (4)` list** in `S2` still names the skipped
+  `brand-voice-matcher`: that list is the run panel's, not the recommendation
+  row's, and this branch does not touch it. Disclosed rather than cropped.
+- The review target inside both review surfaces renders the **generic read-only
+  view** (*“No type renderer resolved for this artifact”*) because this lane has
+  no semantic renderer bound for that artifact type. Pre-existing, outside S9f.
+- On the **dark** `S4` the target island renders light inside the dark page — a
+  separate iframe document the theme class does not reach. A pre-existing island
+  theme gap, outside S9f, and not what these cells are graded on.

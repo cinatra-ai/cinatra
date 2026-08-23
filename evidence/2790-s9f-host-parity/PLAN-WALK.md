@@ -40,13 +40,13 @@ CELL: W1__recommendation-card__site_widget__held__column
 PLAN> The reply says the run started and the card appears in that same reply: **one chip per skill, each carrying its own Confirm, Adjust and Skip**. There is no heading plate and no single submit for the whole row.
 PLAN> **The design's rule stands as ratified:** *every card appears in every one of the four channels* (design §IX, "Yes" in all sixteen cells) — same card, same states, same data, and the same actions its reader is authorized to take.
 PLAN> **The card is withheld from the widget** by the in-code credential guard, because its actions are not broker-aware yet.
-PLAN> Recommendation and schedule-proposal decisions are not widget-operable at this commit — the recommendation card refuses credential-declaring hosts, and the proposal actions have no UI caller anywhere.
+PLAN> Recommendation and schedule decisions are not widget-operable at this commit — the recommendation card refuses credential-declaring hosts, and the schedule card's actions have no UI caller anywhere.
 
 CELL: W2__recommendation-card__site_widget__held__column__dark
 PLAN> The reply says the run started and the card appears in that same reply: **one chip per skill, each carrying its own Confirm, Adjust and Skip**. There is no heading plate and no single submit for the whole row.
 PLAN> **The design's rule stands as ratified:** *every card appears in every one of the four channels* (design §IX, "Yes" in all sixteen cells) — same card, same states, same data, and the same actions its reader is authorized to take.
 PLAN> **The card is withheld from the widget** by the in-code credential guard, because its actions are not broker-aware yet.
-PLAN> Recommendation and schedule-proposal decisions are not widget-operable at this commit — the recommendation card refuses credential-declaring hosts, and the proposal actions have no UI caller anywhere.
+PLAN> Recommendation and schedule decisions are not widget-operable at this commit — the recommendation card refuses credential-declaring hosts, and the schedule card's actions have no UI caller anywhere.
 
 CELL: W3__recommendation-card__site_widget__settled__column
 PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the run card underneath advances.
@@ -77,3 +77,52 @@ PLAN> Once you have decided each one, the run starts with your selection, the ca
 PLAN> **The row is the whole card** — there is no separate heading plate and no second gate-level submit.
 PLAN> **The design's rule stands as ratified:** *every card appears in every one of the four channels* (design §IX, "Yes" in all sixteen cells) — same card, same states, same data, and the same actions its reader is authorized to take.
 PLAN> **Decisions ride the widget's own proof.** The decide route selects the widget branch from the presented `cwu_` header with **no** session fallback, so a decision from a widget frame can never be recorded against whoever else is signed in on that browser (`src/app/api/lifecycle-views/decide/route.ts:176-194`).
+
+CELL: S1__recommendation-card__chat_thread__held
+PLAN> You ask the assistant, in the chat or the widget, to run an agent that has recommended skills.
+PLAN> The reply says the run started and the card appears in that same reply: **one chip per skill, each carrying its own Confirm, Adjust and Skip**. There is no heading plate and no single submit for the whole row.
+PLAN> Before the agent starts, the assistant shows the skills it wants to use, so you can shape the run first: keep or drop skills, then **Confirm** (start with these) or **Skip** (start without changing anything).
+PLAN> The run is parked and does nothing at all until you act.
+PLAN> **Capture owed: the card in the chat**, once the hold lands.
+PLAN> `LIFECYCLE_CARD_HOSTS` (:390-395) — `chat_thread`, `site_widget`, `run_card`, `page_gate_region`. In this page's words: the chat, the widget, the run page, the review page.
+
+CELL: S1__recommendation-card__chat_thread__held__dark
+PLAN> The reply says the run started and the card appears in that same reply: **one chip per skill, each carrying its own Confirm, Adjust and Skip**. There is no heading plate and no single submit for the whole row.
+PLAN> **The row is the whole card** — there is no separate heading plate and no second gate-level submit.
+PLAN> The run is parked and does nothing at all until you act.
+PLAN> `LIFECYCLE_CARD_HOSTS` (:390-395) — `chat_thread`, `site_widget`, `run_card`, `page_gate_region`. In this page's words: the chat, the widget, the run page, the review page.
+
+CELL: S2__recommendation-card__chat_thread__decided
+PLAN> Per skill: **Confirm** takes it as offered; **Adjust** changes it; **Skip** leaves it out.
+PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the run card underneath advances.
+PLAN> **The row is the whole card** — there is no separate heading plate and no second gate-level submit.
+PLAN> **The design's rule stands as ratified:** *every card appears in every one of the four channels* (design §IX, "Yes" in all sixteen cells) — same card, same states, same data, and the same actions its reader is authorized to take.
+
+CELL: S2__recommendation-card__chat_thread__decided__dark
+PLAN> Per skill: **Confirm** takes it as offered; **Adjust** changes it; **Skip** leaves it out.
+PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the run card underneath advances.
+PLAN> `LIFECYCLE_CARD_HOSTS` (:390-395) — `chat_thread`, `site_widget`, `run_card`, `page_gate_region`. In this page's words: the chat, the widget, the run page, the review page.
+
+CELL: S3__review-card__chat_thread__pending
+PLAN> **It appears** when a run reaches a review gate — in the conversation where the run lives, and on the run page.
+PLAN> **You decide** on the card: **Approve** or **Reject** (a note is optional on approve and expected on reject) settles it once and for all.
+PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the run card underneath advances.
+PLAN> **The design's rule stands as ratified:** *every card appears in every one of the four channels* (design §IX, "Yes" in all sixteen cells) — same card, same states, same data, and the same actions its reader is authorized to take.
+
+CELL: S3__review-card__chat_thread__pending__dark
+PLAN> **It appears** when a run reaches a review gate — in the conversation where the run lives, and on the run page.
+PLAN> **You decide** on the card: **Approve** or **Reject** (a note is optional on approve and expected on reject) settles it once and for all.
+PLAN> Everyone who looks at that run — in the chat, in the widget, on the run page, on the review page — sees the same card.
+PLAN> `LIFECYCLE_CARD_HOSTS` (:390-395) — `chat_thread`, `site_widget`, `run_card`, `page_gate_region`. In this page's words: the chat, the widget, the run page, the review page.
+
+CELL: S4__recommendation-card__page_gate_region__decided
+PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.
+PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the run card underneath advances.
+PLAN> **No mount on the review page.**
+PLAN> **You decide** on the card: **Approve** or **Reject** (a note is optional on approve and expected on reject) settles it once and for all.
+
+CELL: S4__recommendation-card__page_gate_region__decided__dark
+PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.
+PLAN> Everyone who looks at that run — in the chat, in the widget, on the run page, on the review page — sees the same card.
+PLAN> **The row is the whole card** — there is no separate heading plate and no second gate-level submit.
+PLAN> `LIFECYCLE_CARD_HOSTS` (:390-395) — `chat_thread`, `site_widget`, `run_card`, `page_gate_region`. In this page's words: the chat, the widget, the run page, the review page.

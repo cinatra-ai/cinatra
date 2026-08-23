@@ -1,0 +1,1523 @@
+{
+  "results": [
+    {
+      "cell": "S1__recommendation-card__chat_thread__held",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "c62c167ab9e16c6422f733f926dcc3c86a325928be22ecd4c5b5c38d39f0c1cf",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-chat-thread-recommendation-hold]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "held",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-chat-thread-recommendation-hold": "",
+        "data-variant": "inline",
+        "data-can-decide": "true"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Brand Voice Matcher Skill",
+          "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        }
+      ],
+      "transcript": {
+        "turns": 2,
+        "listTop": 88,
+        "listBottom": 535,
+        "listFullyInViewport": true,
+        "text": "S9f Chat Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\nAgentic Run Progress\npending input\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: c2a07df4-07e1-4bd5-94dd-9167a18e0b9d, status: pending_input). The run paused for a decision on the recommended skills."
+      },
+      "order": {
+        "card": true,
+        "gate": false,
+        "cardAboveGate": null
+      },
+      "gate": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "S1__recommendation-card__chat_thread__held__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "628a600d865efda8ecbe60989ba94124710630030fb871135d68b1ba51a9a01a",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-chat-thread-recommendation-hold]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 4
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "held",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-chat-thread-recommendation-hold": "",
+        "data-variant": "inline",
+        "data-can-decide": "true"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Brand Voice Matcher Skill",
+          "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "undecided",
+          "forced": true,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmAdjustSkip",
+          "actions": [
+            "confirm",
+            "adjust",
+            "skip"
+          ]
+        }
+      ],
+      "transcript": {
+        "turns": 2,
+        "listTop": 88,
+        "listBottom": 535,
+        "listFullyInViewport": true,
+        "text": "S9f Chat Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\nAgentic Run Progress\npending input\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: c2a07df4-07e1-4bd5-94dd-9167a18e0b9d, status: pending_input). The run paused for a decision on the recommended skills."
+      },
+      "order": {
+        "card": true,
+        "gate": false,
+        "cardAboveGate": null
+      },
+      "gate": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    },
+    {
+      "cell": "S2__recommendation-card__chat_thread__decided",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "86b81171fad3462fedf65d44705e71f3a741a92f364d26d67219919e6fb5a8e2",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-chat-thread-recommendation-hold]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-chat-thread-recommendation-hold": "",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": {
+        "turns": 2,
+        "listTop": 88,
+        "listBottom": 804,
+        "listFullyInViewport": true,
+        "text": "S9f Chat Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nSkills (4)\nblog-post-matcher\nbrand-voice-matcher\nweb-research\nblog-writing\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: c2a07df4-07e1-4bd5-94dd-9167a18e0b9d, status: pending_input). The run paused for a decision on the recommended skills."
+      },
+      "order": {
+        "card": true,
+        "gate": false,
+        "cardAboveGate": null
+      },
+      "gate": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "S2__recommendation-card__chat_thread__decided__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "bf5a00ce9ec851a3819c8281a49f5291372d9edd1703f08bd4fc71c499dd6258",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-chat-thread-recommendation-hold]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        },
+        {
+          "selector": "[data-conformance-id=\"run-chip-row\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-run-recommendation\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-action=\"skip-run-recommendation\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-chat-thread-recommendation-hold": "",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": {
+        "turns": 2,
+        "listTop": 88,
+        "listBottom": 804,
+        "listFullyInViewport": true,
+        "text": "S9f Chat Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nSkills (4)\nblog-post-matcher\nbrand-voice-matcher\nweb-research\nblog-writing\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: c2a07df4-07e1-4bd5-94dd-9167a18e0b9d, status: pending_input). The run paused for a decision on the recommended skills."
+      },
+      "order": {
+        "card": true,
+        "gate": false,
+        "cardAboveGate": null
+      },
+      "gate": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    },
+    {
+      "cell": "S3__review-card__chat_thread__pending",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "9f67a2a7a3b6f391455cc6786312b6d89f2313fc79df68a0213b16aae0abd6f3",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-lifecycle-card": "artifact_review_gate",
+        "data-lifecycle-card-state": "pending",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-conformance-id": "review-gate-card"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": {
+        "turns": 4,
+        "listTop": 88,
+        "listBottom": 1498,
+        "listFullyInViewport": true,
+        "text": "S9f Chat Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\ncompleted\nRun complete\nThis run finished. Its output is in the run transcript below.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: c2a07df4-07e1-4bd5-94dd-9167a18e0b9d, status: pending_input). The run paused for a decision on the recommended skills.\nS9f Chat Capture Owner\nSC\nIs there anything waiting on me for review?\nCinatra\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Is there anything waiting on me for review?\".\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove"
+      },
+      "order": {
+        "card": true,
+        "gate": true,
+        "cardTop": 260,
+        "gateTop": 817,
+        "cardAboveGate": true,
+        "domOrder": "card-then-gate"
+      },
+      "gate": {
+        "state": "pending",
+        "host": "chat_thread",
+        "decisionBar": true,
+        "decisionButtons": [
+          "Comment",
+          "Reject",
+          "Approve"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "S3__review-card__chat_thread__pending__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "8122dbc66910c62b17b1c6e329337bc05220e6f7d2787a8f990b11d6c7d4ab1b",
+      "observed": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "frame",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "frame",
+          "count": 0
+        }
+      ],
+      "rootAttributes": {
+        "data-lifecycle-card": "artifact_review_gate",
+        "data-lifecycle-card-state": "pending",
+        "data-lifecycle-card-host": "chat_thread",
+        "data-conformance-id": "review-gate-card"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": {
+        "turns": 4,
+        "listTop": 88,
+        "listBottom": 1498,
+        "listFullyInViewport": true,
+        "text": "S9f Chat Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\ncompleted\nRun complete\nThis run finished. Its output is in the run transcript below.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: c2a07df4-07e1-4bd5-94dd-9167a18e0b9d, status: pending_input). The run paused for a decision on the recommended skills.\nS9f Chat Capture Owner\nSC\nIs there anything waiting on me for review?\nCinatra\nCINATRA_UAT_OK: deterministic chat reply. You said: \"Is there anything waiting on me for review?\".\nReview requested\nAwaiting your decision\nExpand\nReplying to this review\nYour next chat message becomes a comment on this review. Press again to chat normally.\nDECISION RATIONALE (optional on approve, expected on reject)\nComment\nReject\nApprove"
+      },
+      "order": {
+        "card": true,
+        "gate": true,
+        "cardTop": 260,
+        "gateTop": 817,
+        "cardAboveGate": true,
+        "domOrder": "card-then-gate"
+      },
+      "gate": {
+        "state": "pending",
+        "host": "chat_thread",
+        "decisionBar": true,
+        "decisionButtons": [
+          "Comment",
+          "Reject",
+          "Approve"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    },
+    {
+      "cell": "S4__recommendation-card__page_gate_region__decided",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "f872589117ae824216fbd4e1b29a2577bdf5b48a0bbc308a67e0565b789c5268",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "page_gate_region",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": null,
+      "order": {
+        "card": true,
+        "gate": true,
+        "cardTop": 191,
+        "gateTop": 233,
+        "cardAboveGate": true,
+        "domOrder": "card-then-gate"
+      },
+      "gate": {
+        "state": "pending",
+        "host": "page_gate_region",
+        "decisionBar": true,
+        "decisionButtons": [
+          "Comment",
+          "Reject",
+          "Approve"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "S4__recommendation-card__page_gate_region__decided__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "feb40d3fa3e6215d541ee224e0444e6d1da7189b4b2ee77acb3987f59322fa33",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "page_gate_region",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": null,
+      "order": {
+        "card": true,
+        "gate": true,
+        "cardTop": 191,
+        "gateTop": 233,
+        "cardAboveGate": true,
+        "domOrder": "card-then-gate"
+      },
+      "gate": {
+        "state": "pending",
+        "host": "page_gate_region",
+        "decisionBar": true,
+        "decisionButtons": [
+          "Comment",
+          "Reject",
+          "Approve"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    }
+  ],
+  "wire": [
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:24:46.614Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-23T10:24:46.617Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-23T10:24:46.737Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:24:46.785Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-23T10:24:46.807Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-23T10:24:46.823Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:24:48.334Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-23T10:24:48.475Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-23T10:24:48.767Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:24:53.204Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:24:56.496Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:24:56.662Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat/capabilities",
+      "status": 200,
+      "at": "2026-08-23T10:24:56.740Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat",
+      "status": 200,
+      "at": "2026-08-23T10:24:57.443Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:01.437Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:04.809Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:05.337Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-23T10:25:05.376Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:05.492Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-23T10:25:05.582Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:08.414Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:10.247Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:11.248Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:14.349Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:15.230Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:17.257Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:20.269Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:20.370Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:23.508Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:25.242Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:26.243Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:29.598Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:30.762Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:32.304Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:35.284Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:35.424Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:38.258Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:40.247Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:41.244Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:43.153Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-23T10:25:43.201Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-23T10:25:43.333Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:43.491Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:46.025Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:48.113Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:49.091Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:52.039Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:52.994Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:55.035Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:25:58.034Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:25:58.140Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:01.125Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:03.181Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:04.023Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:07.013Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:07.995Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:10.020Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:13.222Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:13.359Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:16.026Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:17.215Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-23T10:26:17.253Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-23T10:26:17.336Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:17.503Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:20.095Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:21.964Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:22.962Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:23.851Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:23.966Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat/capabilities",
+      "status": 200,
+      "at": "2026-08-23T10:26:23.999Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat",
+      "status": 200,
+      "at": "2026-08-23T10:26:24.342Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:24.796Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/lifecycle-views/resolve",
+      "status": 200,
+      "at": "2026-08-23T10:26:24.808Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:28.528Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:29.650Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-23T10:26:29.675Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:29.869Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-23T10:26:30.040Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/lifecycle-views/resolve",
+      "status": 200,
+      "at": "2026-08-23T10:26:30.263Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:33.237Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:34.892Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:35.526Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:38.483Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:39.476Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:41.500Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-23T10:26:44.553Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c",
+      "status": 200,
+      "at": "2026-08-23T10:26:44.651Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/lifecycle-views/resolve",
+      "status": 200,
+      "at": "2026-08-23T10:26:48.121Z"
+    }
+  ],
+  "pageErrors": []
+}
