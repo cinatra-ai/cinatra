@@ -2,6 +2,38 @@
 
 Head under proof: `f5ae7b401` (PR #2863), plus this evidence commit.
 
+## RE-SHOT AGAIN at cinatra#2945 — the label in the pixels
+
+`#2945` renamed the audit lane's display strings, and the four pictures below
+were taken before it landed: their suggestion block was headed
+`AUDIT · SUGGESTIONS`, which is not what this branch draws. All four are
+**replaced, not appended** — new bytes, new hashes, and their two `chat_thread`
+records and two `page_gate_region` records replaced IN PLACE in
+`scripts/ci/chat-hitl-capture-index.json`. The heading now reads
+**`AUDIT · SUGGESTIONS`** in every one of them.
+
+Two things about the new pictures differ from the ones they replace, and both are
+improvements rather than drift:
+
+- **They are FULL-PAGE browser frames, uncropped**, not clips framed on the card
+  root — which is why the pixel sizes in the table below changed. Nothing is
+  cropped to match the old framing.
+- **The transcript cells are reached by TYPING.** The old B3/B4 carried a
+  transcript this directory's own `seed-chat-thread.mjs` persisted through the
+  app's thread route, with the assistant's sentence written by hand. The new ones
+  do not: the browser opens `/chat`, types *"Show me the review that is waiting
+  on me."* into the app's own composer and presses Enter, and the turn calls the
+  SHIPPED read-only lifecycle pull primitives to produce the card. The seed
+  driver is left in `drivers/` because it is what the round below ran; it was not
+  run again.
+
+The walk, the recorder, the grading table and the store's own timestamps for the
+re-shoot are in `evidence/2945-audit-label/`; the timestamps are also in
+`TIMELINE.md` beside this file.
+
+The round below is otherwise unchanged and still describes what these four cells
+are FOR — the count line's placement, which is what #2852 moved.
+
 ## RE-SHOT — why every picture in `captures/` is new
 
 The four cells this file described before were taken at `9d0a91107`, **before**
@@ -93,15 +125,16 @@ by the shipped `ReviewGateCard`. Every dismissal was made by pressing the chip.
 
 ## Cells DELIVERED
 
-Framed on the card root (`[data-conformance-id="review-gate-card"]`), viewport
-width 1228 at `deviceScaleFactor: 2`.
+**As re-shot at #2945:** full-page browser frames, uncropped, viewport width
+1228 at `deviceScaleFactor: 2`. (The round below framed them on the card root,
+`[data-conformance-id="review-gate-card"]`.)
 
 | Cell | Pixels | What is VISIBLY on screen |
 |---|---|---|
-| `B1__review-card__page_gate_region__pending` | 1672×2282 | The arrival state on the review page's gate region: the target island, then `CORE ANALYSIS · SUGGESTIONS` with **three** accepted blocks, each carrying its own `NOW → SUGGESTED` pair; the block closes with "Press a suggestion to dismiss it, press it again to accept it…" and **no count line**. The count line sits **below, in the decision floor**: "3 of 3 suggestions accepted — they ride this decision. A reject records them as not taken.", directly above `DECISION RATIONALE` and the `Comment / Reject / Approve` row. |
-| `B2__review-card__page_gate_region__pending` | 1672×2282 | The SAME row after the middle chip was pressed once: chip 2 is drawn muted with a **dashed edge** and a revert glyph, **no strike-through**, and it **keeps its before/after panel**. 2 accepted, 1 dismissed, 3 panels. The floor line now reads **"2 of 3 suggestions accepted…"** — still composed in the decision floor above the terminal row, still absent from the chips block. |
-| `B3__review-card__chat_thread__pending` | 1472×2454 | The same card and the same three suggestions in a real chat transcript (`[data-conversation-list]` = 1, `data-lifecycle-card-host="chat_thread"`): 3 accepted, 0 dismissed, 3 panels, count line in the decision floor. |
-| `B4__review-card__chat_thread__pending` | 1472×2454 | The chat-hosted row with one chip dismissed: 2 accepted, 1 dismissed, 3 panels, "2 of 3" in the decision floor — the same two drawn states on the second host, from the one renderer. |
+| `B1__review-card__page_gate_region__pending` | 2456×3140 | The arrival state on the review page's gate region: the target island, then `AUDIT · SUGGESTIONS` with **three** accepted blocks, each carrying its own `NOW → SUGGESTED` pair; the block closes with "Press a suggestion to dismiss it, press it again to accept it…" and **no count line**. The count line sits **below, in the decision floor**: "3 of 3 suggestions accepted — they ride this decision. A reject records them as not taken.", directly above `DECISION RATIONALE` and the `Comment / Reject / Approve` row. |
+| `B2__review-card__page_gate_region__pending` | 2456×3140 | The SAME row after the middle chip was pressed once: chip 2 is drawn muted with a **dashed edge** and a revert glyph, **no strike-through**, and it **keeps its before/after panel**. 2 accepted, 1 dismissed, 3 panels. The floor line now reads **"2 of 3 suggestions accepted…"** — still composed in the decision floor above the terminal row, still absent from the chips block. |
+| `B3__review-card__chat_thread__pending` | 2456×2800 | The same card and the same three suggestions in a real chat transcript (`[data-conversation-list]` = 1, `data-lifecycle-card-host="chat_thread"`): 3 accepted, 0 dismissed, 3 panels, count line in the decision floor. |
+| `B4__review-card__chat_thread__pending` | 2456×2800 | The chat-hosted row with one chip dismissed: 2 accepted, 1 dismissed, 3 panels, "2 of 3" in the decision floor — the same two drawn states on the second host, from the one renderer. |
 
 Zero page errors on all four.
 
@@ -142,9 +175,8 @@ index twins carry no verdict, as every index record does.
 
 ## Layout
 
-- `captures/` — the PNGs, full resolution, uncropped, framed on the card root
-  (`[data-conformance-id="review-gate-card"]`), viewport width 1228 at
-  `deviceScaleFactor: 2`.
+- `captures/` — the PNGs, full resolution, uncropped. As re-shot at #2945 they
+  are full-page browser frames at viewport width 1228, `deviceScaleFactor: 2`.
 - `capture-records.json` / `capture-results.json` — the records and the machine record.
 - `drivers/` — the harness exactly as run: `lane-setup.mjs`, `walk.test.ts` +
   `walk.config.ts` (produce → gate → suggest → ref, plus the default-projector
