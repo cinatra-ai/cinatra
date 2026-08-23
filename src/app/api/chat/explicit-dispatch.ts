@@ -19,13 +19,21 @@
 export const EXPLICIT_DISPATCH_VERB_RE =
   /\b(use|run|invoke|call|dispatch|execute|launch)\b/i;
 
-/** Canonical package form: `@cinatra-ai/<slug>`. */
+/**
+ * Canonical package form: `@cinatra-ai/<slug>`.
+ *
+ * Lowercase-only ON PURPOSE — npm scope and package names are lowercase by
+ * definition, so this is the shape of a real packageName. The caller lowercases
+ * the message text before it matches (see `detectExplicitDispatchPackage`), so a
+ * user who types `@Cinatra-AI/Some-Agent` still resolves here.
+ */
 export const CANONICAL_PKG_RE = /@cinatra-ai\/([a-z][a-z0-9-]*)/g;
 
 /**
  * Legacy `cinatra_<slug>` "tool" wording from the per-agent function-tool
  * form. Still appears in fixtures and operator prompts; maps to the canonical
- * `@cinatra-ai/<slug>` package.
+ * `@cinatra-ai/<slug>` package. Lowercase-only for the same reason as
+ * `CANONICAL_PKG_RE`, and matched against the same lowercased text.
  */
 export const LEGACY_CINATRA_SLUG_RE =
   /\bcinatra_([a-z][a-z0-9-]+)(?:[-_ ]tool|\b)/g;
@@ -38,6 +46,9 @@ export const LEGACY_CINATRA_SLUG_RE =
  * Hedge: requires BOTH a verb match AND a package reference. "Tell me
  * about @cinatra-ai/foo" → no verb → null. "Use @cinatra-ai/foo" →
  * matches both → `"@cinatra-ai/foo"`.
+ *
+ * Case-INSENSITIVE, to stay in parity with the client mention tokenizer:
+ * `Use @Cinatra-AI/Some-Agent …` resolves to `@cinatra-ai/some-agent`.
  */
 export function detectExplicitDispatchPackage(
   messages: Array<{ role: string; content: string }>,
@@ -49,7 +60,17 @@ export function detectExplicitDispatchPackage(
   if (messages.length === 0) return null;
   const last = messages[messages.length - 1];
   if (last.role !== "user" || typeof last.content !== "string") return null;
-  const text = last.content;
+  // CASE PARITY WITH THE CLIENT (cinatra#2820 review). The client mention
+  // tokenizer lexes scoped refs case-insensitively and lowercases vendor+slug
+  // (`packages/chat/src/mention-tokenizer.ts` — `MENTION_RE`, the `/gi` flags),
+  // so `Use @Cinatra-AI/Some-Agent …` produces the SAME `agent-dispatch`
+  // classification as the all-lowercase form and takes the streaming route
+  // (`packages/chat/src/route-decision.ts`). Matching the raw text here would
+  // then find nothing and dispatch nothing — the #2820 defect exactly, on a case
+  // variant: the message streams and the agent never runs. Lowercasing once, up
+  // front, keeps both matchers reading the same string; the lowercased match IS
+  // the canonical packageName, because npm scope/package names are lowercase.
+  const text = last.content.toLowerCase();
   if (!EXPLICIT_DISPATCH_VERB_RE.test(text)) return null;
 
   // Try canonical first; fall back to legacy form.

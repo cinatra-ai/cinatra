@@ -238,6 +238,68 @@ describe("detectExplicitDispatchPackage — hedge / negative cases", () => {
   });
 });
 
+describe("detectExplicitDispatchPackage — case parity with the client tokenizer", () => {
+  // cinatra#2820 review. The client mention tokenizer lexes scoped refs
+  // case-insensitively (`packages/chat/src/mention-tokenizer.ts` — MENTION_RE
+  // carries `/gi`) and lowercases vendor+slug, so a capitalized ref classifies
+  // `agent-dispatch` and takes the STREAMING route just like the lowercase form.
+  // While this matcher read the raw text it found nothing, so the message
+  // streamed and no agent ran: the #2820 defect on a case variant. Every arm
+  // below is RED before the `.toLowerCase()` in `detectExplicitDispatchPackage`.
+
+  it("the canonical form in mixed case resolves to the lowercase packageName", () => {
+    expect(
+      detectExplicitDispatchPackage(
+        u("Use @Cinatra-AI/Some-Agent to find leads at Acme"),
+      ),
+    ).toBe("@cinatra-ai/some-agent");
+  });
+
+  it("a SHOUTED canonical form resolves too", () => {
+    expect(
+      detectExplicitDispatchPackage(
+        u("RUN @CINATRA-AI/CONTACT-DISCOVERY-AGENT ON THIS ACCOUNT"),
+      ),
+    ).toBe("@cinatra-ai/contact-discovery-agent");
+  });
+
+  it("a capitalized vendor with a lowercase slug resolves", () => {
+    expect(
+      detectExplicitDispatchPackage(
+        u("Invoke @Cinatra-ai/planner-agent to sketch the flow"),
+      ),
+    ).toBe("@cinatra-ai/planner-agent");
+  });
+
+  it("the legacy underscore form is case-insensitive on the same text", () => {
+    expect(
+      detectExplicitDispatchPackage(
+        u("Invoke the Cinatra_Trigger-Agent Tool to configure a trigger"),
+      ),
+    ).toBe("@cinatra-ai/trigger-agent");
+  });
+
+  it("HEDGE — case-insensitivity does NOT weaken the verb hedge", () => {
+    // Still no dispatch verb: an informational query stays null whatever its case.
+    expect(
+      detectExplicitDispatchPackage(
+        u("Tell me about @Cinatra-AI/Some-Agent — what does it do?"),
+      ),
+    ).toBeNull();
+  });
+
+  it("emits the directive for the mixed-case form, naming the lowercase package", () => {
+    const out = detectExplicitDispatchDirective(
+      u("Use @Cinatra-AI/Contact-Discovery-Agent to find leads at Acme"),
+    );
+    expect(out).toMatch(/DETECTED EXPLICIT AGENT DISPATCH/);
+    expect(out).toMatch(/@cinatra-ai\/contact-discovery-agent/);
+    // The directive must never echo the user's casing into `packageName` — a
+    // capitalized packageName is not installable.
+    expect(out).not.toMatch(/Cinatra-AI/);
+  });
+});
+
 describe("detectExplicitDispatchDirective — directive emission", () => {
   it("emits non-empty directive on canonical match", () => {
     const out = detectExplicitDispatchDirective(
