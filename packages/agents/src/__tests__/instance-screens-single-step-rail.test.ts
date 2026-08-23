@@ -32,7 +32,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { runDetailPanelKind, screenHostsStepRail } from "../instance-screens";
+import { runDetailPanelKind, screenHostsStepRail,
+  screenDrawsPageRail,
+} from "../instance-screens";
 
 const SCREEN_SRC = fs.readFileSync(
   path.join(__dirname, "..", "instance-screens.tsx"),
@@ -108,8 +110,13 @@ describe("the screen's JSX reads the predicate — no second unconditional rail 
     // this test is here for is unchanged and is asserted the same way: the
     // page-level rail draws ONLY where the predicate says so, and it is mounted
     // exactly once.
+    // The conjunction itself moved into an EXPORTED predicate
+    // (`screenDrawsPageRail`, cinatra#2790) so its whole table can be pinned
+    // without a render; the screen asks it and passes the two run-shaped inputs
+    // it already has. The property is unchanged and is still asserted here: the
+    // page-level rail draws ONLY where the predicate says so.
     expect(SCREEN_SRC).toMatch(
-      /const railDraws =[\s\S]*?rail\.entries\.length > 0 &&[\s\S]*?screenHostsStepRail\(\{[\s\S]*?panel: runDetailPanel,[\s\S]*?stepperStepCount: stepperSteps\.length,[\s\S]*?\}\);/,
+      /const railDraws = screenDrawsPageRail\(\{[\s\S]*?railEntryCount: rail\.entries\.length,[\s\S]*?panel: runDetailPanel,[\s\S]*?stepperStepCount: stepperSteps\.length,[\s\S]*?\}\);/,
     );
     // The mount is now the value of a named node — the schedule step is handed
     // the rail as a slot (`rail={railNode}`) rather than the screen drawing a
@@ -126,11 +133,21 @@ describe("the screen's JSX reads the predicate — no second unconditional rail 
     expect(SCREEN_SRC).toMatch(/reviewHrefBase=\{reviewHrefBase\}/);
   });
 
-  it("keeps the pre-execution hold: a pending_input run still shows no rail (cinatra#2067)", () => {
-    // Same guard, now the first conjunct of the named `railDraws` local rather
-    // than of an inline JSX condition (cinatra#2788).
-    expect(SCREEN_SRC).toMatch(
-      /const railDraws =\s*\n?\s*run\.status !== "pending_input" &&\s*\n?\s*rail\.entries\.length > 0/,
-    );
+  it("keeps the pre-execution hold: a pending_input run with no gate step still shows no rail (cinatra#2067)", () => {
+    // Same guard, now a clause of the exported predicate rather than of an
+    // inline JSX condition, and CONDITIONED (cinatra#2790, S9f): a run held at
+    // its skills question is `pending_input` too, and plan (A) §6.2 puts that
+    // gate row "ahead of the work steps it would authorize" — a rail holding
+    // the gate row alone shows nothing for it to be ahead of. So the
+    // suppression survives exactly where #2067 put it, for a run with NO gate
+    // step, and the behavioural table is pinned in
+    // `instance-screens-recommendation-step.test.ts`.
+    expect(screenDrawsPageRail({
+      runStatus: "pending_input",
+      railEntryCount: 3,
+      gateStepCount: 0,
+      panel: "none",
+      stepperStepCount: 0,
+    })).toBe(false);
   });
 });

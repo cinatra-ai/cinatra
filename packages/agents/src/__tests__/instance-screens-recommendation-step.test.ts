@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { runDetailInitialStep } from "../instance-screens";
+import { runDetailInitialStep, screenDrawsPageRail } from "../instance-screens";
 
 const SCREEN_SRC = fs.readFileSync(
   path.join(__dirname, "..", "instance-screens.tsx"),
@@ -140,5 +140,63 @@ describe("the screen composes THROUGH the frame, not beside it", () => {
     for (const panel of ["<OrchestratorStepperPanel", "<SetupCompletionWatcher"]) {
       expect(detail, panel).toContain(panel);
     }
+  });
+});
+
+describe("screenDrawsPageRail — the gate row is drawn AHEAD OF the work steps, not instead of them", () => {
+  const BASE_RAIL = {
+    railEntryCount: 3,
+    gateStepCount: 0,
+    panel: "none" as const,
+    stepperStepCount: 0,
+  };
+
+  it("a HELD run draws the page's own rows — §6.2 puts the gate row ahead of them", () => {
+    // A held run is `pending_input`. The screen used to suppress the rail on
+    // that status alone, which left the recommendation row with nothing to be
+    // ahead of.
+    expect(
+      screenDrawsPageRail({ ...BASE_RAIL, runStatus: "pending_input", gateStepCount: 1 }),
+    ).toBe(true);
+  });
+
+  it("a pre-dispatch run with NO gate step still draws none — the old suppression survives", () => {
+    expect(screenDrawsPageRail({ ...BASE_RAIL, runStatus: "pending_input" })).toBe(false);
+  });
+
+  it("an empty rail is still no rail, gate step or not", () => {
+    expect(
+      screenDrawsPageRail({
+        ...BASE_RAIL,
+        runStatus: "pending_input",
+        gateStepCount: 2,
+        railEntryCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("the stepper branch's own live column is still the ONE rail", () => {
+    expect(
+      screenDrawsPageRail({
+        ...BASE_RAIL,
+        runStatus: "pending_input",
+        gateStepCount: 1,
+        panel: "stepper",
+        stepperStepCount: 4,
+      }),
+    ).toBe(false);
+  });
+
+  it("an executing run is unchanged by any of this", () => {
+    expect(screenDrawsPageRail({ ...BASE_RAIL, runStatus: "running" })).toBe(true);
+    expect(
+      screenDrawsPageRail({ ...BASE_RAIL, runStatus: "running", gateStepCount: 1 }),
+    ).toBe(true);
+  });
+
+  it("the screen asks the predicate rather than restating it inline", () => {
+    expect(SCREEN_SRC).toContain("const railDraws = screenDrawsPageRail({");
+    expect(SCREEN_SRC).toMatch(/gateStepCount: railSteps\.length,/);
+    expect(SCREEN_SRC).not.toMatch(/run\.status !== "pending_input" &&/);
   });
 });

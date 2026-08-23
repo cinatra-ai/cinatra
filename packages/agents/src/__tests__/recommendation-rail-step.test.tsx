@@ -121,7 +121,7 @@ function RunProgress() {
  * used by the step's surface and by the run detail, which are mutually
  * exclusive slots of the same frame.
  */
-function renderRunSurface(opts: {
+function surface(opts: {
   hasRecommendationStep?: boolean;
   hasScheduleStep?: boolean;
   settled?: boolean;
@@ -156,7 +156,7 @@ function renderRunSurface(opts: {
       surface: <div data-testid="schedule-surface" />,
     });
   }
-  return render(
+  return (
     <div
       className="flex items-start gap-6"
       data-run-detail-contract=""
@@ -173,8 +173,12 @@ function renderRunSurface(opts: {
         }
         initialSelection={opts.initialSelection}
       />
-    </div>,
+    </div>
   );
+}
+
+function renderRunSurface(opts: Parameters<typeof surface>[0]) {
+  return render(surface(opts));
 }
 
 const railColumn = (c: HTMLElement) =>
@@ -293,6 +297,46 @@ describe("a DECIDED hold — the settled reading in the rail, the run detail res
     await waitFor(() =>
       expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
     );
+  });
+});
+
+describe("the server's answer wins when it changes — the refresh after a decision", () => {
+  it("moves the open step when the screen recomputes it, without a remount", async () => {
+    // The decision taken IN the card calls `router.refresh()`: the server tree
+    // re-renders and this client frame does NOT remount. A selection kept only
+    // from the first paint would leave the reader parked on the gate they just
+    // settled.
+    holdStateMock.mockImplementation(async () => HELD);
+    const { container, rerender } = renderRunSurface({ initialSelection: "recommendation" });
+    await waitFor(() => expect(chipRow(container)).not.toBeNull());
+    expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull();
+
+    holdStateMock.mockImplementation(async () => DECIDED);
+    rerender(surface({ settled: true, initialSelection: "detail" }));
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
+    );
+    expect(
+      recommendationRow(container)!.getAttribute("data-recommendation-step-settled"),
+    ).toBe("true");
+  });
+
+  it("leaves the READER's own selection alone when the server's answer has not moved", async () => {
+    holdStateMock.mockImplementation(async () => DECIDED);
+    const { container, rerender } = renderRunSurface({ settled: true, initialSelection: "detail" });
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
+    );
+
+    fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull(),
+    );
+
+    // A re-render carrying the SAME server answer must not yank the reader back.
+    rerender(surface({ settled: true, initialSelection: "detail" }));
+    expect(container.querySelector('[data-testid="run-detail-panel"]')).toBeNull();
   });
 });
 

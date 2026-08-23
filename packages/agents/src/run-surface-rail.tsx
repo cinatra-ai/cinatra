@@ -124,6 +124,22 @@ export function RunSurfaceRail({
   initialSelection: RunStepSelection;
 }): ReactElement {
   const [selected, setSelected] = useState<RunStepSelection>(initialSelection);
+  // THE SERVER'S ANSWER WINS WHEN IT CHANGES, and only then. The decision taken inside a gate step calls `router.refresh()`,
+  // which re-renders the server tree WITHOUT remounting this client component —
+  // so a selection kept only from the first paint would leave the reader parked
+  // on the settled gate after deciding it, when "the run detail returns to what
+  // the run page otherwise shows" is the whole point of the settled reading.
+  //
+  // Adjusted DURING render against the previous prop rather than in an effect:
+  // that is React's own shape for state derived from props, and it means the
+  // corrected surface paints in the same commit instead of flashing the stale
+  // one. A re-render that does NOT change the server's answer leaves the
+  // reader's own selection alone, which is what makes the rail's rows work.
+  const [lastInitial, setLastInitial] = useState<RunStepSelection>(initialSelection);
+  if (initialSelection !== lastInitial) {
+    setLastInitial(initialSelection);
+    setSelected(initialSelection);
+  }
   const open = steps.find((step) => step.key === selected) ?? null;
 
   return (

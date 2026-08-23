@@ -209,6 +209,42 @@ export function screenHostsStepRail(params: {
 }
 
 /**
+ * Does the run detail draw the page's OWN rail rows at all? (cinatra#2790, S9f)
+ *
+ * The screen used to answer this inline, and one clause of it was
+ * `run.status !== "pending_input"`: a run that has not been dispatched has no
+ * work in progress for a rail to point at, so it drew none.
+ *
+ * THAT CLAUSE IS WRONG THE MOMENT A GATE STEP HEADS THE RAIL. A run HELD at its
+ * skills question IS `pending_input`, and plan (A) §6.2 puts that row "at the
+ * trigger position, the top entry on the step rail, ahead of the work steps it
+ * would authorize" — a rail holding the gate row alone shows nothing for it to
+ * be ahead of, which is the reading the plan asks for and not one it allows.
+ * So the pre-dispatch suppression survives for a run with NO gate step, and
+ * stands down for one that has any.
+ *
+ * Nothing else moves: an empty rail is still no rail, and the stepper branch's
+ * own live column is still the one rail where it draws (`screenHostsStepRail`).
+ *
+ * Exported so the regression test can pin the whole table without a DB, a
+ * session or a Next.js render.
+ */
+export function screenDrawsPageRail(params: {
+  runStatus: string | null | undefined;
+  railEntryCount: number;
+  gateStepCount: number;
+  panel: RunDetailPanelKind;
+  stepperStepCount: number;
+}): boolean {
+  if (params.railEntryCount === 0) return false;
+  if (params.runStatus === "pending_input" && params.gateStepCount === 0) return false;
+  return screenHostsStepRail({
+    panel: params.panel,
+    stepperStepCount: params.stepperStepCount,
+  });
+}
+
+/**
  * The run statuses a run holds BEFORE it has ever run (cinatra#2788, S9d).
  *
  * `armed` and `pending_trigger` are the schedule's own states — the trigger is
@@ -807,13 +843,6 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           <AgentPanelBody role="frame">
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
-              const railDraws =
-                run.status !== "pending_input" &&
-                rail.entries.length > 0 &&
-                screenHostsStepRail({
-                  panel: runDetailPanel,
-                  stepperStepCount: stepperSteps.length,
-                });
               // THE ONE `recommendation_hold` MOUNT THIS SCREEN MAKES. It is
               // used in two mutually exclusive slots — the rail step's surface
               // above, and the run detail below — so the interaction still has
@@ -868,6 +897,13 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               // (`screenHostsStepRail`) and the plan puts both gate steps above
               // the run's steps on every branch — not only the one where the
               // server-rendered rail happens to draw.
+              const railDraws = screenDrawsPageRail({
+                runStatus: run.status,
+                railEntryCount: rail.entries.length,
+                gateStepCount: railSteps.length,
+                panel: runDetailPanel,
+                stepperStepCount: stepperSteps.length,
+              });
               const railNode = railDraws ? (
                 <RunStepRailPanel
                   entries={rail.entries}
