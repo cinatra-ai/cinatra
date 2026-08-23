@@ -20,26 +20,26 @@ at each one. This file is the text they are graded against.
 
 CELL: A1__schedule-card__chat_thread__pending
 
-PLAN> **The proposal card.** The body is the app's standard scheduling step, unchanged: the question **"When should this run?"** over three option rows — **Run right after setup**, **Schedule for later** (Run at, Timezone) and **Recurring** (Repeat every N week(s); On Sun–Sat; At HH:MM; Timezone).
+PLAN> **The schedule card.** The body is the app's standard scheduling step, unchanged: the question **"When should this run?"** over three option rows — **Run right after setup**, **Schedule for later** (Run at, Timezone) and **Recurring** (Repeat every N week(s); On Sun–Sat; At HH:MM; Timezone).
 PLAN> The chosen row takes the indigo edge and tint and owns its fields.
 PLAN> Under them, **Estimated run duration** with a range.
-PLAN> There is **no raw cron field**: what the assistant selected is what you see and confirm.
-PLAN> The option rows are editable as they stand: until you confirm, you change the proposal directly on the card — the rows are never locked behind a separate step.
+PLAN> There is **no raw cron field**: the schedule you stated is what you see and confirm.
+PLAN> The option rows are editable as they stand: until you confirm, you change the schedule directly on the card — the rows are never locked behind a separate step.
 PLAN> The floor is **Confirm**, and this floor is new *here and only here*: the same scheduling step everywhere else arms its trigger directly on **Continue**, because there the thing already exists.
-PLAN> On a proposal nothing exists until you confirm; **Confirm** arms it.
-PLAN> The card appears in the reply with the proposed schedule, its option rows editable, and **Confirm**.
-PLAN> You change the proposal directly on the card if it is not right; **Confirm** arms the trigger.
+PLAN> Nothing exists here until you confirm; **Confirm** arms the schedule you stated.
+PLAN> The card appears in the reply with the schedule you stated, its option rows editable, and **Confirm**.
+PLAN> You change the schedule directly on the card if it is not right; **Confirm** arms what you stated.
 
 ---
 
 CELL: B1__schedule-card__chat_thread__pending__dark
 
-PLAN> **The proposal card.** The body is the app's standard scheduling step, unchanged: the question **"When should this run?"** over three option rows — **Run right after setup**, **Schedule for later** (Run at, Timezone) and **Recurring** (Repeat every N week(s); On Sun–Sat; At HH:MM; Timezone).
+PLAN> **The schedule card.** The body is the app's standard scheduling step, unchanged: the question **"When should this run?"** over three option rows — **Run right after setup**, **Schedule for later** (Run at, Timezone) and **Recurring** (Repeat every N week(s); On Sun–Sat; At HH:MM; Timezone).
 PLAN> The chosen row takes the indigo edge and tint and owns its fields.
-PLAN> There is **no raw cron field**: what the assistant selected is what you see and confirm.
-PLAN> The option rows are editable as they stand: until you confirm, you change the proposal directly on the card — the rows are never locked behind a separate step.
+PLAN> There is **no raw cron field**: the schedule you stated is what you see and confirm.
+PLAN> The option rows are editable as they stand: until you confirm, you change the schedule directly on the card — the rows are never locked behind a separate step.
 PLAN> The floor is **Confirm**, and this floor is new *here and only here*: the same scheduling step everywhere else arms its trigger directly on **Continue**, because there the thing already exists.
-PLAN> The card appears in the reply with the proposed schedule, its option rows editable, and **Confirm**.
+PLAN> The card appears in the reply with the schedule you stated, its option rows editable, and **Confirm**.
 
 The same reading on the dark ground. The chosen weekdays keep a filled chip
 rather than washing into the row, which is what makes "the chosen row … owns
@@ -74,7 +74,7 @@ PLAN> On the run page and the review page the schedule is a **dedicated step in 
 PLAN> The schedule is never drawn as a card among the review cards — a trigger decides *when* the agent runs, and a review card exists only after the agent has run and produced something — so the two can never appear together.
 PLAN> On the run page and the review page the schedule is a dedicated step in the step rail on the left, above **1 Review** — open it to see or change the configuration.
 PLAN> The trigger's own chrome — the read-only **Trigger configuration** summary (type, the schedule in plain words, timezone), **Steps held until trigger fires**, and the two quiet controls **Cancel trigger** and **Release now** for an administrator — lives on the run page's schedule step, not in the conversation.
-PLAN> The option rows are editable as they stand: until you confirm, you change the proposal directly on the card — the rows are never locked behind a separate step.
+PLAN> The option rows are editable as they stand: until you confirm, you change the schedule directly on the card — the rows are never locked behind a separate step.
 PLAN> The card stays in the conversation, showing the armed schedule in the same rows; change them and press **Save changes** to re-arm.
 
 The run page. The rail's first row is the schedule step, opened by a real
@@ -116,8 +116,8 @@ PLAN> The trigger's own chrome — the read-only **Trigger configuration** summa
 
 CELL: E1__schedule-card__chat_thread__pending__expired-face__standin
 
-PLAN> Nothing exists yet — the proposal expires on its own after 30 minutes if you do nothing, and an expired proposal **stays visible**, still editable, with **Confirm** to propose again.
-PLAN> The option rows are editable as they stand: until you confirm, you change the proposal directly on the card — the rows are never locked behind a separate step.
+PLAN> Nothing exists yet — the card expires on its own after 30 minutes if you do nothing, and an expired card **stays visible**, still editable, with **Confirm** to set the schedule again.
+PLAN> The option rows are editable as they stand: until you confirm, you change the schedule directly on the card — the rows are never locked behind a separate step.
 PLAN> The floor is **Confirm**, and this floor is new *here and only here*: the same scheduling step everywhere else arms its trigger directly on **Continue**, because there the thing already exists.
 
 STAND-IN, NAMED: this branch's resolver still answers an expired proposal
@@ -130,8 +130,8 @@ name says so.
 
 CELL: E2__schedule-card__chat_thread__pending__expired-face__standin__dark
 
-PLAN> Nothing exists yet — the proposal expires on its own after 30 minutes if you do nothing, and an expired proposal **stays visible**, still editable, with **Confirm** to propose again.
-PLAN> The option rows are editable as they stand: until you confirm, you change the proposal directly on the card — the rows are never locked behind a separate step.
+PLAN> Nothing exists yet — the card expires on its own after 30 minutes if you do nothing, and an expired card **stays visible**, still editable, with **Confirm** to set the schedule again.
+PLAN> The option rows are editable as they stand: until you confirm, you change the schedule directly on the card — the rows are never locked behind a separate step.
 PLAN> The floor is **Confirm**, and this floor is new *here and only here*: the same scheduling step everywhere else arms its trigger directly on **Continue**, because there the thing already exists.
 
 ---

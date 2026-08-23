@@ -292,3 +292,78 @@ describe("the refusals, all of them before any write", () => {
     expectNoWrites();
   });
 });
+
+describe("the replacement is atomic or it does not happen (cinatra#2788, convergence F1)", () => {
+  it("REFUSES the save when the prior scheduler cannot be cancelled — one run never gets two schedulers", async () => {
+    // The whole hazard in one line: the cancel fails. Before this fix the
+    // failure was caught, logged and STEPPED OVER, and the replacement was
+    // installed anyway — leaving the old scheduler live beside the new one, two
+    // things able to fire the same run, and a reader who was shown exactly one
+    // schedule.
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(armedRecurring());
+    // ...Once, deliberately: `vi.clearAllMocks()` in beforeEach clears CALLS but
+    // not implementations, so a persistent rejection here would leak into the
+    // sibling test below that proves the ordinary path still installs.
+    schedule.cancelTriggerSchedule.mockRejectedValueOnce(
+      new Error("scheduler backend unreachable"),
+    );
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: WEEKDAYS_AT_8,
+    });
+
+    expect(result).toEqual({ ok: false, error: SAVE_SCHEDULE_REFUSALS.cancelFailed });
+    // NO SECOND SCHEDULER. Neither the scheduler registration nor the row write
+    // happened, so the schedule the reader is looking at is still the only one.
+    expect(schedule.scheduleTrigger).not.toHaveBeenCalled();
+    expect(triggerStore.createOrUpdateRunTrigger).not.toHaveBeenCalled();
+    // And the refusal names the state truthfully: nothing changed.
+    expect(result.ok === false && result.error).toMatch(/unchanged and still armed/i);
+    expect(logged).toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
+  it("REFUSES when the trigger is RELEASED between the guard's read and the write", async () => {
+    // The race: the refusals at the top of the save read ONE snapshot, and the
+    // setter re-reads later. A release that lands in that gap used to pass the
+    // guard and then be overwritten by the replacement — re-arming a trigger
+    // whose held steps are already eligible.
+    let reads = 0;
+    triggerStore.readRunTriggerByRunId.mockImplementation(async () => {
+      reads += 1;
+      // Read 1 is the guard's snapshot: still armed, so the save proceeds.
+      // Every later read — including the setter's own pre-cancel read, the one
+      // the cancel and the upsert act on — sees it released meanwhile.
+      return reads === 1 ? armedRecurring() : armedRecurring({ releasedAt: new Date() });
+    });
+
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: WEEKDAYS_AT_8,
+    });
+
+    expect(result).toEqual({ ok: false, error: SAVE_SCHEDULE_REFUSALS.released });
+    // The re-ask happens BEFORE the cancel, so the released trigger is not even
+    // cancelled on the way to the refusal.
+    expectNoWrites();
+    expect(reads).toBeGreaterThan(1);
+  });
+
+  it("the ordinary path is untouched: a cancel that SUCCEEDS still installs the replacement", async () => {
+    triggerStore.readRunTriggerByRunId.mockResolvedValue(armedRecurring());
+
+    const result = await updateRunTriggerScheduleForActor(owner, {
+      runId: RUN_ID,
+      schedule: WEEKDAYS_AT_8,
+    });
+
+    expect(result).toEqual({ ok: true, runId: RUN_ID });
+    expect(schedule.cancelTriggerSchedule).toHaveBeenCalledWith({
+      jobSchedulerId: "sched-OLD",
+      triggerType: "recurring",
+    });
+    expect(schedule.scheduleTrigger).toHaveBeenCalledTimes(1);
+  });
+});

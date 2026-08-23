@@ -124,6 +124,40 @@ export type SetTriggerForActorResult =
   | { ok: true; runId: string; jobSchedulerId: string | null }
   | { ok: false; error: string };
 
+/**
+ * OPT-IN REPLACE STRICTNESS for `setRunTriggerForActor` (cinatra#2788).
+ *
+ * WHY IT IS A MODE AND NOT THE DEFAULT. The ordinary callers of this function —
+ * the MCP handlers, `run-actions.ts`, the proposal service's install — are
+ * ARMING a trigger, and for them a prior scheduler that refuses to cancel is a
+ * warning on the way to the arm they asked for. The SAVE path is different: it
+ * is a REPLACEMENT of a schedule the reader is already looking at, so an
+ * uncancelled predecessor is not a blemish on the result — it IS a second live
+ * scheduler for the same run, and the reader was told there is one. Making the
+ * strictness the default would change the arming callers' behaviour, so the
+ * save path selects it and nobody else's contract moves.
+ */
+export type SetTriggerReplaceStrictness = {
+  /**
+   * Refuse the whole operation when the prior scheduler cannot be cancelled,
+   * rather than logging and installing a replacement beside it. Nothing is
+   * written when this fires: the refusal happens BEFORE the upsert, so the
+   * schedule the reader already has stays exactly as it was.
+   */
+  failClosedOnCancelFailure: boolean;
+  /**
+   * Re-run the caller's own guard against the row THIS function reads
+   * immediately before the cancel — the same row the cancel and the upsert act
+   * on. Returning a string refuses with it; `null` proceeds.
+   *
+   * This is the "pass the verified snapshot through and refuse on mismatch"
+   * half: a caller that checked released/fired state against an EARLIER read
+   * has an open window between its check and this write, and re-asking here
+   * closes it against the read that actually matters.
+   */
+  reverify?: (existing: TriggerRecord | null) => string | null;
+};
+
 export type GetTriggerForActorResult =
   | { ok: true; trigger: TriggerRecord | null }
   | { ok: false; error: string };
@@ -480,6 +514,7 @@ async function dispatchImmediateNow(
 export async function setRunTriggerForActor(
   actor: TriggerActorContext,
   args: SetTriggerForActorArgs,
+  strictness?: SetTriggerReplaceStrictness,
 ): Promise<SetTriggerForActorResult> {
   if (!actor.userId) return { ok: false, error: "unauthorized" };
 
@@ -620,6 +655,20 @@ export async function setRunTriggerForActor(
   // cancel it, orphaning the job (codex round-2 finding). The extra round-trip
   // is the price of the no-orphan guarantee.
   const existing = await readRunTriggerByRunId(args.runId);
+
+  // RE-ASK THE CALLER'S GUARD ON *THIS* READ (cinatra#2788).
+  //
+  // A caller that refused on released/fired state did so against an earlier
+  // snapshot, and everything between that read and this one is asynchronous —
+  // so a concurrent release can land in the gap and the caller's refusal never
+  // runs again. Re-asking here binds the decision to the row the cancel and the
+  // upsert are about to act on. Nothing has been written yet at this point, so
+  // a refusal here leaves the reader's existing schedule untouched.
+  if (strictness?.reverify) {
+    const refusal = strictness.reverify(existing);
+    if (refusal) return { ok: false, error: refusal };
+  }
+
   const oldJobSchedulerId = existing?.jobSchedulerId ?? null;
   const oldTriggerType = existing?.triggerType ?? null;
   if (oldJobSchedulerId && oldTriggerType) {
@@ -629,6 +678,19 @@ export async function setRunTriggerForActor(
         triggerType: oldTriggerType,
       });
     } catch (err) {
+      // FAIL CLOSED FOR A REPLACEMENT (cinatra#2788). Continuing here installs
+      // the new scheduler while the old one is still live: two schedulers on
+      // one run, both able to fire it, and a reader who was shown exactly one
+      // schedule. The replace path refuses instead — before the upsert, so
+      // nothing is half-written and the prior schedule stands unchanged.
+      if (strictness?.failClosedOnCancelFailure) {
+        console.error(
+          "[setRunTriggerForActor] cancel of prior schedule failed — refusing the replacement (nothing written)",
+          args.runId,
+          err,
+        );
+        return { ok: false, error: SAVE_SCHEDULE_REFUSALS.cancelFailed };
+      }
       console.warn(
         "[setRunTriggerForActor] cancel of prior schedule failed (continuing)",
         args.runId,
@@ -1134,7 +1196,33 @@ export const SAVE_SCHEDULE_REFUSALS = {
     "This one-off schedule has already run. Ask for a new schedule instead of changing this one.",
   immediate:
     "\u201cRun right after setup\u201d starts the run now rather than scheduling it. Use Release now on the run page\u2019s schedule step to start an armed run early.",
+  /** The prior scheduler would not cancel, so the replacement was NOT installed
+   *  — the schedule the reader is looking at is still the live one. */
+  cancelFailed:
+    "The schedule could not be changed just now. Your existing schedule is unchanged and still armed — please try again.",
 } as const;
+
+/**
+ * THE SAVE GUARD, in ONE place (cinatra#2788).
+ *
+ * `updateRunTriggerScheduleForActor` asks this before it delegates, and asks it
+ * AGAIN — through the strictness hook — against the row the setter itself reads
+ * immediately before the cancel. Two call sites, one function, so the pre-check
+ * and the re-check can never drift into disagreeing about what "still
+ * changeable" means.
+ */
+function saveScheduleGuardRefusal(trigger: TriggerRecord | null): string | null {
+  if (!trigger) return SAVE_SCHEDULE_REFUSALS.noTrigger;
+  if (trigger.releasedAt) return SAVE_SCHEDULE_REFUSALS.released;
+  // A one-off whose moment has passed has fired (or is firing).
+  if (
+    trigger.triggerType === "scheduled" &&
+    (!trigger.scheduledAt || trigger.scheduledAt.getTime() <= Date.now())
+  ) {
+    return SAVE_SCHEDULE_REFUSALS.firedOneOff;
+  }
+  return null;
+}
 
 export async function updateRunTriggerScheduleForActor(
   actor: TriggerActorContext,
@@ -1148,37 +1236,49 @@ export async function updateRunTriggerScheduleForActor(
     return { ok: false, error: "forbidden" };
   }
 
+  // Refused BEFORE any write, so the prior scheduler is never cancelled on the
+  // way to a refusal. This read is a SNAPSHOT: the authoritative re-ask happens
+  // inside the setter, against the row the cancel and the upsert act on.
   const existing = await readRunTriggerByRunId(args.runId);
-  if (!existing) return { ok: false, error: SAVE_SCHEDULE_REFUSALS.noTrigger };
-  if (existing.releasedAt) {
-    return { ok: false, error: SAVE_SCHEDULE_REFUSALS.released };
-  }
-  // A one-off whose moment has passed has fired (or is firing). Refused BEFORE
-  // any write, so the prior scheduler is never cancelled on the way to a refusal.
-  if (
-    existing.triggerType === "scheduled" &&
-    (!existing.scheduledAt || existing.scheduledAt.getTime() <= Date.now())
-  ) {
-    return { ok: false, error: SAVE_SCHEDULE_REFUSALS.firedOneOff };
-  }
+  const guardRefusal = saveScheduleGuardRefusal(existing);
+  if (guardRefusal) return { ok: false, error: guardRefusal };
   if (args.schedule.kind === "immediate") {
     return { ok: false, error: SAVE_SCHEDULE_REFUSALS.immediate };
   }
 
+  // THE SAVE PATH IS A REPLACEMENT, SO IT IS STRICT (cinatra#2788).
+  //
+  // Fail closed if the prior scheduler will not cancel — a save that installs a
+  // second live scheduler is worse than a save that refuses — and re-ask the
+  // guard above against the setter's own pre-cancel read, so a release that
+  // lands between the snapshot and the write is refused rather than overwritten.
+  const strictness: SetTriggerReplaceStrictness = {
+    failClosedOnCancelFailure: true,
+    reverify: saveScheduleGuardRefusal,
+  };
+
   const result =
     args.schedule.kind === "scheduled"
-      ? await setRunTriggerForActor(actor, {
-          runId: args.runId,
-          triggerType: "scheduled",
-          scheduledAt: args.schedule.runAt,
-          timezone: args.schedule.timezone,
-        })
-      : await setRunTriggerForActor(actor, {
-          runId: args.runId,
-          triggerType: "recurring",
-          cronExpression: buildCron(args.schedule.selection),
-          timezone: args.schedule.timezone,
-        });
+      ? await setRunTriggerForActor(
+          actor,
+          {
+            runId: args.runId,
+            triggerType: "scheduled",
+            scheduledAt: args.schedule.runAt,
+            timezone: args.schedule.timezone,
+          },
+          strictness,
+        )
+      : await setRunTriggerForActor(
+          actor,
+          {
+            runId: args.runId,
+            triggerType: "recurring",
+            cronExpression: buildCron(args.schedule.selection),
+            timezone: args.schedule.timezone,
+          },
+          strictness,
+        );
 
   return result.ok ? { ok: true, runId: args.runId } : { ok: false, error: result.error };
 }

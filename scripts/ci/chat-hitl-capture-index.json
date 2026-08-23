@@ -5917,11 +5917,11 @@
     {
       "cell": "E1__schedule-card__chat_thread__pending__expired-face__standin",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-proposal-expired-1787455899",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-card-2939-expired-r9",
       "build": "development",
       "screenshot": "evidence/2788-s9d-schedule-card/captures/E1__schedule-card__chat_thread__pending__expired-face__standin.png",
-      "sha256": "b3d55105da84671976ebdadb9b21292988c524650b91dc19fad90d254a28300c",
-      "capturedAt": "2026-08-23T03:33:52.465Z",
+      "sha256": "9b6bebdf5e97bcf9b5e93c182927c25ca26c4d3a00dbe2c04d51cb24c73987c7",
+      "capturedAt": "2026-08-23T10:19:08.650Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -6097,11 +6097,11 @@
     {
       "cell": "E2__schedule-card__chat_thread__pending__expired-face__standin__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-proposal-expired-1787455899",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/schedule-card-2939-expired-r9",
       "build": "development",
       "screenshot": "evidence/2788-s9d-schedule-card/captures/E2__schedule-card__chat_thread__pending__expired-face__standin__dark.png",
-      "sha256": "3d262bde396c9098ebf324610d88a7cac4601f8ccb23e16012072330e76a838a",
-      "capturedAt": "2026-08-23T03:34:00.591Z",
+      "sha256": "171f79f59343ed925bd252eaf7b384f2c3df45277571c48905d30ec3e9574b58",
+      "capturedAt": "2026-08-23T10:19:15.081Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",

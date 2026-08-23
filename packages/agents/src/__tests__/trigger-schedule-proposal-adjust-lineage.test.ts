@@ -78,10 +78,14 @@ const WEEKDAYS_9AM: ProposalSchedule = {
 };
 
 /** What the reader adjusts it to — "make it 8 in the morning". */
+// No `as ProposalSchedule` here: the assertion widened this back to the whole
+// union and defeated the discriminant narrowing the annotation alone gives
+// (`WEEKDAYS_9AM` narrows to the recurring member and reads `.selection`
+// fine), so `WEEKDAYS_8AM.selection` below stopped typechecking.
 const WEEKDAYS_8AM: ProposalSchedule = {
   ...WEEKDAYS_9AM,
   selection: { ...WEEKDAYS_9AM.selection, hour: 8 },
-} as ProposalSchedule;
+};
 
 const readAgentTemplateById = vi.fn();
 const readProposalConsume = vi.fn();

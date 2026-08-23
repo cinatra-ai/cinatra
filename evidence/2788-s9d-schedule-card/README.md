@@ -151,11 +151,11 @@ before any press.
 
 *chat_thread · light · expired (resolve stood in, named)*
 
-`evidence/2788-s9d-schedule-card/captures/E1__schedule-card__chat_thread__pending__expired-face__standin.png` · sha256 `b3d55105da846719…` · URL `/chat/cinatra-ai/cinatra-assistant/schedule-proposal-expired-1787455899`
+`evidence/2788-s9d-schedule-card/captures/E1__schedule-card__chat_thread__pending__expired-face__standin.png` · sha256 `9b6bebdf5e97bcf9…` · URL `/chat/cinatra-ai/cinatra-assistant/schedule-card-2939-expired-r9`
 
-**Requires.** An expired proposal stays VISIBLE, its rows still editable, on the SAME **Confirm** floor.
+**Requires.** An expired card stays VISIBLE, its rows still editable, on the SAME **Confirm** floor, and the sentence reads as the plan now words it — *"an expired card **stays visible**, still editable, with **Confirm** to set the schedule again"* — with no "proposal" left in the reader's copy.
 
-**Shows.** The card is drawn, not dropped: the sentence naming the expiry, then the same three rows with Recurring chosen and every field live, then **Confirm** — the same control the live proposal ends on. No **Adjust** anywhere.
+**Shows.** The card is drawn, not dropped: *"This schedule expired before it was confirmed. Nothing was scheduled — change it if you like, then confirm it again."* — the reworded sentence, re-shot for it — then the same three rows with Recurring chosen and every field live (Repeat every 1 week(s), On Mon–Fri, At 09 : 00, Timezone Europe/Berlin), **Estimated run duration**, then **Confirm** — the same control the live card ends on. No **Adjust** anywhere, and the word "proposal" appears nowhere on the card.
 
 **Verdict:** **PASS** on what it claims. The STAND-IN is the resolve RESPONSE and nothing else — this branch's resolver still answers an expired token `absent` (cinatra#2836's scope). The card, the transcript, the browser and every counted anchor are real.
 
@@ -165,11 +165,11 @@ before any press.
 
 *chat_thread · dark · expired (resolve stood in, named)*
 
-`evidence/2788-s9d-schedule-card/captures/E2__schedule-card__chat_thread__pending__expired-face__standin__dark.png` · sha256 `3d262bde396c9098…` · URL `/chat/cinatra-ai/cinatra-assistant/schedule-proposal-expired-1787455899`
+`evidence/2788-s9d-schedule-card/captures/E2__schedule-card__chat_thread__pending__expired-face__standin__dark.png` · sha256 `171f79f59343ed92…` · URL `/chat/cinatra-ai/cinatra-assistant/schedule-card-2939-expired-r9`
 
 **Requires.** The same, on the dark ground.
 
-**Shows.** Same expiry sentence, same editable rows, same **Confirm**; the chosen weekdays stay legible.
+**Shows.** The same reworded expiry sentence, the same editable rows and the same **Confirm** on the dark ground; Mon–Fri render as filled light chips while Sun and Sat stay outline, so the chosen days stay legible.
 
 **Verdict:** **PASS** on what it claims, with the same named stand-in.
 
