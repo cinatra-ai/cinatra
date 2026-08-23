@@ -87,6 +87,18 @@ const COVERED_PREFIXES = [
   "src/lib/connect-sites-store.ts",
   "src/lib/widget-user-auth.ts",
   "src/lib/drizzle-store.ts", // DDL owner
+  // cinatra#2911: the bootstrap DDL leaf the DDL owner directly above spreads
+  // in for `agent_runs.created_at`. Its one raw DML site is that column's
+  // GUARDED backfill (`WHERE created_at IS NULL`) — schema bootstrap, not
+  // org-scoped business data: it fills the column only on rows that predate
+  // it, it runs once per server process inside the schema-init run that the
+  // `pg_advisory_lock(hashtext('cinatra-schema-init'))` slow path serializes
+  // (src/lib/postgres-schema-init.ts), and it moved here VERBATIM out of
+  // `buildCreateStoreSchemaQueries` — same statement, same executor, one file
+  // further out — as the guarded rewrite of the unguarded whole-table UPDATE
+  // that used to stand inline. Named as ONE FILE, not a directory prefix, so
+  // every other DDL leaf still has to register on its own.
+  "src/lib/agent-run-created-at-schema.ts",
   "packages/org-write-kernel/",
   "packages/migrations/",
   "scripts/", // schema bootstrap / migrate / audit tooling

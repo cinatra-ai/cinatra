@@ -13,14 +13,17 @@
  * `defaultModel`, i.e. the model a subsequent call with no explicit `model`
  * really lands on.
  *
- * A `null` mint means "no LLM runtime is configured". Callers treat this as a
- * CLEAN SKIP: last-good rows are retained, a job-level skipped-pair count is
- * logged, and nothing throws (failure taxonomy: absence of a runtime is a
+ * A `null` mint means "no LLM runtime this matcher can run on" — nothing
+ * resolved, or what resolved is the scripted deterministic TEST runtime, which
+ * is not a provider and which the matcher has no path for. Callers treat this
+ * as a CLEAN SKIP: last-good rows are retained, a job-level skipped-pair count
+ * is logged, and nothing throws (failure taxonomy: absence of a runtime is a
  * state, not an error).
  */
 
 import {
   resolveConfiguredLlmRuntime,
+  isScriptedLlmRuntime,
   probeBatchCapability,
   type LlmProvider,
 } from "@cinatra-ai/llm";
@@ -37,6 +40,21 @@ export type MintRunContext = () => Promise<SkillMatchRunContext | null>;
 export async function mintSkillMatchRunContext(): Promise<SkillMatchRunContext | null> {
   const runtime = await resolveConfiguredLlmRuntime();
   if (!runtime) return null;
+  // cinatra#2910 — the scripted DETERMINISTIC TEST runtime is not a provider.
+  // A context minted from it would carry `provider: "scripted"` into code that
+  // treats the field as an `LlmProvider`: `submitSkillMatchBatch` probes the
+  // batch capability for it and submits a provider batch under that id
+  // (jobs.ts), i.e. a cast would turn a test runtime into a real-provider call.
+  // The matcher has no scripted path, so this is the CLEAN SKIP the null mint
+  // already means (last-good rows retained, skipped pairs counted, nothing
+  // throws) — stated here with its reason instead of leaking downstream.
+  if (isScriptedLlmRuntime(runtime)) {
+    console.info(
+      "[skill-matcher] the scripted test LLM runtime resolved (no real provider is " +
+        "configured) — skipping the matcher run; last-good rows stand",
+    );
+    return null;
+  }
   return {
     provider: runtime.provider,
     model: runtime.model,
@@ -87,6 +105,11 @@ export function buildSkillMatchWorkerActorContext(jobLabel: string): ActorContex
 export function coerceRunContext(value: unknown): SkillMatchRunContext | null {
   if (typeof value !== "object" || value === null) return null;
   const candidate = value as Record<string, unknown>;
+  // cinatra#2910 — a rehydrated context never re-enters the run on the scripted
+  // runtime either: minting refuses it above, so a payload carrying it is stale
+  // or forged, and the provider-keyed reads downstream would cast it to a real
+  // provider. Rejecting here keeps the two doors shut with the same rule.
+  if (candidate.provider === "scripted") return null;
   if (
     typeof candidate.provider === "string" &&
     candidate.provider.length > 0 &&

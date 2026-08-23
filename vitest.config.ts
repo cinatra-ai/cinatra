@@ -487,6 +487,17 @@ export default defineConfig({
       // semantics: an unmirrored specifier does not reliably fail, it may
       // resolve through tsconfig paths to a different real module.
       "packages/mcp-server/src/**/__tests__/**/*.test.ts",
+      // chat-hitl S9k held-turn suite (cinatra#2824) — the PURE decision rules its
+      // setup and its teardown both obey: the one `admin` predicate, the
+      // membership identity `(organizationId, userId)`, the per-run snapshot
+      // claim, and the revert plans that stop a teardown removing or clearing what
+      // it did not write. The e2e flow itself needs a live stack and is NOT run
+      // here; `tests/e2e/chat-hitl-held-turn/state-rules.ts` deliberately has no
+      // database, `server-only` or Playwright import so these arms run in the
+      // ordinary node unit tier, and so a reader can re-run the coverage this
+      // suite claims. Everything under tests/e2e/ stays out of the tier except
+      // this one glob.
+      "tests/e2e/chat-hitl-held-turn/__tests__/**/*.test.ts",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a

@@ -24,10 +24,11 @@
     "URL, or whose chat anchors were never asserted, is a mislabeled capture and fails. A PENDING",
     "capture owes its decision controls; a DECIDED one owes their ABSENCE and its own decided summary.",
     "",
-    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: THIRTY-NINE",
+    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: FIFTY-EIGHT",
     "records, on all four hosts. Each group is ONE run of the recorder against a LIVE app on a",
-    "lane database, not a hand-assembled set. The A / B / C groups are described here; the V, D",
-    "and I groups arrived with later slices and each record carries its own `note`:",
+    "lane database, not a hand-assembled set. The A / B / C groups are described here; the V, D,",
+    "I, S9b, C, P and SCHEDULE groups arrived with later slices, each described in its own",
+    "paragraph below where it has one, and each record carries its own `note`:",
     "",
     "  A1 / A3 / A4 / A5 - cinatra#2855 (PR #2862), evidence/2855-settled-outcome. A1 is the gate",
     "  region on the review page. A3 / A4 / A5 are chat_thread: a real gate PENDING, the same card",
@@ -74,7 +75,60 @@
     "invented counts. What the contract does catch is the accidental mislabel, the anchor nobody",
     "measured, the drifted hash, the re-used picture, and the cell that cites nothing at all.",
     "",
-    "  A1-A3 / B1-B3 / R1-R2 / E1-E2 - cinatra#2788 (PR #2858, S9d), evidence/2788-s9d-schedule-card. The SCHEDULE PROPOSAL card, drawn where the S1 placeholder box used to stand. The A group is one continuous interaction in one real transcript - the proposal with its schedule on screen, the same rows opened in place by Adjust, and the settled trigger chrome after a real press of Confirm - and the B group is those three cells on the dark ground, in a second transcript with a proposal of its own, because a proposal token is single-use. R1 / R2 are the SAME component on the run page, mounted by TriggerScreen against the run that Confirm created. E1 / E2 are the EXPIRED face and they are the one STAND-IN in the set: main's resolver answers an expired proposal `absent` (cinatra#2836 is the fix), so the card, the page and every counted anchor are real while the RESOLVE RESPONSE is substituted - the cell names carry `standin` and each record's note says so in words."
+    "THE P-GROUP - cinatra#2904, evidence/2904-settled-gate-review-page. FIVE records on page_gate_region,",
+    "all of them the review page's own gate region at /agents/<vendor>/<package>/<runId>/review/<taskId>.",
+    "P1 is the PENDING control: a gate this lane produced through materializeBlogPostBodyArtifact -> the",
+    "produced-event outbox -> the app's own review-orchestration sweep, with its live decision floor. P2 and",
+    "P4 are two OTHER real gates on their own runs, decided by a real press of the card's own Approve /",
+    "Reject control in the browser and then RELOADED, so the route's server loader ran again on a gate it",
+    "found RESOLVED - which is the whole point of the round: before #2904 that loader answered `blocked` for",
+    "every non-pending gate and the page returned its own panel before the card was mounted, so all three",
+    "host anchors counted ZERO here (recorded verbatim in the refusal set of the round that found this, cell",
+    "G4__review-card__page_gate_region__decided). P3 and P5 are the same two decided gates opened fresh on",
+    "the dark ground; each record carries the class the document actually resolved, so the cell name is not",
+    "the only thing claiming the theme.",
+    "",
+    "WHAT IS NOT IN THE P-GROUP, and why it is not a gap. The `unavailable` case - a review-page address for",
+    "a gate that was never emitted - draws NO lifecycle card at all, by design (#2904 AC 5). It cannot be a",
+    "record in this file, because every record here is a measurement of a card, and asking the recorder for",
+    "one would be asking it to measure a card that must not exist. Those two pictures (P6 / P7) and their",
+    "counted anchors live in the round's own capture-results.json and its README grading table instead,",
+    "where they read as what they are: a negative control.",
+    "",
+    "THE SCHEDULE GROUP - cinatra#2788 (PR #2939, S9d), evidence/2788-s9d-schedule-card. TEN records",
+    "of the SCHEDULE card, drawn where the S1 placeholder box used to stand: `trigger_schedule_proposal`",
+    "dispatches to the drawn ScheduleProposalCard now and the shell is RETIRED for this kind, so no",
+    "record here shows the shell's one-line grey box.",
+    "",
+    "  A1 / A2 - chat_thread, ONE continuous interaction in ONE real transcript. A1 is the schedule as",
+    "  it arrives: the question, the three option rows with the RECURRING row chosen and owning its",
+    "  fields, the estimated duration, and a floor holding Confirm and nothing else. The rows are LIVE",
+    "  on first paint and there is NO Adjust control on any phase - the reader edits the rows as they",
+    "  stand. A2 is the SAME card after a real press of Confirm and a full route reload: no second card,",
+    "  same place, the armed schedule in the SAME rows, with Save changes to re-arm. Cancel trigger and",
+    "  Release now are absent - the plan puts those on the run page's schedule step, not in the",
+    "  conversation.",
+    "",
+    "  B1 / B2 - those same two cells on the DARK ground, in a SECOND transcript with a schedule of its",
+    "  own, because a proposal token is single-use and the A pair spent theirs.",
+    "",
+    "  R1 / R2 - run_card, light and dark. The SAME component on the run page, mounted as a DEDICATED",
+    "  STEP in the left step rail (packages/agents/src/schedule-rail-step.tsx) and opened by a real",
+    "  press, above the run's other steps and above the Review step. Inside it: the trigger's own chrome",
+    "  (Trigger configuration, Steps held until trigger fires), the armed schedule in the same option",
+    "  rows, and a floor with Save changes, Cancel trigger and Release now.",
+    "",
+    "  P1 / P2 - page_gate_region, light and dark, on the review page. The schedule is a step in the",
+    "  left rail ABOVE the Review step, and the gate region beside it holds the REVIEW CARD ALONE. The",
+    "  two are never drawn together as cards - that composition is the one the plan forbids and the one",
+    "  the retired page_gate_region schedule mount used to draw.",
+    "",
+    "  E1 / E2 - the EXPIRED face, and the ONE STAND-IN in the set. This branch's resolver still answers",
+    "  an expired proposal `absent` (the vanish defect cinatra#2836 owns), so the expired PHASE cannot be",
+    "  reached through the server here. The card, the transcript, the browser and every counted anchor",
+    "  are REAL; what is stood in is the RESOLVE RESPONSE. Both cell names carry `standin` and both notes",
+    "  say so in words. The reading they prove is the plan's: the card STAYS VISIBLE, its rows stay",
+    "  EDITABLE, and the floor is Confirm - to set the schedule again."
   ],
   "schemaVersion": 1,
   "recorder": "cinatra-lifecycle-capture-recorder@1",
@@ -3953,6 +4007,524 @@
       },
       "note": "The same settled zero-chip card in the dark theme — the panel's tokens resolve to the dark ground and the reading is the same.",
       "runtime": "dev"
+    },
+    {
+      "cell": "P1__review-card__page_gate_region__pending",
+      "declaredHost": "page_gate_region",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/94265eef-5a02-4e07-940a-8d0cf705fa3d/review/lifecycle-review%3A8756e5927f75e9c4628ea297a76f8272e63d66f0505f3ce23471a5d35c1ef135",
+      "build": "development",
+      "screenshot": "evidence/2904-settled-gate-review-page/captures/P1__review-card__page_gate_region__pending.png",
+      "sha256": "553f5bb46b5eeabf548b0dd01833dff9d2b21a56bbc34b43effc8504ba58c773",
+      "capturedAt": "2026-08-22T19:00:00.001Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-settled\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-review-outcome]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "pending",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "page_gate_region",
+          "data-conformance-id": "review-gate-card"
+        }
+      },
+      "runtime": "DEV runtime - pnpm dev (Next.js, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database and lane Redis on loopback, placeholder-only environment, no model credential on this host",
+      "documentClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "note": "THE CONTROL. The gate this lane produced through materializeBlogPostBodyArtifact -> the produced-event outbox -> the app own review-orchestration sweep, drawn PENDING on the review page gate region, with its live decision floor."
+    },
+    {
+      "cell": "P2__review-card__page_gate_region__decided",
+      "declaredHost": "page_gate_region",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cafdc215-0467-4b9e-8c1c-b4c50285fe4c/review/lifecycle-review%3A8a5e610bc0e53f22e5a3b82744a7b6a5b08ab37fa484bbe75d3c3e2069cb47cb",
+      "build": "development",
+      "screenshot": "evidence/2904-settled-gate-review-page/captures/P2__review-card__page_gate_region__decided.png",
+      "sha256": "0c35f653a2e678b24361c05e7095dbe3fa1b7729300315fbc86f3ac3dbda587a",
+      "capturedAt": "2026-08-22T19:00:43.713Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-review-outcome]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-blocked\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-action=\"refresh-gate -> live-gate\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "page_gate_region",
+          "data-conformance-id": "review-gate-card"
+        }
+      },
+      "runtime": "DEV runtime - pnpm dev (Next.js, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database and lane Redis on loopback, placeholder-only environment, no model credential on this host",
+      "documentClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "note": "The SAME gate as P1, APPROVED by a real press of the card own Approve control in this browser, and then RELOADED so the review page own server loader runs again on the resolved gate."
+    },
+    {
+      "cell": "P3__review-card__page_gate_region__decided__dark",
+      "declaredHost": "page_gate_region",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/cafdc215-0467-4b9e-8c1c-b4c50285fe4c/review/lifecycle-review%3A8a5e610bc0e53f22e5a3b82744a7b6a5b08ab37fa484bbe75d3c3e2069cb47cb",
+      "build": "development",
+      "screenshot": "evidence/2904-settled-gate-review-page/captures/P3__review-card__page_gate_region__decided__dark.png",
+      "sha256": "28cd0db4d050cae89c80b9701802840c41a8321e0d33a76b1ea80be331a8b606",
+      "capturedAt": "2026-08-22T19:00:58.784Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-review-outcome]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-blocked\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-action=\"refresh-gate -> live-gate\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "page_gate_region",
+          "data-conformance-id": "review-gate-card"
+        }
+      },
+      "runtime": "DEV runtime - pnpm dev (Next.js, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database and lane Redis on loopback, placeholder-only environment, no model credential on this host",
+      "documentClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "note": "The same approved gate, opened fresh in a new context on the dark ground. No decision is taken here - the gate was already resolved by the press in P2."
+    },
+    {
+      "cell": "P4__review-card__page_gate_region__decided__rejected",
+      "declaredHost": "page_gate_region",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/3044501c-ddf9-4ba2-8f02-58fd16906045/review/lifecycle-review%3A42f0cad8b460992d382d5d807665deef84c1adfd077b34f3e184faa25b376fca",
+      "build": "development",
+      "screenshot": "evidence/2904-settled-gate-review-page/captures/P4__review-card__page_gate_region__decided__rejected.png",
+      "sha256": "1e5bc450af435e64d125a9552f946481eaea427ffcd16c038a0ed3090cb8ef98",
+      "capturedAt": "2026-08-22T19:01:43.458Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-review-outcome]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-blocked\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-action=\"refresh-gate -> live-gate\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "page_gate_region",
+          "data-conformance-id": "review-gate-card"
+        }
+      },
+      "runtime": "DEV runtime - pnpm dev (Next.js, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database and lane Redis on loopback, placeholder-only environment, no model credential on this host",
+      "documentClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "note": "A SECOND real gate on its own run, REJECTED by a real press of the card own Reject control, then reloaded."
+    },
+    {
+      "cell": "P5__review-card__page_gate_region__decided__rejected__dark",
+      "declaredHost": "page_gate_region",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/3044501c-ddf9-4ba2-8f02-58fd16906045/review/lifecycle-review%3A42f0cad8b460992d382d5d807665deef84c1adfd077b34f3e184faa25b376fca",
+      "build": "development",
+      "screenshot": "evidence/2904-settled-gate-review-page/captures/P5__review-card__page_gate_region__decided__rejected__dark.png",
+      "sha256": "6bc0933746f4672f116d75ee4592b34cfda537dd58ca684aab929afcda660ac2",
+      "capturedAt": "2026-08-22T19:01:58.351Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-settled\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-review-outcome]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-blocked\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        },
+        {
+          "selector": "[data-action=\"refresh-gate -> live-gate\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"artifact_review_gate\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "artifact_review_gate",
+      "declaredState": "decided",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "artifact_review_gate",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "page_gate_region",
+          "data-conformance-id": "review-gate-card"
+        }
+      },
+      "runtime": "DEV runtime - pnpm dev (Next.js, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database and lane Redis on loopback, placeholder-only environment, no model credential on this host",
+      "documentClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "note": "The rejected gate on the dark ground, opened fresh."
     },
     {
       "cell": "A1__schedule-card__chat_thread__pending",

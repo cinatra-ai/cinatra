@@ -4,6 +4,10 @@
 // in each test file.
 export const resolveConfiguredLlmRuntime = async () => undefined;
 export const runResolvedDeterministicLlmTask = async () => ({});
+// cinatra#2910 — the scripted-runtime narrowing guard. The stub's
+// `resolveConfiguredLlmRuntime` never yields one, so this is always false here.
+export const isScriptedLlmRuntime = (runtime?: { provider?: string } | null) =>
+  runtime?.provider === "scripted";
 export const runResolvedSkillAwareDeterministicLlmTask = async () => ({});
 export const runDeterministicLlmTask = async () => ({});
 export const runSkillAwareDeterministicLlmTask = async () => ({});

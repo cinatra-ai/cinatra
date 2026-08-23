@@ -186,6 +186,11 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     return <ReviewNotAuthorizedPanel />;
   }
 
+  // The generic blocked panel is still the page's answer for a gate it cannot
+  // show: `targets-mismatch` (a stale or tampered view) and the `unavailable`
+  // gate the loader keeps here — a ref that names nothing, or a row too corrupt
+  // to read. Neither is a decided review, so neither becomes card DOM
+  // (cinatra#2904, AC 4 + AC 5).
   if (surface.kind === "blocked") {
     return (
       <ReviewShell>
@@ -193,6 +198,18 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
       </ReviewShell>
     );
   }
+
+  // A DECIDED gate falls through to the SAME composition a pending one draws
+  // (cinatra#2904). The page short-circuited here before, so the one renderer
+  // was never mounted on `page_gate_region` and the review page contradicted the
+  // transcript about the same gate at the same moment — plan §4.4 step 7,
+  // "Everyone looking at that run, in any channel, sees the same settled card."
+  // Nothing below is settled-specific: the card resolves its own state from the
+  // ref against the live reader, so it draws the recorded outcome and its
+  // decider where the state is `settled` with one, and falls back to the generic
+  // blocked reading with its Refresh where the disposition cannot be read
+  // (`review-gate-card.tsx`). The ONE thing the page withholds from a settled
+  // gate is the prompt window at the foot — see below.
 
   const { steps, activeStep, templateId } = await loadRunStepsContext(runId);
 
@@ -296,12 +313,18 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
 
       {/* owner ruling (1) — the REAL conversational prompt window (the
           changes-request channel). Sticky, portalled into <main>; mounted only when
-          the reviewer may Comment (respond access). */}
-      <ReviewPromptWindow
-        submitAction={submitAction}
-        canComment={surface.permissions.canComment}
-        storageKey={`cinatra_review_prompt_${templateId ?? "run"}_${reviewTaskId}`}
-      />
+          the reviewer may Comment (respond access) on a gate that is still OPEN.
+          A settled gate carries no comment channel and no permission answer to
+          read one from: the loader resolves the decision axis for a pending gate
+          only, and the card's own settled branch draws no floor either, so the
+          foot of the page agrees with the card above it. */}
+      {surface.kind === "ready" ? (
+        <ReviewPromptWindow
+          submitAction={submitAction}
+          canComment={surface.permissions.canComment}
+          storageKey={`cinatra_review_prompt_${templateId ?? "run"}_${reviewTaskId}`}
+        />
+      ) : null}
     </ReviewShell>
   );
 }

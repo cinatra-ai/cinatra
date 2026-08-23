@@ -238,6 +238,33 @@ export type ReviewSurfaceModel =
   | { kind: "not-authorized" }
   /** The gate cannot be prepared or decided (§V) — a single blocked state. */
   | { kind: "blocked"; reason: ReviewBlockedReason }
+  /**
+   * The gate EXISTS on this run, this reader may read the run, and it has been
+   * DECIDED (plan §4.4 step 7: "Everyone looking at that run, in any channel,
+   * sees the same settled card"; §4.2).
+   *
+   * WHY THIS IS ITS OWN KIND rather than a blocked reason. `blocked` is what a
+   * surface says when it cannot show the review; a resolved gate is a review it
+   * CAN show — the recorded outcome, its decider where one can be named, the
+   * recorded suggestion chips — and the one renderer already draws exactly that
+   * from its own ref. Collapsing the two is what made the page contradict the
+   * transcript about the same gate at the same moment.
+   *
+   * IT CARRIES NOTHING. Deliberately: the settled reading is resolved by the
+   * CARD, from the ref, against the live reader (`lifecycle-card-refetch` →
+   * `lifecycle-settled-outcome`), which is the same path every other host
+   * resolves it on. A payload here would be a second projection of the same
+   * facts, on one host only, and the two would drift. This kind says one thing —
+   * "mount the card" — and the card says the rest.
+   *
+   * WHAT IT IS NOT. It is NOT reached for an `unavailable` gate. A ref that
+   * names nothing and a row too corrupt to read stay `blocked`: they are not a
+   * decided review, and a surface that turned them into a settled card would be
+   * inventing a decision. The card's own resolver draws the same line
+   * (`resolved` → `settled`, `unavailable` → `absent`); this kind is that line,
+   * drawn one layer up so the page reaches the card at all.
+   */
+  | { kind: "settled" }
   /** The pending gate, prepared: the targets to review + the decision chrome. */
   | {
       kind: "ready";

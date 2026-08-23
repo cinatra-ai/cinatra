@@ -500,8 +500,19 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 import { withActorContext, getActorContext } from "./actor-context";
 import {
   assertScriptedProviderNotProduction,
+  isScriptedLlmRuntime,
   isScriptedTestProviderEnabled,
+  resolveScriptedLlmRuntime,
+  runScriptedBridgeCompletion,
   runScriptedStream,
+} from "./scripted-test-provider";
+import type { ScriptedLlmRuntime } from "./scripted-test-provider";
+export {
+  resolveScriptedLlmRuntime,
+  runScriptedBridgeCompletion,
+  isScriptedLlmRuntime,
+  SCRIPTED_TEST_MODEL,
+  type ScriptedLlmRuntime,
 } from "./scripted-test-provider";
 
 // Fail-closed gate for LLM entry points.
@@ -563,7 +574,17 @@ function requireActorFrame<T>(
 export type ResolvedLlmRuntime =
   | { provider: "openai"; connection: OpenAIConnectionConfig; model: string }
   | { provider: "anthropic"; model: string }
-  | { provider: "gemini"; model: string };
+  | { provider: "gemini"; model: string }
+  // cinatra#2910 — the DETERMINISTIC TEST runtime. It is not a provider and
+  // carries no connection: it is the value `resolveConfiguredLlmRuntime`
+  // returns when the scripted test provider is enabled and nothing real
+  // resolved, and the two resolved-task entry points below execute it without
+  // touching an adapter. It is constructible ONLY through
+  // `resolveScriptedLlmRuntime`, which asserts an explicit development runtime
+  // first, and the entry points assert again before producing any output — so
+  // no production build can resolve OR execute it. A consumer that reads
+  // `.provider` must handle it; the `isScriptedLlmRuntime` guard narrows it.
+  | ScriptedLlmRuntime;
 
 export type DeterministicLlmExecutionInput = {
   provider: LlmProvider;
@@ -1065,10 +1086,26 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
 }
 
 export async function runResolvedDeterministicLlmTask(input: ResolvedDeterministicLlmExecutionInput) {
+  // cinatra#2910 — the scripted runtime never reaches an adapter. The helper
+  // re-asserts the development fence before producing anything.
+  const runtime = input.runtime;
+  if (isScriptedLlmRuntime(runtime)) {
+    // The SAME actor-context gate the real path enforces: a scripted run that
+    // establishes no actor frame must fail exactly where a provider run would,
+    // or the deterministic stack would mask a missing frame.
+    return requireActorFrame("runResolvedDeterministicLlmTask", input.actorContext, () =>
+      runScriptedBridgeCompletion({
+        system: input.system,
+        user: input.user,
+        outputSchema: input.outputSchema,
+        model: input.model ?? runtime.model,
+      }),
+    );
+  }
   return runDeterministicLlmTask({
     ...input,
-    provider: input.runtime.provider,
-    connection: input.runtime.provider === "openai" ? input.runtime.connection : undefined,
+    provider: runtime.provider,
+    connection: runtime.provider === "openai" ? runtime.connection : undefined,
   });
 }
 
@@ -1321,11 +1358,33 @@ export async function runResolvedSkillAwareDeterministicLlmTask(
       connection: undefined,
     });
   }
+  // cinatra#2910 — the scripted runtime is served HERE, without resolving an
+  // adapter: resolving one a frame later is exactly how a seam placed at
+  // resolution alone would move the failure instead of removing it. It sits
+  // AFTER the pin branch on purpose — an agent that PINNED a provider keeps
+  // getting its pin honored, and its unavailability reported, rather than
+  // silently answered by a test provider.
+  const runtime = input.runtime;
+  if (isScriptedLlmRuntime(runtime)) {
+    // The SAME actor-context gate the real path enforces (see the sibling
+    // entry point): a scripted run may not skip it.
+    return requireActorFrame(
+      "runResolvedSkillAwareDeterministicLlmTask",
+      input.actorContext,
+      () =>
+        runScriptedBridgeCompletion({
+          system: input.system,
+          user: input.user,
+          outputSchema: input.outputSchema,
+          model: input.model ?? runtime.model,
+        }),
+    );
+  }
   // Existing fallback behavior.
   return runSkillAwareDeterministicLlmTask({
     ...input,
-    provider: input.runtime.provider,
-    connection: input.runtime.provider === "openai" ? input.runtime.connection : undefined,
+    provider: runtime.provider,
+    connection: runtime.provider === "openai" ? runtime.connection : undefined,
   });
 }
 
@@ -2057,5 +2116,23 @@ export async function resolveConfiguredLlmRuntime(input?: {
     }
   }
 
-  return null;
+  // An EXPLICIT `preferredProviders` pin is walked VERBATIM and its exhaustion
+  // is the answer: the caller named the providers it will accept, so "none of
+  // them resolved" stays `null` (the S6 `explicit-pin` contract, pinned in
+  // resolve-configured-runtime-exact-binding.test.ts) rather than becoming a
+  // runtime the caller never asked for. Only the DEFAULT resolution — the one
+  // that means "whatever this instance is configured with" — may fall through
+  // to the scripted runtime below.
+  if (input?.preferredProviders) return null;
+
+  // cinatra#2910 — LAST RESORT, after every real candidate failed to resolve:
+  // the deterministic test runtime, so a credential-free development stack can
+  // drive the surfaces that resolve through here (`/api/llm-bridge` is the one
+  // the agent-run model call takes) instead of being refused with
+  // NO_LLM_PROVIDER. `null` — the pre-existing answer — is still what an
+  // install without the flag gets, and an install WITH a configured provider
+  // never reaches this line. The fence lives inside the helper: with the flag
+  // set outside an explicit development runtime it THROWS here rather than
+  // returning a runtime anything could execute.
+  return resolveScriptedLlmRuntime();
 }

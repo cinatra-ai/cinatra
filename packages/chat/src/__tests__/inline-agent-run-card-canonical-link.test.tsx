@@ -9,10 +9,21 @@
  *
  * `AgenticRunPanel` is stubbed: these pins are about what the WRAPPER derives
  * and forwards, and the panel's own rendering is pinned in the agents package.
+ *
+ * THE CARD IS RENDERED UNDER ITS HOST DECLARATION (cinatra#2902). In production
+ * it always is — `/chat` mounts the conversation list inside
+ * `<LifecycleCardSurfaceProvider host="chat_thread">` and the widget inside its
+ * own. The seed now asks with whichever credential that host declared, and a
+ * subtree that declares nothing asks nothing, so a bare render would be testing
+ * a surface that does not exist. Declaring `chat_thread` here states plainly
+ * which one these pins are about; the request it produces is the first-party one
+ * this file always exercised.
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+
+import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 
 import { buildAgentInstancePath } from "@/lib/agent-url";
 
@@ -30,6 +41,13 @@ vi.mock("../use-agent-creation-progress", () => ({
 }));
 
 import { InlineAgentRunCard } from "../inline-agent-run-card";
+
+/** `/chat`'s own declaration — the host these pins are taken on. */
+function chatThread(children: React.ReactNode) {
+  return (
+    <LifecycleCardSurfaceProvider host="chat_thread">{children}</LifecycleCardSurfaceProvider>
+  );
+}
 
 const RUN_ID = "85bd2267-3f9a-4f0d-a1da-bb3a54f1a50d";
 const PACKAGE = "@cinatra-ai/blog-draft-writer-agent";
@@ -77,7 +95,7 @@ describe("InlineAgentRunCard — the run link", () => {
   it("renders the CANONICAL path the shared builder produces", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => seedResponse()));
 
-    render(<InlineAgentRunCard runId={RUN_ID} />);
+    render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
 
     const link = await screen.findByTestId("inline-run-page-link");
     expect(link.getAttribute("href")).toBe(buildAgentInstancePath(PACKAGE, RUN_ID));
@@ -89,7 +107,7 @@ describe("InlineAgentRunCard — the run link", () => {
   it("never renders the API-shaped path the model used to guess", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => seedResponse()));
 
-    render(<InlineAgentRunCard runId={RUN_ID} />);
+    render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
 
     const link = await screen.findByTestId("inline-run-page-link");
     expect(link.getAttribute("href")).not.toBe(`/agents/runs/${RUN_ID}`);
@@ -98,7 +116,7 @@ describe("InlineAgentRunCard — the run link", () => {
   it("renders NO link at all when the run's package is unknown", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => seedResponse({ agentPackageName: null })));
 
-    render(<InlineAgentRunCard runId={RUN_ID} />);
+    render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
 
     await screen.findByTestId("run-panel-stub");
     expect(screen.queryByTestId("inline-run-page-link")).toBeNull();
@@ -109,7 +127,7 @@ describe("InlineAgentRunCard — the gate seed", () => {
   it("forwards the run API's own hitlContext to the panel", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => seedResponse()));
 
-    render(<InlineAgentRunCard runId={RUN_ID} />);
+    render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
 
     await waitFor(() => expect(panelProps.current).not.toBeNull());
     expect(panelProps.current!.initialHitlContext).toEqual(SETUP_GATE);
@@ -122,7 +140,7 @@ describe("InlineAgentRunCard — the gate seed", () => {
       vi.fn(async () => seedResponse({ status: "running", hitlContext: null })),
     );
 
-    render(<InlineAgentRunCard runId={RUN_ID} />);
+    render(chatThread(<InlineAgentRunCard runId={RUN_ID} />));
 
     await waitFor(() => expect(panelProps.current).not.toBeNull());
     expect(panelProps.current!.initialHitlContext).toBeNull();
