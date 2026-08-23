@@ -66,11 +66,20 @@ const MOUNTS = {
   },
 } as const;
 
-/** The two PAGES that place the rail step. Neither may mount the card itself. */
+/**
+ * The two PAGES that place the rail step. Neither may mount the card itself.
+ *
+ * THE REVIEW PAGE PLACES IT ITSELF (cinatra#2788 rework). The step is the two
+ * COLUMNS of the run surface, not a row inside the rail — plan (A) §7.2 step 5,
+ * "it opens to the right of the steps, never directly under a step" — so it is
+ * placed where both columns are composed. On the review page that is the route
+ * component, which hands it the rail on one side and the gate region on the
+ * other; the rail component itself no longer places anything.
+ */
 const RAIL_PLACEMENTS = {
   run_card: "packages/agents/src/instance-screens.tsx",
   page_gate_region:
-    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-run-steps.tsx",
+    "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
 } as const;
 
 const REVIEW_PAGE =
@@ -125,13 +134,24 @@ describe("the four mounts exist and are host-declared", () => {
         `${host}: ${rel} places it ONCE`,
       ).toHaveLength(1);
       expect(source).toContain(`host="${host}"`);
+      // THE TWO COLUMNS TRAVEL WITH IT. A placement that passed no rail and no
+      // detail would be drawing the step somewhere it does not own the frame —
+      // which is how the configuration ended up under the row it opens from.
+      expect(source, `${host}: ${rel} hands the step both columns`).toMatch(
+        /rail=\{[A-Za-z]+\}/,
+      );
+      expect(source, `${host}: ${rel} hands the step both columns`).toMatch(
+        /detail=\{[A-Za-z]+\}/,
+      );
       // The page never mounts the card itself any more.
       expect(source, `${host}: ${rel} mounts no card of its own`).not.toMatch(
         /<\s*ScheduleProposalCard\b/,
       );
     }
     // THE GATE REGION. The review page's `page_gate_region` provider now wraps
-    // the review card and nothing else — the composition the plan requires.
+    // the review card and nothing else — the composition the plan requires. The
+    // schedule step opens IN that region, in place of the card, which is what
+    // makes "the two can never appear together" structural.
     const reviewPage = read(REVIEW_PAGE);
     expect(reviewPage).not.toMatch(/<\s*ScheduleProposalCard\b/);
     expect(reviewPage).toMatch(/<LifecycleCardSurfaceProvider host="page_gate_region">/);
@@ -151,11 +171,13 @@ describe("the four mounts exist and are host-declared", () => {
     }
     // The client is never handed a run id to name; the ref is the whole binding.
     expect(screens).toMatch(/cardRef=\{scheduleRailRef\}/);
-    expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/cardRef=\{scheduleCardRef\}/);
-    // A run with no schedule row mints no ref, and neither rail draws a step.
+    expect(reviewPage).toMatch(/cardRef=\{scheduleCardRef\}/);
+    // A run with no schedule row mints no ref, and neither page draws a step:
+    // each falls back to the two columns it composed before the step existed.
     expect(screens).toMatch(/run && trigger \? encodeScheduleRunRef/);
     expect(reviewPage).toMatch(/readRunTriggerByRunId\(runId\)/);
-    expect(read(RAIL_PLACEMENTS.page_gate_region)).toMatch(/\{scheduleCardRef \? \(/);
+    expect(reviewPage).toMatch(/if \(scheduleCardRef\) \{/);
+    expect(screens).toMatch(/if \(scheduleRailRef\) \{/);
   });
 
   it("the card is defined in exactly ONE module in the whole first-party tree", () => {

@@ -111,7 +111,10 @@ describe("the screen's JSX reads the predicate — no second unconditional rail 
     expect(SCREEN_SRC).toMatch(
       /const railDraws =[\s\S]*?rail\.entries\.length > 0 &&[\s\S]*?screenHostsStepRail\(\{[\s\S]*?panel: runDetailPanel,[\s\S]*?stepperStepCount: stepperSteps\.length,[\s\S]*?\}\);/,
     );
-    expect(SCREEN_SRC).toMatch(/\{railDraws \? \(\s*<RunStepRailPanel/);
+    // The mount is now the value of a named node — the schedule step is handed
+    // the rail as a slot (`rail={railNode}`) rather than the screen drawing a
+    // column of its own — so the gating reads as the node's own conditional.
+    expect(SCREEN_SRC).toMatch(/const railNode = railDraws \? \(\s*<RunStepRailPanel/);
     // Exactly ONE mount of the page-level rail survives in the screen.
     expect(SCREEN_SRC.match(/<RunStepRailPanel\b/g)?.length).toBe(1);
   });

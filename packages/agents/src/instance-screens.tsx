@@ -199,6 +199,76 @@ export function screenHostsStepRail(params: {
   return !(params.panel === "stepper" && params.stepperStepCount > 0);
 }
 
+/**
+ * The run statuses a run holds BEFORE it has ever run (cinatra#2788, S9d).
+ *
+ * `armed` and `pending_trigger` are the schedule's own states — the trigger is
+ * set and the agent is waiting for it — and `pending_input` is the setup that
+ * precedes both. None of them can carry an execution record, so none of them
+ * has run progress to show.
+ */
+const PRE_EXECUTION_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "pending_input",
+  "pending_trigger",
+  "armed",
+]);
+
+/** The statuses that ARE an execution: the run fired and is in it, or died in it. */
+const EXECUTING_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "queued",
+  "running",
+  "pending_approval",
+  "waiting_trigger",
+]);
+
+/**
+ * HAS THIS RUN ACTUALLY RUN? (cinatra#2788, S9d)
+ *
+ * Plan (A) §7.2 step 5: the schedule step "opens to the right of the steps …
+ * and no agentic run progress card is shown with it" — because a run whose
+ * schedule has not fired has produced no progress. Status alone cannot answer
+ * it: `completed` is ambiguous (setup-success awaiting a trigger vs a finished
+ * execution) and `stopped` is what a CANCELLED schedule leaves behind, so for
+ * the terminal statuses the RECORD is the answer — persisted step results, run
+ * messages, or streamed text. For the live statuses the status is the record.
+ *
+ * Exported so the regression test can pin the whole table without a DB, a
+ * session or a Next.js render.
+ */
+export function runHasExecutionRecord(params: {
+  runStatus: string | null | undefined;
+  stepResultCount: number;
+  runMessageCount: number;
+  streamedTextLength: number;
+}): boolean {
+  const { runStatus } = params;
+  if (runStatus == null || PRE_EXECUTION_RUN_STATUSES.has(runStatus)) return false;
+  if (EXECUTING_RUN_STATUSES.has(runStatus)) return true;
+  return (
+    params.stepResultCount > 0 ||
+    params.runMessageCount > 0 ||
+    params.streamedTextLength > 0
+  );
+}
+
+/**
+ * WHICH STEP THE RUN DETAIL OPENS ON (cinatra#2788, S9d).
+ *
+ * The ratified drawing: "the run detail on the right shows the selected step",
+ * and the step the run is paused on is the highlighted one. So a run that is
+ * held at its skills question opens on the run detail, where that hold is drawn;
+ * a run that has executed opens on its own progress; and a run that has neither
+ * — armed, not yet fired, cancelled or expired — opens on the schedule step,
+ * which is the only step it has (plan (A) §7.2 step 5).
+ */
+export function runDetailOpensOnSchedule(params: {
+  hasScheduleStep: boolean;
+  hasExecution: boolean;
+  recommendationHeld: boolean;
+}): boolean {
+  return params.hasScheduleStep && !params.hasExecution && !params.recommendationHeld;
+}
+
 type ScreenProps = {
   agentId: string;          // template slug from URL
   instanceId: string;       // runId or "new"
@@ -626,6 +696,20 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     stepperStepCount: stepperSteps.length,
   });
 
+  // Has the agent run at all? The schedule step is the run detail's first paint
+  // while it has not (cinatra#2788, S9d) — there is no progress to show, and
+  // plan (A) §7.2 step 5 forbids showing one with the schedule.
+  const opensOnScheduleStep = runDetailOpensOnSchedule({
+    hasScheduleStep: scheduleRailRef !== null,
+    hasExecution: runHasExecutionRecord({
+      runStatus: run?.status ?? null,
+      stepResultCount: run?.stepResults?.length ?? 0,
+      runMessageCount: completedRunMessages.length,
+      streamedTextLength: (run?.streamedText ?? "").length,
+    }),
+    recommendationHeld,
+  });
+
   return (
     <Main className="min-h-screen">
       <AgentPageLayout
@@ -672,40 +756,28 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   panel: runDetailPanel,
                   stepperStepCount: stepperSteps.length,
                 });
-              if (!railDraws && !scheduleRailRef) return null;
-              return (
-                // ONE LEFT COLUMN, with the schedule step at its head. The
-                // schedule row is drawn by the SCREEN rather than by the rail
-                // panel because the live orchestrator column is the rail on the
-                // flow branch (`screenHostsStepRail`), and the plan puts the
-                // schedule step above the run's steps on every branch — not only
-                // the one where the server-rendered rail happens to draw.
-                <div className="flex shrink-0 flex-col gap-2 pt-1">
-                  {scheduleRailRef ? (
-                    <ScheduleRailStep
-                      host="run_card"
-                      cardRef={scheduleRailRef}
-                      displayStep={1}
-                    />
-                  ) : null}
-                  {railDraws ? (
-                    <RunStepRailPanel
-                      entries={rail.entries}
-                      activeOrdinal={rail.activeOrdinal}
-                      reviewHrefBase={reviewHrefBase}
-                      stepOffset={scheduleRailRef ? 1 : 0}
-                    />
-                  ) : null}
-                </div>
-              );
-            })()}
-            {/* A COLUMN with a GAP, not a margin on the row above. The card
-                below resolves its own state on the client and renders NO DOM at
-                all when there is no hold — the overwhelmingly common case — so a
-                wrapper carrying `mb-4` would leave a 1rem hole above the panel on
-                every ordinary run. A flex gap only ever applies BETWEEN rendered
-                children, which is the spacing that was actually meant. */}
-            <div className="flex min-w-0 flex-1 flex-col gap-4">
+              // The page's OWN rail rows. The schedule row is drawn by the step
+              // component rather than by this rail because the live orchestrator
+              // column is the rail on the flow branch (`screenHostsStepRail`),
+              // and the plan puts the schedule step above the run's steps on
+              // every branch — not only the one where the server-rendered rail
+              // happens to draw.
+              const railNode = railDraws ? (
+                <RunStepRailPanel
+                  entries={rail.entries}
+                  activeOrdinal={rail.activeOrdinal}
+                  reviewHrefBase={reviewHrefBase}
+                  stepOffset={scheduleRailRef ? 1 : 0}
+                />
+              ) : null;
+              // A COLUMN with a GAP, not a margin on the row above. The card
+              // below resolves its own state on the client and renders NO DOM at
+              // all when there is no hold — the overwhelmingly common case — so a
+              // wrapper carrying `mb-4` would leave a 1rem hole above the panel on
+              // every ordinary run. A flex gap only ever applies BETWEEN rendered
+              // children, which is the spacing that was actually meant.
+              const detailNode = (
+                <>
               {/* Run-start recommendation hold, through the ONE card
                   (cinatra#2573, epic #2564 D-1). A held run draws the interactive
                   confirm/adjust/skip row at the run-start position, before any
@@ -807,7 +879,34 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   />
                 )
               )}
-            </div>
+                </>
+              );
+              // THE TWO COLUMNS. With a schedule, the schedule step owns them:
+              // it heads the rail and it opens ON THE RIGHT, in the run detail,
+              // never under its own row (plan (A) §7.2 step 5 and the ratified
+              // drawing `design-run-surface-rail-and-gate.png`). Without one,
+              // the surface is what it always was.
+              if (scheduleRailRef) {
+                return (
+                  <ScheduleRailStep
+                    host="run_card"
+                    cardRef={scheduleRailRef}
+                    displayStep={1}
+                    rail={railNode}
+                    detail={detailNode}
+                    initialSelection={opensOnScheduleStep ? "schedule" : "detail"}
+                  />
+                );
+              }
+              return (
+                <>
+                  {railNode ? (
+                    <div className="flex shrink-0 flex-col gap-2 pt-1">{railNode}</div>
+                  ) : null}
+                  <div className="flex min-w-0 flex-1 flex-col gap-4">{detailNode}</div>
+                </>
+              );
+            })()}
           </div>
           </AgentPanelBody>
         ) : (

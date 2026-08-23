@@ -130,7 +130,7 @@ const observe = (cell, page) =>
   observeWalkCell({ page, cell, repoRoot: "/anywhere", readImpl: READ, now: NOW });
 
 describe("the walk plan is judged before the browser opens", () => {
-  it("accepts the committed S9d plan and reads its eight cells in walk order", () => {
+  it("accepts the committed S9d plan and reads its ten cells in walk order", () => {
     expect(validateWalkPlan(S9D_WALK)).toEqual([]);
     expect(walkCellsOf(S9D_WALK).map((c) => c.cell)).toEqual([
       "S9d-C1__schedule-card__chat_thread__pending",
@@ -139,6 +139,8 @@ describe("the walk plan is judged before the browser opens", () => {
       "S9d-C2__schedule-card__chat_thread__decided__dark",
       "S9d-C3__schedule-card__run_card__decided",
       "S9d-C3__schedule-card__run_card__decided__dark",
+      "S9d-C6__schedule-card__chat_thread__decided__after-fire",
+      "S9d-C6__schedule-card__chat_thread__decided__after-fire__dark",
       "S9d-C5__schedule-card__chat_thread__pending__expired",
       "S9d-C5__schedule-card__chat_thread__pending__expired__dark",
     ]);
@@ -146,6 +148,26 @@ describe("the walk plan is judged before the browser opens", () => {
     // and a walk that cannot reach a cell must not carry one it would answer
     // with the wrong screen.
     expect(walkCellsOf(S9D_WALK).some((c) => c.cell.includes("C4"))).toBe(false);
+  });
+
+  it("drives to the two card-less stages and declares NO cell on them", () => {
+    // A KNOWN GAP, pinned so it stays visible rather than settling in quietly:
+    // the maintainer's proof set is three stages x two hosts, and this plan
+    // produces the four card cells of it plus C5. C7 (the run's own scheduling
+    // step) and C8 (the run detail after the fire) are the two stages this index
+    // cannot hold: every record here
+    // asserts `[data-lifecycle-card-host]`, and neither screen draws a card —
+    // one is the shipped trigger screen, the other lists the schedule as a rail
+    // ROW. The walk still goes there, because that is how the run is armed and
+    // fired; it just does not claim a record it could not honestly make.
+    const cardless = S9D_WALK.steps.filter((s) =>
+      ["setup-scheduling-step", "fire-the-schedule"].includes(s.id),
+    );
+    expect(cardless).toHaveLength(2);
+    for (const step of cardless) {
+      expect(step.cells).toEqual([]);
+      expect(step.why).toContain("NO CELL");
+    }
   });
 
   it("REFUSES an action outside the closed vocabulary", () => {
@@ -160,7 +182,8 @@ describe("the walk plan is judged before the browser opens", () => {
 
   it("REFUSES a cell whose name contradicts its own declaration", () => {
     const plan = structuredClone(S9D_WALK);
-    plan.steps[5].cells[0].declaredHost = "chat_thread";
+    const runCell = plan.steps.find((s) => s.id === "run-page").cells[0];
+    runCell.declaredHost = "chat_thread";
     expect(validateWalkPlan(plan).join("\n")).toContain(
       'the name says host "run_card" and the cell declares "chat_thread"',
     );
@@ -168,8 +191,9 @@ describe("the walk plan is judged before the browser opens", () => {
 
   it("REFUSES two cells writing one image, and a screenshot outside evidence/", () => {
     const plan = structuredClone(S9D_WALK);
-    plan.steps[2].cells[0].screenshot = plan.steps[1].cells[0].screenshot;
-    plan.steps[3].cells[0].screenshot = "/etc/passwd.png";
+    const withCells = plan.steps.filter((s) => (s.cells ?? []).length > 0);
+    withCells[1].cells[0].screenshot = withCells[0].cells[0].screenshot;
+    withCells[2].cells[0].screenshot = "/etc/passwd.png";
     const violations = validateWalkPlan(plan).join("\n");
     expect(violations).toContain("one image cannot be the evidence for two cells");
     expect(violations).toContain("repo-relative path inside the tree");

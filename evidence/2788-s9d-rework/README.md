@@ -1,159 +1,96 @@
 # S9d rework — evidence (cinatra#2788, PR #2939)
 
-This round changes nothing about the path the previous round walked. It walks
-that path AGAIN, **through the recorder**, so the eight pictures are
-measurements and not only pictures:
+## Round 3 — what the maintainer rejected, and what the proof set is now
 
-```
-node scripts/audit/lib/chat-hitl-capture-driver.mjs \
-  --walk evidence/2788-s9d-rework/capture-walk.json --merge
-```
+Round 2's run-page cell (C3) showed a composition the plan does not contain: the
+schedule's configuration opened **inside the rail column, under its own row**,
+with the **agentic run progress** card drawn beside it on a run that had never
+executed. Two rulings followed, and both are now in plan (A):
 
-re-shot every cell into its committed path, counted the anchors on the live
-page, validated each record at the AUDIT tier before anything was written, and
-merged the eight records into `scripts/ci/chat-hitl-capture-index.json` —
-**48 records before, 56 after**, every other record untouched and in place. The
-ten round-1 records the plan retires were already gone, so the retirement was a
-no-op this time and nothing else was deleted.
+1. §7.2 step 5 / §7.4 step 7 — "open that step to see the configuration or change
+   it — **it opens to the right of the steps, never directly under a step, and no
+   agentic run progress card is shown with it**."
+2. "It makes absolutely no sense to show the agentic run progress card here" —
+   the agent has not run; there is no progress to show.
 
-The maintainer rejected round 1 on four readings. What each one became:
+The ratified drawing says the same thing about the surface these cells
+photograph (`images/lifecycle-screens/design-run-surface-rail-and-gate.png`):
+"a **step rail** down the left names the run's ordered steps, and the **run
+detail** on the right shows the selected step … Selecting a step opens it on the
+right … right here in the run detail, under the same rail, never as a standalone
+document."
 
-1. **"close ups of the card, but I cannot tell the surrounding"** — every capture
-   here is the FULL BROWSER WINDOW at 1440x900, device scale 2 (2880x1800 px).
-   The framing is no longer a promise a driver makes in prose: each cell declares
-   `"framing": "window"` in the plan, the recorder writes that declaration into
-   the record, and the shutter reads it.
-2. **"must be a fake and can't be from a real run"** — there is no seeded
-   transcript and no hand-minted token in this round. Every timestamp behind the
-   pictures is read out of the lane database in `TIMELINE.md`.
-3. **the summary box, the held-steps block and the "Armed ·" line** — removed
-   from the card on every host, so no host can draw them.
-4. **the two control labels** — `Cancel trigger` -> `Cancel schedule`,
-   `Release now` -> `Run now`, with `data-action` ids unchanged, and the confirm
-   dialogs reworded to say "schedule". The plan page still places these two
-   controls on the run page's Trigger tab under their old names; that divergence
-   is named as an open deviation in `PLAN-WALK.md` rather than read away.
+So the code changed (the schedule row is a rail ENTRY; its surface opens in the
+run-detail column; a run with no execution record draws no progress section and
+opens on the schedule step) and the proof set changed with it: the schedule is
+now walked through its **three stages on both page hosts**, which is what a
+reader has to be able to see.
 
 ## Cells
 
-| cell | what | themes | record |
-|---|---|---|---|
-| C1 | the chat conversation, card before Confirm | light, dark | registered |
-| C2 | the chat conversation, same card after Confirm | light, dark | registered |
-| C3 | the run page, schedule step open | light, dark | registered |
-| C4 | the review page with this run's real output | **DROPPED — see TIMELINE.md** | — |
-| C5 | the expired reading, after a real 30 minutes | light, dark | registered |
+`capture-walk.json` is the executable plan. Every cell is **light + dark**, the
+**full browser window**, one real run, and — where the cell is a record — counted
+off the live page by the recorder.
 
-## The eight pictures, graded
+| cell | stage | host | what the picture must show | record |
+|---|---|---|---|---|
+| C1 | first shown | chat | the stated one-off, rows editable, **Confirm** | owed (capture pending) |
+| C2 | configured, not run | chat | the SAME card after Confirm: same rows, **Save changes** | owed (capture pending) |
+| C6 | ran | chat | the same card after the one-off fired; Save changes no longer offered | owed (capture pending) |
+| C7 | first shown | run page | the run's own scheduling step — "When should this run?", the three rows, **Continue** (§7.4 today, step 4) | **owed, and not a record — see below** |
+| C3 | configured, not run | run page | the rail on the LEFT with **Schedule** selected, the form in the run detail on the RIGHT, **no agentic run progress card anywhere in the window** | owed (capture pending) |
+| C8 | ran | run page | the run's steps in the run detail, the schedule step still listed in the rail | **owed, and not a record — see below** |
+| C5 | expired (extra) | chat | still visible, still editable, **Confirm** alone on the floor | registered (round 2) |
+| C4 | — | review page | this run's real artifact review | DROPPED — see `TIMELINE.md` |
 
-Every picture below was opened and looked at. `shows` is what is in the pixels;
-the counts it cites are the record's, taken on that same screen.
+The two round 2's **C3** records were deleted from
+`scripts/ci/chat-hitl-capture-index.json` (56 records → 54) together with their
+two images: they photograph the rejected composition, and a record that
+describes pixels the product no longer draws is worse than no record. Nothing
+was edited in place and no record was hand-written — the index is
+recorder-measured only, and the next walk writes the new ones.
 
-### C1 — `captures/C1__chat-before-confirm__light.png` (`sha256 154ef77f…`)
-- **requires:** the chat conversation around a card that is not yet confirmed:
-  the three option rows editable, and Confirm.
-- **shows:** the whole window — left navigation, breadcrumb, the operator's turn,
-  the assistant's turn, the card and the composer under it. The card draws
-  "When should this run?", the three rows with **Recurring** chosen and owning
-  its fields (Repeat every 1 day(s); At 09:00; Timezone UTC), **Estimated run
-  duration**, and **Confirm** alone on the floor. No summary box, no status
-  label, no Open-the-run link. Record: one card instance, `state=pending`,
-  Confirm counted 1 visible inside the card root.
-- **verdict:** PASS.
+C1/C2 keep their round 2 records for now. The next walk **re-shoots** them,
+because the stated schedule is now a ONE-OFF (the "ran" stage is the card after a
+one-off has fired), so their pictures will change even though their cell names do
+not.
 
-### C1 dark — `captures/C1__chat-before-confirm__dark.png` (`sha256 72a11f87…`)
-- **requires:** the same reading in dark.
-- **shows:** the same window in the dark theme, same two turns, same three rows
-  with Recurring chosen, same Confirm floor. Record: identical counts, same
-  thread URL.
-- **verdict:** PASS.
+## The two cells this index cannot hold, stated rather than fudged
 
-### C2 — `captures/C2__chat-after-confirm__light.png` (`sha256 531cb5fe…`)
-- **requires:** the SAME card in the SAME place after Confirm: the same rows,
-  Save changes, no status label, no summary box, no Open-the-run link.
-- **shows:** the same thread, the same card in the same position with the same
-  rows and values; the floor now reads **Save changes** and is quiet until a row
-  changes. Nothing was added around it: no "Armed ·" line, no configuration
-  summary, no held-steps tree, no link to the run. Record: `state=settled`,
-  Confirm measured ABSENT (count 0) inside the card root.
-- **verdict:** PASS.
+C7 and C8 are real screens and are owed as pictures, but neither can be an honest
+**record** here. Every record in `scripts/ci/chat-hitl-capture-index.json`
+asserts `[data-lifecycle-card-host="<host>"]` on the screen it photographs —
+`requiredAssertionsFor` in `scripts/ci/lib/capture-record-contract.mjs` requires
+it with or without a card kind — and:
 
-### C2 dark — `captures/C2__chat-after-confirm__dark.png` (`sha256 f6e24ae3…`)
-- **requires:** the same settled reading in dark.
-- **shows:** the settled card in dark, same rows, Save changes on the floor,
-  nothing else drawn. Record: same absence measured.
-- **verdict:** PASS.
+- **C7** is the run's SETUP scheduling step, the shipped trigger screen
+  (`packages/agents/src/trigger-screen-client.tsx`). It draws no lifecycle card.
+- **C8** is the run detail after the fire, where the schedule is a rail **row**
+  and its surface is not drawn. No card on the screen either.
 
-### C3 — `captures/C3__run-page-schedule-step__light.png` (`sha256 1e171e07…`)
-- **requires:** the run page's schedule step open: the form and its controls,
-  with the run's other chrome visible around it.
-- **shows:** the run page for `@cinatra-ai/planner-agent`, its Setup / Trigger /
-  Permissions tabs, and the run-progress panel reading `armed` on the right. In
-  the left rail, step **1 Schedule** is open and holds the same form — the three
-  rows, Recurring chosen, Estimated run duration — over three controls: **Save
-  changes**, **Cancel schedule**, **Run now**. No summary box, no held-steps
-  block, no status label inside the step. Record: `host=run_card` on the
-  run_detail URL class, one instance, `state=settled`, Confirm absent.
-- **verdict:** PASS. One honest blemish, stated rather than cropped out: the
-  development build's own status badge ("Rendering …" here, "Compiling …" on the
-  C2 dark frame) sits in the bottom-right corner. The record declares
-  `"build": "development"`, which is exactly what that badge says.
+The walk still drives to both — that is how the run is armed and how it is fired
+— and declares no cell on them (`setup-scheduling-step`, `fire-the-schedule`), so
+`--walk` produces four of the six stage cells (plus C5) and not six. Both C7 and
+C8 are owed in light AND dark, taken outside the recorder.
+Giving either screen an anchor for the recorder to count would mean drawing
+something the plan and the drawing do not define, and making the index accept a
+card-less record would change the anti-fraud contract S9h owns. **Open question
+for the maintainer: how the two run-page stage pictures should be filed.**
 
-### C3 dark — `captures/C3__run-page-schedule-step__dark.png` (`sha256 ef638d55…`)
-- **requires:** the same step in dark.
-- **shows:** the same run, the same open step, the same three controls, in dark.
-- **verdict:** PASS.
+## Red first
 
-### C5 — `captures/C5__chat-expired__light.png` (`sha256 1ff764d4…`)
-- **requires:** the expired reading: still visible, still editable, Confirm
-  offered and nothing else on the floor.
-- **shows:** the same conversation the schedule was stated in, reopened after the
-  shipped window ran out. The card is still there and reads "This schedule
-  expired before it was confirmed. Nothing was scheduled — change it if you like,
-  then confirm it again." over the same three editable rows, with **Confirm**
-  alone on the floor. Record: `state=pending`, Confirm counted 1 visible inside
-  the card root.
-- **verdict:** PASS.
-
-### C5 dark — `captures/C5__chat-expired__dark.png` (`sha256 79a3afaf…`)
-- **requires:** the same expired reading in dark.
-- **shows:** the same expired notice, rows and Confirm floor in dark.
-- **verdict:** PASS.
-
-## What the walk needed before it would run, and what was changed
-
-The plan was not touched to make a cell pass. Two things were wrong with the
-MACHINERY, and both were fixed where they were wrong:
-
-- **The walk had nowhere to be.** A step navigates with an app-relative path
-  (`/chat`) because a committed plan carrying a host and a port is a leak and a
-  plan the next lane cannot run — and the driver never read the `WALK_BASE` the
-  plan's own note tells the operator to export, so the first `goto` had no
-  origin to resolve against. `driveWalk` now takes the base URL from that
-  variable and hands it to every context.
-- **The second pass could not find the first pass's thread.** The expired cell
-  lives in a conversation the PRODUCT addressed, so neither the plan nor the
-  operator knows its URL until a browser has been there, and `followContext`
-  only reaches across steps inside one invocation. The driver now writes down
-  where each context stood (`--contexts-out`), and the later pass supplies that
-  URL back as the environment value the plan already names.
-
-One thing was wrong with the PLAN, and it was fixed there:
-
-- **C5's floor was behind the composer.** `scrollIntoViewIfNeeded` does the
-  MINIMUM scroll — it parks the element flush against the edge of the scroller,
-  and the composer is pinned over that edge. The browser calls such an element
-  in view and the recorder counted Confirm visible, correctly, while the picture
-  showed a sliver of it. The expired card is taller than the window, so its two
-  steps now ask for `"block": "center"` and the driver's `scrollIntoView` honours
-  it. Both C5 pictures were re-shot with the floor in the middle of the window.
-  Nothing else in the plan changed, and no other cell's framing moved.
+`RED-FIRST.md` carries round 3's table: the four DOM facts of the reworked
+composition, and the run-detail predicates, were written before the component was
+touched and failed against `2ba505904` for the stated reasons.
 
 ## What is still owed on this round
 
+- Every cell above marked *owed*: a lane with a browser drives
+  `scripts/audit/lib/chat-hitl-capture-driver.mjs --walk` over
+  `capture-walk.json` in its three passes (see the plan's note) and merges the
+  records.
+- C7 / C8: the two pictures, and the maintainer's answer on how they are filed.
 - C4 needs a lane that may hold a model-provider credential. See `TIMELINE.md`.
-- The plan page has no amendment for the two control labels on the schedule step.
-  `PLAN-WALK.md` names that as an open deviation.
 
 ## Owed elsewhere: six cells the Audit relabel left with old pixels
 
@@ -178,3 +115,14 @@ replaced by measurements of the new pixels rather than edited in place — the
 anchors these cells are graded on did not move, only the word on them did, so a
 record whose hash still matches the old image is the only thing standing between
 the index and the truth. Nothing about these six is fixed by this commit.
+
+## Round 2, kept for the record
+
+Round 2 walked the same path through the recorder and merged eight records
+(48 → 56). Its four answers to round 1 still stand and are not re-litigated here:
+full-window framing declared per cell and written into every record; no seeded
+transcript and no hand-minted token; the summary box, the held-steps block and
+the "Armed ·" line removed from the card on every host; and the two control
+labels — `Cancel trigger` → **Cancel schedule**, `Release now` → **Run now**,
+`data-action` ids unchanged. Plan (A) §7.2 now names those two controls itself,
+so the open deviation round 2 recorded against that sentence is closed.
