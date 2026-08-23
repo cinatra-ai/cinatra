@@ -15,6 +15,7 @@ import {
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
+import { stateRunScheduleMoment } from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
   resolveWayflowUrl,
@@ -2721,6 +2722,12 @@ async function runAgentBuilderExecutionJobInner(
     }
     const configuredInTheWindow = await readRunTriggerByRunId(runId);
     if (configuredInTheWindow === null) {
+      // THE RUN IS AT ITS SCHEDULE MOMENT, and now it says so (cinatra#2928).
+      // `pending_trigger` is the status; the moment is what the run is WAITING
+      // AT, and the two are not the same fact — the run page used to have only
+      // the status to go on. Continue is `advanceAgentRun`, which clears this
+      // before the run moves.
+      await stateRunScheduleMoment({ run, authority: executionAuthority });
       console.log(
         "[setup-interrupt-loop] setup finished with no trigger configured — awaiting the trigger choice for run",
         runId,

@@ -45,13 +45,13 @@ import {
   type DeleteTriggerForActorResult,
 } from "./trigger-service";
 import type { TriggerType } from "./trigger-store";
-import { readRunTriggerByRunId } from "./trigger-store";
+import { createOrUpdateRunTrigger, readRunTriggerByRunId } from "./trigger-store";
 import { markTriggerReleased } from "./trigger-gate";
 import {
   maybeHoldRunForRecommendation,
   readRecommendationParkForRun,
 } from "./recommendation-hold";
-import { launchAgentRun } from "./lifecycle-coordinator";
+import { advanceAgentRun, launchAgentRun } from "./lifecycle-coordinator";
 /** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
  *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
  *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
@@ -182,10 +182,30 @@ export async function triggerAgentRun(
   // check above: both pre-dispatch waiting states are legal dispatch sources,
   // and the rung that WINS is remembered so the compensation below reverts the
   // run to where it actually was rather than rewriting its state.
+  //
+  // CONTINUE IS ADVANCE (cinatra#2928). Both rungs go through the coordinator's
+  // release entry, which clears the run's stated moment BEFORE the run moves —
+  // so a run that starts again is never still saying it is waiting at the
+  // schedule step or the skills question. The rung ladder is unchanged, and the
+  // release is asked to THROW on a lost race precisely so the losing rung stays
+  // distinguishable from the winning one.
   let dispatchedFrom: (typeof RUN_START_DISPATCH_FROM_STATUSES)[number] | null = null;
   for (const from of RUN_START_DISPATCH_FROM_STATUSES) {
     try {
-      await transitionRunStatus(args.runId, from, "queued", undefined, authority);
+      await advanceAgentRun({
+        run,
+        release: {
+          reason: "continue",
+          from,
+          to: "queued",
+          onLostRace: "throw",
+          dispatch: {
+            kind: "caller_dispatches",
+            why: "the compensation below reverts to the rung that actually won, so this frame owns the enqueue",
+          },
+        },
+        authority,
+      });
       dispatchedFrom = from;
       break;
     } catch (err) {
@@ -623,10 +643,88 @@ export async function releaseTriggerNow(
     throw err;
   }
 
-  await markTriggerReleased(args.runId);
-
   // Admin (org-role admin, checked above) acts as a member of the run's org.
   const authority = await verifySessionAuthority(userId, run.orgId);
+
+  // RELEASE NOW ON A RECURRING SCHEDULE STARTS ONE COPY, AND LEAVES THE
+  // SCHEDULE RUNNING (cinatra#2928).
+  //
+  // It used to start the schedule-DEFINING run: the gate was opened on it and it
+  // moved off `armed`, so the schedule the person set up stopped reading as
+  // armed and the run that represents it was spent. Release now means "run it
+  // once, now" — never "and stop the schedule". A recurring tick already knows
+  // how to make a fresh copy; this is the same act, asked for by a person
+  // instead of by the clock, so it goes through the same launch entry, and the
+  // defining run is left exactly as it was.
+  //
+  // The one-off and immediate cases are unchanged: their trigger names a single
+  // firing, and releasing it IS that firing.
+  if (trigger.triggerType === "recurring") {
+    let launched;
+    try {
+      launched = await launchAgentRun({
+        producer: "release_now_recurring_copy",
+        // A person pressed Release now, and this action already resolved them
+        // from a live session — but the COPY is a run of a schedule, exactly
+        // like a tick, so it is started the way a tick starts one.
+        frame: null,
+        authority,
+        create: {
+          kind: "pre_dispatch",
+          input: {
+            templateId: run.templateId,
+            runBy: run.runBy,
+            orgId: run.orgId,
+            inputParams: run.inputParams ?? {},
+            projectId: run.projectId,
+          },
+        },
+        dispatch: {
+          kind: "await_trigger",
+          why: "the copy's own immediate trigger is armed and its gate opened below",
+        },
+      });
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (launched.carrier.kind !== "run") {
+      return { ok: false, error: "the release answered with a carrier that is not a run" };
+    }
+    const copy = launched.carrier.run;
+    await createOrUpdateRunTrigger({
+      runId: copy.id,
+      triggerType: "immediate",
+      timezone: trigger.timezone,
+      enabled: true,
+      jobSchedulerId: null,
+    });
+    await markTriggerReleased(copy.id);
+    try {
+      await advanceAgentRun({
+        run: copy,
+        release: {
+          reason: "trigger_fired",
+          from: "pending_input",
+          to: "queued",
+          dispatch: {
+            kind: "enqueue",
+            options: { jobId: `agent-builder-${copy.id}` },
+          },
+        },
+        authority,
+      });
+    } catch (err) {
+      if (isScopeDenial(err)) {
+        return { ok: false, error: "forbidden — this agent's scope does not include you" };
+      }
+      throw err;
+    }
+    // The defining run keeps its `armed` status and its schedule keeps its
+    // scheduler, so the next tick fires as it would have.
+    return { ok: true };
+  }
+
+  await markTriggerReleased(args.runId);
 
   // Transition armed → queued so the dispatcher can pick up the run.
   // Swallow stale_from_status: the run may already be queued (race with the

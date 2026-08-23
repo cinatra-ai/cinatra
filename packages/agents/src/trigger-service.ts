@@ -602,6 +602,35 @@ export async function setRunTriggerForActor(
     }
   }
 
+  // A ONE-OFF THAT HAS FIRED CANNOT BE CHANGED (cinatra#2928).
+  //
+  // A one-off schedule is a single instant, and once that instant has passed the
+  // run it named has already been let go. Rewriting the row afterwards is not a
+  // reschedule — it is a claim about a moment that is over. The screen refuses
+  // it, and so does every server path that changes a trigger, which is what this
+  // check makes true: the run page's form, the server action and the tool path
+  // all arrive here.
+  //
+  // FIRED is read off the trigger's OWN record — `releasedAt`, the stamp the
+  // release job writes when it opens the gate — never off the run's status,
+  // which moves on for reasons that have nothing to do with the schedule.
+  //
+  // A RECURRING schedule is deliberately NOT refused: its future ticks are still
+  // ahead of it, and a change applies to them. Ticks already fired are separate
+  // runs of their own and no change here reaches back into them.
+  const beforeChange = await readRunTriggerByRunId(args.runId);
+  if (
+    beforeChange &&
+    beforeChange.triggerType === "scheduled" &&
+    beforeChange.releasedAt !== null
+  ) {
+    return {
+      ok: false,
+      error:
+        "This run's schedule has already fired, so it can't be changed. Start a new run to schedule it again.",
+    };
+  }
+
   // Read existing row first → cancel old schedule → upsert (no orphan jobs).
   //
   // Deliberately its OWN read, immediately before the cancel, NOT the gate's

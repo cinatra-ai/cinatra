@@ -670,6 +670,31 @@ export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAns
   return { carrier: { kind: "run", run }, status: "queued", moment: null };
 }
 
+/**
+ * State the SCHEDULE moment on a run that has just parked at the schedule step.
+ *
+ * NOT A SIXTH ENTRY — the five entries are the lifecycle ACTS, and this is the
+ * coordinator recording a moment it already owns. It exists because that park is
+ * created inside the worker's setup hand-off rather than at the run's start, and
+ * a moment nobody states is a moment every screen has to infer.
+ *
+ * The park itself is unchanged: this states what the run is waiting at, and
+ * `advanceAgentRun` clears it when Continue lets the run go.
+ */
+export async function stateRunScheduleMoment(input: {
+  run: Pick<AgentRunRecord, "id" | "orgId">;
+  /** The server-checked reference of the schedule card, when there is one. */
+  cardRef?: string | null;
+  authority: OrgWriteAuthority | undefined;
+}): Promise<void> {
+  await stateMoment({
+    run: input.run,
+    moment: "schedule",
+    cardRef: input.cardRef ?? null,
+    authority: input.authority,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 2. advance
 // ---------------------------------------------------------------------------
@@ -691,6 +716,20 @@ export type AdvanceInput = {
     to: AgentRunStatus;
     /** How the released run reaches the queue. */
     dispatch: LaunchDispatch;
+    /**
+     * What to do when the CAS is LOST — another writer moved the run first.
+     *
+     * `"answer"` (the default) reports the state this call re-read, which is
+     * what a single-rung release wants: the run moved, and by whom is not this
+     * caller's business.
+     *
+     * `"throw"` re-raises the transition error, for a caller that tries more
+     * than one parked state in turn and has to know WHICH rung won — a rung
+     * that silently reported the run's current state would be indistinguishable
+     * from the rung that actually released it, and the compensation would then
+     * revert the run to a state it was never in.
+     */
+    onLostRace?: "answer" | "throw";
   };
   authority: OrgWriteAuthority | undefined;
 };
@@ -715,7 +754,11 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
   try {
     await transitionRunStatus(run.id, release.from, release.to, undefined, authority);
   } catch (err) {
-    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+    if (
+      err instanceof RunTransitionError &&
+      err.code === "stale_from_status" &&
+      (release.onLostRace ?? "answer") === "answer"
+    ) {
       const current = await readAgentRunById(run.id);
       if (!current) {
         throw new Error(`Run ${run.id} lost the release race and no longer reads back.`);
