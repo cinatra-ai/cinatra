@@ -54,6 +54,36 @@ for the model on two paths only:
 Producing this capture therefore needs a real model credential. This lane may use none, so
 the attempt stops here rather than reaching for one.
 
+## Second attempt (2026-08-23, same head): the adapter boundary above is CLOSED; a narrower one holds
+
+A follow-up attempt ran with the operator's sanctioned credential provisioning (the key
+travels Keychain to env to the connector's own save action; it is never in argv, a file, a
+log, or this record). The prediction above held exactly: with a real credential configured
+the turn cleared the adapter gate and REACHED the pre-router, and
+`detectExplicitDispatchPackage` matched the canonical package from the real typed message:
+
+    [assistant-runtime] explicit-dispatch pre-router HARD attempt failed for
+    @cinatra-ai/contact-discovery-agent: Agent is not installed:
+    @cinatra-ai/contact-discovery-agent -- it ships with Cinatra but is opt-in.
+    Install it from the marketplace before running it. -- falling through to LLM
+
+So the boundary is now NARROWER than everything above: not the closure, not the credential,
+not the pre-router. The agent ships opt-in and has no canonical install row in a lane
+database, so the run gate refuses before a run is queued
+(`packages/agents/src/runtime-install-gate.ts:165`, `:216`, `:500`), and no run means no
+inline card. The marketplace install panel that would create the row needs a local registry
+identity (`InstanceNamespaceNotConfiguredError` from `loadVerdaccioConfigAsync`), which a
+lane worktree does not have and may not provision. Writing the `installed_extension` row by
+hand was rejected: a capture enabled by a hand-written row would not be evidence of shipped
+behaviour.
+
+What closes it now: run the same turn in an environment with a registry identity and the
+agent installed (the closure-seeded CI environment has both), or complete `/setup/name`
+against a local registry first. Two operational notes for that run: warm `/api/mcp` before
+the first turn (a 2500 ms self-probe races the first-hit dev compile), and do not point
+`--public-origin` at localhost if the turn may fall through to the LLM (the provider's
+servers fetch the hosted MCP tool list and cannot reach localhost).
+
 ## What WOULD produce the capture
 
 Either of these closes it without weakening the credential rule:
