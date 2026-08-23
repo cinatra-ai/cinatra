@@ -3252,6 +3252,177 @@ def _read_bridge_token() -> Optional[str]:
 #: A declared-input title we are willing to fold into a synthesized
 #: ``message_template``. Restricted to plain Jinja identifiers so the
 #: generated ``{% if <name> %}{% endif %}`` guard can never inject markup.
+# ---------------------------------------------------------------------------
+# cinatra#2949 — derive `output_schema` for bridge ApiNodes from their own
+# declared outputs.
+#
+# `/api/llm-bridge` accepts an OPTIONAL `output_schema` on the request body and
+# forwards it to the orchestration layer, which is what makes a provider answer
+# in a declared SHAPE rather than in prose (host: `src/app/api/llm-bridge/
+# route.ts` -> `packages/llm/src/index.ts`; the development scripted provider
+# shapes its deterministic answer from the same field). Authored OAS files never
+# write that field — a bridge ApiNode ships `agent_id`, `system`, `user`,
+# `agent_run_id` and the compiler-injected `cinatra_llm`, and nothing else.
+#
+# So a node could DECLARE typed outputs (`title`, `content`, ...) and still ask
+# for free text. The host route parses the answer as JSON and spreads its keys;
+# prose parses to nothing, so every declared output came back EMPTY while the
+# call itself reported success, and the run failed one frame later at
+# materialisation ("titleFrom output \"title\" did not resolve to a non-empty
+# string") instead of at the call that actually went wrong.
+#
+# This is the load-time counterpart of `_reconcile_input_message_gates`: the
+# shipped OAS on the read-only mount is never touched, EVERY installed agent
+# benefits without an extension-repo change, and — because the request body is
+# what changes — the scripted development provider and a real provider are
+# asked for the same shape and cannot drift apart.
+#
+# Each property follows the SAME agentspec-property -> JSON-Schema convention
+# the host compiler uses for an agent's own output schema
+# (`packages/agents/src/oas-compiler.ts`, step 8 "Derive outputSchema"):
+# `{type, title, format?, description?, items?}`.
+#
+# The ROOT additionally carries `required` (EVERY declared output) and
+# `additionalProperties: false`. That is not decoration: this schema is
+# forwarded VERBATIM into the OpenAI Responses API `text.format.json_schema`
+# (`extensions/cinatra-ai/openai-connector/src/adapter/openai-adapter.ts`), and
+# the strict structured-output contract requires `required` to name every key in
+# `properties` — an under-specified `required` is a deterministic 400 at the real
+# provider (cinatra#1891 walk-2 DEFECT-2, pinned in
+# `src/lib/artifacts/__tests__/matcher-runtime.test.ts`). The one other place in
+# the repo that hands this path a schema, the artifact matcher
+# (`src/lib/artifacts/matcher-runtime.ts`), emits exactly this root shape, so
+# this pass matches the caller that is already proven against a live provider.
+# A declared output is not optional — the node names it as an output it will
+# read — so "every property is required" is the truthful reading, not a
+# tightening. The compiler's step 8 omits both keywords because its schema is
+# STORED on the template and never sent verbatim to a provider on this path.
+#
+# Subschemas the author wrote (an `items` blob, a nested `properties` map) ride
+# through UNCHANGED. This pass never invents a constraint below the top level:
+# the author declared those shapes, and rewriting them would send the provider
+# something the agent never said.
+# ---------------------------------------------------------------------------
+
+#: The host route the derivation applies to. Mirrors `targetsLlmBridge` in
+#: `packages/agents/src/oas-compiler.ts`: the bare path, the authored
+#: `{{CINATRA_BASE_URL}}` template form, or any absolute URL ending in it.
+_LLM_BRIDGE_PATH = "/api/llm-bridge"
+
+
+def _targets_llm_bridge(url: Any) -> bool:
+    """True when an ApiNode `url` addresses the host's LLM bridge."""
+    return isinstance(url, str) and url.endswith(_LLM_BRIDGE_PATH)
+
+
+def _output_property_json_schema(prop: Any) -> Optional[Dict[str, Any]]:
+    """One declared output -> its JSON-Schema property, or None if unusable.
+
+    `items` accepts BOTH the agentspec spellings the shipped OAS files use —
+    a top-level `items` and `json_schema.items` — the same fallback the host
+    compiler applies.
+    """
+    if not isinstance(prop, dict):
+        return None
+    title = prop.get("title")
+    type_ = prop.get("type")
+    if not isinstance(title, str) or not title:
+        return None
+    if not isinstance(type_, str) or not type_:
+        return None
+    shape: Dict[str, Any] = {"type": type_, "title": title}
+    fmt = prop.get("format")
+    if isinstance(fmt, str) and fmt:
+        shape["format"] = fmt
+    description = prop.get("description")
+    if isinstance(description, str) and description:
+        shape["description"] = description
+    items = prop.get("items")
+    if items is None:
+        json_schema = prop.get("json_schema")
+        if isinstance(json_schema, dict):
+            items = json_schema.get("items")
+    if items is not None:
+        shape["items"] = items
+    return shape
+
+
+def _derive_bridge_output_schemas(
+    doc: Any, label: str
+) -> List[Dict[str, Any]]:
+    """Give every bridge ApiNode that DECLARES outputs an `output_schema`.
+
+    Mutates ``doc`` in place; returns a per-node report (empty when nothing was
+    derived). Walks the WHOLE document, so a bridge ApiNode nested in a subflow
+    — including one the context-subflow injection just composed in — is reached.
+
+    Conservative on every edge:
+      - a node whose `data` is missing or not an object is left alone (there is
+        no request body to describe);
+      - an AUTHORED `data.output_schema` always wins, so a hand-written shape is
+        never overwritten (this also makes the pass idempotent);
+      - a node that declares no outputs, or whose outputs are not ALL usable
+        (a plain string `title` and `type`), is left alone rather than sent a
+        partial shape that would silently drop a declared output.
+
+    The root names every declared output in ``required`` and sets
+    ``additionalProperties: False`` — see the block comment above for why that
+    is load-bearing at the real provider and not cosmetic.
+    """
+    report: List[Dict[str, Any]] = []
+
+    def _walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            if obj.get("component_type") == "ApiNode" and _targets_llm_bridge(
+                obj.get("url")
+            ):
+                _visit_bridge_node(obj)
+            for value in obj.values():
+                _walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                _walk(value)
+
+    def _visit_bridge_node(node: Dict[str, Any]) -> None:
+        data = node.get("data")
+        if not isinstance(data, dict):
+            return
+        if data.get("output_schema") is not None:
+            return  # authored override — never overwritten
+        outputs = node.get("outputs")
+        if not isinstance(outputs, list) or not outputs:
+            return
+        properties: Dict[str, Any] = {}
+        for prop in outputs:
+            shape = _output_property_json_schema(prop)
+            if shape is None:
+                print(
+                    f"[agent_loader] WARNING: {label}: bridge ApiNode "
+                    f"{node.get('id') or node.get('name')!r} declares an output "
+                    f"without a usable title/type ({prop!r}); deriving NO "
+                    f"output_schema for it — it keeps asking for free text."
+                )
+                return
+            properties[shape["title"]] = shape
+        data["output_schema"] = {
+            "type": "object",
+            "properties": properties,
+            # Every declared output, and nothing else — the strict
+            # structured-output contract the real provider enforces.
+            "required": list(properties),
+            "additionalProperties": False,
+        }
+        report.append(
+            {
+                "node": node.get("id") or node.get("name"),
+                "outputs": sorted(properties),
+            }
+        )
+
+    _walk(doc)
+    return report
+
+
 #: Matched with ``fullmatch`` (no anchors) so a trailing newline cannot sneak
 #: past a ``$``-anchored ``match``.
 _GATE_INPUT_TITLE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -3483,6 +3654,30 @@ def _mount_one_sync(
                 f"gates={[r['node'] for r in gate_report]} "
                 f"(InputMessageNode → PluginInputMessageNode, "
                 f"inputs folded into message_template)"
+            )
+
+    # cinatra#2949 — derive `output_schema` for every bridge ApiNode that
+    # declares outputs, so the model is asked for the SHAPE the node declared
+    # instead of free text. Runs LAST on the current working document, so it
+    # also covers ApiNodes the context-subflow injection composed in. See
+    # _derive_bridge_output_schemas for the full contract.
+    schema_working_doc: Optional[Dict[str, Any]] = (
+        composed_oas if composed_oas is not None else parsed_doc
+    )
+    if isinstance(schema_working_doc, dict):
+        schema_report = _derive_bridge_output_schemas(schema_working_doc, label)
+        if schema_report:
+            raw_text = json.dumps(schema_working_doc)
+            if composed_oas is not None:
+                composed_oas = schema_working_doc
+                composed_sha256 = hashlib.sha256(
+                    raw_text.encode("utf-8")
+                ).hexdigest()
+            print(
+                f"[agent_loader] bridge output_schema derived {label}: "
+                + ", ".join(
+                    f"{r['node']}({'/'.join(r['outputs'])})" for r in schema_report
+                )
             )
 
     substituted = _substitute_placeholders(raw_text)
