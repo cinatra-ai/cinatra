@@ -191,6 +191,103 @@ export function deriveConfirmedSelection(input: {
 }
 
 // ---------------------------------------------------------------------------
+// The OFFERED SET (cinatra#2906): a confirm resolves against what was SHOWN.
+// ---------------------------------------------------------------------------
+
+/**
+ * ONE entry of the set a card actually offered — the four fields that decide an
+ * outcome, recorded when the card was drawn: which skill, at which pinned
+ * revision, whether it was offered AS a recommendation, and at which rank.
+ *
+ * Deliberately NOT the presentation fields (label, score, feature breakdown):
+ * those describe how a chip looked, and nothing about how a chip looked may
+ * change what a run executes.
+ */
+export interface OfferedSkill {
+  skillId: string;
+  /** The EXACT revision the chip was drawn at — the pin the confirm honours. */
+  skillRevisionId: string;
+  /** Whether the scorer recommended it AT DRAW TIME. */
+  recommended: boolean;
+  /** Its 1-based rank in the offered ordering at draw time. */
+  rank: number;
+}
+
+/** A confirm resolved against the offered set, or the ids that stopped it. */
+export type OfferedSetSelection =
+  | { ok: true; selection: RunSkillSelectionEntry[] }
+  | { ok: false; staleSkillIds: string[] };
+
+/**
+ * Turn a human's confirm/adjust choice into the immutable selection entries
+ * USING THE OFFERED SET AS THE AUTHORITY (cinatra#2906).
+ *
+ * The sibling `deriveConfirmedSelection` resolves the reader's ids against a
+ * recommendation set the CALLER scored, so whatever drifted between the draw and
+ * the press decides what is pinned. This one resolves them against the set that
+ * was drawn, so:
+ *
+ *   · a kept id present in the offered set is pinned to ITS offered revision,
+ *     whatever has been published since;
+ *   · a kept id that the offered set never contained, or that the caller reports
+ *     can no longer be honoured (no longer assigned, no longer installed), makes
+ *     the WHOLE confirm refuse. It is never dropped, because a dropped skill is
+ *     a decision the reader took and the run did not record — and dropping the
+ *     last one leaves an empty set that delivery reads as "no set" and replaces
+ *     with the agent's computed assignment.
+ *
+ * The refusal is all-or-nothing on purpose: a partially-honoured confirm is a
+ * set nobody chose. Order is stable (confirmed order preserved) and the answer
+ * is a pure function of its inputs, so a retry against the same offered set
+ * produces byte-identical rows.
+ *
+ * The SOURCE stamp keeps the shipped meanings: a skill the scorer did NOT
+ * recommend at draw time is `user_forced` (forcing it on IS its adjustment), a
+ * recommended one settled through ADJUST is `user_adjusted`, and a recommended
+ * one taken as scored is `recommended_confirmed`.
+ */
+export function deriveSelectionFromOfferedSet(input: {
+  offered: ReadonlyArray<OfferedSkill>;
+  confirmedSkillIds: string[];
+  /** Kept skills the reader settled through ADJUST — see the note above. */
+  adjustedSkillIds?: string[];
+  /**
+   * The offered ids that can STILL be honoured — resolved by the caller, which
+   * is the only layer that can see the live assignment + installed catalogue.
+   * An offered id absent from this list is stale, never silently dropped.
+   */
+  honourableSkillIds: ReadonlyArray<string>;
+}): OfferedSetSelection {
+  const offeredById = new Map(input.offered.map((o) => [o.skillId, o]));
+  const honourable = new Set(input.honourableSkillIds);
+  const adjusted = new Set(input.adjustedSkillIds ?? []);
+  const seen = new Set<string>();
+  const stale: string[] = [];
+  const out: RunSkillSelectionEntry[] = [];
+  for (const skillId of input.confirmedSkillIds) {
+    if (seen.has(skillId)) continue;
+    seen.add(skillId);
+    const offer = offeredById.get(skillId);
+    if (!offer || !honourable.has(skillId)) {
+      stale.push(skillId);
+      continue;
+    }
+    out.push({
+      skillId,
+      // THE OFFERED PIN. Not a re-resolved one, not a client-supplied one.
+      skillRevisionId: offer.skillRevisionId,
+      selectionSource: !offer.recommended
+        ? SELECTION_SOURCES.userForced
+        : adjusted.has(skillId)
+          ? SELECTION_SOURCES.userAdjusted
+          : SELECTION_SOURCES.recommendedConfirmed,
+    });
+  }
+  if (stale.length > 0) return { ok: false, staleSkillIds: stale };
+  return { ok: true, selection: out };
+}
+
+// ---------------------------------------------------------------------------
 // Delivery resolution (AC-2: consumed end-to-end, fallback when no set).
 // ---------------------------------------------------------------------------
 
@@ -241,7 +338,13 @@ export interface RecommendationEfficacy {
  * order follows the recommendation ranking.
  */
 export function summarizeRecommendationEfficacy(input: {
-  recommendations: RankedRecommendation[];
+  /**
+   * The set the tally describes. Widened to the two fields it actually reads
+   * (cinatra#2906) so the confirm path can pass the OFFERED set — the scored set
+   * a reader was really shown — rather than a freshly scored one that may name
+   * different skills.
+   */
+  recommendations: ReadonlyArray<Pick<RankedRecommendation, "skillId" | "recommended">>;
   selectedSkillIds: string[];
 }): RecommendationEfficacy {
   const selected = new Set(input.selectedSkillIds);

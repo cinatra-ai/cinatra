@@ -28,6 +28,8 @@ import { randomUUID } from "node:crypto";
 import { SELECTION_SOURCES } from "@cinatra-ai/skills/recommendation";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { runPostgresQueriesAsync } from "@/lib/postgres-async";
+import { RUN_RECOMMENDATION_OFFERED_SET_TABLE } from "@/lib/artifacts/artifact-review-gate-schema";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import type { SelectionSource } from "@cinatra-ai/skills/recommendation";
 
@@ -501,4 +503,158 @@ export function decidedSkillsFromEvidence(
   return [...marks.entries()]
     .map(([skillId, mark]) => ({ skillId, name: nameOf(skillId), mark }))
     .sort((a, b) => (a.skillId < b.skillId ? -1 : a.skillId > b.skillId ? 1 : 0));
+}
+
+// ---------------------------------------------------------------------------
+// THE OFFERED SET (cinatra#2906) — what a recommendation card actually showed.
+//
+// The accepted half above records what a run RESOLVED. This records what the
+// reader was ASKED, at the moment the card was drawn, so the confirm can resolve
+// against the set on screen instead of asking for the list again and recording
+// against a different answer.
+//
+// KEYED BY THE HOLD, not the run: one run can be parked, decided, and parked
+// again, and each of those holds offered its own set. The hold id is exactly
+// what the row already hands back on confirm.
+//
+// THE OFFER IS IMMUTABLE FOR THE LIFE OF THE HOLD. The FIRST draw claims it and
+// every later draw reads the claim back; nothing replaces it. A replace-on-redraw
+// store would move the offer under a reader who is still looking at the first
+// card — a second tab, or the same tab in another window — and their confirm
+// would then be resolved against revisions they were never shown, which is the
+// very substitution this table exists to prevent. So the claim is atomic: the
+// insert is conditional on the hold owning no rows yet, in one transaction, and
+// two concurrent first draws cannot interleave into a set that is half of each.
+//
+// A reader whose card can no longer be honoured is not stranded by the
+// immutability: the offer's own chips stay operable, so they can leave the
+// unhonourable one out, or skip.
+//
+// ASYNC by construction. Both call sites — the card draw and the confirm — are
+// already `async`, so this store uses `runPostgresQueriesAsync` rather than the
+// synchronous bridge, which would park the whole event loop for a query neither
+// caller needs synchronously.
+// ---------------------------------------------------------------------------
+
+/** One entry of the set a card offered: the four fields that decide an outcome. */
+export type RunRecommendationOfferedSkill = {
+  skillId: string;
+  /** The EXACT revision the chip was drawn at — the pin the confirm honours. */
+  skillRevisionId: string;
+  /** Whether the scorer recommended it AT DRAW TIME. */
+  recommended: boolean;
+  /** Its 1-based rank in the offered ordering at draw time. */
+  rank: number;
+};
+
+function offeredSetTable(): string {
+  return `"${postgresSchema.replaceAll('"', '""')}"."${RUN_RECOMMENDATION_OFFERED_SET_TABLE}"`;
+}
+
+/**
+ * CLAIM the set a hold's card offers. FIRST DRAW WINS: a hold that already owns
+ * an offer keeps it, byte for byte, so what a reader was shown cannot be moved
+ * under them by a later draw.
+ *
+ * ATOMIC, AND THE LOCK IS WHAT MAKES IT SO. The claim runs in one transaction
+ * that FIRST takes a per-hold `pg_advisory_xact_lock` (the `member-actions.ts` /
+ * `agent-assigned-skills-store.ts` precedent), then inserts under its own
+ * `WHERE NOT EXISTS` on the hold.
+ *
+ * Neither guard is sufficient alone, and the reason is worth stating because the
+ * first attempt at this got it wrong. Under READ COMMITTED two concurrent
+ * statements can BOTH see no rows at `WHERE NOT EXISTS`, and because their skill
+ * ids are disjoint the `(hold_id, skill_id)` conflict rule fires for neither —
+ * so both insert and the hold ends up owning a union nobody drew. The advisory
+ * lock serializes the two draws on the hold, so the loser evaluates its
+ * predicate AFTER the winner has committed and inserts nothing. It is released
+ * with the transaction, so a crashed writer never wedges a hold.
+ *
+ * Throws only on a genuine DB error; the draw wraps it, because an offer that
+ * could not be claimed must cost the FIX, never the card.
+ */
+export async function writeRunRecommendationOfferedSet(input: {
+  runId: string;
+  holdId: string;
+  offered: ReadonlyArray<RunRecommendationOfferedSkill>;
+}): Promise<void> {
+  if (!input.holdId) return;
+  if (input.offered.length === 0) return;
+  const connectionString = getPostgresConnectionString();
+  const table = offeredSetTable();
+  const rowsSql: string[] = [];
+  const params: unknown[] = [input.holdId];
+  let n = 2;
+  for (const o of input.offered) {
+    rowsSql.push(
+      `($${n++}::text, $${n++}::text, $${n++}::text, $${n++}::text, $${n++}::text, $${n++}::boolean, $${n++}::integer)`,
+    );
+    params.push(
+      randomUUID(),
+      input.runId,
+      input.holdId,
+      o.skillId,
+      o.skillRevisionId,
+      o.recommended,
+      o.rank,
+    );
+  }
+  await runPostgresQueriesAsync({
+    connectionString,
+    transaction: true,
+    queries: [
+      {
+        // Serialize the claim on the HOLD — see the atomicity note above.
+        text: `SELECT pg_advisory_xact_lock(hashtext('cinatra-recommendation-offer'), hashtext($1))`,
+        values: [input.holdId],
+      },
+      {
+        text: `INSERT INTO ${table}
+                 (id, run_id, hold_id, skill_id, skill_revision_id, recommended, offered_rank)
+               SELECT * FROM (VALUES ${rowsSql.join(", ")}) AS claim(
+                 id, run_id, hold_id, skill_id, skill_revision_id, recommended, offered_rank
+               )
+               WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE hold_id = $1)
+               ON CONFLICT (hold_id, skill_id) DO NOTHING`,
+        values: params,
+      },
+    ],
+  });
+}
+
+/**
+ * Read back the set a hold offered, in the order it was drawn (offered rank,
+ * then skill id for a stable tie-break).
+ *
+ * An EMPTY answer means the hold OWNS no offer — one parked before this table
+ * existed, or one whose draw could not claim it — and the confirm keeps its
+ * pre-#2906 behaviour rather than refusing every in-flight hold. A FAILED read
+ * is a different fact and this function does not flatten the two: it throws, so
+ * the confirm can refuse rather than mistake "the database did not answer" for
+ * "this hold offered nothing".
+ */
+export async function readRunRecommendationOfferedSet(
+  holdId: string,
+): Promise<RunRecommendationOfferedSkill[]> {
+  if (!holdId) return [];
+  const connectionString = getPostgresConnectionString();
+  const [result] = await runPostgresQueriesAsync({
+    connectionString,
+    queries: [
+      {
+        text: `SELECT skill_id, skill_revision_id, recommended, offered_rank
+               FROM ${offeredSetTable()}
+               WHERE hold_id = $1
+               ORDER BY offered_rank ASC, skill_id ASC`,
+        values: [holdId],
+      },
+    ],
+  });
+  const rows = (result?.rows ?? []) as Array<Record<string, unknown>>;
+  return rows.map((r) => ({
+    skillId: String(r.skill_id),
+    skillRevisionId: String(r.skill_revision_id),
+    recommended: r.recommended === true || r.recommended === "t" || r.recommended === "true",
+    rank: Number(r.offered_rank),
+  }));
 }
