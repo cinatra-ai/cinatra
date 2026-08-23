@@ -949,8 +949,15 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     // `instance-screens-recommendation-host.test.ts`).
     expect(instanceScreens).toMatch(/<RecommendationHoldCard/);
     expect(instanceScreens).toMatch(/host="run_card"/);
+    // The gate is NAMED once since cinatra#2790 (S9f), because the same answer
+    // decides two things: whether this screen mounts the card, and whether the
+    // rail carries the recommendation STEP that opens onto it. A step whose
+    // surface another module draws would be a second mount.
     expect(instanceScreens).toMatch(
-      /screenHostsRecommendationCard\(runDetailPanel\)\s*\?\s*\(\s*<LifecycleCardSurfaceProvider host="run_card">\s*<RecommendationHoldCard/,
+      /const hostsRecommendationCard = screenHostsRecommendationCard\(runDetailPanel\);/,
+    );
+    expect(instanceScreens).toMatch(
+      /hostsRecommendationCard \? \(\s*<LifecycleCardSurfaceProvider host="run_card">\s*<RecommendationHoldCard/,
     );
     // The park is still read — for ONE thing: the Run button is withheld while a
     // hold is live. That is the run's dispatchability, not a rendering of the

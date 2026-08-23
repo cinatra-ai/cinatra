@@ -478,9 +478,9 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         {
           module: "packages/agents/src/instance-screens.tsx",
           adapter: "mount",
-          region: "run_panel",
+          region: "step_rail",
           surface: "production",
-          why: "the run screen branch: the agentic panel does not render for a run that is pending_input, and a HELD run is exactly that, so this branch draws the held state",
+          why: "the run screen branch: the agentic panel does not render for a run that is pending_input, and a HELD run is exactly that, so this branch draws the held state. It is a STEP in the rail since cinatra#2790 (S9f) — plan (A) §6.2 puts the row \"at the trigger position, the top entry on the step rail, ahead of the work steps it would authorize\", and the ratified drawing opens a gate step's surface \"right here in the run detail, under the same rail\". ONE mount serves the step's surface and the run detail's settled reading, which are mutually exclusive slots of the same frame (`RunSurfaceRail`), so the region names where the card is reached from rather than a second place it is drawn",
         },
         {
           module: "packages/agents/src/orchestrator-stepper-panel.tsx",

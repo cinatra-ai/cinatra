@@ -57,7 +57,16 @@ import { estimateRunDuration } from "./trigger-duration-estimate";
 import { TriggerTabClient } from "./trigger-tab-client";
 // §VI's card on the `run_card` host (cinatra#2788, epic #2784 S9d), reached
 // through the run page's SCHEDULE STEP — see the mount below.
-import { ScheduleRailStep } from "./schedule-rail-step";
+import { ScheduleRailStepRow, ScheduleStepSurface } from "./schedule-rail-step";
+// §V's card at its plan-designated rail position (cinatra#2790, epic #2784 S9f):
+// the recommendation is the run's FIRST step, and the two-column frame both
+// steps stand in.
+import { RecommendationRailStepRow } from "./recommendation-rail-step";
+import {
+  RunSurfaceRail,
+  type RunStepSelection,
+  type RunSurfaceRailStep,
+} from "./run-surface-rail";
 import { readRunTriggerByRunId } from "./trigger-store";
 import type { GatedStep } from "./trigger-infer-side-effects";
 import cronstrue from "cronstrue";
@@ -267,6 +276,40 @@ export function runDetailOpensOnSchedule(params: {
   recommendationHeld: boolean;
 }): boolean {
   return params.hasScheduleStep && !params.hasExecution && !params.recommendationHeld;
+}
+
+/**
+ * WHICH STEP THE RUN DETAIL OPENS ON, over BOTH gate steps (cinatra#2790, S9f).
+ *
+ * The S9d answer above is unchanged and is still the schedule's own half; this
+ * is the whole ladder, in the order the rail draws the steps. Plan (A) §6.2 puts
+ * the recommendation "at the trigger position, the top entry on the step rail,
+ * ahead of the work steps it would authorize", and the drawing highlights the
+ * step the run is PAUSED on — so a LIVE hold is the open step, ahead of a
+ * schedule the run cannot have reached yet. A decided hold opens nothing of its
+ * own: the run detail returns to what the run page otherwise shows, and the row
+ * stays in the rail as the resolved-gate history row.
+ *
+ * Exported so the regression test can pin the whole table without a DB, a
+ * session or a Next.js render.
+ */
+export function runDetailInitialStep(params: {
+  hasRecommendationStep: boolean;
+  recommendationHeld: boolean;
+  hasScheduleStep: boolean;
+  hasExecution: boolean;
+}): RunStepSelection {
+  if (params.hasRecommendationStep && params.recommendationHeld) return "recommendation";
+  if (
+    runDetailOpensOnSchedule({
+      hasScheduleStep: params.hasScheduleStep,
+      hasExecution: params.hasExecution,
+      recommendationHeld: params.recommendationHeld,
+    })
+  ) {
+    return "schedule";
+  }
+  return "detail";
 }
 
 type ScreenProps = {
@@ -684,8 +727,14 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // the run's DISPATCHABILITY, not a rendering of the interaction, so it stays
   // server-side and reads nothing but the park's status. Nothing is prefetched,
   // no candidates are resolved, and no decision state is derived here.
-  const recommendationHeld =
-    (run ? await readRecommendationParkForRun(run.id) : null)?.status === "parked";
+  //
+  // THE PARK ROW IS ALSO WHAT SAYS THERE IS A STEP (cinatra#2790, S9f). A rail
+  // entry for a run that never held would be a step onto an empty surface — the
+  // card draws no DOM at all in that case — so the row's existence is the run's
+  // own evidence that this question was ever asked, and its STATUS is the row's
+  // reading: live is the step the run is paused on, decided is the history row.
+  const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;
+  const recommendationHeld = recommendationPark?.status === "parked";
 
   // WHICH panel the right column mounts — and therefore whether the card is
   // hosted by this screen or by the panel. See `runDetailPanelKind`.
@@ -696,10 +745,20 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     stepperStepCount: stepperSteps.length,
   });
 
-  // Has the agent run at all? The schedule step is the run detail's first paint
-  // while it has not (cinatra#2788, S9d) — there is no progress to show, and
-  // plan (A) §7.2 step 5 forbids showing one with the schedule.
-  const opensOnScheduleStep = runDetailOpensOnSchedule({
+  // Does the SCREEN own the recommendation card on this branch? The step is
+  // drawn only where its surface is: on the `agentic` branch the panel inside
+  // the run detail mounts the card itself (`screenHostsRecommendationCard`), and
+  // a row opening onto a card another module draws would be a second mount of
+  // the one renderer.
+  const hostsRecommendationCard = screenHostsRecommendationCard(runDetailPanel);
+  const hasRecommendationStep = recommendationPark !== null && hostsRecommendationCard;
+
+  // Has the agent run at all? A gate step is the run detail's first paint while
+  // it has not (cinatra#2788, S9d; cinatra#2790, S9f) — there is no progress to
+  // show, and plan (A) §7.2 step 5 forbids showing one with the schedule.
+  const initialStep = runDetailInitialStep({
+    hasRecommendationStep,
+    recommendationHeld,
     hasScheduleStep: scheduleRailRef !== null,
     hasExecution: runHasExecutionRecord({
       runStatus: run?.status ?? null,
@@ -707,7 +766,6 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       runMessageCount: completedRunMessages.length,
       streamedTextLength: (run?.streamedText ?? "").length,
     }),
-    recommendationHeld,
   });
 
   return (
@@ -756,18 +814,66 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   panel: runDetailPanel,
                   stepperStepCount: stepperSteps.length,
                 });
-              // The page's OWN rail rows. The schedule row is drawn by the step
-              // component rather than by this rail because the live orchestrator
-              // column is the rail on the flow branch (`screenHostsStepRail`),
-              // and the plan puts the schedule step above the run's steps on
-              // every branch — not only the one where the server-rendered rail
-              // happens to draw.
+              // THE ONE `recommendation_hold` MOUNT THIS SCREEN MAKES. It is
+              // used in two mutually exclusive slots — the rail step's surface
+              // above, and the run detail below — so the interaction still has
+              // exactly one renderer on this host at any moment. See the comment
+              // on the detail slot for why this screen is a host at all.
+              const recommendationCardNode = hostsRecommendationCard ? (
+                <LifecycleCardSurfaceProvider host="run_card">
+                  <RecommendationHoldCard
+                    runId={run.id}
+                    agentPackageName={template.packageName ?? ""}
+                    wireRef={null}
+                  />
+                </LifecycleCardSurfaceProvider>
+              ) : null;
+              // THE GATE STEPS THAT HEAD THE RAIL, in the order the plan puts
+              // them: the recommendation at the trigger position (plan (A) §6.2
+              // — "the top entry on the step rail, ahead of the work steps it
+              // would authorize"), then the schedule "above '1 Review'" (§7.2
+              // step 5). Built before the rail below, because the rail renumbers
+              // around however many there are.
+              const railSteps: RunSurfaceRailStep[] = [];
+              if (hasRecommendationStep) {
+                railSteps.push({
+                  key: "recommendation",
+                  row: (
+                    <RecommendationRailStepRow
+                      displayStep={railSteps.length + 1}
+                      settled={!recommendationHeld}
+                    />
+                  ),
+                  // THE SAME MOUNT the run detail draws below — not a second
+                  // one. Only one of the two slots is ever rendered, so the chip
+                  // row the step opens is the chip row this screen hosts. It is
+                  // handed over BARE: the card is the whole surface of this step
+                  // (§V — "the row is the whole card"), and a wrapper would be a
+                  // new anchor on a surface whose closed set is ratified.
+                  surface: recommendationCardNode,
+                });
+              }
+              if (scheduleRailRef) {
+                railSteps.push({
+                  key: "schedule",
+                  row: (
+                    <ScheduleRailStepRow host="run_card" displayStep={railSteps.length + 1} />
+                  ),
+                  surface: <ScheduleStepSurface host="run_card" cardRef={scheduleRailRef} />,
+                });
+              }
+              // The page's OWN rail rows. The gate rows above are drawn by
+              // their own step components rather than by this rail, because the
+              // live orchestrator column is the rail on the flow branch
+              // (`screenHostsStepRail`) and the plan puts both gate steps above
+              // the run's steps on every branch — not only the one where the
+              // server-rendered rail happens to draw.
               const railNode = railDraws ? (
                 <RunStepRailPanel
                   entries={rail.entries}
                   activeOrdinal={rail.activeOrdinal}
                   reviewHrefBase={reviewHrefBase}
-                  stepOffset={scheduleRailRef ? 1 : 0}
+                  stepOffset={railSteps.length}
                 />
               ) : null;
               // A COLUMN with a GAP, not a margin on the row above. The card
@@ -799,15 +905,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   parked before this page is served, and the confirm/skip taken IN
                   the row is the only transition out of it (which also fires
                   `router.refresh()`, re-rendering this tree). */}
-              {screenHostsRecommendationCard(runDetailPanel) ? (
-                <LifecycleCardSurfaceProvider host="run_card">
-                  <RecommendationHoldCard
-                    runId={run.id}
-                    agentPackageName={template.packageName ?? ""}
-                    wireRef={null}
-                  />
-                </LifecycleCardSurfaceProvider>
-              ) : null}
+              {recommendationCardNode}
               {/* §VII's audit card (cinatra#2789, S9e) — the run page's own
                   reading of what the post-change analysis found, drawn by the
                   SAME component the chat transcript and the review page mount.
@@ -881,20 +979,20 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               )}
                 </>
               );
-              // THE TWO COLUMNS. With a schedule, the schedule step owns them:
-              // it heads the rail and it opens ON THE RIGHT, in the run detail,
-              // never under its own row (plan (A) §7.2 step 5 and the ratified
-              // drawing `design-run-surface-rail-and-gate.png`). Without one,
-              // the surface is what it always was.
-              if (scheduleRailRef) {
+              // THE TWO COLUMNS. With a gate step, the frame owns them: the
+              // steps head the rail and they open ON THE RIGHT, in the run
+              // detail, never under their own row (plan (A) §6.2 and §7.2 step 5,
+              // and the ratified drawing `design-run-surface-rail-and-gate.png`
+              // — "a gate step opens the gate's own surface in place … right here
+              // in the run detail, under the same rail"). Without one, the
+              // surface is what it always was.
+              if (railSteps.length > 0) {
                 return (
-                  <ScheduleRailStep
-                    host="run_card"
-                    cardRef={scheduleRailRef}
-                    displayStep={1}
+                  <RunSurfaceRail
+                    steps={railSteps}
                     rail={railNode}
                     detail={detailNode}
-                    initialSelection={opensOnScheduleStep ? "schedule" : "detail"}
+                    initialSelection={initialStep}
                   />
                 );
               }
