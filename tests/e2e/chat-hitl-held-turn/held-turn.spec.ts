@@ -50,9 +50,10 @@
  *   canonical one. A run mints into the gitignored scratch directory named at
  *   `RUN_EVIDENCE_DIR` below, so a PASSING run leaves the tree clean and the
  *   committed reference set under `evidence/2824-s9k/` stays the frozen one.
- * · "Exactly one job" is measured as "jobs addressable by this run id", because the
- *   release path enqueues with `jobId = runId`. A queue TOTAL would count every
- *   other run on the lane and answer nothing.
+ * · "Exactly one job" is measured as "jobs naming this run" — every job whose id is
+ *   the run id OR whose payload carries the run id, across every queue state,
+ *   de-duplicated by job id — so a second dispatch under another id is seen. A
+ *   queue TOTAL would count every other run on the lane and answer nothing.
  * · The instance fixtures (a provider presence placeholder, the MCP base URL, one
  *   assigned skill) are world, not subject: see `fixtures.mts`. No hold, park, run
  *   or decision is ever seeded.
