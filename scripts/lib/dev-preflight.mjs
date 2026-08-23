@@ -1157,6 +1157,50 @@ export function formatStandDownRefusal({ unmanaged = [] } = {}) {
 }
 
 /**
+ * What the launcher owes an operator when a service this checkout STOOD DOWN is
+ * also not answering.
+ *
+ * The stand-down settles who may PUBLISH the service; it says nothing about
+ * whether anything is listening where the app dials. Those are two questions,
+ * and the second one still has an answer: the app is about to fail on this
+ * address. The launcher used to skip the probe along with the diagnosis, so the
+ * one shape that reaches this branch and still resolves to loopback — a scoped
+ * lane whose `REDIS_URL` is a loopback URL with no port — got total silence and
+ * then ECONNREFUSED in app boot (cinatra#2839, round-3 finding 1).
+ *
+ * IT MUST NOT BORROW THE ORDINARY REMEDY. "Start them with `pnpm services`" is
+ * the right answer for a service this checkout publishes and a false one here:
+ * a whole-stack `up` cannot honor a stand-down, so the derivation step REFUSES
+ * to run it for exactly this plan (`formatStandDownRefusal`). Sending the
+ * operator to a command that is already rigged to refuse them is worse than the
+ * silence it replaced. So this line names the two fixes that do work, in the
+ * same words the Nango stand-down already uses: start the service where it is
+ * configured, or point its URL at a 127.0.0.1 port this worktree owns.
+ *
+ * THE HOST-PORT VARIABLE IS NAMED AS A CONSTRAINT, NOT AS A SECOND FIX. Setting
+ * `CINATRA_*_HOST_PORT` alone does end the stand-down, and it does NOT make the
+ * service reachable: the app keeps dialing whatever the URL resolves to, so the
+ * only thing that changes is which warning prints (`formatConnectPortMismatch`
+ * instead of this one). The URL is the fix; the variable has to agree with it.
+ *
+ * `hostPortVar` is always known at the one call site: only a service the plan
+ * PARAMETERIZES can be stood down, and such a claim always carries its `envVar`
+ * (`resolvePublishedHostPort`).
+ *
+ * @param {{ service: string, urlVar?: string, hostPortVar?: string, host?: string, port?: number }} input
+ * @returns {string}
+ */
+export function formatStandDownUnreachable({ service, urlVar, hostPortVar, host, port } = {}) {
+  return (
+    `${service} not reachable yet at ${host}:${port}, and this checkout will not start it: ` +
+    `${urlVar} is not an explicit-port loopback URL, so that service is not ours to publish. ` +
+    `\`pnpm services\` refuses this plan for the same reason. Start ${service} where it is configured, ` +
+    `or point ${urlVar} at a 127.0.0.1 port this worktree owns. This checkout then publishes that port, ` +
+    `and ${hostPortVar} must name the same one if it is set at all.`
+  );
+}
+
+/**
  * The distinct compose services a plan says this checkout may not publish.
  *
  * @param {Array<{ service: string }>} unmanaged

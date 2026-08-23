@@ -35,6 +35,7 @@ import {
   createComposeRunner,
   formatComposeCommand,
   formatConnectPortMismatch,
+  formatStandDownUnreachable,
   formatUnmanagedServices,
   isLinkedWorktree,
   planMessages,
@@ -220,7 +221,17 @@ async function runDbPortPreflight() {
     // The plan claims no host port for it: the service is configured somewhere
     // else, so no container here is this checkout's to judge — the same
     // stand-down the Nango heal honors with `--no-deps`.
-    if (claim.standDown) continue;
+    //
+    // It stands the DIAGNOSIS down, not the PROBE, and the difference is the
+    // whole finding (cinatra#2839 round-3): the app still dials whatever its URL
+    // resolves to, so "nothing is listening there" stays true and stays worth
+    // saying. Skipping the loop here made a scoped, portless loopback
+    // `REDIS_URL` — the one shape that reaches this branch and is still probed
+    // on this host — say NOTHING where main warned, and ECONNREFUSED in app boot
+    // was the next thing the operator heard. `scripts/check-services.mjs` skips
+    // only the note and the diagnosis on the same condition and keeps printing
+    // the row; this is that same stand-down, on the launching surface.
+    const standDown = claim.standDown === true;
     const { host, port } = envHostPort(envPath, svc.envVar, {
       host: "127.0.0.1",
       port: svc.defaultHostPort,
@@ -248,8 +259,24 @@ async function runDbPortPreflight() {
     // has no container here to diagnose — but "nothing is listening there" is
     // still true, and gating the PROBE on the drift test is what turned that
     // case into total silence followed by ECONNREFUSED in app boot. Probe every
-    // loopback service; diagnose only the ones this checkout publishes.
-    down.push({ svc, host, port, diagnosable: shouldDiagnoseDrift({ host, port }, svc, claim.published) });
+    // loopback service — the stood-down one included; diagnose only the ones
+    // this checkout publishes.
+    //
+    // A stood-down service is never diagnosable: the plan claims no published
+    // port for it, so there is nothing for `shouldDiagnoseDrift` to compare
+    // against and no container here is this checkout's to inspect. Stated
+    // outright rather than left to fall out of an undefined `claim.published`.
+    down.push({
+      svc,
+      host,
+      port,
+      standDown,
+      // The plan's own name for this service's host-port claim, carried here so
+      // the stand-down warning below can name the variable that would end the
+      // stand-down without re-deriving it from the port table.
+      hostPortVar: claim.envVar,
+      diagnosable: !standDown && shouldDiagnoseDrift({ host, port }, svc, claim.published),
+    });
   }
   if (down.length === 0) return;
 
@@ -292,9 +319,31 @@ async function runDbPortPreflight() {
   }
   // Containers not running / unreachable but no drift — warn and continue; the
   // app retries and the operator may be bringing services up alongside.
-  console.warn(
-    `[dev-server] ⚠ ${down.map((d) => d.svc.label).join(", ")} not reachable yet — start them with \`pnpm services\` (the app will retry once they are up).`,
-  );
+  //
+  // TWO SENTENCES, because there are two different answers. `pnpm services`
+  // brings up the services this checkout publishes — and it REFUSES outright a
+  // plan that stands one down (`formatStandDownRefusal`), since a whole-stack
+  // `up` would start that service anyway, on the compose default, in somebody
+  // else's face. Naming it as the remedy for a stood-down service would send the
+  // operator to a command that cannot run, so the stood-down row gets its own
+  // line and the remedy that does work (`formatStandDownUnreachable`).
+  const publishedHere = down.filter((d) => !d.standDown);
+  if (publishedHere.length > 0) {
+    console.warn(
+      `[dev-server] ⚠ ${publishedHere.map((d) => d.svc.label).join(", ")} not reachable yet — start them with \`pnpm services\` (the app will retry once they are up).`,
+    );
+  }
+  for (const { svc, host, port, hostPortVar } of down.filter((d) => d.standDown)) {
+    console.warn(
+      `[dev-server] ⚠ ${formatStandDownUnreachable({
+        service: svc.label,
+        urlVar: svc.envVar,
+        hostPortVar,
+        host,
+        port,
+      })}`,
+    );
+  }
 }
 
 await runDbPortPreflight();
