@@ -120,12 +120,16 @@ export function ScheduleRailStep({
         )}
       </Button>
 
-      {/* THE CONFIGURATION. The same component the chat thread, the widget and
-          the other page mount — the option rows, the estimated duration, Save
-          changes, and (because this IS the page's schedule step) the trigger's
-          own chrome with Cancel trigger and Release now. The card draws NO DOM
-          at all for a run no proposal produced, so an ordinary run shows the row
-          and an empty panel rather than an invented one. */}
+      {/* THE CONFIGURATION, AND NOTHING ELSE. The same component the chat
+          thread, the widget and the other page mount — the option rows, the
+          estimated duration, Save changes, and (because this IS the page's
+          schedule step) the two operations Cancel schedule and Run now. There is
+          no summary box and no status label above the form: plan (A) §7.2 as
+          amended 2026-08-23 — "The schedule step on the run page and the review
+          page shows the same form and nothing else — no summary box, no status
+          label". The card draws NO DOM at all for a run no proposal produced, so
+          an ordinary run shows the row and an empty panel rather than an
+          invented one. */}
       {open ? (
         <div
           data-conformance-id="schedule-step-detail"

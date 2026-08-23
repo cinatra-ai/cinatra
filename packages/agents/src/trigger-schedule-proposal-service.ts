@@ -132,7 +132,7 @@ export const PROPOSAL_REFUSALS = {
   past:
     "That time has already passed. Ask for a new time and confirm the new card.",
   supersededBySchedule:
-    "This schedule was already set from this card, with different times than the ones shown here. Open the run to see the schedule that was set.",
+    "This schedule was already set from this card, with different times than the ones shown here. The rows below show the schedule that was set.",
 } as const;
 
 // ---------------------------------------------------------------------------

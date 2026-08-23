@@ -215,7 +215,7 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // Cancel acts on a live, un-released, fully-installed schedule. While the
       // install is still draining there is no scheduler to cancel yet.
       canCancel: !resolved.released && !resolved.arming,
-      // "Release now for an administrator" (§VI) — admin-only, by design.
+      // "Run now", for an administrator only (§VI) — admin-only, by design.
       canRelease: isAdmin && !resolved.released && !resolved.arming,
     };
     return { state: { state: "settled" }, view };
@@ -232,11 +232,11 @@ export { describeProposalSchedule };
 //
 // §VI's card operates five things. In a CONVERSATION: Confirm on the proposal
 // floor, and Save changes on the armed one — the two the plan puts there, and
-// the only two ("Cancel trigger, and Release now for an administrator … lives
-// on the run page's schedule step, not in the conversation", plan (A) §7.2).
-// On the RUN PAGE and the REVIEW PAGE, where §VI's card is the SCHEDULE STEP in
-// the rail, the same Save changes plus the trigger's own Cancel trigger and
-// Release now. `adjust` is the re-propose the two Confirms compose with; it is
+// the only two. On the RUN PAGE and the REVIEW PAGE, where §VI's card is the
+// SCHEDULE STEP in the rail, the same Save changes plus the two operations
+// Cancel schedule and Run now. Those two keep the data-action ids
+// `cancel-trigger-schedule` and `release-trigger-now`; only their labels
+// changed (PR #2939), so nothing on the wire moved. `adjust` is the re-propose the two Confirms compose with; it is
 // no longer a control of its own, because the rows are editable as they stand.
 // Until this slice the confirm/adjust pair were cookie-bound server actions with
 // zero UI callers and the cancel/release pair existed only on the run page's

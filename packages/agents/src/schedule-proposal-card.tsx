@@ -30,13 +30,17 @@
 //              three option rows with the chosen one taking the indigo edge and
 //              tint and owning its fields, then Estimated run duration, then the
 //              floor — Confirm, and nothing else. Nothing exists yet.
-//   settled  → THE SAME CARD AND THE SAME ROWS, now showing the armed schedule,
-//              with Save changes to re-arm. On the run page and the review page
-//              — where this card IS the schedule step in the rail — the same
-//              body additionally carries the trigger's own chrome: the read-only
-//              Trigger configuration summary, the steps held until the trigger
-//              fires, and the two quiet controls Cancel trigger and Release now
-//              for an administrator.
+//   settled  → THE SAME CARD AND THE SAME ROWS, showing the schedule as it
+//              stands, with Save changes to re-arm. NO label above it and NO
+//              summary box beside it: plan (A) §7.2 as amended 2026-08-23 —
+//              "the same card, with the same option rows, shows the schedule as
+//              it stands — no label, no summary box", and for the two pages,
+//              "The schedule step on the run page and the review page shows the
+//              same form and nothing else — no summary box, no status label".
+//              On the run page and the review page — where this card IS the
+//              schedule step in the rail — the same body additionally carries
+//              the two operations: Cancel schedule, and Run now for an
+//              administrator.
 //   expired  → the held schedule's thirty minutes ran out with nobody pressing
 //              anything. It STAYS VISIBLE and EDITABLE, with Confirm to set the
 //              schedule again (plan (A) §7.2 step 2; §9.1 row 8). Not an error, and
@@ -59,11 +63,17 @@
 //      **Save changes**, which re-arms the trigger" (§7.2). The settled body
 //      therefore carries the armed SELECTIONS, read back from the installed row,
 //      and the rows are the same component in both phases.
-//   3. THE TRIGGER'S CHROME IS NOT IN THE CONVERSATION. "**Cancel trigger** and
-//      **Release now** for an administrator — lives on the run page's schedule
-//      step, not in the conversation" (§7.2). That is the ONE thing this
-//      renderer reads its host for, and it reads it through a total map so a new
-//      host cannot be added without deciding the question.
+//   3. THE TWO OPERATIONS ARE NOT IN THE CONVERSATION. Cancel schedule, and Run
+//      now for an administrator, belong to the page's schedule step and not to
+//      the conversation (§7.2). That is the ONE thing this renderer reads its
+//      host for, and it reads it through a total map so a new host cannot be
+//      added without deciding the question.
+//
+//      THE READ-ONLY CHROME THAT USED TO RIDE WITH THEM IS GONE ENTIRELY
+//      (PR #2939): no Trigger configuration summary, no held-steps tree, no
+//      "Armed ·" line, on any host. The plan clause quoted in the phase table
+//      above is the authority; the run page's own Trigger tab still carries the
+//      full chrome and is untouched by this card.
 //
 // THE EXPIRED PHASE IS SHARED WITH cinatra#2836 (PR #2837), NOT FORKED FROM IT.
 // That branch lands the today-fix: the token read that tells "expired" apart
@@ -86,13 +96,11 @@
 // entirely. Drawing this card without it would have recreated the widget-parity
 // defect the epic exists to close.
 //
-// AND EVERY COOKIE-BOUND AFFORDANCE IS GATED ON `useCookieSessionSurface`.
-// "No auth declared" is TRUE in two situations — a well-formed cookie host, and
-// a broken non-cookie declaration the provider refused — so it is not the
-// question. The one control that is genuinely first-party (the deep link to the
-// armed run) reads the context that answers it, and draws nothing outside a
-// real cookie session rather than offering a link that would answer as somebody
-// else or 404.
+// THIS CARD DRAWS NO COOKIE-BOUND AFFORDANCE. It used to carry one — a deep
+// link into the armed run — and that link is gone (maintainer, PR #2939): the
+// card shows the schedule and the controls that change it, and nothing that
+// navigates away. So there is no first-party/widget split left to gate here,
+// and `useCookieSessionSurface` is no longer read by this module.
 //
 // THE ROWS ARE REPRODUCED, THE FLOOR IS NEW. The plan says so in as many words:
 // "the same scheduling step everywhere else arms its trigger directly on
@@ -150,7 +158,6 @@ import type {
   TriggerScheduleProposalSettledView,
   TriggerScheduleProposalExpiredView,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
-import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -164,7 +171,6 @@ import {
 } from "@/components/ui/select";
 
 import {
-  useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardResolve,
@@ -196,15 +202,17 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
 };
 
 /**
- * Does THIS host draw the settled trigger's own chrome — the read-only Trigger
- * configuration summary, the steps held until the trigger fires, and the two
- * quiet controls Cancel trigger and Release now?
+ * Does THIS host draw the settled schedule's two operations — Cancel schedule,
+ * and Run now for an administrator?
  *
- * ONLY THE TWO PAGE HOSTS, and the plan says exactly that: the chrome "lives on
- * the run page's schedule step, not in the conversation" (§7.2), and §7.4's
- * as-designed step 6 puts Cancel and Release there and Save changes here. On
- * those two hosts this card IS that step (§7.2 step 5, §7.4 step 7), so the
- * chrome has nowhere else to live.
+ * ONLY THE TWO PAGE HOSTS: §7.4's as-designed step 6 puts Cancel and Release on
+ * the page and Save changes in the conversation, and on those two hosts this
+ * card IS the page's schedule step (§7.2 step 5, §7.4 step 7), so they have
+ * nowhere else to live.
+ *
+ * THE NAME IS HISTORICAL. This map once also gated a read-only chrome block —
+ * the Trigger configuration summary and the held-steps tree — which PR #2939
+ * removed from every host. What it gates now is the two operations alone.
  *
  * A TOTAL MAP, like `HOST_FRAME`, for the same reason: this is the one question
  * this renderer answers differently per host, so a new host cannot be added
@@ -635,16 +643,12 @@ function SettledPhase({
   const [confirming, setConfirming] = useState<null | "cancel" | "release">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  // The deep link into the armed run is COOKIE-BOUND: it is a first-party app
-  // route. Outside a real cookie session it is not offered — a widget reader
-  // following it would arrive as whoever else is signed in on that browser, or
-  // at a sign-in wall. `useCookieSessionSurface` is the only context that
-  // answers this correctly, because "declared no credential" is also true of a
-  // declaration the provider REFUSED.
-  const firstParty = useCookieSessionSurface();
   // The one host-dependent region, decided by a total map rather than by a
-  // condition someone can forget to extend (plan (A) §7.2: the chrome "lives on
-  // the run page's schedule step, not in the conversation").
+  // condition someone can forget to extend. What it now gates is ONLY the two
+  // operations (Cancel schedule, Run now): the read-only summary box and the
+  // held-steps tree it used to gate were removed on the maintainer's reading of
+  // PR #2939 — plan (A) §7.2, "the schedule step … shows the same form and
+  // nothing else — no summary box, no status label".
   const showsChrome = HOST_SHOWS_TRIGGER_CHROME[host];
 
   const edited = useMemo(
@@ -680,55 +684,28 @@ function SettledPhase({
 
   return (
     <div className="flex w-full flex-col gap-4 rounded-card border border-line bg-surface-strong p-4">
-      {/* The armed schedule in plain words, over the rows that draw it. One
-          line, in the same card — not a second card (plan (A) §7.2). */}
-      <p data-conformance-id="schedule-armed-summary" className="text-sm text-foreground">
-        <span className="font-medium">Armed</span>
-        <span className="text-muted-foreground"> · {body.scheduleCopy}</span>
-      </p>
+      {/* THE SUPERSEDED READING (cinatra#2859), and the ONLY thing drawn above
+          the rows. This is not the status label plan (A) §7.2 removes — an
+          ordinary settled card draws nothing here. It fires only when this
+          card's family was corrected away from these times before Confirm
+          landed, and it is the one moment the reader cannot get from the rows
+          alone: the rows below are RIGHT (they are read back off the durable
+          row the family settled on), so without this line the card silently
+          shows different times than the reader stated.
 
-      {showsChrome ? (
-        /* THE TRIGGER'S OWN CHROME — the run page's and the review page's
-           schedule step, and only theirs. Reproduced from Components
-           § Persistent trigger tab, exactly as it was, so the step the plan
-           moves this to shows what the Trigger tab always showed. */
-        <div
-          data-conformance-id="scheduled-run-chrome"
-          className="flex flex-col gap-4 rounded-control border border-line bg-surface-muted p-3"
+          Until now `superseded` and `scheduleCopy` reached the card and nothing
+          drew either — the one-card gate's contract row recorded that gap in
+          writing. Removing the "Armed ·" line is what forced it closed: that
+          line was `scheduleCopy`'s only reader, so the warning would have
+          disappeared with it. */}
+      {body.superseded ? (
+        <p
+          data-conformance-id="schedule-superseded"
+          role="status"
+          className="text-sm text-foreground"
         >
-          <div className="flex flex-col gap-2">
-            <h3 className="text-base font-semibold text-foreground">Trigger configuration</h3>
-            <SummaryRow label="Type" value={body.triggerType} />
-            <SummaryRow label="Schedule" value={body.scheduleCopy} />
-            <SummaryRow label="Timezone" value={body.timezone} />
-          </div>
-
-          {/* Steps held until trigger fires — the same tree the Trigger tab
-              draws, and the same sentence when there are none. The body carries
-              an empty list rather than a wrong one where the tree has not been
-              read. */}
-          <div className="flex flex-col gap-2" data-conformance-id="schedule-gated-steps">
-            <h3 className="text-sm font-medium text-foreground">
-              Steps held until trigger fires
-            </h3>
-            {body.gatedSteps.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No side-effect steps detected. The trigger acts as a start gate only —
-                the run begins when the trigger fires and runs to completion.
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
-                {body.gatedSteps.map((step) => (
-                  <li key={step.stepId} className="font-mono text-xs">
-                    {step.agentPath.length > 0 ? `${step.agentPath.join(" › ")} › ` : ""}
-                    {step.toolName}
-                    <span className="ml-2 text-badge-2xs uppercase">{step.inferredOrManual}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
+          {body.scheduleCopy}
+        </p>
       ) : null}
 
       {/* The state the controls are withheld for, said out loud rather than
@@ -780,16 +757,6 @@ function SettledPhase({
             Saved — the trigger is re-armed on these rows.
           </p>
         ) : null}
-        {firstParty ? (
-          <Button asChild variant="ghost" size="sm" className="mr-auto">
-            <Link
-              data-conformance-id="schedule-open-run"
-              href={`/agents/runs/${encodeURIComponent(body.runId)}`}
-            >
-              Open the run
-            </Link>
-          </Button>
-        ) : null}
         <Button
           type="button"
           size="sm"
@@ -810,7 +777,7 @@ function SettledPhase({
             disabled={!body.canCancel || pending !== null}
             onClick={() => setConfirming("cancel")}
           >
-            {pending === "cancel" ? "Cancelling…" : "Cancel trigger"}
+            {pending === "cancel" ? "Cancelling…" : "Cancel schedule"}
           </Button>
         ) : null}
         {showsChrome && body.canRelease ? (
@@ -822,7 +789,7 @@ function SettledPhase({
             disabled={pending !== null}
             onClick={() => setConfirming("release")}
           >
-            {pending === "release" ? "Releasing…" : "Release now"}
+            {pending === "release" ? "Releasing…" : "Run now"}
           </Button>
         ) : null}
       </div>
@@ -830,10 +797,10 @@ function SettledPhase({
       {confirming === "cancel" ? (
         <ConfirmStrip
           conformanceId="schedule-cancel-confirm"
-          title="Cancel scheduled trigger?"
-          description="The run will stay paused. You can re-arm a new trigger from this step. Already-completed setup steps are preserved."
-          dismissLabel="Keep trigger"
-          confirmLabel="Cancel trigger"
+          title="Cancel this schedule?"
+          description="The run will stay paused. You can set a new schedule from this step. Already-completed setup steps are preserved."
+          dismissLabel="Keep schedule"
+          confirmLabel="Cancel schedule"
           onDismiss={() => setConfirming(null)}
           onConfirm={() => void act("cancel")}
         />
@@ -841,23 +808,14 @@ function SettledPhase({
       {confirming === "release" ? (
         <ConfirmStrip
           conformanceId="schedule-release-confirm"
-          title="Release trigger now?"
+          title="Run this schedule now?"
           description="All side-effect steps will become eligible immediately, including any irreversible sends or publishes. This cannot be undone."
           dismissLabel="Cancel"
-          confirmLabel="Release now"
+          confirmLabel="Run now"
           onDismiss={() => setConfirming(null)}
           onConfirm={() => void act("release")}
         />
       ) : null}
-    </div>
-  );
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }): ReactElement {
-  return (
-    <div className="flex justify-between gap-4 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="text-foreground">{value}</span>
     </div>
   );
 }

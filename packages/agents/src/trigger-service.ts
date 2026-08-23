@@ -1163,8 +1163,8 @@ export async function releaseTriggerNowForActor(
 //
 // SWITCHING TO "RUN RIGHT AFTER SETUP" IS REFUSED, deliberately. That row is not
 // a schedule — arming it dispatches the run at once — so accepting it here would
-// make Save changes an undocumented Release now, on a card that (in a
-// conversation) deliberately carries neither Cancel trigger nor Release now.
+// make Save changes an undocumented Run now, on a card that (in a
+// conversation) deliberately carries neither Cancel schedule nor Run now.
 // ---------------------------------------------------------------------------
 
 /** §VI's closed selection vocabulary, as this module sees it. Mirrors
@@ -1195,7 +1195,7 @@ export const SAVE_SCHEDULE_REFUSALS = {
   firedOneOff:
     "This one-off schedule has already run. Ask for a new schedule instead of changing this one.",
   immediate:
-    "\u201cRun right after setup\u201d starts the run now rather than scheduling it. Use Release now on the run page\u2019s schedule step to start an armed run early.",
+    "\u201cRun right after setup\u201d starts the run now rather than scheduling it. Use Run now on the run page\u2019s schedule step to start an armed run early.",
   /** The prior scheduler would not cancel, so the replacement was NOT installed
    *  — the schedule the reader is looking at is still the live one. */
   cancelFailed:

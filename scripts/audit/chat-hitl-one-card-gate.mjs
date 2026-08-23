@@ -541,15 +541,25 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // the paraphrase instead would make this gate assert that the card
       // consumes fields the server never sends.
       //
-      // TWO AUTHORIZED FIELDS ARE ABSENT FROM THIS LIST, and are named here
-      // rather than left to be discovered, because this row is the only place a
-      // reader can see it: `agentName` (every variant) and `superseded` (the
-      // settled variant, added by cinatra#2859 so "a renderer can mark it in its
-      // own chrome") are sent by the server and read by no part of the drawing.
-      // They are not deferred here — an open obligation may only defer a
-      // ratified ANCHOR, never a body field — so listing them would make R6 fail
-      // on a card that draws §VI as ratified. The gap is real and belongs to
-      // whoever ratifies where those two appear.
+      // `superseded` JOINS THIS LIST (PR #2939), and that closes half of the
+      // gap this comment used to record. It and `scheduleCopy` were both sent
+      // and drawn by nobody; removing the "Armed ·" line took away
+      // `scheduleCopy`'s only reader, which would have deleted cinatra#2859's
+      // superseded warning outright, so the card now draws that warning from
+      // the two of them together. `agentName` is still sent and read by no part
+      // of the drawing — that half of the gap is real and belongs to whoever
+      // ratifies where it appears.
+      //
+      // THREE FIELDS LEAVE THIS LIST, and they leave because the drawing that
+      // read them is gone, not because the server stopped sending them:
+      // `runId` (the "Open the run" link), `triggerType` and `gatedSteps` (the
+      // Trigger configuration summary and the held-steps tree). Plan (A) §7.2
+      // as amended 2026-08-23 removes all three drawings. The settled view
+      // schema still CARRIES the three, so the server now computes fields no
+      // host draws; pruning them from the protocol is a wire change with its
+      // own version story (the schema is `.strict()`) and is deliberately NOT
+      // folded into this rework. Listed here so it is discovered by reading
+      // rather than by a later gate failure.
       fields: [
         "state",
         "phase",
@@ -557,11 +567,9 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "durationCopy",
         "canConfirm",
         "restrictedReason",
-        "runId",
-        "triggerType",
         "scheduleCopy",
+        "superseded",
         "timezone",
-        "gatedSteps",
         "released",
         "arming",
         "canSave",
@@ -594,10 +602,18 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     // chrome wherever it appears. The plan supersedes both, so the design page
     // needs the amendment — the same shape §9.1 already records for the chip row
     // and for the pinned capture pair. Named here rather than implemented around.
+    //
+    // `scheduled-run-chrome` IS RETIRED FROM THIS SET (PR #2939). It named the
+    // read-only summary box and the held-steps tree, and plan (A) §7.2 as
+    // amended 2026-08-23 removes both from every host: "The schedule step on the
+    // run page and the review page shows the same form and nothing else — no
+    // summary box, no status label". An anchor no host may draw cannot be a
+    // requirement, so it is dropped rather than made conditional. The two
+    // operations keep their data-action ids and change only their labels
+    // (Cancel schedule, Run now), which is why the ids below are untouched.
     anchors: [
       "schedule-option-rows",
       "schedule-proposal-floor",
-      "scheduled-run-chrome",
       '[data-action="save-schedule-changes"]',
       '[data-action="cancel-trigger-schedule"]',
       '[data-action="release-trigger-now"]',

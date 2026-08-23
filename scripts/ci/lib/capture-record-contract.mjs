@@ -173,7 +173,7 @@ export const CARD_KINDS = {
     // TWO CORRECTIONS ARE FOLDED IN HERE. The placeholder-era `[data-action]`
     // was written before any of the card existed and matched too much — the
     // settled reading draws Save changes, and on the two page hosts Cancel
-    // trigger and Release now as well — so a truthful settled capture was
+    // schedule and Run now as well — so a truthful settled capture was
     // refused as "still offers a decision". And the interim wording named an
     // `adjust-schedule-proposal` control that no longer exists: plan (A) §7.2,
     // "The option rows are editable as they stand: until you confirm, you change

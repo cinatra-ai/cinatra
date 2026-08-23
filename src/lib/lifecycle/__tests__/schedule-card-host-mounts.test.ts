@@ -187,7 +187,6 @@ describe("the owner's contract, read off its own source", () => {
     for (const anchor of [
       "schedule-option-rows",
       "schedule-proposal-floor",
-      "scheduled-run-chrome",
     ]) {
       expect(owner, anchor).toContain(`data-conformance-id="${anchor}"`);
     }

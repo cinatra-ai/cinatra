@@ -1003,7 +1003,6 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
     trigger_schedule_proposal: [
       "schedule-option-rows",
       "schedule-proposal-floor",
-      "scheduled-run-chrome",
       '[data-action="save-schedule-changes"]',
       '[data-action="cancel-trigger-schedule"]',
       '[data-action="release-trigger-now"]',

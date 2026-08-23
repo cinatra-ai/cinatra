@@ -245,22 +245,21 @@ describe("§VI the schedule proposal card", () => {
     expect(container.querySelector('[data-lifecycle-card-state="restricted"]')).not.toBeNull();
   });
 
-  // PLAN §7.2 step 5 and §7.2, on the PAGE host. The page's schedule step carries the
-  // trigger's own chrome AND the editable rows: plan (A) §7.2 — the chrome
-  // "lives on the run page's schedule step, not in the conversation", and the
-  // step is where you "see the configuration or change it".
-  it("settled on a PAGE host: the trigger's chrome, the SAME editable rows, Save changes, and the two quiet controls", async () => {
+  // PLAN §7.2 step 5 and §7.2, on the PAGE host. The page's schedule step is the
+  // FORM and its controls — plan (A) §7.2, amended 2026-08-23: "The schedule
+  // step on the run page and the review page shows the same form and nothing
+  // else — no summary box, no status label". The step is still where you "see
+  // the configuration or change it", so the rows stay editable.
+  it("settled on a PAGE host: the form only — no chrome, the SAME editable rows, Save changes, and the two controls", async () => {
     mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
     const { container } = renderOn("run_card");
 
     await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="scheduled-run-chrome"]')).not.toBeNull(),
+      expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
     );
-    expect(container.textContent).toContain("Trigger configuration");
-    expect(container.textContent).toContain("Every weekday at 9:00 AM");
-    expect(container.textContent).toContain("Europe/Berlin");
-    expect(container.textContent).toContain("Steps held until trigger fires");
-    expect(container.textContent).toContain("No side-effect steps detected.");
+    expect(container.querySelector('[data-conformance-id="scheduled-run-chrome"]')).toBeNull();
+    expect(container.textContent).not.toContain("Trigger configuration");
+    expect(container.textContent).not.toContain("Steps held until trigger fires");
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull();
     expect(container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull();
     // The SAME option rows the proposal drew, showing the armed schedule and
@@ -410,11 +409,11 @@ describe("§VI the schedule proposal card", () => {
     expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
   });
 
-  it("settled: Release now is admin-only — a non-admin body draws no control at all", async () => {
+  it("settled: Run now is admin-only — a non-admin body draws no control at all", async () => {
     mockTransport({ state: "settled" }, settledBody({ canRelease: false }));
     const { container } = renderOn("run_card");
     await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="scheduled-run-chrome"]')).not.toBeNull(),
+      expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
     );
     expect(container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
     expect(isDisabled(container.querySelector('[data-action="cancel-trigger-schedule"]'))).toBe(false);
@@ -611,9 +610,10 @@ describe("§IX every host draws the same card", () => {
 
       // The SETTLED half of the same set, on the same host: the Save-changes
       // floor everywhere, plus — on the two PAGE hosts, where this card IS the
-      // schedule step — the trigger's own chrome and its two quiet controls.
-      // The conversation is ruled not to have those (plan (A) §7.2), so the
-      // ratified anchors that name them are read on the hosts that draw them.
+      // schedule step — the two operations. The chrome anchor is GONE from the
+      // set on every host (plan (A) §7.2: the step "shows the same form and
+      // nothing else"), and the conversation is ruled not to have the two
+      // operations either, so they are read on the hosts that draw them.
       const pageHost = host === "run_card" || host === "page_gate_region";
       mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
       const settled = renderOn(host);
@@ -639,7 +639,7 @@ describe("§IX every host draws the same card", () => {
       ).toHaveLength(1);
       expect(
         settled.container.querySelectorAll('[data-conformance-id="scheduled-run-chrome"]'),
-      ).toHaveLength(pageHost ? 1 : 0);
+      ).toHaveLength(0);
       expect(
         settled.container.querySelectorAll('[data-action="cancel-trigger-schedule"]'),
       ).toHaveLength(pageHost ? 1 : 0);
@@ -700,24 +700,25 @@ describe("credential-aware decisions", () => {
     expect((init.headers as Record<string, string>)["X-Cinatra-Widget-User-Token"]).toBe("cwu_user");
   });
 
-  it("the widget draws NO cookie-bound affordance: the deep link into the run is first-party only", async () => {
-    mockTransport({ state: "settled" }, settledBody());
-    const widget = renderOn("site_widget");
-    await waitFor(() =>
-      expect(widget.container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
-    );
-    expect(widget.container.querySelector('[data-conformance-id="schedule-open-run"]')).toBeNull();
-    widget.unmount();
-    cleanup();
-
-    mockTransport({ state: "settled" }, settledBody());
-    const chat = renderOn("chat_thread");
-    await waitFor(() =>
-      expect(chat.container.querySelector('[data-conformance-id="schedule-open-run"]')).not.toBeNull(),
-    );
+  // The card once carried a deep link into the armed run, gated on a real
+  // cookie session. The maintainer removed it from the card altogether
+  // (PR #2939), so there is no cookie-bound affordance left to gate: the
+  // absence is now unconditional, and that is what this reads.
+  it("NO cookie-bound affordance on any host: the deep link into the run is gone from the card", async () => {
+    for (const host of ["site_widget", "chat_thread", "run_card", "page_gate_region"] as const) {
+      mockTransport({ state: "settled" }, settledBody());
+      const view = renderOn(host);
+      await waitFor(() =>
+        expect(view.container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
+      );
+      expect(view.container.querySelector('[data-conformance-id="schedule-open-run"]')).toBeNull();
+      expect(view.container.textContent).not.toContain("Open the run");
+      view.unmount();
+      cleanup();
+    }
   });
 
-  it("Cancel asks first, in the Trigger tab's own words, and only then acts", async () => {
+  it("Cancel schedule asks first, in the schedule's own words, and only then acts", async () => {
     const fetchMock = mockTransport({ state: "settled" }, settledBody(), { kind: "cancelled" });
     const { container } = renderOn("run_card");
     await waitFor(() =>
@@ -727,7 +728,7 @@ describe("credential-aware decisions", () => {
     // Asked, not done.
     const strip = container.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
     expect(strip).not.toBeNull();
-    expect(strip?.textContent).toContain("Cancel scheduled trigger?");
+    expect(strip?.textContent).toContain("Cancel this schedule?");
     expect(strip?.textContent).toContain("The run will stay paused.");
     expect(decisionBodies(fetchMock)).toHaveLength(0);
 
@@ -735,7 +736,7 @@ describe("credential-aware decisions", () => {
     await waitFor(() => expect(lastDecision(fetchMock).op).toBe("cancel"));
   });
 
-  it("Release now asks first with its irreversibility warning, then reaches the release operation", async () => {
+  it("Run now asks first with its irreversibility warning, then reaches the release operation", async () => {
     const fetchMock = mockTransport({ state: "settled" }, settledBody({ canRelease: true }), {
       kind: "released",
     });
@@ -745,7 +746,7 @@ describe("credential-aware decisions", () => {
     );
     fireEvent.click(container.querySelector('[data-action="release-trigger-now"]')!);
     const strip = container.querySelector('[data-conformance-id="schedule-release-confirm"]');
-    expect(strip?.textContent).toContain("Release trigger now?");
+    expect(strip?.textContent).toContain("Run this schedule now?");
     expect(strip?.textContent).toContain("This cannot be undone.");
     fireEvent.click(strip!.querySelector('[data-action="confirm-destructive"]')!);
     await waitFor(() => expect(lastDecision(fetchMock).op).toBe("release"));
@@ -932,5 +933,133 @@ describe("the prompt-window action seam (cinatra#2853)", () => {
     ) as unknown as typeof fetch;
     const outcome = await submitScheduleDecision({ ref: "r", op: "confirm", auth: null });
     expect(outcome.kind).toBe("not-permitted");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE S9d REWORK (cinatra#2788, PR #2939 round 2).
+//
+// The maintainer rejected round 1 on four readings of the settled card. Three
+// of them are removals the PLAN now states outright — PLAN: Agents Lifecycle
+// (A) §7.2, amended 2026-08-23: "the same card, with the same option rows,
+// shows the schedule as it stands — no label, no summary box" for the
+// conversation, and "The schedule step on the run page and the review page
+// shows the same form and nothing else — no summary box, no status label" for
+// the two pages. The fourth is the two controls' names.
+//
+// These are written against the CARD rather than a page because the card is the
+// one renderer of this kind on all four hosts: what it does not draw, no host
+// can show.
+// ---------------------------------------------------------------------------
+
+describe("the rework — the step is the form and nothing else", () => {
+  const PAGE_HOSTS = ["run_card", "page_gate_region"] as const;
+  const ALL_HOSTS = ["chat_thread", "site_widget", "run_card", "page_gate_region"] as const;
+
+  it("NO summary box and NO held-steps block on either page host", async () => {
+    for (const host of PAGE_HOSTS) {
+      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      const view = renderOn(host);
+      await waitFor(() =>
+        expect(
+          view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
+        ).not.toBeNull(),
+      );
+      expect(
+        view.container.querySelector('[data-conformance-id="scheduled-run-chrome"]'),
+      ).toBeNull();
+      expect(
+        view.container.querySelector('[data-conformance-id="schedule-gated-steps"]'),
+      ).toBeNull();
+      expect(view.container.textContent).not.toContain("Trigger configuration");
+      expect(view.container.textContent).not.toContain("Steps held until trigger fires");
+      view.unmount();
+      cleanup();
+    }
+  });
+
+  it("NO status label — the word Armed is drawn on no host", async () => {
+    for (const host of ALL_HOSTS) {
+      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      const view = renderOn(host);
+      await waitFor(() =>
+        expect(
+          view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
+        ).not.toBeNull(),
+      );
+      expect(
+        view.container.querySelector('[data-conformance-id="schedule-armed-summary"]'),
+      ).toBeNull();
+      expect(view.container.textContent).not.toContain("Armed");
+      view.unmount();
+      cleanup();
+    }
+  });
+
+  it("NO Open-the-run link on any host", async () => {
+    for (const host of ALL_HOSTS) {
+      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      const view = renderOn(host);
+      await waitFor(() =>
+        expect(
+          view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
+        ).not.toBeNull(),
+      );
+      expect(
+        view.container.querySelector('[data-conformance-id="schedule-open-run"]'),
+      ).toBeNull();
+      expect(view.container.textContent).not.toContain("Open the run");
+      view.unmount();
+      cleanup();
+    }
+  });
+
+  it("the two controls are named Cancel schedule and Run now — the data-action ids are unchanged", async () => {
+    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+    const { container } = renderOn("run_card");
+    await waitFor(() =>
+      expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull(),
+    );
+    expect(
+      container.querySelector('[data-action="cancel-trigger-schedule"]')?.textContent,
+    ).toContain("Cancel schedule");
+    expect(
+      container.querySelector('[data-action="release-trigger-now"]')?.textContent,
+    ).toContain("Run now");
+    expect(container.textContent).not.toContain("Cancel trigger");
+    expect(container.textContent).not.toContain("Release now");
+  });
+
+  it("the confirm dialogs say schedule, not trigger", async () => {
+    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+    const cancelView = renderOn("run_card");
+    await waitFor(() =>
+      expect(
+        cancelView.container.querySelector('[data-action="cancel-trigger-schedule"]'),
+      ).not.toBeNull(),
+    );
+    fireEvent.click(cancelView.container.querySelector('[data-action="cancel-trigger-schedule"]')!);
+    const cancelStrip = cancelView.container.querySelector(
+      '[data-conformance-id="schedule-cancel-confirm"]',
+    );
+    expect(cancelStrip?.textContent).toContain("Cancel this schedule?");
+    expect(cancelStrip?.textContent).toContain("Keep schedule");
+    expect(cancelStrip?.textContent).not.toContain("trigger");
+    cancelView.unmount();
+    cleanup();
+
+    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+    const releaseView = renderOn("run_card");
+    await waitFor(() =>
+      expect(
+        releaseView.container.querySelector('[data-action="release-trigger-now"]'),
+      ).not.toBeNull(),
+    );
+    fireEvent.click(releaseView.container.querySelector('[data-action="release-trigger-now"]')!);
+    const releaseStrip = releaseView.container.querySelector(
+      '[data-conformance-id="schedule-release-confirm"]',
+    );
+    expect(releaseStrip?.textContent).toContain("Run this schedule now?");
+    expect(releaseStrip?.textContent).not.toContain("trigger");
   });
 });
