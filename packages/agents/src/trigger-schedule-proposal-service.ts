@@ -116,14 +116,14 @@ import { verifySessionAuthority } from "@/lib/org-write/authority";
 // in `assistant_turns.content` and is re-fed to the model — naming what was
 // refused there would build a durable enumeration oracle.
 
-/** What Confirm says when the proposal is no longer good. */
+/** What Confirm says when the stated schedule is no longer good. */
 export const PROPOSAL_REFUSALS = {
   invalid:
-    "This schedule proposal is no longer valid — it may have expired. Ask again and confirm the new one.",
+    "This schedule is no longer valid — it may have expired. Ask again and confirm the new card.",
   notRunnable:
     "This agent can't be run right now. Open its listing to see what it needs.",
   unknownAgent:
-    "The agent this schedule was proposed for is no longer available.",
+    "The agent this schedule was for is no longer available.",
   installFailed:
     "The schedule could not be armed just now — please try again.",
   past:

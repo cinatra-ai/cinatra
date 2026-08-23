@@ -11,11 +11,11 @@
 // WHAT WAS HERE BEFORE: nothing. `registry.tsx` dispatched this kind to the S1
 // shell — a grey box reading "Schedule proposal · Waiting for your decision."
 // with no controls — while the server had been returning the whole card body
-// and the confirm action had zero UI callers on any surface. A proposal made in
-// a conversation could not be confirmed in that conversation, or anywhere else.
+// and the confirm action had zero UI callers on any surface. A schedule stated
+// in a conversation could not be confirmed in that conversation, or anywhere else.
 // This file is that card, and the shell is retired for this kind.
 //
-// ONE RENDERER, EVERY HOST. The same component draws the proposal in the chat
+// ONE RENDERER, EVERY HOST. The same component draws the stated schedule in the chat
 // thread, in the site widget, on the run page and in the review page's gate
 // region. The HOST supplies a frame (spacing) and a credential; it never
 // supplies a second drawing. That is the epic's structural rule and the reason
@@ -37,9 +37,9 @@
 //              Trigger configuration summary, the steps held until the trigger
 //              fires, and the two quiet controls Cancel trigger and Release now
 //              for an administrator.
-//   expired  → the proposal's thirty minutes ran out with nobody pressing
-//              anything. It STAYS VISIBLE and EDITABLE, with Confirm to propose
-//              again (plan (A) §7.2 step 2; §9.1 row 8). Not an error, and
+//   expired  → the held schedule's thirty minutes ran out with nobody pressing
+//              anything. It STAYS VISIBLE and EDITABLE, with Confirm to set the
+//              schedule again (plan (A) §7.2 step 2; §9.1 row 8). Not an error, and
 //              emphatically not `absent` — that rung is reserved for a reader
 //              who may not see the subject at all, and answering it deleted the
 //              card, and the question it asked, out of the reader's transcript.
@@ -47,7 +47,7 @@
 // THREE THINGS THE PLAN FIXES THAT THIS CARD IS THE WHOLE IMPLEMENTATION OF:
 //
 //   1. NO ADJUST STEP. "The option rows are editable as they stand: until you
-//      confirm, you change the proposal directly on the card — the rows are
+//      confirm, you change the schedule directly on the card — the rows are
 //      never locked behind a separate step. The floor is **Confirm**" (§7.2).
 //      There is no `Adjust` control on any phase. The re-propose it used to open
 //      still happens — a proposal is single-use, so EDITED rows are re-proposed
@@ -96,8 +96,8 @@
 //
 // THE ROWS ARE REPRODUCED, THE FLOOR IS NEW. The plan says so in as many words:
 // "the same scheduling step everywhere else arms its trigger directly on
-// **Continue**, because there the thing already exists. On a proposal nothing
-// exists until you confirm; **Confirm** arms it" (§7.2). So
+// **Continue**, because there the thing already exists. Nothing exists here
+// until you confirm; **Confirm** arms the schedule you stated" (§7.2). So
 // the rows here carry the shipped scheduling step's own structure, classes and
 // selection vocabulary — `trigger-recurrence` is the ONE module that says what a
 // selection means, imported by the form, by the server's proposal producer and
@@ -445,7 +445,7 @@ export function ScheduleProposalCard({
 }
 
 // ---------------------------------------------------------------------------
-// PROPOSAL — the standard scheduling step, then the Confirm floor
+// THE STATED SCHEDULE — the standard scheduling step, then the Confirm floor
 // ---------------------------------------------------------------------------
 
 function ProposalPhase({
@@ -563,8 +563,8 @@ function ExpiredPhase({
   const [pending, setPending] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
 
-  // THE SAME FLOOR AS THE LIVE PROPOSAL. "An expired proposal **stays visible**,
-  // still editable, with **Confirm** to propose again" (§7.2 step 2). The window
+  // THE SAME FLOOR AS THE LIVE CARD. "An expired card **stays visible**, still
+  // editable, with **Confirm** to set the schedule again" (§7.2 step 2). The window
   // closed and the token is unspendable, so the press cannot be a bare confirm:
   // it re-proposes on the expired ref and confirms the replacement, which is the
   // same composite an EDITED live proposal performs. The reader sees one
@@ -585,8 +585,8 @@ function ExpiredPhase({
         data-conformance-id="schedule-proposal-expired"
         className="text-sm text-muted-foreground"
       >
-        This schedule proposal expired before it was confirmed. Nothing was
-        scheduled — change it if you like, then confirm to propose it again.
+        This schedule expired before it was confirmed. Nothing was scheduled —
+        change it if you like, then confirm it again.
       </p>
       <ScheduleOptionRows schedule={draft} editable onChange={setDraft} durationCopy={null} />
       <div

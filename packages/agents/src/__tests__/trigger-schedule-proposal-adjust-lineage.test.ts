@@ -924,3 +924,13 @@ describe("resolution never manufactures a supersession", () => {
     }
   });
 });
+
+describe("the refusals name the schedule, not a proposal by the assistant", () => {
+  it("Confirm's refusal copy never calls the reader's own schedule a proposal", async () => {
+    const { PROPOSAL_REFUSALS } = await import("../trigger-schedule-proposal-service");
+    for (const line of Object.values(PROPOSAL_REFUSALS)) {
+      expect(line.toLowerCase()).not.toContain("proposal");
+      expect(line.toLowerCase()).not.toContain("proposed");
+    }
+  });
+});

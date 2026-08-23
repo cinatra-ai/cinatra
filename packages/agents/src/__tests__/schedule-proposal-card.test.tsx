@@ -488,6 +488,26 @@ describe("§VI the schedule proposal card", () => {
     expect(container.querySelector('[data-lifecycle-card-phase="expired"]')).not.toBeNull();
   });
 
+  // THE CARD SHOWS THE SCHEDULE THE READER STATED — never "the assistant's
+  // proposal". A schedule a person stated in the conversation is their
+  // instruction; the card reads it back and Confirm arms it. Plan (A) §7.2.
+  it("expired: the copy names THE SCHEDULE the reader stated, never a proposal", async () => {
+    mockTransport({ state: "settled" }, EXPIRED_BODY);
+    const { container } = renderOn("chat_thread");
+
+    const expired = await waitFor(() => {
+      const node = container.querySelector('[data-conformance-id="schedule-proposal-expired"]');
+      expect(node).not.toBeNull();
+      return node as Element;
+    });
+    const copy = (expired.textContent ?? "").replace(/\s+/g, " ").trim();
+    expect(copy).toBe(
+      "This schedule expired before it was confirmed. Nothing was scheduled — change it if you like, then confirm it again.",
+    );
+    expect(copy.toLowerCase()).not.toContain("proposal");
+    expect(copy.toLowerCase()).not.toContain("propose");
+  });
+
   // PLAN §7.2, stated as an absence over the WHOLE card, on every host and every
   // phase: there is no Adjust control anywhere any more.
   it("NO Adjust control exists on any phase or any host — the rows are the only way to change a proposal", async () => {
