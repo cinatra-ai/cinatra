@@ -12,7 +12,8 @@
 // exists to force `agent_run` for exactly this wording, is server-side and so
 // never ran. The documented form was dead on arrival.
 //
-// RULING IMPLEMENTED (see the PR body). The documented canonical form is the
+// RULING IMPLEMENTED (cinatra#2820 — the issue carries the ruling, durably;
+// a PR body does not survive the squash). The documented canonical form is the
 // contract; the router defect is the bug. An `agent-dispatch` classification is
 // therefore a REQUEST FOR THE HOST, not a no-responder: the host Cinatra reply
 // streams, the pre-router sees the message, and the run plays out on the inline
@@ -28,6 +29,13 @@ import { decideMessageRouting } from "../route-decision";
 import { classifyMentions, type AudienceScopedAssistantResolver } from "../classify-mentions";
 import { resolveDispatchPlan, shouldEnterSlackModeOnSend, countMentions } from "../chat-routing";
 import type { AssistantDeliveryLookup } from "../dispatch-planner";
+// THE OTHER SIDE OF THE SEAM. `explicit-dispatch.ts` is deliberately free of
+// `import "server-only"` so it can be unit-tested without the Next server
+// harness, which also lets this client-side suite hold both halves of the
+// client→server path against ONE literal. Reached by relative path because the
+// app is not a workspace dependency of @cinatra-ai/chat (same precedent as
+// packages/extensions/src/__tests__/canonical-types-source-validators.test.ts).
+import { detectExplicitDispatchPackage } from "../../../../src/app/api/chat/explicit-dispatch";
 
 const CINATRA_HOST_ID = "cin-host";
 /** The builtin's CANONICAL handle — the bare `cinatra` is only a reserved alias. */
@@ -67,6 +75,10 @@ async function route(content: string) {
 }
 
 const AGENT_ONLY = "use @cinatra-ai/contact-discovery-agent to find leads at Acme";
+/** The SAME message a reader types with ordinary capitalization (pinned below). */
+const AGENT_ONLY_MIXED_CASE = "Use @Cinatra-AI/Contact-Discovery-Agent to find leads at Acme";
+/** What the server pre-router must resolve `AGENT_ONLY` to. */
+const AGENT_ONLY_PACKAGE = "@cinatra-ai/contact-discovery-agent";
 
 describe("cinatra#2820 — the canonical scoped-agent-only form streams", () => {
   it("REPRO — a scoped-agent-only message reaches the host stream, not the no-call plan", async () => {
@@ -125,6 +137,74 @@ describe("cinatra#2820 — the canonical scoped-agent-only form streams", () => 
       cinatraHostId: null,
     });
     expect(r).toEqual({ shouldCallLlm: true });
+  });
+});
+
+describe("cinatra#2820 — the seam: the literal the client streams is the literal the server dispatches", () => {
+  // The defect never lived in either half. `decideMessageRouting` and
+  // `detectExplicitDispatchPackage` were each correct in their own suite; the
+  // SEAM between them was broken, and no test spanned it. Both halves stay green
+  // through a regression that re-kills the canonical form — someone tidies
+  // `CANONICAL_PKG_RE` or `EXPLICIT_DISPATCH_VERB_RE`
+  // (`src/app/api/chat/explicit-dispatch.ts`) and neither suite knows the other
+  // exists. These arms tie ONE literal to both matchers, so that edit goes red.
+
+  it("SEAM — the canonical form streams on the client AND dispatches on the server", async () => {
+    // Client half: the plan the client acts on is a STREAM dispatch — the plan
+    // that makes it POST at all. (This asserts the decision, not the socket.)
+    expect(resolveDispatchPlan(await route(AGENT_ONLY), undefined)).toMatchObject({
+      kind: "stream",
+    });
+    // Server half: the pre-router, reading the exact string the client streamed,
+    // resolves the packageName it must force `agent_run` on.
+    expect(detectExplicitDispatchPackage([{ role: "user", content: AGENT_ONLY }])).toBe(
+      AGENT_ONLY_PACKAGE,
+    );
+  });
+
+  it("SEAM — the same message in ordinary capitalization crosses the seam too", async () => {
+    // The two matchers used to disagree on CASE: the client tokenizer carries
+    // `/gi` (`../mention-tokenizer` MENTION_RE) and lowercases vendor+slug, while
+    // the server matcher was lowercase-only. So a reader who typed the canonical
+    // form the way English capitalizes a sentence got the streaming path and NO
+    // dispatch — #2820's shape on a case variant. RED before the server
+    // lowercases (cinatra#2820 review).
+    expect(AGENT_ONLY_MIXED_CASE.toLowerCase()).toBe(AGENT_ONLY.toLowerCase());
+
+    expect(
+      resolveDispatchPlan(await route(AGENT_ONLY_MIXED_CASE), undefined),
+    ).toMatchObject({ kind: "stream" });
+    expect(
+      detectExplicitDispatchPackage([{ role: "user", content: AGENT_ONLY_MIXED_CASE }]),
+    ).toBe(AGENT_ONLY_PACKAGE);
+  });
+
+  it("SEAM — the legacy underscore form crosses the seam in both cases", async () => {
+    // No mention token at all, so the client streams by the no-mention default;
+    // the server maps `cinatra_<slug>` onto the canonical package.
+    const LEGACY = "use cinatra_contact-discovery-agent to find leads at Acme";
+    expect(resolveDispatchPlan(await route(LEGACY), undefined)).toMatchObject({
+      kind: "stream",
+    });
+    expect(detectExplicitDispatchPackage([{ role: "user", content: LEGACY }])).toBe(
+      AGENT_ONLY_PACKAGE,
+    );
+    expect(
+      detectExplicitDispatchPackage([
+        { role: "user", content: "Use Cinatra_Contact-Discovery-Agent to find leads at Acme" },
+      ]),
+    ).toBe(AGENT_ONLY_PACKAGE);
+  });
+
+  it("SEAM — the honest no-responder is still on the CLIENT side of the seam", async () => {
+    // The guard that keeps the seam arms honest: a non-agent unresolved mention
+    // never POSTs, so the server matcher is not even consulted. Pins that the
+    // seam arms above prove routing, not merely that a regex matches a string.
+    const NO_RESPONDER = "@chatgpt what do you think?";
+    expect(resolveDispatchPlan(await route(NO_RESPONDER), undefined)).toEqual({ kind: "none" });
+    expect(
+      detectExplicitDispatchPackage([{ role: "user", content: NO_RESPONDER }]),
+    ).toBeNull();
   });
 });
 
