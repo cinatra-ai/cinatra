@@ -44,13 +44,13 @@ import {
 import {
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
+  coreDelegatedChatAdmissionRecords,
 } from "@cinatra-ai/mcp-server/capability-plan";
-import { coreDelegatedChatAdmissionRecords } from "@cinatra-ai/mcp-server/host-primitive-declarations";
-import { getActivationGeneration } from "@/lib/extension-activation-generation";
 import {
+  getActivationGeneration,
   bumpAdmissionPolicyGeneration,
   getAdmissionPolicyGeneration,
-} from "@/lib/delegated-chat-admission-generation";
+} from "@/lib/extension-activation-generation";
 
 /** The metadata row the record set lives in. */
 export const DELEGATED_CHAT_ADMISSION_KEY = "delegated-chat-admission/v1";

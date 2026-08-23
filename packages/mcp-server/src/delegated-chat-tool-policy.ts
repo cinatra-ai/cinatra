@@ -20,7 +20,7 @@
 // UNCONDITIONAL backstops (the family denies and the mutating-verb denylist),
 // the separately audited proposal override, and the declaration channel; the
 // ordered decision that combines them with the admission record lives in
-// `delegated-chat-evaluator.ts`.
+// `delegated-chat-admission.ts`.
 //
 // WHAT THE ALLOWLIST COST, and why it is gone: a marketplace-installed
 // connector's primitives stayed unreachable in delegated chat until someone
@@ -183,7 +183,7 @@ const DENIED_FAMILY_SUBSTRINGS = [
 // These three are all that remains of `isDelegatedChatMcpToolAllowed`. The
 // predicate itself is GONE, along with the ~110-name `ALLOWED_EXACT` set it
 // ended at: admission is now the version- and declaration-bound record, decided
-// by the shared evaluator in `delegated-chat-evaluator.ts`.
+// by the shared evaluator in `delegated-chat-admission.ts`.
 //
 // What survives is the part that was never an allowlist. The family denies and
 // the destructive-verb backstop are UNCONDITIONAL refusals, behaviourally

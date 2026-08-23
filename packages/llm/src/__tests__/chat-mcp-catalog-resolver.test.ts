@@ -53,7 +53,7 @@ import {
   coreDelegatedChatAdmittedNames,
   isCoreDelegatedChatAdmitted,
 } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
-import { hostDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/host-primitive-declarations";
+import { hostDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/capability-plan";
 
 const ACTOR = {
   delegation: "chat" as const,

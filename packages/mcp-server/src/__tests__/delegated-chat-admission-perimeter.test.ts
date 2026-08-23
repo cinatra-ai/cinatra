@@ -8,12 +8,12 @@ import {
   type DelegatedChatAdmissionRecord,
   type DelegatedChatAdmissionSnapshot,
 } from "../delegated-chat-admission";
-import { primitiveProvenanceStamp } from "../capability-plan";
 import {
+  primitiveProvenanceStamp,
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
-} from "../host-primitive-identity";
-import { coreDelegatedChatAdmissionRecords } from "../host-primitive-declarations";
+  coreDelegatedChatAdmissionRecords,
+} from "../capability-plan";
 import { coreDelegatedChatAdmittedNames } from "../core-delegated-chat-surface";
 import { mcpRequestContextStorage } from "../request-context";
 

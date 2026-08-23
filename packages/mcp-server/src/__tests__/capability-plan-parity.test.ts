@@ -10,13 +10,13 @@ import {
   primitiveProvenanceStamp,
   readPrimitiveProvenance,
   type CapabilityPlan,
+  HOST_PRIMITIVE_DECLARATIONS,
 } from "../capability-plan";
-import { evaluateDelegatedChatAdmission } from "../delegated-chat-evaluator";
+import { evaluateDelegatedChatAdmission } from "../delegated-chat-admission";
 import {
   coreDelegatedChatAdmissionSnapshot,
   coreDelegatedChatAdmittedNames,
 } from "../core-delegated-chat-surface";
-import { HOST_PRIMITIVE_DECLARATIONS } from "../host-primitive-declarations";
 
 // ---------------------------------------------------------------------------
 // REQUEST-SCOPED CAPABILITY PLAN ↔ ACTUAL REGISTRATION PARITY (cinatra#2817
@@ -516,7 +516,7 @@ describe("closed perimeters and non-canonical casing", () => {
 });
 
 // ---------------------------------------------------------------------------
-// THE HOST OWNER IS NOT CLAIMABLE (cinatra#2817 review round).
+// THE HOST OWNER IS NOT CLAIMABLE.
 //
 // The host owner string is load-bearing: `planPrimitiveRegistration` inherits
 // HOST_PRIMITIVE_DECLARATIONS whenever the owner is the host package, and the

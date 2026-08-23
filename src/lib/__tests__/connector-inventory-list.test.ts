@@ -38,7 +38,7 @@ import {
 const REPO_ROOT = resolve(__dirname, "..", "..", "..");
 const DECLARATIONS_PATH = resolve(
   REPO_ROOT,
-  "packages/mcp-server/src/host-primitive-declarations.ts",
+  "packages/mcp-server/src/capability-plan.ts",
 );
 
 // The RAW material a leak would expose. None of it may appear in the result.

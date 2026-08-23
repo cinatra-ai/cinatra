@@ -30,8 +30,9 @@ primitive is refused with `admission_store_unavailable`. A caller that forgets t
 chat surface rather than silently gaining an ungated one.
 
 The decision itself is `evaluateDelegatedChatAdmission(planned, snapshot)` in
-`src/delegated-chat-evaluator.ts` — one pure function shared by registration filtering, catalog
-derivation, the call-time guard and the in-process self-invoker.
+`src/delegated-chat-admission.ts`, beside the record and digest it evaluates against — one pure
+function shared by registration filtering, catalog derivation, the call-time guard and the
+in-process self-invoker.
 
 ## Public base URL
 

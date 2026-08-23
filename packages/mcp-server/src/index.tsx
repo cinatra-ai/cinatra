@@ -751,11 +751,11 @@ export {
 // (e.g. the host self-MCP `ctx.mcp.callPrimitive`) apply the SAME evaluator,
 // against the same planned identity and the same request snapshot, that the
 // live transport's registration choke point applies.
-export { evaluateDelegatedChatAdmission } from "./delegated-chat-evaluator";
+export { evaluateDelegatedChatAdmission } from "./delegated-chat-admission";
 
-// The auth-plugin factory moved to ./llm-credentials (cinatra#2817 review
-// round) so `src/lib/auth.ts` can reach it WITHOUT this barrel. Re-exported
-// here for the in-app mount, which loads the barrel anyway.
+// The auth-plugin factory moved to ./llm-credentials so `src/lib/auth.ts`
+// can reach it WITHOUT this barrel. Re-exported here for the in-app mount,
+// which loads the barrel anyway.
 export {
   createMcpServerAuthPlugins,
   DEFAULT_MCP_AUTH_SCOPES,

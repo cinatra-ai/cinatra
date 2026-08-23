@@ -13,12 +13,10 @@ import {
 import {
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
-} from "../capability-plan";
-import {
   HOST_PRIMITIVE_DECLARATIONS,
   coreDelegatedChatAdmissionRecords,
   hostDeclaredDelegatedChatClass,
-} from "../host-primitive-declarations";
+} from "../capability-plan";
 import { coreDelegatedChatAdmittedNames } from "../core-delegated-chat-surface";
 
 // ---------------------------------------------------------------------------

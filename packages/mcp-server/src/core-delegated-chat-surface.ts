@@ -23,20 +23,18 @@
 // removed.
 // ---------------------------------------------------------------------------
 
-import type { PlannedPrimitive } from "./capability-plan";
 import {
+  type PlannedPrimitive,
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
-} from "./host-primitive-identity";
+  HOST_PRIMITIVE_DECLARATIONS,
+  coreDelegatedChatAdmissionRecords,
+} from "./capability-plan";
 import {
   createDelegatedChatAdmissionSnapshot,
   type DelegatedChatAdmissionSnapshot,
+  evaluateDelegatedChatAdmission,
 } from "./delegated-chat-admission";
-import { evaluateDelegatedChatAdmission } from "./delegated-chat-evaluator";
-import {
-  HOST_PRIMITIVE_DECLARATIONS,
-  coreDelegatedChatAdmissionRecords,
-} from "./host-primitive-declarations";
 
 let cachedSnapshot: DelegatedChatAdmissionSnapshot | null = null;
 

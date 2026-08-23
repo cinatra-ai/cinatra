@@ -23,7 +23,10 @@ import "server-only";
 // would need the test expanded too.
 
 import { removeExtensionMcpToolsForPackage } from "@/lib/extension-mcp-registry";
-import { bumpAdmissionPolicyGeneration } from "@/lib/delegated-chat-admission-generation";
+import {
+  bumpAdmissionPolicyGeneration,
+  bumpActivationGeneration,
+} from "@/lib/extension-activation-generation";
 import {
   invalidateProvidersForPackage,
   hasCapabilityProvidersForPackage,
@@ -63,7 +66,6 @@ import {
   invalidateMatcherManifestForPackage,
 } from "@/lib/extension-object-types-teardown";
 import { invalidateArtifactRenderersForPackage } from "@/lib/extension-artifact-renderers-teardown";
-import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
 // Runtime dashboard-cube + portlet-kind registries (cinatra#660). These are pure
 // in-memory maps; unregistering is cheap and importing them does NOT build the
 // pg-backed cube platform (that stays lazy). Clearing the platform + MCP bridge

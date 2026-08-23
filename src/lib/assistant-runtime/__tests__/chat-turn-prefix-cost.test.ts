@@ -141,7 +141,7 @@ vi.mock("@/lib/mcp-server", () => ({
     resolveCapabilityKey?: (name: string) => string | null | undefined;
   }) => {
     const core = await import("@cinatra-ai/mcp-server/core-delegated-chat-surface");
-    const decls = await import("@cinatra-ai/mcp-server/host-primitive-declarations");
+    const decls = await import("@cinatra-ai/mcp-server/capability-plan");
     const servable = core.coreDelegatedChatAdmittedNames().map((name, order) => ({
       name,
       registeredName: name,

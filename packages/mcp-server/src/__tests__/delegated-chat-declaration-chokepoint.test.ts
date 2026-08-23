@@ -5,7 +5,7 @@ import {
   coreDelegatedChatAdmissionSnapshot,
   coreDelegatedChatAdmittedNames,
 } from "../core-delegated-chat-surface";
-import { HOST_PRIMITIVE_DECLARATIONS } from "../host-primitive-declarations";
+import { HOST_PRIMITIVE_DECLARATIONS } from "../capability-plan";
 
 // The registration CHOKE POINT, exercised through the real runtime server
 // (cinatra#2771).

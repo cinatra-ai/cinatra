@@ -15,13 +15,11 @@ import {
 import {
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
-} from "@cinatra-ai/mcp-server/capability-plan";
-import {
   HOST_PRIMITIVE_DECLARATIONS,
   coreDelegatedChatAdmissionRecords,
-} from "@cinatra-ai/mcp-server/host-primitive-declarations";
-import { __resetAdmissionPolicyGenerationForTests } from "@/lib/delegated-chat-admission-generation";
+} from "@cinatra-ai/mcp-server/capability-plan";
 import {
+  __resetAdmissionPolicyGenerationForTests,
   bumpActivationGeneration,
   __resetActivationGenerationForTests,
 } from "@/lib/extension-activation-generation";

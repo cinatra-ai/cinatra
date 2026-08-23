@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import { coreDelegatedChatAdmittedNames } from "@cinatra-ai/mcp-server/core-delegated-chat-surface";
-import { hostDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/host-primitive-declarations";
+import { hostDeclaredDelegatedChatClass } from "@cinatra-ai/mcp-server/capability-plan";
 import {
   resolveChatMcpAllowedTools,
   type ServableChatPrimitive,

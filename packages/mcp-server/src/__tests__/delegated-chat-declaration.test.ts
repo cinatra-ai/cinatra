@@ -6,18 +6,18 @@ import {
   readDeclaredDelegatedChatClass,
   type DelegatedChatToolClass,
 } from "../delegated-chat-tool-policy";
-import { planPrimitiveRegistration } from "../capability-plan";
 import {
+  planPrimitiveRegistration,
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
-} from "../host-primitive-identity";
-import { evaluateDelegatedChatAdmission } from "../delegated-chat-evaluator";
+  hostDeclaredDelegatedChatClass,
+} from "../capability-plan";
+import { evaluateDelegatedChatAdmission } from "../delegated-chat-admission";
 import {
   coreDelegatedChatAdmissionSnapshot,
   coreDelegatedChatAdmittedNames,
   isCoreDelegatedChatAdmitted,
 } from "../core-delegated-chat-surface";
-import { hostDeclaredDelegatedChatClass } from "../host-primitive-declarations";
 
 // The typed delegated-chat declaration (cinatra#2771, owner ruling
 // 2026-08-15).

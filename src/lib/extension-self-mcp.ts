@@ -201,7 +201,7 @@ export async function callHostPrimitive(
   let handler = captured.handler;
 
   const { evaluateDelegatedChatAdmission } = await import(
-    "@cinatra-ai/mcp-server/delegated-chat-evaluator"
+    "@cinatra-ai/mcp-server/delegated-chat-admission"
   );
 
   const invoke = async () => {
