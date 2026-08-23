@@ -31,8 +31,10 @@ import {
 } from "./lib/docker-port-drift.mjs";
 import {
   COMPOSE_PROJECT_ENV_VAR,
+  classifyServiceUrl,
   formatConnectPortMismatch,
   formatGuardedComposeCommand,
+  formatUnusableServiceUrl,
   isLinkedWorktree,
   planMessages,
   readEnvFileValue,
@@ -353,6 +355,11 @@ const downByLabel = new Map(
 );
 const driftedLabels = [];
 const mismatchNotes = [];
+// Service URLs that name no address at all. Reported in the SAME words the
+// launcher uses, from the same formatter (cinatra#2839, round-4 finding): the
+// two surfaces read one classifier, so neither can decide on its own that a
+// stated URL is fine.
+const unusableUrlNotes = [];
 // A plan with a hole in it resolves NO publishable port for the affected
 // service, so neither the drift diagnosis nor the connect/publish note has a
 // port to judge against — `resolvePublishedHostPort` would hand back the
@@ -380,6 +387,24 @@ if (!planRefused) {
       defaultHostPort: svc.defaultHostPort,
       plan: composeHostPortPlan,
     });
+    // STATED, AND NAMING NO ADDRESS. `parseHostPort` fell back to the bundled
+    // `127.0.0.1:<default>` for it, so the row above probed an address the
+    // stated URL never mentions — the connect/publish note and the drift
+    // diagnosis would both be judging that fallback. Say what is actually wrong
+    // instead, and judge nothing: there is no address of this checkout's here.
+    const stated = classifyServiceUrl(env[svc.envVar]);
+    if (stated.state === "unusable") {
+      unusableUrlNotes.push(
+        formatUnusableServiceUrl({
+          service: svc.label,
+          urlVar: svc.envVar,
+          url: stated.url,
+          hostPortVar: claim.envVar,
+          standDown: claim.standDown === true,
+        }),
+      );
+      continue;
+    }
     // Configured elsewhere: this checkout publishes no host port for it, so no
     // container found here is its to report on.
     if (claim.standDown) continue;
@@ -423,6 +448,9 @@ if (planRefused) {
   for (const message of planMessages(composeHostPortPlan.refusals)) {
     console.log(dim(`     • ${message}`));
   }
+}
+for (const note of unusableUrlNotes) {
+  console.log(yellow(`  ⚠ ${note}`));
 }
 for (const note of mismatchNotes) {
   console.log(yellow(`  ⚠ ${note}`));

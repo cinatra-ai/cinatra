@@ -32,11 +32,13 @@ import {
 import {
   COMPOSE_PROJECT_ENV_VAR,
   SKIP_PREFLIGHT_ENV_VAR,
+  classifyServiceUrl,
   createComposeRunner,
   formatComposeCommand,
   formatConnectPortMismatch,
   formatStandDownUnreachable,
   formatUnmanagedServices,
+  formatUnusableServiceUrl,
   isLinkedWorktree,
   planMessages,
   readEnvFileValue,
@@ -170,8 +172,16 @@ for (const message of planMessages(composeHostPortPlan.warnings)) {
 // default. A `#` that is part of the value (a dev DB password, a URL fragment)
 // still survives: the comment must begin the value or follow whitespace. Both
 // halves are asserted in scripts/__tests__/dev-preflight.test.mjs.
+// The stated value itself, read by the SAME precedence the address below is
+// derived with. Kept separate because the two answer different questions: this
+// one is what the operator WROTE, and `parseHostPort` may hand back an address
+// that appears nowhere in it (cinatra#2839, round-4 finding).
+function envUrlValue(filePath, key) {
+  return process.env[key] || readEnvFileValue(filePath, key);
+}
+
 function envHostPort(filePath, key, fallback) {
-  const value = process.env[key] || readEnvFileValue(filePath, key);
+  const value = envUrlValue(filePath, key);
   // parseHostPort applies explicit-port > scheme-default > fallback precedence, so
   // a no-port loopback URL (e.g. postgresql://…@localhost/db = :5432) is NOT
   // mis-read as the bundled host port and never triggers a false drift exit.
@@ -205,6 +215,10 @@ async function runDbPortPreflight() {
     ["postgres", "redis"].includes(s.composeService),
   );
   const down = [];
+  // Rows whose STATED URL names no address at all. Kept apart from `down`
+  // because "down" is an answer about an address, and these have none
+  // (cinatra#2839, round-4 finding).
+  const unusableUrls = [];
   for (const svc of targets) {
     // The port THIS checkout publishes for the service, read off the SAME plan
     // the compose runner below is pinned to (cinatra#2839, acceptance item 2).
@@ -232,6 +246,26 @@ async function runDbPortPreflight() {
     // only the note and the diagnosis on the same condition and keeps printing
     // the row; this is that same stand-down, on the launching surface.
     const standDown = claim.standDown === true;
+    const statedUrl = envUrlValue(envPath, svc.envVar);
+    // NO ADDRESS, NO ADDRESS TALK (cinatra#2839, round-4 finding). A stated URL
+    // that names no host and port — `REDIS_URL=not a url`, `redis://`, a `:0`
+    // nothing can listen on — still reaches `parseHostPort`, which FALLS BACK to
+    // the bundled `127.0.0.1:<default>`. Probing that fallback and reporting the
+    // result named a service the app never talks to: either "not reachable yet
+    // at 127.0.0.1:6379" for an address it does not use, or silence when the
+    // operator's own redis happened to answer there. So the shape is settled
+    // BEFORE the probe, the probe is not run, and the row gets the validation
+    // line instead of a reachability one.
+    //
+    // It is spoken whatever the scope and whatever the stand-down: the defect is
+    // in the URL, not in who publishes the service, and an unscoped checkout
+    // with a broken URL was getting the same invented address. `standDown`
+    // decides only whether the publishing half of the line is added, since
+    // postgres is not a service this plan parameterizes.
+    if (classifyServiceUrl(statedUrl).state === "unusable") {
+      unusableUrls.push({ svc, url: statedUrl, standDown, hostPortVar: claim.envVar });
+      continue;
+    }
     const { host, port } = envHostPort(envPath, svc.envVar, {
       host: "127.0.0.1",
       port: svc.defaultHostPort,
@@ -271,12 +305,28 @@ async function runDbPortPreflight() {
       host,
       port,
       standDown,
+      // Carried so the stand-down warning is formatted from the STATEMENT and
+      // the address together, never from the address alone.
+      statedUrl,
       // The plan's own name for this service's host-port claim, carried here so
       // the stand-down warning below can name the variable that would end the
       // stand-down without re-deriving it from the port table.
       hostPortVar: claim.envVar,
       diagnosable: !standDown && shouldDiagnoseDrift({ host, port }, svc, claim.published),
     });
+  }
+  // Before the early return: a row with no address is never in `down`, and this
+  // is the one thing an operator with a broken URL needs to hear.
+  for (const { svc, url, standDown, hostPortVar } of unusableUrls) {
+    console.warn(
+      `[dev-server] ⚠ ${formatUnusableServiceUrl({
+        service: svc.label,
+        urlVar: svc.envVar,
+        url,
+        hostPortVar,
+        standDown,
+      })}`,
+    );
   }
   if (down.length === 0) return;
 
@@ -333,7 +383,7 @@ async function runDbPortPreflight() {
       `[dev-server] ⚠ ${publishedHere.map((d) => d.svc.label).join(", ")} not reachable yet — start them with \`pnpm services\` (the app will retry once they are up).`,
     );
   }
-  for (const { svc, host, port, hostPortVar } of down.filter((d) => d.standDown)) {
+  for (const { svc, host, port, hostPortVar, statedUrl } of down.filter((d) => d.standDown)) {
     console.warn(
       `[dev-server] ⚠ ${formatStandDownUnreachable({
         service: svc.label,
@@ -341,6 +391,12 @@ async function runDbPortPreflight() {
         hostPortVar,
         host,
         port,
+        // The stated URL travels WITH the address, so the formatter can refuse
+        // to describe a derived fallback as the configured one. Unreachable by
+        // construction here — an unusable URL never reaches `down` — and passed
+        // anyway, because the guarantee belongs to the formatter, not to this
+        // call site's ordering.
+        url: statedUrl,
       })}`,
     );
   }

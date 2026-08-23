@@ -18,7 +18,12 @@
 // and an impure wrapper (`diagnoseDockerPortDrift`) that shells out to Docker.
 
 import { spawnSync } from "node:child_process";
-import { buildComposeArgs, formatGuardedComposeCommand, isLoopbackHost } from "./dev-preflight.mjs";
+import {
+  buildComposeArgs,
+  formatGuardedComposeCommand,
+  isLoopbackHost,
+  PROTOCOL_DEFAULT_PORTS,
+} from "./dev-preflight.mjs";
 import path from "node:path";
 
 // The bundled local DB/cache services whose host ports come from the dev override.
@@ -35,20 +40,15 @@ export const BUNDLED_DB_SERVICES = [
 // loopback set. (That module owns it because this one already imports it.)
 export { isLoopbackHost };
 
-// Default port per URL scheme. A URL that omits an explicit port resolves to its
-// scheme default, NOT the bundled-stack fallback — otherwise a loopback
-// `postgresql://…@localhost/db` (which means :5432) is mis-read as the bundled
-// 5434 and a perfectly-healthy non-bundled DB triggers a false drift diagnosis.
-export const PROTOCOL_DEFAULT_PORTS = {
-  "http:": 80,
-  "https:": 443,
-  "postgres:": 5432,
-  "postgresql:": 5432,
-  "redis:": 6379,
-  "rediss:": 6379,
-  "bolt:": 7687,
-  "neo4j:": 7687,
-};
+// Same arrangement, same reason (cinatra#2839). A URL that omits an explicit
+// port resolves to its scheme default, NOT the bundled-stack fallback —
+// otherwise a loopback `postgresql://…@localhost/db` (which means :5432) is
+// mis-read as the bundled 5434 and a perfectly-healthy non-bundled DB triggers
+// a false drift diagnosis. `classifyServiceUrl` reads the SAME table to decide
+// whether a portless URL states a port at all, because a scheme this table does
+// not know sends the resolution below to the bundled fallback and produces an
+// address that appears nowhere in what the operator stated.
+export { PROTOCOL_DEFAULT_PORTS };
 
 // Derive { host, port } from a URL-shaped value. Port precedence:
 //   explicit URL port  >  scheme default  >  bundled fallback.

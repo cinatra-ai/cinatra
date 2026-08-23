@@ -448,6 +448,63 @@ export function isLoopbackHost(host) {
   return LOOPBACK_HOSTS.has(String(host ?? "").trim());
 }
 
+/**
+ * Default port per URL scheme, for a URL that states none.
+ *
+ * Owned HERE and re-exported by scripts/lib/docker-port-drift.mjs, exactly as
+ * `isLoopbackHost` is and for the same reason: that module already imports this
+ * one, and two questions have to get one answer. `parseHostPort` reads this
+ * table to resolve a connect address; `classifyServiceUrl` reads it to decide
+ * whether a portless URL states a port AT ALL. A scheme this table does not
+ * know sends `parseHostPort` to the BUNDLED fallback instead, so the address it
+ * returns is invented rather than stated — and the two callers must not be able
+ * to disagree about which schemes those are.
+ *
+ * IT MUST STAY COMPLETE FOR EVERY SCHEME A SERVICE URL HERE CAN HOLD, AND NO
+ * WIDER. An omission stopped being neutral the moment the classifier began
+ * reading it: a LOOPBACK URL whose scheme is missing from this table reads as
+ * "states no port at all" and is condemned, so a real address-bearing URI would
+ * be reported as unusable. An ADDITION is not free either — a scheme listed
+ * here is one the classifier accepts on EVERY variable — so a scheme no service
+ * in this repo speaks (`ws:`) is deliberately absent: on a `REDIS_URL` it names
+ * no Redis this checkout can find, and saying so is the honest answer. These
+ * are the schemes of THESE services, not of the web.
+ *
+ * IT DOES NOT ANSWER "is this scheme right for this variable?". A
+ * `REDIS_URL=http://127.0.0.1/x` resolves to :80 and is reported at :80: the
+ * address really is the one the URL states, and whether a Redis client can
+ * speak HTTP is a different question from the one this module asks. That
+ * mismatch is pre-existing and untouched by the address work here.
+ *
+ * A URL that omits an explicit port resolves to its scheme default, NOT the
+ * bundled-stack fallback — otherwise a loopback `postgresql://…@localhost/db`
+ * (which means :5432) is mis-read as the bundled 5434 and a perfectly-healthy
+ * non-bundled DB triggers a false drift diagnosis.
+ */
+export const PROTOCOL_DEFAULT_PORTS = {
+  "http:": 80,
+  "https:": 443,
+  "postgres:": 5432,
+  "postgresql:": 5432,
+  "redis:": 6379,
+  "rediss:": 6379,
+  // The whole Neo4j family, not only the two plain schemes. `NEO4J_URI` is a
+  // classified variable on the reporting surface, and a local instance behind
+  // TLS is stated as `neo4j+s://localhost` or `bolt+ssc://127.0.0.1` — all of
+  // them 7687. Listing only `bolt:`/`neo4j:` left the secure spellings with no
+  // known default, which the classifier then reads as "states no port" and
+  // condemns a perfectly good URI. Nothing else moves: neo4j's own fallback IS
+  // 7687 wherever this repo resolves it, so these six entries change no address
+  // already computed — they only stop the classifier condemning four spellings
+  // of an address it can resolve.
+  "bolt:": 7687,
+  "bolt+s:": 7687,
+  "bolt+ssc:": 7687,
+  "neo4j:": 7687,
+  "neo4j+s:": 7687,
+  "neo4j+ssc:": 7687,
+};
+
 const isUsablePort = (port) => Number.isInteger(port) && port > 0 && port < 65536;
 
 /**
@@ -486,6 +543,25 @@ function statedPort(rawUrl) {
  * @param {string | undefined} urlValue
  * @returns {number | undefined}
  */
+/**
+ * Does a PARSED URL point at this machine?
+ *
+ * The one normalization both callers need, in one place: WHATWG returns an IPv6
+ * hostname bracketed (`[::1]`), so it is unwrapped before the lookup —
+ * otherwise the `::1` entry in the loopback set is unreachable and a legitimate
+ * IPv6 loopback lane URL reads as somebody else's service — and
+ * `host.docker.internal` (used so containers reach the host) maps to loopback,
+ * which is what a published port is actually bound to.
+ *
+ * @param {URL} url
+ * @returns {boolean}
+ */
+function isLoopbackUrlHost(url) {
+  let host = url.hostname.replace(/^\[(.*)\]$/, "$1");
+  if (host === "host.docker.internal") host = "127.0.0.1";
+  return LOOPBACK_HOSTS.has(host);
+}
+
 export function explicitLoopbackPort(urlValue) {
   if (!urlValue) return undefined;
   const raw = String(urlValue).trim();
@@ -495,16 +571,70 @@ export function explicitLoopbackPort(urlValue) {
   } catch {
     return undefined;
   }
-  // WHATWG returns an IPv6 hostname bracketed (`[::1]`), so unwrap before the
-  // lookup — otherwise the `::1` entry above is unreachable and a legitimate
-  // explicit-port IPv6 loopback lane URL reads as somebody else's service.
-  let host = url.hostname.replace(/^\[(.*)\]$/, "$1");
-  if (host === "host.docker.internal") host = "127.0.0.1";
-  if (!LOOPBACK_HOSTS.has(host)) return undefined; // external service — not ours
+  if (!isLoopbackUrlHost(url)) return undefined; // external service — not ours
   // `url.port` for anything WHATWG did not normalize away, the raw authority for
   // a stated default port (`:80`, `:443`) that it did.
   const port = url.port ? Number(url.port) : statedPort(raw);
   return isUsablePort(port) ? port : undefined;
+}
+
+/**
+ * Why a STATED service URL names no address at all — or `undefined` when it
+ * names one.
+ *
+ * Separated from `explicitLoopbackPort` because that helper answers ONE
+ * question ("is this a host port we may publish?") and answers `undefined` to
+ * every other shape alike. Three different statements collapse into that one
+ * answer, and only two of them are a service somebody else owns:
+ *
+ *   - `unparseable` — `new URL()` rejects it outright (`REDIS_URL=not a url`,
+ *     a bare socket path). There is no host and no port anywhere in it, so
+ *     nothing here can derive an address from it. What the CLIENT then makes of
+ *     the value is the client's business and is not claimed either way.
+ *   - `no-host` — it parses and states NO host (`redis://`, `redis:///0`,
+ *     `unix:///var/run/redis.sock`). Nothing here can name a TCP address for
+ *     it, whatever the app may do with the value.
+ *   - `unusable-port` — it states a port outside 1-65535, which in practice
+ *     means `:0`, the one such value WHATWG accepts (`:65536` and `:-1` fail
+ *     the parse instead). `bind(0)` asks the OS for an ephemeral port, so
+ *     nothing can ever listen on the address the URL states.
+ *   - `no-known-port` — a LOOPBACK URL that states no port under a scheme
+ *     `PROTOCOL_DEFAULT_PORTS` does not know (`redsi://127.0.0.1/0`, one letter
+ *     off). Nothing in this repo can say which port that is, so `parseHostPort`
+ *     hands back the BUNDLED fallback and every local surface then reports an
+ *     address the operator never stated.
+ *
+ * The port test comes BEFORE the loopback test on purpose: `:0` is not a port
+ * on a remote host either, so the defect is reported for the value the operator
+ * typed rather than only for the half of the host space this checkout publishes
+ * in.
+ *
+ * `no-known-port` IS RESTRICTED TO LOOPBACK, and that is not timidity. The rule
+ * "no explicit port and no scheme default" describes real remote URIs too — a
+ * Neo4j Aura `neo4j+s://….databases.neo4j.io` states neither — and those are
+ * perfectly good configuration this preflight must not condemn. The defect is
+ * not the unknown scheme; it is that a LOCAL address gets invented for it and
+ * then probed, reported and remedied as though it were configured. A remote
+ * host is never probed, never gets a local address printed for it, and stays
+ * `theirs`.
+ *
+ * @param {string} raw — a stated, non-empty, already-trimmed value
+ * @returns {{ reason: "unparseable" | "no-host" | "no-known-port" } | { reason: "unusable-port", port: number } | undefined}
+ */
+function statedUrlDefect(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { reason: "unparseable" };
+  }
+  if (url.hostname === "") return { reason: "no-host" };
+  const port = url.port ? Number(url.port) : statedPort(raw);
+  if (port !== undefined && !isUsablePort(port)) return { reason: "unusable-port", port };
+  if (port === undefined && !(url.protocol in PROTOCOL_DEFAULT_PORTS) && isLoopbackUrlHost(url)) {
+    return { reason: "no-known-port" };
+  }
+  return undefined;
 }
 
 /**
@@ -514,17 +644,43 @@ export function explicitLoopbackPort(urlValue) {
  *     force; this is the main checkout's unchanged behavior.
  *   - `ours` — an explicit-port loopback URL. That port is what this checkout
  *     publishes, and it is the lane's own claim.
- *   - `theirs` — anything else the URL can say: a remote host, or a loopback
- *     host with NO port stated. Either way the service the app talks to is not
- *     one this checkout publishes, so the preflight must neither claim a host
- *     port for it nor start a local copy of it.
+ *   - `theirs` — a URL this module can resolve an address FROM, and one this
+ *     checkout does not publish: a remote host, or a loopback host with no port
+ *     stated (which resolves to the scheme default). The address is the URL's
+ *     own rather than a fallback, and that is the only claim made about it —
+ *     whether the service's client can speak that scheme is a different
+ *     question. Either way the service is not one this checkout publishes, so
+ *     the preflight must neither claim a host port for it nor start a local
+ *     copy of it.
+ *   - `unusable` — stated, and names no address at all (see `statedUrlDefect`).
+ *
+ * `unusable` IS A DISTINCT STATE AND NOT A FLAVOUR OF `theirs` (cinatra#2839,
+ * round-4 finding). Both are stood down, so the PLAN treats them identically —
+ * neither is this checkout's to publish. What they may be SAID about is not
+ * identical: `theirs` has an address its own URL states, so "not reachable yet
+ * at <address>" is a fact about that address, while `unusable` has none, and the
+ * address a caller would otherwise print for it is one `parseHostPort` invented
+ * as a fallback. Filing both as `theirs` is what let the launcher tell an
+ * operator that `REDIS_URL=not a url` was "not reachable yet at 127.0.0.1:6379"
+ * — an address the app never uses — and tell a `:0` lane to start a service at
+ * a port nothing can listen on.
+ *
+ * IT LIVES HERE, IN THE CLASSIFIER, rather than in the launcher that formats
+ * the warning. The launcher is not the only surface that speaks about a stated
+ * URL: `scripts/check-services.mjs` reports the same services from the same
+ * plan, and this module's own doctrine is that one question gets one answer
+ * (see `isLoopbackHost`). A shape test written next to the launcher's formatter
+ * would be the second copy, free to drift from the classifier the plan is built
+ * from — the exact failure the shared `isLoopbackHost` exists to prevent.
  *
  * @param {string | undefined} urlValue
- * @returns {{ state: "unconfigured" } | { state: "ours", port: number, url: string } | { state: "theirs", url: string }}
+ * @returns {{ state: "unconfigured" } | { state: "ours", port: number, url: string } | { state: "theirs", url: string } | { state: "unusable", url: string, reason: "unparseable" | "no-host" | "unusable-port" | "no-known-port", port?: number }}
  */
 export function classifyServiceUrl(urlValue) {
   const url = String(urlValue ?? "").trim();
   if (!url) return { state: "unconfigured" };
+  const defect = statedUrlDefect(url);
+  if (defect) return { state: "unusable", url, ...defect };
   const port = explicitLoopbackPort(url);
   return port === undefined ? { state: "theirs", url } : { state: "ours", port, url };
 }
@@ -858,7 +1014,12 @@ export function resolveComposeHostPortPlan({
       // Rule A: no lane, no derivation.
       const configured =
         scoped && spec.urlVar ? classifyServiceUrl(read(spec.urlVar)) : { state: "unconfigured" };
-      if (configured.state === "theirs") {
+      // `unusable` rides with `theirs`: the PLAN's question is only "may this
+      // checkout publish a host port for the service?", and the answer is no
+      // either way — a URL that names no address is not a claim on one. The two
+      // states are told apart where they are SPOKEN about, not here (see
+      // `classifyServiceUrl`), so this plan's output shape is unchanged.
+      if (configured.state === "theirs" || configured.state === "unusable") {
         unmanaged.push({
           service: spec.service,
           envVar: spec.envVar,
@@ -1187,16 +1348,108 @@ export function formatStandDownRefusal({ unmanaged = [] } = {}) {
  * PARAMETERIZES can be stood down, and such a claim always carries its `envVar`
  * (`resolvePublishedHostPort`).
  *
- * @param {{ service: string, urlVar?: string, hostPortVar?: string, host?: string, port?: number }} input
+ * IT NEVER DESCRIBES A DERIVED FALLBACK AS THE CONFIGURED ADDRESS (cinatra#2839,
+ * round-4 finding). `host`/`port` reach this function from `parseHostPort`,
+ * which FALLS BACK to the bundled address whenever the stated URL yields
+ * nothing — so `REDIS_URL=not a url` arrived here as `127.0.0.1:6379` and this
+ * sentence told the operator their app was failing at an address it never
+ * dials, with a remedy ("start Redis where it is configured") aimed at the
+ * wrong place. The stated URL is therefore passed in and classified HERE rather
+ * than tested at the call site: a caller that hands this function an unusable
+ * URL gets the validation line back, not an invented address, and there is no
+ * order of operations at any call site that can produce the false sentence.
+ *
+ * @param {{ service: string, urlVar?: string, hostPortVar?: string, host?: string, port?: number, url?: string, standDown?: boolean }} input
  * @returns {string}
  */
-export function formatStandDownUnreachable({ service, urlVar, hostPortVar, host, port } = {}) {
+export function formatStandDownUnreachable({ service, urlVar, hostPortVar, host, port, url } = {}) {
+  // Absent `url` keeps the address branch: a stood-down row ALWAYS has a stated
+  // URL (`unmanaged` is populated from one), so the only callers that reach this
+  // without one are asking about a shape that has an address by construction.
+  if (classifyServiceUrl(url).state === "unusable") {
+    return formatUnusableServiceUrl({ service, urlVar, url, hostPortVar, standDown: true });
+  }
   return (
     `${service} not reachable yet at ${host}:${port}, and this checkout will not start it: ` +
     `${urlVar} is not an explicit-port loopback URL, so that service is not ours to publish. ` +
     `\`pnpm services\` refuses this plan for the same reason. Start ${service} where it is configured, ` +
     `or point ${urlVar} at a 127.0.0.1 port this worktree owns. This checkout then publishes that port, ` +
     `and ${hostPortVar} must name the same one if it is set at all.`
+  );
+}
+
+/**
+ * What a surface owes an operator when a service URL is STATED and names no
+ * address at all (cinatra#2839, round-4 finding).
+ *
+ * A VALIDATION LINE, NOT A REACHABILITY LINE, and that is the whole point. The
+ * reachability sentence answers "is anything listening where the app dials?" —
+ * a question that presupposes an address. For `REDIS_URL=not a url` there is
+ * none: `getRedisUrl` hands the value to BullMQ verbatim
+ * (`src/lib/background-jobs.ts`), so whatever the app dials it is not
+ * `127.0.0.1:6379` — which is exactly what `parseHostPort` gives every local
+ * surface as its fallback. Reporting THAT address named a service the app never
+ * talks to; for `redis://127.0.0.1:0/0`
+ * the address was real and the remedy impossible, since nothing can listen on
+ * port 0. So this line speaks about the URL, names no host and no port, and
+ * says outright — per defect, because the two halves are not true of the same
+ * shapes — either that a shown address is invented or that the ordinary remedy
+ * cannot be carried out.
+ *
+ * THE HEAD IS "does not state a usable address", not "is not a usable URL".
+ * Only the first stays true for every shape: a `unix:///var/run/redis.sock` may
+ * be a perfectly good value for the app's client and is still no host and port
+ * this preflight can probe. It is also the sentence the plan already speaks
+ * about a host port (`… is not a usable host port (1-65535)`).
+ *
+ * IT IS NOT A REFUSAL EXIT. Both surfaces keep the exit semantics they had: the
+ * launcher warns and lets the app boot (only a positively-diagnosed drift exits
+ * 1, and a service with no address can never be diagnosed), and the checker
+ * reports it beside its rows. Promoting this to a plan REFUSAL would fail
+ * `make dev` outright through `scripts/dev-compose-env.mjs`, and — worse — would
+ * make `scripts/dev-server.mjs` return on `planRefused` BEFORE the preflight
+ * that prints this very line. The louder exit would buy silence about the thing
+ * it exits for.
+ *
+ * `standDown` adds the publishing half, and only where it is true: postgres is
+ * not a service the plan parameterizes, so a defective `SUPABASE_DB_URL` gets
+ * the validation line WITHOUT a stand-down clause this checkout would be
+ * contradicting the moment it published 5434.
+ *
+ * @param {{ service: string, urlVar?: string, url?: string, hostPortVar?: string, standDown?: boolean }} input
+ * @returns {string}
+ */
+export function formatUnusableServiceUrl({ service, urlVar, url, hostPortVar, standDown = false } = {}) {
+  const stated = classifyServiceUrl(url);
+  const shown = `${urlVar}=${stated.url ?? String(url ?? "")}`;
+  // The FALLBACK sentence is the finding's first half and the IMPOSSIBLE-REMEDY
+  // sentence its second, so each reason carries the one that is true of it. A
+  // `:0` URL really does resolve to the address it states — 127.0.0.1:0 is no
+  // fallback — and calling it one would be a new false statement in the line
+  // that exists to remove one.
+  const invented =
+    `The address a check would otherwise show for ${service} is this checkout's own fallback, not one ` +
+    `${urlVar} states`;
+  const why =
+    stated.reason === "no-host"
+      ? `${shown} states no host, so it names no address for ${service} at all. ${invented}`
+      : stated.reason === "unusable-port"
+        ? `${shown} states port ${stated.port}, and a host port is 1-65535. Nothing can ever listen there, so ` +
+          `"start ${service} where it is configured" is a remedy no operator can carry out`
+        : stated.reason === "no-known-port"
+          ? `${shown} states no port, and this checkout knows no default port for the ` +
+            `\`${new URL(stated.url).protocol}\` scheme. ${invented}`
+          : `${shown} does not parse as a URL at all, so no address here can come from it. ${invented}`;
+  return (
+    `${urlVar} does not state a usable address for ${service}: ${why}. ` +
+    `Point ${urlVar} at the host and port ${service} really answers on: a 127.0.0.1 port this worktree owns if it ` +
+    `runs here.` +
+    (standDown
+      ? ` This checkout will not start ${service} either: a URL that is not an explicit-port loopback URL is not ` +
+        `ours to publish, and \`pnpm services\` refuses this plan for the same reason. ${hostPortVar} alone ends ` +
+        `that stand-down and fixes nothing, because the app keeps dialing ${urlVar}; the URL is the fix, and ` +
+        `${hostPortVar} must name the same port if it is set at all.`
+      : "")
   );
 }
 
