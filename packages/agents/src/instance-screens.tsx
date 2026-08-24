@@ -59,6 +59,14 @@ import { TriggerTabClient } from "./trigger-tab-client";
 // §VI's card on the `run_card` host (cinatra#2788, epic #2784 S9d), reached
 // through the run page's SCHEDULE STEP — see the mount below.
 import { ScheduleRailStep } from "./schedule-rail-step";
+// The two columns of the run surface — the step rail on the left, the selected
+// step's own surface on the right (cinatra#2970). The setup run page composes
+// the whole frame from here; the schedule step composes its row from it.
+import {
+  RUN_SURFACE_RAIL_LABELS,
+  RunSurfaceRail,
+  type RunSurfaceStep,
+} from "./run-surface-rail";
 import { readRunTriggerByRunId } from "./trigger-store";
 import type { GatedStep } from "./trigger-infer-side-effects";
 import cronstrue from "cronstrue";
@@ -1463,6 +1471,154 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // NULL default to an empty array here.
   const gatedSteps: GatedStep[] = template.gatedSteps ?? [];
 
+  // ── HAS THE RUN REACHED THESE STEPS? (cinatra#2970) ──────────────────────
+  //
+  // The rail says which steps are still ahead, so it must READ that rather than
+  // assume it — and where it cannot read it, it says nothing. This branch serves
+  // a run that owes its scheduling step, and such a run can already carry a
+  // review gate (a finished run being given a recurring schedule); that is a
+  // plain run-scoped read behind the access door `readAgentRunById` already
+  // cleared above, and it does not run for `/trigger` reached without a run.
+  //
+  // THE SKILLS STEP IS DELIBERATELY UNMARKED. The one authority on that
+  // interaction is the card itself (cinatra#2573); a screen that read the hold's
+  // park a second time to draw around it is exactly the parallel derivation the
+  // one-renderer rule retired, and it is pinned as retired
+  // (`recommendation-hold-card.test.tsx`). So the row is drawn plainly and the
+  // page claims nothing about a step it has not read.
+  const setupReviewGates = run ? await listReviewGatesForRun(run.id) : [];
+
+  // ── THE SCHEDULER STEP'S OWN SURFACE (cinatra#2970) ──────────────────────
+  //
+  // The scheduling form exactly as it is today, in its first-shown state, with
+  // the same Continue that arms the trigger — not one prop of it changes here.
+  // What changes is only WHERE it is drawn: it is one step of the run surface
+  // below, opened in the run detail beside the rail, instead of standing alone
+  // in the middle of a single-column page.
+  //
+  // It keeps its declared body role: a single column of form controls is Narrow
+  // (Application Design — Agents §III), and Narrow is an inset that sits inside
+  // whatever frame holds it.
+  const schedulerStepSurface = (
+    <AgentPanelBody role="narrow">
+      {/*
+        cinatra#2482 — finished-run CONTEXT, above the form rather than
+        instead of it.
+
+        The reported repro ends on this screen with no idea that the run is
+        over, so the state has to be said out loud. It must NOT replace the
+        form though: `shouldShowPersistentTab` sends only scheduled/recurring
+        rows to the persistent tab, so this standalone form is the ONLY way
+        to give a finished immediate run a recurring or scheduled trigger —
+        and a recurring trigger clones a fresh run, so arming one here is
+        meaningful however this run itself ended. Hiding the form would take
+        that away (codex round-B finding).
+
+        "Run right after setup" on an already-triggered finished run is the
+        one thing that cannot work, and `setRunTriggerForActor` now refuses
+        exactly that with a message the form renders inline — no silent
+        success, and no bounce back to the run view.
+      */}
+      {run && shouldShowFinishedRunNotice(trigger, run.status) ? (
+        <div
+          className="soft-panel rounded-card mb-4 flex flex-col items-start gap-2 p-4"
+          data-run-finished-notice=""
+        >
+          <h2 className="text-sm font-semibold text-foreground">
+            This run has already finished
+          </h2>
+          {/* Copy names RECURRING specifically. Codex round 2: only a
+              recurring trigger clones a fresh run per fire — a one-off
+              `scheduled` arm on a finished run is a pre-existing no-op
+              (trigger-release-job skips an unarmed run), so promising that
+              "a schedule" starts a fresh run would overstate it. */}
+          <p className="text-sm text-muted-foreground">
+            It can&apos;t be run again. You can still give it a recurring
+            schedule below — each recurrence starts a fresh run.
+          </p>
+          <Link
+            href={`/agents/${agentId}/${encodeURIComponent(instanceId)}`}
+            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+            data-action="open-finished-run"
+          >
+            View this run
+          </Link>
+        </div>
+      ) : null}
+      <TriggerScreenClient
+        agentId={agentId}
+        instanceId={instanceId}
+        templateId={template.id}
+        isAdmin={isAdmin}
+        inputParams={inputParams}
+        requiredFields={required}
+        properties={properties}
+        setupComplete={setupComplete}
+        durationEstimate={durationEstimate}
+      />
+    </AgentPanelBody>
+  );
+
+  // ── THE SETUP RUN PAGE'S STEP RAIL (cinatra#2970, epic #2784) ────────────
+  //
+  // The setup run page shows the series of steps that set the run up — the
+  // scheduler among them, and the skills recommendation and the review beside
+  // it (cinatra#2970). The ratified drawing
+  // `design-run-surface-rail-and-gate.png` draws EVERY run-page state as the
+  // same two-column frame — "a step rail down the left names the run's ordered
+  // steps, and the run detail on the right shows the selected step" — and the
+  // setup flow was the one run-page screen that drew a single centred column
+  // instead.
+  //
+  // THE THREE STEPS ARE THE SETUP FLOW'S OWN, and no fourth is invented: the
+  // schedule (plan (A) §7), the skills recommendation (§6) and the review (§4).
+  // Each keeps EXACTLY the surface it has today — the scheduling form, and the
+  // one shipped renderer of the recommendation card. A step the run has not
+  // reached draws nothing: the plan draws no "not reached yet" screen, so none
+  // is invented for it, and the run detail simply has nothing in it until the
+  // step is reached.
+  //
+  // AND NO RUN PROGRESS IS DRAWN BESIDE ANY OF THEM. This page is served for a
+  // run that has not executed, so there is no progress to show — plan (A) §7.2
+  // step 5 for the schedule step, §6.2 for the recommendation step.
+  const setupRailSteps: RunSurfaceStep[] = run
+    ? [
+        {
+          key: "schedule",
+          label: RUN_SURFACE_RAIL_LABELS.schedule,
+          surface: schedulerStepSurface,
+        },
+        {
+          key: "recommendation",
+          label: RUN_SURFACE_RAIL_LABELS.recommendation,
+          // The ONE renderer of this interaction (cinatra#2573), on the host
+          // this screen already declares. It is the authority on whether it
+          // draws: with no live hold it resolves to nothing and renders no DOM
+          // at all, which is the honest reading of a step the run has not
+          // reached — never an invented placeholder.
+          surface: (
+            <LifecycleCardSurfaceProvider host="run_card">
+              <RecommendationHoldCard
+                runId={run.id}
+                agentPackageName={template.packageName ?? ""}
+                wireRef={null}
+              />
+            </LifecycleCardSurfaceProvider>
+          ),
+        },
+        {
+          key: "review",
+          label: RUN_SURFACE_RAIL_LABELS.review,
+          reached: setupReviewGates.length > 0,
+          // A review exists only after the agent has run and produced something
+          // (plan (A) §7.2 step 5), so a run still in setup has no review
+          // surface to open. The step is named on the rail — it is one of the
+          // run's steps — and its detail stays empty until the run reaches it.
+          surface: null,
+        },
+      ]
+    : [];
+
   return (
     <Main className="min-h-screen">
       <AgentPageLayout
@@ -1520,64 +1676,20 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             gatedSteps={gatedSteps}
           />
           </AgentPanelBody>
-        ) : (
-          <AgentPanelBody role="narrow">
-          {/*
-            cinatra#2482 — finished-run CONTEXT, above the form rather than
-            instead of it.
-
-            The reported repro ends on this screen with no idea that the run is
-            over, so the state has to be said out loud. It must NOT replace the
-            form though: `shouldShowPersistentTab` sends only scheduled/recurring
-            rows to the persistent tab, so this standalone form is the ONLY way
-            to give a finished immediate run a recurring or scheduled trigger —
-            and a recurring trigger clones a fresh run, so arming one here is
-            meaningful however this run itself ended. Hiding the form would take
-            that away (codex round-B finding).
-
-            "Run right after setup" on an already-triggered finished run is the
-            one thing that cannot work, and `setRunTriggerForActor` now refuses
-            exactly that with a message the form renders inline — no silent
-            success, and no bounce back to the run view.
-          */}
-          {run && shouldShowFinishedRunNotice(trigger, run.status) ? (
-            <div
-              className="soft-panel rounded-card mb-4 flex flex-col items-start gap-2 p-4"
-              data-run-finished-notice=""
-            >
-              <h2 className="text-sm font-semibold text-foreground">
-                This run has already finished
-              </h2>
-              {/* Copy names RECURRING specifically. Codex round 2: only a
-                  recurring trigger clones a fresh run per fire — a one-off
-                  `scheduled` arm on a finished run is a pre-existing no-op
-                  (trigger-release-job skips an unarmed run), so promising that
-                  "a schedule" starts a fresh run would overstate it. */}
-              <p className="text-sm text-muted-foreground">
-                It can&apos;t be run again. You can still give it a recurring
-                schedule below — each recurrence starts a fresh run.
-              </p>
-              <Link
-                href={`/agents/${agentId}/${encodeURIComponent(instanceId)}`}
-                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-                data-action="open-finished-run"
-              >
-                View this run
-              </Link>
-            </div>
-          ) : null}
-          <TriggerScreenClient
-            agentId={agentId}
-            instanceId={instanceId}
-            templateId={template.id}
-            isAdmin={isAdmin}
-            inputParams={inputParams}
-            requiredFields={required}
-            properties={properties}
-            setupComplete={setupComplete}
-            durationEstimate={durationEstimate}
-          />
+        ) : run ? (
+          /* THE SETUP RUN PAGE, AS THE TWO-COLUMN RUN SURFACE (cinatra#2970).
+             The steps on the left, the selected step's surface on the right —
+             the same frame every other run-page state draws, and the same
+             column anchors the capture recorder measures on them. The surface
+             takes the FRAME width because it is a two-column frame, not a form;
+             the scheduler step inside it declares Narrow for itself. */
+          <AgentPanelBody role="frame">
+            <RunSurfaceRail steps={setupRailSteps} initialSelectedKey="schedule" />
           </AgentPanelBody>
+        ) : (
+          /* No run to name steps for (`/trigger` reached with `new`): the form
+             stands alone, exactly as it did. */
+          schedulerStepSurface
         )}
       </AgentPageLayout>
     </Main>

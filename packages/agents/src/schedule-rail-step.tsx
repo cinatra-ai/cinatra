@@ -61,16 +61,16 @@ import {
   type ReactNode,
 } from "react";
 
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 import { ScheduleProposalCard } from "./schedule-proposal-card";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
+import { RUN_SURFACE_RAIL_LABELS, RunSurfaceRailRow } from "./run-surface-rail";
 
 /** The label the rail row carries. One word, in the plan's own vocabulary —
- *  "the schedule is a dedicated step in the step rail". */
-export const SCHEDULE_RAIL_STEP_LABEL = "Schedule";
+ *  "the schedule is a dedicated step in the step rail". Read from the run
+ *  surface's own label set (cinatra#2970) so the setup page's schedule row and
+ *  this one cannot drift into two words for the same step. */
+export const SCHEDULE_RAIL_STEP_LABEL = RUN_SURFACE_RAIL_LABELS.schedule;
 
 /**
  * WHICH step the run detail is showing: the schedule step, or the run's own
@@ -144,49 +144,29 @@ export function ScheduleRailStep({
         data-run-step-rail-column=""
         className="flex shrink-0 flex-col gap-2 pt-1"
       >
-        {/* The row is the shadcn <Button>, not a raw <button> — the design-system
-            boundary (eslint `no-restricted-syntax`) admits no raw control JSX
-            outside the vendored primitives, and the sibling control in
-            `ScheduleProposalCard` takes the same shape. `ghost` plus the
-            size/hover neutralisers is what keeps a rail ROW looking like a rail
-            row rather than a pill: no chrome at rest, no muted fill while it is
-            selected, and the same `hover:opacity-90` the row had. */}
-        <Button
-          type="button"
-          variant="ghost"
-          data-conformance-id="schedule-rail-step"
-          data-schedule-rail-step=""
-          data-schedule-rail-host={host}
-          data-schedule-step-selected={scheduleSelected ? "true" : "false"}
-          data-action="open-schedule-step"
-          aria-current={scheduleSelected ? "step" : undefined}
-          onClick={() => setSelected("schedule")}
-          className="h-auto justify-start gap-2 rounded-control px-0 py-0.5 text-left whitespace-normal hover:bg-transparent hover:opacity-90 dark:hover:bg-transparent"
-        >
-          {/* The circle and the title carry the rail's own selected/unselected
-              tokens — the same pair `RunStepRailPanel` gives an inactive row —
-              so the selected step reads as the selected step and no second
-              vocabulary is invented for this row. */}
-          <span
-            data-conformance-id="schedule-rail-indicator"
-            className={cn(
-              "relative flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full text-xs",
-              scheduleSelected
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted-foreground/40 text-background",
-            )}
-          >
-            {displayStep}
-          </span>
-          <span
-            className={cn(
-              "text-sm font-medium",
-              scheduleSelected ? "text-foreground" : "text-muted-foreground",
-            )}
-          >
-            {SCHEDULE_RAIL_STEP_LABEL}
-          </span>
-        </Button>
+        {/* THE ROW — the SHARED run-surface rail row (cinatra#2970). The circle,
+            the title and the selected state used to be written out here; they
+            are the same row the setup page's rail draws, so the drawing lives in
+            `run-surface-rail.tsx` and both rails compose it rather than each
+            keeping a copy. Every anchor this row carried is passed through
+            unchanged — the capture walk and this step's own suite measure them
+            by name — and the row stays a shadcn <Button> for the reason it
+            always was: the design-system boundary (eslint `no-restricted-syntax`)
+            admits no raw control JSX outside the vendored primitives. */}
+        <RunSurfaceRailRow
+          label={SCHEDULE_RAIL_STEP_LABEL}
+          displayStep={displayStep}
+          selected={scheduleSelected}
+          onSelect={() => setSelected("schedule")}
+          conformanceId="schedule-rail-step"
+          indicatorConformanceId="schedule-rail-indicator"
+          action="open-schedule-step"
+          rowAttributes={{
+            "data-schedule-rail-step": "",
+            "data-schedule-rail-host": host,
+            "data-schedule-step-selected": scheduleSelected ? "true" : "false",
+          }}
+        />
         {rail}
       </div>
 
