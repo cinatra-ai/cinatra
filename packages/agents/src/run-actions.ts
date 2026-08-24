@@ -717,6 +717,9 @@ export async function releaseTriggerNow(
       if (isScopeDenial(err)) {
         return { ok: false, error: "forbidden — this agent's scope does not include you" };
       }
+      // Every other dispatch failure has already been compensated by the release
+      // ladder — the copy is back at its wait, or failed, or the throw names it
+      // as stranded. What is left to do here is not swallow it.
       throw err;
     }
     // The defining run keeps its `armed` status and its schedule keeps its

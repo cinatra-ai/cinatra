@@ -1571,30 +1571,15 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: async (artifact) => {
-        await writeDurableHitlGateArtifact({
+      persistArtifact: (artifact) =>
+        writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
           inputSchema: artifact.schema,
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
-        });
-        // THE RUN STATES ITS MOMENT (cinatra#2928). The agent has paused to ask,
-        // and the durable gate artifact written just above IS the screen's
-        // server-checked reference — so the run records WHAT it is waiting at
-        // beside the row that says HOW. This is what lets
-        // `classifyRunWaitInterrupt` read the moment instead of recognizing a
-        // synthetic task-id prefix.
-        //
-        // AFTER the artifact, deliberately: a run that named a screen the
-        // durable row does not carry would point every host at nothing.
-        await onAgentHitl({
-          run: { id: runId, orgId: run.orgId, status: run.status },
-          screenRef: artifact.reviewTaskId,
-          authority: authority,
-        });
-      },
+        }),
       parkRun: () =>
         transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
@@ -2524,6 +2509,10 @@ async function runAgentBuilderExecutionJobInner(
         buildA2UiMidRunTranslatorResolver(),
       ),
     );
+    // The gate identity the park will state as its lifecycle card reference
+    // (cinatra#2928). Set by `persistArtifact` below, read by `parkRun` after
+    // its CAS wins — the two callbacks are the only writer and the only reader.
+    let parkedGateRef: string | null = null;
     await parkRunOnHumanGate({
       runId,
       gateLabel: `setup field '${fieldName}'`,
@@ -2565,8 +2554,13 @@ async function runAgentBuilderExecutionJobInner(
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: async (artifact) => {
-        await writeDurableHitlGateArtifact({
+      persistArtifact: (artifact) => {
+        // The gate identity this park will state as its card reference. Held
+        // here because `parkRun` below takes no arguments and the reference has
+        // to survive into it; captured BEFORE the write, so a failed durable
+        // write does not also cost the run its moment.
+        parkedGateRef = artifact.reviewTaskId;
+        return writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
@@ -2574,26 +2568,36 @@ async function runAgentBuilderExecutionJobInner(
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
         });
-        // THE RUN STATES ITS MOMENT (cinatra#2928). The agent has paused to ask,
-        // and the durable gate artifact written just above IS the screen's
-        // server-checked reference — so the run records WHAT it is waiting at
-        // beside the row that says HOW. This is what lets
-        // `classifyRunWaitInterrupt` read the moment instead of recognizing a
-        // synthetic task-id prefix.
-        //
-        // AFTER the artifact, deliberately: a run that named a screen the
-        // durable row does not carry would point every host at nothing.
-        await onAgentHitl({
-          run: { id: runId, orgId: run.orgId, status: run.status },
-          screenRef: artifact.reviewTaskId,
-          authority: executionAuthority,
-        });
       },
-      parkRun: () =>
-        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority).catch((e) => {
+      parkRun: async () => {
+        try {
+          await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
+        } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        }
+        // THE RUN STATES ITS MOMENT (cinatra#2928) — and only now.
+        //
+        // AFTER THE WINNING CAS, which is the whole placement. Written beside
+        // the durable artifact instead, it landed before the park, and a
+        // concurrent stop that won the CAS left a stopped run still saying it
+        // was waiting at a live screen. Winning is the only proof the run is
+        // really parked here.
+        //
+        // THE SETUP LOOP ONLY. This branch is the agent asking for a field it
+        // needs — which is what the `hitl` moment IS. The generic mid-run gate
+        // in `handleWayflowTaskState` is an APPROVAL of work already done, and
+        // recording it as an input ask would make every surface tell a review
+        // gate as "needs your input". Which moment that gate is at belongs to
+        // the review core, which is W2b's (cinatra#2929).
+        if (parkedGateRef) {
+          await onAgentHitl({
+            run: { id: runId, orgId: run.orgId, status: "pending_approval" },
+            screenRef: parkedGateRef,
+            authority: executionAuthority,
+          });
+        }
+      },
       failRun: (error) =>
         transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
@@ -2642,6 +2646,10 @@ async function runAgentBuilderExecutionJobInner(
         buildA2UiMidRunTranslatorResolver(),
       ),
     );
+    // The gate identity the park will state as its lifecycle card reference
+    // (cinatra#2928). Set by `persistArtifact` below, read by `parkRun` after
+    // its CAS wins — the two callbacks are the only writer and the only reader.
+    let parkedGateRef: string | null = null;
     await parkRunOnHumanGate({
       runId,
       gateLabel: `grouped setup (${pendingFields.length} required fields: ${pendingFields.join(", ")})`,
@@ -2670,8 +2678,13 @@ async function runAgentBuilderExecutionJobInner(
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: async (artifact) => {
-        await writeDurableHitlGateArtifact({
+      persistArtifact: (artifact) => {
+        // The gate identity this park will state as its card reference. Held
+        // here because `parkRun` below takes no arguments and the reference has
+        // to survive into it; captured BEFORE the write, so a failed durable
+        // write does not also cost the run its moment.
+        parkedGateRef = artifact.reviewTaskId;
+        return writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
@@ -2679,26 +2692,36 @@ async function runAgentBuilderExecutionJobInner(
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
         });
-        // THE RUN STATES ITS MOMENT (cinatra#2928). The agent has paused to ask,
-        // and the durable gate artifact written just above IS the screen's
-        // server-checked reference — so the run records WHAT it is waiting at
-        // beside the row that says HOW. This is what lets
-        // `classifyRunWaitInterrupt` read the moment instead of recognizing a
-        // synthetic task-id prefix.
-        //
-        // AFTER the artifact, deliberately: a run that named a screen the
-        // durable row does not carry would point every host at nothing.
-        await onAgentHitl({
-          run: { id: runId, orgId: run.orgId, status: run.status },
-          screenRef: artifact.reviewTaskId,
-          authority: executionAuthority,
-        });
       },
-      parkRun: () =>
-        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority).catch((e) => {
+      parkRun: async () => {
+        try {
+          await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
+        } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        }
+        // THE RUN STATES ITS MOMENT (cinatra#2928) — and only now.
+        //
+        // AFTER THE WINNING CAS, which is the whole placement. Written beside
+        // the durable artifact instead, it landed before the park, and a
+        // concurrent stop that won the CAS left a stopped run still saying it
+        // was waiting at a live screen. Winning is the only proof the run is
+        // really parked here.
+        //
+        // THE SETUP LOOP ONLY. This branch is the agent asking for a field it
+        // needs — which is what the `hitl` moment IS. The generic mid-run gate
+        // in `handleWayflowTaskState` is an APPROVAL of work already done, and
+        // recording it as an input ask would make every surface tell a review
+        // gate as "needs your input". Which moment that gate is at belongs to
+        // the review core, which is W2b's (cinatra#2929).
+        if (parkedGateRef) {
+          await onAgentHitl({
+            run: { id: runId, orgId: run.orgId, status: "pending_approval" },
+            screenRef: parkedGateRef,
+            authority: executionAuthority,
+          });
+        }
+      },
       failRun: (error) =>
         transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;

@@ -359,17 +359,6 @@ async function dispatchImmediateNow(
         actingUserId: actor.userId,
       });
       transitionedFrom = from;
-      // THE MOMENT IS OVER (cinatra#2928). This is the OTHER Continue: choosing
-      // "run right after setup" on the schedule screen releases a run parked at
-      // `pending_trigger` exactly as the run page's Continue does, so it has to
-      // clear what the run says it is waiting at. Without this a run could begin
-      // executing while still stating the schedule moment, and every host would
-      // keep mounting that card.
-      //
-      // AFTER the winning CAS, for the same reason `advanceAgentRun` clears
-      // there: winning is the only proof this call is the one releasing the run.
-      // Best-effort — a lifecycle record must never strand a released run.
-      await clearRunLifecycleMoment(runId, authority);
       break;
     } catch (err) {
       // cinatra#2485 C — a SCOPE DENIAL from the `→queued` guard is a decision,
@@ -462,6 +451,22 @@ async function dispatchImmediateNow(
         "This run could not be started just now — please try again.",
     };
   }
+
+  // THE MOMENT IS OVER (cinatra#2928). This is the OTHER Continue: choosing
+  // "run right after setup" on the schedule screen releases a run parked at
+  // `pending_trigger` exactly as the run page's Continue does, so it has to
+  // clear what the run says it is waiting at. Without it a run could begin
+  // executing while still stating the schedule moment, and every host would keep
+  // mounting that card.
+  //
+  // LAST, after the enqueue, for the reason `advanceAgentRun` clears last: every
+  // failure above compensates the run BACK to where it came from, and a run
+  // returned to its wait with nothing left to say what it is waiting for is a
+  // park with no card. Reaching this line means the run really is dispatched.
+  //
+  // Best-effort by construction — the helper swallows and logs — so a
+  // bookkeeping write can never strand a run that is already on its way.
+  await clearRunLifecycleMoment(runId, authority);
 
   return { ok: true };
 }

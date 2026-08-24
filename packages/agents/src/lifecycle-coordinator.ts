@@ -650,6 +650,17 @@ export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAns
         await transitionRunStatus(run.id, "queued", "pending_input", undefined, authority);
         recovered = "pending_input";
       } catch (revertErr) {
+        // Same reading as the release ladder below: a stale `from` means the run
+        // has moved on and belongs to another writer, and the terminal rung must
+        // not run against a generation this call did not produce.
+        if (revertErr instanceof RunTransitionError && revertErr.code === "stale_from_status") {
+          console.warn(
+            "[lifecycle-coordinator] enqueue compensation skipped for run",
+            run.id,
+            "— another writer moved it after this launch; leaving it to them",
+          );
+          throw enqueueErr;
+        }
         console.error(
           "[lifecycle-coordinator] enqueue compensation revert failed for run",
           run.id,
@@ -707,9 +718,25 @@ export async function clearRunLifecycleMoment(
   runId: string,
   authority: OrgWriteAuthority | undefined,
 ): Promise<void> {
-  const run = await readAgentRunById(runId);
-  if (!run) return;
-  await stateMoment({ run, moment: null, authority });
+  // THE READ IS INSIDE THE BEST-EFFORT, not beside it. It sat outside, so a
+  // transient database read failure escaped into a caller that had ALREADY
+  // released the run and had not yet enqueued it — leaving exactly the run this
+  // clear exists to tidy up after: released, with no job behind it.
+  try {
+    const run = await readAgentRunById(runId);
+    if (!run) return;
+    await recordRunLifecycleMoment(
+      { runId: run.id, orgId: run.orgId, moment: null },
+      authority,
+    );
+  } catch (err) {
+    console.warn(
+      "[lifecycle-coordinator] could not clear the moment on run",
+      runId,
+      "— the run keeps the moment it was stating:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 }
 
 /**
@@ -821,12 +848,6 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
     throw err;
   }
 
-  // WON. The run is ours to have released, so the moment it was waiting at is
-  // over. Best-effort by the same contract as every other lifecycle record: a
-  // failure is logged loudly and the run still goes, because a bookkeeping
-  // write must never strand a released run.
-  await stateMoment({ run, moment: null, authority });
-
   if (release.dispatch.kind === "enqueue") {
     const options = release.dispatch.options;
     try {
@@ -857,6 +878,21 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
         await transitionRunStatus(run.id, release.to, release.from, undefined, authority);
         recovered = release.from;
       } catch (revertErr) {
+        // ANOTHER WRITER OWNS THE RUN. A stale `from` means the row has moved on
+        // since this call released it — stopped, resumed, finished — and the
+        // second rung must NOT run: `queued → stopped → queued` is a legal
+        // sequence, so a status-only CAS cannot tell this call's own `queued`
+        // from the one a resuming writer just created, and failing that one
+        // would kill work somebody restarted. There is nothing here to
+        // compensate; the run is somebody else's.
+        if (revertErr instanceof RunTransitionError && revertErr.code === "stale_from_status") {
+          console.warn(
+            "[lifecycle-coordinator] release compensation skipped for run",
+            run.id,
+            "— another writer moved it after this release; leaving it to them",
+          );
+          throw enqueueErr;
+        }
         console.error(
           "[lifecycle-coordinator] release compensation revert failed for run",
           run.id,
@@ -893,6 +929,20 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
       throw enqueueErr;
     }
   }
+
+  // WON, AND DISPATCHED. Only now is the moment over.
+  //
+  // THE CLEAR IS LAST, and both neighbours are the reason. Ahead of the CAS it
+  // wiped a moment this call had not earned; between the CAS and the enqueue it
+  // was lost for good whenever the compensation put the run back at the state it
+  // was parked at — a run returned to its wait with nothing to say what it is
+  // waiting for is a park with no card. Last, the compensation path never
+  // reaches it, so a run that comes back is still stating its moment.
+  //
+  // Best-effort by the same contract as every other lifecycle record: a failure
+  // is logged loudly and the run still goes, because a bookkeeping write must
+  // never strand a released run.
+  await stateMoment({ run, moment: null, authority });
 
   const released = await readAgentRunById(run.id);
   return {

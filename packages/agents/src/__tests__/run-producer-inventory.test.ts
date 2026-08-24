@@ -19,6 +19,7 @@
  * The point of reading the tree rather than a registry is that a new producer
  * cannot be added by editing this list — it has to survive the fence too.
  */
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -160,23 +161,50 @@ describe("the run-producer inventory", () => {
     }
   });
 
-  it("names EVERY producer key the tree launches under — a launch the inventory does not know is a producer nobody counted", () => {
+  it("names EVERY producer the TREE launches under — a launch the inventory does not know is a producer nobody counted", () => {
     // THE REVERSE DIRECTION, and the one that catches an omission. The check
     // above walks the list and looks for each row in the tree; this walks the
-    // TREE and looks for each launch in the list. `release_now_recurring_copy`
-    // was added mid-slice and passed the first check by living in a module that
-    // already launched — this is what would have caught it.
-    const seen = new Set<string>();
-    for (const module of new Set(RUN_PRODUCERS.map((p) => p.module))) {
-      for (const m of executable(read(module)).matchAll(/producer:\s*["'`]([a-z0-9_]+)["'`]/g)) {
-        seen.add(m[1]);
+    // WHOLE TRACKED TREE and looks for each launch in the list.
+    //
+    // THE WHOLE TREE, not the modules the list already names. Scanning only the
+    // listed modules could never discover a launch in a module nobody had
+    // listed, which is the shape of every omission that matters: a new producer
+    // arrives in a new file. `release_now_recurring_copy` was added mid-slice
+    // and passed the forward check by living in a module that already launched;
+    // a genuinely new module would have passed both.
+    const tracked = execSync(
+      'git ls-files "src/**/*.ts" "src/**/*.tsx" "packages/**/*.ts" "packages/**/*.tsx"',
+      { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    )
+      .split("\n")
+      .filter(Boolean)
+      .filter((rel) => !rel.includes("/__tests__/") && !/\.test\.tsx?$/.test(rel));
+
+    const known = new Set(RUN_PRODUCERS.map((p) => p.key));
+    const unlisted = new Map<string, string>();
+    const launchingModules = new Set<string>();
+    for (const rel of tracked) {
+      const source = executable(read(rel));
+      if (!callsLaunch(source)) continue;
+      launchingModules.add(rel);
+      for (const m of source.matchAll(/producer:\s*["'`]([a-z0-9_]+)["'`]/g)) {
+        if (!known.has(m[1])) unlisted.set(m[1], rel);
       }
     }
-    const known = new Set(RUN_PRODUCERS.map((p) => p.key));
-    const unlisted = [...seen].filter((k) => !known.has(k)).sort();
     expect(
-      unlisted,
+      [...unlisted].map(([key, rel]) => `${key} (${rel})`).sort(),
       "these producers launch runs and the inventory does not name them",
+    ).toEqual([]);
+
+    // …and no module may launch WITHOUT naming a producer at all, which is the
+    // other way a launch escapes the count.
+    const listed = new Set(RUN_PRODUCERS.map((p) => p.module));
+    const nameless = [...launchingModules]
+      .filter((rel) => !listed.has(rel) && rel !== "packages/agents/src/lifecycle-coordinator.ts")
+      .sort();
+    expect(
+      nameless,
+      "these modules call launchAgentRun and the inventory names none of them",
     ).toEqual([]);
   });
 

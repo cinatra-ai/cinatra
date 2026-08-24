@@ -104,6 +104,32 @@ describe("the fence refuses every shape of creating a run outside launch", () =>
     expect(v.map((x: { file: string }) => x.file)).toContain("src/lib/pending.ts");
   });
 
+  it("catches a DESTRUCTURED dynamic import — this tree uses them to keep graphs off routes", async () => {
+    const source = `const { createAgentRun } = await import("./store");\nawait createAgentRun({}, undefined);\n`;
+    const v = await scanTree(withRecords({ "src/lib/dyn.ts": source }));
+    expect(v.map((x: { file: string }) => x.file)).toContain("src/lib/dyn.ts");
+  });
+
+  it("catches a WHOLE-MODULE dynamic import of the store — every creator, none named", async () => {
+    const source = `const store = await import("@cinatra-ai/agents/store");\nawait store.createAgentRun({}, undefined);\n`;
+    const v = await scanTree(withRecords({ "src/lib/dynns.ts": source }));
+    expect(v.map((x: { file: string }) => x.file)).toContain("src/lib/dynns.ts");
+  });
+
+  it("does NOT refuse a namespace import of the BARREL used for readers", async () => {
+    // The workspace barrel is a large READ surface, and namespace-importing it
+    // is ordinary. Refusing it would block legitimate code to catch a creation
+    // the member rule already catches by name.
+    const source = `import * as agents from "@cinatra-ai/agents";\nconst run = await agents.readAgentRunById("r");\n${CLEAN}`;
+    expect(await scanTree(withRecords({ "src/lib/reader.ts": source }))).toEqual([]);
+  });
+
+  it("STILL refuses a creator reached through that same barrel namespace", async () => {
+    const source = `import * as agents from "@cinatra-ai/agents";\nawait agents.createAgentRun({}, undefined);\n`;
+    const v = await scanTree(withRecords({ "src/lib/barrelns.ts": source }));
+    expect(v.map((x: { file: string }) => x.file)).toContain("src/lib/barrelns.ts");
+  });
+
   it("does NOT fire on prose that merely names a creator", async () => {
     const source = `// createAgentRun is the perimeter this module goes through launch to reach.\n${CLEAN}`;
     expect(await scanTree(withRecords({ "src/lib/prose.ts": source }))).toEqual([]);
@@ -145,7 +171,12 @@ describe("the records hold in both directions", () => {
   it("reads a creator out of an import however it is spelled", () => {
     expect(creatorImports(`import { createAgentRun } from "./store";`)).toHaveLength(1);
     expect(creatorImports(`import { createAgentRun as m } from "../store";`)).toHaveLength(1);
-    expect(creatorImports(`import * as s from "@cinatra-ai/agents";`)).toHaveLength(1);
+    expect(creatorImports(`import * as s from "./store";`)).toHaveLength(1);
+    // …and NOT the barrel, which is a read surface; a creator reached through
+    // it is a member call, and the member rule catches that by name.
+    expect(creatorImports(`import * as s from "@cinatra-ai/agents";`)).toHaveLength(0);
+    expect(creatorImports(`const { createAgentRun } = await import("./store");`)).toHaveLength(1);
+    expect(creatorImports(`const s = await import("@cinatra-ai/agents/store");`)).toHaveLength(1);
     expect(creatorImports(`import {\n  createAgentRunPendingInput,\n} from "@cinatra-ai/agents/store";`)).toHaveLength(1);
     // …and not out of something that merely looks like one.
     expect(creatorImports(`import { createAgentRunMetrics } from "./store";`)).toHaveLength(0);

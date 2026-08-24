@@ -206,9 +206,19 @@ export async function runAgentRunTriggerReleaseJob(
     // pending_input status. Propagate orgId so the cloned run preserves tenant
     // scope, AND projectId so the run stays project-scoped — the clone otherwise
     // dropped it, silently widening the run out of its project. Copying projectId
-    // also makes createAgentRunPendingInput re-derive the SAME OBO scope-ceiling
-    // chain as the schedule-defining run (the template owner anchor is locked
-    // after first run), so the cloned run carries the identical ceiling.
+    // also makes the pre-dispatch creator re-derive the same OBO scope-ceiling
+    // ANCHOR as the schedule-defining run (the template owner anchor is locked
+    // after first run).
+    //
+    // "THE SAME ANCHOR" IS NOT "THE SAME CEILING", and this note used to say the
+    // stronger thing. A run that was itself dispatched UNDER a parent carries a
+    // COMPOSED chain narrower than its own anchor, and a copy derived from
+    // template and project alone does not inherit that narrowing — the
+    // pre-dispatch creator takes no parent chain at all. Every tick has worked
+    // this way since recurring schedules existed and this change does not widen
+    // it; what changed is that the comment no longer claims otherwise. Threading
+    // the source run's persisted chain through the copy is a change to the
+    // creator's own inputs and belongs with the epic's review-core wave.
     // cinatra#1940 P3 (Decision 2): mint BEFORE the clone insert — the
     // creation perimeter is now guarded, so the authority must exist before
     // createAgentRunPendingInput runs (was previously minted only after, for
@@ -291,8 +301,15 @@ export async function runAgentRunTriggerReleaseJob(
   const releaseAuthority = mintTriggerReleaseAuthority(runForFire.orgId);
   // A ONE-OFF FIRING IS ADVANCE (cinatra#2928): the run already exists and is
   // parked at its schedule moment, and the schedule is what says to let it go.
-  // The enqueue stays below rather than riding the release, because this branch
-  // has its own compensation for a scope denial that the enqueue can raise.
+  //
+  // THE ENQUEUE STAYS BELOW rather than riding the release, and the reason is
+  // that the two want opposite things from a failure. The coordinator's release
+  // ladder COMPENSATES — it returns the run to its wait so a person can retry —
+  // which is right for a person's Continue and wrong here: this is a background
+  // job, its failure is the retry, and BullMQ re-runs it. Reverting the run
+  // would race that retry. A SCOPE DENIAL is the one failure that is terminal
+  // rather than transient, and the compensation for it is below, where the
+  // authority this frame holds already is.
   try {
     await advanceAgentRun({
       run: runForFire,

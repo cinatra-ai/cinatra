@@ -119,6 +119,22 @@ const STORE_SPECIFIERS = [
   /from\s+["']@cinatra-ai\/agents(?:\/store)?["']/,
 ];
 
+/**
+ * The specifiers a NAMESPACE import of is itself a hit.
+ *
+ * NARROWER THAN THE LIST ABOVE, on purpose. `import * as store from "./store"`
+ * reaches every creator while naming none, so it has to be a hit. The workspace
+ * BARREL is a different thing: it is a large read surface, and a module that
+ * namespace-imports it is almost always after a reader. Treating that as a
+ * creation would refuse legitimate code — and it does not need to, because a
+ * creator reached through a namespace is still a member call, which the member
+ * rule catches by name.
+ */
+const NAMESPACE_SPECIFIERS = [
+  /from\s+["'](?:\.{1,2}\/)*store["']/,
+  /from\s+["']@cinatra-ai\/agents\/store["']/,
+];
+
 const BANNED = [
   {
     label: "createAgentRun(",
@@ -148,7 +164,9 @@ export function creatorImports(source) {
     if (!STORE_SPECIFIERS.some((re) => re.test(statement))) continue;
     if (/^\s*import\s+type\b/.test(statement)) continue;
     if (/import\s+\*\s+as\s+/.test(statement)) {
-      hits.push(statement.replace(/\s+/g, " ").trim());
+      if (NAMESPACE_SPECIFIERS.some((re) => re.test(statement))) {
+        hits.push(statement.replace(/\s+/g, " ").trim());
+      }
       continue;
     }
     for (const name of CREATOR_NAMES) {
@@ -156,6 +174,31 @@ export function creatorImports(source) {
         hits.push(statement.replace(/\s+/g, " ").trim());
         break;
       }
+    }
+  }
+  // DYNAMIC IMPORTS reach the same modules, and this codebase uses them heavily
+  // to keep heavy graphs off a route. A destructured `await import(...)` names
+  // its bindings exactly as a static one does; a bare one reaches everything.
+  for (const m of source.matchAll(
+    /(?:const|let|var)\s*\{([^}]*)\}\s*=\s*await\s+import\(\s*["']([^"']+)["']\s*\)/g,
+  )) {
+    const spec = `from "${m[2]}"`;
+    if (!STORE_SPECIFIERS.some((re) => re.test(spec))) continue;
+    for (const name of CREATOR_NAMES) {
+      if (new RegExp(String.raw`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(m[1])) {
+        hits.push(`await import(${JSON.stringify(m[2])}) { ${m[1].trim()} }`);
+        break;
+      }
+    }
+  }
+  for (const m of source.matchAll(
+    /(?:const|let|var)\s+[A-Za-z0-9_$]+\s*=\s*await\s+import\(\s*["']([^"']+)["']\s*\)/g,
+  )) {
+    const spec = `from "${m[1]}"`;
+    // A whole-module dynamic import of the STORE reaches every creator without
+    // naming one — the dynamic twin of the namespace import above.
+    if (NAMESPACE_SPECIFIERS.some((re) => re.test(spec))) {
+      hits.push(`await import(${JSON.stringify(m[1])})`);
     }
   }
   return hits;
