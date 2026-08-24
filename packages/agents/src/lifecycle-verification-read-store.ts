@@ -48,7 +48,7 @@ export interface VerificationRecordRead {
   createdAt: Date;
 }
 
-/** Read a gate's verification record (the "Core analysis" the run rail opens). */
+/** Read a gate's verification record (the "Audit" reading the run rail opens). */
 export async function readVerificationRecordForGate(
   gateId: string,
 ): Promise<VerificationRecordRead | null> {

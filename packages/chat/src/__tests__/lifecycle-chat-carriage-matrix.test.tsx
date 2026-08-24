@@ -189,6 +189,11 @@ const REF_BY_KIND: Record<LifecycleCardKind, string> = {
   verification_summary: "verification-ref-2827",
   trigger_schedule_proposal: "proposal-ref-2827",
   recommendation_hold: "hold-ref-2827",
+  // cinatra#2928 — the fifth kind. Carried as an INTERRUPT like the hold, so
+  // this ref is never minted into an envelope; it is here because the table is
+  // keyed by the protocol's closed set and a missing key would be a kind the
+  // matrix silently skips.
+  agent_hitl_screen: "hitl-screen-ref-2928",
 };
 
 /** The self-MCP tool the shipped allowlist authorizes to mint this kind. */
@@ -218,12 +223,19 @@ async function driveSink(kind: LifecycleCardKind): Promise<AgUiEvent[]> {
   });
   adapter.start();
   adapter.send("text", { content: PROSE });
-  if (kind === "recommendation_hold") {
+  if (kind === "recommendation_hold" || kind === "agent_hitl_screen") {
+    // Both INTERRUPT kinds run the shape they actually have: an `agent_run`
+    // dispatch that parks, whose own tool call is the slot. The hold parks
+    // BEFORE the run starts (`pending_input`); the HITL screen parks the run
+    // mid-flight while the agent asks (`pending_approval`).
     adapter.send("tool_call", { id: CALL_ID, name: "agent_run" });
     adapter.send("tool_result", {
       id: CALL_ID,
       name: "agent_run",
-      result: JSON.stringify({ runId: RUN_ID, status: "pending_input" }),
+      result: JSON.stringify({
+        runId: RUN_ID,
+        status: kind === "recommendation_hold" ? "pending_input" : "pending_approval",
+      }),
     });
   } else {
     const toolName = producerToolFor(kind);
@@ -535,7 +547,7 @@ describe("the DATA_PART slot identity, measured on the real sink's own output", 
 // 2. The matrix
 // ---------------------------------------------------------------------------
 
-describe("the four-kind chat_thread carriage matrix, in the REAL view", () => {
+describe("the five-kind chat_thread carriage matrix, in the REAL view", () => {
   it("covers the protocol's closed kind set, once each, with no kind added or dropped", () => {
     expect([...CHAT_THREAD_CARRIAGE_CONTRACT.map((r) => r.kind)].sort()).toEqual(
       [...LIFECYCLE_CARD_KINDS].sort(),

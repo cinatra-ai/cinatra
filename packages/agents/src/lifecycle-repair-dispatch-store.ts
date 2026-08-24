@@ -85,7 +85,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import { agentRuns, agentTemplates, lifecycleRepair } from "./schema";
-import { createAgentRun } from "./store";
+import { launchAgentRun } from "./lifecycle-coordinator";
 import { markRepairDispatched } from "./lifecycle-repair-store";
 
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
@@ -326,8 +326,22 @@ export async function dispatchPendingProducerRepairs(opts?: {
           // an authority — this drain has no session, so mint the system
           // dispatcher authority scoped to the repair's org.
           const dispatchAuthority = mintLifecycleRepairDispatchAuthority(row.orgId);
-          await createAgentRun(
-            {
+          // Routed through the coordinator (cinatra#2928). A repair run is
+          // HEADLESS — the drain starts it, not a person — so no moment applies
+          // at its start and the row is created `queued` exactly as before. The
+          // enqueue stays here because it carries this drain's own derived job
+          // id and actor context.
+          await launchAgentRun({
+            producer: "lifecycle_repair",
+            frame: null,
+            authority: dispatchAuthority,
+            dispatch: {
+              kind: "caller_dispatches",
+              why: "the drain enqueues with its own colon-sanitized job id and the originating human's actor context",
+            },
+            create: {
+              kind: "full",
+              input: {
               id: runId,
               templateId: producer.templateId,
               orgId: row.orgId,
@@ -345,9 +359,9 @@ export async function dispatchPendingProducerRepairs(opts?: {
               // A re-drain re-derives the same key, so an at-least-once delivery
               // converges on the SAME repair run.
               idempotencyKey: `lifecycle-repair:${row.id}`,
+              },
             },
-            dispatchAuthority,
-          );
+          });
         } catch (err) {
           // A concurrent drain won the insert — the delivery is already durable.
           if ((err as { code?: string } | null)?.code !== "23505") throw err;

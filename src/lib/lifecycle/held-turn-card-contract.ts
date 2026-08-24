@@ -487,6 +487,34 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
+  {
+    // cinatra#2928 (lifecycle-b W2a) — the FIFTH kind. The agent pausing to ask
+    // for input is an INTERRUPT for the same reason the hold is: the run is
+    // genuinely blocked on the answer. W2a registers the kind so a run can
+    // STATE the moment; W3 (cinatra#2930) draws and mounts the card, which is
+    // why the kind is on BOTH obligation lists below.
+    kind: "agent_hitl_screen",
+    carriage: LIFECYCLE_CARD_CARRIAGE.agent_hitl_screen,
+    triggeringPart: "the agent_hitl_screen INTERRUPT the paused run carries",
+    triggerToolName: "agent_run",
+    owner: "AgentHitlScreenCard",
+    // A conformance id of the card's OWN, deliberately NOT the ruled root
+    // declaration: while the root declaration is owed (below), an owner anchor
+    // that IS the ruled anchor would let the obligation be satisfied by the
+    // very thing it is owed.
+    ownerAnchors: Object.freeze([`[data-conformance-id="agent-hitl-screen-card"]`]),
+    ruledRootAnchors: rootAnchorsFor("agent_hitl_screen"),
+    // The HITL screen is fields with a Continue button — that is what the
+    // screen already is on the run page today. NAMED BEFORE THEY EXIST as a
+    // chat mount, on the `trigger_schedule_proposal` precedent above: an
+    // obligation with no named target is a row that can be struck against
+    // nothing.
+    decisionControls: Object.freeze([
+      '[data-action="submit-hitl-screen"]',
+    ]),
+    foreignHostSubtrees: RUN_CARD_SUBTREES,
+    enforcer: "chat-hitl-one-card-gate",
+  },
 ]);
 
 /** The one row this module executes end-to-end: the held dispatch turn. */
@@ -513,7 +541,15 @@ export const RULED_KINDS: readonly LifecycleCardKind[] = LIFECYCLE_CARD_KINDS;
  * turns CI red immediately.
  */
 export const HELD_TURN_MOUNT_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
-  // EMPTY, and that is the ratchet being paid rather than relaxed.
+  // cinatra#2928 (lifecycle-b W2a) registers `agent_hitl_screen` as the fifth
+  // kind and draws NOTHING — W2a changes no screen. So the kind genuinely has
+  // no production chat_thread mount, and this row says exactly that. It is NOT
+  // the waiver the note below warns against: that warning is about RE-ADDING a
+  // kind whose mount already landed. A net-new kind with no card has one honest
+  // reading here and one dishonest alternative — claiming a mount nothing
+  // renders. W3 (cinatra#2930) lands the mount and strikes this row, and the
+  // suite turns red the moment the mount exists with the row still standing.
+  "agent_hitl_screen",
   // `recommendation_hold` was the one row here. S9b (cinatra#2786) landed its
   // production chat_thread mount — `chat-messages-view.tsx` draws
   // `RecommendationHoldCard` in the `agent_run` part's own slot container,
@@ -569,7 +605,13 @@ export function heldTurnMountIsOwed(kind: LifecycleCardKind): boolean {
  * labelled `chat_thread` by construction, a mount cannot claim a host it is
  * not, and the "ONE root" this list measures stays one.
  */
-export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([]);
+export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
+  // cinatra#2928 — same reading as the mount obligation above: the kind is
+  // registered, and the component that would carry the ruled root declaration
+  // is W3's (cinatra#2930). The list is no longer empty because a fifth kind
+  // arrived, not because a paid ratchet was relaxed.
+  "agent_hitl_screen",
+]);
 
 // ---------------------------------------------------------------------------
 // The four-kind chat_thread CARRIAGE MATRIX (cinatra#2827, epic #2784 S9i)

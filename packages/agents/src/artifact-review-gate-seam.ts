@@ -24,8 +24,25 @@ import {
   readReviewGate,
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
+import { decideDeclaredReviewForGate } from "./lifecycle-declared-review-store";
+import type { DeclaredReviewDecision } from "@/lib/lifecycle/lifecycle-review-core";
 
 export type ArtifactReviewGateSeam = {
+  /**
+   * THE ONE REVIEW CORE, reached from the run executor (cinatra#2929).
+   *
+   * The declared kind's decision needs the artifact's type and the
+   * organization's bound, so it needs a database — which is precisely what this
+   * seam exists to keep out of the executor's reachable graph. It rides the slot
+   * already bound for the gate, rather than a second one, because it is the same
+   * decision the emit below is the consequence of.
+   */
+  decideDeclaredReview(input: {
+    orgId: string;
+    templateId: string | null;
+    packageVersion: string | null;
+    targets: unknown;
+  }): Promise<DeclaredReviewDecision>;
   emit(input: {
     runId: string;
     orgId: string;
@@ -46,6 +63,9 @@ export type ArtifactReviewGateSeam = {
  * can reach a marked artifact-review gate. */
 export function bindArtifactReviewGateSeam(): void {
   const seam: ArtifactReviewGateSeam = {
+    async decideDeclaredReview(input) {
+      return decideDeclaredReviewForGate(input);
+    },
     async emit(input) {
       try {
         await emitArtifactReviewGate(input);

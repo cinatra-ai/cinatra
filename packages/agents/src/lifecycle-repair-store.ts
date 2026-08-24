@@ -645,7 +645,7 @@ export async function submitRepairResponse(
   }
 
   // S4 (cinatra#2042): a landed repair TRIGGERS post-change verification — the
-  // before/after "Core analysis" record the run rail opens, and (on a failed
+  // before/after "Audit" record the run rail opens, and (on a failed
   // verdict, within the cycle bound) exactly one reopened bounded gate on the same
   // run. BEST-EFFORT: a verification error never fails the (already-committed)
   // repair; the successor gate stands regardless.

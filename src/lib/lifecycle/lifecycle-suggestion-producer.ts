@@ -77,8 +77,8 @@ import {
 
 /**
  * The stable identity of the suggestion producer lane. A SIBLING of
- * `CORE_ANALYSIS_LANE_ID`, not the same lane: both render under the "Core
- * analysis" chrome (#2042's labelling rule — a core lane is never presented as
+ * `CORE_ANALYSIS_LANE_ID`, not the same lane: both render under the "Audit"
+ * chrome (#2042's labelling rule — a core lane is never presented as
  * an agent), but they write to different stores and a provenance row has to say
  * which one produced it. The chrome string itself belongs to the surface that
  * draws it (S6c), not here.

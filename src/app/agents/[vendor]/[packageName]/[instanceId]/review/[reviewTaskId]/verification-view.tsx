@@ -8,7 +8,7 @@ import { ReviewPinnedCapture } from "./review-pinned-capture";
 
 /**
  * The run-embedded VERIFICATION region (cinatra#2042, re-anchored 2026-07-25) —
- * reached from the run rail's "Core analysis" entry (`?view=verification`).
+ * reached from the run rail's "Audit" entry (`?view=verification`).
  *
  * WHAT MOVED, AND WHAT DID NOT (cinatra#2789, epic #2784 S9e). This component
  * used to DRAW §VII itself: the Core-analysis chrome, the outcome pill, the

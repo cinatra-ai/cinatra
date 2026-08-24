@@ -13,9 +13,9 @@ import {
   readPublishedAgentTemplates,
   isAgentPubliclyDiscoverable,
   readAgentTemplateVersions,
-  createAgentRun,
   type AgentTemplateVersionRecord,
 } from "@cinatra-ai/agents";
+import { launchAgentRun } from "@cinatra-ai/agents/lifecycle-coordinator";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 import { filterTemplatesToLiveManifest, readLiveAgentPackageNames } from "@/lib/a2a-manifest-gate";
 import { getActivationGeneration } from "@/lib/extension-activation-generation";
@@ -130,10 +130,29 @@ async function buildA2AMount(): Promise<A2AMount> {
       // scope-bound — an external peer whose org/team/project standing does
       // not satisfy the agent's install scope is refused at the creation
       // perimeter, even for a published agent it can see on the card.
-      return createAgentRun(
-        { ...input, parentOboCeiling: input.parentOboCeiling, scopeActor: actorCtx ?? null },
+      //
+      // Routed through the coordinator (cinatra#2928). An inbound invocation
+      // over the agent-to-agent protocol is HEADLESS — the caller is another
+      // system — so no moment applies at its start and the row is created
+      // `queued` exactly as before. The executor owns the dispatch, which is
+      // why this launch does not enqueue.
+      const launched = await launchAgentRun({
+        producer: "external_a2a_invocation",
+        frame: null,
         authority,
-      );
+        dispatch: {
+          kind: "caller_dispatches",
+          why: "the A2A executor enqueues through its own createAndEnqueueAgentRun contract",
+        },
+        create: {
+          kind: "full",
+          input: { ...input, parentOboCeiling: input.parentOboCeiling, scopeActor: actorCtx ?? null },
+        },
+      });
+      if (launched.carrier.kind !== "run") {
+        throw new Error("the A2A launch answered with a carrier that is not a run");
+      }
+      return launched.carrier.run;
     },
     // Retained for the rare legacy code path inside the a2a package that
     // still calls `enqueueJob` directly. Production never hits this branch

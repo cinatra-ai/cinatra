@@ -175,7 +175,7 @@ describe("buildRunStepRail merge contract", () => {
     expect(rail.entries.map((e) => e.key)).toEqual(["step:10", "gate:ta", "gate:tb"]);
   });
 
-  it("S4: a verification record is woven in RIGHT AFTER the gate it annotates as a 'Core analysis' entry", () => {
+  it("S4: a verification record is woven in RIGHT AFTER the gate it annotates as an 'Audit' entry", () => {
     const rail = buildRunStepRail({
       templateSteps: [tstep(1, 10, "Draft")],
       gates: [gate("g1", "resolved", "2026-07-25T10:00:00Z", "changes_requested")],
@@ -185,7 +185,7 @@ describe("buildRunStepRail merge contract", () => {
     expect(rail.entries.map((e) => e.key)).toEqual(["step:10", "gate:g1", "verification:g1"]);
     const verify = rail.entries.find((e) => e.kind === "verification");
     expect(verify).toBeTruthy();
-    expect(verify!.label).toBe("Core analysis");
+    expect(verify!.label).toBe("Audit");
     expect(verify!.status).toBe("completed");
     expect(verify!.verification).toEqual({ gateId: "g_g1", reviewTaskId: "g1", outcome: "unmet" });
   });

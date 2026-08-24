@@ -1,0 +1,217 @@
+# Consolidated micro-gate runner. One checkout + one Node setup + one step per
+# source gate job, replacing a fleet of single-step gate workflows that each
+# burned a runner slot. Per-source `paths:` filters are dropped: these gates are
+# cheap and must see every PR.
+
+name: gates
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the touch-ratchet gates below diff against the PR base.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      # Every `workspace:`-protocol dep in an in-tree member resolves to a
+      # package that exists. Self-tests the pure helpers first.
+      - name: Workspace Integrity Gate
+        run: |
+          node --test scripts/audit/__tests__/workspace-deps-resolve.test.mjs
+          node scripts/audit/workspace-deps-resolve.mjs
+
+      # docs/ top level is exactly {README.md, internals/}, no *.json under
+      # docs/**, pr-evidence/** absent — asserted against the tracked tree.
+      - name: Repo Docs Tree Guard
+        run: |
+          node scripts/audit/repo-docs-tree-guard.mjs
+
+      # No new source reference to the historical admin route prefix as a Cinatra
+      # route. Touch-ratchet: computes the diff base, then scans.
+      - name: Administration Route Banned
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          # Validate the base resolves to a commit. When it points at a commit
+          # not present in the fetched history, the three-dot diff has no shared
+          # anchor and every pre-existing reference is misread as newly added.
+          # Fall back to HEAD so the gate self-compares: HEAD vs HEAD is an empty
+          # diff, so no line is seen as added and the absolute baseline check
+          # holds. An empty base is deliberately NOT used — the gate treats "" as
+          # absent and re-resolves origin/main, diffing against pre-existing
+          # legacy references and failing. If HEAD itself cannot resolve (should
+          # never happen in a real checkout), hard-fail rather than drop the guard.
+          if [ -n "$base" ] && ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+            head="$(git rev-parse --verify --quiet HEAD || true)"
+            if [ -z "$head" ]; then
+              echo "::error::diff base '${base}' did not resolve AND HEAD did not resolve — cannot anchor the ratchet gate; failing rather than dropping the guard."
+              exit 1
+            fi
+            echo "::notice::diff base '${base}' did not resolve — using HEAD so the ratchet gate self-compares"
+            base="$head"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          # Consolidation bridge: the source passed this as a step `env:` fed by
+          # `steps.base.outputs.base`; in one merged step it is a shell export.
+          export ADMIN_ROUTE_DIFF_BASE="$base"
+          node scripts/audit/administration-route-banned.mjs
+
+      # No source file outside the allowlist writes to the legacy
+      # connector_access_policy table.
+      - name: Connector Access Policy Gate
+        run: |
+          node scripts/audit/connector-access-policy-write-gate.mjs
+
+      # No production code derives viewerScope/vendorScope from the freely
+      # editable identity.instanceNamespace.
+      - name: Viewer Scope Spoofing Guard
+        run: |
+          node scripts/audit/viewer-scope-gate.mjs
+
+      # No install/detail module builds a registry URL or auth token directly
+      # instead of using the grant/proxy seams. Includes the gate's unit tests.
+      - name: Gatekept Install No Direct Registry
+        run: |
+          node scripts/audit/gatekept-install-no-direct-registry.mjs
+          node --test scripts/audit/__tests__/gatekept-install-no-direct-registry.test.mjs
+
+      # No NEW import of the vendored marketplace MCP client package outside the
+      # allowlist. Touch-ratchet: computes the diff base, then scans. (The
+      # package name is spelled out nowhere here — this gate scans this file too.)
+      - name: Marketplace MCP Client Banned
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          # Validate the base resolves to a commit. When it points at a commit
+          # not present in the fetched history, the three-dot diff has no shared
+          # anchor and every pre-existing reference is misread as newly added.
+          # Fall back to HEAD so the gate self-compares: HEAD vs HEAD is an empty
+          # diff, so no line is seen as added and the absolute baseline check
+          # holds. An empty base is deliberately NOT used — the gate treats "" as
+          # absent and re-resolves origin/main, diffing against pre-existing
+          # legacy references and failing. If HEAD itself cannot resolve (should
+          # never happen in a real checkout), hard-fail rather than drop the guard.
+          if [ -n "$base" ] && ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+            head="$(git rev-parse --verify --quiet HEAD || true)"
+            if [ -z "$head" ]; then
+              echo "::error::diff base '${base}' did not resolve AND HEAD did not resolve — cannot anchor the ratchet gate; failing rather than dropping the guard."
+              exit 1
+            fi
+            echo "::notice::diff base '${base}' did not resolve — using HEAD so the ratchet gate self-compares"
+            base="$head"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          # Consolidation bridge: the source passed this as a step `env:` fed by
+          # `steps.base.outputs.base`; in one merged step it is a shell export.
+          export MARKETPLACE_MCP_CLIENT_DIFF_BASE="$base"
+          node scripts/audit/marketplace-mcp-client-banned.mjs
+
+      # The two anti-fraud checks from cinatra#2821. WARN-FIRST rollout; needs
+      # the full history to date a branch's first own commit against main.
+      - name: chat-HITL Evidence Gate
+        run: |
+          node scripts/ci/chat-hitl-evidence-gate.mjs --github-annotations
+
+      # design-system.html §Toolbar: ground tokens pinned in both token homes,
+      # no non-canonical role="toolbar" JSX, no spec hexes outside the tokens.
+      - name: Toolbar Design-System Gate — Toolbar design-system gate
+        run: |
+          node scripts/audit/toolbar-tokens.mjs
+
+      # Every "{Kind} by {Vendor}" byline path consumes resolveVendorPresentation
+      # and carries no retired scope/slug substitution.
+      - name: vendor-byline-gate — Vendor-byline lint/AST scan
+        run: |
+          node scripts/audit/vendor-byline-scan.mjs
+
+      # SDK ABI version byte-equal across register.ts, package.json and README,
+      # plus the public-surface fence (no host capability-id on the author root).
+      - name: SDK ABI Doc Gate — SDK ABI doc gate
+        run: |
+          node scripts/audit/sdk-abi-readme-gate.mjs
+          node scripts/audit/sdk-public-surface-ban.mjs
+
+      # Extractor tests for the two SDK ABI gates above.
+      - name: SDK ABI Doc Gate — extractor tests
+        run: |
+          node --test scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs
+          node --test scripts/audit/__tests__/sdk-public-surface-ban.test.mjs
+
+  # The three micro-gates that need a workspace install share ONE install here
+  # instead of three: dashboards-suite-gate (whole workflow) and the `tests`
+  # jobs of toolbar-tokens-gate / vendor-byline-gate. Full `--frozen-lockfile`
+  # install (a superset of the two sources' --ignore-scripts variant). Commands
+  # are verbatim from the retired workflows.
+  gates-pnpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: dashboards-suite-gate — dashboards default suite
+        run: pnpm -C packages/dashboards exec vitest run --no-coverage
+
+      - name: dashboards-suite-gate — sdk-dashboard default suite
+        run: pnpm -C packages/sdk-dashboard exec vitest run --no-coverage
+
+      - name: Toolbar design-system gate — parser tests
+        run: pnpm exec vitest run scripts/audit/__tests__/toolbar-tokens.test.mjs
+
+      - name: Vendor-byline — §I / §II byline tests (packages/extensions)
+        run: >-
+          pnpm --filter @cinatra-ai/extensions exec vitest run
+          src/__tests__/marketplace-card-model.test.ts
+          src/__tests__/marketplace-listing-card.test.tsx
+          src/__tests__/marketplace-modal-byline.test.tsx
+
+      - name: Vendor-byline — resolver + §III/§IV byline + parser tests (root)
+        run: >-
+          pnpm exec vitest run --config vitest.config.ts
+          src/lib/__tests__/vendor-presentation.test.ts
+          src/components/extensions/__tests__/installed-extension-card.test.tsx
+          src/components/extensions/__tests__/agent-card-vendor.test.ts
+          scripts/audit/__tests__/vendor-byline-scan.test.mjs

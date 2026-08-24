@@ -219,6 +219,7 @@ export const LIFECYCLE_CARD_KINDS = Object.freeze([
   "verification_summary",
   "recommendation_hold",
   "trigger_schedule_proposal",
+  "agent_hitl_screen",
 ]);
 
 /** How each kind reaches a surface. Mirrors `LIFECYCLE_CARD_CARRIAGE`. */
@@ -227,6 +228,7 @@ export const LIFECYCLE_CARD_CARRIAGE = Object.freeze({
   verification_summary: "data_part",
   recommendation_hold: "interrupt",
   trigger_schedule_proposal: "data_part",
+  agent_hitl_screen: "interrupt",
 });
 
 /** The four hosts. Mirrors `LIFECYCLE_CARD_HOSTS`. */
@@ -865,6 +867,46 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // registry-served, so a JSX-mount scan alone would leave them uncounted.
       hosts: ["chat_thread", "site_widget", "run_card", "page_gate_region"],
     },
+  },
+
+  // Registered by cinatra#2928 (lifecycle-b W2a) as the FIFTH kind, and NOT
+  // drawn by it: that slice changes no screen. The moment the agent pauses to
+  // ask for input had no name in this vocabulary, so every surface told it
+  // apart from a review by pattern-matching the shape of the pause. Naming it
+  // is what lets a run STATE it; drawing it is W3's (cinatra#2930).
+  agent_hitl_screen: {
+    status: "PLACEHOLDER",
+    design:
+      "the HITL screen the run page already shows — fields with a Continue button. It carries no card identity of its own today, which is exactly what the plan's section 3 gives it.",
+    component: "AgentHitlScreenCard",
+    wireCarriage: "interrupt",
+    owner: null,
+    composes: [],
+    body: {
+      // A typed INTERRUPT like `recommendation_hold`, so its authorized state
+      // does not come from the data-part resolve seam. The obligation the
+      // drawing slice inherits is named for the reader that exists.
+      validator: "useLifecycleCardResolve",
+      params: ["view"],
+      fields: ["state"],
+    },
+    // The two the plan states in prose — the fields the screen asks for, and
+    // the Continue that submits them. Named here so the drawing slice has a
+    // target to be measured against; this is the obligation W3 inherits, not a
+    // description of anything shipped.
+    anchors: ["hitl-screen-fields", '[data-action="submit-hitl-screen"]'],
+    instanceRootSelector: '[data-lifecycle-card="agent_hitl_screen"]',
+    instanceProof: null,
+    hosts: {
+      chat_thread: null,
+      site_widget: null,
+      run_card: null,
+      page_gate_region: null,
+    },
+    hostGap:
+      "No host mounts this kind as a card, because no component draws it as one. The run page shows the screen today, but not through this vocabulary. W3 (cinatra#2930) draws the card and binds it to the moment the run now records, on the hosts the parity ratchet already owes.",
+    renderedProof: null,
+    gap: "The card is not drawn. W2a registers the kind so a run can state the moment it is paused at, and changes no screen; the run page keeps the HITL screen it already renders, unchanged and outside this vocabulary. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.",
   },
 });
 

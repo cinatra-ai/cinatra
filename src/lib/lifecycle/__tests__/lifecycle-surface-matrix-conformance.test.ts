@@ -94,7 +94,7 @@ const BROKER_SURFACES = ["widget_content_editor_carrier_run"] as const;
 // ---------------------------------------------------------------------------
 
 describe("the surface matrix — HUMAN surfaces carry every interaction kind", () => {
-  it("declares exactly the four hosts and the four interaction kinds", () => {
+  it("declares exactly the four hosts and the five interaction kinds", () => {
     expect([...LIFECYCLE_CARD_HOSTS]).toEqual([
       "chat_thread",
       "site_widget",
@@ -106,6 +106,9 @@ describe("the surface matrix — HUMAN surfaces carry every interaction kind", (
       "verification_summary",
       "recommendation_hold",
       "trigger_schedule_proposal",
+      // cinatra#2928 (lifecycle-b W2a) — the agent pausing to ask for input.
+      // Registered so a run can STATE the moment; drawn by W3 (cinatra#2930).
+      "agent_hitl_screen",
     ]);
   });
 
@@ -150,11 +153,17 @@ describe("BROKER exclusion, leg 1: a carrier run emits no recommendation hold", 
 
   it("BY CONSTRUCTION: neither carrier-run creation site sets humanPresent", () => {
     const dispatch = read("src/lib/host-content-editor-dispatch.ts");
-    // Both `createAgentRun(...)` calls in this module are carrier runs. If a
-    // future edit adds `humanPresent` to either, the run stops being headless
-    // and leg 1's refusal stops being structural — so the absence is pinned.
-    expect(dispatch).toMatch(/createAgentRun\(/);
+    // Both launches in this module create carrier runs. Since cinatra#2929 they
+    // go through the coordinator, which DERIVES presence rather than accepting a
+    // claim — so the structural guarantee is stronger than it was: the module
+    // cannot state `humanPresent` at all, and it hands the coordinator no
+    // interactive surface and no frame to derive one from. If a future edit adds
+    // either, the run stops being headless and leg 1's refusal stops being
+    // structural, so the absence of both is pinned.
+    expect(dispatch).toMatch(/launchAgentRun\(/);
     expect(dispatch).not.toMatch(/humanPresent/);
+    expect(dispatch).not.toMatch(/interactive:/);
+    expect(dispatch).toMatch(/frame:\s*null/);
     // …and both carrier sourceTypes stay the broker discriminators, so the run
     // can never be mistaken for a human-dispatched one downstream.
     expect(dispatch).toMatch(/sourceType:\s*"content_editor_dispatch"/);

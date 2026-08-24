@@ -125,6 +125,14 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // run-start presence discriminator (cinatra#2067). Drizzle returns the typed
     // boolean column directly; null on pre-backfill / headless rows.
     humanPresent: row.humanPresent ?? null,
+    // The lifecycle MOMENT TRIPLE (cinatra#2928). Surfaced as written: a run at
+    // no moment reads all three as null, which is what every row created before
+    // the columns existed reads too. Nothing here interprets the values — the
+    // coordinator owns what they may say, and a surface reads the moment off
+    // the row rather than deriving it from the shape of the pause.
+    lifecycleMoment: row.lifecycleMoment ?? null,
+    lifecycleCardKind: row.lifecycleCardKind ?? null,
+    lifecycleCardRef: row.lifecycleCardRef ?? null,
   };
 }
 

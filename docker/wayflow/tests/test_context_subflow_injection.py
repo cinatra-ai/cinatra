@@ -731,7 +731,19 @@ def test_mount_legacy_doc_reaches_load_json_byte_identical(
     doc["nodes"].append({"$component_ref": "context_ideaContext"})
 
     raw, fake_loader, mounted = _mount(monkeypatch, tmp_path, doc)
-    assert fake_loader.loaded == [al._substitute_placeholders(raw)]
+    # cinatra#2949 — the loader now derives `output_schema` for every bridge
+    # ApiNode that DECLARES outputs, so a hand-authored doc reaches load_json
+    # with that ONE documented difference and nothing else. (The same is
+    # already true of the #1830 HITL gate reconcile, which likewise
+    # re-serializes the working document.) What this test guards is unchanged:
+    # the context-subflow injection does NOT fire, so no sidecar is recorded.
+    expected = json.loads(raw)
+    derived = al._derive_bridge_output_schemas(expected, "cinatra-ai/under-test")
+    assert derived, "fixture should exercise the bridge-ApiNode derivation"
+    assert len(fake_loader.loaded) == 1
+    assert json.loads(fake_loader.loaded[0]) == json.loads(
+        al._substitute_placeholders(json.dumps(expected))
+    )
     assert mounted.composed_oas is None
     assert mounted.composed_sha256 is None
     assert mounted.context_injection is None

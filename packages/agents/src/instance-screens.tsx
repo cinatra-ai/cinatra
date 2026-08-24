@@ -49,6 +49,7 @@ import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
 import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
+import { TriggerStepWatcher } from "./trigger-step-watcher";
 import { type SerializedAgentRunMessage } from "./agentic-run-panel";
 import { AgentPageLayout, AgentPanelBody } from "./agent-page-layout";
 import { OrchestratorStepperPanel } from "./orchestrator-stepper-panel";
@@ -129,8 +130,8 @@ export function shouldShowFinishedRunNotice(
 // places is how the two would drift back apart.
 // ---------------------------------------------------------------------------
 
-/** The three shapes the run-detail right column can take. */
-export type RunDetailPanelKind = "none" | "stepper" | "agentic";
+/** The four shapes the run-detail right column can take. */
+export type RunDetailPanelKind = "none" | "trigger" | "stepper" | "agentic";
 
 /**
  * Resolve the run-detail panel branch from the run + template shape.
@@ -140,6 +141,32 @@ export type RunDetailPanelKind = "none" | "stepper" | "agentic";
  * held run IS `pending_input` — which is why the screen has to host the card
  * itself rather than leaving it to a panel that is not on the page.
  *
+ * `"trigger"` is the PENDING_TRIGGER case (cinatra#2952). `pending_trigger`
+ * MEANS "setup is finished and the trigger step is open, awaiting the user's
+ * choice" (`run-status.ts`), so the run owes that step before anything may
+ * dispatch. Until this branch existed the status fell through to the SETUP
+ * branch below, and a run that had just cleared its setup approval was served
+ * the settled setup card again: its only control re-submitted the approval,
+ * which `approveReviewTaskInternal` refuses ("… is not pending_approval"), and
+ * no `agent_run_triggers` row was ever created.
+ *
+ * WHY ONLY SOME AGENTS. The one route into the scheduling step was
+ * `SetupCompletionWatcher`'s /trigger redirect, and that watcher is mounted on
+ * the `agentic` branch ALONE. An agent whose approval policy carries renderer
+ * gates lands on `stepper` instead — `buildRunStepperSteps` projects those
+ * gates into steps — so its run page never mounted the watcher and had no route
+ * into the step by any entry path, while a sibling whose policy carries no
+ * renderer gate landed on `agentic`, was redirected, and got its row. (The
+ * redirect is switched off again by `noRedirect` for orchestrator/flow
+ * templates and child runs, which closes the remaining ways in.) The step is
+ * drawn HERE instead of routed to, so no client redirect decides whether the
+ * person can go on.
+ *
+ * `hasTriggerRow` is the other half of that branch, and it is not optional: a
+ * run that already HAS its row is PAST the step, so handing it the form again
+ * is the re-arm loop cinatra#2482 closed. Take it from
+ * `readRunTriggerByRunId`, never from the status alone.
+ *
  * Exported so the regression test can pin the branch table (and the host
  * ownership derived from it) without a DB, a session or a Next.js render.
  */
@@ -148,9 +175,12 @@ export function runDetailPanelKind(params: {
   templateType: string | null | undefined;
   sourceType: string | null | undefined;
   stepperStepCount: number;
+  /** Does an `agent_run_triggers` row already exist for this run? */
+  hasTriggerRow: boolean;
 }): RunDetailPanelKind {
-  const { runStatus, templateType, sourceType, stepperStepCount } = params;
+  const { runStatus, templateType, sourceType, stepperStepCount, hasTriggerRow } = params;
   if (runStatus == null || runStatus === "pending_input") return "none";
+  if (runStatus === "pending_trigger" && !hasTriggerRow) return "trigger";
   const stepper =
     (templateType === "orchestrator" || templateType === "flow" || stepperStepCount > 0) &&
     sourceType !== "external";
@@ -163,6 +193,9 @@ export function runDetailPanelKind(params: {
  * TRUE unless the panel below already declares `run_card` and draws it. There is
  * no third answer: every branch draws the card exactly once, either here or in
  * the panel, so the interaction has ONE renderer on this surface at all times.
+ *
+ * The `trigger` branch (cinatra#2952) mounts no run panel at all, so the screen
+ * keeps the card there, exactly as it does on `none` and `stepper`.
  */
 export function screenHostsRecommendationCard(panel: RunDetailPanelKind): boolean {
   return panel !== "agentic";
@@ -188,6 +221,10 @@ export function screenHostsRecommendationCard(panel: RunDetailPanelKind): boolea
  * WITH steps. A stepper panel with NO steps renders no column at all (it
  * returns the step-less "Agentic Run Progress" section), so the screen keeps the
  * rail there: suppressing it would drop the run's review links entirely.
+ *
+ * THE TRIGGER BRANCH KEEPS THE RAIL (cinatra#2952). The scheduling step raises
+ * no column of its own, and Agents Lifecycle (A) §7 puts it "to the right of the
+ * steps" — so the steps stay on the left and the step opens beside them.
  *
  * Exported so the regression test can pin the whole branch table without a DB,
  * a session or a Next.js render.
@@ -267,6 +304,37 @@ export function runDetailOpensOnSchedule(params: {
   recommendationHeld: boolean;
 }): boolean {
   return params.hasScheduleStep && !params.hasExecution && !params.recommendationHeld;
+}
+
+/**
+ * Can this run still REACH `pending_trigger`, and therefore still owe the
+ * scheduling step? (cinatra#2952)
+ *
+ * `TriggerStepWatcher` is mounted on exactly this answer, so the run row it
+ * polls is read only while the transition it waits for is still possible. Two
+ * edges lead into `pending_trigger` (`run-status.ts`): from `pending_input` and
+ * from `queued` — and the setup gate's `pending_approval` resumes THROUGH
+ * `queued`, which is the path this issue is about. Anything past that —
+ * `running`, `waiting_trigger`, `armed`, terminal — can no longer reach it, so
+ * the watcher stands down rather than reading the run forever.
+ *
+ * Two runs never owe the step at all: one that already HOLDS a trigger row (it
+ * is past the step — cinatra#2482's re-arm loop), and a CHILD run, whose
+ * dispatch is governed by its parent's trigger and which has no step of its own.
+ *
+ * Exported so the regression test can pin the whole table without a DB.
+ */
+export function runMayReachTriggerStep(params: {
+  runStatus: string | null | undefined;
+  hasTriggerRow: boolean;
+  isChildRun: boolean;
+}): boolean {
+  if (params.hasTriggerRow || params.isChildRun) return false;
+  return (
+    params.runStatus === "pending_input" ||
+    params.runStatus === "pending_approval" ||
+    params.runStatus === "queued"
+  );
 }
 
 type ScreenProps = {
@@ -555,7 +623,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // machinery running. Plain run-scoped read behind the access door already cleared.
   const railLifecycleDecisions = run ? await readLifecycleDecisionsForRun(run.id) : [];
   // S4 (cinatra#2042): the run's post-change verification records, keyed to their
-  // gate — woven into the rail as "Core analysis" entries beneath each gate.
+  // gate — woven into the rail as "Audit" entries beneath each gate.
   const railVerifications = railGates.length
     ? await readVerificationRecordsForGates(railGates.map((g) => g.id))
     : [];
@@ -620,7 +688,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
   // ── §VII's audit card, on the `run_card` host (cinatra#2789, epic #2784 S9e) ──
   //
-  // THE MOUNT. The rail above already weaves a "Core analysis" ENTRY beneath
+  // THE MOUNT. The rail above already weaves an "Audit" ENTRY beneath
   // each gate that has a verification record — a link into the review page's
   // `?view=verification`. That entry is navigation; it is not the reading. This
   // is the reading, drawn on the run page itself under its own
@@ -694,6 +762,9 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     templateType: template.type,
     sourceType: template.sourceType,
     stepperStepCount: stepperSteps.length,
+    // cinatra#2952: a run that already holds a trigger row is past the
+    // scheduling step; only a run that owes it gets the step drawn.
+    hasTriggerRow: trigger !== null,
   });
 
   // Has the agent run at all? The schedule step is the run detail's first paint
@@ -709,6 +780,20 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     }),
     recommendationHeld,
   });
+
+  // The scheduling step's duration banner, computed ONLY on the branch that
+  // draws it (cinatra#2952). `estimateRunDuration` falls through to an LLM
+  // analysis when a template has too little run history, so the ordinary run
+  // page must never pay for it. Best-effort: the form states "Unavailable."
+  // for a null estimate, which is a better page than a failed render.
+  const triggerStepDurationEstimate =
+    runDetailPanel === "trigger"
+      ? await estimateRunDuration({
+          template: { id: template.id },
+          compiledOas: { triggerMode: template.triggerMode ?? undefined },
+          skillMd: (template.taskSpec ?? "") as string,
+        }).catch(() => null)
+      : null;
 
   return (
     <Main className="min-h-screen">
@@ -828,9 +913,59 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   ))}
                 </LifecycleCardSurfaceProvider>
               ) : null}
+              {/* THE SCHEDULING STEP, ON THE RUN PAGE ITSELF (cinatra#2952).
+
+                  A run on `pending_trigger` has finished setup and owes the
+                  trigger step. It used to be served the settled setup card
+                  instead, whose only control re-submitted an approval the
+                  server refuses — a dead end with no trigger row at its end.
+                  The standard scheduling step is drawn here instead, and it is
+                  the SAME component the /trigger route mounts, so there is one
+                  scheduling step in the product rather than two.
+
+                  Agents Lifecycle (A) §7, kept in force: the step opens to the
+                  RIGHT of the steps (the page-level rail is beside it, see
+                  `screenHostsStepRail`), and NO agentic run progress card is
+                  shown with it — a run that has not executed has no progress to
+                  show. It declares its own body role: a single column of form
+                  controls is Narrow (Agents §III). */}
+              {runDetailPanel === "trigger" ? (
+                <AgentPanelBody role="narrow">
+                  <TriggerScreenClient
+                    agentId={agentId}
+                    instanceId={instanceId}
+                    templateId={template.id}
+                    isAdmin={isAdmin}
+                    inputParams={inputParams}
+                    requiredFields={required}
+                    properties={properties}
+                    setupComplete={setupComplete}
+                    durationEstimate={triggerStepDurationEstimate}
+                  />
+                </AgentPanelBody>
+              ) : null}
               {/* Render setup INTERRUPT events inline on the Setup tab.
-                  Only rendered once the run has been triggered (status !== pending_input). */}
-              {runDetailPanel !== "none" && (
+                  Only rendered once the run has been triggered (status !== pending_input),
+                  and never on the scheduling step above. */}
+              {/* The live page follows the run into that step (cinatra#2952).
+                  The panel below is a client component that stays mounted while
+                  the run leaves `pending_approval`, and `pending_trigger` is not
+                  an AG-UI event, so without this the person who just answered
+                  the setup gate goes on looking at the settled setup card. Only
+                  where it is needed: the setup branch of a run that owes its
+                  trigger step. The `agentic` branch already carries this through
+                  `SetupCompletionWatcher`. */}
+              {runDetailPanel === "stepper" ? (
+                <TriggerStepWatcher
+                  runId={run.id}
+                  enabled={runMayReachTriggerStep({
+                    runStatus: run.status,
+                    hasTriggerRow: trigger !== null,
+                    isChildRun: run.parentRunId != null,
+                  })}
+                />
+              ) : null}
+              {runDetailPanel !== "none" && runDetailPanel !== "trigger" && (
                 runDetailPanel === "stepper" ? (
                   <OrchestratorStepperPanel
                     runId={run.id}

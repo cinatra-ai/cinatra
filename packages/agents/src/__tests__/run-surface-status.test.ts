@@ -108,6 +108,52 @@ describe("classifyRunWaitInterrupt", () => {
     // A WayFlow gate's synthetic identity is NOT a setup identity.
     expect(classifyRunWaitInterrupt({ reviewTaskId: "wayflow-task-7" })).toBe("approval");
   });
+
+  // -------------------------------------------------------------------------
+  // THE READER (cinatra#2928): the run states its moment, so this stops guessing
+  // -------------------------------------------------------------------------
+
+  it("reads the moment the RUN states, in preference to the shape of the pause", () => {
+    // The two heuristics and the recorded fact DISAGREE on purpose here, which
+    // is the only way to show which one is being read. An agent that paused to
+    // ask for input on an opaque WayFlow-shaped task id used to read as an
+    // approval gate — the exact mislabelling the moment triple ends.
+    expect(
+      classifyRunWaitInterrupt({ reviewTaskId: "wayflow-task-7", lifecycleMoment: "hitl" }),
+    ).toBe("input");
+    // …and the other direction: a setup-shaped identity on a run that states it
+    // is at a REVIEW is a review.
+    expect(
+      classifyRunWaitInterrupt({
+        reviewTaskId: "setup-run-42",
+        fieldName: "idea",
+        lifecycleMoment: "review",
+      }),
+    ).toBe("approval");
+  });
+
+  it("falls back to the heuristics when the run states no moment", () => {
+    // Every run created before the column existed reads null, and the SSE path
+    // holds an interrupt without holding the row. The fallback is the previous
+    // behaviour, byte for byte.
+    for (const moment of [null, undefined]) {
+      expect(classifyRunWaitInterrupt({ reviewTaskId: "setup-run-42", lifecycleMoment: moment })).toBe(
+        "input",
+      );
+      expect(
+        classifyRunWaitInterrupt({ reviewTaskId: "wayflow-task-7", lifecycleMoment: moment }),
+      ).toBe("approval");
+    }
+  });
+
+  it("says nothing about a moment that is not an interrupt at all", () => {
+    // A run parked for the skills question or its schedule is not waiting at an
+    // interrupt, so this classifier has no answer for it and keeps its
+    // fail-closed one rather than inventing a reading.
+    for (const moment of ["recommendation", "schedule", "audit", "something_new"]) {
+      expect(classifyRunWaitInterrupt({ lifecycleMoment: moment }), moment).toBe("approval");
+    }
+  });
 });
 
 describe("runStatusBadgeLabel — run-card badge copy fixtures", () => {

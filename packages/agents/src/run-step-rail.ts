@@ -96,7 +96,7 @@ export interface RunStepRailEntry {
   };
   /** Present iff kind==="verification" (S4, cinatra#2042): the linkage the rail
    * entry deep-links into the review surface's VERIFICATION view with, plus the
-   * verdict the "Core analysis" badge shows. */
+   * verdict the "Audit" badge shows. */
   verification?: {
     gateId: string;
     reviewTaskId: string;
@@ -392,7 +392,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
   // (+) VERIFICATIONS (S4, cinatra#2042) — a post-change verification record is
   //     woven in RIGHT AFTER the gate it annotates: it shares the gate's ordinal
   //     and keys `verification:<reviewTaskId>` (which sorts after `gate:<…>` at the
-  //     same ordinal), so the "Core analysis" entry sits directly beneath its
+  //     same ordinal), so the "Audit" entry sits directly beneath its
   //     Review entry. A verification is a produced, read-only record ⇒ completed.
   //     A verification whose gate is not on the rail falls back to trailing.
   const verifications = input.verifications ?? [];
@@ -408,7 +408,7 @@ export function buildRunStepRail(input: BuildRunStepRailInput): RunStepRail {
         key,
         ordinal,
         kind: "verification",
-        label: "Core analysis",
+        label: "Audit",
         status: "completed",
         verification: { gateId: v.gateId, reviewTaskId: v.reviewTaskId, outcome: v.outcome },
       }),

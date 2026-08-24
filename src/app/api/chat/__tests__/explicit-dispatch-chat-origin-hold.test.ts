@@ -172,10 +172,17 @@ describe("the launch origin is stamped by this bridge, not by anyone else", () =
     expect(JSON.stringify(request.input)).not.toContain("humanPresent");
   });
 
-  it("stamps it as a constant — the same value for a system principal", async () => {
-    // The origin describes the CALL FRAME (this bridge is only reachable from
-    // the chat route), not the caller's identity, so no principal shape turns
-    // it off or changes it.
+  it("cinatra#2892: stamps NOTHING for a non-human principal", async () => {
+    // IT USED TO BE A CONSTANT, and that was the defect. The origin describes a
+    // CALL FRAME this bridge alone can reach, which is true — but the stamp is
+    // read downstream as "a human is watching this run", and for a service
+    // principal that is simply untrue. The run came out marked human-present
+    // with NO OWNER: the recommendation moment could open on it, and the only
+    // card that could release it belongs to a person who does not exist.
+    //
+    // A non-human principal now carries no launch origin at all, which is the
+    // headless reading every other machine path already gets. Nothing is
+    // refused that was allowed — the run dispatches, as a headless run.
     mocks.invokePrimitive.mockResolvedValueOnce({ runId: RUN_ID, status: "queued" });
     const { send } = makeSend();
     await serverSideExplicitDispatch({
@@ -190,7 +197,10 @@ describe("the launch origin is stamped by this bridge, not by anyone else", () =
     });
 
     const request = mocks.invokePrimitive.mock.calls[0][1] as { actor: Record<string, unknown> };
-    expect(request.actor.launchOrigin).toBe("chat");
+    expect(request.actor.launchOrigin).toBeUndefined();
+    // …and the frame still carries no user id to stand in for one, so nothing
+    // downstream can reconstruct a presence claim from it either.
+    expect(request.actor.userId).toBeUndefined();
   });
 });
 

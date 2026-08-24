@@ -488,3 +488,112 @@ describe("the scripted structured-output contract — conforming by TYPE, not by
     });
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// The DECLARED-OUTPUTS contract (cinatra#2949).
+//
+// #2910 gave the bridge a provider that answers without a credential. What the
+// agents never sent it was the SHAPE to answer in: a bridge ApiNode declared
+// typed outputs (`title`, `content`, …) and still asked for free text, so the
+// call reported success while every declared output came back empty and no
+// artifact could be materialised.
+//
+// The agent runtime now derives `output_schema` from the node's own declared
+// outputs at load time (`docker/wayflow/agent_loader.py`
+// ::_derive_bridge_output_schemas), following the SAME agentspec-property ->
+// JSON-Schema convention the host compiler uses for an agent's own output
+// schema (`packages/agents/src/oas-compiler.ts`, step 8).
+//
+// These cases pin the OTHER end of that contract — the shape the runtime emits
+// is one this provider actually answers in — so the two sides cannot drift
+// apart in silence. The derivation itself is pinned in
+// `docker/wayflow/tests/test_bridge_output_schema.py`.
+// ---------------------------------------------------------------------------
+describe("an agent whose node declares outputs cannot get shapeless prose (#2949)", () => {
+  /**
+   * EXACTLY what the runtime derives for the shipped blog-draft-writer
+   * `write` node — five declared outputs, one of them an array whose item type
+   * comes from the agentspec `json_schema.items` spelling. Written out in full
+   * rather than computed, so a change on either side of the seam shows up here
+   * as a diff.
+   */
+  const DERIVED_FOR_DRAFT_WRITER = {
+    type: "object",
+    properties: {
+      title: { type: "string", title: "title" },
+      excerpt: { type: "string", title: "excerpt" },
+      content: { type: "string", title: "content" },
+      sourcesUsed: { type: "array", title: "sourcesUsed", items: { type: "string" } },
+      notes: { type: "string", title: "notes" },
+    },
+    // The root names every declared output and closes the object — the strict
+    // structured-output contract the OpenAI path enforces (cinatra#1891 walk-2
+    // DEFECT-2). The scripted provider reads `required` as the member list, so
+    // the two providers are asked for, and answer with, the SAME key set.
+    required: ["title", "excerpt", "content", "sourcesUsed", "notes"],
+    additionalProperties: false,
+  } satisfies Record<string, unknown>;
+
+  const DECLARED = ["title", "excerpt", "content", "sourcesUsed", "notes"] as const;
+
+  it("answers a derived schema with EVERY declared output, none of them empty", () => {
+    enableScriptedDevelopmentRuntime();
+    const response = runScriptedBridgeCompletion({
+      system: "You are a stateless blog draft writer agent.",
+      user: "draft it",
+      outputSchema: DERIVED_FOR_DRAFT_WRITER,
+    });
+
+    expect(response.status).toBe("completed");
+    const parsed = JSON.parse(response.text ?? "") as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual([...DECLARED].sort());
+    // Non-empty is the whole point: the run failed at materialisation because
+    // `title` resolved to "".
+    for (const name of ["title", "excerpt", "content", "notes"] as const) {
+      expect(typeof parsed[name]).toBe("string");
+      expect((parsed[name] as string).length).toBeGreaterThan(0);
+    }
+    // The array output keeps its declared item type instead of collapsing to
+    // an empty list.
+    expect(Array.isArray(parsed.sourcesUsed)).toBe(true);
+    expect((parsed.sourcesUsed as unknown[]).length).toBeGreaterThan(0);
+    expect(typeof (parsed.sourcesUsed as unknown[])[0]).toBe("string");
+  });
+
+  it("without a schema the same call reports success and carries NO declared output — the #2949 state", () => {
+    enableScriptedDevelopmentRuntime();
+    const response = runScriptedBridgeCompletion({
+      system: "You are a stateless blog draft writer agent.",
+      user: "draft it",
+    });
+
+    expect(response.status).toBe("completed");
+    // Prose. The host route parses the answer as JSON and spreads its keys, so
+    // a non-object answer leaves every declared output unset.
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(response.text ?? "");
+    } catch {
+      parsed = null;
+    }
+    expect(parsed === null || typeof parsed !== "object").toBe(true);
+    for (const name of DECLARED) {
+      expect(response.text ?? "").not.toContain(`"${name}"`);
+    }
+  });
+
+  it("the `title` annotation the runtime emits is ignored, not answered as a member", () => {
+    enableScriptedDevelopmentRuntime();
+    const response = runScriptedBridgeCompletion({
+      user: "produce it",
+      outputSchema: {
+        type: "object",
+        properties: { onlyOne: { type: "string", title: "onlyOne" } },
+      },
+    });
+    expect(JSON.parse(response.text ?? "")).toEqual({
+      onlyOne: expect.stringContaining(UAT_SENTINEL),
+    });
+  });
+});

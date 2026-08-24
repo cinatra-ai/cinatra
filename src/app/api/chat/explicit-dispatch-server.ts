@@ -59,7 +59,24 @@ function chatActorToPrimitive(actor: ActorContext): PrimitiveActorContext {
     // transport-verified `delegatedRestricted` instead, deliberately, so there
     // is exactly one carrier per path and neither one is re-derivable from
     // model-reachable data.
-    launchOrigin: "chat",
+    //
+    // ONLY FOR A HUMAN PRINCIPAL (cinatra#2892, closed by cinatra#2928). This
+    // stamp used to be an unconditional constant, which was true of the SURFACE
+    // and untrue of the CALLER: a non-human principal reaching this pre-router
+    // produced a chat-origin run stamped human-present with no owner. The
+    // recommendation hold could then fire on it, and the only card that could
+    // release it belongs to a person who does not exist — a dead-end card on a
+    // run nobody can move. The refusal direction was safe (nothing launched
+    // unowned), but a stamp that says a human is watching when none is has no
+    // business being a constant.
+    //
+    // A non-human principal now carries no launch origin at all, which is
+    // exactly the headless reading every other machine path already gets. The
+    // coordinator re-derives presence from BOTH halves — a verified interactive
+    // surface AND a resolvable human owner — so this stamp is the truthful half
+    // it owns rather than the whole answer.
+    launchOrigin:
+      actor.principalType === "HumanUser" ? "chat" : undefined,
   };
 }
 

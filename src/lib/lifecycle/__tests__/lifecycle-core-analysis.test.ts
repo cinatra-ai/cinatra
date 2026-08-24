@@ -53,6 +53,20 @@ describe("buildCoreAnalysis — S4 core advisor lane provenance (cinatra#2042)",
     expect(a.provenance.includedFields).toEqual([]);
   });
 
+  it("names the reading AUDIT in the advisory body a person reads", () => {
+    const a = buildCoreAnalysis({
+      target,
+      projection: { includedFields: { subject: "Hi" }, excludedFields: ["ssn"] },
+      authzDecision: "partial",
+    });
+    // The lane is called the AUDIT lane wherever a person reads it; the
+    // provenance line below it still names the lane IDENTITY, unchanged.
+    expect(a.summary).toBe("Audit of 1 disclosed field(s) (1 withheld).");
+    expect(a.body.split("\n")[0]).toBe(a.summary);
+    expect(a.body).not.toContain("Core analysis");
+    expect(a.body).toContain("lane=core-analysis-lane");
+  });
+
   it("the projection digest is stable + order-independent over the same disclosed content", () => {
     const d1 = projectionDigest({ a: "1", b: "2" });
     const d2 = projectionDigest({ b: "2", a: "1" });
