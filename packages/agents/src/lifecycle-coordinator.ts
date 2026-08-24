@@ -725,9 +725,6 @@ export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAns
 export async function clearRunLifecycleMoment(
   runId: string,
   authority: OrgWriteAuthority | undefined,
-  /** Clear only while the run is still in this status. A caller that has just
-   *  dispatched knows it; one that does not may omit it. */
-  onlyWhileStatus?: string,
 ): Promise<void> {
   // THE READ IS INSIDE THE BEST-EFFORT, not beside it. It sat outside, so a
   // transient database read failure escaped into a caller that had ALREADY
@@ -736,12 +733,18 @@ export async function clearRunLifecycleMoment(
   try {
     const run = await readAgentRunById(runId);
     if (!run) return;
+    // NOTHING TO CLEAR. Not an error and not worth a write.
+    if (run.lifecycleMoment === null) return;
+    // COMPARE AND CLEAR. The read and the write are two statements, so the
+    // moment can change between them — a run released and parked again at
+    // something new. Naming the moment this call SAW is what keeps the clear
+    // from taking the newer card off: it removes the moment it read, or nothing.
     await recordRunLifecycleMoment(
       {
         runId: run.id,
         orgId: run.orgId,
         moment: null,
-        ...(onlyWhileStatus === undefined ? {} : { onlyWhileStatus }),
+        onlyWhileMoment: run.lifecycleMoment,
       },
       authority,
     );
@@ -968,14 +971,16 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
   // its own dispatch, with `clearRunLifecycleMoment`, and the two callers that
   // take this shape do exactly that.
   //
-  // Guarded on the status this call produced, so a run that has already parked
-  // again keeps the moment its new park stated.
+  // Guarded on the MOMENT this call sees rather than on a status: the status a
+  // release dispatches into is left almost at once — a worker picks the run up —
+  // so a status-pinned clear would miss the ordinary case and leave a card on a
+  // run that is already working. A run that has reached a NEW moment keeps it.
   //
   // Best-effort by the same contract as every other lifecycle record: a failure
   // is logged loudly and the run still goes, because a bookkeeping write must
   // never strand a released run.
   if (release.dispatch.kind === "enqueue") {
-    await stateMoment({ run, moment: null, authority, onlyWhileStatus: release.to });
+    await clearRunLifecycleMoment(run.id, authority);
   }
 
   const released = await readAgentRunById(run.id);
@@ -1011,9 +1016,16 @@ export type HitlInput = {
 export async function onAgentHitl(input: HitlInput): Promise<CoordinatorAnswer> {
   // ONLY WHILE THE RUN IS STILL PARKED WHERE THE CALLER LEFT IT. The park and
   // this record are two writes, and an approval fast enough to land between them
-  // would have the run resumed — after which stating `hitl` puts a card back on
-  // a run that is running again. Naming the status folds the check into the
-  // write, so the record can only land on the run the caller actually parked.
+  // would have the run resumed — after which stating `hitl` would put a card
+  // back on a run that is running again. Naming the status folds the check into
+  // the write, so the record cannot land on a run that has left the park.
+  //
+  // WHAT IT DOES NOT CLOSE: a run approved and parked AGAIN inside that window
+  // is back at the same status, and this write then lands on the newer park
+  // carrying the OLDER gate's reference. It is narrow — it needs an approval and
+  // a re-park between one CAS and one update — and self-correcting, because the
+  // newer park makes this same record for its own gate. Closing it properly
+  // needs the write to name the gate generation, not the status.
   await stateMoment({
     run: input.run,
     moment: "hitl",

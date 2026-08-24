@@ -266,7 +266,7 @@ export async function triggerAgentRun(
   // DISPATCHED — the moment is over (cinatra#2928). Guarded on `queued`, the
   // status this frame produced, so a run that has parked again in the meantime
   // keeps whatever its new park stated.
-  await clearRunLifecycleMoment(args.runId, authority, "queued");
+  await clearRunLifecycleMoment(args.runId, authority);
 
   return { ok: true };
 }
@@ -807,7 +807,7 @@ export async function releaseTriggerNow(
   // (cinatra#2928). The recurring branch above never reaches here: it releases a
   // COPY and deliberately leaves the defining run exactly as it was, moment
   // included, because that run is still the schedule.
-  await clearRunLifecycleMoment(args.runId, authority, "queued");
+  await clearRunLifecycleMoment(args.runId, authority);
 
   return { ok: true };
 }

@@ -26,7 +26,11 @@ import {
   readAgentRunById,
   readAgentTemplateById,
 } from "./store";
-import { advanceAgentRun, launchAgentRun } from "./lifecycle-coordinator";
+import {
+  advanceAgentRun,
+  clearRunLifecycleMoment,
+  launchAgentRun,
+} from "./lifecycle-coordinator";
 // cinatra#1939 wave 2 (§2b): this scheduler has NO session — it mints the
 // SYSTEM `agent-run-dispatch` authority (run.execute + run.complete) per fire to
 // ground the run's armed/pending→queued/stopped transitions, scoped to the run's
@@ -307,16 +311,12 @@ export async function runAgentRunTriggerReleaseJob(
   // terminal — a scope denial, which fails the run rather than returning it to a
   // wait it has no schedule left to be released from.
   //
-  // A TRANSIENT ENQUEUE FAILURE HERE IS NOT RECOVERED, and that is inherited
-  // rather than introduced: it is what this branch did before the release went
-  // through the coordinator, and it is worth stating plainly because the obvious
-  // reading is wrong. BullMQ does re-run this job, but the re-run finds the run
-  // already `queued`, so the `armed → queued` CAS is stale and it returns before
-  // reaching the enqueue again — the retry cannot repair the gap. Repairing it
-  // means this branch doing what the immediate path already does: on a stale
-  // CAS, fall through and make sure the run really has a job. That is a change
-  // to the firing path's own shape and belongs with the epic's runner wave, not
-  // with the entry this slice routed it through.
+  // A TRANSIENT ENQUEUE FAILURE IS THE JOB'S RETRY, which is why this branch
+  // wants none of the coordinator's compensation. BullMQ re-runs this job; the
+  // re-run finds the run already `queued`, the `armed → queued` release loses
+  // its race and ANSWERS with the state it read — the default reading, not a
+  // throw — and the code below it runs again and re-enqueues. Returning the run
+  // to `armed` here would race that retry instead of helping it.
   try {
     await advanceAgentRun({
       run: runForFire,
@@ -390,6 +390,12 @@ export async function runAgentRunTriggerReleaseJob(
     }
     return;
   }
+  // DISPATCHED — the schedule moment this run was waiting at is over
+  // (cinatra#2928). Here rather than inside the release, because this branch
+  // owns its own enqueue: a clear made before the dispatch answered would be
+  // lost to the scope-denial compensation above, and a run failed for scope
+  // should keep the record of what it was waiting at.
+  await clearRunLifecycleMoment(data.runId, releaseAuthority);
   console.log(`[trigger-release] enqueued execution for run ${data.runId}`);
 }
 

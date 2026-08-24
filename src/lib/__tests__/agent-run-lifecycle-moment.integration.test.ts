@@ -320,7 +320,7 @@ describeDb("the writer states and clears the triple together", () => {
     expect((await readTriple("run-cleared"))?.lifecycle_moment).toBe("schedule");
 
     // …and the caller's own clear, once it has dispatched, takes all three.
-    await clearRunLifecycleMoment("run-cleared", writeAuthority(), "queued");
+    await clearRunLifecycleMoment("run-cleared", writeAuthority());
     expect(await readTriple("run-cleared")).toEqual({
       lifecycle_moment: null,
       lifecycle_card_kind: null,
@@ -328,20 +328,42 @@ describeDb("the writer states and clears the triple together", () => {
     });
   });
 
-  it("a caller's clear does NOT fire on a run that has parked again", async () => {
-    // The other half of the guard. Between a dispatch and the clear that follows
-    // it, a run can reach a new moment — and a clear that ignored the status
-    // would take that new card straight back off.
+  it("a caller's clear takes off the moment it SAW, and nothing newer", async () => {
+    // Between the read and the write a run can be released and parked again at
+    // something else. A clear that ignored which moment it was removing would
+    // take the newer card straight back off.
     await admin.query(`DELETE FROM ${RUNS}`);
     await seedRun("run-reparked", "pending_approval");
     await writeTriple("run-reparked", "hitl", "agent_hitl_screen", "gate-new");
 
-    await clearRunLifecycleMoment("run-reparked", writeAuthority(), "queued");
+    // The moment the caller is trying to clear is not the one on the row.
+    await recordRunLifecycleMoment(
+      { runId: "run-reparked", orgId: ORG_ID, moment: null, onlyWhileMoment: "schedule" },
+      writeAuthority(),
+    );
 
     expect(await readTriple("run-reparked")).toEqual({
       lifecycle_moment: "hitl",
       lifecycle_card_kind: "agent_hitl_screen",
       lifecycle_card_ref: "gate-new",
+    });
+  });
+
+  it("a clear still fires on a run a worker has already picked up", async () => {
+    // The case a status-pinned clear got wrong. A released run is `running`
+    // within moments, and its schedule moment is just as over as it was the
+    // instant before — a clear that missed it would leave a card on a working
+    // run.
+    await admin.query(`DELETE FROM ${RUNS}`);
+    await seedRun("run-working", "running");
+    await writeTriple("run-working", "schedule", "trigger_schedule_proposal", "sched-w");
+
+    await clearRunLifecycleMoment("run-working", writeAuthority());
+
+    expect(await readTriple("run-working")).toEqual({
+      lifecycle_moment: null,
+      lifecycle_card_kind: null,
+      lifecycle_card_ref: null,
     });
   });
 

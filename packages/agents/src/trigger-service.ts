@@ -464,6 +464,10 @@ async function dispatchImmediateNow(
   // returned to its wait with nothing left to say what it is waiting for is a
   // park with no card. Reaching this line means the run really is dispatched.
   //
+  // The helper compares before it clears, so a run that has already reached a
+  // NEW moment — a worker fast enough to pick it up and park it again — keeps
+  // that one rather than having it taken off by this call.
+  //
   // Best-effort by construction — the helper swallows and logs — so a
   // bookkeeping write can never strand a run that is already on its way.
   await clearRunLifecycleMoment(runId, authority);

@@ -3446,6 +3446,20 @@ export async function recordRunLifecycleMoment(
      * audit, which is a reading and does not park.
      */
     onlyWhileStatus?: string;
+    /**
+     * Write ONLY while the run still states this moment.
+     *
+     * The guard a CLEAR wants. A status guard is the wrong shape for one: the
+     * status a caller dispatched into is left almost at once — a worker picks
+     * the run up and it is `running` — so a clear pinned to it misses the
+     * ordinary case and leaves a card on a run that is already working. What
+     * the clear actually means is "take off the moment I saw", and this says
+     * exactly that: a run that has since reached a NEW moment keeps it.
+     *
+     * `null` is a value, not an absence: it means "only while the run states no
+     * moment". Pass `undefined` to leave the moment unconstrained.
+     */
+    onlyWhileMoment?: string | null;
   },
   authority: OrgWriteAuthority | undefined,
 ): Promise<void> {
@@ -3455,10 +3469,20 @@ export async function recordRunLifecycleMoment(
     { orgId: input.orgId, runId: input.runId, capability: "run.execute" },
     async (tx) => {
       const dtx = tx as unknown as typeof db;
-      const where =
-        input.onlyWhileStatus === undefined
-          ? eq(agentRuns.id, input.runId)
-          : and(eq(agentRuns.id, input.runId), eq(agentRuns.status, input.onlyWhileStatus));
+      const conditions = [eq(agentRuns.id, input.runId)];
+      if (input.onlyWhileStatus !== undefined) {
+        conditions.push(eq(agentRuns.status, input.onlyWhileStatus));
+      }
+      if (input.onlyWhileMoment !== undefined) {
+        // `IS NOT DISTINCT FROM`, not `=`: a NULL moment is the ordinary
+        // reading, and `= NULL` matches nothing at all.
+        conditions.push(
+          input.onlyWhileMoment === null
+            ? isNull(agentRuns.lifecycleMoment)
+            : eq(agentRuns.lifecycleMoment, input.onlyWhileMoment),
+        );
+      }
+      const where = conditions.length === 1 ? conditions[0] : and(...conditions);
       await dtx
         .update(agentRuns)
         .set({
