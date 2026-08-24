@@ -24,12 +24,14 @@ import "server-only";
 // confirmed, the schedule the person stated, held — together with the status
 // that carrier is really in and the moment, if any.
 //
-// WHAT THIS SLICE DOES NOT DO. It stops short of the review CORE and of the two
-// surfaces that bypass the worker today (the widget's content-edit run and runs
-// of external agents over the agent-to-agent protocol). Those are W2b's
-// (cinatra#2929), and `RUN_PRODUCERS` below names them as owed rather than
-// leaving them unlisted. It changes no screen: the moments it records are the
-// parks that already exist, and nothing new parks because of it.
+// WHAT W2a STOPPED SHORT OF, AND W2b LANDED. W2a left the review CORE and the
+// two surfaces that bypassed the worker — the widget's content-edit run and runs
+// of external agents over the agent-to-agent protocol — recorded as owed rather
+// than unlisted. W2b (cinatra#2929) built both adapters and the one review core
+// with its two inputs, so `RUN_PRODUCERS` below carries no unrouted row and the
+// review seam below takes a decision the core makes. Neither slice changes a
+// screen: the moments recorded here are the parks that already exist, and
+// nothing new parks because of them.
 //
 // THE POLICY TABLE IS UNCHANGED. `LifecycleCheckpoint` still has its three
 // checkpoints — the organization's rules first, the product's defaults next.
@@ -212,20 +214,34 @@ export const RUN_PRODUCERS: readonly RunProducer[] = Object.freeze([
   {
     key: "widget_content_edit",
     module: "src/lib/host-content-editor-dispatch.ts",
-    routed: false,
-    tracking: "cinatra#2929 (lifecycle-b W2b) — the worker-backed adapter that keeps the blocking reply and its timeout",
-    what: "the widget's content-edit run, which bypasses the worker today",
+    routed: true,
+    tracking: null,
+    what: "the widget's content-edit run — a carrier the host drives inline, which keeps its blocking reply and its timeout",
   },
   {
     key: "external_agent_message",
     module: "packages/agents/src/a2a-actions.ts",
-    routed: false,
-    tracking: "cinatra#2929 (lifecycle-b W2b) — the adapter that keeps the remote task stream",
-    what: "a run of an external agent over the agent-to-agent protocol, which bypasses the worker today",
+    routed: true,
+    tracking: null,
+    what: "a run of an external agent over the agent-to-agent protocol — the remote peer executes it and the proxy carries its task stream",
+  },
+  {
+    key: "agent_builder_in_process",
+    module: "packages/agents/src/a2a-actions.ts",
+    routed: true,
+    tracking: null,
+    what: "the same action's in-process branch — a first-party agent dispatched through the in-process agent-to-agent client",
   },
 ]);
 
-/** The producers this slice has NOT routed yet, with their owner. */
+/**
+ * The producers not routed yet, with their owner. EMPTY since W2b.
+ *
+ * Kept as a derived list rather than deleted: it is what the inventory suite
+ * walks, and an empty walk is the statement that every way of creating a run
+ * goes through launch. A future producer that cannot be routed at once is
+ * recorded by flipping its own row, not by reintroducing a concept.
+ */
 export const UNROUTED_PRODUCERS: readonly RunProducer[] = Object.freeze(
   RUN_PRODUCERS.filter((p) => !p.routed),
 );
@@ -1266,10 +1282,11 @@ export type ProducedInput = {
  * the run may be waiting at, and clearing a moment this entry did not set would
  * take a card off a host on the strength of an unrelated event.
  *
- * THE REVIEW CORE ITSELF IS W2b's (cinatra#2929): one core with two inputs, the
- * declared targets and the typed output confirmed by the write. This entry is
- * the seam that core reports through, and it takes the decision rather than
- * making it — so W2b fills a named seam instead of inventing a parallel one.
+ * THE REVIEW CORE ITSELF LIVES OUTSIDE THIS ENTRY (cinatra#2929, W2b): one core
+ * with two inputs — the declared targets and the typed output confirmed by the
+ * write — proving the binding and asking the policy. This entry is the seam that
+ * core reports through, and it takes the decision rather than making it, which
+ * is why W2b filled a named seam instead of standing up a parallel one.
  */
 export async function onArtifactProduced(
   input: ProducedInput,
@@ -1327,9 +1344,12 @@ export type ReviewedWorkChangedInput = {
  * which is where a surface reads it from — but the SIGNAL on the run is dropped
  * for as long as the park holds it, and nothing re-states it when the park ends.
  * Carrying both needs the run to state more than one moment at a time, which is
- * a change to the column shape and belongs with W2b's review core (cinatra#2929),
- * not here. Given the choice between dropping this signal and taking a live
- * gate's card off the person waiting at it, this drops the signal.
+ * a change to the COLUMN SHAPE. W2b (cinatra#2929) did not make it: its review
+ * core decides WHETHER a review exists for a piece of work, not how many moments
+ * a run may state at once. So the residual stands, named here rather than
+ * attributed to a slice that closed without closing it. Given the choice between
+ * dropping this signal and taking a live gate's card off the person waiting at
+ * it, this drops the signal.
  */
 export async function onReviewedWorkChanged(
   input: ReviewedWorkChangedInput,

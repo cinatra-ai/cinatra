@@ -142,14 +142,35 @@ describe("the fence refuses every shape of creating a run outside launch", () =>
 });
 
 describe("the records hold in both directions", () => {
+  it("the owed ledger is EMPTY — both adapters landed (cinatra#2929)", () => {
+    // W2a recorded two modules here; W2b routed both through the coordinator and
+    // struck their rows. Asserted rather than left implicit, because an empty
+    // ledger is the statement that every producer goes through launch, and a row
+    // creeping back in should have to argue for itself in front of this line.
+    expect(Object.keys(OWED_BY_ADAPTER)).toEqual([]);
+  });
+
   it("an OWED module that stopped creating runs fails as a stale record", async () => {
-    const owed = Object.keys(OWED_BY_ADAPTER)[0];
+    // The MECHANISM, on an injected ledger. It must stay provable with the real
+    // one empty: a ratchet nobody can test is a ratchet nobody can trust the day
+    // a row is added back.
+    const owed = "src/lib/some-adapter.ts";
+    const ledger = { [owed]: "cinatra#0000 — the slice that owes the adapter, named" };
     const files = withRecords({});
     files[owed] = CLEAN; // the adapter landed…
-    const v = await scanTree(files);
+    const v = await scan(Object.keys(files), async (rel: string) => files[rel], { owed: ledger });
     expect(
       v.filter((x: { label: string }) => x.label === "stale record").map((x: { file: string }) => x.file),
     ).toContain(owed);
+  });
+
+  it("…and an owed module that STILL creates a run is recorded, not reported", async () => {
+    const owed = "src/lib/some-adapter.ts";
+    const ledger = { [owed]: "cinatra#0000 — the slice that owes the adapter, named" };
+    const files = withRecords({});
+    files[owed] = `import { createAgentRun } from "@cinatra-ai/agents";\nawait createAgentRun({}, undefined);\n`;
+    const v = await scan(Object.keys(files), async (rel: string) => files[rel], { owed: ledger });
+    expect(v).toEqual([]);
   });
 
   it("every owed row names its owner — an unowned record is a waiver", () => {

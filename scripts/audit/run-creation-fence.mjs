@@ -67,25 +67,22 @@ export const PENDING_INPUT_CALLERS = Object.freeze({
 });
 
 /**
- * The two surfaces that bypass the worker today, with their owner.
+ * The surfaces that bypass the worker, with their owner. EMPTY, and that is the
+ * done-check having fired.
  *
- * These are the plan's own carve-out — the widget's content-edit run keeps its
- * blocking reply and its timeout, and a run of an EXTERNAL agent over the
- * agent-to-agent protocol keeps its remote task stream. Both reach the
- * coordinator through an ADAPTER, and building those adapters is W2b's
- * (cinatra#2929). W2a routes everything else.
+ * W2a recorded two here — the widget's content-edit run and a run of an EXTERNAL
+ * agent over the agent-to-agent protocol — as the plan's own carve-out, each
+ * with the slice that owed the adapter. W2b (cinatra#2929) built both: they
+ * launch through the coordinator and keep their contracts (the blocking reply
+ * within its timeout; the remote task stream), so the rows are struck rather
+ * than left standing.
  *
- * A RED DONE-CHECK, NOT A WAIVER, in both directions: an owed file that stops
- * creating runs fails as a stale record, so W2b cannot land its adapter without
- * striking the row; and no file can be added here silently, because a row with
- * no owner named is refused below.
+ * A RED DONE-CHECK, NOT A WAIVER, in both directions, which is why this is empty
+ * rather than commented out: an owed file that stops creating runs fails as a
+ * stale record, so an adapter cannot land without striking its row; and no file
+ * can be added here silently, because a row with no owner named is refused below.
  */
-export const OWED_BY_ADAPTER = Object.freeze({
-  "packages/agents/src/a2a-actions.ts":
-    "cinatra#2929 (lifecycle-b W2b) — the adapter that keeps the external agent's remote task stream",
-  "src/lib/host-content-editor-dispatch.ts":
-    "cinatra#2929 (lifecycle-b W2b) — the worker-backed adapter that keeps the widget content-edit run's blocking reply and its timeout",
-});
+export const OWED_BY_ADAPTER = Object.freeze({});
 
 /**
  * The two creator names, and every shape a file can reach one by.
@@ -253,7 +250,16 @@ function isLineComment(line) {
   return /^\s*(\/\/|\*|\/\*)/.test(line);
 }
 
-export async function scan(files, read) {
+/**
+ * @param files    tracked paths to scan
+ * @param read     path -> source
+ * @param opts     `owed` overrides the OWED_BY_ADAPTER ledger. It exists so the
+ *                 stale-record MECHANISM stays provable now that the real ledger
+ *                 is empty: a ratchet nobody can test is a ratchet nobody can
+ *                 trust the next time a row is added to it.
+ */
+export async function scan(files, read, opts = {}) {
+  const owedLedger = opts.owed ?? OWED_BY_ADAPTER;
   const violations = [];
   const seenPendingCallers = new Set();
   const seenOwed = new Set();
@@ -264,7 +270,7 @@ export async function scan(files, read) {
     // call, and a namespace import unable to reach one without naming it.
     if (!CREATE_ALLOWLIST.has(rel)) {
       for (const statement of creatorImports(content)) {
-        if (rel in OWED_BY_ADAPTER) {
+        if (rel in owedLedger) {
           seenOwed.add(rel);
           continue;
         }
@@ -284,7 +290,7 @@ export async function scan(files, read) {
       if (isLineComment(line)) continue;
       for (const rule of BANNED) {
         if (!rule.re.test(line) || rule.allow.has(rel)) continue;
-        if (rel in OWED_BY_ADAPTER) {
+        if (rel in owedLedger) {
           // Recorded, with its owner named. Not a violation TODAY, and the
           // stale-record pass below turns it into one the day it stops.
           seenOwed.add(rel);
@@ -307,7 +313,7 @@ export async function scan(files, read) {
       }
     }
   }
-  for (const [rel, owner] of Object.entries(OWED_BY_ADAPTER)) {
+  for (const [rel, owner] of Object.entries(owedLedger)) {
     if (!owner || owner.length < 20) {
       violations.push({
         file: rel,

@@ -414,15 +414,16 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // cinatra#2928 — THE ONE CALLER. Every producer creates through the
       // lifecycle coordinator's `launchAgentRun`, and
       // `scripts/audit/run-creation-fence.mjs` is what keeps it so. The rows
-      // struck below are the producers that used to name the creator directly
-      // and now go through it — the MCP `agent_run` handler among them, which
-      // names the launch frame's creator now and no longer this one. The two
-      // that remain are the surfaces that bypass the worker today and reach the
-      // coordinator through an adapter W2b (cinatra#2929) builds.
+      // struck are the producers that used to name the creator directly and now
+      // go through it — the MCP `agent_run` handler among them, which names the
+      // launch frame's creator now and no longer this one.
+      //
+      // cinatra#2929 struck the last two: the widget's content-edit dispatch and
+      // the agent-to-agent action were the surfaces that bypassed the worker, and
+      // both now launch through the coordinator, so neither names a creator any
+      // more. What is left is the coordinator itself and the pass-through barrel.
       "packages/agents/src/lifecycle-coordinator.ts",
-      "packages/agents/src/a2a-actions.ts",
       "packages/agents/src/index.ts",
-      "src/lib/host-content-editor-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on
       // transitionRunStatus/updateAgentRunStatus):
       "src/app/plugins-registry.tsx",

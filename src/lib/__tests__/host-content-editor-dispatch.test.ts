@@ -23,16 +23,36 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 // --- agents store ------------------------------------------------------------
-// cinatra#1940 P3: createAgentRun's creation perimeter is now guarded — it
+// cinatra#1940 P3: createCarrierRun's creation perimeter is now guarded — it
 // takes a REQUIRED trailing `authority` param. The mock forwards it so tests
 // below can assert it was minted BEFORE the guarded create (Decision 1,
 // content-editor row).
-const createAgentRun = vi.fn<(input: { id: string }, authority?: unknown) => Promise<unknown>>();
+const createCarrierRun = vi.fn<(input: { id: string }, authority?: unknown) => Promise<unknown>>();
+
+// cinatra#2929 (epic #2926 W2b) — the carrier run is created THROUGH the
+// lifecycle coordinator now, not around it. The spy observes the same two
+// things it always did — the run being created and the authority it is created
+// under — one rung further out, so every assertion below still reads the
+// carrier this dispatch asks for. The launch answers with the coordinator's own
+// carrier shape, and a refusal still travels by throwing.
+vi.mock("@cinatra-ai/agents/lifecycle-coordinator", () => ({
+  launchAgentRun: async (launch: {
+    create: { input: { id: string } };
+    authority?: unknown;
+  }) => ({
+    carrier: {
+      kind: "run",
+      run: await createCarrierRun(launch.create.input, launch.authority),
+    },
+    status: "queued",
+    moment: null,
+  }),
+}));
+
 const readAgentTemplateByPackageName = vi.fn<(pkg: string) => Promise<unknown>>();
 const readLatestAgentVersionIdForTemplate = vi.fn<(id: string) => Promise<unknown>>();
 const transitionRunStatus = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 vi.mock("@cinatra-ai/agents", () => ({
-  createAgentRun: (input: { id: string }, authority?: unknown) => createAgentRun(input, authority),
   // #1193: the carrier run now also mints + persists a per-run token and embeds
   // the RAW value in the initial message. Mirror the real builder's
   // spread-then-overwrite so the identity keys stay dispatch-owned.
@@ -61,7 +81,7 @@ vi.mock("@/lib/content-editor-run-identity", () => ({
 
 import { dispatchContentEditorViaA2A } from "@/lib/host-content-editor-dispatch";
 // Real (unmocked) — used to construct the exact rejection shape the guarded
-// createAgentRun throws under an archived org, and to assert the typed
+// createCarrierRun throws under an archived org, and to assert the typed
 // refusal it must become (cinatra#1940 P3, Decision 1 content-editor row).
 import { OrgWriteRefusedError } from "@cinatra-ai/org-write-kernel";
 
@@ -83,7 +103,7 @@ beforeEach(() => {
   });
   readAgentTemplateByPackageName.mockResolvedValue({ id: "tmpl_wp" });
   readLatestAgentVersionIdForTemplate.mockResolvedValue("ver_1");
-  createAgentRun.mockImplementation(async (input: { id: string }) => ({
+  createCarrierRun.mockImplementation(async (input: { id: string }) => ({
     id: input.id,
     inputParams: {},
   }));
@@ -106,8 +126,8 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
     });
 
     expect(readAgentTemplateByPackageName).toHaveBeenCalledWith("@cinatra-ai/wordpress-agent");
-    expect(createAgentRun).toHaveBeenCalledTimes(1);
-    const runArg = createAgentRun.mock.calls[0][0] as Record<string, unknown>;
+    expect(createCarrierRun).toHaveBeenCalledTimes(1);
+    const runArg = createCarrierRun.mock.calls[0][0] as Record<string, unknown>;
     expect(runArg.orgId).toBe("org_1");
     expect(runArg.runBy).toBe("u_admin");
     expect(runArg.templateId).toBe("tmpl_wp");
@@ -136,7 +156,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       timeoutMs: 300_000,
       packageName: "@cinatra-ai/drupal-agent",
     });
-    expect(createAgentRun).toHaveBeenCalledTimes(1);
+    expect(createCarrierRun).toHaveBeenCalledTimes(1);
     const sent = JSON.parse(lastSentText());
     expect(sent.nodeId).toBe("42");
     expect(typeof sent.cinatra_run_id).toBe("string");
@@ -149,7 +169,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       timeoutMs: 300_000,
       // packageName omitted (pre-#246 connector)
     });
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
     expect(transitionRunStatus).not.toHaveBeenCalled();
     const sent = JSON.parse(lastSentText());
     expect(sent.cinatra_run_id).toBeUndefined();
@@ -163,7 +183,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       timeoutMs: 300_000,
       packageName: "@cinatra-ai/wordpress-agent",
     });
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 
   it("threads the install→org anchors (instancesConfigKey/origin/instanceId) into the per-install resolver (cinatra#274)", async () => {
@@ -188,7 +208,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       instanceId: "wp-b",
     });
     // The carrier run binds to THIS install's org/user, not the default.
-    const runArg = createAgentRun.mock.calls[0][0] as Record<string, unknown>;
+    const runArg = createCarrierRun.mock.calls[0][0] as Record<string, unknown>;
     expect(runArg.orgId).toBe("org_tenantB");
     expect(runArg.runBy).toBe("u_tenantB_admin");
   });
@@ -216,7 +236,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       timeoutMs: 300_000,
       packageName: "@cinatra-ai/wordpress-agent",
     });
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 
   it("marks the carrier run failed when the A2A dispatch throws", async () => {
@@ -229,7 +249,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
         packageName: "@cinatra-ai/wordpress-agent",
       }),
     ).rejects.toThrow("a2a boom");
-    const runArg = createAgentRun.mock.calls[0][0] as { id: string };
+    const runArg = createCarrierRun.mock.calls[0][0] as { id: string };
     expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "running", "failed", expect.anything(), expect.anything());
   });
 
@@ -247,7 +267,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       }),
     ).rejects.toThrow("card fetch boom");
 
-    const runArg = createAgentRun.mock.calls[0][0] as { id: string };
+    const runArg = createCarrierRun.mock.calls[0][0] as { id: string };
     // The failure happens before queued→running, so the carrier run transitions
     // FROM queued (not running) to failed — and never reaches sendTask.
     expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "failed", expect.anything(), expect.anything());
@@ -266,7 +286,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       }),
     ).rejects.toThrow("token mint boom");
 
-    const runArg = createAgentRun.mock.calls[0][0] as { id: string };
+    const runArg = createCarrierRun.mock.calls[0][0] as { id: string };
     expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "failed", expect.anything(), expect.anything());
     expect(createExternalA2AClient).not.toHaveBeenCalled();
   });
@@ -294,8 +314,8 @@ describe("dispatchContentEditorViaA2A — per-user actorOverride (cinatra#408)",
     // The install/single-tenant resolver MUST NOT be consulted on this path.
     expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
 
-    expect(createAgentRun).toHaveBeenCalledTimes(1);
-    const runArg = createAgentRun.mock.calls[0][0] as Record<string, unknown>;
+    expect(createCarrierRun).toHaveBeenCalledTimes(1);
+    const runArg = createCarrierRun.mock.calls[0][0] as Record<string, unknown>;
     // runBy is the END USER, never the install's service identity (org admin).
     expect(runArg.runBy).toBe("u_enduser");
     expect(runArg.orgId).toBe("org_1");
@@ -324,7 +344,7 @@ describe("dispatchContentEditorViaA2A — per-user actorOverride (cinatra#408)",
       }),
     ).rejects.toThrow(/no agent template installed/);
     // No carrier run, but crucially NO anonymous dispatch either.
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
     expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
   });
 
@@ -348,8 +368,8 @@ describe("dispatchContentEditorViaA2A — per-user actorOverride (cinatra#408)",
     // created under the install identity with the content_editor_dispatch
     // discriminator (NOT public_site_widget) — i.e. allowed, not denied.
     expect(resolveContentEditorIdentityForInstance).toHaveBeenCalledTimes(1);
-    expect(createAgentRun).toHaveBeenCalledTimes(1);
-    const runArg = createAgentRun.mock.calls[0][0] as Record<string, unknown>;
+    expect(createCarrierRun).toHaveBeenCalledTimes(1);
+    const runArg = createCarrierRun.mock.calls[0][0] as Record<string, unknown>;
     expect(runArg.runBy).toBe("u_admin");
     expect(runArg.orgId).toBe("org_1");
     expect(runArg.sourceType).toBe("content_editor_dispatch");
@@ -373,13 +393,13 @@ describe("dispatchContentEditorViaA2A — preCreateAuthorize at the run-creation
     },
   };
 
-  it("invokes the re-assert AFTER template/version reads and BEFORE createAgentRun (override path)", async () => {
+  it("invokes the re-assert AFTER template/version reads and BEFORE createCarrierRun (override path)", async () => {
     const order: string[] = [];
     readLatestAgentVersionIdForTemplate.mockImplementation(async () => {
       order.push("version-read");
       return "ver_1";
     });
-    createAgentRun.mockImplementation(async (input: { id: string }) => {
+    createCarrierRun.mockImplementation(async (input: { id: string }) => {
       order.push("create-run");
       return { id: input.id, inputParams: {} };
     });
@@ -399,7 +419,7 @@ describe("dispatchContentEditorViaA2A — preCreateAuthorize at the run-creation
     await expect(
       dispatchContentEditorViaA2A({ ...overrideInput, preCreateAuthorize }),
     ).rejects.toThrow(/point-of-use authorization re-assert failed/);
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
     expect(sendTask).not.toHaveBeenCalled();
   });
 
@@ -410,7 +430,7 @@ describe("dispatchContentEditorViaA2A — preCreateAuthorize at the run-creation
     await expect(
       dispatchContentEditorViaA2A({ ...overrideInput, preCreateAuthorize }),
     ).rejects.toThrow(/point-of-use authorization re-assert failed/);
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 
   it("guards the install-identity path's run creation too", async () => {
@@ -426,12 +446,12 @@ describe("dispatchContentEditorViaA2A — preCreateAuthorize at the run-creation
         preCreateAuthorize,
       }),
     ).rejects.toThrow(/point-of-use authorization re-assert failed/);
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 
   it("an ABSENT hook keeps existing callers unchanged (baked-trust paths)", async () => {
     await dispatchContentEditorViaA2A(overrideInput);
-    expect(createAgentRun).toHaveBeenCalledTimes(1);
+    expect(createCarrierRun).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -444,7 +464,7 @@ describe("dispatchContentEditorViaA2A — preCreateAuthorize at the run-creation
 // typed `OrganizationArchivedDispatchError`, fail-loud to the connector.
 describe("dispatchContentEditorViaA2A — archived-org typed refusal (cinatra#1940 P3)", () => {
   it("install-identity path: an archived-org capability-denied refusal becomes OrganizationArchivedDispatchError — NO anonymous fallback, NO A2A client opened", async () => {
-    createAgentRun.mockRejectedValue(new OrgWriteRefusedError("capability-denied"));
+    createCarrierRun.mockRejectedValue(new OrgWriteRefusedError("capability-denied"));
     await expect(
       dispatchContentEditorViaA2A({
         agentUrl: "http://localhost:3021",
@@ -463,7 +483,7 @@ describe("dispatchContentEditorViaA2A — archived-org typed refusal (cinatra#19
   });
 
   it("actorOverride (per-user widget) path: the same typed refusal, no anonymous fallback", async () => {
-    createAgentRun.mockRejectedValue(new OrgWriteRefusedError("capability-denied"));
+    createCarrierRun.mockRejectedValue(new OrgWriteRefusedError("capability-denied"));
     await expect(
       dispatchContentEditorViaA2A({
         agentUrl: "http://localhost:3021",
@@ -485,8 +505,8 @@ describe("dispatchContentEditorViaA2A — archived-org typed refusal (cinatra#19
     expect(sendTask).not.toHaveBeenCalled();
   });
 
-  it("a non-archive createAgentRun failure is NOT reinterpreted as an archive refusal (only capability-denied maps)", async () => {
-    createAgentRun.mockRejectedValue(new Error("db connection reset"));
+  it("a non-archive createCarrierRun failure is NOT reinterpreted as an archive refusal (only capability-denied maps)", async () => {
+    createCarrierRun.mockRejectedValue(new Error("db connection reset"));
     await expect(
       dispatchContentEditorViaA2A({
         agentUrl: "http://localhost:3021",
@@ -497,14 +517,14 @@ describe("dispatchContentEditorViaA2A — archived-org typed refusal (cinatra#19
     ).rejects.toThrow("db connection reset");
   });
 
-  it("threads a real authority (not undefined) into createAgentRun for both creation sites", async () => {
+  it("threads a real authority (not undefined) into createCarrierRun for both creation sites", async () => {
     await dispatchContentEditorViaA2A({
       agentUrl: "http://localhost:3021",
       payload: { instanceId: "wp1", postId: "7", instructions: "do it" },
       timeoutMs: 300_000,
       packageName: "@cinatra-ai/wordpress-agent",
     });
-    const [, authority] = createAgentRun.mock.calls[0] as [unknown, { orgId?: string } | undefined];
+    const [, authority] = createCarrierRun.mock.calls[0] as [unknown, { orgId?: string } | undefined];
     expect(authority).toBeDefined();
     expect(authority?.orgId).toBe("org_1");
   });

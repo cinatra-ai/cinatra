@@ -5,11 +5,26 @@ import { buildA2aBearerToken } from "@cinatra-ai/llm";
 import { createExternalA2AClient, type Task } from "@cinatra-ai/a2a";
 import {
   buildInitialMessagePayloadWithRunToken,
-  createAgentRun,
   readAgentTemplateByPackageName,
   readLatestAgentVersionIdForTemplate,
   transitionRunStatus,
 } from "@cinatra-ai/agents";
+// cinatra#2929 (epic #2926 W2b) — THE WORKER-BACKED ADAPTER. This dispatch used
+// to create its OBO-carrier run directly, which is why the creation fence
+// carried this file as owed. It now launches through the coordinator and keeps
+// exactly what `HostContentEditorDispatchService` requires of it: a
+// `Promise<string>` reply, and the caller's own `timeoutMs` budget around the
+// blocking A2A send.
+//
+// THE LAUNCH CLAIMS NO PRESENT HUMAN, deliberately. A presence claim makes the
+// coordinator create the run PARKED so a moment can open before dispatch — and
+// this run is never dispatched to the worker at all: it exists to carry the OBO
+// identity, and this function drives its whole lifecycle inline. A park here
+// would hold the carrier at a card nobody is shown while the person at the other
+// end of the widget waits for a reply that would never arrive inside its
+// timeout. So the run is created `queued`, exactly as before, and the inline
+// queued -> running -> completed ladder below is unchanged.
+import { launchAgentRun } from "@cinatra-ai/agents/lifecycle-coordinator";
 import { resolveContentEditorIdentityForInstance } from "@/lib/content-editor-run-identity";
 import { resolveWidgetActorFromFrame } from "@/lib/widget-actor-frame";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
@@ -333,20 +348,33 @@ async function prepareDispatch(
     const overrideAuthority = mintContentEditorDispatchAuthority(input.actorOverride.orgId);
     let overrideRun;
     try {
-      overrideRun = await createAgentRun(
-        {
-          id: overrideRunId,
-          templateId: template.id,
-          versionId: latestVersionId,
-          inputParams: payloadObject,
-          runBy: input.actorOverride.runBy,
-          orgId: input.actorOverride.orgId,
-          // The discriminator the bridge resolver keys on to suppress the
-          // platform-admin bypass for ONLY this per-user widget path (cinatra#408).
-          sourceType: input.actorOverride.sourceType,
+      const launched = await launchAgentRun({
+        producer: "widget_content_edit",
+        frame: null,
+        authority: overrideAuthority,
+        dispatch: {
+          kind: "caller_dispatches",
+          why: "the carrier run is never worker-executed; this dispatch drives its lifecycle inline and returns the blocking reply",
         },
-        overrideAuthority,
-      );
+        create: {
+          kind: "full",
+          input: {
+            id: overrideRunId,
+            templateId: template.id,
+            versionId: latestVersionId,
+            inputParams: payloadObject,
+            runBy: input.actorOverride.runBy,
+            orgId: input.actorOverride.orgId,
+            // The discriminator the bridge resolver keys on to suppress the
+            // platform-admin bypass for ONLY this per-user widget path (cinatra#408).
+            sourceType: input.actorOverride.sourceType,
+          },
+        },
+      });
+      if (launched.carrier.kind !== "run") {
+        throw new Error("the content-editor launch answered with a carrier that is not a run");
+      }
+      overrideRun = launched.carrier.run;
     } catch (err) {
       if (err instanceof OrgWriteRefusedError && err.reason === "capability-denied") {
         throw new OrganizationArchivedDispatchError(input.actorOverride.orgId, "content-editor");
@@ -417,21 +445,34 @@ async function prepareDispatch(
   const identityAuthority = mintContentEditorDispatchAuthority(identity.orgId);
   let run;
   try {
-    run = await createAgentRun(
-      {
-        id: runId,
-        templateId: template.id,
-        versionId: latestVersionId,
-        inputParams: payloadObject,
-        runBy: identity.runBy,
-        orgId: identity.orgId,
-        // Distinct discriminator: this run carries OBO identity for a host-side
-        // blocking A2A dispatch; it is NOT a worker-executed agent_builder run and
-        // is never enqueued.
-        sourceType: "content_editor_dispatch",
+    const launched = await launchAgentRun({
+      producer: "widget_content_edit",
+      frame: null,
+      authority: identityAuthority,
+      dispatch: {
+        kind: "caller_dispatches",
+        why: "the carrier run is never worker-executed; this dispatch drives its lifecycle inline and returns the blocking reply",
       },
-      identityAuthority,
-    );
+      create: {
+        kind: "full",
+        input: {
+          id: runId,
+          templateId: template.id,
+          versionId: latestVersionId,
+          inputParams: payloadObject,
+          runBy: identity.runBy,
+          orgId: identity.orgId,
+          // Distinct discriminator: this run carries OBO identity for a host-side
+          // blocking A2A dispatch; it is NOT a worker-executed agent_builder run and
+          // is never enqueued.
+          sourceType: "content_editor_dispatch",
+        },
+      },
+    });
+    if (launched.carrier.kind !== "run") {
+      throw new Error("the content-editor launch answered with a carrier that is not a run");
+    }
+    run = launched.carrier.run;
   } catch (err) {
     if (err instanceof OrgWriteRefusedError && err.reason === "capability-denied") {
       throw new OrganizationArchivedDispatchError(identity.orgId, "content-editor");
