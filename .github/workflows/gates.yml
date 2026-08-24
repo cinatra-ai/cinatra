@@ -166,3 +166,52 @@ jobs:
         run: |
           node --test scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs
           node --test scripts/audit/__tests__/sdk-public-surface-ban.test.mjs
+
+  # The three micro-gates that need a workspace install share ONE install here
+  # instead of three: dashboards-suite-gate (whole workflow) and the `tests`
+  # jobs of toolbar-tokens-gate / vendor-byline-gate. Full `--frozen-lockfile`
+  # install (a superset of the two sources' --ignore-scripts variant). Commands
+  # are verbatim from the retired workflows.
+  gates-pnpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: dashboards-suite-gate — dashboards default suite
+        run: pnpm -C packages/dashboards exec vitest run --no-coverage
+
+      - name: dashboards-suite-gate — sdk-dashboard default suite
+        run: pnpm -C packages/sdk-dashboard exec vitest run --no-coverage
+
+      - name: Toolbar design-system gate — parser tests
+        run: pnpm exec vitest run scripts/audit/__tests__/toolbar-tokens.test.mjs
+
+      - name: Vendor-byline — §I / §II byline tests (packages/extensions)
+        run: >-
+          pnpm --filter @cinatra-ai/extensions exec vitest run
+          src/__tests__/marketplace-card-model.test.ts
+          src/__tests__/marketplace-listing-card.test.tsx
+          src/__tests__/marketplace-modal-byline.test.tsx
+
+      - name: Vendor-byline — resolver + §III/§IV byline + parser tests (root)
+        run: >-
+          pnpm exec vitest run --config vitest.config.ts
+          src/lib/__tests__/vendor-presentation.test.ts
+          src/components/extensions/__tests__/installed-extension-card.test.tsx
+          src/components/extensions/__tests__/agent-card-vendor.test.ts
+          scripts/audit/__tests__/vendor-byline-scan.test.mjs
