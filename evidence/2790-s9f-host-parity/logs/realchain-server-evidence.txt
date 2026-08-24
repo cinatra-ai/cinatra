@@ -1,0 +1,62 @@
+ POST /api/mcp 200 in 294ms (next.js: 5ms, proxy.ts: 10ms, application-code: 280ms)
+ POST /api/mcp 200 in 37ms (next.js: 3ms, proxy.ts: 2ms, application-code: 32ms)
+ POST /api/mcp 200 in 136ms (next.js: 7ms, proxy.ts: 20ms, application-code: 109ms)
+ POST /api/mcp 200 in 1299ms (next.js: 3ms, proxy.ts: 1829µs, application-code: 1294ms)
+ POST /api/mcp 200 in 168ms (next.js: 5ms, proxy.ts: 72ms, application-code: 91ms)
+ POST /api/mcp 200 in 49ms (next.js: 3ms, proxy.ts: 1824µs, application-code: 44ms)
+ POST /api/mcp 200 in 180ms (next.js: 7ms, proxy.ts: 3ms, application-code: 170ms)
+ POST /api/mcp 200 in 980ms (next.js: 3ms, proxy.ts: 1567µs, application-code: 976ms)
+[llm-bridge-run-select] served-by=run_token run=1317bf13-8e73-40b0-b2d8-d911e6a8065d org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 8.9s (next.js: 1444ms, proxy.ts: 282ms, application-code: 7.2s)
+ POST /api/mcp 200 in 1001ms (next.js: 42ms, proxy.ts: 6ms, application-code: 953ms)
+ POST /api/mcp 200 in 101ms (next.js: 3ms, proxy.ts: 2ms, application-code: 96ms)
+ POST /api/mcp 200 in 41ms (next.js: 3ms, proxy.ts: 1673µs, application-code: 36ms)
+ POST /api/mcp 200 in 1057ms (next.js: 2ms, proxy.ts: 1551µs, application-code: 1053ms)
+ POST /api/mcp 200 in 163ms (next.js: 3ms, proxy.ts: 74ms, application-code: 86ms)
+ POST /api/mcp 200 in 41ms (next.js: 2ms, proxy.ts: 1443µs, application-code: 37ms)
+ POST /api/mcp 200 in 949ms (next.js: 3ms, proxy.ts: 1894µs, application-code: 944ms)
+ POST /api/mcp 200 in 84ms (next.js: 4ms, proxy.ts: 1568µs, application-code: 79ms)
+ POST /api/mcp 200 in 36ms (next.js: 3ms, proxy.ts: 1374µs, application-code: 32ms)
+ POST /api/mcp 200 in 64ms (next.js: 8ms, proxy.ts: 2ms, application-code: 54ms)
+ POST /api/mcp 200 in 106ms (next.js: 3ms, proxy.ts: 1662µs, application-code: 102ms)
+ POST /api/mcp 200 in 34ms (next.js: 3ms, proxy.ts: 1520µs, application-code: 29ms)
+ POST /api/mcp 200 in 948ms (next.js: 3ms, proxy.ts: 1724µs, application-code: 943ms)
+[llm-bridge-run-select] served-by=run_token run=bd925142-2172-411e-9354-6eb79d177be7 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 132ms (next.js: 6ms, proxy.ts: 30ms, application-code: 96ms)
+ POST /api/mcp 200 in 44ms (next.js: 2ms, proxy.ts: 1316µs, application-code: 40ms)
+ POST /api/mcp 200 in 84ms (next.js: 3ms, proxy.ts: 1630µs, application-code: 79ms)
+ POST /api/mcp 200 in 80ms (next.js: 4ms, proxy.ts: 23ms, application-code: 53ms)
+ POST /api/mcp 200 in 987ms (next.js: 11ms, proxy.ts: 4ms, application-code: 972ms)
+ POST /api/mcp 200 in 98ms (next.js: 4ms, proxy.ts: 7ms, application-code: 87ms)
+ POST /api/mcp 200 in 45ms (next.js: 3ms, proxy.ts: 3ms, application-code: 38ms)
+ POST /api/mcp 200 in 863ms (next.js: 3ms, proxy.ts: 4ms, application-code: 856ms)
+ POST /api/mcp 200 in 101ms (next.js: 5ms, proxy.ts: 3ms, application-code: 94ms)
+ POST /api/mcp 200 in 69ms (next.js: 3ms, proxy.ts: 1800µs, application-code: 65ms)
+ POST /api/mcp 200 in 108ms (next.js: 27ms, proxy.ts: 7ms, application-code: 74ms)
+ POST /api/mcp 200 in 1073ms (next.js: 5ms, proxy.ts: 4ms, application-code: 1064ms)
+ POST /api/mcp 200 in 58ms (next.js: 2ms, proxy.ts: 1484µs, application-code: 54ms)
+ POST /api/mcp 200 in 37ms (next.js: 2ms, proxy.ts: 1286µs, application-code: 34ms)
+ POST /api/mcp 200 in 110ms (next.js: 8ms, proxy.ts: 6ms, application-code: 95ms)
+ POST /api/mcp 200 in 1132ms (next.js: 6ms, proxy.ts: 3ms, application-code: 1124ms)
+ POST /api/mcp 200 in 78ms (next.js: 3ms, proxy.ts: 1550µs, application-code: 74ms)
+ POST /api/mcp 200 in 35ms (next.js: 3ms, proxy.ts: 1458µs, application-code: 31ms)
+ POST /api/mcp 200 in 879ms (next.js: 3ms, proxy.ts: 1438µs, application-code: 874ms)
+ POST /api/mcp 200 in 104ms (next.js: 3ms, proxy.ts: 46ms, application-code: 55ms)
+ POST /api/mcp 200 in 31ms (next.js: 2ms, proxy.ts: 1355µs, application-code: 27ms)
+ POST /api/mcp 200 in 956ms (next.js: 8ms, proxy.ts: 19ms, application-code: 930ms)
+[llm-bridge-run-select] served-by=run_token run=7ca98871-eabe-4d1c-9954-cad0ffa53add org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 134ms (next.js: 6ms, proxy.ts: 30ms, application-code: 98ms)
+ POST /api/mcp 200 in 40ms (next.js: 3ms, proxy.ts: 1471µs, application-code: 36ms)
+ POST /api/mcp 200 in 136ms (next.js: 3ms, proxy.ts: 56ms, application-code: 76ms)
+ POST /api/mcp 200 in 33ms (next.js: 3ms, proxy.ts: 1503µs, application-code: 29ms)
+ POST /api/mcp 200 in 917ms (next.js: 9ms, proxy.ts: 7ms, application-code: 902ms)
+[context-route] run resolved kind=resolve via=run_token run=0f696a2a-9413-4422-ba0a-d52d0553f2af ctx=c7afedfb-a5e3-4834-b645-0b3cdd904652 count=4
+[context-route] ok kind=resolve via=run_token run=0f696a2a-9413-4422-ba0a-d52d0553f2af ctx=c7afedfb-a5e3-4834-b645-0b3cdd904652 slot=draftContext count=4
+[wayflow] run=0f696a2a-9413-4422-ba0a-d52d0553f2af task=972a3dac-6e50-4fe9-a006-6ef4e5eccb54 state=input-required status={"state":"input-required","timestamp":"2026-08-24T21:15:39.627102"} artifacts=null
+[human-gate-park] run=0f696a2a-9413-4422-ba0a-d52d0553f2af parked on WayFlow gate wayflow-972a3dac-6e50-4fe9-a006-6ef4e5eccb54
+[context-route] run resolved kind=finalize via=run_token run=0f696a2a-9413-4422-ba0a-d52d0553f2af ctx=c7afedfb-a5e3-4834-b645-0b3cdd904652 count=4
+[context-route] ok kind=finalize via=run_token run=0f696a2a-9413-4422-ba0a-d52d0553f2af ctx=c7afedfb-a5e3-4834-b645-0b3cdd904652 slot=draftContext count=4
+[llm-bridge-run-select] served-by=run_token run=0f696a2a-9413-4422-ba0a-d52d0553f2af org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 126ms (next.js: 5ms, proxy.ts: 19ms, application-code: 102ms)
+ POST /api/mcp 200 in 60ms (next.js: 2ms, proxy.ts: 1783µs, application-code: 56ms)
+[wayflow] run=0f696a2a-9413-4422-ba0a-d52d0553f2af task=e86a9902-4049-4e23-9d96-ad8ffd91d7ed state=completed status={"state":"completed","timestamp":"2026-08-24T21:16:32.674637"} artifacts=null

@@ -6,7 +6,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "bcd6f6cec98c32c645f36d12c7ae89c58235ae32e07022eae0ea3956fa7d4ce5",
+      "sha256": "6d3ea8f5e23082af74bbd1bf00138a67399b726922844f6c57928e686e09cc85",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -110,6 +110,7 @@
           "actions": []
         }
       ],
+      "transcript": null,
       "runSurface": {
         "surfacePresent": true,
         "surfaceChildren": 2,
@@ -127,17 +128,39 @@
         "railStepIndicatorHasCheckGlyph": true,
         "railRowLabels": [
           "Recommendation",
-          "Step 1"
+          "Step 1Review"
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (3)",
+          "Blog Draft Writer Agent (6)",
           "Step 1",
+          "Review",
           "Agentic Run Progress",
           "Command Palette"
         ]
       },
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:17:12.967Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 51,
+        "bridgeRunSelects": 4,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 5,
+          "bridgeRunSelects": 1
+        }
+      }
     },
     {
       "cell": "R6__recommendation-card__run_card__decided__dark",
@@ -145,7 +168,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "0450effa0a6defb18c80e40ae9f01791593bab9f8d9af629b11321cfcb270c4d",
+      "sha256": "13e2c7623e05f79ceb5423a936e0646ef275fb4932ee7f2d7a6b63dc7d79faac",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -249,6 +272,7 @@
           "actions": []
         }
       ],
+      "transcript": null,
       "runSurface": {
         "surfacePresent": true,
         "surfaceChildren": 2,
@@ -266,17 +290,39 @@
         "railStepIndicatorHasCheckGlyph": true,
         "railRowLabels": [
           "Recommendation",
-          "Step 1"
+          "Step 1Review"
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (3)",
+          "Blog Draft Writer Agent (6)",
           "Step 1",
+          "Review",
           "Agentic Run Progress",
           "Command Palette"
         ]
       },
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:17:14.099Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 51,
+        "bridgeRunSelects": 4,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 5,
+          "bridgeRunSelects": 1
+        }
+      }
     }
   ],
   "wire": [

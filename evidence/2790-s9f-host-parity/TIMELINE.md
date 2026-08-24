@@ -305,3 +305,78 @@ hold, where the run already exists and no model has yet been consulted.
 Neither substitution touches the hold, the chips, the decision, the release, the
 dispatch or the settled rail entry R6 is about: those are the server's own
 shipped path throughout.
+
+---
+
+# The stood-in-legs re-shoot — the order ITS run actually happened in
+
+**2026-08-24.** This round replaces the rework round's eight cells and the R6
+re-shoot's two. The reason is the chain, not the picture: both earlier rounds had
+a leg that did not reach a model — the chat turn took the deterministic
+pre-router, and the agent's own step was served by the scripted runtime after the
+real provider's public-MCP fetch answered `424 Failed Dependency`.
+
+## Which clock each row is on
+
+Rows marked **db** are columns read from the lane database with `psql`
+(`logs/realchain-db-readback.txt`). Rows marked **process** are this driver's own
+clock — the shutter times (`recordedAt` on each record), the press times, and the
+ingress probe. No row anywhere is read off a screen.
+
+## The sequence
+
+| # | Time (UTC) | Clock | What |
+|---|---|---|---|
+| 1 | `21:14:10.446` | process | The public ingress is proved BEFORE any pictured turn: `HEAD /api/mcp` answers `405` in **207 ms**, inside the app's own 2500 ms dead-ingress budget, and `/api/health` answers `200`. Row `T0`. |
+| 2 | `21:14:36.747170` | db | The run is created, `human_present = t`. The deterministic pre-router did not dispatch it: it cannot match a message carrying no package token, and its counters read 0 on every record. `agent_runs.created_at`. |
+| 3 | `21:14:37.431509` | db | It parks at the recommendation hold. `lifecycle_continuation_park.created_at`. |
+| 4 | `21:14:55.379` | process | Row `T1` reads the park and the three output tables at **0**, with the evidence block attached. |
+| 5 | `21:14:56.520` / `21:14:57.664` | process | `S1` light and dark. |
+| 6 | `21:15:13.167` / `21:15:14.263` | process | `R5` light and dark, on the run page, the SAME hold still `parked`. |
+| 7 | `21:15:16.996` | process | Row `T1c`: the sealed REAL provider row is READ BACK through the shipped reader and is still there. **This is where the earlier round removed it.** Nothing is cleared here. |
+| 8 | `21:15:37.305670` | db | The three kept decisions are written in one release transaction. |
+| 9 | `21:15:37.312113` | db | The hold is RELEASED. |
+| 10 | `21:16:03.557` / `21:16:04.691` | process | `S2` light and dark — the row settled in place, after a reload. |
+| 11 | `21:16:05.637` | process | The person answers the run's own in-flight gate with its own `Continue`. One press, landed. |
+| 12 | `21:16:33.745010` | db | The artifact the run produced is written — `representation` revision 1, a 6228-byte `text/markdown` blob. |
+| 13 | `21:16:33.810` | db | The run reaches `completed`, `error` empty. `agent_runs.completed_at`. |
+| 14 | `21:16:57.377` | process | Row `T3a`: the sealed provider row is read AGAIN, after the step's own model call. `T1c` and `T3a` BRACKET that call. |
+| 15 | `21:17:13.195` / `21:17:14.293` | process | `R6` light and dark, on the run page, question decided and run finished. |
+
+## What the order proves
+
+**Rows 4-6 are all on one side of row 9, and rows 10-15 are all on the other.**
+`S1` and `R5` are photographed while the park is `parked` and the three output
+tables read zero; `S2` and `R6` are photographed after the release timestamp. The
+held cells cannot be a decided card mislabelled, and the decided cells cannot be
+a held one — the database says which side of the release each shutter is on.
+
+**Rows 7 and 14 bracket the model call rows 12-13 depend on.** The earlier round
+removed the provider at row 7's position; this one reads it there and reads it
+again after the step. Two point reads are what is claimed — not uninterrupted
+presence, which no point read can establish.
+
+**Row 15 follows row 13.** R6 is photographed after the run completed, so the
+`Step 1` and `Review` rows its rail carries are the run's own executed steps.
+
+## What this round could not do, said plainly
+
+**Several sequences before this one ended at `pending_trigger`.** When the model
+hands `agent_run` no `inputParams`, the run parks on the agent's setup field and
+then on its trigger, and neither surface on this branch draws a control for that
+trigger state — the schedule card in the conversation is the slice cinatra#2788
+adds. The driver fails LOUD on that state rather than photographing a run that
+did not run, and the person's turn states the idea so the run reaches its own
+gate. That is a property of a real chain, and it is on the record.
+
+**And what the counters cannot do.** `publicMcpCallbacks` and `bridgeRunSelects`
+are cumulative over the app server's log for this lane session, so the raw
+numbers include earlier runs; the figure that carries any claim is the
+`deltaSinceStart` on each record. The five must-be-zero counters are screens: a
+hit is proof of a problem, a zero is only the absence of that line. What the AGENT'S
+STEP rests on is the resolver's own ordering — the scripted runtime is its last
+resort and a configured provider preempts it — together with the provider row read
+on both sides of the call (rows 7 and 14). What the CHAT TURN rests on is the
+pre-router counters, which are structural, plus an environment read taken one hop
+above the listening process: presence would be proof, absence there is consistent
+rather than conclusive. That difference is stated, not smoothed over.

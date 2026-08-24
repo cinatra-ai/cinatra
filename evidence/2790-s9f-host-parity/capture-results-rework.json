@@ -6,7 +6,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "cd8581871bb8d48447fefb22009381c42417febb8e64d8f93748ff9feee2d4ec",
+      "sha256": "b0232d45f7a5dc9e03fb3c6496ea694eb2c68fbe7d54a97a18f4fce6ae85c248",
       "observed": [
         {
           "selector": "[data-conversation-list]",
@@ -127,12 +127,33 @@
       "transcript": {
         "turns": 2,
         "listTop": 88,
-        "listBottom": 401,
+        "listBottom": 396,
         "listFullyInViewport": true,
-        "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe blog draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
       },
       "runSurface": null,
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:14:56.285Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
     },
     {
       "cell": "S1__recommendation-card__chat_thread__held__dark",
@@ -140,7 +161,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "ba59402f99d67fc241483f2a4fe6d548836b51615c95812d371db7adebef7617",
+      "sha256": "742263ae665bb22cfa66f5d30cb9fbf1df8cec23f8136ef3598f0ab3a9b01dc0",
       "observed": [
         {
           "selector": "[data-conversation-list]",
@@ -261,12 +282,33 @@
       "transcript": {
         "turns": 2,
         "listTop": 88,
-        "listBottom": 401,
+        "listBottom": 396,
         "listFullyInViewport": true,
-        "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe blog draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
       },
       "runSurface": null,
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:14:57.423Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
     },
     {
       "cell": "R5__recommendation-card__run_card__held",
@@ -274,7 +316,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "a0545aa22dd2aab273db5d46e72bb00b9cc18c02bd41e4386881702bfad87737",
+      "sha256": "2f02f2b4cb77690f93a5bdbfa98bda0979671c1d33e39de2479b37481c80ed68",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -416,6 +458,7 @@
         "railStepSettled": "false",
         "railStepText": "1Recommendation",
         "railStepIndicatorText": "1",
+        "railStepIndicatorHasCheckGlyph": false,
         "railRowLabels": [
           "1Recommendation"
         ],
@@ -425,7 +468,28 @@
           "Command Palette"
         ]
       },
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:15:12.926Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
     },
     {
       "cell": "R5__recommendation-card__run_card__held__dark",
@@ -433,7 +497,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "b86fd07a712c3253421e266abaa42324a1c54ec21da5722eb1e0fd8b72bb5b68",
+      "sha256": "1029820390ce72a5dcc1be0f17e36fb9a1a2eb6d2080887fd1bab52614f2d3cf",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -575,6 +639,7 @@
         "railStepSettled": "false",
         "railStepText": "1Recommendation",
         "railStepIndicatorText": "1",
+        "railStepIndicatorHasCheckGlyph": false,
         "railRowLabels": [
           "1Recommendation"
         ],
@@ -584,7 +649,28 @@
           "Command Palette"
         ]
       },
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:15:14.069Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
     },
     {
       "cell": "S2__recommendation-card__chat_thread__decided",
@@ -592,7 +678,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "e6a2155a616456e50ac547ce1cc4062380bf3cccc0feb8df82102bd6fc35b426",
+      "sha256": "6e2b52e9f9e38dbc5a6fdabd2f3364ccbc72a4525f4553c2a6dffb58239b931f",
       "observed": [
         {
           "selector": "[data-conversation-list]",
@@ -695,12 +781,33 @@
       "transcript": {
         "turns": 2,
         "listTop": 88,
-        "listBottom": 724,
+        "listBottom": 719,
         "listFullyInViewport": true,
-        "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe blog draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
       },
       "runSurface": null,
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:16:03.266Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
     },
     {
       "cell": "S2__recommendation-card__chat_thread__decided__dark",
@@ -708,7 +815,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "60388e9d9da96addd09cc04009edaa26160b7c1800ee7a39a86aba959f76d9ad",
+      "sha256": "b1267475a3264000764a841d5bcffbe0f6c21ba9051a0d5a9345722b2d4cfd97",
       "observed": [
         {
           "selector": "[data-conversation-list]",
@@ -811,12 +918,33 @@
       "transcript": {
         "turns": 2,
         "listTop": 88,
-        "listBottom": 724,
+        "listBottom": 719,
         "listFullyInViewport": true,
-        "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe blog draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
       },
       "runSurface": null,
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:16:04.461Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      }
     },
     {
       "cell": "R6__recommendation-card__run_card__decided",
@@ -824,7 +952,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "bcd6f6cec98c32c645f36d12c7ae89c58235ae32e07022eae0ea3956fa7d4ce5",
+      "sha256": "6d3ea8f5e23082af74bbd1bf00138a67399b726922844f6c57928e686e09cc85",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -928,6 +1056,7 @@
           "actions": []
         }
       ],
+      "transcript": null,
       "runSurface": {
         "surfacePresent": true,
         "surfaceChildren": 2,
@@ -945,17 +1074,39 @@
         "railStepIndicatorHasCheckGlyph": true,
         "railRowLabels": [
           "Recommendation",
-          "Step 1"
+          "Step 1Review"
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (3)",
+          "Blog Draft Writer Agent (6)",
           "Step 1",
+          "Review",
           "Agentic Run Progress",
           "Command Palette"
         ]
       },
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:17:12.967Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 51,
+        "bridgeRunSelects": 4,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 5,
+          "bridgeRunSelects": 1
+        }
+      }
     },
     {
       "cell": "R6__recommendation-card__run_card__decided__dark",
@@ -963,7 +1114,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "0450effa0a6defb18c80e40ae9f01791593bab9f8d9af629b11321cfcb270c4d",
+      "sha256": "13e2c7623e05f79ceb5423a936e0646ef275fb4932ee7f2d7a6b63dc7d79faac",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1067,6 +1218,7 @@
           "actions": []
         }
       ],
+      "transcript": null,
       "runSurface": {
         "surfacePresent": true,
         "surfaceChildren": 2,
@@ -1084,17 +1236,39 @@
         "railStepIndicatorHasCheckGlyph": true,
         "railRowLabels": [
           "Recommendation",
-          "Step 1"
+          "Step 1Review"
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (3)",
+          "Blog Draft Writer Agent (6)",
           "Step 1",
+          "Review",
           "Agentic Run Progress",
           "Command Palette"
         ]
       },
-      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:17:14.099Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 51,
+        "bridgeRunSelects": 4,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 5,
+          "bridgeRunSelects": 1
+        }
+      }
     }
   ],
   "wire": [

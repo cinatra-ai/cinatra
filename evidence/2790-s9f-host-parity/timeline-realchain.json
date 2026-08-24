@@ -1,0 +1,227 @@
+[
+  {
+    "step": "T0",
+    "what": "the public ingress answers, inside the app's own reachability budget",
+    "at": "2026-08-24T21:14:10.446Z",
+    "db": {
+      "publicOrigin": "<the lane's public origin>",
+      "healthStatus": 200,
+      "mcpHead": {
+        "url": "<the lane's public origin>/api/mcp",
+        "status": 405,
+        "ms": 207
+      },
+      "budgetMs": 2500
+    }
+  },
+  {
+    "step": "T1",
+    "what": "held at the recommendation hold; the run has produced NOTHING",
+    "at": "2026-08-24T21:14:55.379Z",
+    "db": {
+      "evidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:14:55.322Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63
+      },
+      "runStatus": "pending_input",
+      "humanPresent": true,
+      "parkCheckpoint": "recommendation",
+      "parkStatus": "parked",
+      "parkCreatedAt": "2026-08-24T21:14:37.431Z",
+      "representationRows": 0,
+      "producedOutboxRows": 0,
+      "reviewGateRows": 0,
+      "selectionRows": 0
+    }
+  },
+  {
+    "step": "T1b",
+    "what": "the run page is opened while the SAME hold is still parked",
+    "at": "2026-08-24T21:15:12.922Z",
+    "db": {
+      "runStatus": "pending_input",
+      "parkStatus": "parked",
+      "selectionRows": 0,
+      "representationRows": 0,
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af"
+    }
+  },
+  {
+    "step": "T1c",
+    "what": "the REAL sealed provider row is STILL configured — nothing was cleared and no scripted runtime is reachable",
+    "at": "2026-08-24T21:15:16.996Z",
+    "db": {
+      "shippedReader": "readOpenAIConnection",
+      "readBack": "S9FREAL PROVIDER_READ {\"shippedWriter\":\"writeOpenAIConnection\",\"sealedAtRest\":true,\"keyPresent\":true,\"isThePreviousRoundsPlaceholder\":false,\"defaultModel\":\"gpt-5.5\",\"serviceTier\":\"flex\"}",
+      "evidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:15:16.944Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63
+      }
+    }
+  },
+  {
+    "step": "T2",
+    "what": "the decisions are written and the hold is RELEASED",
+    "at": "2026-08-24T21:16:03.261Z",
+    "db": {
+      "runStatus": "pending_approval",
+      "parkStatus": "released",
+      "parkResolvedAt": "2026-08-24T21:15:37.312Z",
+      "selections": [
+        {
+          "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "selection_source": "user_adjusted",
+          "selected_at": "2026-08-24T21:15:37.305Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-24T21:15:37.305Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/web-research-skill:web-research",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-24T21:15:37.305Z"
+        }
+      ],
+      "representationRows": 0,
+      "reviewGateRows": 0
+    }
+  },
+  {
+    "step": "T3a",
+    "what": "the sealed provider row is read AGAIN, after the step's own model call",
+    "at": "2026-08-24T21:16:57.377Z",
+    "db": {
+      "shippedReader": "readOpenAIConnection",
+      "readBack": "S9FREAL PROVIDER_READ {\"shippedWriter\":\"writeOpenAIConnection\",\"sealedAtRest\":true,\"keyPresent\":true,\"isThePreviousRoundsPlaceholder\":false,\"defaultModel\":\"gpt-5.5\",\"serviceTier\":\"flex\"}",
+      "evidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:16:57.322Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 51,
+        "bridgeRunSelects": 4,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63
+      }
+    }
+  },
+  {
+    "step": "T3",
+    "what": "the step ran in the runtime and the run reached its state",
+    "at": "2026-08-24T21:16:57.440Z",
+    "db": {
+      "evidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:16:57.385Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 51,
+        "bridgeRunSelects": 4,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63
+      },
+      "runStatus": "completed",
+      "runCompletedAt": "2026-08-24T21:16:33.810Z",
+      "runError": "",
+      "representations": [
+        {
+          "id": "b2ec1ac9-a7cf-41fc-be19-cf4c66e526b5",
+          "artifact_id": "99b81ec5-4744-4ad3-9a35-8165702e2ea9",
+          "resource_id": "61b53251-3e58-4790-a6bc-299548fa55de",
+          "revision": 1,
+          "form": "file",
+          "created_at": "2026-08-24T21:16:33.745Z"
+        }
+      ],
+      "outbox": [
+        {
+          "event_id": "01df22490da1b9c73160a81cef008265d3388bfd42d914a0eb1182a4335751e9",
+          "artifact_id": "99b81ec5-4744-4ad3-9a35-8165702e2ea9",
+          "representation_revision_id": "b2ec1ac9-a7cf-41fc-be19-cf4c66e526b5",
+          "emitter": "createSemanticArtifact",
+          "origin_kind": "agent_produced",
+          "created_at": "2026-08-24T21:16:33.745Z",
+          "processed_at": "2026-08-24T21:16:48.598Z"
+        }
+      ],
+      "gates": [
+        {
+          "id": "47f4b263-db49-471b-ab88-a81c91bbf677",
+          "review_task_id": "lifecycle-review:01df22490da1b9c73160a81cef008265d3388bfd42d914a0eb1182a4335751e9",
+          "status": "pending",
+          "created_at": "2026-08-24T21:16:48.491Z"
+        }
+      ]
+    }
+  },
+  {
+    "step": "T4",
+    "what": "the run page is photographed with the question decided",
+    "at": "2026-08-24T21:17:12.964Z",
+    "db": {
+      "runStatus": "completed",
+      "parkStatus": "released",
+      "parkResolvedAt": "2026-08-24T21:15:37.312Z",
+      "selections": [
+        {
+          "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "selection_source": "user_adjusted",
+          "selected_at": "2026-08-24T21:15:37.305Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-24T21:15:37.305Z"
+        },
+        {
+          "skill_id": "@cinatra-ai/web-research-skill:web-research",
+          "selection_source": "recommended_confirmed",
+          "selected_at": "2026-08-24T21:15:37.305Z"
+        }
+      ],
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af"
+    }
+  }
+]

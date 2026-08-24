@@ -1145,3 +1145,128 @@ served the call. The recorded artifacts are left VERBATIM rather than rewritten,
 because they are the driver's own output; the correction rides beside them (a
 `whatCorrection` field on the row, a marked footer on the log), and the driver's
 label is fixed for any re-run.
+
+---
+
+# The re-shoot that removes both stood-in legs — cinatra#2790 (S9f), PR #2890, 2026-08-24
+
+## What changed, and why it is the chain rather than the pictures
+
+The eight cells `S1` / `S2` / `R5` / `R6` (light and dark each) are **re-shot**.
+Their previous records were measured honestly, but the CHAIN that produced the
+states they measure had two legs that never reached a model:
+
+1. **The chat turn took the deterministic pre-router.** The turn named the agent
+   package and carried embedded `inputParams`, so `detectExplicitDispatchPackage`
+   matched, the server dispatched the run itself, and the reply in the picture was
+   the platform's own synthesized dispatch line.
+2. **The agent's own step was served by the scripted runtime.** The real sealed
+   provider row was REMOVED mid-sequence, because this instance had no public MCP
+   ingress and the provider's toolbox fetch answered `424 Failed Dependency`.
+
+Both are replaced, and `drivers/12-real-chain-sequence.mjs` is written so that
+each replacement is checkable rather than promised:
+
+- **The turn names no package token**, in either form the pre-router reads.
+  `detectExplicitDispatchPackage` needs BOTH a verb and a package reference, so it
+  returns null, the hard short-circuit cannot fire and the soft directive is never
+  prepended. The only thing that can start a run from this turn is the real model
+  calling `agent_run` through this instance's own public MCP toolbox.
+- **The sealed `openai_connection` row is read on BOTH sides of the step** —
+  timeline rows `T1c` (before) and `T3a` (after the step's own model call). The
+  earlier round removed it at `T1c`'s position; this one reads it there. Two point
+  reads are what is claimed; they bracket the call rather than proving continuity.
+- **The scripted runtime is ruled out for the AGENT'S STEP by the code's own
+  ordering.** `resolveConfiguredLlmRuntime` — the resolver `/api/llm-bridge` takes,
+  which is the seam the agent-run model call goes through — reaches the scripted
+  runtime only as a LAST RESORT, *"after every real candidate failed to resolve"*,
+  and its own comment states that an install WITH a configured provider never
+  reaches that line. `T1c` and `T3a` read a real sealed provider back on both
+  sides of the step. That is decisive for the step, and it does not depend on any
+  environment read.
+- **For the CHAT TURN the ordering is the other way round, and this page says so.**
+  `orchestrateStreamImpl` checks the flag FIRST and returns the scripted stream
+  before any provider is resolved. What the records carry for that leg is an
+  ENVIRONMENT READ — `serverScriptedProviderEnv: null`, with `serverEnvReadFrom`,
+  the pid read, `serverEnvHopsFromListener: 1` and `serverEnvTokensSeen: 63`. It is
+  an ANCESTOR read: the Next server rewrites its argv, so the listening process
+  prints no environment and the read walks one hop up. A non-null answer would be
+  proof of presence and aborts the sequence; a null answer at one hop up is
+  CONSISTENT with absence and is not a proof of it, because a child can be given a
+  variable its parent never had. The lane started the server with the variable
+  explicitly unset and every shutter agrees with that; the residual is named
+  rather than closed. The driver additionally refuses to start if its OWN
+  environment carries the flag — the weaker half, labelled
+  `driverScriptedProviderEnv` so the two are never conflated.
+- **The public origin was set through the app's OWN tunnel surface**
+  (`/configuration/development?tab=tunnel`, `publicBaseUrlSource: "manual"`), the
+  app was restarted so the OAuth audience allowlist follows it, and the driver
+  proves the ingress answers inside the app's own 2500 ms reachability budget
+  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 207 ms).
+
+## What the counters are, and what they are not
+
+Each record carries a `providerEvidence` block read from the app server's own log
+at the instant of its shutter. Five counters are NEGATIVE SCREENS —
+`preRouterShortCircuits`, `preRouterAttempts`, `scriptedRuntimeLines`,
+`noProviderRefusals`, `mcpDependencyFailures` — and all five are zero on all eight
+cells. A screen is worth what a screen is worth: a hit proves a problem, a zero is
+the absence of that particular line. Two of them are deliberately broad, which is
+the safe direction for something whose only power is to stop the shoot.
+
+`publicMcpCallbacks` is the POSITIVE one: `POST /api/mcp` hits. The raw count is
+cumulative over the whole lane session, so what carries anything is
+`deltaSinceStart`, which rises **0 → 3 → 5** across the eight cells while
+`bridgeRunSelects` rises **0 → 1**. The driver ABORTS a shutter if that delta has
+not moved, and aborts if any screen has. Its LIMIT is stated as well: the request
+log does not record which caller made the POST, and this branch's scripted
+self-MCP path also posts to `/api/mcp` on the LOCAL url — so a moving delta shows
+the instance's own MCP surface was exercised during the sequence, not, on its own,
+who exercised it.
+
+## And this time the run finished
+
+`agent_runs.status = completed`, `error` empty, one `representation` (a 6228-byte
+`text/markdown` blob), one processed `artifact_produced_outbox` event and one
+`artifact_review_gates` row. `RUN-READBACK.md` reads all of it out of the database
+and states, claim by claim, which field supports it and what that field does not
+say. `TIMELINE.md` says which clock each row is on.
+
+## The one thing this round could not drive, stated plainly
+
+Several sequences before the recorded one ended at `pending_trigger`. When the
+model hands `agent_run` no `inputParams`, the run parks on the agent's own setup
+field and then on its trigger — and **neither surface on this branch draws a
+control for that trigger state**, so the run never executes and `R6` has nothing
+decided-and-run to photograph. `approveReviewTask` reports it honestly (*"Setup
+approval rejected: run … is not pending_approval (current status:
+pending_trigger)"*). The driver now fails LOUD on that state instead of
+photographing a run that did not run, and the person's turn states the idea it
+wants the agent to work from, which is what removes the stall. That is a property
+of a real chain rather than a defect of this branch, and it is on the record.
+
+## What is committed here that a reader may want to re-derive
+
+The lane's own account and organization UUIDs appear in `RUN-READBACK.md` and in
+`logs/realchain-sequence-state.json`, because "created by the lane's own signed-in
+person" is only checkable if the row it was read from is named. They are the
+identifiers of a throwaway lane database that is dropped when the lane is torn
+down; no credential, no key and no private hostname is committed anywhere in this
+directory, and the lane's public origin and the app server's log path appear as
+placeholders because the recorder replaces them at the moment it writes.
+
+## How it was run
+
+`node scripts/dev-server.mjs` (Next.js, Turbopack), `CINATRA_RUNTIME_MODE=development`,
+on a dedicated lane database and Redis, with the WayFlow runtime and a lane-local
+package registry up from the repository's own compose profile, the dev extensions
+synced pinned, and the branch's `@cinatra-ai/blog-draft-writer-agent@0.1.2` plus
+`@cinatra-ai/blog-post-artifact@0.1.4` published into the lane registry. Drivers:
+`drivers/10-r6-lane-setup.mjs` (the lane's own owner in the platform's one
+organization), `drivers/02-provision-instance-identity.mjs` (the shipped
+`/setup/name` step), `drivers/06-chat-lane-fixture.config.ts` with
+`WALK_STEP=ASSIGN` (the four skill assignments, keyed by the agent's PACKAGE NAME
+and read back through the shipped reader), `drivers/08-real-provider.test.ts` (the
+sealed provider row, written inside the operator's secret-manager wrapper — the
+credential never touches this repository), and `drivers/12-real-chain-sequence.mjs`
+for the sequence itself.

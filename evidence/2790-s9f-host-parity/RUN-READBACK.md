@@ -201,3 +201,105 @@ No credential and nothing derived from one. The provider key reached exactly one
 process — the seeding step, through its environment, inside the operator's
 secret-manager `run` wrapper — and that step reports presence and the published
 model name only.
+
+---
+
+# The stood-in-legs re-shoot's own run, read out of the database
+
+This is the run the eight `S1` / `R5` / `S2` / `R6` cells now photograph. It
+replaces the rework round's run and the R6 re-shoot's run, both of which had a
+stood-in leg. Every LIFECYCLE value below is a column read with `psql`; the raw
+output is committed as `logs/realchain-db-readback.txt`. The capture times are
+the recorder's own `recordedAt` and the press times are the driver's clock —
+each row says which. Nothing is read off a screen.
+
+The run: **`0f696a2a-9413-4422-ba0a-d52d0553f2af`**, started from one typed turn
+in the conversation named by the `finalUrl` on the two `S1` records.
+
+## What is claimed about the chain, and what each claim is read from
+
+Read this table as the boundary of the claim. Each row names the ONE thing that
+supports it — no row leans on another row's evidence.
+
+| Claim | What it is read from | What that field does NOT say |
+|---|---|---|
+| The turn was not dispatched by the deterministic pre-router | `preRouterShortCircuits: 0` and `preRouterAttempts: 0` on all eight records, counted from the server's own log lines; and the turn text itself, which contains neither of the two package forms `detectExplicitDispatchPackage` requires | nothing — this one is structural: with no package token in the message the pre-router cannot match |
+| The scripted runtime could not serve the AGENT'S STEP | the code's own ordering: `resolveConfiguredLlmRuntime` reaches the scripted runtime only as a LAST RESORT and never with a configured provider — and rows `T1c` / `T3a` read a real sealed provider back on both sides of the step | it says nothing about the CHAT TURN, whose seam checks the flag FIRST |
+| The scripted flag was absent from the server's process chain | `serverScriptedProviderEnv: null`, with `serverEnvReadFrom: "process-table"`, `serverEnvReadOfPid`, `serverEnvHopsFromListener: 1`, `serverEnvTokensSeen: 63` | it is an ANCESTOR read — the listening process rewrites its argv and prints no environment. Presence would be proof; ABSENCE AT ONE HOP UP IS CONSISTENT, NOT CONCLUSIVE, because a child can be given a variable its parent never had. Nothing committed here closes that residual for the chat turn |
+| A real provider was configured before AND after the step | the shipped `readOpenAIConnection`, run twice: timeline rows `T1c` (before) and `T3a` (after the step's own model call) | two point reads bracket the call; they do not prove uninterrupted presence between them |
+| This instance's own MCP surface was exercised during the sequence | `publicMcpCallbacks` — `POST /api/mcp` hits — MOVED from the sequence baseline: `deltaSinceStart` rises 0 → 3 → 5 across the cells, and `bridgeRunSelects` 0 → 1 | the request log does not record WHICH caller posted, and this branch's scripted self-MCP path also posts to `/api/mcp` on the local url — so the delta does not by itself attribute the calls to a hosted provider |
+| The run completed and produced a real artifact | `agent_runs.status = completed`, `error` empty, and the representation / outbox / gate rows below | completion says the run finished; WHICH runtime served the model call is the rows above, not this one |
+
+The five must-be-zero counters (`preRouterShortCircuits`, `preRouterAttempts`,
+`scriptedRuntimeLines`, `noProviderRefusals`, `mcpDependencyFailures`) are
+NEGATIVE SCREENS and are worth what a screen is worth: a hit proves a problem, a
+zero is the absence of that particular line. Two of them are deliberately broad,
+which is the safe direction for something whose only power is to stop the shoot.
+The claims rest on the rows above them, not on the screens.
+
+**The honest summary of the two legs.** The AGENT'S STEP is established: the
+resolver cannot reach the scripted runtime with a provider configured, and the
+provider was read on both sides of the call. The CHAT TURN is established as far
+as the pre-router goes — it demonstrably did not dispatch this run — and rests, for
+the scripted-stream question, on an environment read whose absence-direction is
+consistent rather than conclusive. That distinction is written here rather than
+flattened into one word.
+
+## Who created it, who decided it
+
+| Question | Answer | Where it was read |
+|---|---|---|
+| Created by | `61391487-272a-4b79-8d8a-39ac5056d254` — the lane's own signed-in person, the same account the browser typed the turn as | `cinatra.agent_runs.run_by` |
+| Person present? | `t` | `cinatra.agent_runs.human_present` |
+| Why it is human-present at all | the transport's own carrier: the hosted relay's call arrives as a verified `delegation: "chat"` actor, the agents registry forwards it as `delegatedRestricted`, and `isChatLaunchFrame` reads THAT — not anything the model emitted | `packages/agents/src/actions.ts` `isChatLaunchFrame` |
+| Organization | `197ba74d-3ac5-4647-bcde-7b662323f524` (this lane's only organization; the lane database is dropped at cleanup) | `cinatra.agent_runs.org_id` |
+| Agent | `@cinatra-ai/blog-draft-writer-agent` (template `6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b`) | `agent_runs.template_id` → `agent_templates.package_name` |
+| Decided by | the same person, through the card's own per-chip controls in the chat — four presses, `confirm`, `adjust` → *"Keep it in this run"*, `skip`, `confirm` | `logs/realchain-sequence.txt` (`PRESS …`) and the selection rows below |
+| How this run id was bound to this turn | the inline run panel's link-out did not resolve at that instant, so the driver used its NARROWED fallback — every run started BY THIS ACTOR SINCE THIS SEQUENCE BEGAN — and that set held **exactly one** row (`runIdCandidates: 1`). The driver REFUSES when it holds more than one, so the binding is unambiguous rather than merely newest | `logs/realchain-sequence-state.json` |
+| Model configured | a REAL sealed OpenAI connection, `defaultModel` **`gpt-5.5`**, `serviceTier` `flex`, written by the shipped `writeOpenAIConnection` | `cinatra.metadata` row `openai_connection`, read back at `T1c` and `T3a` |
+
+## The clock
+
+| # | What happened | Time (UTC, 2026-08-24) | Clock | Read from |
+|---|---|---|---|---|
+| 1 | The public ingress answered inside the app's own 2500 ms budget: `HEAD /api/mcp` → `405` in **207 ms**; `/api/health` → `200` | `21:14:10.446` | process | `timeline-realchain.json` row `T0` |
+| 2 | The run was created, person-present | `21:14:36.747170` | db | `cinatra.agent_runs.created_at` |
+| 3 | It PARKED at the recommendation hold | `21:14:37.431509` | db | `lifecycle_continuation_park.created_at` |
+| 4 | `S1` light / dark — representation, produced-outbox and review-gate rows all **0** | `21:14:56.520` / `21:14:57.664` | process | `dbAt` + `recordedAt` on the `S1` records |
+| 5 | `R5` light / dark — the SAME hold still `parked` | `21:15:13.167` / `21:15:14.263` | process | `dbAt` + `recordedAt` on the `R5` records |
+| 6 | The sealed provider row is READ BACK, still present, still not the placeholder | `21:15:16.996` | process | row `T1c` |
+| 7 | The three kept decisions are written (one release transaction, one timestamp) | `21:15:37.305670` | db | `run_selected_skill_revisions.selected_at` |
+| 8 | The hold is RELEASED | `21:15:37.312113` | db | `lifecycle_continuation_park.resolved_at` |
+| 9 | `S2` light / dark — settled in place, after a reload | `21:16:03.557` / `21:16:04.691` | process | `recordedAt` on the `S2` records |
+| 10 | The person answers the run's own in-flight gate with its own `Continue` — one press, landed | `21:16:05.637` | process | `gatePresses` in `logs/realchain-sequence-state.json` |
+| 11 | The artifact the run produced is written | `21:16:33.745010` | db | `cinatra.representation.created_at` |
+| 12 | The run reaches `completed`, `error` empty | `21:16:33.810` | db | `agent_runs.completed_at` |
+| 13 | The sealed provider row is READ AGAIN, after the step's own model call | `21:16:57.377` | process | row `T3a` |
+| 14 | `R6` light / dark — question decided, run finished | `21:17:13.195` / `21:17:14.293` | process | `recordedAt` on the `R6` records |
+
+## What the run produced
+
+| Table | Rows for this run |
+|---|---|
+| `cinatra.run_selected_skill_revisions` | **3** — `blog-post-matcher → user_adjusted`, `blog-writing → recommended_confirmed`, `web-research → recommended_confirmed` |
+| `cinatra.representation` | **1** — revision 1, `form=file` |
+| the resource behind it | one `text/markdown` blob of **6228 bytes** |
+| `cinatra.artifact_produced_outbox` | **1**, emitter `createSemanticArtifact`, `origin_kind=agent_produced`, processed at `21:16:48.598275` |
+| `cinatra.artifact_review_gates` | **1**, `status=pending`, opened `21:16:48.491132` |
+
+`cinatra.agent_runs.error` is **empty**. Every earlier round in this lane had to
+disclose a downstream failure here — `503 NO_LLM_PROVIDER`, the provider's
+`424 Failed Dependency` on the public MCP fetch, or an artifact materialization
+that found no title in what a scripted model returned. This round has none.
+
+## The sequences before it, and why they are named here
+
+Twelve sequences were driven on this lane. Several ended at the same place, and
+the reason is a real property of a real chain: **when the model hands `agent_run`
+no `inputParams`, the run parks on the agent's own setup field and then on its
+trigger, and neither surface on this branch draws a control for that trigger
+state** — so the run never executes. `approveReviewTask` answers the second press
+honestly (`Setup approval rejected: run … is not pending_approval (current
+status: pending_trigger)`), and the driver now fails LOUD on that state instead
+of photographing a run that did not run. That is why the person's turn states the
+idea it wants the agent to work from: it removes a stall, not a step.

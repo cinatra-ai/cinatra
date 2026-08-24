@@ -1,0 +1,122 @@
+{
+  "startedAt": "2026-08-24T21:14:00.633Z",
+  "userId": "61391487-272a-4b79-8d8a-39ac5056d254",
+  "evidenceAtStart": {
+    "serverLog": "<the app server's own log>",
+    "at": "2026-08-24T21:14:08.122Z",
+    "preRouterShortCircuits": 0,
+    "preRouterAttempts": 0,
+    "scriptedRuntimeLines": 0,
+    "noProviderRefusals": 0,
+    "mcpDependencyFailures": 0,
+    "publicMcpCallbacks": 46,
+    "bridgeRunSelects": 3,
+    "driverScriptedProviderEnv": null,
+    "serverScriptedProviderEnv": null,
+    "serverEnvReadFrom": "process-table",
+    "serverEnvReadOfPid": "9738",
+    "serverEnvHopsFromListener": 1,
+    "serverEnvTokensSeen": 63
+  },
+  "threadPath": "/chat/cinatra-ai/cinatra-assistant/fa6d5a06-e9be-495c-97e0-ecb083fec11a",
+  "runIdCandidates": 1,
+  "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
+  "runIdSource": "the ONLY agent_runs row started by this actor since this sequence began",
+  "packageName": "@cinatra-ai/blog-draft-writer-agent",
+  "runPath": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af",
+  "heldChips": [
+    {
+      "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+      "mark": "undecided",
+      "forced": true,
+      "label": "Blog Writing Skill",
+      "text": "Blog Writing SkillConfirmAdjustSkip",
+      "actions": [
+        "confirm",
+        "adjust",
+        "skip"
+      ]
+    },
+    {
+      "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+      "mark": "undecided",
+      "forced": true,
+      "label": "Blog Post Matcher Skill",
+      "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+      "actions": [
+        "confirm",
+        "adjust",
+        "skip"
+      ]
+    },
+    {
+      "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+      "mark": "undecided",
+      "forced": true,
+      "label": "Brand Voice Matcher Skill",
+      "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+      "actions": [
+        "confirm",
+        "adjust",
+        "skip"
+      ]
+    },
+    {
+      "skillId": "@cinatra-ai/web-research-skill:web-research",
+      "mark": "undecided",
+      "forced": true,
+      "label": "Web Research Skill",
+      "text": "Web Research SkillConfirmAdjustSkip",
+      "actions": [
+        "confirm",
+        "adjust",
+        "skip"
+      ]
+    }
+  ],
+  "decisionPresses": [
+    {
+      "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+      "action": "confirm",
+      "cardStateAfter": "held",
+      "at": "2026-08-24T21:15:32.394Z"
+    },
+    {
+      "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+      "action": "adjust",
+      "cardStateAfter": "held",
+      "at": "2026-08-24T21:15:35.185Z"
+    },
+    {
+      "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+      "action": "skip",
+      "cardStateAfter": "held",
+      "at": "2026-08-24T21:15:36.404Z"
+    },
+    {
+      "skillId": "@cinatra-ai/web-research-skill:web-research",
+      "action": "confirm",
+      "cardStateAfter": "held",
+      "at": "2026-08-24T21:15:37.634Z"
+    }
+  ],
+  "gatePresses": [
+    {
+      "at": "2026-08-24T21:16:05.637Z",
+      "pressed": "Continue",
+      "landed": true,
+      "error": null
+    }
+  ],
+  "runStatusWalk": [
+    {
+      "at": "2026-08-24T21:16:05.598Z",
+      "status": "pending_approval"
+    },
+    {
+      "at": "2026-08-24T21:16:41.682Z",
+      "status": "completed"
+    }
+  ],
+  "reviewTaskId": "lifecycle-review:01df22490da1b9c73160a81cef008265d3388bfd42d914a0eb1182a4335751e9"
+}

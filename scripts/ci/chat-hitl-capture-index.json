@@ -111,14 +111,14 @@
     "the RESOLVE RESPONSE. All ten are RETIRED here, for two separate reasons that both stand on",
     "their own:",
     "",
-    "  \u00b7 THE CARD THEY PHOTOGRAPH NO LONGER EXISTS. The S9d rework removed the summary box, the",
+    "  · THE CARD THEY PHOTOGRAPH NO LONGER EXISTS. The S9d rework removed the summary box, the",
     "    held-steps block and the status label from every host, renamed the two run-page controls",
     "    (Cancel trigger -> Cancel schedule, Release now -> Run now), and moved the schedule from a",
     "    card in the gate region to a STEP in the left rail. Every one of the ten shows drawings the",
     "    shipped card does not draw any more. A record whose anchors still hash to a real image of a",
     "    retired reading is not evidence for the card that ships; it is evidence against it.",
     "",
-    "  \u00b7 TWO OF THEM WERE NEVER A CAPTURE OF THE THING CLAIMED. The `standin` pair says so in its own",
+    "  · TWO OF THEM WERE NEVER A CAPTURE OF THE THING CLAIMED. The `standin` pair says so in its own",
     "    names, and a stand-in is not acceptable evidence at any tier.",
     "",
     "WHAT REPLACES THEM IS NOW RECORDED. The rework's walk was driven THROUGH THIS RECORDER -",
@@ -140,7 +140,7 @@
     "",
     "TWO CARD-ROOT RECORDS ARE RETIRED HERE, and their absence is the honest state",
     "rather than a loss. R1 and R3 (`recommendation-card__page_gate_region__decided`,",
-    "light and dark) declared `framing: \"card-root\"` \u2014 a close-up of the card with the",
+    "light and dark) declared `framing: \"card-root\"` — a close-up of the card with the",
     "page cropped away. The ratified framing vocabulary is `window` or `page` and",
     "nothing else: the maintainer asked for the surrounding after seeing close-ups",
     "(\"close ups of the card, but I cannot tell the surrounding\"), and the recorder's",
@@ -149,9 +149,9 @@
     "two would undo the ruling that produced it.",
     "",
     "NOTHING IS OWED FOR THEM. The SAME reading of the SAME run is already recorded at",
-    "page framing by R2 and R4 (`\u2026__above-gate`, light and dark): the decided row in",
+    "page framing by R2 and R4 (`…__above-gate`, light and dark): the decided row in",
     "its page, uncropped and full-length, with the review gate card beneath it still",
-    "awaiting its decision. The two images go with the two records \u2014 a picture kept",
+    "awaiting its decision. The two images go with the two records — a picture kept",
     "beside a retired record is the next round's false evidence."
   ],
   "schemaVersion": 1,
@@ -952,7 +952,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:21.024Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out \u2014 they are sealed bearer strings \u2014 so each is reported by length, url-safe shape and a truncated digest."
+      "note": "The SAME cross-site card with the island's own expand control pressed, so more of the painted target is on screen. This record's evidentiary payload is `islandAddress`: the frame's `src` attribute, read off the DOM, carries BOTH `ref` and the opaque credential parameter `ic`. Their VALUES are never written out — they are sealed bearer strings — so each is reported by length, url-safe shape and a truncated digest."
     },
     {
       "cell": "C3__review-card__site_widget__pending",
@@ -1018,7 +1018,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T05:58:29.104Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js dev, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted; a dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; placeholder-only env, no model credential on this host. App origin http://localhost:3251; the top-level host page is served from http://127.0.0.1:5591 - a different ORIGIN and a different SITE, so no cookie set for the app can ride the island frame load. Head under proof 2c66dd10b, unmodified.",
-      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL \u2014 the single empty-island element every denial draws, which is why the framed region is blank \u2014 and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
+      "note": "NEGATIVE CONTROL, framed at the SAME clamped island height as C1 so the two are directly comparable. One character of the island credential was flipped in the DOM and the frame re-addressed; everything else about the request is byte-identical. The island document answered with its REFUSAL — the single empty-island element every denial draws, which is why the framed region is blank — and the card around it is UNMOVED: still `Review requested / Awaiting your decision`, still carrying its decision floor. Not an error page, not a crash, not a sign-in form inside third-party chrome."
     },
     {
       "cell": "V1__recommendation-card__run_card__held",
@@ -1158,7 +1158,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:56:52.794Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
+      "note": "§V bullet 1+2: one chip per skill, each with its own Confirm/Adjust/Skip; no heading plate, no row-level submit. Framed on the card root."
     },
     {
       "cell": "V2__recommendation-card__run_card__held__dark",
@@ -1438,7 +1438,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:57:15.084Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
+      "note": "§V: a chip is settled by pressing one of its OWN three affordances; the row is never decided as a unit. Two chips decided (Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher), two still undecided, nothing released."
     },
     {
       "cell": "V4__recommendation-card__run_card__held__adjust-panel",
@@ -1718,7 +1718,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:57:59.190Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
+      "note": "§V's settled row, reached by pressing chip buttons only: Confirm on blog-post-matcher, Adjust->Keep on brand-voice-matcher (an IN-SET recommended skill, so the store writes user_adjusted), Skip on blog-writing and on web-research. All three settled marks on one row."
     },
     {
       "cell": "V6__recommendation-card__run_card__settled__dark",
@@ -1998,7 +1998,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:58:17.869Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
+      "note": "§V's read-only reading: every chip keeps its three affordances on screen, disabled, and the reason sits under the row."
     },
     {
       "cell": "V8__recommendation-card__run_card__held__trigger-position",
@@ -2138,7 +2138,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-20T19:58:25.799Z",
       "runtime": "dev-runtime",
-      "note": "\u00a76.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
+      "note": "§6.2 bullet 3: on the run page the same row sits at the trigger position, ahead of the work it would authorize. Full page, nothing summarised above the row."
     },
     {
       "cell": "V9__recommendation-card__run_card__decided__page",
@@ -2550,7 +2550,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T10:49:34.787Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7I input hierarchy, LIGHT: the ONE primary composer (boxed, raised, send affordance) and the card's subordinate note field (dashed baseline, transparent, no box) in ONE frame."
+      "note": "§I input hierarchy, LIGHT: the ONE primary composer (boxed, raised, send affordance) and the card's subordinate note field (dashed baseline, transparent, no box) in ONE frame."
     },
     {
       "cell": "I2__review-card__chat_thread__pending__dark",
@@ -2615,7 +2615,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T10:49:34.787Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7I input hierarchy, DARK: the same two inputs, same weight difference, on the dark field."
+      "note": "§I input hierarchy, DARK: the same two inputs, same weight difference, on the dark field."
     },
     {
       "cell": "I3__review-card__chat_thread__pending__composer-bound",
@@ -2680,7 +2680,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T10:49:34.787Z",
       "runtime": "dev-runtime",
-      "note": "\u00a7I: one open review binds the chat box with no press \u2014 the row above the buttons states the binding and offers the box back."
+      "note": "§I: one open review binds the chat box with no press — the row above the buttons states the binding and offers the box back."
     },
     {
       "cell": "I4__review-card__site_widget__pending",
@@ -2766,7 +2766,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T13:10:01.329Z",
       "runtime": "Next.js dev (Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + the verify Redis, loopback-only, placeholder-only provider environment (no model credential on this host).",
-      "note": "\u00a7I input hierarchy inside the EMBEDDED CROSS-SITE widget column, LIGHT: a real held review card whose subordinate note field (dashed baseline, no box) and the widget's OWN primary composer are in one frame, on a page served by another site."
+      "note": "§I input hierarchy inside the EMBEDDED CROSS-SITE widget column, LIGHT: a real held review card whose subordinate note field (dashed baseline, no box) and the widget's OWN primary composer are in one frame, on a page served by another site."
     },
     {
       "cell": "I5__review-card__site_widget__pending__dark",
@@ -2852,7 +2852,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T13:10:28.072Z",
       "runtime": "Next.js dev (Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + the verify Redis, loopback-only, placeholder-only provider environment (no model credential on this host).",
-      "note": "\u00a7I input hierarchy inside the EMBEDDED CROSS-SITE widget column, DARK: the same two inputs and the same weight difference on the dark field; the record carries the theme read-back measured inside the embed frame."
+      "note": "§I input hierarchy inside the EMBEDDED CROSS-SITE widget column, DARK: the same two inputs and the same weight difference on the dark field; the record carries the theme read-back measured inside the embed frame."
     },
     {
       "cell": "G1__review-card__chat_thread__pending",
@@ -2923,7 +2923,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "AC-15 chat_thread PENDING, re-driven at the current face. The \u00a7III review card in a real /chat transcript: the island at its Floor tier, \u00a7VIII before/after suggestion chips, the composer-binding row, the decision floor with the accepted-count line, the subordinate rationale field and Comment / Reject / Approve. Retires the S7-era C1 cell, whose round never looked for [data-conversation-list]."
+      "note": "AC-15 chat_thread PENDING, re-driven at the current face. The §III review card in a real /chat transcript: the island at its Floor tier, §VIII before/after suggestion chips, the composer-binding row, the decision floor with the accepted-count line, the subordinate rationale field and Comment / Reject / Approve. Retires the S7-era C1 cell, whose round never looked for [data-conversation-list]."
     },
     {
       "cell": "G2__review-card__chat_thread__decided",
@@ -3066,7 +3066,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "\u00a7IX page_gate_region PENDING \u2014 the review page composes the SAME ReviewGateCard under host=\"page_gate_region\"."
+      "note": "§IX page_gate_region PENDING — the review page composes the SAME ReviewGateCard under host=\"page_gate_region\"."
     },
     {
       "cell": "G5__audit-card__run_card__advisory",
@@ -3120,7 +3120,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "\u00a7VII audit card on the RUN CARD host, advisory \u2014 the run screen composes VerificationSummaryCard per verification record the run carries."
+      "note": "§VII audit card on the RUN CARD host, advisory — the run screen composes VerificationSummaryCard per verification record the run carries."
     },
     {
       "cell": "G6__audit-card__page_gate_region__advisory",
@@ -3174,7 +3174,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "\u00a7VII audit card in the review page verification region (the run rail Core-analysis entry), advisory \u2014 S9e composes the shared renderer and the page adjuncts around it."
+      "note": "§VII audit card in the review page verification region (the run rail Core-analysis entry), advisory — S9e composes the shared renderer and the page adjuncts around it."
     },
     {
       "cell": "G8__recommendation-card__run_card__held",
@@ -3258,7 +3258,7 @@
         }
       },
       "runtime": "dev-runtime",
-      "note": "\u00a7V chip row HELD on the run card: one chip per recommended skill, each with its own Confirm / Adjust / Skip. The run is parked at the recommendation checkpoint by the shipped maybeHoldRunForRecommendation."
+      "note": "§V chip row HELD on the run card: one chip per recommended skill, each with its own Confirm / Adjust / Skip. The run is parked at the recommendation checkpoint by the shipped maybeHoldRunForRecommendation."
     },
     {
       "cell": "S9b-1__recommendation-hold__chat_thread__held",
@@ -3583,7 +3583,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T16:11:36.037Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted; a lane-private Postgres (55794) and Redis (56794) on loopback, compose project x2794cap; no real model credential on this host",
-      "note": "The settled row after a whole-row skip: all three chips present, each on \u00a7V's skipped treatment, display names intact, controls gone, still inside the conversation list, and the panel below carries no second copy."
+      "note": "The settled row after a whole-row skip: all three chips present, each on §V's skipped treatment, display names intact, controls gone, still inside the conversation list, and the panel below carries no second copy."
     },
     {
       "cell": "C0__recommendation-card__run_card__held__per-chip-control",
@@ -3805,7 +3805,7 @@
           "class": "flex flex-wrap gap-2"
         }
       },
-      "note": "Control run, settled: the candidate set survived to settle time, so the recorded set names skills and the row draws the \u00a7V PER-CHIP settled faces. This is the reading the zero-chip addition does NOT change.",
+      "note": "Control run, settled: the candidate set survived to settle time, so the recorded set names skills and the row draws the §V PER-CHIP settled faces. This is the reading the zero-chip addition does NOT change.",
       "runtime": "dev"
     },
     {
@@ -3917,7 +3917,7 @@
           "class": "flex flex-wrap gap-2"
         }
       },
-      "note": "THE READING UNDER TEST. The hold settled after its candidates were retired: the run-level skip marker is on record with candidate_count 0 and no per-skill row beside it, so the recorded set names no skill and \u00a7V's outcome panel is drawn in place of the chips.",
+      "note": "THE READING UNDER TEST. The hold settled after its candidates were retired: the run-level skip marker is on record with candidate_count 0 and no per-skill row beside it, so the recorded set names no skill and §V's outcome panel is drawn in place of the chips.",
       "runtime": "dev"
     },
     {
@@ -4029,7 +4029,7 @@
           "class": "flex flex-wrap gap-2"
         }
       },
-      "note": "The same settled zero-chip card in the dark theme \u2014 the panel's tokens resolve to the dark ground and the reading is the same.",
+      "note": "The same settled zero-chip card in the dark theme — the panel's tokens resolve to the dark ground and the reading is the same.",
       "runtime": "dev"
     },
     {
@@ -4624,7 +4624,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T21:36:54.526Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The same held card, framed on its own root so the drawing can be graded against \u00a7V: one chip per skill, each carrying its OWN Confirm / Adjust / Skip, each printing the owning extension's manifest displayName rather than a slug or a package id."
+      "note": "The same held card, framed on its own root so the drawing can be graded against §V: one chip per skill, each carrying its OWN Confirm / Adjust / Skip, each printing the owning extension's manifest displayName rather than a slug or a package id."
     },
     {
       "cell": "H2__recommendation-card__site_widget__held__dark",
@@ -4776,7 +4776,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T21:36:58.052Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The SAME cross-site card after ONE chip was decided by pressing its own Confirm in a real browser. That chip carries its mark; every other chip still shows all three affordances and is still pressable \u2014 the row is never decided as a unit."
+      "note": "The SAME cross-site card after ONE chip was decided by pressing its own Confirm in a real browser. That chip carries its mark; every other chip still shows all three affordances and is still pressable — the row is never decided as a unit."
     },
     {
       "cell": "H4__recommendation-card__site_widget__settled",
@@ -4921,7 +4921,7 @@
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-22T17:30:21.726Z",
-      "runtime": "dev-runtime \u2014 Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
+      "runtime": "dev-runtime — Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
       "note": "The SAME decided row IN ITS PAGE, uncropped and full-length, with the REVIEW GATE CARD beneath it still AWAITING its decision (Comment / Reject / Approve). This is the ordering plan section 6.4 asks for, in the only composition a real flow produces: the run-start decision settled above the after-the-fact one that is still open. The measured order is carried in this record's `order`, the gate's own reading in `gate`.",
       "rootAttributes": {
         "data-run-recommendation-chip-row": "",
@@ -5049,7 +5049,7 @@
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-22T17:30:22.839Z",
-      "runtime": "dev-runtime \u2014 Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
+      "runtime": "dev-runtime — Next.js dev server (Turbopack), CINATRA_RUNTIME_MODE=development, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres + Redis, placeholder-only environment (no model credential on this host).",
       "note": "The SAME page framing as R2, same run, in the dark palette: the decided row above the still-open review gate card.",
       "rootAttributes": {
         "data-run-recommendation-chip-row": "",
@@ -5184,7 +5184,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T21:36:54.476Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The whole embedded widget on a THIRD-PARTY page, uncropped: the turn the visitor typed, the assistant's reply, and the recommendation card HELD in the real transcript column \u2014 with the widget's OWN composer in frame beneath it. Every read behind this picture went to the broker with the widget's credential and NO cookie (see `wire`)."
+      "note": "The whole embedded widget on a THIRD-PARTY page, uncropped: the turn the visitor typed, the assistant's reply, and the recommendation card HELD in the real transcript column — with the widget's OWN composer in frame beneath it. Every read behind this picture went to the broker with the widget's credential and NO cookie (see `wire`)."
     },
     {
       "cell": "W2__recommendation-card__site_widget__held__column__dark",
@@ -5260,7 +5260,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T21:36:55.498Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The SAME held card in the SAME embedded column, in the dark palette \u2014 the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed."
+      "note": "The SAME held card in the SAME embedded column, in the dark palette — the class the shipped theme control writes, applied to the embed document. There is no theme control inside third-party chrome, so nothing else was changed."
     },
     {
       "cell": "W3__recommendation-card__site_widget__settled__column",
@@ -5336,7 +5336,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-21T21:37:08.226Z",
       "runtime": "dev-runtime: node scripts/dev-server.mjs (Next.js Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted, dedicated lane database on the verify Postgres and the verify Redis, loopback only, branch extension tree, no model credential on this host",
-      "note": "The row SETTLED IN PLACE, in the SAME embedded column and the SAME frame instance that drew it held \u2014 no reload, no second sign-in, no second turn. Each chip states what it recorded (Confirmed / Adjusted / Skipped) and there is nothing left to press. `agent_runs.status` read back beside this cell in `settleFacts`."
+      "note": "The row SETTLED IN PLACE, in the SAME embedded column and the SAME frame instance that drew it held — no reload, no second sign-in, no second turn. Each chip states what it recorded (Confirmed / Adjusted / Skipped) and there is nothing left to press. `agent_runs.status` read back beside this cell in `settleFacts`."
     },
     {
       "cell": "S3__review-card__chat_thread__pending",
@@ -5396,7 +5396,7 @@
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
       "recordedAt": "2026-08-23T10:26:44.494Z",
       "runtime": "DEV runtime - node scripts/dev-server.mjs (Next.js, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; dedicated lane database on the verify Postgres (5634) and the verify Redis (6579), loopback-only; the WayFlow runtime from this repository's own compose file; CINATRA_TEST_LLM_PROVIDER=scripted serves the agent's own model bridge; no model credential on this host",
-      "note": "The same conversation, further down: the run executed its step against the scripted model bridge, wrote its own output, and the shipped sweeper opened the review on it. The review card appears IN THE CHAT on the chat_thread host, with the DECIDED skills row still above it in the same conversation \u2014 the whole window, earlier turns included."
+      "note": "The same conversation, further down: the run executed its step against the scripted model bridge, wrote its own output, and the shipped sweeper opened the review on it. The review card appears IN THE CHAT on the chat_thread host, with the DECIDED skills row still above it in the same conversation — the whole window, earlier turns included."
     },
     {
       "cell": "S3__review-card__chat_thread__pending__dark",
@@ -6037,9 +6037,9 @@
       "declaredHost": "chat_thread",
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/fa6d5a06-e9be-495c-97e0-ecb083fec11a",
       "screenshot": "evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held.png",
-      "sha256": "cd8581871bb8d48447fefb22009381c42417febb8e64d8f93748ff9feee2d4ec",
+      "sha256": "b0232d45f7a5dc9e03fb3c6496ea694eb2c68fbe7d54a97a18f4fce6ae85c248",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -6098,20 +6098,58 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-23T23:38:38.695Z",
+      "recordedAt": "2026-08-24T21:14:56.520Z",
       "runtime": "dev-runtime",
-      "note": "The whole conversation in one browser window: the person's own turn asking for the agent, and the reply carrying the recommendation card HELD \u2014 one chip per skill, each with its own Confirm / Adjust / Skip, no heading plate and no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either \u2014 representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt).",
-      "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:14:56.285Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      },
+      "note": "The whole conversation in one browser window: the person's own turn — plain English, naming no package and carrying no inputParams — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). The chain that produced this state is real end to end, and the record's own `providerEvidence` block is where that is read: the deterministic pre-router never fired (`preRouterShortCircuits: 0`), no scripted-runtime line exists in the server log, and the hosted provider called back into this instance over its public origin.",
+      "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "dbAt": {
         "step": "T1",
         "what": "held at the recommendation hold; the run has produced NOTHING",
-        "at": "2026-08-23T23:38:37.626Z",
+        "at": "2026-08-24T21:14:55.379Z",
         "db": {
+          "evidence": {
+            "serverLog": "<the app server's own log>",
+            "at": "2026-08-24T21:14:55.322Z",
+            "preRouterShortCircuits": 0,
+            "preRouterAttempts": 0,
+            "scriptedRuntimeLines": 0,
+            "noProviderRefusals": 0,
+            "mcpDependencyFailures": 0,
+            "publicMcpCallbacks": 49,
+            "bridgeRunSelects": 3,
+            "driverScriptedProviderEnv": null,
+            "serverScriptedProviderEnv": null,
+            "serverEnvReadFrom": "process-table",
+            "serverEnvReadOfPid": "9738",
+            "serverEnvHopsFromListener": 1,
+            "serverEnvTokensSeen": 63
+          },
           "runStatus": "pending_input",
           "humanPresent": true,
           "parkCheckpoint": "recommendation",
           "parkStatus": "parked",
-          "parkCreatedAt": "2026-08-23T23:38:21.032Z",
+          "parkCreatedAt": "2026-08-24T21:14:37.431Z",
           "representationRows": 0,
           "producedOutboxRows": 0,
           "reviewGateRows": 0,
@@ -6181,9 +6219,9 @@
       "transcript": {
         "turns": 2,
         "listTop": 88,
-        "listBottom": 401,
+        "listBottom": 396,
         "listFullyInViewport": true,
-        "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe blog draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
       },
       "runSurface": null,
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
@@ -6200,9 +6238,9 @@
       "declaredHost": "chat_thread",
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/fa6d5a06-e9be-495c-97e0-ecb083fec11a",
       "screenshot": "evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held__dark.png",
-      "sha256": "ba59402f99d67fc241483f2a4fe6d548836b51615c95812d371db7adebef7617",
+      "sha256": "742263ae665bb22cfa66f5d30cb9fbf1df8cec23f8136ef3598f0ab3a9b01dc0",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -6261,20 +6299,58 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-23T23:38:39.757Z",
+      "recordedAt": "2026-08-24T21:14:57.664Z",
       "runtime": "dev-runtime",
-      "note": "The same window and the same held turn in the dark palette \u2014 chip row present, no run progress card.",
-      "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:14:57.423Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      },
+      "note": "The same window and the same held turn in the dark palette — chip row present, no run progress card, same real chain and the same `providerEvidence` counters.",
+      "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "dbAt": {
         "step": "T1",
         "what": "held at the recommendation hold; the run has produced NOTHING",
-        "at": "2026-08-23T23:38:37.626Z",
+        "at": "2026-08-24T21:14:55.379Z",
         "db": {
+          "evidence": {
+            "serverLog": "<the app server's own log>",
+            "at": "2026-08-24T21:14:55.322Z",
+            "preRouterShortCircuits": 0,
+            "preRouterAttempts": 0,
+            "scriptedRuntimeLines": 0,
+            "noProviderRefusals": 0,
+            "mcpDependencyFailures": 0,
+            "publicMcpCallbacks": 49,
+            "bridgeRunSelects": 3,
+            "driverScriptedProviderEnv": null,
+            "serverScriptedProviderEnv": null,
+            "serverEnvReadFrom": "process-table",
+            "serverEnvReadOfPid": "9738",
+            "serverEnvHopsFromListener": 1,
+            "serverEnvTokensSeen": 63
+          },
           "runStatus": "pending_input",
           "humanPresent": true,
           "parkCheckpoint": "recommendation",
           "parkStatus": "parked",
-          "parkCreatedAt": "2026-08-23T23:38:21.032Z",
+          "parkCreatedAt": "2026-08-24T21:14:37.431Z",
           "representationRows": 0,
           "producedOutboxRows": 0,
           "reviewGateRows": 0,
@@ -6344,9 +6420,9 @@
       "transcript": {
         "turns": 2,
         "listTop": 88,
-        "listBottom": 401,
+        "listBottom": 396,
         "listFullyInViewport": true,
-        "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe blog draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
       },
       "runSurface": null,
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
@@ -6363,9 +6439,9 @@
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "screenshot": "evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held.png",
-      "sha256": "a0545aa22dd2aab273db5d46e72bb00b9cc18c02bd41e4386881702bfad87737",
+      "sha256": "2f02f2b4cb77690f93a5bdbfa98bda0979671c1d33e39de2479b37481c80ed68",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -6434,20 +6510,41 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-23T23:38:56.218Z",
+      "recordedAt": "2026-08-24T21:15:13.167Z",
       "runtime": "dev-runtime",
-      "note": "The run page for the SAME run while the recommendation is still held: the two-column frame, the step rail down the LEFT with `Recommendation` at the trigger position (numbered 1, ahead of the work steps it would authorize), and the chip row as that step's own surface in the run detail on the RIGHT. Nothing is drawn inline under the rail row (the chip row is a descendant of the run-detail column, not of the rail column and not of the row), and there is no Agentic Run Progress section beside a run that has not run.",
-      "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:15:12.926Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      },
+      "note": "The run page for the SAME run — the one the model started from the conversation — while the recommendation is still held: the two-column frame, the step rail down the LEFT with `Recommendation` at the trigger position, and the chip row as that step's own surface in the run detail on the RIGHT. Nothing is drawn inline under the rail row (the chip row is a descendant of the run-detail column, not of the rail column and not of the row), and there is no Agentic Run Progress section beside a run that has not run. A held run contributes no work steps of its own, so what the rail carries here is the gate row alone — stated, not glossed.",
+      "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "dbAt": {
         "step": "T1b",
         "what": "the run page is opened while the SAME hold is still parked",
-        "at": "2026-08-23T23:38:56.088Z",
+        "at": "2026-08-24T21:15:12.922Z",
         "db": {
           "runStatus": "pending_input",
           "parkStatus": "parked",
           "selectionRows": 0,
           "representationRows": 0,
-          "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af"
         }
       },
       "rootAttributes": {
@@ -6524,6 +6621,7 @@
         "railStepSettled": "false",
         "railStepText": "1Recommendation",
         "railStepIndicatorText": "1",
+        "railStepIndicatorHasCheckGlyph": false,
         "railRowLabels": [
           "1Recommendation"
         ],
@@ -6547,9 +6645,9 @@
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "pending",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "screenshot": "evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held__dark.png",
-      "sha256": "b86fd07a712c3253421e266abaa42324a1c54ec21da5722eb1e0fd8b72bb5b68",
+      "sha256": "1029820390ce72a5dcc1be0f17e36fb9a1a2eb6d2080887fd1bab52614f2d3cf",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -6618,20 +6716,41 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-23T23:38:57.256Z",
+      "recordedAt": "2026-08-24T21:15:14.263Z",
       "runtime": "dev-runtime",
-      "note": "The same run page and the same held state in the dark palette.",
-      "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:15:14.069Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      },
+      "note": "The same run page and the same held state in the dark palette — the gate row alone on the rail, the chips in the run detail beside it.",
+      "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "dbAt": {
         "step": "T1b",
         "what": "the run page is opened while the SAME hold is still parked",
-        "at": "2026-08-23T23:38:56.088Z",
+        "at": "2026-08-24T21:15:12.922Z",
         "db": {
           "runStatus": "pending_input",
           "parkStatus": "parked",
           "selectionRows": 0,
           "representationRows": 0,
-          "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af"
         }
       },
       "rootAttributes": {
@@ -6708,6 +6827,7 @@
         "railStepSettled": "false",
         "railStepText": "1Recommendation",
         "railStepIndicatorText": "1",
+        "railStepIndicatorHasCheckGlyph": false,
         "railRowLabels": [
           "1Recommendation"
         ],
@@ -6731,9 +6851,9 @@
       "declaredHost": "chat_thread",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/fa6d5a06-e9be-495c-97e0-ecb083fec11a",
       "screenshot": "evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided.png",
-      "sha256": "e6a2155a616456e50ac547ce1cc4062380bf3cccc0feb8df82102bd6fc35b426",
+      "sha256": "6e2b52e9f9e38dbc5a6fdabd2f3364ccbc72a4525f4553c2a6dffb58239b931f",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -6797,33 +6917,54 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-23T23:39:46.673Z",
+      "recordedAt": "2026-08-24T21:16:03.557Z",
       "runtime": "dev-runtime",
-      "note": "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, each chip stating its own outcome, nothing left to press. The agentic run progress card is now on screen BELOW the settled chips \u2014 it appears with the decision, not before it \u2014 and there is NO skills button row inside it (the picker count reads ZERO). The hold reads released in the database at this instant.",
-      "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:16:03.266Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      },
+      "note": "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, each chip stating its own outcome, nothing left to press. The agentic run progress card is now on screen — it appears with the decision, not before it — and there is NO skills button row inside it (the picker count reads ZERO). The hold reads released in the database at this instant, and the sealed real provider is still the configured one (timeline row T1c).",
+      "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "dbAt": {
         "step": "T2",
         "what": "the decisions are written and the hold is RELEASED",
-        "at": "2026-08-23T23:39:46.505Z",
+        "at": "2026-08-24T21:16:03.261Z",
         "db": {
           "runStatus": "pending_approval",
           "parkStatus": "released",
-          "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+          "parkResolvedAt": "2026-08-24T21:15:37.312Z",
           "selections": [
             {
               "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
               "selection_source": "user_adjusted",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             },
             {
               "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             },
             {
               "skill_id": "@cinatra-ai/web-research-skill:web-research",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             }
           ],
           "representationRows": 0,
@@ -6870,9 +7011,9 @@
       "transcript": {
         "turns": 2,
         "listTop": 88,
-        "listBottom": 724,
+        "listBottom": 719,
         "listFullyInViewport": true,
-        "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe blog draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
       },
       "runSurface": null,
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
@@ -6889,9 +7030,9 @@
       "declaredHost": "chat_thread",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/fa6d5a06-e9be-495c-97e0-ecb083fec11a",
       "screenshot": "evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided__dark.png",
-      "sha256": "60388e9d9da96addd09cc04009edaa26160b7c1800ee7a39a86aba959f76d9ad",
+      "sha256": "b1267475a3264000764a841d5bcffbe0f6c21ba9051a0d5a9345722b2d4cfd97",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -6955,33 +7096,54 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-23T23:39:47.760Z",
+      "recordedAt": "2026-08-24T21:16:04.691Z",
       "runtime": "dev-runtime",
-      "note": "The same settled turn in the dark palette \u2014 settled chips above, run progress card below, no skills button row inside it.",
-      "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:16:04.461Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 49,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 3,
+          "bridgeRunSelects": 0
+        }
+      },
+      "note": "The same settled turn in the dark palette — settled chips, the run progress card, and no skills button row inside it.",
+      "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "dbAt": {
         "step": "T2",
         "what": "the decisions are written and the hold is RELEASED",
-        "at": "2026-08-23T23:39:46.505Z",
+        "at": "2026-08-24T21:16:03.261Z",
         "db": {
           "runStatus": "pending_approval",
           "parkStatus": "released",
-          "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+          "parkResolvedAt": "2026-08-24T21:15:37.312Z",
           "selections": [
             {
               "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
               "selection_source": "user_adjusted",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             },
             {
               "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             },
             {
               "skill_id": "@cinatra-ai/web-research-skill:web-research",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             }
           ],
           "representationRows": 0,
@@ -7028,9 +7190,9 @@
       "transcript": {
         "turns": 2,
         "listTop": 88,
-        "listBottom": 724,
+        "listBottom": 719,
         "listFullyInViewport": true,
-        "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+        "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe blog draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
       },
       "runSurface": null,
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
@@ -7047,9 +7209,9 @@
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b632737c-a18c-4c3a-acbf-1aa6c60af623",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided.png",
-      "sha256": "bcd6f6cec98c32c645f36d12c7ae89c58235ae32e07022eae0ea3956fa7d4ce5",
+      "sha256": "6d3ea8f5e23082af74bbd1bf00138a67399b726922844f6c57928e686e09cc85",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -7118,36 +7280,57 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-24T11:45:10.624Z",
+      "recordedAt": "2026-08-24T21:17:13.195Z",
       "runtime": "dev-runtime",
-      "note": "The run page for THIS run after its recommended skills were decided in the chat. What the drawing owes here is one sentence \u2014 \u201cA resolved gate stays on the rail as read-only history \u2014 its entry keeps its place and records how it was settled\u201d \u2014 and this cell is where it is read: the `Recommendation` entry is still on the rail down the LEFT, in the place it held while the question was live, drawn in its COMPLETED reading (the numeral replaced by the check in the circle, the title unhighlighted because the row is no longer the selected one). The run detail on the RIGHT is the run's own panel, not the gate's surface: a settled entry opens nothing of its own, because the decided summary it stands for is already inside that panel. The chips in it state their outcomes and nothing inside the card can be pressed \u2014 the three per-chip action counts all read 0 inside the card root. Read `runSurface` on this record for what was MEASURED of it: the entry's presence and its place in `railRowLabels`, its settled/selected attributes, its indicator's empty text and check glyph, the two instrumented columns, and where the chip row sits. The rest of the sentence above - the title's weight, the pill, the chip wording, the Error block and the controls under it - is a reading of the PIXELS, and `PLAN-WALK.md` grades it that way, on that side of the line.",
-      "runId": "b632737c-a18c-4c3a-acbf-1aa6c60af623",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:17:12.967Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 51,
+        "bridgeRunSelects": 4,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 5,
+          "bridgeRunSelects": 1
+        }
+      },
+      "note": "The same run page after the decision. What this cell OWES is the recommendation's rail entry settled as the rail's own resolved-gate history row — the check in the circle, the title unhighlighted because it is no longer the selected step — the run detail restored to the run's own panel, the settled chips in place, and nothing selectable inside the card. The record's own `runSurface` block carries the measurements every one of those four is decided on (`railStepPresent`, `railStepSettled`, `railStepSelected`, `railStepIndicatorHasCheckGlyph`, the three `[data-skill-action]` counts); PLAN-WALK.md grades it from the pixels rather than from this sentence.",
+      "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "dbAt": {
         "step": "T4",
         "what": "the run page is photographed with the question decided",
-        "at": "2026-08-24T11:45:09.573Z",
+        "at": "2026-08-24T21:17:12.964Z",
         "db": {
-          "runStatus": "failed",
+          "runStatus": "completed",
           "parkStatus": "released",
-          "parkResolvedAt": "2026-08-24T11:44:33.942Z",
+          "parkResolvedAt": "2026-08-24T21:15:37.312Z",
           "selections": [
             {
               "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
               "selection_source": "user_adjusted",
-              "selected_at": "2026-08-24T11:44:33.932Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             },
             {
               "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-24T11:44:33.932Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             },
             {
               "skill_id": "@cinatra-ai/web-research-skill:web-research",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-24T11:44:33.932Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             }
           ],
-          "url": "/agents/cinatra-ai/blog-draft-writer-agent/b632737c-a18c-4c3a-acbf-1aa6c60af623"
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af"
         }
       },
       "rootAttributes": {
@@ -7204,12 +7387,13 @@
         "railStepIndicatorHasCheckGlyph": true,
         "railRowLabels": [
           "Recommendation",
-          "Step 1"
+          "Step 1Review"
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (3)",
+          "Blog Draft Writer Agent (6)",
           "Step 1",
+          "Review",
           "Agentic Run Progress",
           "Command Palette"
         ]
@@ -7221,19 +7405,16 @@
         "height": 1700,
         "deviceScaleFactor": 2
       },
-      "pageErrors": [],
-      "picturedAttempt": "scripted-runtime",
-      "modelBehindTheStep": "the scripted runtime (#2917), reached as resolveConfiguredLlmRuntime()'s last resort after the real connection was removed",
-      "noteCorrection": "This `note` was CORRECTED after the shutter. The driver wrote it before the measurement and it said `runSurface` carried \"the measurement behind every clause\"; it does not - it measures the rail entry, the columns and the chip row's containment, not typography, status pills or chip wording. The note now says which half is measured and which half is read off the picture. Nothing measured was touched: the screenshot, its sha256 and every assertion count are exactly as recorded, and the driver's own note text is fixed so a re-run writes the corrected wording."
+      "pageErrors": []
     },
     {
       "cell": "R6__recommendation-card__run_card__decided__dark",
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b632737c-a18c-4c3a-acbf-1aa6c60af623",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided__dark.png",
-      "sha256": "0450effa0a6defb18c80e40ae9f01791593bab9f8d9af629b11321cfcb270c4d",
+      "sha256": "13e2c7623e05f79ceb5423a936e0646ef275fb4932ee7f2d7a6b63dc7d79faac",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -7302,36 +7483,57 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-24T11:45:11.688Z",
+      "recordedAt": "2026-08-24T21:17:14.293Z",
       "runtime": "dev-runtime",
-      "note": "The same decided run page, same run, same window, in the dark palette: the settled `Recommendation` entry still on the rail with its check, the run's own panel in the run detail beside it, the settled chips with nothing left to press. Same owed set as the light cell, and split the same way: the rail entry, the columns and the chip row's containment are MEASURED on this record's own `runSurface`; the palette, the pill and the chip wording are read off the picture.",
-      "runId": "b632737c-a18c-4c3a-acbf-1aa6c60af623",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-24T21:17:14.099Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 51,
+        "bridgeRunSelects": 4,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "9738",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 63,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 5,
+          "bridgeRunSelects": 1
+        }
+      },
+      "note": "The same decided run page in the dark palette. Same owed set as the light cell, graded the same way from the record's own `runSurface` block and from the pixels.",
+      "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
       "dbAt": {
         "step": "T4",
         "what": "the run page is photographed with the question decided",
-        "at": "2026-08-24T11:45:09.573Z",
+        "at": "2026-08-24T21:17:12.964Z",
         "db": {
-          "runStatus": "failed",
+          "runStatus": "completed",
           "parkStatus": "released",
-          "parkResolvedAt": "2026-08-24T11:44:33.942Z",
+          "parkResolvedAt": "2026-08-24T21:15:37.312Z",
           "selections": [
             {
               "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
               "selection_source": "user_adjusted",
-              "selected_at": "2026-08-24T11:44:33.932Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             },
             {
               "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-24T11:44:33.932Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             },
             {
               "skill_id": "@cinatra-ai/web-research-skill:web-research",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-24T11:44:33.932Z"
+              "selected_at": "2026-08-24T21:15:37.305Z"
             }
           ],
-          "url": "/agents/cinatra-ai/blog-draft-writer-agent/b632737c-a18c-4c3a-acbf-1aa6c60af623"
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af"
         }
       },
       "rootAttributes": {
@@ -7388,12 +7590,13 @@
         "railStepIndicatorHasCheckGlyph": true,
         "railRowLabels": [
           "Recommendation",
-          "Step 1"
+          "Step 1Review"
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (3)",
+          "Blog Draft Writer Agent (6)",
           "Step 1",
+          "Review",
           "Agentic Run Progress",
           "Command Palette"
         ]
@@ -7405,10 +7608,7 @@
         "height": 1700,
         "deviceScaleFactor": 2
       },
-      "pageErrors": [],
-      "picturedAttempt": "scripted-runtime",
-      "modelBehindTheStep": "the scripted runtime (#2917), reached as resolveConfiguredLlmRuntime()'s last resort after the real connection was removed",
-      "noteCorrection": "This `note` was CORRECTED after the shutter. The driver wrote it before the measurement and it said `runSurface` carried \"the measurement behind every clause\"; it does not - it measures the rail entry, the columns and the chip row's containment, not typography, status pills or chip wording. The note now says which half is measured and which half is read off the picture. Nothing measured was touched: the screenshot, its sha256 and every assertion count are exactly as recorded, and the driver's own note text is fixed so a re-run writes the corrected wording."
+      "pageErrors": []
     }
   ]
 }
