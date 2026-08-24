@@ -39,9 +39,11 @@
 //     `readServerScriptedProviderEnv`), and its asymmetry is stated there — a
 //     non-null answer is proof of presence and aborts; a null answer read one hop
 //     above the listening process is CONSISTENT with absence, not a proof of it.
-//     What rules the scripted runtime out for the AGENT'S STEP is a different
-//     fact: `resolveConfiguredLlmRuntime` reaches it only as a last resort, after
-//     every configured candidate has failed to resolve.
+//     What ARGUES against the scripted runtime for the AGENT'S STEP is a
+//     different fact: `resolveConfiguredLlmRuntime` reaches it only as a last
+//     resort, after every configured candidate has failed to resolve. That is an
+//     argument, not a proof — the provider reads take the sealed ROW, not
+//     `resolveProviderAdapter` at the instant of the call.
 //
 // WHAT IS MEASURED ABOUT THAT, rather than asserted: the driver reads the app
 // server's OWN log across the whole sequence and records, on every cell,
@@ -186,9 +188,10 @@ const DECISION_ORDER = ["confirm", "adjust", "skip", "confirm"];
  * either. Nothing in the platform tells the model what to do with this sentence.
  * The agent is named the way a person names it: by the display name on its card.
  *
- * So the ONLY thing in this system that can turn this turn into a run is the
- * model, calling the platform's own `agent_run` through the public MCP toolbox.
- * That is the whole point of the re-shoot.
+ * So nothing in the platform can turn this turn into a run: it was started by a
+ * model calling the platform's own `agent_run` through the MCP toolbox. WHICH
+ * model that was is a separate question these records do not settle, and the
+ * boundary is written out in README.md.
  *
  * WHY THE IDEA IS SPELLED OUT, since it looks like the thing the withdrawn round
  * did. It is not. The withdrawn turn's JSON mattered because that turn ALSO named
@@ -372,9 +375,11 @@ function readProviderEvidence() {
  * It is recorded with `readFrom`, the pid actually read, the hop count and the
  * number of environment tokens seen, so a reader can weigh it rather than take
  * it. What the evidence directory leans on for the AGENT STEP is a different and
- * decisive fact: `resolveConfiguredLlmRuntime` reaches the scripted runtime only
- * as a LAST RESORT and never with a configured provider, and rows `T1c`/`T3a`
- * read that provider back on both sides of the step.
+ * strongest available reading, and it is an ARGUMENT rather than a proof:
+ * `resolveConfiguredLlmRuntime` reaches the scripted runtime only as a LAST
+ * RESORT, after every configured candidate failed to resolve, and rows `T1c`/`T3a`
+ * read the sealed provider ROW back on both sides of the step — the row, not
+ * `resolveProviderAdapter` at the instant of the call.
  *
  * HOW THE PROCESS IS FOUND, and why it is not simply a pid handed in: the server
  * whose environment matters is the one ANSWERING THIS DRIVER'S REQUESTS, so it is
@@ -1040,8 +1045,8 @@ try {
 
   const t1 = await runRows(state.runId);
   await stamp("T1", "held at the recommendation hold; the run has produced NOTHING", {
-    // The turn's own evidence, read before the first shutter: the pre-router
-    // never fired, so the model is what turned this sentence into a run.
+    // The turn's own evidence, read before the first shutter. The pre-router's
+    // counters are 0, so the platform did not dispatch this run from the turn.
     evidence: readProviderEvidence(),
     runStatus: t1.run?.status,
     humanPresent: t1.run?.human_present,
@@ -1068,7 +1073,7 @@ try {
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). Neither of the two things the withdrawn round did is done here, and the record's own `providerEvidence` block is what that is read from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the app server's process chain carries no scripted-provider switch (`serverScriptedProviderEnv: null`, taken one hop above the listening process — presence would be proof, absence there is consistent rather than conclusive), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
+      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). Neither of the two things the withdrawn round did is done here, and the record's own `providerEvidence` block is what that is read from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the scripted-provider switch was not found in the app server's process chain (`serverScriptedProviderEnv: null`, taken ONE HOP ABOVE the listening process — a non-null answer would be proof of presence, and a null answer there is consistent with absence rather than a proof of it, because a child can be given a variable its parent never had), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
   });
   await setTheme("dark");
   await shoot("S1__recommendation-card__chat_thread__held__dark", {
@@ -1125,8 +1130,8 @@ try {
   // The 09 sequence removed the real `openai_connection` row at exactly this
   // point, because the provider could not fetch this instance's toolbox and the
   // step's model call had to be served by the scripted runtime instead. THAT
-  // STEP IS GONE. Nothing is cleared, nothing is swapped, and the same sealed
-  // row the run was created under serves every model call still ahead of it.
+  // STEP IS GONE. Nothing here clears the row and nothing swaps it; what it
+  // SERVED is not something this driver can measure, and the documents say so.
   //
   // What replaces it is a READ, through the shipped reader, recorded as its own
   // timeline row: the row is still there, and it is still a real key rather than
@@ -1199,7 +1204,7 @@ try {
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, each chip stating its own outcome, nothing left to press. The agentic run progress card is now on screen — it appears with the decision, not before it — and there is NO skills button row inside it (the picker count reads ZERO). The hold reads released in the database at this instant, and the sealed real provider is still the configured one (timeline row T1c).",
+      "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, each chip stating its own outcome, nothing left to press. The agentic run progress card is now on screen — it appears with the decision, not before it — and there is NO skills button row inside it (the picker count reads ZERO). The hold reads released in the database at this instant. No step of this sequence clears the sealed provider row; the reads that bracket the agent's step are timeline rows T1c and T3a, and neither of them is taken at this shutter.",
   });
   await setTheme("dark");
   await shoot("S2__recommendation-card__chat_thread__decided__dark", {

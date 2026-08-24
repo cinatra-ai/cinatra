@@ -1,55 +1,55 @@
 == agent_runs ==
 -[ RECORD 1 ]-+-------------------------------------
-id            | 06c64824-9899-4c2b-9e25-159fc8a60c2a
+id            | fee52d80-a808-4ca8-b9b8-26f19866d571
 status        | completed
 human_present | t
 source_type   | agent_builder
 run_by        | 50395d2d-1d98-4583-b33a-6e04aab476d1
 org_id        | 197ba74d-3ac5-4647-bcde-7b662323f524
 template_id   | 6909ff9e-b0ad-4408-9b2d-ddf2d1e67a6b
-created_at    | 2026-08-24 22:45:12.393195+00
-completed_at  | 2026-08-24 22:47:02.872+00
+created_at    | 2026-08-24 23:05:31.703315+00
+completed_at  | 2026-08-24 23:07:27.22+00
 error         | (none)
 
 == lifecycle_continuation_park ==
    checkpoint   |  status  |          created_at           |          resolved_at          
 ----------------+----------+-------------------------------+-------------------------------
- recommendation | released | 2026-08-24 22:45:13.070372+00 | 2026-08-24 22:46:12.893984+00
+ recommendation | released | 2026-08-24 23:05:32.411688+00 | 2026-08-24 23:06:32.328141+00
 (1 row)
 
 == run_selected_skill_revisions ==
                        skill_id                        |   selection_source    |          selected_at          
 -------------------------------------------------------+-----------------------+-------------------------------
- @cinatra-ai/blog-post-matcher-skill:blog-post-matcher | user_adjusted         | 2026-08-24 22:46:12.888288+00
- @cinatra-ai/blog-writing-skill:blog-writing           | recommended_confirmed | 2026-08-24 22:46:12.888288+00
- @cinatra-ai/web-research-skill:web-research           | recommended_confirmed | 2026-08-24 22:46:12.888288+00
+ @cinatra-ai/blog-post-matcher-skill:blog-post-matcher | user_adjusted         | 2026-08-24 23:06:32.322452+00
+ @cinatra-ai/blog-writing-skill:blog-writing           | recommended_confirmed | 2026-08-24 23:06:32.322452+00
+ @cinatra-ai/web-research-skill:web-research           | recommended_confirmed | 2026-08-24 23:06:32.322452+00
 (3 rows)
 
 == representation ==
 -[ RECORD 1 ]-------------------------------------
-id          | e3797d93-0cbb-4c01-bafc-b70752a4a3fe
-artifact_id | 767946ec-887c-46ec-82dc-4dffbafd56d5
-resource_id | f390894d-b14e-4b49-a873-5e876cac0481
+id          | d589061e-7cad-4bfd-b243-1ed069876600
+artifact_id | b3127f54-7462-41e9-8604-55861eb1ec8a
+resource_id | 29eeb87b-0b38-4ade-9e44-be848fa9f728
 revision    | 1
 form        | file
-created_at  | 2026-08-24 22:47:02.792292+00
+created_at  | 2026-08-24 23:07:27.13298+00
 
 == resource the run produced ==
                   id                  | kind |     mime      | size_bytes 
 --------------------------------------+------+---------------+------------
- f390894d-b14e-4b49-a873-5e876cac0481 | blob | text/markdown |       4775
+ 29eeb87b-0b38-4ade-9e44-be848fa9f728 | blob | text/markdown |       5387
 (1 row)
 
 == artifact_produced_outbox ==
-                             event_id                             |        emitter         |  origin_kind   |          created_at           |         processed_at          
-------------------------------------------------------------------+------------------------+----------------+-------------------------------+-------------------------------
- 688f9cb320554c28639665a49e5695f6d37051dcf9ab54a42b4db8b7d9648a71 | createSemanticArtifact | agent_produced | 2026-08-24 22:47:02.792292+00 | 2026-08-24 22:47:15.540295+00
+                             event_id                             |        emitter         |  origin_kind   |          created_at          |         processed_at          
+------------------------------------------------------------------+------------------------+----------------+------------------------------+-------------------------------
+ 6b3fa1351d5e4c48af1cfce803a655465b642e1b944298657c9716c46725c2e7 | createSemanticArtifact | agent_produced | 2026-08-24 23:07:27.13298+00 | 2026-08-24 23:07:54.266891+00
 (1 row)
 
 == artifact_review_gates ==
                   id                  |                                  review_task_id                                   | status  |          created_at           
 --------------------------------------+-----------------------------------------------------------------------------------+---------+-------------------------------
- 03a06309-337d-4d9d-b528-38fef4845c67 | lifecycle-review:688f9cb320554c28639665a49e5695f6d37051dcf9ab54a42b4db8b7d9648a71 | pending | 2026-08-24 22:47:15.342413+00
+ f3dc1399-5539-41a1-bffc-8a47f225ed2d | lifecycle-review:6b3fa1351d5e4c48af1cfce803a655465b642e1b944298657c9716c46725c2e7 | pending | 2026-08-24 23:07:54.170954+00
 (1 row)
 
 == template ==

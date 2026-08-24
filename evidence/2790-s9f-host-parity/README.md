@@ -1164,8 +1164,9 @@ states they measure had two legs that never reached a model:
    provider row was REMOVED mid-sequence, because this instance had no public MCP
    ingress and the provider's toolbox fetch answered `424 Failed Dependency`.
 
-Neither is done here, and `drivers/12-real-chain-sequence.mjs` is written so that
-what stands in each place is checkable rather than promised:
+Neither is done in this round, and `drivers/12-real-chain-sequence.mjs` is written
+so that what stands in each place is checkable rather than promised — including
+what it does NOT settle:
 
 - **The turn names no package token**, in either form the pre-router reads.
   `detectExplicitDispatchPackage` needs BOTH a verb and a package reference, so it
@@ -1206,7 +1207,7 @@ what stands in each place is checkable rather than promised:
   (`/configuration/development?tab=tunnel`, `publicBaseUrlSource: "manual"`), the
   app was restarted so the OAuth audience allowlist follows it, and the driver
   proves the ingress answers inside the app's own 2500 ms reachability budget
-  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 242 ms).
+  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 341 ms).
 
 ## What the counters are, and what they are not
 
@@ -1220,7 +1221,7 @@ the safe direction for something whose only power is to stop the shoot.
 
 `publicMcpCallbacks` is the POSITIVE one: `POST /api/mcp` hits. The raw count is
 cumulative over the whole lane session, so what carries anything is
-`deltaSinceStart`, which rises **0 → 3 → 5** across the eight cells while
+`deltaSinceStart`, which rises **0 → 6 → 8** across the eight cells while
 `bridgeRunSelects` rises **0 → 1**. The driver ABORTS a shutter if that delta has
 not moved, and aborts if any screen has. Its LIMIT is stated as well: the request
 log does not record which caller made the POST, and this branch's scripted
@@ -1230,7 +1231,7 @@ who exercised it.
 
 ## And this time the run finished
 
-`agent_runs.status = completed`, `error` empty, one `representation` (a 4775-byte
+`agent_runs.status = completed`, `error` empty, one `representation` (a 5387-byte
 `text/markdown` blob), one processed `artifact_produced_outbox` event and one
 `artifact_review_gates` row. `RUN-READBACK.md` reads all of it out of the database
 and states, claim by claim, which field supports it and what that field does not

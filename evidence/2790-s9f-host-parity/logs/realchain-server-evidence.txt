@@ -15,9 +15,18 @@
  POST /api/mcp 200 in 118ms (next.js: 3ms, proxy.ts: 46ms, application-code: 70ms)
  POST /api/mcp 200 in 33ms (next.js: 2ms, proxy.ts: 1239µs, application-code: 29ms)
  POST /api/mcp 200 in 831ms (next.js: 2ms, proxy.ts: 1274µs, application-code: 827ms)
-[wayflow] run=06c64824-9899-4c2b-9e25-159fc8a60c2a task=6ad0f631-27c2-4834-8126-b9da6c8da8a5 state=input-required status={"state":"input-required","timestamp":"2026-08-24T22:46:14.728993"} artifacts=null
-[human-gate-park] run=06c64824-9899-4c2b-9e25-159fc8a60c2a parked on WayFlow gate wayflow-6ad0f631-27c2-4834-8126-b9da6c8da8a5
 [llm-bridge-run-select] served-by=run_token run=06c64824-9899-4c2b-9e25-159fc8a60c2a org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
  POST /api/mcp 200 in 89ms (next.js: 5ms, proxy.ts: 1682µs, application-code: 82ms)
  POST /api/mcp 200 in 54ms (next.js: 2ms, proxy.ts: 1448µs, application-code: 50ms)
-[wayflow] run=06c64824-9899-4c2b-9e25-159fc8a60c2a task=2b976512-f001-46ab-9bea-4387b71d78f2 state=completed status={"state":"completed","timestamp":"2026-08-24T22:47:01.490256"} artifacts=null
+ POST /api/mcp 200 in 121ms (next.js: 3ms, proxy.ts: 44ms, application-code: 75ms)
+ POST /api/mcp 200 in 29ms (next.js: 2ms, proxy.ts: 1507µs, application-code: 25ms)
+ POST /api/mcp 200 in 32ms (next.js: 2ms, proxy.ts: 1548µs, application-code: 28ms)
+ POST /api/mcp 200 in 69ms (next.js: 3ms, proxy.ts: 1810µs, application-code: 64ms)
+ POST /api/mcp 200 in 35ms (next.js: 2ms, proxy.ts: 1580µs, application-code: 31ms)
+ POST /api/mcp 200 in 886ms (next.js: 2ms, proxy.ts: 1515µs, application-code: 882ms)
+[wayflow] run=fee52d80-a808-4ca8-b9b8-26f19866d571 task=403e1772-c6f4-4e3a-afe9-f89445e77a61 state=input-required status={"state":"input-required","timestamp":"2026-08-24T23:06:33.884329"} artifacts=null
+[human-gate-park] run=fee52d80-a808-4ca8-b9b8-26f19866d571 parked on WayFlow gate wayflow-403e1772-c6f4-4e3a-afe9-f89445e77a61
+[llm-bridge-run-select] served-by=run_token run=fee52d80-a808-4ca8-b9b8-26f19866d571 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 97ms (next.js: 4ms, proxy.ts: 1390µs, application-code: 91ms)
+ POST /api/mcp 200 in 53ms (next.js: 2ms, proxy.ts: 1730µs, application-code: 49ms)
+[wayflow] run=fee52d80-a808-4ca8-b9b8-26f19866d571 task=a77e0b6d-3158-470f-887c-b8ff9e057e50 state=completed status={"state":"completed","timestamp":"2026-08-24T23:07:25.829502"} artifacts=null

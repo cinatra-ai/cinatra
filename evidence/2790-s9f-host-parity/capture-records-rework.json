@@ -4,9 +4,9 @@
     "declaredHost": "chat_thread",
     "declaredKind": "recommendation_hold",
     "declaredState": "pending",
-    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/b3aab76d-e5a1-478d-8664-a64c39e4bbda",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ac0cfcf-4650-474e-be16-b31dba528af0",
     "screenshot": "evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held.png",
-    "sha256": "0f0bd740ff8d3842a8e42fbb14c5e51a1423a33d1cbbfef7a500c2caab5a7e92",
+    "sha256": "5378b45d8aad684f8fcd848e64aed8434669ecaefb8985660bce8ac8917d3d51",
     "assertions": [
       {
         "selector": "[data-conversation-list]",
@@ -65,18 +65,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:45:32.623Z",
+    "recordedAt": "2026-08-24T23:05:52.071Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:45:32.328Z",
+      "at": "2026-08-24T23:05:51.832Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 15,
-      "bridgeRunSelects": 2,
+      "publicMcpCallbacks": 23,
+      "bridgeRunSelects": 3,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -84,27 +84,27 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 3,
+        "publicMcpCallbacks": 6,
         "bridgeRunSelects": 0
       }
     },
-    "note": "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). Neither of the two things the withdrawn round did is done here, and the record's own `providerEvidence` block is what that is read from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the app server's process chain carries no scripted-provider switch (`serverScriptedProviderEnv: null`, taken one hop above the listening process — presence would be proof, absence there is consistent rather than conclusive), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
-    "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "note": "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). Neither of the two things the withdrawn round did is done here, and the record's own `providerEvidence` block is what that is read from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the scripted-provider switch was not found in the app server's process chain (`serverScriptedProviderEnv: null`, taken ONE HOP ABOVE the listening process — a non-null answer would be proof of presence, and a null answer there is consistent with absence rather than a proof of it, because a child can be given a variable its parent never had), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
+    "runId": "fee52d80-a808-4ca8-b9b8-26f19866d571",
     "dbAt": {
       "step": "T1",
       "what": "held at the recommendation hold; the run has produced NOTHING",
-      "at": "2026-08-24T22:45:31.425Z",
+      "at": "2026-08-24T23:05:50.929Z",
       "db": {
         "evidence": {
           "serverLog": "<the app server's own log>",
-          "at": "2026-08-24T22:45:31.355Z",
+          "at": "2026-08-24T23:05:50.864Z",
           "preRouterShortCircuits": 0,
           "preRouterAttempts": 0,
           "scriptedRuntimeLines": 0,
           "noProviderRefusals": 0,
           "mcpDependencyFailures": 0,
-          "publicMcpCallbacks": 15,
-          "bridgeRunSelects": 2,
+          "publicMcpCallbacks": 23,
+          "bridgeRunSelects": 3,
           "driverScriptedProviderEnv": null,
           "serverScriptedProviderEnv": null,
           "serverEnvReadFrom": "process-table",
@@ -116,7 +116,7 @@
         "humanPresent": true,
         "parkCheckpoint": "recommendation",
         "parkStatus": "parked",
-        "parkCreatedAt": "2026-08-24T22:45:13.070Z",
+        "parkCreatedAt": "2026-08-24T23:05:32.411Z",
         "representationRows": 0,
         "producedOutboxRows": 0,
         "reviewGateRows": 0,
@@ -188,7 +188,7 @@
       "listTop": 88,
       "listBottom": 396,
       "listFullyInViewport": true,
-      "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
+      "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
     },
     "runSurface": null,
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
@@ -205,9 +205,9 @@
     "declaredHost": "chat_thread",
     "declaredKind": "recommendation_hold",
     "declaredState": "pending",
-    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/b3aab76d-e5a1-478d-8664-a64c39e4bbda",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ac0cfcf-4650-474e-be16-b31dba528af0",
     "screenshot": "evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held__dark.png",
-    "sha256": "c01afa3554538f0e6b17d28fa12635254d81101a6656862fef55fa16d5a9de5b",
+    "sha256": "51f1baea66f1a0d39474a8c36e67c724d4d3a854ed9a0f135c2968c58c570933",
     "assertions": [
       {
         "selector": "[data-conversation-list]",
@@ -266,18 +266,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:45:33.765Z",
+    "recordedAt": "2026-08-24T23:05:53.200Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:45:33.526Z",
+      "at": "2026-08-24T23:05:52.974Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 15,
-      "bridgeRunSelects": 2,
+      "publicMcpCallbacks": 23,
+      "bridgeRunSelects": 3,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -285,27 +285,27 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 3,
+        "publicMcpCallbacks": 6,
         "bridgeRunSelects": 0
       }
     },
     "note": "The same window and the same held turn in the dark palette — chip row present, no run progress card, and the same `providerEvidence` block read with the same stated limits.",
-    "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "runId": "fee52d80-a808-4ca8-b9b8-26f19866d571",
     "dbAt": {
       "step": "T1",
       "what": "held at the recommendation hold; the run has produced NOTHING",
-      "at": "2026-08-24T22:45:31.425Z",
+      "at": "2026-08-24T23:05:50.929Z",
       "db": {
         "evidence": {
           "serverLog": "<the app server's own log>",
-          "at": "2026-08-24T22:45:31.355Z",
+          "at": "2026-08-24T23:05:50.864Z",
           "preRouterShortCircuits": 0,
           "preRouterAttempts": 0,
           "scriptedRuntimeLines": 0,
           "noProviderRefusals": 0,
           "mcpDependencyFailures": 0,
-          "publicMcpCallbacks": 15,
-          "bridgeRunSelects": 2,
+          "publicMcpCallbacks": 23,
+          "bridgeRunSelects": 3,
           "driverScriptedProviderEnv": null,
           "serverScriptedProviderEnv": null,
           "serverEnvReadFrom": "process-table",
@@ -317,7 +317,7 @@
         "humanPresent": true,
         "parkCheckpoint": "recommendation",
         "parkStatus": "parked",
-        "parkCreatedAt": "2026-08-24T22:45:13.070Z",
+        "parkCreatedAt": "2026-08-24T23:05:32.411Z",
         "representationRows": 0,
         "producedOutboxRows": 0,
         "reviewGateRows": 0,
@@ -389,7 +389,7 @@
       "listTop": 88,
       "listBottom": 396,
       "listFullyInViewport": true,
-      "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
+      "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip"
     },
     "runSurface": null,
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
@@ -406,9 +406,9 @@
     "declaredHost": "run_card",
     "declaredKind": "recommendation_hold",
     "declaredState": "pending",
-    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/fee52d80-a808-4ca8-b9b8-26f19866d571",
     "screenshot": "evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held.png",
-    "sha256": "e26c09d5222dcc52380865e4d2d18785e9633054af5ec841aae4b8c35e06659e",
+    "sha256": "c6212ef306156a50173318199005a1d0714ab478181efcde847991413871b50f",
     "assertions": [
       {
         "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -477,18 +477,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:45:49.252Z",
+    "recordedAt": "2026-08-24T23:06:08.720Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:45:49.031Z",
+      "at": "2026-08-24T23:06:08.502Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 15,
-      "bridgeRunSelects": 2,
+      "publicMcpCallbacks": 23,
+      "bridgeRunSelects": 3,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -496,22 +496,22 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 3,
+        "publicMcpCallbacks": 6,
         "bridgeRunSelects": 0
       }
     },
     "note": "The run page for the SAME run — the one the model started from the conversation — while the recommendation is still held: the two-column frame, the step rail down the LEFT with `Recommendation` at the trigger position, and the chip row as that step's own surface in the run detail on the RIGHT. Nothing is drawn inline under the rail row (the chip row is a descendant of the run-detail column, not of the rail column and not of the row), and there is no Agentic Run Progress section beside a run that has not run. A held run contributes no work steps of its own, so what the rail carries here is the gate row alone — stated, not glossed.",
-    "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "runId": "fee52d80-a808-4ca8-b9b8-26f19866d571",
     "dbAt": {
       "step": "T1b",
       "what": "the run page is opened while the SAME hold is still parked",
-      "at": "2026-08-24T22:45:49.029Z",
+      "at": "2026-08-24T23:06:08.499Z",
       "db": {
         "runStatus": "pending_input",
         "parkStatus": "parked",
         "selectionRows": 0,
         "representationRows": 0,
-        "url": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a"
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/fee52d80-a808-4ca8-b9b8-26f19866d571"
       }
     },
     "rootAttributes": {
@@ -612,9 +612,9 @@
     "declaredHost": "run_card",
     "declaredKind": "recommendation_hold",
     "declaredState": "pending",
-    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/fee52d80-a808-4ca8-b9b8-26f19866d571",
     "screenshot": "evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held__dark.png",
-    "sha256": "c16476b9ac674fac5408e356ea0d4a608532365e4fcb83f2d578f54f0a5da84b",
+    "sha256": "1df5e3bf83a6f96a23776dea4fe56f8cd927bf9843ad8227d4257f67d0640cfe",
     "assertions": [
       {
         "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -683,18 +683,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:45:50.338Z",
+    "recordedAt": "2026-08-24T23:06:09.930Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:45:50.155Z",
+      "at": "2026-08-24T23:06:09.622Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 15,
-      "bridgeRunSelects": 2,
+      "publicMcpCallbacks": 23,
+      "bridgeRunSelects": 3,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -702,22 +702,22 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 3,
+        "publicMcpCallbacks": 6,
         "bridgeRunSelects": 0
       }
     },
     "note": "The same run page and the same held state in the dark palette — the gate row alone on the rail, the chips in the run detail beside it.",
-    "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "runId": "fee52d80-a808-4ca8-b9b8-26f19866d571",
     "dbAt": {
       "step": "T1b",
       "what": "the run page is opened while the SAME hold is still parked",
-      "at": "2026-08-24T22:45:49.029Z",
+      "at": "2026-08-24T23:06:08.499Z",
       "db": {
         "runStatus": "pending_input",
         "parkStatus": "parked",
         "selectionRows": 0,
         "representationRows": 0,
-        "url": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a"
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/fee52d80-a808-4ca8-b9b8-26f19866d571"
       }
     },
     "rootAttributes": {
@@ -818,9 +818,9 @@
     "declaredHost": "chat_thread",
     "declaredKind": "recommendation_hold",
     "declaredState": "decided",
-    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/b3aab76d-e5a1-478d-8664-a64c39e4bbda",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ac0cfcf-4650-474e-be16-b31dba528af0",
     "screenshot": "evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided.png",
-    "sha256": "03bc4a2525d24c3edecf0037898f92f573d7db86d3674714ea3d387da860a20a",
+    "sha256": "e973bfc7cede16423ad0079cb9243e509baf583aed97deceec932c95fd522ad3",
     "assertions": [
       {
         "selector": "[data-conversation-list]",
@@ -884,18 +884,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:46:39.199Z",
+    "recordedAt": "2026-08-24T23:06:58.564Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:46:38.782Z",
+      "at": "2026-08-24T23:06:58.249Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 15,
-      "bridgeRunSelects": 2,
+      "publicMcpCallbacks": 23,
+      "bridgeRunSelects": 3,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -903,35 +903,35 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 3,
+        "publicMcpCallbacks": 6,
         "bridgeRunSelects": 0
       }
     },
-    "note": "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, each chip stating its own outcome, nothing left to press. The agentic run progress card is now on screen — it appears with the decision, not before it — and there is NO skills button row inside it (the picker count reads ZERO). The hold reads released in the database at this instant, and the sealed real provider is still the configured one (timeline row T1c).",
-    "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "note": "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, each chip stating its own outcome, nothing left to press. The agentic run progress card is now on screen — it appears with the decision, not before it — and there is NO skills button row inside it (the picker count reads ZERO). The hold reads released in the database at this instant. No step of this sequence clears the sealed provider row; the reads that bracket the agent's step are timeline rows T1c and T3a, and neither of them is taken at this shutter.",
+    "runId": "fee52d80-a808-4ca8-b9b8-26f19866d571",
     "dbAt": {
       "step": "T2",
       "what": "the decisions are written and the hold is RELEASED",
-      "at": "2026-08-24T22:46:38.779Z",
+      "at": "2026-08-24T23:06:58.246Z",
       "db": {
         "runStatus": "pending_approval",
         "parkStatus": "released",
-        "parkResolvedAt": "2026-08-24T22:46:12.893Z",
+        "parkResolvedAt": "2026-08-24T23:06:32.328Z",
         "selections": [
           {
             "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
             "selection_source": "user_adjusted",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           },
           {
             "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           },
           {
             "skill_id": "@cinatra-ai/web-research-skill:web-research",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           }
         ],
         "representationRows": 0,
@@ -980,7 +980,7 @@
       "listTop": 88,
       "listBottom": 719,
       "listFullyInViewport": true,
-      "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
+      "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
     },
     "runSurface": null,
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
@@ -997,9 +997,9 @@
     "declaredHost": "chat_thread",
     "declaredKind": "recommendation_hold",
     "declaredState": "decided",
-    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/b3aab76d-e5a1-478d-8664-a64c39e4bbda",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/0ac0cfcf-4650-474e-be16-b31dba528af0",
     "screenshot": "evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided__dark.png",
-    "sha256": "825f6b726b0d0f6ccf472b1631f633d575b93d2ab1024b5ead97a137da6fe5de",
+    "sha256": "79ec6a7a34646bdfc5dd92145930e5c9901b82ce0f7191079419cc830c8f3d31",
     "assertions": [
       {
         "selector": "[data-conversation-list]",
@@ -1063,18 +1063,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:46:40.408Z",
+    "recordedAt": "2026-08-24T23:06:59.728Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:46:40.107Z",
+      "at": "2026-08-24T23:06:59.466Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 15,
-      "bridgeRunSelects": 2,
+      "publicMcpCallbacks": 23,
+      "bridgeRunSelects": 3,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -1082,35 +1082,35 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 3,
+        "publicMcpCallbacks": 6,
         "bridgeRunSelects": 0
       }
     },
     "note": "The same settled turn in the dark palette — settled chips, the run progress card, and no skills button row inside it.",
-    "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "runId": "fee52d80-a808-4ca8-b9b8-26f19866d571",
     "dbAt": {
       "step": "T2",
       "what": "the decisions are written and the hold is RELEASED",
-      "at": "2026-08-24T22:46:38.779Z",
+      "at": "2026-08-24T23:06:58.246Z",
       "db": {
         "runStatus": "pending_approval",
         "parkStatus": "released",
-        "parkResolvedAt": "2026-08-24T22:46:12.893Z",
+        "parkResolvedAt": "2026-08-24T23:06:32.328Z",
         "selections": [
           {
             "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
             "selection_source": "user_adjusted",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           },
           {
             "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           },
           {
             "skill_id": "@cinatra-ai/web-research-skill:web-research",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           }
         ],
         "representationRows": 0,
@@ -1159,7 +1159,7 @@
       "listTop": 88,
       "listBottom": 719,
       "listFullyInViewport": true,
-      "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe draft run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
+      "text": "S9f R6 Capture Owner\nSR\nPlease have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}\nCinatra\nThe run is waiting for your Confirm or Skip on the recommendation card in this conversation.\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page"
     },
     "runSurface": null,
     "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
@@ -1176,9 +1176,9 @@
     "declaredHost": "run_card",
     "declaredKind": "recommendation_hold",
     "declaredState": "decided",
-    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/fee52d80-a808-4ca8-b9b8-26f19866d571",
     "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided.png",
-    "sha256": "43ee7949203d72f3c98639ef8353a30799794607ccaf1976d023055910da7791",
+    "sha256": "b910ee500c66b0c652d011eacf736e63f3228426075a8dbf387728d3435a5009",
     "assertions": [
       {
         "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1247,18 +1247,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:47:36.886Z",
+    "recordedAt": "2026-08-24T23:08:07.470Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:47:36.653Z",
+      "at": "2026-08-24T23:08:07.195Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 17,
-      "bridgeRunSelects": 3,
+      "publicMcpCallbacks": 25,
+      "bridgeRunSelects": 4,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -1266,38 +1266,38 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 5,
+        "publicMcpCallbacks": 8,
         "bridgeRunSelects": 1
       }
     },
     "note": "The same run page after the decision. What this cell OWES is the recommendation's rail entry settled as the rail's own resolved-gate history row — the check in the circle, the title unhighlighted because it is no longer the selected step — the run detail restored to the run's own panel, the settled chips in place, and nothing selectable inside the card. The record's own `runSurface` block carries the measurements every one of those four is decided on (`railStepPresent`, `railStepSettled`, `railStepSelected`, `railStepIndicatorHasCheckGlyph`, the three `[data-skill-action]` counts); PLAN-WALK.md grades it from the pixels rather than from this sentence.",
-    "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "runId": "fee52d80-a808-4ca8-b9b8-26f19866d571",
     "dbAt": {
       "step": "T4",
       "what": "the run page is photographed with the question decided",
-      "at": "2026-08-24T22:47:36.651Z",
+      "at": "2026-08-24T23:08:07.192Z",
       "db": {
         "runStatus": "completed",
         "parkStatus": "released",
-        "parkResolvedAt": "2026-08-24T22:46:12.893Z",
+        "parkResolvedAt": "2026-08-24T23:06:32.328Z",
         "selections": [
           {
             "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
             "selection_source": "user_adjusted",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           },
           {
             "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           },
           {
             "skill_id": "@cinatra-ai/web-research-skill:web-research",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           }
         ],
-        "url": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a"
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/fee52d80-a808-4ca8-b9b8-26f19866d571"
       }
     },
     "rootAttributes": {
@@ -1354,13 +1354,13 @@
       "railStepIndicatorHasCheckGlyph": true,
       "railRowLabels": [
         "Recommendation",
-        "Step 1Review"
+        "Step 1Review pending policycore-defaultawaiting review orche"
       ],
       "agenticRunProgressHeadings": 1,
       "headings": [
-        "Blog Draft Writer Agent (3)",
+        "Blog Draft Writer Agent (4)",
         "Step 1",
-        "Review",
+        "Review pending policycore-defaultawaiting review orchestration",
         "Agentic Run Progress",
         "Command Palette"
       ]
@@ -1379,9 +1379,9 @@
     "declaredHost": "run_card",
     "declaredKind": "recommendation_hold",
     "declaredState": "decided",
-    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/fee52d80-a808-4ca8-b9b8-26f19866d571",
     "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided__dark.png",
-    "sha256": "ce94a92ff976d76b75ec93c611a03e8dbf1d564e3c7f29dc177e7c93e973b1b8",
+    "sha256": "b1d411c4a26f25f74fd55b0ca99b8a86c3b51a83f5e36ec50d43738caa64463f",
     "assertions": [
       {
         "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -1450,18 +1450,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:47:37.985Z",
+    "recordedAt": "2026-08-24T23:08:08.581Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:47:37.790Z",
+      "at": "2026-08-24T23:08:08.374Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 17,
-      "bridgeRunSelects": 3,
+      "publicMcpCallbacks": 25,
+      "bridgeRunSelects": 4,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -1469,38 +1469,38 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 5,
+        "publicMcpCallbacks": 8,
         "bridgeRunSelects": 1
       }
     },
     "note": "The same decided run page in the dark palette. Same owed set as the light cell, graded the same way from the record's own `runSurface` block and from the pixels.",
-    "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
+    "runId": "fee52d80-a808-4ca8-b9b8-26f19866d571",
     "dbAt": {
       "step": "T4",
       "what": "the run page is photographed with the question decided",
-      "at": "2026-08-24T22:47:36.651Z",
+      "at": "2026-08-24T23:08:07.192Z",
       "db": {
         "runStatus": "completed",
         "parkStatus": "released",
-        "parkResolvedAt": "2026-08-24T22:46:12.893Z",
+        "parkResolvedAt": "2026-08-24T23:06:32.328Z",
         "selections": [
           {
             "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
             "selection_source": "user_adjusted",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           },
           {
             "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           },
           {
             "skill_id": "@cinatra-ai/web-research-skill:web-research",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:46:12.888Z"
+            "selected_at": "2026-08-24T23:06:32.322Z"
           }
         ],
-        "url": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a"
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/fee52d80-a808-4ca8-b9b8-26f19866d571"
       }
     },
     "rootAttributes": {
@@ -1557,13 +1557,13 @@
       "railStepIndicatorHasCheckGlyph": true,
       "railRowLabels": [
         "Recommendation",
-        "Step 1Review"
+        "Step 1Review pending policycore-defaultawaiting review orche"
       ],
       "agenticRunProgressHeadings": 1,
       "headings": [
-        "Blog Draft Writer Agent (3)",
+        "Blog Draft Writer Agent (4)",
         "Step 1",
-        "Review",
+        "Review pending policycore-defaultawaiting review orchestration",
         "Agentic Run Progress",
         "Command Palette"
       ]
