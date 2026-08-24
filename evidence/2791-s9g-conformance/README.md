@@ -299,3 +299,17 @@ reason. Each was updated with its reason inline, never relaxed:
   checked rather than taken on trust.
 - `drivers/` — `walk.config.ts`, `walk.test.ts` (the shipped-writer walk),
   `lane-setup.mjs`, `seed-chat-thread.mjs`, `capture.mjs` (the recorder).
+
+## Label note — G1, G2, G3, G5, G6
+
+These five pictures show the audit lane under its former label, `Core analysis`
+(the `CORE ANALYSIS · SUGGESTIONS` block in G1–G3; the audit card's heading and the
+run rail entry in G5–G6). The shipped label is `Audit` everywhere a person reads it
+(cinatra#2945). The shipped paths do not produce these states: the automatic gate
+hands the suggestion lane the identity-only projector, so a real gate normally
+writes no suggestion snapshot (cinatra#2950), and the blog repair step that would
+write the audit card's verification record, `repairBlogPostDraft`, exists but is
+never called by the product (cinatra#2951). A record of a state the product does
+not produce is not evidence, so these five stand as taken; a later record taken
+through those paths supersedes each of them. The "Shows" lines above describe the
+pictures as they are.
