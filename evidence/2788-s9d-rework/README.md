@@ -1,5 +1,72 @@
 # S9d rework — evidence (cinatra#2788, PR #2939)
 
+## Round 4 — the two cells that carried a FAIL, re-shot on the fixed card
+
+Round 3 reported three honest FAILs. Two of them were conformance failures in the
+settled branch of the one schedule renderer, and both are now fixed:
+
+1. **C2** — an ADJUSTED-then-confirmed card drew a supersede line over its rows
+   ("This card was adjusted before it was set — open the run to see the schedule
+   that was set."), so it declined the sentence it exists for: §7.2, "the same
+   card, with the same option rows, **shows the schedule as it stands** — no
+   label, no summary box". The card now re-opens on the settled rows and says
+   nothing over them. `superseded` stays a resolver answer and stays on the wire —
+   Confirm still refuses on the same comparison — it simply stopped being chrome
+   the plan does not define.
+2. **C6** — a FIRED one-off drew a disabled **Save changes**. §7.2: "once a
+   one-off has fired it cannot be changed", and Save changes is defined for the
+   changeable state only. A fired one-off now draws **no floor at all**: no Save
+   changes, no Cancel schedule, no Run now, and no status line standing in for
+   them. The rows simply stand, read-only, on the server's schedule.
+
+So **C2 and C6 were re-shot, and nothing else was**. They were walked on their own
+new run through the SAME recipe `capture-walk.json` carries: the schedule stated
+in the chat composer, the rows ADJUSTED on the card before Confirm (the
+deterministic producer proposes a daily recurrence; the person chose *Schedule for
+later* and put `2026-08-24 09:34` / `UTC` in), Confirm, and then the one-off left
+to come due on its own tick — `released_at 2026-08-24 09:34:00.088+00`, 88 ms
+after the second the person stated. Nothing pressed *Run now*: the walk plan has
+no such action, no context in this round was on a run page, and the runtime logged
+the release job opening the gate for this run by name (`RUN-READBACK.md` quotes
+it — the stamp alone would not say WHO released, because *Run now* writes the same
+one). The agent then
+executed on the REAL model: `usage_events` records `provider openai`,
+`model gpt-5.5-2026-04-23` at `09:34:04.876+00`, and the run reached `completed`
+with no error five seconds after the fire.
+
+**C1, C3, C5, C7 and C8 keep round 3's pixels**, because the fix touches only the
+settled branch of the renderer: the pending card, the run page's schedule step and
+the two page controls did not move. One consequence is stated rather than left to
+be noticed: C1 and C2 are no longer two pictures of ONE conversation — C1 is round
+3's thread and C2/C6 are round 4's — so the "one card, in one place, before and
+after one press" reading is carried by C2's own record (one card instance, one
+thread URL, Confirm gone from the card root) and by the walk's own actions — one
+context, one page, one press between the two steps — instead of by a picture pair.
+What a reader can check in the committed pixels is narrower and is stated as such:
+C2 shows ONE settled card in that conversation with Confirm gone and Save changes
+in its place.
+`RUN-READBACK.md` and `TIMELINE.md` carry both runs, and the index count is
+unchanged: four records replaced where they stood, 58 in, 58 out.
+
+Two things about round 4's environment are worth stating plainly, because round 3
+had to report the opposite of the second one:
+
+- **The chat turn is still the deterministic bridge**, and it is visible in the
+  pictures in the assistant's own words ("CINATRA_UAT_OK: deterministic chat
+  reply"). A real-model chat turn hands the tool catalogue to the provider as one
+  provider-hosted MCP reference and needs a PUBLICLY reachable MCP URL, which this
+  machine does not have. The bridge stands in for ONE decision — which tool the
+  turn calls; the producer, the proposal token, the org boundary and the card are
+  all the shipped path.
+- **The agent's own execution used the REAL model, and no fallback was needed.**
+  The agent runtime calls back into the shipped `/api/llm-bridge`, which resolved
+  the instance's own sealed `openai_connection` row (`POST /api/llm-bridge 200`,
+  served by run token for this run) — the 424 the toolbox load can raise without a
+  public MCP URL did not occur, so nothing was removed on the clock and the
+  scripted runtime never served this run. The row was written before the walk
+  through the shipped sealed writer, from a credential held only in the process
+  environment: never printed, never logged, never written to any file here.
+
 ## Round 3 — what the maintainer rejected, and what the proof set is now
 
 Round 2's run-page cell (C3) showed a composition the plan does not contain: the
@@ -45,25 +112,28 @@ that does and does not buy.
 | C5 | expired (extra) | chat | still visible, still editable, **Confirm** alone on the floor | record, light + dark |
 | C4 | — | review page | this run's real artifact review | DROPPED — see `TIMELINE.md` |
 
-Fourteen pictures. Twelve of them are ONE run — the run the schedule armed and
-the scheduler released — and the two C7 pictures are the fresh, never-armed run
-that stage can only exist on: an armed run's setup scheduling step is behind it.
-`RUN-READBACK.md` gives both rows. `PLAN-WALK.md` carries the graded verdict for
-each picture, written after looking at the pixels; **three cells carry a FAIL on
-a clause and say so** (C2, C6, C7).
+Fourteen pictures, from three runs, and every one of them says which.
+**Round 3** walked one run for eight of them (C1, C3, C5, C8) and a second, fresh
+never-armed run for the two C7 pictures — that stage can only exist there, since an
+armed run's setup scheduling step is behind it. **Round 4** re-walked C2 and C6 on
+a third run, for the reason at the top of this file. `RUN-READBACK.md` gives every
+row. `PLAN-WALK.md` carries the graded verdict for each picture, written after
+looking at the pixels; **one cell still carries a FAIL on a clause and says so**
+(C7, against the named drawing — a standing gap in the setup wizard, not a
+regression this PR introduces).
 
 | file | sha256 | filed as |
 |---|---|---|
 | `C1__chat-first-shown__light.png` | `1b8e9b4998ee646ec228affac81bd4140ee44a613eb9a7a161e8565335560060` | record `S9d-C1__schedule-card__chat_thread__pending` |
 | `C1__chat-first-shown__dark.png` | `8573b88f438348488390b10a97b2871f0523910832a8938077b704758a40a4bc` | record `S9d-C1__schedule-card__chat_thread__pending__dark` |
-| `C2__chat-configured__light.png` | `c3b024963654b5e3c47074f529716648a30bfd6a139fffe40309257aaec63ee8` | record `S9d-C2__schedule-card__chat_thread__decided` |
-| `C2__chat-configured__dark.png` | `81823e5c91936307efc8977c30ec41e11cf1356784460b004ce651b37cabc908` | record `S9d-C2__schedule-card__chat_thread__decided__dark` |
+| `C2__chat-configured__light.png` | `c97d18ccbbca2b329ff7c39dd693c0d13c89f9fb857c5f548b833c4a1a2c622f` | record `S9d-C2__schedule-card__chat_thread__decided` |
+| `C2__chat-configured__dark.png` | `ac4f9dcdc852ca3dd821ae933b7017d1569dbec3ae80fd7161640c3f0100f7cb` | record `S9d-C2__schedule-card__chat_thread__decided__dark` |
 | `C5__chat-expired__light.png` | `59c45ffb4f73437d2d10d684161db83825c04043910092de68a6e374ef0430c5` | record `S9d-C5__schedule-card__chat_thread__pending__expired` |
 | `C5__chat-expired__dark.png` | `8345fbef5ff93b0e5eb51370a654ade0c8fb54d6d32989e66f46593cb6059671` | record `S9d-C5__schedule-card__chat_thread__pending__expired__dark` |
 | `C3__run-page-configured__light.png` | `eb796975fa197e99b7b40b76096d407bf71fad18148973ce5007b499e00bcf1a` | record `S9d-C3__schedule-card__run_card__decided` |
 | `C3__run-page-configured__dark.png` | `5c40280524311292cd08a35a792cd2706c2ba1bcf4596ce567fbbf729c96f3d1` | record `S9d-C3__schedule-card__run_card__decided__dark` |
-| `C6__chat-ran__light.png` | `061057980105cd7987bc6d6353954ae0322eb4728cbab5915b94d03c86fb24fc` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire` |
-| `C6__chat-ran__dark.png` | `f6d490078f923d361278c9761e112c934fbe11f8f507ca0679e6ecde2e1209de` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire__dark` |
+| `C6__chat-ran__light.png` | `bb347f2bcbb19b585005bfadac15588100e4b7352ab7d6af39350f2223d105a9` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire` |
+| `C6__chat-ran__dark.png` | `170e3f70ddc20a443bcfb7d6484271140b7c6953a9b5d3c8f4038256e5021b43` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire__dark` |
 | `C7__run-setup-scheduling-step__light.png` | `d1a21a6ba61245c74ee16c317da3645700f5728d7f89465146af84d1b6b98b46` | page control (light) — no index record |
 | `C7__run-setup-scheduling-step__dark.png` | `4765eff1216e9d314bf13394fb6d726e803f548017112d052c6041791a626686` | page control (dark) — no index record |
 | `C8__run-detail-after-fire__light.png` | `55e772fcb20ae68b117dd0ce674cc525ab1c87a270e20cf878dd94d78c4b8c58` | page control (light) — no index record |
@@ -76,10 +146,10 @@ describes pixels the product no longer draws is worse than no record. Nothing
 was edited in place and no record was hand-written — the index is
 recorder-measured only, and the next walk writes the new ones.
 
-C1/C2 keep their round 2 records for now. The next walk **re-shoots** them,
-because the stated schedule is now a ONE-OFF (the "ran" stage is the card after a
-one-off has fired), so their pictures will change even though their cell names do
-not.
+C1 and C2 were both re-shot after that, C1 by round 3 (the stated schedule
+became a ONE-OFF, so its picture changed even though its cell name did not) and
+C2 again by round 4, on the fixed settled card. Every C1/C2 record in the index is
+a measurement of the pixels the file holds today.
 
 ## The two cells this index cannot hold — filed as PAGE CONTROLS
 
@@ -142,11 +212,13 @@ notice.
    That is the plan's own sentence ("until you confirm, you change the schedule
    directly on the card — the rows are never locked behind a separate step"), so
    the path is a shipped one and the round exercises that sentence instead of
-   only photographing it. Its one visible consequence is the line C2 and C6 draw
-   above the rows — the shipped `SUPERSEDED_SCHEDULE_COPY`, "This card was
-   adjusted before it was set — open the run to see the schedule that was set."
-   It is reported as a deviation against C2's plan sentence rather than papered
-   over.
+   only photographing it. Its one visible consequence in round 3 was the line C2
+   and C6 drew above the rows — the shipped `SUPERSEDED_SCHEDULE_COPY`, "This card
+   was adjusted before it was set — open the run to see the schedule that was
+   set." Round 3 reported it as a FAIL against C2's plan sentence rather than
+   papering over it; **that line is now gone** (see "Round 4" at the top), and
+   round 4's C2/C6 are the same adjusted-then-confirmed path photographed on the
+   fixed card.
 
 **The agent's own execution used the REAL model.** That half needs no public
 ingress: the agent runtime calls back into the shipped `/api/llm-bridge`, which
@@ -155,9 +227,15 @@ before the walk through the shipped writer the setup wizard uses, from a
 credential held only in the process environment — never printed, never logged,
 never written to any file produced here, never committed.
 
-**Nothing pressed *Run now*.** The one-off fired on the shipped delayed job at
+**Nothing pressed *Run now*, in either round.** Round 3's one-off was released at
 `released_at 2026-08-23 21:22:00.163+00`, 163 ms after the second the person
-stated and seventeen minutes after the row was written.
+stated and seventeen minutes after the row was written; round 4's at
+`released_at 2026-08-24 09:34:00.088+00`, 88 ms after its own stated second and
+seven minutes after its row was written. The stamp itself proves RELEASE and not
+WHO released — *Run now* writes the same one — so what each round can say for it
+is set out in `RUN-READBACK.md`: round 3 has its walk's own actions and the
+timing; round 4 has those plus the runtime's `[trigger-release]` lines naming the
+release job for its run.
 
 ## Red first
 
@@ -168,20 +246,23 @@ touched and failed against `2ba505904` for the stated reasons.
 ## What is still owed on this round
 
 - Nothing on the cells: all fourteen pictures are taken, graded and filed. The
-  index holds ten new records (C1/C2/C5 replaced in place, C3 new); C7 and C8 are
-  page controls with no record, by the reasoning above.
+  index holds 58 records. Round 3 wrote ten of them (C1/C2/C5 replaced in place,
+  C3 new); round 4 then replaced four of those ten again where they stood — C2 and
+  C6, light and dark — so six of round 3's ten still stand as round 3 wrote them;
+  C7 and C8 are page controls with no record, by the reasoning above.
 - C4 stays dropped. See `TIMELINE.md`.
 - The maintainer's answer on whether the page-control filing is the one they
   want for C7 / C8 is still the open question. It is a shape this round proposes:
   a measured sidecar with no record and no gate behind it. The alternatives are
   to widen the record contract so a card-less screen can hold one, or to accept
   that these two stages are photographed but not indexed.
-- Three cells FAIL a clause and are reported that way rather than softened: C2
-  ("shows the schedule as it stands" — the card draws the shipped supersede line
-  instead), C6 ("Save changes no longer offered" — the control is drawn, disabled)
-  and C7 (the named drawing's two-column frame — the setup wizard's page has
-  neither column). None of the three is a regression this PR introduces; each is
-  a standing gap between a sentence and the shipped screen.
+- ONE cell still FAILs a clause and is reported that way rather than softened:
+  C7 (the named drawing's two-column frame — the setup wizard's page has neither
+  column). It is not a regression this PR introduces; it is a standing gap between
+  a drawing and the shipped setup wizard, and the slice does not touch that screen.
+  The other two FAILs round 3 reported — C2's supersede line and C6's disabled
+  **Save changes** — were conformance failures in the settled branch of the
+  renderer, and both are fixed and re-shot; see "Round 4" at the top.
 
 ## Owed elsewhere: six cells the Audit relabel left with old pixels
 

@@ -7,10 +7,28 @@ grep-verified against that file rather than retyped from memory.
 
 Every `DRAWING>` line names the ratified drawing the cell is graded against, and
 the `DRAWING-CHECK>` line under it states what that drawing requires, what the
-picture shows, and the verdict. **Round 3's captures are taken**: fourteen
-pictures on one real run, and every `shows` and every `verdict` below was written
-after looking at the pixels of the named file, never before and never from a
-selector count.
+picture shows, and the verdict. **The captures are taken**, and every `shows` and
+every `verdict` below was written after looking at the pixels of the named file,
+never before and never from a selector count.
+
+**ROUND 4 RE-SHOT C2 AND C6, and nothing else.** Round 3 recorded a FAIL on each
+of them — C2 drew a supersede line over its rows, C6 drew a disabled **Save
+changes** — and both are conformance failures the settled branch of the renderer
+has since been fixed for. So the two cells were walked again, on their own new
+run through the same recipe: the schedule stated in the chat, the rows ADJUSTED
+on the card (the producer proposes a daily recurrence; the person chose *Schedule
+for later* and put the instant in), Confirm, then the one-off left to come due on
+its own tick. C1, C3, C5, C7 and C8 keep round 3's pixels: the fix touches only
+the settled branch, so the pending card, the run page's step and the two page
+controls did not move. C1 and C2 are therefore no longer two pictures of one
+conversation — C1 is round 3's thread, C2 and C6 are round 4's — and the
+"one card, in one place, before and after one press" reading is carried by C2's
+own record (one card instance, one thread URL, Confirm gone) rather than by a
+picture pair, and by the walk's own actions (one context, one page, one press
+between the two steps). What the committed pixels alone show is narrower, and is
+written that way in the cell below: ONE settled card in that conversation, Confirm
+gone, Save changes in its place. `RUN-READBACK.md` and `TIMELINE.md` carry every
+run.
 
 The cell readings, once written, are the RECORDER's and not a reader's summary:
 every count comes from the record the picture is filed with in
@@ -38,37 +56,47 @@ CELL: C2 — configured, not run, in the conversation
   requires: the SAME card in the SAME place after Confirm: the same rows, Save changes, no status label, no summary box
   DRAWING> design-schedule-card.png
   DRAWING-CHECK> requires: one card, not two — the same rows in the same place, with the
-    settled floor · shows: `C2__chat-configured__light.png` / `…__dark.png` — the SAME
-    conversation, the SAME single card in the SAME place, the same three rows with
-    Schedule for later still chosen and still reading `23.08.2026, 21:22` / `UTC`; the
-    floor now carries **Save changes** where Confirm stood; NO status label, NO summary
-    box, NO second card. One line the plan sentence does not name is drawn at the top:
-    "This card was adjusted before it was set — open the run to see the schedule that
-    was set." That is the shipped `SUPERSEDED_SCHEDULE_COPY`, drawn because the person
-    adjusted the rows before confirming — see README.md, "What the environment forced",
-    for why this round had to take the adjusted path · verdict: **FAIL against the
-    clause "shows the schedule as it stands": the card explicitly declines to show it
-    and sends the reader to the run. PASS on every other clause of the sentence — one
-    card not two, the same rows in the same place, no label, no summary box, Save
-    changes on the floor. The failing clause is the sentence's own, so the cell is
-    reported FAILING, not passing with a note.**
+    settled floor · shows: `C2__chat-configured__light.png` / `…__dark.png` — the
+    navigation, the person's turn, the assistant's turn, then ONE card: "When should
+    this run?" over the three rows, **Schedule for later** chosen and alone owning
+    Run at (`24.08.2026, 09:34`) and Timezone (`UTC`), both fields in the ENABLED
+    style; "Estimated run duration / Unavailable."; and the floor carrying **Save
+    changes** where Confirm stood, drawn dimmed because nothing has been edited yet —
+    which is the changeable state's own reading, not a withdrawal. **NOTHING is drawn
+    above the rows**: no supersede line, no status label, no summary box, no second
+    card. Dark is the same reading on the dark ground, every label and both field
+    values legible · verdict: **PASS**, including on the clause round 3 recorded a
+    FAIL against. §7.2 asks the confirmed card to show "the schedule as it stands",
+    and it does: the rows read back the schedule that was armed — `agent_run_triggers`
+    `scheduled_at 2026-08-24 09:34:00+00`, `timezone UTC`, `cron_expression` NULL. The
+    one-off in this picture was ADJUSTED on the card before Confirm (the producer
+    proposes a daily recurrence; the person chose Schedule for later and stated the
+    instant), so this is exactly the adjusted-then-confirmed reading the sentence
+    governs, and the card no longer sends the reader to the run to find out what was
+    set.
 
 CELL: C6 — ran, in the conversation
   (light `S9d-C6__schedule-card__chat_thread__decided__after-fire`, dark `…__dark`)
-  requires: the same card in the same conversation after the one-off fired, with Save changes no longer offered
+  requires: the same card in the same conversation after the one-off fired — the rows read-only, showing what ran, and Save changes no longer offered
   DRAWING> design-schedule-card.png
   DRAWING-CHECK> requires: the same card, still in its place in the thread, reading the
     schedule it armed · shows: `C6__chat-ran__light.png` / `…__dark.png` — the SAME card
-    in the SAME conversation after the one-off fired at 21:22:00.163Z on its own. A
-    second line has joined the first: "Released — every held step is eligible now, so
-    there is nothing left to cancel." Every option row is greyed and inert, Run at and
-    Timezone are greyed, and **Save changes** is drawn in the disabled style. Dark reads
-    the same · verdict: **FAIL against this cell's own words, "Save changes no longer
-    offered": the control is still DRAWN, in the disabled style. PASS against the plan
-    sentence the cell exists for — "once a one-off has fired it cannot be changed" —
-    which the shipped card serves by greying the rows and the control rather than
-    removing them.** The pixels show disabled STYLING; nothing here measured whether a
-    click is refused, and no such claim is made.
+    in the SAME conversation (same thread URL as C2, one card instance) after the
+    one-off was released at `2026-08-24 09:34:00.088+00` on its own tick — by the
+    release job, which the runtime named in its own log; see `RUN-READBACK.md` for why
+    the stamp alone does not say who released. The same three rows
+    in the same place as C2 photographed them, Schedule for later still chosen, and Run at `24.08.2026, 09:34`
+    / Timezone `UTC` now drawn in the READ-ONLY style — greyed, no caret, the schedule
+    the server holds rather than any local draft. "Estimated run duration /
+    Unavailable." is the LAST thing in the card: there is **no floor at all** — no Save
+    changes, no Cancel schedule, no Run now, not even the rule that used to divide
+    them off — and no status line standing in for them; round 3's "Released — every
+    held step is eligible now…" is gone with the controls it explained. Dark reads the
+    same · verdict: **PASS** on both readings, where round 3 recorded a FAIL. The plan
+    sentence ("once a one-off has fired it cannot be changed") holds, and this cell's
+    own words ("Save changes no longer offered") now hold too: the pixels show the
+    control ABSENT, not drawn-and-disabled. Nothing here measures whether a click would
+    be refused, and no such claim is made — there is no control left to click.
 
 CELL: C7 — first shown, on the run page
   (NO CELL IN THE WALK, and no record: this screen draws no lifecycle card, so the
@@ -182,13 +210,19 @@ PLAN> The schedule step on the run page and the review page shows the same form 
     summary box, no status label, and the word "Armed" appears nowhere in the window.
 
 PLAN> No second card is drawn for the confirmed state: the same card, with the same option rows, shows the schedule as it stands — no label, no summary box; to change it you return to the card, change the rows and press **Save changes**, which re-arms the trigger.
-    C2 is the same card in the same thread as C1 — same URL, one instance, the
-    same option rows — with Save changes where Confirm stood and no second card
-    beside it. VERDICT: **FAILING on one clause.** C1 and C2 are one card in one place:
-    same thread, one instance, the same three rows, Confirm replaced by Save changes —
-    every clause of the sentence holds EXCEPT "shows the schedule as it stands", which
-    the card declines to do, drawing the shipped supersede line instead. See the C2
-    cell above and README.md, "What the environment forced".
+    C2 is the card in its thread after one press — one instance, the same option
+    rows, Save changes where Confirm stood, and no second card beside it. The
+    "after one press" half is the walk's (one context, one page, the click between
+    two steps) and the record's (one card instance, one thread URL, Confirm absent
+    from the card root); the picture itself shows the settled reading, not the
+    transition.
+    VERDICT: **PASS on every clause.** Round 3 recorded a FAIL here — an
+    adjusted-then-confirmed card drew the shipped supersede line over its rows, so it
+    declined to show the schedule as it stands and sent the reader to the run instead.
+    The renderer's settled branch no longer draws it: `superseded` stays a resolver
+    answer (Confirm still refuses on the same comparison) and stops being chrome, and
+    the card re-opens on the settled rows with nothing over them. C2 is that picture,
+    on an adjusted-then-confirmed one-off, in both themes.
 
 PLAN> The option rows are editable as they stand: until you confirm, you change the schedule directly on the card — the rows are never locked behind a separate step. The floor is **Confirm**
     C1 draws the three rows with the chosen one owning its fields, and the floor
@@ -202,14 +236,18 @@ PLAN> The option rows are editable as they stand: until you confirm, you change 
 PLAN> once a one-off has fired it cannot be changed; a change to a recurring schedule applies to its future runs.
     C6 is the conversation's card after the one-off fired on the
     schedule's own tick: the same card, and Save changes no longer offered.
-    VERDICT: **PASS on the plan sentence, FAILING on this cell's own wording.** The
-    one-off fired on ITS OWN at `released_at 2026-08-23 21:22:00.163+00` — the second
-    the person stated, no press involved — and C6 is the conversation's card
-    afterwards: every row in the disabled style, "Released — every held step is
-    eligible now, so there is nothing left to cancel.", and Save changes STILL DRAWN,
-    disabled. So the schedule cannot be changed (the plan's sentence holds) but the
-    control is not withdrawn (this cell asked for "no longer offered"). Reported as a
-    FAIL on that wording rather than reinterpreted after the fact.
+    VERDICT: **PASS on the plan sentence and on this cell's own wording.** The one-off
+    was released at `released_at 2026-08-24 09:34:00.088+00` — 88 ms after the second
+    the person stated — by the release job, which the runtime named in its own log
+    (`RUN-READBACK.md` sets out why the stamp alone does not say who released, since
+    *Run now* writes the same one). C6 is the conversation's card
+    afterwards: the rows read-only on the server's schedule, and NO floor at all. Round
+    3 recorded a FAIL here, because the fired card still drew Save changes in the
+    disabled style; **Save changes** is defined for the changeable state only, so a
+    fired one-off now withdraws the whole floor rather than offering a control that
+    exists to refuse. Firing is read from `released` — the stamp the release job
+    writes — never from a clock, so a one-off whose moment has passed while its gate is
+    still shut keeps the floor it always had.
 
 PLAN> **To actually set a schedule you use the run's scheduling step on the run page:** the question **"When should this run?"** over three option rows — **Run right after setup**, **Schedule for later** (Run at, Timezone) and **Recurring** (Repeat every N week(s); On Sun–Sat; At HH:MM; Timezone) — then **Estimated run duration**, then **Continue**.
     §7.4 "Today", step 4 — the run page's FIRST-SHOWN stage, which this slice does

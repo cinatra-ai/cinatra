@@ -1,7 +1,13 @@
 {
   "slice": "2788-s9d-rework",
   "note": [
-    "THE S9d REAL-PATH WALK, executable (cinatra#2788, PR #2939 round 3).",
+    "THE S9d REAL-PATH WALK, executable (cinatra#2788, PR #2939).",
+    "",
+    "ROUND 4 RE-WALKED C2 AND C6 ONLY, on a run of their own, after the settled branch of the",
+    "card was fixed (no supersede line on a settled card; no floor at all on a FIRED one-off).",
+    "So the proof set now spans THREE runs, and README.md says which cell belongs to which.",
+    "Everything below is the walk as it stands and is driven step by step; a pass that re-shoots",
+    "part of the set drives the steps it needs and declares cells only for the cells it re-shoots.",
     "",
     "ROUND 3 REDRAWS THE PROOF SET, because round 2 photographed a composition the plan does not",
     "contain: the configuration opened INSIDE the rail column, under its own row, with the agentic",
@@ -47,13 +53,26 @@
     "that the schedule came DUE — so no step here presses 'Run now', and no step releases the trigger.",
     "Confirm mints the run; the run page's schedule step is C3; the shipped delayed job releases the",
     "one-off at the time the person stated; and the SAME conversation, reopened afterwards, is C6.",
-    "`after-fire` therefore waits for `[data-conformance-id=\"schedule-released\"]` and not merely for a",
-    "settled card — a settled card exists the moment Confirm is pressed, so waiting on that alone would",
-    "let a continuous run photograph C6 before the schedule was ever due.",
+    "`after-fire` CANNOT WAIT ON THE FLOOR OR ON A RELEASED LINE, because a fired one-off draws",
+    "neither: plan (A) §7.2 — \"once a one-off has fired it cannot be changed\" — so the card withdraws",
+    "Save changes, Cancel schedule and Run now together with the status line that used to explain them.",
+    "A settled card exists the moment Confirm is pressed, so waiting on that alone would let a run",
+    "photograph C6 before the schedule was ever due. TWO THINGS therefore gate the cell, and they are",
+    "named rather than implied: the LANE polls `agent_run_triggers.released_at` in the database and",
+    "drives this step only once the release job has stamped it — the fire is a database fact, not a",
+    "selector — and the step then waits for the READ-ONLY rows the fired card draws",
+    "(`[data-field=\"schedule-run-at\"][disabled]`), which is the painted half of the same reading.",
     "",
-    "C7 is the only cell on another run, and it has to be: an armed run's setup scheduling step is",
-    "behind it, and only a fresh run still shows it. So the proof set is ONE run for every stage the",
-    "schedule passes through, plus that one fresh run for the first-shown stage on the run page.",
+    "AND THE SELECTOR ALONE DOES NOT ESTABLISH FIRING — said here so nobody reads it as the",
+    "proof. `canSaveInstalled` refuses a save for THREE different reasons — released, arming,",
+    "or a one-off whose instant is no longer in the future — so the read-only rows also stand",
+    "on an arming card and on a past-due card whose gate has not opened yet. Only",
+    "`released_at` separates those, and this file cannot poll a database: the lane does, and a",
+    "cell driven without that gate would be honestly framed and wrongly timed.",
+    "",
+    "C7 was round 3's only cell on another run, and it has to be: an armed run's setup scheduling",
+    "step is behind it, and only a fresh run still shows it. Round 3's proof set was therefore ONE",
+    "run for every stage the schedule passes through, plus that fresh run; round 4 then added its own.",
     "",
     "TWO PASSES, because the clock is real. `PROPOSAL_TTL_SECONDS = 1800`: the expired reading is",
     "reached by letting the shipped window actually run out, not by moving a clock. Pass 1 starts",
@@ -297,7 +316,7 @@
     {
       "id": "confirm",
       "context": "light",
-      "why": "THE PRESS, and STAGE 2 in the conversation: one press, on the shipped control, on the card the previous step photographed — which is what makes C2 the same card in the same place rather than another card that looks settled.",
+      "why": "THE PRESS, and STAGE 2 in the conversation: one press, on the shipped control, on the card the PREVIOUS STEP drove — the same context, the same page, no navigation in between — which is what makes C2 the same card in the same place rather than another card that looks settled. That identity is carried by the walk's own actions and by C2's record (one card instance on one thread URL, Confirm gone from the card root); it is not read off a before/after picture pair unless the same pass also shoots C1.",
       "actions": [
         {
           "action": "click",
@@ -450,7 +469,7 @@
     {
       "id": "after-fire",
       "context": "light",
-      "why": "STAGE 3 in the conversation (C6): the SAME card in the SAME thread once the one-off has FIRED ON ITS OWN at the time the person stated — the schedule cannot be changed any more, and the card says so in its own controls. Nothing in this walk releases it: the shipped delayed job does, and the lane waits for it.",
+      "why": "STAGE 3 in the conversation (C6): the SAME card in the SAME thread once the one-off has FIRED ON ITS OWN at the time the person stated — the schedule cannot be changed any more, and the card withdraws every control rather than drawing one that only refuses. Nothing in this walk releases it: the shipped delayed job does, the lane waits for `released_at` in the database before this step is driven, and the step waits for the read-only rows the fired card draws. The card itself is scrolled into the middle of the window, because a fired card has no floor to centre on.",
       "actions": [
         {
           "action": "goto",
@@ -462,11 +481,11 @@
         },
         {
           "action": "waitForSelector",
-          "selector": "[data-conformance-id=\"schedule-released\"]"
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"] [data-field=\"schedule-run-at\"][disabled]"
         },
         {
           "action": "scrollIntoView",
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-card\"]",
           "block": "center"
         }
       ],
@@ -498,11 +517,11 @@
         },
         {
           "action": "waitForSelector",
-          "selector": "[data-conformance-id=\"schedule-released\"]"
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"] [data-field=\"schedule-run-at\"][disabled]"
         },
         {
           "action": "scrollIntoView",
-          "selector": "[data-conformance-id=\"schedule-proposal-floor\"]",
+          "selector": "[data-conformance-id=\"schedule-proposal-card\"]",
           "block": "center"
         }
       ],

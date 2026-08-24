@@ -4671,11 +4671,11 @@
     {
       "cell": "S9d-C2__schedule-card__chat_thread__decided",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7d5c87b2-84e4-487a-a9f8-103df32f78d1",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__light.png",
-      "sha256": "c3b024963654b5e3c47074f529716648a30bfd6a139fffe40309257aaec63ee8",
-      "capturedAt": "2026-08-23T21:04:45.400Z",
+      "sha256": "c97d18ccbbca2b329ff7c39dd693c0d13c89f9fb857c5f548b833c4a1a2c622f",
+      "capturedAt": "2026-08-24T09:26:33.542Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4751,11 +4751,11 @@
     {
       "cell": "S9d-C2__schedule-card__chat_thread__decided__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7d5c87b2-84e4-487a-a9f8-103df32f78d1",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__dark.png",
-      "sha256": "81823e5c91936307efc8977c30ec41e11cf1356784460b004ce651b37cabc908",
-      "capturedAt": "2026-08-23T21:04:47.234Z",
+      "sha256": "ac4f9dcdc852ca3dd821ae933b7017d1569dbec3ae80fd7161640c3f0100f7cb",
+      "capturedAt": "2026-08-24T09:26:35.217Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -5117,11 +5117,11 @@
     {
       "cell": "S9d-C6__schedule-card__chat_thread__decided__after-fire",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7d5c87b2-84e4-487a-a9f8-103df32f78d1",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__light.png",
-      "sha256": "061057980105cd7987bc6d6353954ae0322eb4728cbab5915b94d03c86fb24fc",
-      "capturedAt": "2026-08-23T21:22:55.440Z",
+      "sha256": "bb347f2bcbb19b585005bfadac15588100e4b7352ab7d6af39350f2223d105a9",
+      "capturedAt": "2026-08-24T09:34:54.120Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -5197,11 +5197,11 @@
     {
       "cell": "S9d-C6__schedule-card__chat_thread__decided__after-fire__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7d5c87b2-84e4-487a-a9f8-103df32f78d1",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__dark.png",
-      "sha256": "f6d490078f923d361278c9761e112c934fbe11f8f507ca0679e6ecde2e1209de",
-      "capturedAt": "2026-08-23T21:22:57.229Z",
+      "sha256": "170e3f70ddc20a443bcfb7d6484271140b7c6953a9b5d3c8f4038256e5021b43",
+      "capturedAt": "2026-08-24T09:34:55.953Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
