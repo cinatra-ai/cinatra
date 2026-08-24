@@ -46,7 +46,7 @@
       "migrationMechanism": "logical-dump-restore",
       "appManagedSchema": false,
       "upstreamDictated": false,
-      "baselinePin": { "image": "postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15", "major": "18", "digest": "sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15" },
+      "baselinePin": { "image": "postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2", "major": "18", "digest": "sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2" },
       "notes": "The platform database, covered by the drizzle migration ledger (packages/migrations). PG 18 moved PGDATA under /var/lib/postgresql/18/docker and requires the volume mounted at the PARENT /var/lib/postgresql; an 18 image refuses a 17-era cluster (fail-closed both directions). Upgrades go through the guarded logical dump->fresh-volume->restore (cinatra db upgrade-major, cinatra-cli#129); pg_dump crosses any source major in one hop, so skipped majors are allowed.",
       "transitions": [
         { "from": "17", "to": "18", "supported": true, "mechanism": "logical-dump-restore", "skippedMajor": "allowed", "downgrade": false, "notes": "The SUPPORTED BASELINE transition (cinatra#1417 Case A): the 0.1.9 baseline ships 18, so a 17-era field volume upgrades on the general path — logical dump under 17, restore into a fresh 18 parent-mounted volume. Mount-layout move applies (17 legacy .../data -> 18 parent mount)." },
