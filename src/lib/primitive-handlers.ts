@@ -6,6 +6,13 @@ import { createBlogContentPrimitiveHandlers } from "@/lib/blog/mcp/handlers";
 // passthrough returns 404 "Tool ... has no registered handler", so published
 // runs can fail at execution.
 import { createObjectsPrimitiveHandlers } from "@cinatra-ai/objects/mcp-handlers";
+// cinatra#2960 — the objects-package TYPE registrar, through its narrow
+// registration subpath. Mounted here for the same reason as the version-keyed
+// serving port below: this in-process registry is the mount point for the
+// NON-MCP dispatch paths (e.g. /api/agents/passthrough) that do NOT
+// transitively load `@/lib/mcp-server`, whose `createObjectsModule()` is what
+// registers these types on the MCP transport path.
+import { registerAllObjectTypes as registerObjectsPackageObjectTypes } from "@cinatra-ai/objects/register-object-types";
 // cinatra#1392 object-type serve — SIDE-EFFECT import. Loading the version-keyed
 // serving registry publishes the edge-bound object-type serve port on its
 // globalThis singleton at module load. This in-process primitive registry is the
@@ -85,6 +92,16 @@ async function loadAppointmentScheduleModule(): Promise<AppointmentScheduleModul
 }
 
 export async function collectAllPrimitiveHandlers() {
+  // Warm the objects-package type registrar BEFORE the objects_* handlers are
+  // mounted (cinatra#2960). Without it an `objects_save` dispatched on a
+  // non-MCP path resolves against a COLD registry, so a type the host itself
+  // declares is refused fail-closed ("no installed artifact extension defines
+  // ..."). Pure in-memory and idempotent (replace-by-id for these null-definer
+  // built-ins), so it can neither clobber nor be clobbered by an
+  // extension-owned type. Deliberately the PACKAGE registrar, not the
+  // app-level one, whose extension-bridge scan would put filesystem work on
+  // every dispatch.
+  registerObjectsPackageObjectTypes();
   return {
     // Agent builder first — ensures agent_* tools are within the
     // MAX_FUNCTION_TOOLS window (OpenAI caps function tools at 128).

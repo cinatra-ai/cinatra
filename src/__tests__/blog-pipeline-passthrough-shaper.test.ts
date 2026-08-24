@@ -11,7 +11,11 @@
  *   pnpm exec vitest run src/__tests__/blog-pipeline-passthrough-shaper.test.ts
  */
 import { describe, it, expect } from "vitest";
-import { shapeBlogPipelineObjectsSave as __shapeBlogPipelineObjectsSave } from "../app/api/agents/passthrough/blog-pipeline-seam";
+import {
+  shapeBlogPipelineObjectsSave as __shapeBlogPipelineObjectsSave,
+  BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID,
+  BLOG_PIPELINE_DRAFT_PROJECTION_TYPE_ID,
+} from "../app/api/agents/passthrough/blog-pipeline-seam";
 
 describe("blog-pipeline passthrough seam shapers", () => {
   it("blog_pipeline_selected_idea: parses selectedIdeaJson and matches an offered idea", () => {
@@ -29,7 +33,7 @@ describe("blog-pipeline passthrough seam shapers", () => {
       "run-fallback",
     );
     expect(out).not.toBeNull();
-    expect(out!.typeHint).toBe("@dynamic/types:blog-pipeline-selected-idea");
+    expect(out!.typeHint).toBe(BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID);
     expect(out!.rawData.idea).toEqual({ title: "B", summary: "sb", outline: ["2"] });
     expect(out!.rawData.cinatra_agent_run_id).toBe("run-1");
   });
@@ -80,7 +84,7 @@ describe("blog-pipeline passthrough seam shapers", () => {
       "fb",
     );
     expect(out).not.toBeNull();
-    expect(out!.typeHint).toBe("@dynamic/types:blog-pipeline-draft-projection");
+    expect(out!.typeHint).toBe(BLOG_PIPELINE_DRAFT_PROJECTION_TYPE_ID);
     expect(out!.rawData).toEqual({
       cinatra_agent_run_id: "run-2",
       postTitle: "T",

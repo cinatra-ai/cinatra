@@ -216,6 +216,13 @@ export const OBJECT_TYPE_FAMILY = {
   "@cinatra-ai/campaigns:email-draft-bundle": "campaign",
   "@cinatra-ai/campaigns:email-followup-bundle": "campaign",
   "@cinatra-ai/campaigns:send-attempt": "campaign",
+  // Blog-pipeline passthrough-seam records (cinatra#2960) — the same promotion
+  // the campaign bundles above took off the retired dynamic prefix. UI-family
+  // `workflow`: they are the orchestrator's own run-scoped seam state, not a
+  // library asset and not a campaign, so they must never surface in the asset
+  // or entity browser filters (both of which are DERIVED from this map).
+  "@cinatra-ai/blog-pipeline:selected-idea": "workflow",
+  "@cinatra-ai/blog-pipeline:draft-projection": "workflow",
   // Agent-memory concept rows (cinatra#1376, epic #1373): locked-taxonomy
   // category `content`, UI-family `asset` — the content-category grouping the
   // browser's "Assets" filter reads (the blog-post precedent: category

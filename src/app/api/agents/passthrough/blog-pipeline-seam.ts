@@ -1,7 +1,8 @@
 // blog-pipeline-agent deterministic seam shapers.
 //
-// Pure, zero-dependency module (no `server-only`, no MCP/handler graph)
-// so it is unit-testable in isolation. `route.ts` imports the dispatcher
+// Dependency-light module (no `server-only`, no MCP/handler graph) so it is
+// unit-testable in isolation — its ONE import is the dependency-free namespace
+// leaf that owns the tombstoned-prefix set. `route.ts` imports the dispatcher
 // and chains it ahead of the base `objects_save` shaper.
 //
 // The blog-pipeline-agent orchestrator bridges two OAS shape gaps via
@@ -13,10 +14,61 @@
 // email's context_setup) and the route's `result_input_passthrough`
 // echoes `rawData` (the typed output fields) into the OAS node outputs.
 
+import { TOMBSTONED_OBJECT_TYPE_ID_PREFIXES } from "@cinatra-ai/objects/namespace";
+
 export type BlogPipelineShaped = {
   typeHint: string;
   rawData: Record<string, unknown>;
 };
+
+/**
+ * The two seam records' object types (cinatra#2960).
+ *
+ * These name the HOST-registered types the objects package declares
+ * (`packages/objects/src/integration/register-types.ts`) — the same shape the
+ * email-outreach `context_setup` seam uses with `@cinatra-ai/campaigns:context`.
+ * They deliberately do NOT name a `@dynamic/types:*` id: that namespace is a
+ * PERMANENT tombstone (`@cinatra-ai/objects/namespace`), so a save under it is
+ * refused at the fail-closed write boundary and the pipeline could never
+ * persist its selection.
+ */
+export const BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID =
+  "@cinatra-ai/blog-pipeline:selected-idea";
+export const BLOG_PIPELINE_DRAFT_PROJECTION_TYPE_ID =
+  "@cinatra-ai/blog-pipeline:draft-projection";
+
+/**
+ * The passthrough save path's DECLARED resolution rule for a shaped
+ * `objects_save` type hint (cinatra#2960, AC2).
+ *
+ * `objects_save` persists only a type that an installed artifact extension
+ * DECLARES (its `cinatra.artifact.objectTypes[]` manifest entry) or that a host
+ * registrar registers. A `@dynamic/types:*` / `@cinatra-ai/dynamic:*` id names
+ * NO definer — the namespaces are permanently tombstoned as write targets — so
+ * a shaper that emits one can only ever produce the opaque
+ * "no installed artifact extension defines ..." refusal one frame later. This
+ * guard converts that into an immediate, self-explaining shaper throw (the
+ * route surfaces a shaper throw as HTTP 400) that names what must define the
+ * type instead.
+ *
+ * It stays NARROW on purpose: an ordinary namespaced id whose definer is simply
+ * not installed passes through here and is still refused fail-closed by the
+ * write boundary, which is the behaviour that must not regress.
+ */
+export function assertPassthroughSaveTypeHint(typeHint: string): void {
+  const tombstoned = TOMBSTONED_OBJECT_TYPE_ID_PREFIXES.some((prefix) =>
+    typeHint.startsWith(prefix),
+  );
+  if (!tombstoned) return;
+  throw new Error(
+    `objects_save passthrough: type hint ${JSON.stringify(typeHint)} is under a ` +
+      "permanently retired dynamic namespace " +
+      `(${TOMBSTONED_OBJECT_TYPE_ID_PREFIXES.join(", ")}) and can never be saved. ` +
+      "A save must name a type an installed artifact extension declares in its " +
+      "`cinatra.artifact.objectTypes[]` manifest entry, or a host-registered type " +
+      "(packages/objects/src/integration/register-types.ts).",
+  );
+}
 
 function resolveRunId(
   raw: Record<string, unknown>,
@@ -82,7 +134,7 @@ export function shapeBlogPipelineObjectsSave(
       );
     }
     return {
-      typeHint: "@dynamic/types:blog-pipeline-selected-idea",
+      typeHint: BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID,
       rawData: { cinatra_agent_run_id: runId, idea: matched ?? selected },
     };
   }
@@ -94,7 +146,7 @@ export function shapeBlogPipelineObjectsSave(
         : {};
     const str = (v: unknown) => (typeof v === "string" ? v : "");
     return {
-      typeHint: "@dynamic/types:blog-pipeline-draft-projection",
+      typeHint: BLOG_PIPELINE_DRAFT_PROJECTION_TYPE_ID,
       rawData: {
         cinatra_agent_run_id: runId,
         postTitle: str(draft.title),

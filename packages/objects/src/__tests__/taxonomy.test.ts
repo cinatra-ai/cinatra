@@ -92,6 +92,22 @@ describe("OBJECT_TYPE_FAMILY locked set", () => {
     expect(isKnownObjectTypeId("@cinatra-ai/memory:concept")).toBe(true);
   });
 
+  it("maps the blog-pipeline seam records to the workflow family (cinatra#2960)", () => {
+    expect(objectTypeIdsForFamily("workflow").sort()).toEqual(
+      [
+        "@cinatra-ai/blog-pipeline:selected-idea",
+        "@cinatra-ai/blog-pipeline:draft-projection",
+      ].sort(),
+    );
+    // ...and therefore NOT in the browser filters derived from this map.
+    expect(objectTypeIdsForFamily("asset")).not.toContain(
+      "@cinatra-ai/blog-pipeline:selected-idea",
+    );
+    expect(objectTypeIdsForFamily("entity")).not.toContain(
+      "@cinatra-ai/blog-pipeline:draft-projection",
+    );
+  });
+
   it("isKnownObjectTypeId narrows correctly", () => {
     expect(isKnownObjectTypeId("@cinatra-ai/entity-accounts:account")).toBe(true);
     expect(isKnownObjectTypeId("@cinatra-ai/dynamic:email-drafts-bundle")).toBe(false);

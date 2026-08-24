@@ -10,7 +10,10 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import type { ActorContext } from "@/lib/authz/actor-context";
-import { shapeBlogPipelineObjectsSave } from "./blog-pipeline-seam";
+import {
+  shapeBlogPipelineObjectsSave,
+  assertPassthroughSaveTypeHint,
+} from "./blog-pipeline-seam";
 import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
@@ -270,11 +273,21 @@ TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
 // The pure shaper lives in ./blog-pipeline-seam (zero-dep, unit-tested).
 // Chained AHEAD of the base objects_save shaper; the `_shape` opt-in
 // keeps every other objects_save call site untouched.
+//
+// Every shaped `objects_save` type hint additionally passes the declared
+// resolution rule (cinatra#2960): a hint under a permanently tombstoned dynamic
+// namespace names no definer, so it throws HERE — naming what must define the
+// type — instead of producing the opaque "no installed artifact extension
+// defines ..." refusal one frame later. A hint whose definer is merely not
+// installed is untouched and still refused fail-closed by the write boundary.
 const baseObjectsSaveShaper = TOOL_INPUT_SHAPERS.objects_save;
 TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
-  const blog = shapeBlogPipelineObjectsSave(raw, agentRunId);
-  if (blog) return blog;
-  return baseObjectsSaveShaper ? baseObjectsSaveShaper(raw, agentRunId) : raw;
+  const shaped = shapeBlogPipelineObjectsSave(raw, agentRunId)
+    ?? (baseObjectsSaveShaper ? baseObjectsSaveShaper(raw, agentRunId) : raw);
+  if (typeof shaped.typeHint === "string") {
+    assertPassthroughSaveTypeHint(shaped.typeHint);
+  }
+  return shaped;
 };
 
 // email-test-delivery run_send input shaping (#1625) — the pure shaper

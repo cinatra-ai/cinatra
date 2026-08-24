@@ -51,6 +51,10 @@ const RETENTION_POLICIES: Record<string, RetentionPolicy> = {
   "@cinatra-ai/campaigns:campaign": { kind: "indefinite" },
   "@cinatra-ai/campaigns:context": { kind: "indefinite" },
   "@cinatra-ai/campaigns:recipients": { kind: "indefinite" },
+  // Blog-pipeline passthrough-seam transient records (cinatra#2960) — the
+  // promotion of the retired `@dynamic/types:blog-pipeline-*` ids.
+  "@cinatra-ai/blog-pipeline:selected-idea": { kind: "indefinite" },
+  "@cinatra-ai/blog-pipeline:draft-projection": { kind: "indefinite" },
   "@cinatra-ai/email:sender-identity": { kind: "indefinite" },
   "@cinatra-ai/email:sent-email": { kind: "indefinite" },
   "@cinatra-ai/email:received-reply": { kind: "indefinite" },

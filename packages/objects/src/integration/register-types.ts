@@ -220,6 +220,65 @@ function registerCampaignBundleTypes(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Blog-pipeline passthrough-seam object types (cinatra#2960).
+//
+// The blog-pipeline orchestrator's two deterministic `/api/agents/passthrough`
+// seam nodes (`blog_pipeline_selected_idea`, `blog_pipeline_draft_projection`)
+// persist a thin, run-scoped transient record via `objects_save`, exactly like
+// the email-outreach `context_setup` node persists `@cinatra-ai/campaigns:context`.
+// They used to name `@dynamic/types:blog-pipeline-*` ids, which the namespace
+// tombstone (`../namespace`) retired PERMANENTLY as write targets — so every
+// save was refused at the fail-closed write boundary ("no installed artifact
+// extension defines ..."), and the pipeline could never materialize its
+// selection. These two static, domain-namespaced host types are the promotion
+// of those ids, mirroring the campaign bundle promotion above (which moved the
+// same class of run-scoped transient record off `@cinatra-ai/dynamic:*`).
+//
+// They are HOST-owned records of the seam, not blog CONTENT: the canonical blog
+// model stays `@cinatra-ai/assets:*` (host-side, registered from the app) and
+// the finished post stays the `@cinatra-ai/blog-post-artifact` pack's artifact.
+// Registering them HERE — in the objects package's own registrar — is what makes
+// them resolvable on the passthrough dispatch path, which mounts the primitive
+// handlers without warming the app-level registrar.
+// ---------------------------------------------------------------------------
+
+/** The seam record carrying the idea the operator picked at the idea gate. */
+export const BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID =
+  "@cinatra-ai/blog-pipeline:selected-idea" as const;
+
+/** The seam record carrying the draft projected into the writer's string fields. */
+export const BLOG_PIPELINE_DRAFT_PROJECTION_TYPE_ID =
+  "@cinatra-ai/blog-pipeline:draft-projection" as const;
+
+function registerBlogPipelineSeamTypes(): void {
+  const runIdentity = (data: unknown): string | null => {
+    const d = data as Record<string, unknown>;
+    const runId = d.cinatra_agent_run_id;
+    return typeof runId === "string" && runId.length > 0 ? runId : null;
+  };
+  for (const [type, category] of [
+    [BLOG_PIPELINE_SELECTED_IDEA_TYPE_ID, "idea"],
+    [BLOG_PIPELINE_DRAFT_PROJECTION_TYPE_ID, "content"],
+  ] as const) {
+    objectTypeRegistry.register({
+      type,
+      category,
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: { sources: ["agent"], mutableBy: ["agent"] },
+      renderers: {
+        listRow: GenericObjectListRow,
+        card: GenericObjectCard,
+        detail: GenericObjectDetail,
+      },
+      identityKey: runIdentity,
+      // Run-scoped transient seam record: a retry inside the same run updates
+      // in place through the run-id dedup; a new run creates a new row.
+      crudPolicy: RUN_SCOPED_CAMPAIGN_POLICY,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Email transport + work-product object types.
 //
 // Provider-neutral object types backing the @cinatra-ai/email-connector facade
@@ -1010,6 +1069,7 @@ export function registerAllObjectTypes(): void {
   registerCampaignContextType();
   registerCampaignRecipientsType();
   registerCampaignBundleTypes();
+  registerBlogPipelineSeamTypes();
   registerEmailObjectTypes();
   registerLinkedinObjectTypes();
   registerDrupalObjectTypes();
