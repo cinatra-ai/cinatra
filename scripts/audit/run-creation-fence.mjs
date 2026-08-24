@@ -104,7 +104,18 @@ export const OWED_BY_ADAPTER = Object.freeze({
  * in an import is itself the violation, whatever the file goes on to do with
  * it, and that closes the alias and the namespace at once. A namespace import
  * of the store (`import * as store from "./store"`) is a hit for the same
- * reason — it reaches every export without naming one.
+ * reason — it reaches every export without naming one. Dynamic imports are read
+ * too, in the three shapes this tree writes them: a destructured await, a
+ * whole-module await, and a `.then` destructure.
+ *
+ * WHAT IT STILL MISSES, so nobody reads this as total: a dynamic import whose
+ * promise is stored and destructured LATER (`const p = import("./store"); const
+ * { createAgentRun: mint } = await p;`) separates the specifier from the name
+ * across statements, which a text scan cannot follow. Closing that needs a real
+ * parse — the shape `host-peer-value-import-ban.mjs` takes, at the cost of the
+ * compiler dependency this script deliberately does without. The fence is a
+ * fence, not a proof: what it guarantees is that no ORDINARY spelling of a
+ * creation slips past review unremarked.
  */
 const CREATOR_NAMES = ["createAgentRun", "createAgentRunPendingInput"];
 
@@ -156,8 +167,16 @@ const BANNED = [
  * Every creator name this file IMPORTS, aliased or not, plus a namespace import
  * of a store module. Returns the offending fragments, or an empty array.
  */
-export function creatorImports(source) {
+export function creatorImports(rawSource) {
   const hits = [];
+  // COMMENTS FIRST. This scan reads raw text, so a line that EXPLAINS the seam —
+  // `// const store = await import("./store")` — was reported as one. The line
+  // pass below already skips comments for exactly this reason; the import pass
+  // has to as well, or documenting the fence trips it.
+  const source = rawSource
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n");
   // Import statements can span lines; join the file and scan the statements.
   for (const m of source.matchAll(/import\s+([\s\S]*?)\s+from\s+["'][^"']+["']/g)) {
     const statement = m[0];
@@ -187,6 +206,20 @@ export function creatorImports(source) {
     for (const name of CREATOR_NAMES) {
       if (new RegExp(String.raw`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(m[1])) {
         hits.push(`await import(${JSON.stringify(m[2])}) { ${m[1].trim()} }`);
+        break;
+      }
+    }
+  }
+  // `import("./store").then(({ createAgentRun }) => …)` — the same destructure,
+  // spelled as a continuation rather than an await.
+  for (const m of source.matchAll(
+    /import\(\s*["']([^"']+)["']\s*\)\s*\.then\(\s*\(?\s*\{([^}]*)\}/g,
+  )) {
+    const spec = `from "${m[1]}"`;
+    if (!STORE_SPECIFIERS.some((re) => re.test(spec))) continue;
+    for (const name of CREATOR_NAMES) {
+      if (new RegExp(String.raw`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(m[2])) {
+        hits.push(`import(${JSON.stringify(m[1])}).then({ ${m[2].trim()} })`);
         break;
       }
     }

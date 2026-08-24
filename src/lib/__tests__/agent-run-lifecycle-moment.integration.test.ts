@@ -33,6 +33,7 @@ import { agentRunLifecycleMomentSchemaQueries } from "@/lib/agent-run-lifecycle-
 import { recordRunLifecycleMoment } from "@cinatra-ai/agents/store";
 import {
   advanceAgentRun,
+  clearRunLifecycleMoment,
   onReviewedWorkChanged,
 } from "@cinatra-ai/agents/lifecycle-coordinator";
 
@@ -290,10 +291,12 @@ describeDb("the writer states and clears the triple together", () => {
     });
   });
 
-  it("clears all three together when the RELEASE ENTRY lets the run go", async () => {
-    // Driven through `advanceAgentRun` itself, not through a stand-in for it:
-    // the clear belongs to the coordinator, and what this case is about is that
-    // releasing a run really performs it.
+  it("a release the CALLER dispatches leaves the clear to that caller", async () => {
+    // The clear belongs with the answer about whether the run really got a job.
+    // Under `caller_dispatches` that answer is one frame out, so the release
+    // moves the run and states nothing: a clear made here would be lost the
+    // moment the caller's own compensation put the run back at its wait, and
+    // the run would come back to a park with no card.
     await admin.query(`DELETE FROM ${RUNS}`);
     await seedRun("run-cleared", "pending_input");
     await writeTriple("run-cleared", "schedule", "trigger_schedule_proposal", "sched-9");
@@ -310,13 +313,36 @@ describeDb("the writer states and clears the triple together", () => {
     });
 
     expect(answer.moment).toBeNull();
+    const res = await admin.query(`SELECT status FROM ${RUNS} WHERE id = $1`, ["run-cleared"]);
+    expect(res.rows[0].status).toBe("queued");
+    // Released — and still saying what it was waiting at, because nothing has
+    // yet told it the dispatch succeeded.
+    expect((await readTriple("run-cleared"))?.lifecycle_moment).toBe("schedule");
+
+    // …and the caller's own clear, once it has dispatched, takes all three.
+    await clearRunLifecycleMoment("run-cleared", writeAuthority(), "queued");
     expect(await readTriple("run-cleared")).toEqual({
       lifecycle_moment: null,
       lifecycle_card_kind: null,
       lifecycle_card_ref: null,
     });
-    const res = await admin.query(`SELECT status FROM ${RUNS} WHERE id = $1`, ["run-cleared"]);
-    expect(res.rows[0].status).toBe("queued");
+  });
+
+  it("a caller's clear does NOT fire on a run that has parked again", async () => {
+    // The other half of the guard. Between a dispatch and the clear that follows
+    // it, a run can reach a new moment — and a clear that ignored the status
+    // would take that new card straight back off.
+    await admin.query(`DELETE FROM ${RUNS}`);
+    await seedRun("run-reparked", "pending_approval");
+    await writeTriple("run-reparked", "hitl", "agent_hitl_screen", "gate-new");
+
+    await clearRunLifecycleMoment("run-reparked", writeAuthority(), "queued");
+
+    expect(await readTriple("run-reparked")).toEqual({
+      lifecycle_moment: "hitl",
+      lifecycle_card_kind: "agent_hitl_screen",
+      lifecycle_card_ref: "gate-new",
+    });
   });
 
   it("does NOT clear a moment it did not release — a lost race states nothing", async () => {
@@ -369,6 +395,68 @@ describeDb("the writer states and clears the triple together", () => {
       lifecycle_card_kind: "verification_summary",
       lifecycle_card_ref: "verification-3",
     });
+  });
+
+  it("a status-guarded write lands ONLY on the run the caller believes it has", async () => {
+    // A moment and a status are two statements made by two writes, and between
+    // them another writer can move the run. The park states its moment a moment
+    // after it parks; an approval fast enough to land in that gap would have the
+    // run resumed, and the record would then put a card back on a run that is
+    // running again. Naming the status folds the check into the write.
+    await admin.query(`DELETE FROM ${RUNS}`);
+    await seedRun("run-guarded", "running");
+
+    // The caller believes it parked the run; the row says otherwise.
+    await recordRunLifecycleMoment(
+      {
+        runId: "run-guarded",
+        orgId: ORG_ID,
+        moment: "hitl",
+        cardKind: "agent_hitl_screen",
+        cardRef: "gate-guarded",
+        onlyWhileStatus: "pending_approval",
+      },
+      writeAuthority(),
+    );
+
+    expect(await readTriple("run-guarded")).toEqual({
+      lifecycle_moment: null,
+      lifecycle_card_kind: null,
+      lifecycle_card_ref: null,
+    });
+
+    // …and it DOES land when the row really is where the caller thinks.
+    await admin.query(`UPDATE ${RUNS} SET status = 'pending_approval' WHERE id = $1`, [
+      "run-guarded",
+    ]);
+    await recordRunLifecycleMoment(
+      {
+        runId: "run-guarded",
+        orgId: ORG_ID,
+        moment: "hitl",
+        cardKind: "agent_hitl_screen",
+        cardRef: "gate-guarded",
+        onlyWhileStatus: "pending_approval",
+      },
+      writeAuthority(),
+    );
+    expect((await readTriple("run-guarded"))?.lifecycle_moment).toBe("hitl");
+  });
+
+  it("the AUDIT write carries no status guard — it is true whatever the run is doing", async () => {
+    // The audit does not park, so there is no status it is "only true while".
+    // Guarding it would silently drop the reading whenever the run moved on,
+    // which is most of the time.
+    await admin.query(`DELETE FROM ${RUNS}`);
+    await seedRun("run-audit-guard", "completed");
+
+    await onReviewedWorkChanged({
+      run: { id: "run-audit-guard", orgId: ORG_ID, status: "completed" },
+      auditRef: "verification-9",
+      authority: writeAuthority(),
+    });
+
+    expect((await readTriple("run-audit-guard"))?.lifecycle_moment).toBe("audit");
   });
 
   it("the partial index really covers the read it exists for", async () => {

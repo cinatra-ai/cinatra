@@ -302,14 +302,21 @@ export async function runAgentRunTriggerReleaseJob(
   // A ONE-OFF FIRING IS ADVANCE (cinatra#2928): the run already exists and is
   // parked at its schedule moment, and the schedule is what says to let it go.
   //
-  // THE ENQUEUE STAYS BELOW rather than riding the release, and the reason is
-  // that the two want opposite things from a failure. The coordinator's release
-  // ladder COMPENSATES — it returns the run to its wait so a person can retry —
-  // which is right for a person's Continue and wrong here: this is a background
-  // job, its failure is the retry, and BullMQ re-runs it. Reverting the run
-  // would race that retry. A SCOPE DENIAL is the one failure that is terminal
-  // rather than transient, and the compensation for it is below, where the
-  // authority this frame holds already is.
+  // THE ENQUEUE STAYS BELOW rather than riding the release, because this branch
+  // already carries its own compensation for the one failure it treats as
+  // terminal — a scope denial, which fails the run rather than returning it to a
+  // wait it has no schedule left to be released from.
+  //
+  // A TRANSIENT ENQUEUE FAILURE HERE IS NOT RECOVERED, and that is inherited
+  // rather than introduced: it is what this branch did before the release went
+  // through the coordinator, and it is worth stating plainly because the obvious
+  // reading is wrong. BullMQ does re-run this job, but the re-run finds the run
+  // already `queued`, so the `armed → queued` CAS is stale and it returns before
+  // reaching the enqueue again — the retry cannot repair the gap. Repairing it
+  // means this branch doing what the immediate path already does: on a stale
+  // CAS, fall through and make sure the run really has a job. That is a change
+  // to the firing path's own shape and belongs with the epic's runner wave, not
+  // with the entry this slice routed it through.
   try {
     await advanceAgentRun({
       run: runForFire,

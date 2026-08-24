@@ -3432,6 +3432,20 @@ export async function recordRunLifecycleMoment(
     moment: string | null;
     cardKind?: string | null;
     cardRef?: string | null;
+    /**
+     * Write ONLY while the run is still in this status.
+     *
+     * A moment and a status are two statements about the same run made by two
+     * writes, and between them another writer can move the run. Without this,
+     * a park that states its moment a moment later can put a card back on a run
+     * a fast approval has already resumed, and a clear can take one off a run
+     * that has just parked again. Naming the status the caller believes the run
+     * to be in folds the check into the same statement as the write.
+     *
+     * Omit it for a write that is true of the run whatever it is doing — the
+     * audit, which is a reading and does not park.
+     */
+    onlyWhileStatus?: string;
   },
   authority: OrgWriteAuthority | undefined,
 ): Promise<void> {
@@ -3441,6 +3455,10 @@ export async function recordRunLifecycleMoment(
     { orgId: input.orgId, runId: input.runId, capability: "run.execute" },
     async (tx) => {
       const dtx = tx as unknown as typeof db;
+      const where =
+        input.onlyWhileStatus === undefined
+          ? eq(agentRuns.id, input.runId)
+          : and(eq(agentRuns.id, input.runId), eq(agentRuns.status, input.onlyWhileStatus));
       await dtx
         .update(agentRuns)
         .set({
@@ -3448,7 +3466,7 @@ export async function recordRunLifecycleMoment(
           lifecycleCardKind: clearing ? null : (input.cardKind ?? null),
           lifecycleCardRef: clearing ? null : (input.cardRef ?? null),
         })
-        .where(eq(agentRuns.id, input.runId));
+        .where(where);
     },
   );
 }

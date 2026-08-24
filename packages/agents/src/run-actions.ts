@@ -51,7 +51,11 @@ import {
   maybeHoldRunForRecommendation,
   readRecommendationParkForRun,
 } from "./recommendation-hold";
-import { advanceAgentRun, launchAgentRun } from "./lifecycle-coordinator";
+import {
+  advanceAgentRun,
+  clearRunLifecycleMoment,
+  launchAgentRun,
+} from "./lifecycle-coordinator";
 /** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
  *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
  *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
@@ -184,11 +188,15 @@ export async function triggerAgentRun(
   // run to where it actually was rather than rewriting its state.
   //
   // CONTINUE IS ADVANCE (cinatra#2928). Both rungs go through the coordinator's
-  // release entry, which clears the run's stated moment BEFORE the run moves —
-  // so a run that starts again is never still saying it is waiting at the
-  // schedule step or the skills question. The rung ladder is unchanged, and the
-  // release is asked to THROW on a lost race precisely so the losing rung stays
-  // distinguishable from the winning one.
+  // release entry. The rung ladder is unchanged, and the release is asked to
+  // THROW on a lost race precisely so the losing rung stays distinguishable
+  // from the winning one.
+  //
+  // THE MOMENT IS CLEARED AFTER THE ENQUEUE BELOW, not inside the release: this
+  // frame owns the dispatch (`caller_dispatches`), so the release cannot see
+  // whether the run really got a job, and a clear made before that answer is
+  // lost the moment the compensation puts the run back at its wait — leaving a
+  // parked run with nothing to say what it is waiting for.
   let dispatchedFrom: (typeof RUN_START_DISPATCH_FROM_STATUSES)[number] | null = null;
   for (const from of RUN_START_DISPATCH_FROM_STATUSES) {
     try {
@@ -254,6 +262,11 @@ export async function triggerAgentRun(
     if (actionable) return { ok: false, ...actionable };
     return { ok: false, error: "enqueue failed" };
   }
+
+  // DISPATCHED — the moment is over (cinatra#2928). Guarded on `queued`, the
+  // status this frame produced, so a run that has parked again in the meantime
+  // keeps whatever its new park stated.
+  await clearRunLifecycleMoment(args.runId, authority, "queued");
 
   return { ok: true };
 }
@@ -789,6 +802,12 @@ export async function releaseTriggerNow(
     }
     return { ok: false, error: "forbidden — this agent's scope does not include you" };
   }
+
+  // DISPATCHED — the schedule moment this run was waiting at is over
+  // (cinatra#2928). The recurring branch above never reaches here: it releases a
+  // COPY and deliberately leaves the defining run exactly as it was, moment
+  // included, because that run is still the schedule.
+  await clearRunLifecycleMoment(args.runId, authority, "queued");
 
   return { ok: true };
 }

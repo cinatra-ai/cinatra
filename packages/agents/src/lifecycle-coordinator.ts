@@ -365,6 +365,9 @@ async function stateMoment(input: {
   moment: LifecycleMoment | null;
   cardRef?: string | null;
   authority: OrgWriteAuthority | undefined;
+  /** Write only while the run is still in this status — see the writer's own
+   *  note. Omitted for a record that is true whatever the run is doing. */
+  onlyWhileStatus?: string;
 }): Promise<void> {
   try {
     await recordRunLifecycleMoment(
@@ -374,6 +377,9 @@ async function stateMoment(input: {
         moment: input.moment,
         cardKind: input.moment === null ? null : cardKindForMoment(input.moment),
         cardRef: input.cardRef ?? null,
+        ...(input.onlyWhileStatus === undefined
+          ? {}
+          : { onlyWhileStatus: input.onlyWhileStatus }),
       },
       input.authority,
     );
@@ -650,9 +656,11 @@ export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAns
         await transitionRunStatus(run.id, "queued", "pending_input", undefined, authority);
         recovered = "pending_input";
       } catch (revertErr) {
-        // Same reading as the release ladder below: a stale `from` means the run
-        // has moved on and belongs to another writer, and the terminal rung must
-        // not run against a generation this call did not produce.
+        // Same reading as the release ladder below, including its limit: a
+        // stale `from` means the run has moved on, so there is nothing to
+        // compensate and the terminal rung stands down — but a writer that
+        // returns the row to the SAME status is invisible to a status-only
+        // check, and that residual is described in full there.
         if (revertErr instanceof RunTransitionError && revertErr.code === "stale_from_status") {
           console.warn(
             "[lifecycle-coordinator] enqueue compensation skipped for run",
@@ -717,6 +725,9 @@ export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAns
 export async function clearRunLifecycleMoment(
   runId: string,
   authority: OrgWriteAuthority | undefined,
+  /** Clear only while the run is still in this status. A caller that has just
+   *  dispatched knows it; one that does not may omit it. */
+  onlyWhileStatus?: string,
 ): Promise<void> {
   // THE READ IS INSIDE THE BEST-EFFORT, not beside it. It sat outside, so a
   // transient database read failure escaped into a caller that had ALREADY
@@ -726,7 +737,12 @@ export async function clearRunLifecycleMoment(
     const run = await readAgentRunById(runId);
     if (!run) return;
     await recordRunLifecycleMoment(
-      { runId: run.id, orgId: run.orgId, moment: null },
+      {
+        runId: run.id,
+        orgId: run.orgId,
+        moment: null,
+        ...(onlyWhileStatus === undefined ? {} : { onlyWhileStatus }),
+      },
       authority,
     );
   } catch (err) {
@@ -878,13 +894,20 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
         await transitionRunStatus(run.id, release.to, release.from, undefined, authority);
         recovered = release.from;
       } catch (revertErr) {
-        // ANOTHER WRITER OWNS THE RUN. A stale `from` means the row has moved on
-        // since this call released it — stopped, resumed, finished — and the
-        // second rung must NOT run: `queued → stopped → queued` is a legal
-        // sequence, so a status-only CAS cannot tell this call's own `queued`
-        // from the one a resuming writer just created, and failing that one
-        // would kill work somebody restarted. There is nothing here to
-        // compensate; the run is somebody else's.
+        // THE RUN HAS MOVED ON. A stale `from` means the row is no longer in the
+        // status this call put it in — stopped, resumed, finished — so there is
+        // nothing here to compensate, and the terminal rung must not run: it
+        // would fail a run somebody else is now driving.
+        //
+        // WHAT THIS DOES NOT CLOSE, stated because the comment used to claim it
+        // did: a status-only check cannot see an ABA. If another writer moves
+        // the run `queued → stopped → queued` between the failed enqueue and
+        // this revert, the row reads `queued` again and the FIRST rung succeeds,
+        // returning a generation this call never produced to its wait. Closing
+        // that needs the compensation to name the generation as well as the
+        // status — the execution attempt id is the value that identifies one,
+        // and threading it through the transition seam is a change to that seam
+        // rather than to this ladder.
         if (revertErr instanceof RunTransitionError && revertErr.code === "stale_from_status") {
           console.warn(
             "[lifecycle-coordinator] release compensation skipped for run",
@@ -939,10 +962,21 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
   // waiting for is a park with no card. Last, the compensation path never
   // reaches it, so a run that comes back is still stating its moment.
   //
+  // AND ONLY WHEN THIS CALL DISPATCHED. Under `caller_dispatches` the queue
+  // work is still ahead, in a frame this one cannot see the outcome of — the
+  // same "lost on compensation" defect, one frame out. That caller clears after
+  // its own dispatch, with `clearRunLifecycleMoment`, and the two callers that
+  // take this shape do exactly that.
+  //
+  // Guarded on the status this call produced, so a run that has already parked
+  // again keeps the moment its new park stated.
+  //
   // Best-effort by the same contract as every other lifecycle record: a failure
   // is logged loudly and the run still goes, because a bookkeeping write must
   // never strand a released run.
-  await stateMoment({ run, moment: null, authority });
+  if (release.dispatch.kind === "enqueue") {
+    await stateMoment({ run, moment: null, authority, onlyWhileStatus: release.to });
+  }
 
   const released = await readAgentRunById(run.id);
   return {
@@ -975,11 +1009,17 @@ export type HitlInput = {
  * matching a synthetic task-id prefix.
  */
 export async function onAgentHitl(input: HitlInput): Promise<CoordinatorAnswer> {
+  // ONLY WHILE THE RUN IS STILL PARKED WHERE THE CALLER LEFT IT. The park and
+  // this record are two writes, and an approval fast enough to land between them
+  // would have the run resumed — after which stating `hitl` puts a card back on
+  // a run that is running again. Naming the status folds the check into the
+  // write, so the record can only land on the run the caller actually parked.
   await stateMoment({
     run: input.run,
     moment: "hitl",
     cardRef: input.screenRef,
     authority: input.authority,
+    onlyWhileStatus: input.run.status,
   });
   const current = await readAgentRunById(input.run.id);
   return {

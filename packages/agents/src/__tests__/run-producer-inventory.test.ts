@@ -64,9 +64,20 @@ function createsARun(raw: string): boolean {
   );
 }
 
-/** Does this module reach the coordinator's launch entry? */
+/**
+ * Does this module reach the coordinator's launch entry?
+ *
+ * BY CALL OR BY IMPORT. A module that imports `launchAgentRun` — aliased or not
+ * — can launch under any spelling, so the whole-tree pass below would never see
+ * it if the only signal were the literal call. Reading the import is the same
+ * trick the creation fence uses on the creators, and for the same reason.
+ */
 function callsLaunch(raw: string): boolean {
-  return /(?<![A-Za-z0-9_.])launchAgentRun\s*\(/.test(executable(raw));
+  const source = executable(raw);
+  if (/(?<![A-Za-z0-9_.])launchAgentRun\s*\(/.test(source)) return true;
+  return /import[\s\S]{0,400}?(?<![A-Za-z0-9_])launchAgentRun(?![A-Za-z0-9_])[\s\S]{0,200}?from\s+["'][^"']*lifecycle-coordinator["']/.test(
+    source,
+  );
 }
 
 /**
