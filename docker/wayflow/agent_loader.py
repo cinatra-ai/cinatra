@@ -3298,10 +3298,37 @@ def _read_bridge_token() -> Optional[str]:
 # tightening. The compiler's step 8 omits both keywords because its schema is
 # STORED on the template and never sent verbatim to a provider on this path.
 #
-# Subschemas the author wrote (an `items` blob, a nested `properties` map) ride
-# through UNCHANGED. This pass never invents a constraint below the top level:
-# the author declared those shapes, and rewriting them would send the provider
-# something the agent never said.
+# THE SAME RULE HOLDS BELOW THE ROOT (the second walk of cinatra#2949). The
+# first version stopped at the root, so a node declaring `ideas: array<object>`
+# asked for an array and said NOTHING about what belongs in an entry: a shaped
+# answer came back as `{"ideas": [{}]}` — a non-empty list of empty entries, and
+# the gate that offers those entries had nothing to offer. `required` +
+# `additionalProperties: false` are not a root-only decoration: the strict
+# structured-output surface applies the same rule to EVERY `properties` map it
+# is handed, so a DECLARED member map at any depth needs exactly what the root
+# needs. `_strict_declared_subschema` therefore walks the declaration and
+# supplies those two keywords wherever the author declared members — and
+# NOTHING else: every keyword the author actually wrote (`type`, `enum`,
+# `format`, `description`, bounds) reaches the provider verbatim.
+#
+# The same holds for an ARRAY whose `items` the author never declared: the
+# request then asks for a list and says nothing about its elements, which is
+# the weakest thing this pass can ask for — a provider is free to answer with
+# an empty list, and the compiled INPUT path has already been observed to be
+# refused outright for an array with no `items` (see the step-7 note in
+# `packages/agents/src/oas-compiler.ts`). Inventing an element shape would be
+# worse: it would send a list shape the agent never declared. So the pass
+# leaves it exactly as declared and names the path out loud instead.
+#
+# WHERE THE AUTHOR DECLARED NO MEMBERS the pass stays silent about the shape:
+# `{"type": "object"}` is a declaration that says nothing about the inside, and
+# inventing members would send the provider something the agent never said. The
+# request keeps asking for a free-form object, an answer therefore need carry
+# nothing inside it, and the pass SAYS SO — each such path is named in the
+# per-node report and printed at load. That disclosure is the actionable half:
+# the fix for a free-form member is one line in the AGENT's own OAS
+# (`json_schema.items` / `json_schema.properties`), which is the other branch
+# the issue itself names, and this pass then carries it without further change.
 # ---------------------------------------------------------------------------
 
 #: The host route the derivation applies to. Mirrors `targetsLlmBridge` in
@@ -3315,12 +3342,87 @@ def _targets_llm_bridge(url: Any) -> bool:
     return isinstance(url, str) and url.endswith(_LLM_BRIDGE_PATH)
 
 
-def _output_property_json_schema(prop: Any) -> Optional[Dict[str, Any]]:
+def _declared_members(node: Any) -> Optional[Dict[str, Any]]:
+    """The member map a declaration carries, in EITHER agentspec spelling.
+
+    A top-level `properties` and a nested `json_schema.properties` are the same
+    declaration — the same fallback the host compiler applies to an object-typed
+    input (`packages/agents/src/oas-compiler.ts`, step 7). An EMPTY map is not a
+    declaration of members, so it reads as "nothing declared".
+    """
+    if not isinstance(node, dict):
+        return None
+    members = node.get("properties")
+    if not isinstance(members, dict):
+        nested = node.get("json_schema")
+        members = nested.get("properties") if isinstance(nested, dict) else None
+    return members if isinstance(members, dict) and members else None
+
+
+def _declared_items(node: Any) -> Any:
+    """The item declaration a declaration carries, in EITHER spelling."""
+    if not isinstance(node, dict):
+        return None
+    items = node.get("items")
+    if items is None:
+        nested = node.get("json_schema")
+        items = nested.get("items") if isinstance(nested, dict) else None
+    return items
+
+
+def _strict_declared_subschema(
+    node: Any, path: str, free_form: List[str]
+) -> Any:
+    """One declared subschema -> the JSON Schema the request carries for it.
+
+    Returns a COPY (the document's own declaration is read, never adopted), with
+    exactly two keywords supplied and only where the author declared members:
+    `required` naming every declared member and `additionalProperties: False`.
+    Everything else the author wrote rides through byte-for-byte.
+
+    A level that declares NO members (`{"type": "object"}`, or an array with no
+    `items` at all) is left exactly as declared and its path is appended to
+    ``free_form`` — the caller reports it rather than inventing a shape.
+
+    An authored `required` that names a SUBSET of the declared members is
+    WIDENED, for the same reason the root widens: the strict surface has no
+    notion of an optional key, and a member a node declares is a member it will
+    read. That is the one authored keyword this pass overrides, and it overrides
+    it only where it also supplies `additionalProperties`.
+    """
+    if not isinstance(node, dict):
+        return node
+    shape: Dict[str, Any] = {
+        key: value for key, value in node.items() if key != "json_schema"
+    }
+    members = _declared_members(node)
+    if members is not None:
+        shape["properties"] = {
+            name: _strict_declared_subschema(member, f"{path}.{name}", free_form)
+            for name, member in members.items()
+        }
+        shape["required"] = list(shape["properties"])
+        shape["additionalProperties"] = False
+    elif node.get("type") == "object":
+        free_form.append(path)
+    items = _declared_items(node)
+    if items is not None:
+        shape["items"] = _strict_declared_subschema(items, f"{path}[]", free_form)
+    elif node.get("type") == "array":
+        free_form.append(f"{path}[]")
+    return shape
+
+
+def _output_property_json_schema(
+    prop: Any, free_form: Optional[List[str]] = None
+) -> Optional[Dict[str, Any]]:
     """One declared output -> its JSON-Schema property, or None if unusable.
 
-    `items` accepts BOTH the agentspec spellings the shipped OAS files use —
-    a top-level `items` and `json_schema.items` — the same fallback the host
-    compiler applies.
+    `items` (and a nested `properties` map) accept BOTH the agentspec spellings
+    the shipped OAS files use — a top-level key and the `json_schema` nesting —
+    the same fallback the host compiler applies. The declared member shapes are
+    carried down to every level by `_strict_declared_subschema`; the paths that
+    declare no members land in ``free_form`` for the caller to report.
     """
     if not isinstance(prop, dict):
         return None
@@ -3330,6 +3432,8 @@ def _output_property_json_schema(prop: Any) -> Optional[Dict[str, Any]]:
         return None
     if not isinstance(type_, str) or not type_:
         return None
+    unreported: List[str] = []
+    collected = unreported if free_form is None else free_form
     shape: Dict[str, Any] = {"type": type_, "title": title}
     fmt = prop.get("format")
     if isinstance(fmt, str) and fmt:
@@ -3337,13 +3441,21 @@ def _output_property_json_schema(prop: Any) -> Optional[Dict[str, Any]]:
     description = prop.get("description")
     if isinstance(description, str) and description:
         shape["description"] = description
-    items = prop.get("items")
-    if items is None:
-        json_schema = prop.get("json_schema")
-        if isinstance(json_schema, dict):
-            items = json_schema.get("items")
+    members = _declared_members(prop)
+    if members is not None:
+        shape["properties"] = {
+            name: _strict_declared_subschema(member, f"{title}.{name}", collected)
+            for name, member in members.items()
+        }
+        shape["required"] = list(shape["properties"])
+        shape["additionalProperties"] = False
+    elif type_ == "object":
+        collected.append(title)
+    items = _declared_items(prop)
     if items is not None:
-        shape["items"] = items
+        shape["items"] = _strict_declared_subschema(items, f"{title}[]", collected)
+    elif type_ == "array":
+        collected.append(f"{title}[]")
     return shape
 
 
@@ -3367,7 +3479,10 @@ def _derive_bridge_output_schemas(
 
     The root names every declared output in ``required`` and sets
     ``additionalProperties: False`` — see the block comment above for why that
-    is load-bearing at the real provider and not cosmetic.
+    is load-bearing at the real provider and not cosmetic. EVERY declared member
+    map below the root gets the same two keywords; a level that declares no
+    members stays free-form and is named in that node's report entry (and
+    printed), because the request can then promise nothing about its contents.
     """
     report: List[Dict[str, Any]] = []
 
@@ -3393,8 +3508,9 @@ def _derive_bridge_output_schemas(
         if not isinstance(outputs, list) or not outputs:
             return
         properties: Dict[str, Any] = {}
+        free_form: List[str] = []
         for prop in outputs:
-            shape = _output_property_json_schema(prop)
+            shape = _output_property_json_schema(prop, free_form)
             if shape is None:
                 print(
                     f"[agent_loader] WARNING: {label}: bridge ApiNode "
@@ -3412,10 +3528,27 @@ def _derive_bridge_output_schemas(
             "required": list(properties),
             "additionalProperties": False,
         }
+        node_id = node.get("id") or node.get("name")
+        free_form = sorted(set(free_form))
+        if free_form:
+            # Not a defect in this pass: the agent declared these members as
+            # free-form, so the request cannot promise what is inside them. Said
+            # out loud because it is exactly what an answer will come back
+            # EMPTY inside — and because the fix is one declaration in the
+            # agent's own OAS.
+            print(
+                f"[agent_loader] NOTE: {label}: bridge ApiNode {node_id!r} "
+                f"declares no members for {', '.join(free_form)}; the request "
+                f"keeps them free-form. Nothing tells a provider what belongs "
+                f"inside, so an answer may carry nothing there. Declare the "
+                f"members in the agent's own OAS (`json_schema.items` / "
+                f"`json_schema.properties`) to close it."
+            )
         report.append(
             {
-                "node": node.get("id") or node.get("name"),
+                "node": node_id,
                 "outputs": sorted(properties),
+                "free_form": free_form,
             }
         )
 
