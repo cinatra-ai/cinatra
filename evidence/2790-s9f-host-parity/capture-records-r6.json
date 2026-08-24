@@ -4,9 +4,9 @@
     "declaredHost": "run_card",
     "declaredKind": "recommendation_hold",
     "declaredState": "decided",
-    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b72d952f-2550-4b21-8ccc-70f47276992b",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/63ba0918-5b74-442e-808b-97dc282cdcbe",
     "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided.png",
-    "sha256": "d0168db2df75acfe40ee578a4777e18d78e8075d98f5c9f9e9c1334401a6c5eb",
+    "sha256": "a62929022aed09f05cfb378a8f5ecc4a920606b464b593b1d597e0fadec715c0",
     "assertions": [
       {
         "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -75,18 +75,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:06:01.029Z",
+    "recordedAt": "2026-08-24T22:25:09.499Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:06:00.651Z",
+      "at": "2026-08-24T22:25:09.268Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 5,
-      "bridgeRunSelects": 1,
+      "publicMcpCallbacks": 12,
+      "bridgeRunSelects": 2,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -94,38 +94,38 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 5,
+        "publicMcpCallbacks": 7,
         "bridgeRunSelects": 1
       }
     },
     "note": "The same run page after the decision. What this cell OWES is the recommendation's rail entry settled as the rail's own resolved-gate history row — the check in the circle, the title unhighlighted because it is no longer the selected step — the run detail restored to the run's own panel, the settled chips in place, and nothing selectable inside the card. The record's own `runSurface` block carries the measurements every one of those four is decided on (`railStepPresent`, `railStepSettled`, `railStepSelected`, `railStepIndicatorHasCheckGlyph`, the three `[data-skill-action]` counts); PLAN-WALK.md grades it from the pixels rather than from this sentence.",
-    "runId": "b72d952f-2550-4b21-8ccc-70f47276992b",
+    "runId": "63ba0918-5b74-442e-808b-97dc282cdcbe",
     "dbAt": {
       "step": "T4",
       "what": "the run page is photographed with the question decided",
-      "at": "2026-08-24T22:06:00.649Z",
+      "at": "2026-08-24T22:25:09.265Z",
       "db": {
         "runStatus": "completed",
         "parkStatus": "released",
-        "parkResolvedAt": "2026-08-24T22:04:03.895Z",
+        "parkResolvedAt": "2026-08-24T22:23:45.475Z",
         "selections": [
           {
             "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
             "selection_source": "user_adjusted",
-            "selected_at": "2026-08-24T22:04:03.885Z"
+            "selected_at": "2026-08-24T22:23:45.469Z"
           },
           {
             "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:04:03.885Z"
+            "selected_at": "2026-08-24T22:23:45.469Z"
           },
           {
             "skill_id": "@cinatra-ai/web-research-skill:web-research",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:04:03.885Z"
+            "selected_at": "2026-08-24T22:23:45.469Z"
           }
         ],
-        "url": "/agents/cinatra-ai/blog-draft-writer-agent/b72d952f-2550-4b21-8ccc-70f47276992b"
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/63ba0918-5b74-442e-808b-97dc282cdcbe"
       }
     },
     "rootAttributes": {
@@ -182,13 +182,13 @@
       "railStepIndicatorHasCheckGlyph": true,
       "railRowLabels": [
         "Recommendation",
-        "Step 1Review"
+        "Step 1Review pending policycore-defaultawaiting review orche"
       ],
       "agenticRunProgressHeadings": 1,
       "headings": [
-        "Blog Draft Writer Agent (1)",
+        "Blog Draft Writer Agent (2)",
         "Step 1",
-        "Review",
+        "Review pending policycore-defaultawaiting review orchestration",
         "Agentic Run Progress",
         "Command Palette"
       ]
@@ -207,9 +207,9 @@
     "declaredHost": "run_card",
     "declaredKind": "recommendation_hold",
     "declaredState": "decided",
-    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b72d952f-2550-4b21-8ccc-70f47276992b",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/63ba0918-5b74-442e-808b-97dc282cdcbe",
     "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided__dark.png",
-    "sha256": "7d9a57922545a057a766651b5974f9ee9ab7fc669c195893de21bcd725cd2f85",
+    "sha256": "7d82fc631f2645d0277c34afcf84f2bacdfc0985696715121c9dadbc7a3efcb3",
     "assertions": [
       {
         "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -278,18 +278,18 @@
       }
     ],
     "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-    "recordedAt": "2026-08-24T22:06:02.167Z",
+    "recordedAt": "2026-08-24T22:25:10.595Z",
     "runtime": "dev-runtime",
     "providerEvidence": {
       "serverLog": "<the app server's own log>",
-      "at": "2026-08-24T22:06:01.933Z",
+      "at": "2026-08-24T22:25:10.403Z",
       "preRouterShortCircuits": 0,
       "preRouterAttempts": 0,
       "scriptedRuntimeLines": 0,
       "noProviderRefusals": 0,
       "mcpDependencyFailures": 0,
-      "publicMcpCallbacks": 5,
-      "bridgeRunSelects": 1,
+      "publicMcpCallbacks": 12,
+      "bridgeRunSelects": 2,
       "driverScriptedProviderEnv": null,
       "serverScriptedProviderEnv": null,
       "serverEnvReadFrom": "process-table",
@@ -297,38 +297,38 @@
       "serverEnvHopsFromListener": 1,
       "serverEnvTokensSeen": 63,
       "deltaSinceStart": {
-        "publicMcpCallbacks": 5,
+        "publicMcpCallbacks": 7,
         "bridgeRunSelects": 1
       }
     },
     "note": "The same decided run page in the dark palette. Same owed set as the light cell, graded the same way from the record's own `runSurface` block and from the pixels.",
-    "runId": "b72d952f-2550-4b21-8ccc-70f47276992b",
+    "runId": "63ba0918-5b74-442e-808b-97dc282cdcbe",
     "dbAt": {
       "step": "T4",
       "what": "the run page is photographed with the question decided",
-      "at": "2026-08-24T22:06:00.649Z",
+      "at": "2026-08-24T22:25:09.265Z",
       "db": {
         "runStatus": "completed",
         "parkStatus": "released",
-        "parkResolvedAt": "2026-08-24T22:04:03.895Z",
+        "parkResolvedAt": "2026-08-24T22:23:45.475Z",
         "selections": [
           {
             "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
             "selection_source": "user_adjusted",
-            "selected_at": "2026-08-24T22:04:03.885Z"
+            "selected_at": "2026-08-24T22:23:45.469Z"
           },
           {
             "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:04:03.885Z"
+            "selected_at": "2026-08-24T22:23:45.469Z"
           },
           {
             "skill_id": "@cinatra-ai/web-research-skill:web-research",
             "selection_source": "recommended_confirmed",
-            "selected_at": "2026-08-24T22:04:03.885Z"
+            "selected_at": "2026-08-24T22:23:45.469Z"
           }
         ],
-        "url": "/agents/cinatra-ai/blog-draft-writer-agent/b72d952f-2550-4b21-8ccc-70f47276992b"
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/63ba0918-5b74-442e-808b-97dc282cdcbe"
       }
     },
     "rootAttributes": {
@@ -385,13 +385,13 @@
       "railStepIndicatorHasCheckGlyph": true,
       "railRowLabels": [
         "Recommendation",
-        "Step 1Review"
+        "Step 1Review pending policycore-defaultawaiting review orche"
       ],
       "agenticRunProgressHeadings": 1,
       "headings": [
-        "Blog Draft Writer Agent (1)",
+        "Blog Draft Writer Agent (2)",
         "Step 1",
-        "Review",
+        "Review pending policycore-defaultawaiting review orchestration",
         "Agentic Run Progress",
         "Command Palette"
       ]

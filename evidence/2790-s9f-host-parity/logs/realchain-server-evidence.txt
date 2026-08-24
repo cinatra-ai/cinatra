@@ -1,13 +1,17 @@
  POST /api/mcp 200 in 298ms (next.js: 4ms, proxy.ts: 5ms, application-code: 289ms)
  POST /api/mcp 200 in 35ms (next.js: 3ms, proxy.ts: 2ms, application-code: 29ms)
  POST /api/mcp 200 in 1196ms (next.js: 7ms, proxy.ts: 4ms, application-code: 1185ms)
-[context-route] run resolved kind=resolve via=run_token run=b72d952f-2550-4b21-8ccc-70f47276992b ctx=043a74e6-44ba-4c4c-95d6-b586ce4b45da count=1
-[context-route] ok kind=resolve via=run_token run=b72d952f-2550-4b21-8ccc-70f47276992b ctx=043a74e6-44ba-4c4c-95d6-b586ce4b45da slot=draftContext count=1
-[wayflow] run=b72d952f-2550-4b21-8ccc-70f47276992b task=b729feae-b992-46e6-afeb-faf8674c9052 state=input-required status={"state":"input-required","timestamp":"2026-08-24T22:04:14.160550"} artifacts=null
-[human-gate-park] run=b72d952f-2550-4b21-8ccc-70f47276992b parked on WayFlow gate wayflow-b729feae-b992-46e6-afeb-faf8674c9052
-[context-route] run resolved kind=finalize via=run_token run=b72d952f-2550-4b21-8ccc-70f47276992b ctx=043a74e6-44ba-4c4c-95d6-b586ce4b45da count=1
-[context-route] ok kind=finalize via=run_token run=b72d952f-2550-4b21-8ccc-70f47276992b ctx=043a74e6-44ba-4c4c-95d6-b586ce4b45da slot=draftContext count=1
 [llm-bridge-run-select] served-by=run_token run=b72d952f-2550-4b21-8ccc-70f47276992b org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
  POST /api/mcp 200 in 136ms (next.js: 7ms, proxy.ts: 2ms, application-code: 128ms)
  POST /api/mcp 200 in 57ms (next.js: 2ms, proxy.ts: 1890µs, application-code: 53ms)
-[wayflow] run=b72d952f-2550-4b21-8ccc-70f47276992b task=66a84e73-311e-4515-9bab-ee6dc856dd0a state=completed status={"state":"completed","timestamp":"2026-08-24T22:05:17.294615"} artifacts=null
+ POST /api/mcp 200 in 103ms (next.js: 3ms, proxy.ts: 19ms, application-code: 81ms)
+ POST /api/mcp 200 in 84ms (next.js: 2ms, proxy.ts: 1964µs, application-code: 80ms)
+ POST /api/mcp 200 in 35ms (next.js: 2ms, proxy.ts: 1448µs, application-code: 31ms)
+ POST /api/mcp 200 in 40ms (next.js: 6ms, proxy.ts: 6ms, application-code: 27ms)
+ POST /api/mcp 200 in 935ms (next.js: 2ms, proxy.ts: 1613µs, application-code: 931ms)
+[wayflow] run=63ba0918-5b74-442e-808b-97dc282cdcbe task=6bc10ab8-16d4-4c6e-8781-5fa6a94bbaf3 state=input-required status={"state":"input-required","timestamp":"2026-08-24T22:23:47.211304"} artifacts=null
+[human-gate-park] run=63ba0918-5b74-442e-808b-97dc282cdcbe parked on WayFlow gate wayflow-6bc10ab8-16d4-4c6e-8781-5fa6a94bbaf3
+[llm-bridge-run-select] served-by=run_token run=63ba0918-5b74-442e-808b-97dc282cdcbe org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 109ms (next.js: 4ms, proxy.ts: 1554µs, application-code: 103ms)
+ POST /api/mcp 200 in 46ms (next.js: 2ms, proxy.ts: 1437µs, application-code: 42ms)
+[wayflow] run=63ba0918-5b74-442e-808b-97dc282cdcbe task=46779b11-9dca-4c25-a801-37134c91982e state=completed status={"state":"completed","timestamp":"2026-08-24T22:24:36.567348"} artifacts=null

@@ -74,13 +74,6 @@
 // No origin is hard-coded: the app origin and the lane database are read from
 // the environment.
 //
-// A NOTE ON ONE STRING. The banner this file prints at the start of a run still
-// reads "the FULLY-REAL chat + run-page sequence". That wording is kept VERBATIM
-// rather than tidied, because `logs/realchain-sequence.txt` is the recorded run's
-// own output and a re-run must reproduce it byte for byte. What the evidence does
-// and does not establish is written in README.md, RUN-READBACK.md and
-// PLAN-WALK.md, and those are the documents that carry the claim.
-//
 // Usage: node 12-real-chain-sequence.mjs <appOrigin> <outDir> <repoRoot>
 //        env: S9F_EMAIL, S9F_PW, SUPABASE_DB_URL, S9F_SERVER_LOG,
 //             S9F_RUNTIME_NOTE
@@ -278,8 +271,9 @@ async function runRows(runId) {
  *   scriptedRuntimeLines    any line naming the scripted provider/runtime.
  *   noProviderRefusals      the bridge's own `NO_LLM_PROVIDER` refusal.
  *   mcpDependencyFailures   the 424 the previous attempt died on.
- *   publicMcpCallbacks      `POST /api/mcp` — the hosted provider calling BACK
- *                           into this instance over the public origin.
+ *   publicMcpCallbacks      `POST /api/mcp` — posts to this instance's own MCP
+ *                           surface. UNATTRIBUTED: the request log does not
+ *                           record the caller.
  *   bridgeRunSelects        `[llm-bridge-run-select]` — the agent's own step
  *                           reaching the model bridge under its run token.
  */
@@ -307,7 +301,7 @@ const EVIDENCE_PATTERNS = {
  * The claim that the chain is real does NOT rest on them. It rests on the
  * structural facts beside them: the app server's own environment (the scripted
  * runtime's single switch), the sealed provider row read before AND after the
- * step, and the hosted provider's own calls back into this instance.
+ * step, and the movement of the unattributed `/api/mcp` counter.
  */
 const EVIDENCE_MUST_BE_ZERO = [
   "preRouterShortCircuits",
@@ -455,9 +449,10 @@ let evidenceBaseline = null;
  *     actually READ rather than merely unavailable — an unread value is a
  *     failure here, not a pass;
  *   · once the sequence is under way, the POSITIVE counter must have MOVED: a
- *     hosted provider that never called back into this instance would leave
- *     `publicMcpCallbacks` flat, and the sequence would then be photographing a
- *     state nothing external produced.
+ *     sequence in which this instance's own MCP surface is never posted to would
+ *     leave `publicMcpCallbacks` flat, and a flat counter means the run under the
+ *     shutter is not doing what a dispatched run does. It is a LIVENESS check, not
+ *     an attribution: the request log does not say who posted.
  */
 function assertRealChain(where, { requireMovement = false } = {}) {
   const ev = readProviderEvidence();
@@ -488,7 +483,7 @@ function assertRealChain(where, { requireMovement = false } = {}) {
   }
   if (requireMovement && !(ev.deltaSinceStart?.publicMcpCallbacks > 0)) {
     throw new Error(
-      `no hosted-provider callback reached this instance during the sequence (publicMcpCallbacks delta ${ev.deltaSinceStart?.publicMcpCallbacks}) — nothing external produced these states`,
+      `this instance's own MCP surface was never posted to during the sequence (publicMcpCallbacks delta ${ev.deltaSinceStart?.publicMcpCallbacks}) — a dispatched run does not leave that counter flat`,
     );
   }
   return ev;
@@ -865,7 +860,7 @@ async function openThread(threadPath) {
 const state = {};
 try {
   state.startedAt = new Date().toISOString();
-  say(`# cinatra#2790 S9f — the FULLY-REAL chat + run-page sequence — ${state.startedAt}`);
+  say(`# cinatra#2790 S9f — the chat + run-page sequence, both stood-in legs removed — ${state.startedAt}`);
   say(`after sign-in: ${await signIn()}`);
   state.userId =
     (await q(`select id from public."user" where email = $1`, [ACTOR.email]))[0]?.id ?? null;
@@ -1067,7 +1062,7 @@ try {
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The whole conversation in one browser window: the person's own turn — plain English, naming no package and carrying no inputParams — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). The chain that produced this state is real end to end, and the record's own `providerEvidence` block is where that is read: the deterministic pre-router never fired (`preRouterShortCircuits: 0`), no scripted-runtime line exists in the server log, and the hosted provider called back into this instance over its public origin.",
+      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). Both stood-in legs of the withdrawn round are gone here, and the record's own `providerEvidence` block is what that is read from rather than asserted: the deterministic pre-router never fired (`preRouterShortCircuits: 0` and `preRouterAttempts: 0`), the sealed provider row was never cleared (timeline rows T1c and T3a), the app server's process chain carries no scripted-provider switch (`serverScriptedProviderEnv: null`, read one hop above the listening process — presence would be proof, absence there is consistent rather than conclusive), and this instance's own `/api/mcp` surface was posted to while the sequence ran. WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
   });
   await setTheme("dark");
   await shoot("S1__recommendation-card__chat_thread__held__dark", {

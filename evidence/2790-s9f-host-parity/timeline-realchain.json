@@ -2,14 +2,14 @@
   {
     "step": "T0",
     "what": "the public ingress answers, inside the app's own reachability budget",
-    "at": "2026-08-24T22:02:26.159Z",
+    "at": "2026-08-24T22:22:21.641Z",
     "db": {
       "publicOrigin": "<the lane's public origin>",
       "healthStatus": 200,
       "mcpHead": {
         "url": "<the lane's public origin>/api/mcp",
         "status": 405,
-        "ms": 508
+        "ms": 415
       },
       "consecutiveFastProbes": 3,
       "budgetMs": 2500,
@@ -19,18 +19,18 @@
   {
     "step": "T1",
     "what": "held at the recommendation hold; the run has produced NOTHING",
-    "at": "2026-08-24T22:03:10.059Z",
+    "at": "2026-08-24T22:23:04.124Z",
     "db": {
       "evidence": {
         "serverLog": "<the app server's own log>",
-        "at": "2026-08-24T22:03:09.994Z",
+        "at": "2026-08-24T22:23:04.050Z",
         "preRouterShortCircuits": 0,
         "preRouterAttempts": 0,
         "scriptedRuntimeLines": 0,
         "noProviderRefusals": 0,
         "mcpDependencyFailures": 0,
-        "publicMcpCallbacks": 3,
-        "bridgeRunSelects": 0,
+        "publicMcpCallbacks": 10,
+        "bridgeRunSelects": 1,
         "driverScriptedProviderEnv": null,
         "serverScriptedProviderEnv": null,
         "serverEnvReadFrom": "process-table",
@@ -42,7 +42,7 @@
       "humanPresent": true,
       "parkCheckpoint": "recommendation",
       "parkStatus": "parked",
-      "parkCreatedAt": "2026-08-24T22:02:52.373Z",
+      "parkCreatedAt": "2026-08-24T22:22:46.416Z",
       "representationRows": 0,
       "producedOutboxRows": 0,
       "reviewGateRows": 0,
@@ -52,32 +52,32 @@
   {
     "step": "T1b",
     "what": "the run page is opened while the SAME hold is still parked",
-    "at": "2026-08-24T22:03:39.008Z",
+    "at": "2026-08-24T22:23:21.493Z",
     "db": {
       "runStatus": "pending_input",
       "parkStatus": "parked",
       "selectionRows": 0,
       "representationRows": 0,
-      "url": "/agents/cinatra-ai/blog-draft-writer-agent/b72d952f-2550-4b21-8ccc-70f47276992b"
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/63ba0918-5b74-442e-808b-97dc282cdcbe"
     }
   },
   {
     "step": "T1c",
     "what": "the REAL sealed provider row is read back BEFORE the step — nothing was cleared at the point the earlier round cleared it",
-    "at": "2026-08-24T22:03:43.125Z",
+    "at": "2026-08-24T22:23:25.457Z",
     "db": {
       "shippedReader": "readOpenAIConnection",
       "readBack": "S9FREAL PROVIDER_READ {\"shippedWriter\":\"writeOpenAIConnection\",\"sealedAtRest\":true,\"keyPresent\":true,\"isThePreviousRoundsPlaceholder\":false,\"defaultModel\":\"gpt-5.5\",\"serviceTier\":\"flex\"}",
       "evidence": {
         "serverLog": "<the app server's own log>",
-        "at": "2026-08-24T22:03:43.065Z",
+        "at": "2026-08-24T22:23:25.407Z",
         "preRouterShortCircuits": 0,
         "preRouterAttempts": 0,
         "scriptedRuntimeLines": 0,
         "noProviderRefusals": 0,
         "mcpDependencyFailures": 0,
-        "publicMcpCallbacks": 3,
-        "bridgeRunSelects": 0,
+        "publicMcpCallbacks": 10,
+        "bridgeRunSelects": 1,
         "driverScriptedProviderEnv": null,
         "serverScriptedProviderEnv": null,
         "serverEnvReadFrom": "process-table",
@@ -90,26 +90,26 @@
   {
     "step": "T2",
     "what": "the decisions are written and the hold is RELEASED",
-    "at": "2026-08-24T22:04:30.173Z",
+    "at": "2026-08-24T22:24:10.758Z",
     "db": {
       "runStatus": "pending_approval",
       "parkStatus": "released",
-      "parkResolvedAt": "2026-08-24T22:04:03.895Z",
+      "parkResolvedAt": "2026-08-24T22:23:45.475Z",
       "selections": [
         {
           "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
           "selection_source": "user_adjusted",
-          "selected_at": "2026-08-24T22:04:03.885Z"
+          "selected_at": "2026-08-24T22:23:45.469Z"
         },
         {
           "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
           "selection_source": "recommended_confirmed",
-          "selected_at": "2026-08-24T22:04:03.885Z"
+          "selected_at": "2026-08-24T22:23:45.469Z"
         },
         {
           "skill_id": "@cinatra-ai/web-research-skill:web-research",
           "selection_source": "recommended_confirmed",
-          "selected_at": "2026-08-24T22:04:03.885Z"
+          "selected_at": "2026-08-24T22:23:45.469Z"
         }
       ],
       "representationRows": 0,
@@ -119,20 +119,20 @@
   {
     "step": "T3a",
     "what": "the sealed provider row is read AGAIN, after the step's own model call",
-    "at": "2026-08-24T22:05:45.788Z",
+    "at": "2026-08-24T22:24:54.339Z",
     "db": {
       "shippedReader": "readOpenAIConnection",
       "readBack": "S9FREAL PROVIDER_READ {\"shippedWriter\":\"writeOpenAIConnection\",\"sealedAtRest\":true,\"keyPresent\":true,\"isThePreviousRoundsPlaceholder\":false,\"defaultModel\":\"gpt-5.5\",\"serviceTier\":\"flex\"}",
       "evidence": {
         "serverLog": "<the app server's own log>",
-        "at": "2026-08-24T22:05:45.702Z",
+        "at": "2026-08-24T22:24:54.288Z",
         "preRouterShortCircuits": 0,
         "preRouterAttempts": 0,
         "scriptedRuntimeLines": 0,
         "noProviderRefusals": 0,
         "mcpDependencyFailures": 0,
-        "publicMcpCallbacks": 5,
-        "bridgeRunSelects": 1,
+        "publicMcpCallbacks": 12,
+        "bridgeRunSelects": 2,
         "driverScriptedProviderEnv": null,
         "serverScriptedProviderEnv": null,
         "serverEnvReadFrom": "process-table",
@@ -145,18 +145,18 @@
   {
     "step": "T3",
     "what": "the step ran in the runtime and the run reached its state",
-    "at": "2026-08-24T22:05:45.845Z",
+    "at": "2026-08-24T22:24:54.394Z",
     "db": {
       "evidence": {
         "serverLog": "<the app server's own log>",
-        "at": "2026-08-24T22:05:45.794Z",
+        "at": "2026-08-24T22:24:54.345Z",
         "preRouterShortCircuits": 0,
         "preRouterAttempts": 0,
         "scriptedRuntimeLines": 0,
         "noProviderRefusals": 0,
         "mcpDependencyFailures": 0,
-        "publicMcpCallbacks": 5,
-        "bridgeRunSelects": 1,
+        "publicMcpCallbacks": 12,
+        "bridgeRunSelects": 2,
         "driverScriptedProviderEnv": null,
         "serverScriptedProviderEnv": null,
         "serverEnvReadFrom": "process-table",
@@ -165,65 +165,58 @@
         "serverEnvTokensSeen": 63
       },
       "runStatus": "completed",
-      "runCompletedAt": "2026-08-24T22:05:19.956Z",
+      "runCompletedAt": "2026-08-24T22:24:38.020Z",
       "runError": "",
       "representations": [
         {
-          "id": "ae4c86dd-9fc0-451e-9715-c4deda4844cc",
-          "artifact_id": "726fb4bd-441e-41b1-a367-74ac8813a36c",
-          "resource_id": "d057b1c1-269d-487b-b3ea-f22300b98840",
+          "id": "3b69dab5-cf57-44a2-9158-ba691cb6bc38",
+          "artifact_id": "832b20d2-e48a-45ad-845c-254f8705ef83",
+          "resource_id": "8b7ed536-0d0b-46a8-8738-cfd4931b84e3",
           "revision": 1,
           "form": "file",
-          "created_at": "2026-08-24T22:05:19.612Z"
+          "created_at": "2026-08-24T22:24:37.946Z"
         }
       ],
       "outbox": [
         {
-          "event_id": "b308a234572a17c5dd3b31ac9774e2f68757d13a3fee6f8fee1cb5f236cb3931",
-          "artifact_id": "726fb4bd-441e-41b1-a367-74ac8813a36c",
-          "representation_revision_id": "ae4c86dd-9fc0-451e-9715-c4deda4844cc",
+          "event_id": "ec99c5ae8fa673188c22ec7bf02344cf6c2bf6a6a901e0fd01eca69a3b0a338f",
+          "artifact_id": "832b20d2-e48a-45ad-845c-254f8705ef83",
+          "representation_revision_id": "3b69dab5-cf57-44a2-9158-ba691cb6bc38",
           "emitter": "createSemanticArtifact",
           "origin_kind": "agent_produced",
-          "created_at": "2026-08-24T22:05:19.612Z",
-          "processed_at": "2026-08-24T22:05:29.049Z"
+          "created_at": "2026-08-24T22:24:37.946Z",
+          "processed_at": null
         }
       ],
-      "gates": [
-        {
-          "id": "cfc95da1-f17d-4c61-906f-aba9f192c516",
-          "review_task_id": "lifecycle-review:b308a234572a17c5dd3b31ac9774e2f68757d13a3fee6f8fee1cb5f236cb3931",
-          "status": "pending",
-          "created_at": "2026-08-24T22:05:28.673Z"
-        }
-      ]
+      "gates": []
     }
   },
   {
     "step": "T4",
     "what": "the run page is photographed with the question decided",
-    "at": "2026-08-24T22:06:00.649Z",
+    "at": "2026-08-24T22:25:09.265Z",
     "db": {
       "runStatus": "completed",
       "parkStatus": "released",
-      "parkResolvedAt": "2026-08-24T22:04:03.895Z",
+      "parkResolvedAt": "2026-08-24T22:23:45.475Z",
       "selections": [
         {
           "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
           "selection_source": "user_adjusted",
-          "selected_at": "2026-08-24T22:04:03.885Z"
+          "selected_at": "2026-08-24T22:23:45.469Z"
         },
         {
           "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
           "selection_source": "recommended_confirmed",
-          "selected_at": "2026-08-24T22:04:03.885Z"
+          "selected_at": "2026-08-24T22:23:45.469Z"
         },
         {
           "skill_id": "@cinatra-ai/web-research-skill:web-research",
           "selection_source": "recommended_confirmed",
-          "selected_at": "2026-08-24T22:04:03.885Z"
+          "selected_at": "2026-08-24T22:23:45.469Z"
         }
       ],
-      "url": "/agents/cinatra-ai/blog-draft-writer-agent/b72d952f-2550-4b21-8ccc-70f47276992b"
+      "url": "/agents/cinatra-ai/blog-draft-writer-agent/63ba0918-5b74-442e-808b-97dc282cdcbe"
     }
   }
 ]
