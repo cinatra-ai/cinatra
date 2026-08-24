@@ -6,7 +6,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "b910ee500c66b0c652d011eacf736e63f3228426075a8dbf387728d3435a5009",
+      "sha256": "12fd70e9d437f12639d4e35225aa9fe490a5822306335791af206250832aed88",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -128,13 +128,13 @@
         "railStepIndicatorHasCheckGlyph": true,
         "railRowLabels": [
           "Recommendation",
-          "Step 1Review pending policycore-defaultawaiting review orche"
+          "Step 1Review"
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (4)",
+          "Blog Draft Writer Agent (5)",
           "Step 1",
-          "Review pending policycore-defaultawaiting review orchestration",
+          "Review",
           "Agentic Run Progress",
           "Command Palette"
         ]
@@ -142,14 +142,14 @@
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
       "providerEvidence": {
         "serverLog": "<the app server's own log>",
-        "at": "2026-08-24T23:08:07.195Z",
+        "at": "2026-08-24T23:23:26.838Z",
         "preRouterShortCircuits": 0,
         "preRouterAttempts": 0,
         "scriptedRuntimeLines": 0,
         "noProviderRefusals": 0,
         "mcpDependencyFailures": 0,
-        "publicMcpCallbacks": 25,
-        "bridgeRunSelects": 4,
+        "publicMcpCallbacks": 30,
+        "bridgeRunSelects": 5,
         "driverScriptedProviderEnv": null,
         "serverScriptedProviderEnv": null,
         "serverEnvReadFrom": "process-table",
@@ -157,7 +157,7 @@
         "serverEnvHopsFromListener": 1,
         "serverEnvTokensSeen": 63,
         "deltaSinceStart": {
-          "publicMcpCallbacks": 8,
+          "publicMcpCallbacks": 5,
           "bridgeRunSelects": 1
         }
       }
@@ -168,7 +168,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "b1d411c4a26f25f74fd55b0ca99b8a86c3b51a83f5e36ec50d43738caa64463f",
+      "sha256": "79619d253e4e8a7948d7bb395baf351afcee16d0b14aec057ddfbcde64b11cb1",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -290,13 +290,13 @@
         "railStepIndicatorHasCheckGlyph": true,
         "railRowLabels": [
           "Recommendation",
-          "Step 1Review pending policycore-defaultawaiting review orche"
+          "Step 1Review"
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (4)",
+          "Blog Draft Writer Agent (5)",
           "Step 1",
-          "Review pending policycore-defaultawaiting review orchestration",
+          "Review",
           "Agentic Run Progress",
           "Command Palette"
         ]
@@ -304,14 +304,14 @@
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
       "providerEvidence": {
         "serverLog": "<the app server's own log>",
-        "at": "2026-08-24T23:08:08.374Z",
+        "at": "2026-08-24T23:23:27.942Z",
         "preRouterShortCircuits": 0,
         "preRouterAttempts": 0,
         "scriptedRuntimeLines": 0,
         "noProviderRefusals": 0,
         "mcpDependencyFailures": 0,
-        "publicMcpCallbacks": 25,
-        "bridgeRunSelects": 4,
+        "publicMcpCallbacks": 30,
+        "bridgeRunSelects": 5,
         "driverScriptedProviderEnv": null,
         "serverScriptedProviderEnv": null,
         "serverEnvReadFrom": "process-table",
@@ -319,7 +319,7 @@
         "serverEnvHopsFromListener": 1,
         "serverEnvTokensSeen": 63,
         "deltaSinceStart": {
-          "publicMcpCallbacks": 8,
+          "publicMcpCallbacks": 5,
           "bridgeRunSelects": 1
         }
       }

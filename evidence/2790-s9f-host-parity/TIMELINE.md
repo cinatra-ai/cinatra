@@ -327,21 +327,21 @@ ingress probe. No row anywhere is read off a screen.
 
 | # | Time (UTC) | Clock | What |
 |---|---|---|---|
-| 1 | `23:05:02.204` | process | The public ingress is proved BEFORE any pictured turn: `HEAD /api/mcp` answers `405` in **341 ms**, inside the app's own 2500 ms dead-ingress budget, and `/api/health` answers `200`. Row `T0`. |
-| 2 | `23:05:31.703315` | db | The run is created, `human_present = t`. The deterministic pre-router did not dispatch it: it cannot match a message carrying no package token, and its counters read 0 on every record. `agent_runs.created_at`. |
-| 3 | `23:05:32.411688` | db | It parks at the recommendation hold. `lifecycle_continuation_park.created_at`. |
-| 4 | `23:05:50.929` | process | Row `T1` reads the park and the three output tables at **0**, with the evidence block attached. |
-| 5 | `23:05:52.071` / `23:05:53.200` | process | `S1` light and dark. |
-| 6 | `23:06:08.720` / `23:06:09.930` | process | `R5` light and dark, on the run page, the SAME hold still `parked`. |
-| 7 | `23:06:12.581` | process | Row `T1c`: the sealed REAL provider row is READ BACK through the shipped reader and is still there. **This is where the earlier round removed it.** Nothing is cleared here. |
-| 8 | `23:06:32.322452` | db | The three kept decisions are written in one release transaction. |
-| 9 | `23:06:32.328141` | db | The hold is RELEASED. |
-| 10 | `23:06:58.564` / `23:06:59.728` | process | `S2` light and dark — the row settled in place, after a reload. |
-| 11 | `23:07:00.685` | process | The person answers the run's own in-flight gate with its own `Continue`. One press, landed. |
-| 12 | `23:07:27.132980` | db | The artifact the run produced is written — `representation` revision 1, a 5387-byte `text/markdown` blob. |
-| 13 | `23:07:27.220` | db | The run reaches `completed`, `error` empty. `agent_runs.completed_at`. |
-| 14 | `23:07:51.944` | process | Row `T3a`: the sealed provider row is read AGAIN, after the step's own model call. `T1c` and `T3a` BRACKET that call. |
-| 15 | `23:08:07.470` / `23:08:08.581` | process | `R6` light and dark, on the run page, question decided and run finished. |
+| 1 | `23:20:32.966` | process | The public ingress is proved BEFORE any pictured turn: `HEAD /api/mcp` answers `405` in **515 ms**, inside the app's own 2500 ms dead-ingress budget, and `/api/health` answers `200`. Row `T0`. |
+| 2 | `23:20:59.797401` | db | The run is created, `human_present = t`. The deterministic pre-router did not dispatch it: it cannot match a message carrying no package token, and its counters read 0 on every record. `agent_runs.created_at`. |
+| 3 | `23:21:00.604777` | db | It parks at the recommendation hold. `lifecycle_continuation_park.created_at`. |
+| 4 | `23:21:19.510` | process | Row `T1` reads the park and the three output tables at **0**, with the evidence block attached. |
+| 5 | `23:21:20.683` / `23:21:21.809` | process | `S1` light and dark. |
+| 6 | `23:21:37.272` / `23:21:38.352` | process | `R5` light and dark, on the run page, the SAME hold still `parked`. |
+| 7 | `23:21:40.902` | process | Row `T1c`: the sealed REAL provider row is READ BACK through the shipped reader and is still there. **This is where the earlier round removed it.** Nothing is cleared here. |
+| 8 | `23:22:02.166648` | db | The three kept decisions are written in one release transaction. |
+| 9 | `23:22:02.175215` | db | The hold is RELEASED. |
+| 10 | `23:22:27.550` / `23:22:28.752` | process | `S2` light and dark — the row settled in place, after a reload. |
+| 11 | `23:22:29.710` | process | The person answers the run's own in-flight gate with its own `Continue`. One press, landed. |
+| 12 | `23:22:52.711414` | db | The artifact the run produced is written — `representation` revision 1, a 5296-byte `text/markdown` blob. |
+| 13 | `23:22:52.795` | db | The run reaches `completed`, `error` empty. `agent_runs.completed_at`. |
+| 14 | `23:23:12.217` | process | Row `T3a`: the sealed provider row is read AGAIN, after the step's own model call. `T1c` and `T3a` BRACKET that call. |
+| 15 | `23:23:27.039` / `23:23:28.118` | process | `R6` light and dark, on the run page, question decided and run finished. |
 
 ## What the order proves
 
@@ -357,7 +357,9 @@ again after the step. Two point reads are what is claimed — not uninterrupted
 presence, which no point read can establish.
 
 **Row 15 follows row 13.** R6 is photographed after the run completed, so the
-`Step 1` and `Review` rows its rail carries are the run's own executed steps.
+`Step 1` its rail carries is the run's own executed work step. The `Review` row
+below it is NOT executed: it is the pending downstream entry the review gate
+opened, and `artifact_review_gates.status` reads `pending` for this run.
 
 ## What this round could not do, said plainly
 

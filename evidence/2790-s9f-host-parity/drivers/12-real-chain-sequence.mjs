@@ -13,7 +13,9 @@
 //     row was removed mid-sequence because this instance had no public MCP
 //     ingress and the provider's toolbox fetch answered 424.
 //
-// NEITHER IS DONE HERE:
+// THIS FILE PERFORMS NEITHER OF THOSE TWO ACTIONS — which is a statement about
+// what the driver DOES, not about which runtime answered. That second question
+// is bounded, not settled, and README.md is where the boundary is drawn:
 //
 //   · THE TURN NAMES NO PACKAGE TOKEN in either form the pre-router reads, so it
 //     matches no branch of that detector and nothing in the platform dispatched
@@ -306,10 +308,11 @@ const EVIDENCE_PATTERNS = {
  * also catch an unrelated 424) — broad is the safe direction for a screen whose
  * only power is to stop the shoot.
  *
- * The claim that the chain is real does NOT rest on them. It rests on the
- * structural facts beside them: the app server's own environment (the scripted
- * runtime's single switch), the sealed provider row read before AND after the
- * step, and the movement of the unattributed `/api/mcp` counter.
+ * Nothing here identifies which runtime answered a model call, and no field in
+ * this block can. What the fields beside the screens carry is narrower: the
+ * scripted switch was not found in the app server's process chain (one hop above
+ * the listener), the sealed provider row reads present before AND after the step,
+ * and the unattributed `/api/mcp` counter moved. README.md draws the boundary.
  */
 const EVIDENCE_MUST_BE_ZERO = [
   "preRouterShortCircuits",
@@ -760,8 +763,9 @@ async function shoot(cell, { host, kind, declaredState, rootSel, assertions, not
     recordedBy: "cinatra-lifecycle-capture-recorder@1",
     recordedAt: new Date().toISOString(),
     runtime: process.env.S9F_RUNTIME_NOTE ?? "",
-    // THE PROVIDER-EVIDENCE BLOCK, on the record itself, so a reader grading
-    // this cell never has to take the prose's word for which model answered.
+    // THE PROVIDER-EVIDENCE BLOCK, on the record itself, so a reader grading this
+    // cell can weigh its four readings directly. It does NOT identify which model
+    // answered; no field in it can.
     providerEvidence,
     note,
     runId,
@@ -1073,7 +1077,7 @@ try {
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). Neither of the two things the withdrawn round did is done here, and the record's own `providerEvidence` block is what that is read from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the scripted-provider switch was not found in the app server's process chain (`serverScriptedProviderEnv: null`, taken ONE HOP ABOVE the listening process — a non-null answer would be proof of presence, and a null answer there is consistent with absence rather than a proof of it, because a child can be given a variable its parent never had), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
+      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). This sequence performs NEITHER OF THE TWO ACTIONS the withdrawn round performed — which is a statement about what the driver does, not about which runtime answered — and the record's own `providerEvidence` block is what the readings below are taken from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the scripted-provider switch was not found in the app server's process chain (`serverScriptedProviderEnv: null`, taken ONE HOP ABOVE the listening process — a non-null answer would be proof of presence, and a null answer there is consistent with absence rather than a proof of it, because a child can be given a variable its parent never had), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
   });
   await setTheme("dark");
   await shoot("S1__recommendation-card__chat_thread__held__dark", {
