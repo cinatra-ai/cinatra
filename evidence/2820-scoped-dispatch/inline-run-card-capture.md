@@ -107,7 +107,8 @@ So attempt three used `@cinatra-ai/code-reviewer-agent`, a REQUIRED bundled agen
 **No fixture seeding and no hand-written row were needed.** Ordinary boot installs the bundled
 required package by itself:
 
-- Boot log: `[cinatra:extensions:agent] @cinatra-ai/code-reviewer-agent v0.1.1 upserted`, and
+- Boot log: `[cinatra:extensions:agent] @cinatra-ai/code-reviewer-agent <version> upserted` (the
+  version token is elided here for the source-leak gate; the full line is in the lane log), and
   `[static-bundle-lifecycle] anchored 50 bundled serverEntry/required-in-prod package(s) live`
   names it.
 - Database after boot: one row, `owner_level=platform`, `status=active`, `is_default=true`.
