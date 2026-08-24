@@ -1172,9 +1172,10 @@ is checkable rather than promised, including what it does NOT settle:
 - **The turn names no package token**, in either form the pre-router reads.
   `detectExplicitDispatchPackage` needs BOTH a verb and a package reference, so it
   returns null, the hard short-circuit cannot fire and the soft directive is never
-  prepended. Nothing in the platform dispatched this run from that sentence: it was
-  started by a model calling `agent_run` through this instance's MCP toolbox.
-  WHICH model served the turn is a separate question, bounded below.
+  prepended, and its counters read 0. That the run was therefore started by a MODEL
+  calling `agent_run` is an ARCHITECTURAL INFERENCE from that absence plus the run's
+  own chat-launch carrier — not a measurement: no committed field records who
+  invoked the tool, and the `/api/mcp` counter is expressly unattributed.
 - **No step of this sequence clears the sealed `openai_connection` row, and it is
   read on BOTH sides of the step** — timeline rows `T1c` (before) and `T3a` (after
   the step's own model call). The earlier round removed it at `T1c`'s position;
@@ -1208,7 +1209,7 @@ is checkable rather than promised, including what it does NOT settle:
   (`/configuration/development?tab=tunnel`, `publicBaseUrlSource: "manual"`), the
   app was restarted so the OAuth audience allowlist follows it, and the driver
   proves the ingress answers inside the app's own 2500 ms reachability budget
-  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 515 ms).
+  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 313 ms).
 
 ## What the counters are, and what they are not
 
@@ -1232,7 +1233,7 @@ who exercised it.
 
 ## And this time the run finished
 
-`agent_runs.status = completed`, `error` empty, one `representation` (a 5296-byte
+`agent_runs.status = completed`, `error` empty, one `representation` (a 5107-byte
 `text/markdown` blob), one processed `artifact_produced_outbox` event and one
 `artifact_review_gates` row. `RUN-READBACK.md` reads all of it out of the database
 and states, claim by claim, which field supports it and what that field does not

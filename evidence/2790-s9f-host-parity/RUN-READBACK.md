@@ -213,7 +213,7 @@ output is committed as `logs/realchain-db-readback.txt`. The capture times are
 the recorder's own `recordedAt` and the press times are the driver's clock —
 each row says which. Nothing is read off a screen.
 
-The run: **`b63db643-5a60-4e67-956f-a06184b82035`**, started from one typed turn
+The run: **`52f8b620-b4c4-4ecd-9635-93acdd0e7485`**, started from one typed turn
 in the conversation named by the `finalUrl` on the two `S1` records.
 
 ## What is claimed about the chain, and what each claim is read from
@@ -263,20 +263,20 @@ than conclusive. Both residuals are named rather than flattened into one word.
 
 | # | What happened | Time (UTC, 2026-08-24) | Clock | Read from |
 |---|---|---|---|---|
-| 1 | The public ingress answered inside the app's own 2500 ms budget: `HEAD /api/mcp` → `405` in **515 ms**; `/api/health` → `200` | `23:20:32.966` | process | `timeline-realchain.json` row `T0` |
-| 2 | The run was created, person-present | `23:20:59.797401` | db | `cinatra.agent_runs.created_at` |
-| 3 | It PARKED at the recommendation hold | `23:21:00.604777` | db | `lifecycle_continuation_park.created_at` |
-| 4 | `S1` light / dark — representation, produced-outbox and review-gate rows all **0** | `23:21:20.683` / `23:21:21.809` | process | `dbAt` + `recordedAt` on the `S1` records |
-| 5 | `R5` light / dark — the SAME hold still `parked` | `23:21:37.272` / `23:21:38.352` | process | `dbAt` + `recordedAt` on the `R5` records |
-| 6 | The sealed provider row is READ BACK, still present, still not the placeholder | `23:21:40.902` | process | row `T1c` |
-| 7 | The three kept decisions are written (one release transaction, one timestamp) | `23:22:02.166648` | db | `run_selected_skill_revisions.selected_at` |
-| 8 | The hold is RELEASED | `23:22:02.175215` | db | `lifecycle_continuation_park.resolved_at` |
-| 9 | `S2` light / dark — settled in place, after a reload | `23:22:27.550` / `23:22:28.752` | process | `recordedAt` on the `S2` records |
-| 10 | The person answers the run's own in-flight gate with its own `Continue` — one press, landed | `23:22:29.710` | process | `gatePresses` in `logs/realchain-sequence-state.json` |
-| 11 | The artifact the run produced is written | `23:22:52.711414` | db | `cinatra.representation.created_at` |
-| 12 | The run reaches `completed`, `error` empty | `23:22:52.795` | db | `agent_runs.completed_at` |
-| 13 | The sealed provider row is READ AGAIN, after the step's own model call | `23:23:12.217` | process | row `T3a` |
-| 14 | `R6` light / dark — question decided, run finished | `23:23:27.039` / `23:23:28.118` | process | `recordedAt` on the `R6` records |
+| 1 | The public ingress answered inside the app's own 2500 ms budget: `HEAD /api/mcp` → `405` in **313 ms**; `/api/health` → `200` | `23:39:09.027` | process | `timeline-realchain.json` row `T0` |
+| 2 | The run was created, person-present | `23:39:33.521858` | db | `cinatra.agent_runs.created_at` |
+| 3 | It PARKED at the recommendation hold | `23:39:34.293851` | db | `lifecycle_continuation_park.created_at` |
+| 4 | `S1` light / dark — representation, produced-outbox and review-gate rows all **0** | `23:39:54.065` / `23:39:55.203` | process | `dbAt` + `recordedAt` on the `S1` records |
+| 5 | `R5` light / dark — the SAME hold still `parked` | `23:40:10.699` / `23:40:11.789` | process | `dbAt` + `recordedAt` on the `R5` records |
+| 6 | The sealed provider row is READ BACK, still present, still not the placeholder | `23:40:14.517` | process | row `T1c` |
+| 7 | The three kept decisions are written (one release transaction, one timestamp) | `23:40:35.058938` | db | `run_selected_skill_revisions.selected_at` |
+| 8 | The hold is RELEASED | `23:40:35.073743` | db | `lifecycle_continuation_park.resolved_at` |
+| 9 | `S2` light / dark — settled in place, after a reload | `23:41:01.045` / `23:41:02.229` | process | `recordedAt` on the `S2` records |
+| 10 | The person answers the run's own in-flight gate with its own `Continue` — one press, landed | `23:41:03.171` | process | `gatePresses` in `logs/realchain-sequence-state.json` |
+| 11 | The artifact the run produced is written | `23:41:28.746616` | db | `cinatra.representation.created_at` |
+| 12 | The run reaches `completed`, `error` empty | `23:41:28.820` | db | `agent_runs.completed_at` |
+| 13 | The sealed provider row is READ AGAIN, after the step's own model call | `23:41:47.190` | process | row `T3a` |
+| 14 | `R6` light / dark — question decided, run finished | `23:42:01.980` / `23:42:03.064` | process | `recordedAt` on the `R6` records |
 
 ## What the run produced
 
@@ -284,9 +284,9 @@ than conclusive. Both residuals are named rather than flattened into one word.
 |---|---|
 | `cinatra.run_selected_skill_revisions` | **3** — `blog-post-matcher → user_adjusted`, `blog-writing → recommended_confirmed`, `web-research → recommended_confirmed` |
 | `cinatra.representation` | **1** — revision 1, `form=file` |
-| the resource behind it | one `text/markdown` blob of **5296 bytes** |
-| `cinatra.artifact_produced_outbox` | **1**, emitter `createSemanticArtifact`, `origin_kind=agent_produced`, processed at `23:23:01.477806` |
-| `cinatra.artifact_review_gates` | **1**, `status=pending`, opened `23:23:01.305979` |
+| the resource behind it | one `text/markdown` blob of **5107 bytes** |
+| `cinatra.artifact_produced_outbox` | **1**, emitter `createSemanticArtifact`, `origin_kind=agent_produced`, processed at `23:41:39.698856` |
+| `cinatra.artifact_review_gates` | **1**, `status=pending`, opened `23:41:39.485802` |
 
 `cinatra.agent_runs.error` is **empty**. Every earlier round in this lane had to
 disclose a downstream failure here — `503 NO_LLM_PROVIDER`, the provider's

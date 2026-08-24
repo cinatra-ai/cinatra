@@ -144,12 +144,15 @@ function redact(value) {
   return value;
 }
 
-// THE SCRIPTED RUNTIME IS NOT MERELY UNUSED HERE — IT IS REFUSED. Its only
-// activation switch is this one env var; a sequence that ran with it set could
-// not honestly claim any leg was real, so the driver stops before it starts.
+// THIS DRIVER REFUSES TO RUN UNDER THE SCRIPTED FLAG IN ITS OWN ENVIRONMENT.
+// That is all this guard checks — the driver's process, not the app server's.
+// It is the WEAK half and is labelled as such wherever it is recorded
+// (`driverScriptedProviderEnv`); the server's own value is read separately at
+// every shutter, one hop above the listening process, and CANNOT exclude a
+// variable injected into the listener alone.
 if (process.env.CINATRA_TEST_LLM_PROVIDER) {
   throw new Error(
-    `CINATRA_TEST_LLM_PROVIDER is set (${process.env.CINATRA_TEST_LLM_PROVIDER}) — this sequence refuses to run a chain that can reach the scripted runtime`,
+    `CINATRA_TEST_LLM_PROVIDER is set in THIS process (${process.env.CINATRA_TEST_LLM_PROVIDER}) — the driver refuses to run under it; note this says nothing about the app server's own environment, which is read separately at every shutter`,
   );
 }
 mkdirSync(OUT, { recursive: true });
@@ -190,10 +193,12 @@ const DECISION_ORDER = ["confirm", "adjust", "skip", "confirm"];
  * either. Nothing in the platform tells the model what to do with this sentence.
  * The agent is named the way a person names it: by the display name on its card.
  *
- * So nothing in the platform can turn this turn into a run: it was started by a
- * model calling the platform's own `agent_run` through the MCP toolbox. WHICH
- * model that was is a separate question these records do not settle, and the
- * boundary is written out in README.md.
+ * So the platform's own deterministic path cannot turn this turn into a run, and
+ * its counters read 0. That the run was therefore started by a MODEL calling
+ * `agent_run` is an ARCHITECTURAL INFERENCE from that absence plus the run's own
+ * chat-launch carrier — not a measurement: no field here records who invoked the
+ * tool, and the `/api/mcp` counter is expressly unattributed. README.md carries
+ * the same boundary.
  *
  * WHY THE IDEA IS SPELLED OUT, since it looks like the thing the withdrawn round
  * did. It is not. The withdrawn turn's JSON mattered because that turn ALSO named
@@ -1077,7 +1082,7 @@ try {
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). This sequence performs NEITHER OF THE TWO ACTIONS the withdrawn round performed — which is a statement about what the driver does, not about which runtime answered — and the record's own `providerEvidence` block is what the readings below are taken from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the scripted-provider switch was not found in the app server's process chain (`serverScriptedProviderEnv: null`, taken ONE HOP ABOVE the listening process — a non-null answer would be proof of presence, and a null answer there is consistent with absence rather than a proof of it, because a child can be given a variable its parent never had), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
+      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the agent's work step has not run and the run-card count reads ZERO (the run row itself EXISTS and is parked — `runStatus` reads `pending_input` in this record's own `dbAt` block). Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). This sequence performs NEITHER OF THE TWO ACTIONS the withdrawn round performed — which is a statement about what the driver does, not about which runtime answered — and the record's own `providerEvidence` block is what the readings below are taken from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the scripted-provider switch was not found in the app server's process chain (`serverScriptedProviderEnv: null`, taken ONE HOP ABOVE the listening process — a non-null answer would be proof of presence, and a null answer there is consistent with absence rather than a proof of it, because a child can be given a variable its parent never had), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
   });
   await setTheme("dark");
   await shoot("S1__recommendation-card__chat_thread__held__dark", {
@@ -1114,7 +1119,7 @@ try {
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The run page for the SAME run — the one the model started from the conversation — while the recommendation is still held: the two-column frame, the step rail down the LEFT with `Recommendation` at the trigger position, and the chip row as that step's own surface in the run detail on the RIGHT. Nothing is drawn inline under the rail row (the chip row is a descendant of the run-detail column, not of the rail column and not of the row), and there is no Agentic Run Progress section beside a run that has not run. A held run contributes no work steps of its own, so what the rail carries here is the gate row alone — stated, not glossed.",
+      "The run page for the SAME run this conversation's turn started — while the recommendation is still held: the two-column frame, the step rail down the LEFT with `Recommendation` at the trigger position, and the chip row as that step's own surface in the run detail on the RIGHT. Nothing is drawn inline under the rail row (the chip row is a descendant of the run-detail column, not of the rail column and not of the row), and there is no Agentic Run Progress section beside a run that has not run. A held run contributes no work steps of its own, so what the rail carries here is the gate row alone — stated, not glossed.",
   });
   await setTheme("dark");
   await shoot("R5__recommendation-card__run_card__held__dark", {
