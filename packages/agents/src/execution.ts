@@ -80,6 +80,22 @@ const isScopeDenial = (err: unknown): err is { reason: string } =>
 // makes a marked gate FAIL CLOSED to the review surface (never the legacy gate,
 // which could dual-path an already-pinned gate); see the branch below.
 type ArtifactReviewGateSeam = {
+  // cinatra#2929: the one review core, reached the same way the gate store is —
+  // through the boot-bound slot, so this file gains no import edge for it.
+  decideDeclaredReview(input: {
+    orgId: string;
+    templateId: string | null;
+    packageVersion: string | null;
+    targets: unknown;
+  }): Promise<
+    | {
+        review: true;
+        /** The set to PIN — validated, deduped, and policy-filtered. */
+        targets: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>;
+        reason: string;
+      }
+    | { review: false; why: string }
+  >;
   emit(input: {
     runId: string;
     orgId: string;
@@ -1366,6 +1382,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // redirecting to a gate that isn't this run's — an invalid-targets error (no
       // gate), a different-org conflict, or a vanished row all fall open to the
       // legacy HITL gate so the run degrades rather than dead-ends.
+      // What the gate will pin. It starts as the marker's own value — which is
+      // what an unbound seam and a core that cannot answer both fall back to —
+      // and is replaced by the core's decided set when there is one.
+      let pinnedTargets: unknown = rawTargets;
       let routeToReviewSurface = false;
       const gateSeam = resolveArtifactReviewGateSeam();
       if (!gateSeam) {
@@ -1385,12 +1405,79 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         );
         routeToReviewSurface = true;
       } else {
-        const emitResult = await gateSeam.emit({
-          runId,
-          orgId: run.orgId,
-          reviewTaskId,
-          targets: rawTargets,
-        });
+        // ------------------------------------------------------------------
+        // THE ONE REVIEW CORE (cinatra#2929, epic #2926 W2b) — the DECLARED
+        // input. Until this slice a marked gate pinned and routed
+        // unconditionally: the one review kind an agent author states outright
+        // was the one kind the policy table had no say over, and an agent whose
+        // marker named nothing usable was told so by the emitter rather than by
+        // the predicate both kinds share.
+        //
+        // Now both kinds prove the same binding and ask the same policy, and
+        // only then is the gate emitted. A DECLINE — an unusable marker, or an
+        // organization that forbids a review for this work — falls through to
+        // the legacy human gate below, which is exactly what an unusable marker
+        // has always done. That keeps the single-decision-path property this
+        // branch is built around: the review surface OR the legacy gate, and
+        // never both, because nothing is pinned when the core declines.
+        //
+        // FAIL-OPEN, deliberately, on a core that THROWS: a decision that cannot
+        // be reached must not decide. The pre-#2929 behaviour is the fallback —
+        // pin and route — because a marked step is a step whose author asked for
+        // a review, and refusing one on a resolver fault would drop it silently.
+        let coreDecision: {
+          review: boolean;
+          why?: string;
+          reason?: string;
+          targets?: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>;
+        };
+        try {
+          coreDecision = await gateSeam.decideDeclaredReview({
+            orgId: run.orgId,
+            templateId: run.templateId,
+            // The version the RUN is pinned to. `agent_templates` is a mutable
+            // row a reinstall overwrites in place, so a template that has moved
+            // on must not supply a declared skip that takes this run's review
+            // away.
+            packageVersion: run.packageVersion ?? null,
+            targets: rawTargets,
+          });
+        } catch (coreErr) {
+          console.warn(
+            `[artifact-review-gate] run=${runId} task=${task.id} review core unavailable ` +
+              `(${coreErr instanceof Error ? coreErr.message : String(coreErr)}) — ` +
+              `opening the review the marked step asked for`,
+          );
+          coreDecision = { review: true };
+        }
+        if (!coreDecision.review) {
+          console.log(
+            `[artifact-review-gate] run=${runId} task=${task.id} no review for this work ` +
+              `(${coreDecision.why ?? "the review core declined"}) — falling through to the ordinary human gate`,
+          );
+        }
+        // WHAT THE GATE PINS IS WHAT THE CORE DECIDED FOR, not what the flow
+        // input happened to hold. The core validated the set, deduped it and
+        // dropped any target the organization forbids a review for — emitting
+        // the raw value again would put a refused artifact back under the gate
+        // and ask the emitter to re-derive a set that had already been decided.
+        // The fail-open branch above resolves no set, so it keeps the raw value:
+        // a core that could not answer must not narrow what a person reviews.
+        if (coreDecision.review && coreDecision.targets) {
+          pinnedTargets = coreDecision.targets;
+        }
+        const emitResult = coreDecision.review
+          ? await gateSeam.emit({
+              runId,
+              orgId: run.orgId,
+              reviewTaskId,
+              targets: pinnedTargets,
+            })
+          : ({
+              ok: false as const,
+              code: "invalid-targets" as const,
+              message: coreDecision.why ?? "the review core opened no review",
+            });
         if (emitResult.ok) {
           routeToReviewSurface = true;
         } else {
@@ -1473,7 +1560,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             reviewSurfaceUrl,
             reviewTaskId,
             lifecycleCardRef,
-            targetCount: Array.isArray(rawTargets) ? rawTargets.length : null,
+            targetCount: Array.isArray(pinnedTargets) ? pinnedTargets.length : null,
             agentSummary: historyText ?? "",
           },
           reviewTaskId,
