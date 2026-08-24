@@ -69,6 +69,10 @@ import { maybeParkCheckpoint, sweepParks } from "./lifecycle-continuation-park-s
 
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import {
+  proveReviewBinding,
+  type ReviewBinding,
+} from "@/lib/lifecycle/lifecycle-review-core";
+import {
   producedEventId,
   type ProducedEventKind,
 } from "@/lib/lifecycle/lifecycle-produced-event";
@@ -175,33 +179,132 @@ function parseCompiledManifest(raw: string | null): CompiledManifestLifecycle | 
 /** Resolve the producing agent's compiled manifest lifecycle from the event's
  * `producerRunId` → the run's template → `lifecycle_config`. Best-effort: any
  * missing link yields `undefined` (core-default lattice). */
-async function resolveManifest(
+/**
+ * The producing agent's own declarations: its compiled lifecycle refinements AND
+ * whether it declares an artifact-bound output at all (cinatra#2929).
+ *
+ * ONE READ, ONE SNAPSHOT, for both. They live on the same template row, and one
+ * review decision needs both — the binding proof reads the second, the policy
+ * reads the first. Reading them separately would cost a second round trip AND
+ * open a window in which a concurrent recompile answers the binding from one
+ * template state and the policy from another, so the two halves are resolved
+ * together and threaded through the decision.
+ *
+ * VERSION-PINNED, not template-scoped. `agent_templates` is a MUTABLE row a
+ * reinstall or recompile overwrites in place, while a run is PINNED to the
+ * `package_version` it was created against. Trusting the template's CURRENT
+ * `has_artifact_bindings` unconditionally would let an in-flight run silently
+ * lose its review the moment the template moved on: v1 declares a binding, a run
+ * starts pinned to v1, a reinstall to a v2 without bindings flips the row to
+ * `false`, and the v1 run's own write would be settled with no review at all —
+ * irreversibly, because the event is marked processed. So the flag is trusted
+ * ONLY while the row's current `package_version` still equals the run's; a
+ * moved-on template, or an unpinned run whose floating tag can move under it,
+ * reads as UNKNOWN and keeps its review. The run-completion materializer applies
+ * the identical rule to the identical column, for the identical reason.
+ *
+ * Best-effort in the same sense the manifest read always was: any missing link
+ * yields `undefined` for the manifest and `null` for the declaration, and `null`
+ * is UNKNOWN, never "no bindings" — see `ProducedOutputDeclaration`.
+ */
+type ProducerDeclarations = {
+  manifest: CompiledManifestLifecycle | undefined;
+  hasArtifactBindings: boolean | null;
+};
+
+const NO_DECLARATIONS: ProducerDeclarations = {
+  manifest: undefined,
+  hasArtifactBindings: null,
+};
+
+async function resolveProducerDeclarations(
   producerRunId: string | null,
-): Promise<CompiledManifestLifecycle | undefined> {
-  if (!producerRunId) return undefined;
+): Promise<ProducerDeclarations> {
+  if (!producerRunId) return NO_DECLARATIONS;
   try {
     const [run] = await db
-      .select({ templateId: agentRuns.templateId })
+      .select({ templateId: agentRuns.templateId, packageVersion: agentRuns.packageVersion })
       .from(agentRuns)
       .where(eq(agentRuns.id, producerRunId))
       .limit(1);
-    if (!run?.templateId) return undefined;
+    if (!run?.templateId) return NO_DECLARATIONS;
     const [tmpl] = await db
-      .select({ lifecycleConfig: agentTemplates.lifecycleConfig })
+      .select({
+        lifecycleConfig: agentTemplates.lifecycleConfig,
+        hasArtifactBindings: agentTemplates.hasArtifactBindings,
+        packageVersion: agentTemplates.packageVersion,
+      })
       .from(agentTemplates)
       .where(eq(agentTemplates.id, run.templateId))
       .limit(1);
-    return parseCompiledManifest(tmpl?.lifecycleConfig ?? null);
+    const pinHolds =
+      typeof run.packageVersion === "string" &&
+      run.packageVersion.length > 0 &&
+      typeof tmpl?.packageVersion === "string" &&
+      tmpl.packageVersion === run.packageVersion;
+    // THE MANIFEST IS PINNED TOO, and by a different rule, because the two
+    // declarations fail in different directions.
+    //
+    // `hasArtifactBindings: false` REMOVES a review, so it is trusted only while
+    // the pin HOLDS — an unpinned run's floating tag can move under it, and the
+    // materializer applies the same rule to the same column.
+    //
+    // A manifest `requestedSkips: ["review"]` also removes a review, so a
+    // template PROVABLY on another version must not supply it: a run pinned to a
+    // version that declared no skip would otherwise lose its review to a skip
+    // some later version declared. But an UNPINNED run keeps its manifest, which
+    // is the behaviour it has always had: dropping it there would stop honouring
+    // an agent's declared skip for every run without a pin, which is a change to
+    // when the policy applies and no part of what this slice was asked to do.
+    const pinContradicted =
+      typeof run.packageVersion === "string" &&
+      run.packageVersion.length > 0 &&
+      typeof tmpl?.packageVersion === "string" &&
+      tmpl.packageVersion !== run.packageVersion;
+    return {
+      manifest: pinContradicted
+        ? undefined
+        : parseCompiledManifest(tmpl?.lifecycleConfig ?? null),
+      hasArtifactBindings:
+        pinHolds && typeof tmpl?.hasArtifactBindings === "boolean"
+          ? tmpl.hasArtifactBindings
+          : null,
+    };
   } catch {
-    return undefined;
+    return NO_DECLARATIONS;
   }
+}
+
+/**
+ * Is this recorded write bound to an artifact the agent DECLARED it produces?
+ *
+ * The produced half of the one review core's binding proof (cinatra#2929). Asked
+ * BEFORE the policy on every produced path — the per-event one and the batch one
+ * alike — because an agent whose outputs are bound to no artifact never reaches a
+ * review, and "never" is not something an organization rule should have to say.
+ *
+ * A refusal here is `no-gate`, not `not-classifiable`: the event is perfectly
+ * classifiable and the answer is that no review exists for it.
+ */
+function proveProducedBinding(
+  row: ProducedEventRow,
+  declarations: ProducerDeclarations,
+): ReviewBinding {
+  return proveReviewBinding({
+    kind: "produced-output",
+    produces: { hasArtifactBindings: declarations.hasArtifactBindings },
+    writeEvent: toAxes(row),
+  });
 }
 
 /** Resolve the review-orchestration context for a produced event. Returns a
  * `not-classifiable` reason when the artifact's `objects` row is missing or
  * tombstoned (the artifact was deleted between production and orchestration) —
  * the caller then leaves the artifact ungated. */
-async function resolveReviewContext(event: ProducedEventRow): Promise<ResolveContextResult> {
+async function resolveReviewContext(
+  event: ProducedEventRow,
+  declarations?: ProducerDeclarations,
+): Promise<ResolveContextResult> {
   const [obj] = await db
     .select({ type: objectsRef.type, deletedAt: objectsRef.deletedAt })
     .from(objectsRef)
@@ -218,7 +321,12 @@ async function resolveReviewContext(event: ProducedEventRow): Promise<ResolveCon
     destinationClass,
     originKind,
   });
-  const manifest = await resolveManifest(event.producerRunId);
+  // THE SAME SNAPSHOT the binding was proved against, when the caller has one.
+  // A caller that has not resolved them yet (the expiry re-evaluation paths)
+  // reads them here; a caller mid-decision passes what it already read, so the
+  // binding and the policy can never answer from two template states.
+  const { manifest } =
+    declarations ?? (await resolveProducerDeclarations(event.producerRunId));
 
   return {
     ok: true,
@@ -527,7 +635,17 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
     return "no-gate";
   }
 
-  const context = await resolveReviewContext(row);
+  // THE BINDING, PROVED FIRST (cinatra#2929). A review exists only for
+  // artifact-bound work: an agent that declares no artifact-bound output reaches
+  // no review, whatever its writes and whatever the policy would have said.
+  const declarations = await resolveProducerDeclarations(row.producerRunId);
+  const binding = proveProducedBinding(row, declarations);
+  if (!binding.bound) {
+    await markProducedEventProcessed(row.eventId);
+    return "no-gate";
+  }
+
+  const context = await resolveReviewContext(row, declarations);
   if (!context.ok) {
     await markProducedEventProcessed(row.eventId);
     return "not-classifiable";
@@ -922,7 +1040,18 @@ async function orchestrateProducedBatch(
       await settleAlreadyLinkedEvent(row);
       continue;
     }
-    const context = await resolveReviewContext(row);
+    // The SAME binding proof the per-event path applies (cinatra#2929). Asked
+    // per member rather than per production: a run may declare an artifact-bound
+    // output and still write an unbound revision, and a member that proves no
+    // binding must not be sealed into a partition gate.
+    const memberDeclarations = await resolveProducerDeclarations(row.producerRunId);
+    const memberBinding = proveProducedBinding(row, memberDeclarations);
+    if (!memberBinding.bound) {
+      await markProducedEventProcessed(row.eventId);
+      summary.noGate += 1;
+      continue;
+    }
+    const context = await resolveReviewContext(row, memberDeclarations);
     if (!context.ok) {
       await markProducedEventProcessed(row.eventId);
       summary.notClassifiable += 1;
