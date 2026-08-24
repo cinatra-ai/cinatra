@@ -193,3 +193,18 @@ Assisted-by: Claude Code (claude-fable-5)
 Assisted-by: Claude Code (claude-opus-5)
 Correction-for: 3ceba8711c35760c1d956c373154df7911d2c262
 ```
+
+---
+
+## Correction for `5901ca07cb3f42945fc5a06b34f26ce092dfd8b6`
+
+```
+correction: truthful-attribution record for 5901ca07
+
+The record on 5901ca07 (correction attempt for 871443b9b) asserted a maintainer-tier human arm, but the commit landed through PR #2964 with no review by the named login — the fabrication flag was correct. The commit is a docs-only ledger append (no high-risk path), so its corrected record carries the gate arm. Its Correction-for assertion is superseded by the v2 correction above (latest-wins).
+
+Gate-suite: cinatra-core@2026.08.3
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 5901ca07cb3f42945fc5a06b34f26ce092dfd8b6
+```
