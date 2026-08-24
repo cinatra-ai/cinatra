@@ -986,8 +986,10 @@ which surface it is.
 
 **Read `PLAN-WALK.md` beside this file for the grading.** Every cell carries the
 plan sentences that govern it, the drawing it is graded against, and a
-`DRAWING-CHECK>` written by looking at the picture. **Two of the eight FAIL, and
-they are named as FAILs** — see below. **Read `RUN-READBACK.md`** for who created
+`DRAWING-CHECK>` written by looking at the picture. **All eight PASS.** Two of
+them — the `R6` pair — were first filed as FAILs on the settled rail entry, and
+have since been RE-SHOT on the commit that fixes it, on their own real run; see
+*The `R6` re-shoot* below. **Read `RUN-READBACK.md`** for who created
 the run, who decided it, what model was configured, and what the run did and did
 not produce, every value read out of the database.
 
@@ -1001,31 +1003,43 @@ branch carries. `S1` now records `[data-inline-run-card]` at **0** on the held
 turn, and `S2` records `[data-hitl-skill-picker]` at **0** inside the run card
 on the decided one — the absences are measured, not asserted.
 
-## The two FAILs
+## The `R6` re-shoot, and the one shortfall that stands
 
-**`R6` does not draw the recommendation's settled rail entry, in either
-palette.** The plan puts the row "at the trigger position, the top entry on the
-step rail", and the rework's own settled reading is the rail's resolved-gate
-history row. `R5` shows the held half working exactly: the two-column frame, `①
-Recommendation` on the left, the chip row as that step's surface in the run
-detail on the right, nothing inline under the rail row and no progress section.
-But once the run leaves `pending_input` the screen stops contributing the step
-at all — it adds one only where the SCREEN hosts the card, and from that moment
-the run panel inside the run detail hosts it instead. So in `R6` the left column
-carries the run's own `✓ Step 1` and the `Recommendation` row is absent
-(`railStepPresent: false`, measured on both cells). The page still has two
-columns — they are the screen's own, which is why the gate frame's instrumented
-columns read absent beside a present `run-surface` — but the recommendation's
-rail entry is not among them.
+**`R6` was first filed as a FAIL, and it is now re-shot as a PASS.** The plan puts
+the row *"at the trigger position, the top entry on the step rail"*, and the
+ratified run-surface drawing says a resolved gate keeps it: *"A resolved gate stays
+on the rail as read-only history — its entry keeps its place and records how it was
+settled."* The withdrawn `R6` pair did not draw it: once the run left
+`pending_input` the screen stopped contributing the step at all — it added one only
+where the SCREEN hosts the card, and from that moment the run panel inside the run
+detail hosts it instead — so the `Recommendation` row vanished and `RunSurfaceRail`
+was not rendered with it.
 
-Everything else `R6` owes it shows: the settled chips are in place, nothing
-inside the card can be pressed (all three per-chip action counts read 0 inside
-the card root), and the run detail is restored with the run's own progress.
+`64c0b1412` separates the two questions the one gate was answering:
+`recommendationRailEntry` decides whether the entry EXISTS and how it READS, while
+the screen's own host gate keeps deciding only what SURFACE the step opens (a
+settled entry opens none — the decided summary it stands for is already inside the
+run panel). **`R6` is re-shot on that code, on its own real run**
+(`drivers/11-r6-settled-rail-sequence.mjs`), and nothing else is re-shot: `S1`,
+`S2` and `R5` are the cells recorded before, unchanged, with their records
+untouched.
 
-**One further shortfall, stated rather than glossed.** In `R5` the rail carries
-only the gate row: the page's own rail is suppressed while the run has no step
-entries yet, so "ahead of the steps it would authorize" is shown as a position
-without the steps it precedes.
+What the new pair measures, in both palettes: the rail's ordered rows read
+`Recommendation`, `Step 1` — the settled gate entry FIRST, ahead of the run's own
+work step; its circle carries a check glyph and no numeral, and the row is
+`data-recommendation-step-settled="true"`, `data-recommendation-step-selected="false"`,
+so the title is drawn unhighlighted; both of `RunSurfaceRail`'s instrumented
+columns are present (they read absent on the withdrawn pair); the settled chips are
+in the run detail with nothing inside the card that can be pressed (all three
+per-chip action counts read 0 inside the card root). `PLAN-WALK.md` grades every
+clause of that from the pixels.
+
+**One shortfall stands, stated rather than glossed.** In `R5` the rail carries only
+the gate row: the page's own rail is suppressed while the run has no step entries
+yet, so "ahead of the steps it would authorize" is shown there as a position
+without the steps it precedes. `R6` is where that reading completes — on the
+decided page the rail reads `Recommendation`, `Step 1`, and the gate entry is
+visibly ahead of the work step.
 
 ## What served the model, and what this environment cannot do
 
@@ -1077,7 +1091,25 @@ synced PINNED to the committed lock shas (112/112) before boot. The drivers are
 `drivers/09-chat-and-run-page-sequence.mjs` (the whole sequence). It is the dev
 build, not a production-equivalent one, as every earlier round in this lane was.
 
+**The `R6` re-shoot ran the same way, on a rebuilt lane of the same shape** — the
+rework round's lane database no longer existed — with `drivers/10-r6-lane-setup.mjs`
+(the lane's own owner, in the platform's one organization),
+`drivers/08-real-provider.test.ts` again for the sealed provider row, and
+`drivers/11-r6-settled-rail-sequence.mjs` for the sequence. Two lane facts that
+changed a RESULT rather than only a setting are stated in `RUN-READBACK.md`: the
+skill assignment is keyed by the agent's PACKAGE NAME (keyed by template id it
+reads back for that id and the recommendation seam still finds no candidates, so
+the run dispatches unheld), and `CINATRA_TEST_LLM_PROVIDER=scripted` is set,
+without which an install with no configured provider never reaches the scripted
+runtime at all (`503 NO_LLM_PROVIDER`, measured here).
+
 ## Three corrections made to this round's own artifacts, before it was filed
+
+> These three are the HISTORY of the withdrawn `R6` pair, kept because a record
+> that quietly loses its own corrections is worse than one that carries them.
+> Points 1 and 2 describe records that no longer stand: the `R6` pair has since
+> been re-shot on `64c0b1412` and its records replaced (see *The `R6` re-shoot*
+> above, and the R6 section of `RUN-READBACK.md` / `TIMELINE.md`).
 
 A convergence review read the records against the prose and caught three places
 where this round's own writing outran its own measurements. All three are fixed

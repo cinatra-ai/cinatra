@@ -33,8 +33,9 @@
     "S4 -- one run walked end to end in a real conversation, whole browser windows; its S1 / S2",
     "pair was WITHDRAWN and RE-SHOT by the rework round, which added the run-page pair R5 / R6",
     "from the SAME run: the skills question and the decided skills, in the chat AND on the run",
-    "page, light and dark, with the two R6 cells graded a FAIL on the settled rail entry in",
-    "evidence/2790-s9f-host-parity/PLAN-WALK.md) and the S9d",
+    "page, light and dark. The two R6 cells were first graded a FAIL on the settled rail entry",
+    "and have since been RE-SHOT, on their own real run, on the commit that fixes it; they are",
+    "graded PASS from the new pixels in evidence/2790-s9f-host-parity/PLAN-WALK.md) and the S9d",
     "SCHEDULE group (S9d-C1 / C2 / C5) -- each record carries its own `note`:",
     "",
     "  A1 / A3 / A4 / A5 - cinatra#2855 (PR #2862), evidence/2855-settled-outcome. A1 is the gate",
@@ -7046,9 +7047,9 @@
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b632737c-a18c-4c3a-acbf-1aa6c60af623",
       "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided.png",
-      "sha256": "10a10ac433e8dbe2b32a9629d2fcf1b06622d07077ed7854ebd5c70c5caf20bc",
+      "sha256": "bcd6f6cec98c32c645f36d12c7ae89c58235ae32e07022eae0ea3956fa7d4ce5",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -7068,22 +7069,22 @@
         {
           "selector": "[data-run-step-rail-column]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-run-detail-column]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-run-recommendation-chip-row]",
@@ -7117,36 +7118,36 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-23T23:40:10.326Z",
+      "recordedAt": "2026-08-24T11:45:10.624Z",
       "runtime": "dev-runtime",
-      "note": "The same run page after the decision, GRADED AGAINST WHAT WAS MEASURED ON IT rather than against what was expected. The settled chips ARE in place and nothing inside them can be pressed (the three per-chip action counts all read 0 inside the card root), and the run detail IS restored \u2014 the Agentic Run Progress section is on screen with the run's own reading. BUT the recommendation's rail entry is ABSENT: `railStepPresent` reads false, the left column carries the run's own `Step 1` instead, and the frame's instrumented columns (`run-step-rail-column` / `run-detail-column`) are not drawn \u2014 the two columns here are the screen's own, not `RunSurfaceRail`'s. `run-surface` itself is present with two children. The settled chip row is drawn INSIDE the run progress card rather than above it. This cell is a FAIL on the settled rail entry; PLAN-WALK.md states it as one.",
-      "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "note": "The run page for THIS run after its recommended skills were decided in the chat. What the drawing owes here is one sentence \u2014 \u201cA resolved gate stays on the rail as read-only history \u2014 its entry keeps its place and records how it was settled\u201d \u2014 and this cell is where it is read: the `Recommendation` entry is still on the rail down the LEFT, in the place it held while the question was live, drawn in its COMPLETED reading (the numeral replaced by the check in the circle, the title unhighlighted because the row is no longer the selected one). The run detail on the RIGHT is the run's own panel, not the gate's surface: a settled entry opens nothing of its own, because the decided summary it stands for is already inside that panel. The chips in it state their outcomes and nothing inside the card can be pressed \u2014 the three per-chip action counts all read 0 inside the card root. Read `runSurface` on this record for what was MEASURED of it: the entry's presence and its place in `railRowLabels`, its settled/selected attributes, its indicator's empty text and check glyph, the two instrumented columns, and where the chip row sits. The rest of the sentence above - the title's weight, the pill, the chip wording, the Error block and the controls under it - is a reading of the PIXELS, and `PLAN-WALK.md` grades it that way, on that side of the line.",
+      "runId": "b632737c-a18c-4c3a-acbf-1aa6c60af623",
       "dbAt": {
         "step": "T4",
         "what": "the run page is photographed with the question decided",
-        "at": "2026-08-23T23:40:10.185Z",
+        "at": "2026-08-24T11:45:09.573Z",
         "db": {
           "runStatus": "failed",
           "parkStatus": "released",
-          "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+          "parkResolvedAt": "2026-08-24T11:44:33.942Z",
           "selections": [
             {
               "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
               "selection_source": "user_adjusted",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T11:44:33.932Z"
             },
             {
               "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T11:44:33.932Z"
             },
             {
               "skill_id": "@cinatra-ai/web-research-skill:web-research",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T11:44:33.932Z"
             }
           ],
-          "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/b632737c-a18c-4c3a-acbf-1aa6c60af623"
         }
       },
       "rootAttributes": {
@@ -7189,18 +7190,22 @@
       "runSurface": {
         "surfacePresent": true,
         "surfaceChildren": 2,
-        "railColumnPresent": false,
-        "detailColumnPresent": false,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
         "chipRowPresent": true,
-        "chipRowInDetailColumn": false,
+        "chipRowInDetailColumn": true,
         "chipRowInRailColumn": false,
         "chipRowInsideRailRow": false,
-        "railStepPresent": false,
-        "railStepSelected": null,
-        "railStepSettled": null,
-        "railStepText": null,
-        "railStepIndicatorText": null,
-        "railRowLabels": null,
+        "railStepPresent": true,
+        "railStepSelected": "false",
+        "railStepSettled": "true",
+        "railStepText": "Recommendation",
+        "railStepIndicatorText": "",
+        "railStepIndicatorHasCheckGlyph": true,
+        "railRowLabels": [
+          "Recommendation",
+          "Step 1"
+        ],
         "agenticRunProgressHeadings": 1,
         "headings": [
           "Blog Draft Writer Agent (3)",
@@ -7217,16 +7222,18 @@
         "deviceScaleFactor": 2
       },
       "pageErrors": [],
-      "noteCorrection": "This `note` was CORRECTED after the shutter. The driver wrote it before the measurement and it asserted a settled rail entry the same record measures as absent; a false prose claim beside a true measurement is worse than no prose at all, so the note now says what the record measured. Nothing measured was touched: the screenshot, its sha256 and every assertion count are exactly as recorded. The driver's own note text is fixed too, so a re-run writes the corrected wording."
+      "picturedAttempt": "scripted-runtime",
+      "modelBehindTheStep": "the scripted runtime (#2917), reached as resolveConfiguredLlmRuntime()'s last resort after the real connection was removed",
+      "noteCorrection": "This `note` was CORRECTED after the shutter. The driver wrote it before the measurement and it said `runSurface` carried \"the measurement behind every clause\"; it does not - it measures the rail entry, the columns and the chip row's containment, not typography, status pills or chip wording. The note now says which half is measured and which half is read off the picture. Nothing measured was touched: the screenshot, its sha256 and every assertion count are exactly as recorded, and the driver's own note text is fixed so a re-run writes the corrected wording."
     },
     {
       "cell": "R6__recommendation-card__run_card__decided__dark",
       "declaredHost": "run_card",
       "declaredKind": "recommendation_hold",
       "declaredState": "decided",
-      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/b632737c-a18c-4c3a-acbf-1aa6c60af623",
       "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided__dark.png",
-      "sha256": "877b6296396ee354f21503a28ebf13402a0a7de053c7e7867bf5d67dcc2f5c99",
+      "sha256": "0450effa0a6defb18c80e40ae9f01791593bab9f8d9af629b11321cfcb270c4d",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -7246,22 +7253,22 @@
         {
           "selector": "[data-run-step-rail-column]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-run-detail-column]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-run-recommendation-chip-row]",
@@ -7295,36 +7302,36 @@
         }
       ],
       "recordedBy": "cinatra-lifecycle-capture-recorder@1",
-      "recordedAt": "2026-08-23T23:40:11.412Z",
+      "recordedAt": "2026-08-24T11:45:11.688Z",
       "runtime": "dev-runtime",
-      "note": "The same decided run page in the dark palette. Settled chips present with nothing pressable among them, run detail restored \u2014 and the recommendation's rail entry ABSENT for the same reason as the light cell (`railStepPresent: false`, the run's own `Step 1` in its place, the frame's instrumented columns not drawn). A FAIL on the settled rail entry, stated as one in PLAN-WALK.md.",
-      "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+      "note": "The same decided run page, same run, same window, in the dark palette: the settled `Recommendation` entry still on the rail with its check, the run's own panel in the run detail beside it, the settled chips with nothing left to press. Same owed set as the light cell, and split the same way: the rail entry, the columns and the chip row's containment are MEASURED on this record's own `runSurface`; the palette, the pill and the chip wording are read off the picture.",
+      "runId": "b632737c-a18c-4c3a-acbf-1aa6c60af623",
       "dbAt": {
         "step": "T4",
         "what": "the run page is photographed with the question decided",
-        "at": "2026-08-23T23:40:10.185Z",
+        "at": "2026-08-24T11:45:09.573Z",
         "db": {
           "runStatus": "failed",
           "parkStatus": "released",
-          "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+          "parkResolvedAt": "2026-08-24T11:44:33.942Z",
           "selections": [
             {
               "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
               "selection_source": "user_adjusted",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T11:44:33.932Z"
             },
             {
               "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T11:44:33.932Z"
             },
             {
               "skill_id": "@cinatra-ai/web-research-skill:web-research",
               "selection_source": "recommended_confirmed",
-              "selected_at": "2026-08-23T23:39:20.352Z"
+              "selected_at": "2026-08-24T11:44:33.932Z"
             }
           ],
-          "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+          "url": "/agents/cinatra-ai/blog-draft-writer-agent/b632737c-a18c-4c3a-acbf-1aa6c60af623"
         }
       },
       "rootAttributes": {
@@ -7367,18 +7374,22 @@
       "runSurface": {
         "surfacePresent": true,
         "surfaceChildren": 2,
-        "railColumnPresent": false,
-        "detailColumnPresent": false,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
         "chipRowPresent": true,
-        "chipRowInDetailColumn": false,
+        "chipRowInDetailColumn": true,
         "chipRowInRailColumn": false,
         "chipRowInsideRailRow": false,
-        "railStepPresent": false,
-        "railStepSelected": null,
-        "railStepSettled": null,
-        "railStepText": null,
-        "railStepIndicatorText": null,
-        "railRowLabels": null,
+        "railStepPresent": true,
+        "railStepSelected": "false",
+        "railStepSettled": "true",
+        "railStepText": "Recommendation",
+        "railStepIndicatorText": "",
+        "railStepIndicatorHasCheckGlyph": true,
+        "railRowLabels": [
+          "Recommendation",
+          "Step 1"
+        ],
         "agenticRunProgressHeadings": 1,
         "headings": [
           "Blog Draft Writer Agent (3)",
@@ -7395,7 +7406,9 @@
         "deviceScaleFactor": 2
       },
       "pageErrors": [],
-      "noteCorrection": "This `note` was CORRECTED after the shutter. The driver wrote it before the measurement and it asserted a settled rail entry the same record measures as absent; a false prose claim beside a true measurement is worse than no prose at all, so the note now says what the record measured. Nothing measured was touched: the screenshot, its sha256 and every assertion count are exactly as recorded. The driver's own note text is fixed too, so a re-run writes the corrected wording."
+      "picturedAttempt": "scripted-runtime",
+      "modelBehindTheStep": "the scripted runtime (#2917), reached as resolveConfiguredLlmRuntime()'s last resort after the real connection was removed",
+      "noteCorrection": "This `note` was CORRECTED after the shutter. The driver wrote it before the measurement and it said `runSurface` carried \"the measurement behind every clause\"; it does not - it measures the rail entry, the columns and the chip row's containment, not typography, status pills or chip wording. The note now says which half is measured and which half is read off the picture. Nothing measured was touched: the screenshot, its sha256 and every assertion count are exactly as recorded, and the driver's own note text is fixed so a re-run writes the corrected wording."
     }
   ]
 }

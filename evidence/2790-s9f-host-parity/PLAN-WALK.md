@@ -119,8 +119,16 @@ are already the REVIEW-PAGE cells; the host token in each name (`run_card`) says
 which surface it is.
 
 Every `DRAWING-CHECK>` below was written by VIEWING the picture and comparing it
-to the plan sentence and the named drawing. Two cells FAIL, and the FAILs are
-stated as FAILs.
+to the plan sentence and the named drawing.
+
+**The R6 pair is a RE-SHOOT.** When this set was first filed, R6 failed on the
+one thing it exists to show: the moment the question was decided the
+recommendation's rail entry — and with it the whole two-column frame — stopped
+being drawn. `64c0b1412` fixes that (`recommendationRailEntry` answers whether the
+entry EXISTS separately from who draws the card), and R6 is re-shot on that code,
+on its own real run, by `drivers/11-r6-settled-rail-sequence.mjs`. **Only R6 is
+re-shot**: S1, S2 and R5 are the cells recorded before, unchanged, with their
+records untouched. The R6 entries below are graded from the NEW pixels.
 
 CELL: S1__recommendation-card__chat_thread__held
 PLAN> You ask the assistant, in the chat or the widget, to run an agent that has recommended skills.
@@ -160,30 +168,45 @@ DRAWING> design-run-surface-rail-and-gate.png
 DRAWING-CHECK> requires: the same run page and the same held state in the dark palette / shows: the identical two-column framing on the dark ground — `① Recommendation` on the left, the four undecided chips in the run detail on the right, no progress section; the same measured containment (`chipRowInDetailColumn: true`) / verdict: PASS, with the same rail shortfall as the light cell
 
 CELL: R6__recommendation-card__run_card__decided
-PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the agentic run progress card appears; no skill inside it can be selected.
-PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.
+SECTION> plan (A) §6.2 step 3 · §6.4 step 4 · §6.2's run-page bullet — the three sentences quoted next, in that order. Each PLAN> line stays an exact substring of the plan page.
+PLAN> You confirm (the run starts with your selection) or skip (the recommendation is recorded as skipped, nothing is selected, and the run proceeds with its default skill set). The card settles in place and shows what you chose. The agentic run progress card appears once the skills are decided; no skill inside it can be selected.
+PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the agentic run progress card appears; no skill inside it can be selected. **End state: shaped and started, in the conversation you were already in.**
+PLAN> On the run page the same row sits at the **trigger position**, the top entry on the step rail, ahead of the work steps it would authorize.
 DRAWING> design-run-surface-rail-and-gate.png
-DRAWING-CHECK> requires: the run page after the decision — the recommendation's rail entry settled as the rail's own resolved-gate history row (the completed circle in place of the numeral, the title unhighlighted), the run detail returned to what the run page otherwise shows, the settled chips in place, and NO skills button row inside that card / shows: the run page for the same run; the settled chips ARE in place and nothing inside them can be pressed (root-scoped `[data-skill-action]` counts all 0), and the run detail IS restored — the Agentic Run Progress section is on screen with the run's own reading. BUT the recommendation's rail entry is GONE: the left column now carries the run's own `✓ Step 1` and no `Recommendation` row at all (measured: `railStepPresent: false`). The two columns ARE still there — `run-surface` is present with two children — but they are the SCREEN's own columns, not the gate frame's: `RunSurfaceRail` is not what draws them, so its instrumented `run-step-rail-column` / `run-detail-column` read absent. The settled chip row is drawn INSIDE the Agentic Run Progress card rather than above it. / verdict: FAIL on the settled rail entry — the plan's "the same row sits at the trigger position, the top entry on the step rail" and the rework's own settled reading are not what this branch draws once the run leaves `pending_input` on this agent's branch. The cause, read out of `packages/agents/src/instance-screens.tsx`: the screen adds the gate step only where the SCREEN hosts the card (`hasRecommendationStep = recommendationPark !== null && hostsRecommendationCard`, :789), and `screenHostsRecommendationCard` is false on the `agentic` panel branch (:176) — which is the branch a run takes the moment it leaves `pending_input`. From that moment the run panel inside the run detail hosts the card, the gate step is not contributed, and `RunSurfaceRail` is not rendered at all. PASS on the other three halves: settled chips present, nothing selectable inside the card, run detail restored.
+DRAWING-CHECK> requires: the drawing's own sentence for a settled gate — "A resolved gate stays on the rail as read-only history" — read on the run page after the decision: the `Recommendation` entry still on the rail, in the place it held while the question was live, drawn in its COMPLETED reading (the check in the circle in place of the numeral, the title unhighlighted because it is no longer the selected step); the run detail beside it showing the run's OWN panel rather than the gate's surface; the settled chips wherever this branch draws them; and nothing selectable inside the card / shows, MEASURED (every value below is a field of this cell's own record in `capture-records-r6.json`): the run page for run `b632737c-a18c-4c3a-acbf-1aa6c60af623` (`finalUrl`) — the run whose skills were decided chip by chip in the chat, which this record does NOT measure and does not claim to: the presses are in `logs/r6-sequence.txt`, the three selection rows they wrote are in `logs/r6-db-readback.txt`, and that log also carries the server's own binding of that run to its typed turn. The two-column frame is drawn AND it is `RunSurfaceRail`'s own: `surfacePresent: true`, `surfaceChildren: 2`, and both instrumented columns count 1 (`run-step-rail-column`, `run-detail-column`) where the withdrawn R6 measured both 0. The rail's ordered rows are `railRowLabels: ["Recommendation", "Step 1"]` — the settled gate entry FIRST, ahead of the run's own work step. `railStepSettled: "true"`, `railStepSelected: "false"`, `railStepText: "Recommendation"`; the indicator's own text is EMPTY and it holds an `svg` (`railStepIndicatorText: ""`, `railStepIndicatorHasCheckGlyph: true`) — a check where a numeral would be. Three chips, all settled, none with any action left: `[data-skill-action="confirm"|"adjust"|"skip"]` all count 0 inside the card root, and each chip's `actions` array is empty. The chip row is a descendant of the run-detail column and NOT of the rail column and NOT of the rail row (`chipRowInDetailColumn: true`, `chipRowInRailColumn: false`, `chipRowInsideRailRow: false`), and one `Agentic Run Progress` heading is on screen. / and READ OFF THE PIXELS (looked at, not measured — these clauses are a person's reading of the image, and they are labelled so nobody mistakes them for record fields): the `Recommendation` title is drawn at the SAME weight as `Step 1` beside it, so the settled row reads as history rather than as the open step; the run detail is the run's own `Agentic Run Progress` card carrying a `failed` pill, and the three settled chips — `Blog Post Matcher Skill ADJUSTED`, `Blog Writing Skill ✓ CONFIRMED`, `Web Research Skill ✓ CONFIRMED` — are drawn INSIDE that card, above the run's own `Error` block and its `Retry` / `Start new run`. / verdict: PASS — with two readings stated rather than glossed. (a) The settled chips sit inside the Agentic Run Progress card rather than above it; the plan sentence puts the settled row and the progress card together without ordering them, so this is where this branch draws them and the picture says so plainly. (b) The SKIPPED skill (Brand Voice Matcher) is not drawn in the settled row at all — three chips for four decisions — the same settled reading S2 records in the chat. One cross-cell comparison is also named as one: "the place it held while the question was live" is R5's own record, which measured `① Recommendation` at the trigger position on the same surface.
 
 CELL: R6__recommendation-card__run_card__decided__dark
+SECTION> plan (A) §6.4 step 4 · §6.2's run-page bullet — the two sentences quoted next, in that order.
 PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the agentic run progress card appears; no skill inside it can be selected.
+PLAN> On the run page the same row sits at the **trigger position**, the top entry on the step rail, ahead of the work steps it would authorize.
 DRAWING> design-run-surface-rail-and-gate.png
-DRAWING-CHECK> requires: the same decided run page in the dark palette — settled chips, no skills button row inside the card / shows: the identical screen on the dark ground — `✓ Step 1` on the left, the Agentic Run Progress card on the right carrying the three settled chips with their outcome words and nothing pressable among them, and the run's own error reading below them; `railStepPresent: false` here too / verdict: FAIL on the settled rail entry, for the same reason as the light cell; PASS on the settled chips and on the absence of any skills button row inside the card
+DRAWING-CHECK> requires: the same decided run page in the dark palette — the settled `Recommendation` entry still on the rail with its check, the run's own panel in the run detail beside it, the settled chips with nothing left to press / shows, MEASURED: the same run, the same shutter contract (1440x1700 at deviceScaleFactor 2, `framing: "window"`), and a record whose `runSurface` block is field-for-field the light cell's — `railRowLabels: ["Recommendation", "Step 1"]`, `railStepSettled: "true"`, `railStepSelected: "false"`, `railStepIndicatorHasCheckGlyph: true`, both instrumented columns at 1, `chipRowInDetailColumn: true`, three chips with empty `actions`, all three `[data-skill-action]` counts 0 inside the card root. `themeClass` carries `dark`. / and READ OFF THE PIXELS: `✓ Recommendation` above `✓ Step 1` on the left, both legible on the dark ground; the `Agentic Run Progress` card on the right with its `failed` pill; the same three chips reading `ADJUSTED` / `CONFIRMED` / `CONFIRMED`; the run's `Error` block and `Retry` / `Start new run` below them / verdict: PASS, with the same two stated readings as the light cell
 
-## What the two FAILs are, in one place
+## What R6 now shows, and the one shortfall that stands
 
-**R6 (both palettes) does not draw the recommendation's settled rail entry.** It
-is one defect with one cause, and it is visible in the pictures rather than
-inferred: on this agent's branch the run panel inside the run detail hosts the
-recommendation card once the run has started (`screenHostsRecommendationCard`
-is false for the `agentic` panel), and the screen only contributes a rail step
-where the SCREEN hosts that card — so at the moment the question is decided the
-`Recommendation` row stops being drawn and `RunSurfaceRail` stops being rendered.
-The page still has two columns; they are the screen's own, and the gate's rail
-entry is not among them. R5 proves the held half of the same sentence works; R6
-shows the settled half does not survive the run starting.
+**R6 (both palettes) draws the recommendation's settled rail entry.** The
+withdrawn pair did not: on this agent's branch the run panel inside the run
+detail hosts the recommendation card once the run has started
+(`screenHostsRecommendationCard` is false for the `agentic` panel), and the screen
+used to contribute a rail step only where the SCREEN hosts that card — so at the
+moment the question was decided the `Recommendation` row stopped being drawn and
+`RunSurfaceRail` stopped being rendered with it. `64c0b1412` separates the two
+questions: `recommendationRailEntry` answers whether the entry EXISTS and how it
+READS, and the screen's own host gate keeps answering only what SURFACE the step
+opens (a settled entry opens none — the decided summary it stands for is already
+inside the panel). The pictures are where that is read: the entry is on the rail,
+first, with its check, and both of `RunSurfaceRail`'s instrumented columns are
+present.
 
-The run's own downstream failure (artifact materialization) is NOT one of these
-FAILs. It happens after every state these cells show, it is a lane fact rather
-than a statement about this branch, and `RUN-READBACK.md` reads it out of the
-database beside the rest.
+**The R5 shortfall stands and is not re-shot.** While the run is still held the
+rail carries ONLY the gate row, because a run that has not executed contributes no
+step entries of its own — so R5 shows "ahead of the steps it would authorize" as a
+position without the steps it precedes. R6 is where that reading completes: on the
+decided page the rail reads `Recommendation`, `Step 1`, and the gate entry is
+visibly ahead of the work step.
+
+The run's own downstream failure (artifact materialization — the run declared a
+blog-post artifact whose `titleFrom` output did not resolve) is NOT a FAIL of this
+cell. It happens after every state R6 shows, it is a lane fact rather than a
+statement about this branch, and `RUN-READBACK.md` reads it out of the database
+beside the rest.

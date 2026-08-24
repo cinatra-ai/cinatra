@@ -234,3 +234,74 @@ Nothing on either surface was staged into its state.
 
 Neither substitution touches the hold, the chips, the decision, the release or
 the dispatch: those are the server's own shipped path throughout.
+
+---
+
+# The R6 RE-SHOOT — the order ITS run actually happened in
+
+`64c0b1412` fixes the defect the R6 pair filed, so those two cells are re-shot on
+their own real run. Every row below is a timestamp read from a DATABASE COLUMN,
+from the running server's own log, or from the driver's clock; the right-hand
+column names which. All times are UTC on **2026-08-24**; `timeline-r6.json`
+beside this file carries the same rows machine-readably, and
+`logs/r6-db-readback.txt` is the raw `psql` output behind every column here.
+
+Two runs are in this timeline, and they are named apart on purpose:
+
+* **`8a6a113d-a47f-46be-b917-f65c162e9a68`** — the REAL-PROVIDER run. Driven
+  first, end to end, so this machine's limit is MEASURED rather than assumed.
+* **`b632737c-a18c-4c3a-acbf-1aa6c60af623`** — the PICTURED run, the one both R6
+  cells photograph.
+
+## Which column is trusted here
+
+`agent_runs.created_at` IS trusted on this lane: the schema carries
+`core__0096_agent-run-created-at-immutable` (the migration ran at this lane's own
+boot), and the two rows agree — the pictured run reads `11:44:06.877` and its
+park, which it could only be parked on once it existed, reads `11:44:07.822`.
+
+| # | What happened | Time (UTC) | Read from |
+|---|---|---|---|
+| 1 | The REAL-PROVIDER run was created, person-present, from one typed chat turn | `11:42:55.447308` | `cinatra.agent_runs.created_at` |
+| 2 | It parked at the recommendation hold, was decided chip by chip, and was released | park `11:42:56.245715` → released `11:43:21.039935` | `cinatra.lifecycle_continuation_park.created_at` / `.resolved_at` |
+| 3 | Its step's model call went to the REAL sealed provider and DIED there: the provider could not fetch this instance's public MCP toolbox — `HTTP 424 Failed Dependency` → `POST /api/llm-bridge` **500**, three times | `11:43:2x`–`11:43:41` | the server's own bridge lines under `run=8a6a113d…` (`logs/r6-bridge-readback.txt`) |
+| 4 | That run reached `failed` (`WayFlow task failed`) | `11:43:41.445` | `cinatra.agent_runs.completed_at` / `.error` |
+| 5 | The PICTURED run was created, person-present, from its own typed chat turn | `11:44:06.877588` | `cinatra.agent_runs.created_at` |
+| 6 | It PARKED at the recommendation hold | `11:44:07.822411` | `cinatra.lifecycle_continuation_park.created_at` (`checkpoint=recommendation`, `status=parked`) |
+| 7 | THE PROVIDER WINDOW CLOSES — the real connection is removed through the shipped `clearOpenAIConnection`, at THIS run's hold and after row 3 measured why | `11:44:27.429` | `timeline-r6.json` row `T1c`; the writer's own read-back reads `storeResolvesAKey: false` |
+| 8 | The four chips were pressed, one at a time, through the card's own per-chip controls | `11:44:28.661` → `11:44:33.868` | `logs/r6-sequence.txt` (`PRESS …`), the driver's clock |
+| 9 | The three kept decisions were written, in one release transaction | `11:44:33.932359` | `cinatra.run_selected_skill_revisions.selected_at` |
+| 10 | The hold was RELEASED | `11:44:33.942714` | `cinatra.lifecycle_continuation_park.resolved_at`, `status=released` |
+| 11 | The run's own in-flight gate was answered by its own `Continue` | `11:44:45.909` | `logs/r6-sequence.txt` (`GATE Continue pressed`), the driver's clock |
+| 12 | The step's model call was SERVED — `POST /api/llm-bridge` **200** | in the `11:44:46` window | the server's own bridge lines under `run=b632737c…` |
+| 13 | The run reached `failed` at artifact materialization, downstream of everything R6 shows | `11:44:47.758` | `cinatra.agent_runs.completed_at` / `.error` |
+| 14 | `R6` light was photographed | `11:45:10.624` | `recordedAt` on the light record |
+| 15 | `R6` dark was photographed | `11:45:11.688` | `recordedAt` on the dark record |
+
+Read rows 9 → 12 → 14: the skills were decided BEFORE the step that would use
+them ran, and the step ran BEFORE the shutter.
+
+## The two things this round could NOT do, said plainly
+
+1. **The chat turn answers on the DETERMINISTIC BRIDGE.** The turn carries
+   embedded `inputParams`, which takes the hard pre-router's brace-matched fast
+   path and dispatches server-side without consulting a model. A real-model chat
+   turn needs a publicly reachable MCP ingress, which this environment does not
+   have.
+2. **The agent's own step could not COMPLETE on the real model** — and this round
+   proved it on a REAL run of its own rather than citing an earlier one. Row 3 is
+   that proof, bound to that run's own bridge line. The connection was then
+   removed in the open at row 7 and the scripted runtime served the pictured run's
+   one call (row 12).
+
+There is also one thing this round could not do the way the driver first tried
+it, and it is stated because it changed the sequence: **the provider row cannot
+be removed BEFORE the pictured run's chat turn.** A turn that starts a run needs
+a configured provider to reach its pre-router at all — with the row already gone
+the assistant answers *"The configured default LLM provider \"openai\" is not
+available"* and no run is created. So the window sits at the pictured run's own
+hold, where the run already exists and no model has yet been consulted.
+
+Neither substitution touches the hold, the chips, the decision, the release, the
+dispatch or the settled rail entry R6 is about: those are the server's own
+shipped path throughout.

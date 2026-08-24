@@ -824,7 +824,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "10a10ac433e8dbe2b32a9629d2fcf1b06622d07077ed7854ebd5c70c5caf20bc",
+      "sha256": "bcd6f6cec98c32c645f36d12c7ae89c58235ae32e07022eae0ea3956fa7d4ce5",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -844,22 +844,22 @@
         {
           "selector": "[data-run-step-rail-column]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-run-detail-column]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-run-recommendation-chip-row]",
@@ -928,22 +928,25 @@
           "actions": []
         }
       ],
-      "transcript": null,
       "runSurface": {
         "surfacePresent": true,
         "surfaceChildren": 2,
-        "railColumnPresent": false,
-        "detailColumnPresent": false,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
         "chipRowPresent": true,
-        "chipRowInDetailColumn": false,
+        "chipRowInDetailColumn": true,
         "chipRowInRailColumn": false,
         "chipRowInsideRailRow": false,
-        "railStepPresent": false,
-        "railStepSelected": null,
-        "railStepSettled": null,
-        "railStepText": null,
-        "railStepIndicatorText": null,
-        "railRowLabels": null,
+        "railStepPresent": true,
+        "railStepSelected": "false",
+        "railStepSettled": "true",
+        "railStepText": "Recommendation",
+        "railStepIndicatorText": "",
+        "railStepIndicatorHasCheckGlyph": true,
+        "railRowLabels": [
+          "Recommendation",
+          "Step 1"
+        ],
         "agenticRunProgressHeadings": 1,
         "headings": [
           "Blog Draft Writer Agent (3)",
@@ -960,7 +963,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "877b6296396ee354f21503a28ebf13402a0a7de053c7e7867bf5d67dcc2f5c99",
+      "sha256": "0450effa0a6defb18c80e40ae9f01791593bab9f8d9af629b11321cfcb270c4d",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -980,22 +983,22 @@
         {
           "selector": "[data-run-step-rail-column]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-run-detail-column]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
           "scope": "frame",
-          "count": 0
+          "count": 1
         },
         {
           "selector": "[data-run-recommendation-chip-row]",
@@ -1064,22 +1067,25 @@
           "actions": []
         }
       ],
-      "transcript": null,
       "runSurface": {
         "surfacePresent": true,
         "surfaceChildren": 2,
-        "railColumnPresent": false,
-        "detailColumnPresent": false,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
         "chipRowPresent": true,
-        "chipRowInDetailColumn": false,
+        "chipRowInDetailColumn": true,
         "chipRowInRailColumn": false,
         "chipRowInsideRailRow": false,
-        "railStepPresent": false,
-        "railStepSelected": null,
-        "railStepSettled": null,
-        "railStepText": null,
-        "railStepIndicatorText": null,
-        "railRowLabels": null,
+        "railStepPresent": true,
+        "railStepSelected": "false",
+        "railStepSettled": "true",
+        "railStepText": "Recommendation",
+        "railStepIndicatorText": "",
+        "railStepIndicatorHasCheckGlyph": true,
+        "railRowLabels": [
+          "Recommendation",
+          "Step 1"
+        ],
         "agenticRunProgressHeadings": 1,
         "headings": [
           "Blog Draft Writer Agent (3)",

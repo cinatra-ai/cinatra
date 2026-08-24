@@ -1,0 +1,34 @@
+# cinatra#2790 S9f — R6 RE-SHOOT — WHAT SERVED THE AGENT'S OWN MODEL CALL.
+#
+# Read off the RUNNING SERVER's own log and bound to each run's own bridge
+# line: the bridge prints [llm-bridge-run-select] ... run=<id> for the call it
+# is about to serve, so the lines under a run's select line belong to THAT run.
+# The call is server-to-server — the runtime container posts to /api/llm-bridge
+# on the host — so no browser can observe it, and no browser-collected wire
+# list is evidence about it.
+#
+# One line below is NOT run-bound and is therefore quoted apart, at the foot.
+
+## 8a6a113d-a47f-46be-b917-f65c162e9a68 — the REAL sealed provider, configured for this run
+## (driven FIRST, so this machine's limit is measured rather than assumed)
+[llm-bridge-run-select] served-by=run_token run=8a6a113d-a47f-46be-b917-f65c162e9a68 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+[llm-bridge] LLM task failed: The AI provider could not reach this instance's public MCP server at http://localhost:3000/api/mcp to load the cinatra toolbox (HTTP 424 Failed Dependency), so the agent run was stopped. Make sure the instance's public URL / tunnel is reachable from the AI provider, then try again. Error: The AI provider could not reach this instance's public MCP server at http://localhost:3000/api/mcp to load the cinatra toolbox (HTTP 424 Failed Dependency), so the agent run was stopped. Make sure the instance's public URL / tunnel is reachable from the AI provider, then try again.
+ POST /api/llm-bridge 500 in 3.3s (next.js: 153ms, proxy.ts: 2ms, application-code: 3.2s)
+[llm-bridge-run-select] served-by=run_token run=8a6a113d-a47f-46be-b917-f65c162e9a68 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+[llm-bridge] LLM task failed: The AI provider could not reach this instance's public MCP server at http://localhost:3000/api/mcp to load the cinatra toolbox (HTTP 424 Failed Dependency), so the agent run was stopped. Make sure the instance's public URL / tunnel is reachable from the AI provider, then try again. Error: The AI provider could not reach this instance's public MCP server at http://localhost:3000/api/mcp to load the cinatra toolbox (HTTP 424 Failed Dependency), so the agent run was stopped. Make sure the instance's public URL / tunnel is reachable from the AI provider, then try again.
+ POST /api/llm-bridge 500 in 2.1s (next.js: 3ms, proxy.ts: 2ms, application-code: 2.1s)
+[llm-bridge-run-select] served-by=run_token run=8a6a113d-a47f-46be-b917-f65c162e9a68 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+[llm-bridge] LLM task failed: The AI provider could not reach this instance's public MCP server at http://localhost:3000/api/mcp to load the cinatra toolbox (HTTP 424 Failed Dependency), so the agent run was stopped. Make sure the instance's public URL / tunnel is reachable from the AI provider, then try again. Error: The AI provider could not reach this instance's public MCP server at http://localhost:3000/api/mcp to load the cinatra toolbox (HTTP 424 Failed Dependency), so the agent run was stopped. Make sure the instance's public URL / tunnel is reachable from the AI provider, then try again.
+ POST /api/llm-bridge 500 in 2.8s (next.js: 3ms, proxy.ts: 1935µs, application-code: 2.8s)
+
+## b632737c-a18c-4c3a-acbf-1aa6c60af623 — the PICTURED run, driven after clearOpenAIConnection removed that row
+[llm-bridge-run-select] served-by=run_token run=b632737c-a18c-4c3a-acbf-1aa6c60af623 org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/llm-bridge 200 in 580ms (next.js: 4ms, proxy.ts: 2ms, application-code: 574ms)
+
+# NOT RUN-BOUND, quoted for completeness — the resolver's own line, printed
+# once the sealed row was gone, before the pictured run's select line:
+[llm-bridge] preferredProvider openai unavailable, falling back to configured default
+
+# The pictured run's bridge answered 200: with no configured provider,
+# resolveConfiguredLlmRuntime() reaches its last resort — the scripted runtime
+# (cinatra#2917), which this lane enables with CINATRA_TEST_LLM_PROVIDER=scripted.

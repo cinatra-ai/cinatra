@@ -1,0 +1,747 @@
+{
+  "results": [
+    {
+      "cell": "R6__recommendation-card__run_card__decided",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "bcd6f6cec98c32c645f36d12c7ae89c58235ae32e07022eae0ea3956fa7d4ce5",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-step-rail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-detail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "run_card",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
+        "chipRowPresent": true,
+        "chipRowInDetailColumn": true,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": true,
+        "railStepSelected": "false",
+        "railStepSettled": "true",
+        "railStepText": "Recommendation",
+        "railStepIndicatorText": "",
+        "railStepIndicatorHasCheckGlyph": true,
+        "railRowLabels": [
+          "Recommendation",
+          "Step 1"
+        ],
+        "agenticRunProgressHeadings": 1,
+        "headings": [
+          "Blog Draft Writer Agent (3)",
+          "Step 1",
+          "Agentic Run Progress",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra"
+    },
+    {
+      "cell": "R6__recommendation-card__run_card__decided__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3400
+      },
+      "sha256": "0450effa0a6defb18c80e40ae9f01791593bab9f8d9af629b11321cfcb270c4d",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"run-surface\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-step-rail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-detail-column]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-run-recommendation-chip-row]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "run_card",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "runSurface": {
+        "surfacePresent": true,
+        "surfaceChildren": 2,
+        "railColumnPresent": true,
+        "detailColumnPresent": true,
+        "chipRowPresent": true,
+        "chipRowInDetailColumn": true,
+        "chipRowInRailColumn": false,
+        "chipRowInsideRailRow": false,
+        "railStepPresent": true,
+        "railStepSelected": "false",
+        "railStepSettled": "true",
+        "railStepText": "Recommendation",
+        "railStepIndicatorText": "",
+        "railStepIndicatorHasCheckGlyph": true,
+        "railRowLabels": [
+          "Recommendation",
+          "Step 1"
+        ],
+        "agenticRunProgressHeadings": 1,
+        "headings": [
+          "Blog Draft Writer Agent (3)",
+          "Step 1",
+          "Agentic Run Progress",
+          "Command Palette"
+        ]
+      },
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark"
+    }
+  ],
+  "wire": [
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:42:36.998Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T11:42:37.002Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T11:42:37.110Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:42:41.795Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:42:46.825Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:42:48.692Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:42:48.892Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat/capabilities",
+      "status": 200,
+      "at": "2026-08-24T11:42:49.140Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat",
+      "status": 200,
+      "at": "2026-08-24T11:42:49.890Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:42:56.600Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:00.103Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T11:43:00.178Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T11:43:00.929Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:02.068Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:03.196Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:05.120Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:05.670Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:08.682Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:10.045Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:11.679Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:15.123Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:15.240Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:17.651Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:20.642Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:20.777Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:23.756Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:25.061Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:27.459Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:30.124Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:30.214Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:32.690Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:35.107Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:35.795Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:38.685Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:40.322Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:41.756Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:45.142Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:45.247Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/5738b6bb-439f-432e-9239-8031937fdc58",
+      "status": 200,
+      "at": "2026-08-24T11:43:47.699Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:50.058Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:50.896Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T11:43:50.901Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T11:43:51.082Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:43:55.878Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:00.942Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:02.668Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:02.828Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat/capabilities",
+      "status": 200,
+      "at": "2026-08-24T11:44:02.897Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/chat",
+      "status": 200,
+      "at": "2026-08-24T11:44:03.432Z"
+    },
+    {
+      "method": "POST",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:08.218Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:11.534Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:12.625Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T11:44:12.666Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:12.786Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T11:44:12.898Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:15.452Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:17.663Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:18.004Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:21.046Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:22.440Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:24.050Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:27.493Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:27.607Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:30.010Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:32.506Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:33.486Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:36.473Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:37.527Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:39.014Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:42.567Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:42.760Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:45.017Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:47.504Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:48.029Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:51.004Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T11:44:52.449Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/76566921-ea38-44ba-a746-767103c5c2fa",
+      "status": 200,
+      "at": "2026-08-24T11:44:54.008Z"
+    }
+  ],
+  "pageErrors": []
+}
