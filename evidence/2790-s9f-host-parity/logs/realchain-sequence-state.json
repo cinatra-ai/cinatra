@@ -1,29 +1,29 @@
 {
-  "startedAt": "2026-08-24T21:14:00.633Z",
-  "userId": "61391487-272a-4b79-8d8a-39ac5056d254",
+  "startedAt": "2026-08-24T22:02:09.354Z",
+  "userId": "50395d2d-1d98-4583-b33a-6e04aab476d1",
   "evidenceAtStart": {
     "serverLog": "<the app server's own log>",
-    "at": "2026-08-24T21:14:08.122Z",
+    "at": "2026-08-24T22:02:16.867Z",
     "preRouterShortCircuits": 0,
     "preRouterAttempts": 0,
     "scriptedRuntimeLines": 0,
     "noProviderRefusals": 0,
     "mcpDependencyFailures": 0,
-    "publicMcpCallbacks": 46,
-    "bridgeRunSelects": 3,
+    "publicMcpCallbacks": 0,
+    "bridgeRunSelects": 0,
     "driverScriptedProviderEnv": null,
     "serverScriptedProviderEnv": null,
     "serverEnvReadFrom": "process-table",
-    "serverEnvReadOfPid": "9738",
+    "serverEnvReadOfPid": "3947",
     "serverEnvHopsFromListener": 1,
     "serverEnvTokensSeen": 63
   },
-  "threadPath": "/chat/cinatra-ai/cinatra-assistant/fa6d5a06-e9be-495c-97e0-ecb083fec11a",
+  "threadPath": "/chat/cinatra-ai/cinatra-assistant/7769a5d3-7a7d-4a8b-af3a-476faadc0d5e",
   "runIdCandidates": 1,
-  "runId": "0f696a2a-9413-4422-ba0a-d52d0553f2af",
+  "runId": "b72d952f-2550-4b21-8ccc-70f47276992b",
   "runIdSource": "the ONLY agent_runs row started by this actor since this sequence began",
   "packageName": "@cinatra-ai/blog-draft-writer-agent",
-  "runPath": "/agents/cinatra-ai/blog-draft-writer-agent/0f696a2a-9413-4422-ba0a-d52d0553f2af",
+  "runPath": "/agents/cinatra-ai/blog-draft-writer-agent/b72d952f-2550-4b21-8ccc-70f47276992b",
   "heldChips": [
     {
       "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
@@ -79,30 +79,30 @@
       "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
       "action": "confirm",
       "cardStateAfter": "held",
-      "at": "2026-08-24T21:15:32.394Z"
+      "at": "2026-08-24T22:03:59.019Z"
     },
     {
       "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
       "action": "adjust",
       "cardStateAfter": "held",
-      "at": "2026-08-24T21:15:35.185Z"
+      "at": "2026-08-24T22:04:01.799Z"
     },
     {
       "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
       "action": "skip",
       "cardStateAfter": "held",
-      "at": "2026-08-24T21:15:36.404Z"
+      "at": "2026-08-24T22:04:03.023Z"
     },
     {
       "skillId": "@cinatra-ai/web-research-skill:web-research",
       "action": "confirm",
       "cardStateAfter": "held",
-      "at": "2026-08-24T21:15:37.634Z"
+      "at": "2026-08-24T22:04:04.251Z"
     }
   ],
   "gatePresses": [
     {
-      "at": "2026-08-24T21:16:05.637Z",
+      "at": "2026-08-24T22:04:32.774Z",
       "pressed": "Continue",
       "landed": true,
       "error": null
@@ -110,13 +110,13 @@
   ],
   "runStatusWalk": [
     {
-      "at": "2026-08-24T21:16:05.598Z",
+      "at": "2026-08-24T22:04:32.649Z",
       "status": "pending_approval"
     },
     {
-      "at": "2026-08-24T21:16:41.682Z",
+      "at": "2026-08-24T22:05:29.456Z",
       "status": "completed"
     }
   ],
-  "reviewTaskId": "lifecycle-review:01df22490da1b9c73160a81cef008265d3388bfd42d914a0eb1182a4335751e9"
+  "reviewTaskId": "lifecycle-review:b308a234572a17c5dd3b31ac9774e2f68757d13a3fee6f8fee1cb5f236cb3931"
 }

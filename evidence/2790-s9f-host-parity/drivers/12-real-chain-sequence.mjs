@@ -27,25 +27,36 @@
 //     no provider window and no `PROVIDER_CLEAR` step in this file. The public
 //     origin is set through the app's own tunnel surface before the run, so the
 //     provider CAN fetch the toolbox it 424'd on last time.
-//   · `CINATRA_TEST_LLM_PROVIDER` IS UNSET, and this driver REFUSES TO START if
-//     it is set. The scripted runtime is not merely unused here — it is
-//     unreachable by construction (`isScriptedTestProviderEnabled` reads that
-//     one env var), so no leg of this chain can fall back to it.
+//   · `CINATRA_TEST_LLM_PROVIDER` IS UNSET IN THIS PROCESS, and this driver
+//     REFUSES TO START if it is set. That is the WEAK half and is labelled as
+//     such: the switch that matters is read by the APP SERVER, not by this
+//     process. The server's own value is read at every shutter (see
+//     `readServerScriptedProviderEnv`), and its asymmetry is stated there — a
+//     non-null answer is proof of presence and aborts; a null answer read one hop
+//     above the listening process is CONSISTENT with absence, not a proof of it.
+//     What rules the scripted runtime out for the AGENT'S STEP is a different
+//     fact: `resolveConfiguredLlmRuntime` reaches it only as a last resort, after
+//     every configured candidate has failed to resolve.
 //
 // WHAT IS MEASURED ABOUT THAT, rather than asserted: the driver reads the app
 // server's OWN log across the whole sequence and records, on every cell,
 //
 //   · `preRouterShortCircuits` — the deterministic chat dispatch. MUST be 0.
 //   · `scriptedRuntimeLines` — any scripted-provider line. MUST be 0.
-//   · `publicMcpCallbacks` — `POST /api/mcp` hits. These are the hosted provider
-//     calling BACK into this instance over the public origin; nothing else in
-//     this lane produces them, so a non-zero count is positive evidence that a
-//     real provider loaded and used the public toolbox.
+//   · `publicMcpCallbacks` — `POST /api/mcp` hits, reported as a DELTA against
+//     this sequence's own baseline. It shows the instance's MCP surface being
+//     exercised while the sequence ran. It does NOT attribute the calls: the
+//     request log does not record the caller, and this branch's scripted
+//     self-MCP path posts to the same route on the local url. The shoot aborts
+//     if the delta has not moved, which is a liveness check, not an attribution.
 //   · `noProviderRefusals` — `NO_LLM_PROVIDER` / 503 on the bridge. MUST be 0.
 //   · `mcpDependencyFailures` — the 424 that killed the previous attempt. MUST be 0.
 //
-// A run that reaches a pictured state with any of the three MUST-be-0 counters
-// non-zero ABORTS the sequence rather than photographing it.
+// A run that reaches a pictured state with any must-be-0 screen non-zero ABORTS
+// rather than photographing it. So does a shutter whose server-environment read
+// came back non-null or unread, and so does one whose callback delta has not
+// moved. None of those aborts is a proof of realness; each is a refusal to
+// photograph a state that is visibly not.
 //
 // EVERYTHING ELSE IS THE 09 SEQUENCE, DELIBERATELY UNCHANGED: the same four
 // states in the same order (chat HELD, run page HELD, chat DECIDED, run page
@@ -886,23 +897,37 @@ try {
     }
   };
   const health = await fetch(`${publicOrigin}/api/health`).then((r) => r.status).catch(() => null);
+  // THREE CONSECUTIVE FAST ANSWERS, not one. MEASURED on this lane: a single
+  // sub-budget probe is not enough, because the app's OWN probe can still land on
+  // a cold route moments later and refuse the turn (`public MCP URL … is
+  // unreachable (no response within 2500ms)`). The ingress has to be answering
+  // steadily before a pictured turn is typed, so the streak is what is required
+  // and the whole probe series is written into the log.
   let mcpProbe = null;
-  for (let i = 0; i < 12; i += 1) {
+  let streak = 0;
+  for (let i = 0; i < 24 && streak < 3; i += 1) {
     mcpProbe = await probe(`${publicOrigin}/api/mcp`);
-    say(`INGRESS probe ${i + 1}: ${JSON.stringify(mcpProbe)}`);
-    // The app's own budget, quoted from `MCP_REACHABILITY_TIMEOUT_MS`.
-    if (mcpProbe.status !== null && mcpProbe.ms < 2500) break;
-    await new Promise((r) => setTimeout(r, 3000));
+    say(`INGRESS probe ${i + 1}: ${JSON.stringify(mcpProbe)} streak=${streak}`);
+    // Half the app's own budget, quoted from `MCP_REACHABILITY_TIMEOUT_MS`, so a
+    // probe that only just squeaks under it does not count as steady.
+    if (mcpProbe.status !== null && mcpProbe.ms < 1250) streak += 1;
+    else streak = 0;
+    if (streak < 3) await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (streak < 3) {
+    throw new Error(`the public MCP ingress never answered steadily (last probe ${JSON.stringify(mcpProbe)})`);
   }
   if (health !== 200) throw new Error(`the public origin's /api/health answered ${health}, not 200`);
-  if (!mcpProbe || mcpProbe.status === null || mcpProbe.ms >= 2500) {
-    throw new Error(`the public MCP ingress never answered inside the app's own 2500ms budget: ${JSON.stringify(mcpProbe)}`);
+  if (!mcpProbe || mcpProbe.status === null || mcpProbe.ms >= 1250) {
+    throw new Error(`the public MCP ingress never answered steadily inside half the app's own 2500ms budget: ${JSON.stringify(mcpProbe)}`);
   }
   await stamp("T0", "the public ingress answers, inside the app's own reachability budget", {
     publicOrigin: redact(publicOrigin),
     healthStatus: health,
     mcpHead: mcpProbe,
+    consecutiveFastProbes: streak,
     budgetMs: 2500,
+    requiredMs: 1250,
   });
 
   // ---- the person's turn that starts the run ------------------------------
@@ -967,12 +992,13 @@ try {
   // THE FALLBACK IS NARROWED, not just ordered: the newest run STARTED BY THIS
   // ACTOR SINCE THIS SEQUENCE BEGAN. The 09 fallback took the newest row in the
   // whole database, which a concurrent run on the same lane would have won.
-  // THE FALLBACK IS NARROWED **AND** UNAMBIGUOUS. The 09 fallback took the newest
-  // row in the whole database, which a concurrent run would have won. This one
-  // asks for every run started BY THIS ACTOR SINCE THIS SEQUENCE BEGAN and
-  // REFUSES unless there is exactly one: two candidates mean the binding cannot
-  // say which run the pictures are of, and a binding that cannot say that is not
-  // a binding. The count is recorded either way.
+  // THE FALLBACK IS NARROWED **AND** UNAMBIGUOUS, and newestness plays no part in
+  // it. The 09 fallback took the newest row in the whole database, which a
+  // concurrent run would have won. This one asks for EVERY run started by this
+  // actor since this sequence began and REFUSES unless the set holds exactly one:
+  // two candidates mean the binding cannot say which run the pictures are of, and
+  // a binding that cannot say that is not a binding. The count is recorded either
+  // way.
   if (linked) {
     state.runId = linked;
     state.runIdSource = "inline-run-page-link";
@@ -1122,7 +1148,7 @@ try {
   const providerLine = providerReadOut.split("\n").find((l) => l.includes("S9FREAL PROVIDER_READ")) ?? "";
   await stamp(
     "T1c",
-    "the REAL sealed provider row is STILL configured — nothing was cleared and no scripted runtime is reachable",
+    "the REAL sealed provider row is read back BEFORE the step — nothing was cleared at the point the earlier round cleared it",
     { shippedReader: "readOpenAIConnection", readBack: providerLine.trim(), evidence: readProviderEvidence() },
   );
 

@@ -1170,8 +1170,9 @@ each replacement is checkable rather than promised:
 - **The turn names no package token**, in either form the pre-router reads.
   `detectExplicitDispatchPackage` needs BOTH a verb and a package reference, so it
   returns null, the hard short-circuit cannot fire and the soft directive is never
-  prepended. The only thing that can start a run from this turn is the real model
-  calling `agent_run` through this instance's own public MCP toolbox.
+  prepended. Nothing in the platform dispatched this run from that sentence: it was
+  started by a model calling `agent_run` through this instance's MCP toolbox.
+  WHICH model served the turn is a separate question, bounded below.
 - **The sealed `openai_connection` row is read on BOTH sides of the step** —
   timeline rows `T1c` (before) and `T3a` (after the step's own model call). The
   earlier round removed it at `T1c`'s position; this one reads it there. Two point
@@ -1182,8 +1183,10 @@ each replacement is checkable rather than promised:
   runtime only as a LAST RESORT, *"after every real candidate failed to resolve"*,
   and its own comment states that an install WITH a configured provider never
   reaches that line. `T1c` and `T3a` read a real sealed provider back on both
-  sides of the step. That is decisive for the step, and it does not depend on any
-  environment read.
+  sides of the step. That is a STRONG ARGUMENT for the step and it does not depend
+  on any environment read — but it is not a closed proof: those rows read the
+  sealed ROW through `readOpenAIConnection` in a separate process, not
+  `resolveProviderAdapter` at the instant of the call.
 - **For the CHAT TURN the ordering is the other way round, and this page says so.**
   `orchestrateStreamImpl` checks the flag FIRST and returns the scripted stream
   before any provider is resolved. What the records carry for that leg is an
@@ -1202,7 +1205,7 @@ each replacement is checkable rather than promised:
   (`/configuration/development?tab=tunnel`, `publicBaseUrlSource: "manual"`), the
   app was restarted so the OAuth audience allowlist follows it, and the driver
   proves the ingress answers inside the app's own 2500 ms reachability budget
-  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 207 ms).
+  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 508 ms).
 
 ## What the counters are, and what they are not
 
@@ -1226,7 +1229,7 @@ who exercised it.
 
 ## And this time the run finished
 
-`agent_runs.status = completed`, `error` empty, one `representation` (a 6228-byte
+`agent_runs.status = completed`, `error` empty, one `representation` (a 5932-byte
 `text/markdown` blob), one processed `artifact_produced_outbox` event and one
 `artifact_review_gates` row. `RUN-READBACK.md` reads all of it out of the database
 and states, claim by claim, which field supports it and what that field does not

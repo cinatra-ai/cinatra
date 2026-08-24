@@ -115,13 +115,16 @@ was served by the scripted runtime, because this instance had no public MCP
 ingress and the real provider's toolbox fetch answered `424 Failed Dependency`.
 Neither is allowed to stand as proof.
 
-**Both legs are real here, and each one is checkable rather than promised.** The turn names the
+**Both stood-in legs are GONE, and what replaces each one is stated with its
+limit rather than promised.** The turn names the
 agent by its DISPLAY name and carries NO package token in either form the
 pre-router reads — no `@cinatra-ai/<slug>`, no `cinatra_<slug>`. That detector
 requires BOTH a verb AND a package reference, so it returns null, the hard
 server-side dispatch never fires, and the SOFT directive is never prepended
-either. The ONLY thing that can turn this turn into a run is the real model
-calling `agent_run` through this instance's own public MCP toolbox.
+either. So nothing in the platform dispatched this run from that sentence: it was
+started by a model calling `agent_run` through this instance's MCP toolbox. WHICH
+model served that turn is a separate question, and the limit of what these records
+can say about it is set out below.
 
 The turn DOES state the idea as an object, and that is worth separating from what
 the withdrawn round did, because it looks similar and is not. The withdrawn
@@ -148,8 +151,14 @@ resolver `/api/llm-bridge` takes, which is the seam the agent-run model call goe
 through — reaches the scripted runtime only as a LAST RESORT, *"after every real
 candidate failed to resolve"*, and its own comment says an install WITH a
 configured provider never reaches that line. Rows `T1c` and `T3a` read a real
-sealed provider back on BOTH sides of the step. So the step could not have been
-served by the scripted runtime whatever any environment says.
+sealed provider back on BOTH sides of the step, so a provider that resolves at
+call time preempts the scripted runtime on that seam.
+
+That is a strong argument, not a closed proof, and the difference is worth one
+sentence: `T1c` and `T3a` read the sealed ROW through `readOpenAIConnection` in a
+separate process, not `resolveProviderAdapter` at the instant of the call. The row
+was present on both sides; an adapter that failed to resolve at that instant is a
+residual these records do not measure.
 
 **For the CHAT TURN the ordering is the other way round, and this page says so
 rather than blurring it.** `orchestrateStreamImpl` checks the flag FIRST and
@@ -195,8 +204,7 @@ made the POST, and this branch's scripted self-MCP path also posts to `/api/mcp`
 on the LOCAL url — so a moving delta proves the instance's own MCP surface was
 exercised during the sequence, not, on its own, who exercised it.
 
-**The run in these pictures RAN, on the real model, and produced a real
-artifact.** `agent_runs.status = completed`, `error` empty, one `representation`
+**The run in these pictures RAN to completion and produced a real artifact.** `agent_runs.status = completed`, `error` empty, one `representation`
 row, one processed `artifact_produced_outbox` event and one `artifact_review_gates`
 row. `RUN-READBACK.md` reads all of it out of the database. Every earlier round in
 this lane had to disclose a downstream failure at this point; this one has none to
@@ -214,8 +222,8 @@ PLAN> You ask the assistant, in the chat or the widget, to run an agent that has
 PLAN> The card appears in the reply: **one chip per skill, each carrying its own Confirm, Adjust and Skip**. There is no heading plate and no single submit for the whole row. An agentic run progress card is not visible while the recommended skills can be selected, because they are being chosen before the agent actually runs.
 PLAN> The run is parked and does nothing at all until you act.
 DRAWING> design-recommendation-card.png
-DRAWING-CHECK> requires: the assistant's reply carries the chip row and NOTHING else that belongs to a started run — one chip per skill with its own Confirm / Adjust / Skip, no heading plate, no row-level submit, and no agentic run progress card anywhere in the turn / shows: the whole chat window in one frame; the person's own turn at the top, naming the agent by its display name and no package ("Please have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {…}"), and under it the assistant's OWN reply — "The blog draft run is waiting for your **Confirm or Skip** on the recommendation card in this conversation." — carrying FOUR chips: Blog Writing Skill, Blog Post Matcher Skill, Brand Voice Matcher Skill, Web Research Skill, each with its own Confirm, Adjust and Skip and no other control. No heading plate above them, no submit below them. NO agentic run progress card anywhere in the turn: the record's frame count for `[data-inline-run-card]` reads **0**. The run has produced nothing: representation, produced-outbox and review-gate row counts all read **0** in the database at the instant of the shutter (`dbAt`), with the park `parked` at `recommendation` / verdict: PASS
-DRAWING-CHECK> chain: `providerEvidence` on this record — `preRouterShortCircuits: 0` and `preRouterAttempts: 0` (the deterministic dispatch never fired), `serverScriptedProviderEnv: null` read from the app server's own process table (`serverEnvReadFrom: "process-table"`, 63 environment tokens seen), and `deltaSinceStart.publicMcpCallbacks: 3` — three hosted-provider callbacks reached this instance between the sequence's baseline and this shutter. What this record CAN say about the reply is that it is not the platform's synthesized dispatch line — that line is absent from the turn and `preRouterShortCircuits` reads 0. Which model produced its wording is not something this record measures, and the phrasing is not offered as if it were. The withdrawn record's reply read "Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-…, status: pending_input)", which is the line the SERVER writes when it dispatches without a model; no such line is anywhere in this turn.
+DRAWING-CHECK> requires: the assistant's reply carries the chip row and NOTHING else that belongs to a started run — one chip per skill with its own Confirm / Adjust / Skip, no heading plate, no row-level submit, and no agentic run progress card anywhere in the turn / shows: the whole chat window in one frame; the person's own turn at the top, naming the agent by its display name and no package ("Please have the Blog Draft Writer Agent write me a blog draft. Here is the idea it should work from: {…}"), and under it the assistant's OWN reply — "The Blog Draft Writer Agent is waiting for your **Confirm or Skip** on the recommendation card in this conversation." — carrying FOUR chips: Blog Writing Skill, Blog Post Matcher Skill, Brand Voice Matcher Skill, Web Research Skill, each with its own Confirm, Adjust and Skip and no other control. No heading plate above them, no submit below them. NO agentic run progress card anywhere in the turn: the record's frame count for `[data-inline-run-card]` reads **0**. The run has produced nothing: representation, produced-outbox and review-gate row counts all read **0** in the database at the instant of the shutter (`dbAt`), with the park `parked` at `recommendation` / verdict: PASS
+DRAWING-CHECK> chain: `providerEvidence` on this record — `preRouterShortCircuits: 0` and `preRouterAttempts: 0` (the deterministic dispatch never fired), `serverScriptedProviderEnv: null` read from the app server's own process table (`serverEnvReadFrom: "process-table"`, 63 environment tokens seen), and `deltaSinceStart.publicMcpCallbacks: 3` — this instance's `/api/mcp` surface was posted to three times between the sequence's baseline and this shutter. The request log does not record the caller, so that is a liveness reading, not an attribution. What this record CAN say about the reply is that it is not the platform's synthesized dispatch line — that line is absent from the turn and `preRouterShortCircuits` reads 0. Which model produced its wording is not something this record measures, and the phrasing is not offered as if it were. The withdrawn record's reply read "Dispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-…, status: pending_input)", which is the line the SERVER writes when it dispatches without a model; no such line is anywhere in this turn.
 DRAWING-CHECK> binding: this record's `runId` is bound to this turn by the driver's NARROWED fallback — every run started by this actor since the sequence began — and that set held EXACTLY ONE row (`runIdCandidates: 1` in `logs/realchain-sequence-state.json`). The driver refuses when it holds more than one, so the binding is unambiguous rather than merely newest.
 
 CELL: S1__recommendation-card__chat_thread__held__dark
