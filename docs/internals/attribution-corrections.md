@@ -135,3 +135,17 @@ Gate-suite: cinatra-core@2026.08.3
 Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
 Assisted-by: Claude Code (claude-fable-5)
 Correction-for: ed215702ae06aa726b2c23ebbe688dbd3455b119```
+
+---
+
+## Correction for `871443b9b7b655da90bd30046b4e477ab13792ef`
+
+```
+correction: truthful-attribution record for 871443b9b
+
+The record on 871443b9b ("ci(build-image): un-serialize the image build + shard the perpetual gates — wall ~19 → ~13-14 min (#2962)") is invalid under the ratified record grammar: a high-risk change (.github/**) merged with no verification arm — the human approval existed but no Reviewed-by trailer carried it into the record. The change was humanly approved by @groganz at the reviewed head f87cf995e0eba1fe86ca171eeb7c4b12d08044eb (PR #2962) with every required context green after the post-approval gate rerun; the corrected record carries that human arm. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 871443b9b7b655da90bd30046b4e477ab13792ef
+```
