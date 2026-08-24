@@ -1584,8 +1584,8 @@ jobs:
   # before a fifth recurrence lands. Runs the gate script PLUS its companion
   # parser tests so a regression in either the source pattern or the gate
   # itself is caught.
-  perpetual-loops-invariants:
-    name: Perpetual system loops invariants
+  perpetual-core:
+    name: Perpetual core invariants (loops, ratchets, unit tiers)
     needs: detect
     # REQUIRED status check on `main`. Run even when `detect` FAILED, so the
     # guard step below reports a definitive job FAILURE instead of a SKIP —
@@ -2397,52 +2397,11 @@ jobs:
       # monorepo runs these". The host `tsc` pass was the only thing that saw
       # those files, so it caught TYPE defects and nothing else
       # (openai-connector#75 → #76 is the concrete miss).
-      #
-      # The gate discovers every materialized package under extensions/, runs
-      # each vitest suite from its own package dir under its OWN config — the
-      # #2249 remedy (folding a tier into the root vitest include) does not
-      # transfer here, because the root config would have to absorb 30+
-      # divergent alias sets — and PRINTS A MANIFEST of every package with what
-      # ran, so a truncated run cannot pass for a clean one. It fails on: a red
-      # suite; an on-disk test file vitest never executed (a GREEN run can hide
-      # this — wordpress-assistant-connector reported "2 passed" while a whole
-      # wire-contract conformance suite went uncollected, found by this gate on
-      # its first run); a companion repo that skips its tests while this gate
-      # does not run them (cinatra#2288 AC6, enforced in the only place that can
-      # prove it); and zero discovered packages — the clone-back-failed case,
-      # the same fail-closed shape extension-conformance-gate.yml already uses.
-      # Its carve-out ledger is named, PINNED and SHAPE-BOUND: an entry
-      # tolerates ONE documented failure at ONE committed sha, the suite is
-      # still run, and any drift from the recorded shape — worse, different, or
-      # newly green — fails. Once the pin moves the entry stops applying at all
-      # and the package is enforced like any other, so an exemption can neither
-      # absorb a regression it was not written for nor outlive its defect. The
-      # rules are unit-tested in
-      # scripts/ci/__tests__/extension-suite-gate.test.mjs (57 cases, part of
-      # the root suite), so they are gated independently of the fleet's state.
-      #
-      # RUNTIME — why EXTENSION_SUITE_JOBS. The 44 discovered suites are 2,149
-      # tests. On the hosted runner this step measures 58s wall / 214.7s of
-      # vitest at the 4-way concurrency pinned below, with ONE inner vitest
-      # worker per package so the outer budget IS the budget; run one suite
-      # after another the same work is ~215s, which against a job that already
-      # took 10m17s of a 15-minute cap is most of the remaining margin. Hence
-      # the concurrency, and hence `timeout-minutes` 15 → 18, reasoned above.
-      # Concurrency is PINNED rather than derived from the runner's core count
-      # so it cannot silently move when the runner label does. The gate prints
-      # its own suite count and wall total every run, so this claim is checkable
-      # against the log rather than trusted from here.
-      #
-      # Rides THIS job for the reason already recorded above for the seed-pack
-      # tier: it already has the PINNED extension tree on disk
-      # (clone-extensions) and node_modules installed, and it is a REQUIRED
-      # status check whose `always()` + hard-fail guard shape means this gate
-      # inherits "definitive, never a silent skip" rather than needing a new
-      # required context.
-      - name: Extension suites — discovery gate (every materialized suite)
-        env:
-          EXTENSION_SUITE_JOBS: '4'
-        run: node scripts/ci/extension-suite-gate.mjs
+      # The extension-suites discovery gate MOVED to the parallel
+      # `perpetual-extension-suites` job below (critical-path shard): it needed
+      # ~5 min of this job's 11+ and shares nothing with the ratchet gates but
+      # the clone. The `Perpetual system loops invariants` REQUIRED context is
+      # now the fan-in job of the same name, which gates on BOTH shards.
 
       # ── The two remaining LLM provider connectors (cinatra#1705 AC4) ──────
       #
@@ -2657,6 +2616,119 @@ jobs:
   # runs (`if: always()`) so the check reports on every PR, the `detect` guard
   # fails it RED if detection broke, and a docs-only PR green-stubs in seconds
   # with no service containers started.
+  perpetual-extension-suites:
+    name: Perpetual extension suites (discovery gate shard)
+    needs: detect
+    # Same always()+guard shape as every required-adjacent job here: a failed
+    # `detect` yields a definitive RED via the guard, never a silent skip;
+    # docs-only/draft PRs skip. Split out of perpetual-core so the ~5-minute
+    # suite battery (44 companion suites, 2,149 tests — see the step's comment)
+    # runs beside the ratchet gates instead of after them; the REQUIRED context
+    # is the `perpetual-loops-invariants` fan-in below, which needs both shards.
+    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 12
+    steps:
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this shard rather than passing it silently."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No git credential left on disk for companion test code to find —
+          # same reasoning as perpetual-core (cinatra#2288 slice 2): after this
+          # checkout the job runs no authenticated git; clone-extensions clones
+          # over public https. No ratchet diffs here, so no fetch-depth: 0.
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      #
+      # The gate discovers every materialized package under extensions/, runs
+      # each vitest suite from its own package dir under its OWN config — the
+      # #2249 remedy (folding a tier into the root vitest include) does not
+      # transfer here, because the root config would have to absorb 30+
+      # divergent alias sets — and PRINTS A MANIFEST of every package with what
+      # ran, so a truncated run cannot pass for a clean one. It fails on: a red
+      # suite; an on-disk test file vitest never executed (a GREEN run can hide
+      # this — wordpress-assistant-connector reported "2 passed" while a whole
+      # wire-contract conformance suite went uncollected, found by this gate on
+      # its first run); a companion repo that skips its tests while this gate
+      # does not run them (cinatra#2288 AC6, enforced in the only place that can
+      # prove it); and zero discovered packages — the clone-back-failed case,
+      # the same fail-closed shape extension-conformance-gate.yml already uses.
+      # Its carve-out ledger is named, PINNED and SHAPE-BOUND: an entry
+      # tolerates ONE documented failure at ONE committed sha, the suite is
+      # still run, and any drift from the recorded shape — worse, different, or
+      # newly green — fails. Once the pin moves the entry stops applying at all
+      # and the package is enforced like any other, so an exemption can neither
+      # absorb a regression it was not written for nor outlive its defect. The
+      # rules are unit-tested in
+      # scripts/ci/__tests__/extension-suite-gate.test.mjs (57 cases, part of
+      # the root suite), so they are gated independently of the fleet's state.
+      #
+      # RUNTIME — why EXTENSION_SUITE_JOBS. The 44 discovered suites are 2,149
+      # tests. On the hosted runner this step measures 58s wall / 214.7s of
+      # vitest at the 4-way concurrency pinned below, with ONE inner vitest
+      # worker per package so the outer budget IS the budget; run one suite
+      # after another the same work is ~215s, which against a job that already
+      # took 10m17s of a 15-minute cap is most of the remaining margin. Hence
+      # the concurrency, and hence `timeout-minutes` 15 → 18, reasoned above.
+      # Concurrency is PINNED rather than derived from the runner's core count
+      # so it cannot silently move when the runner label does. The gate prints
+      # its own suite count and wall total every run, so this claim is checkable
+      # against the log rather than trusted from here.
+      #
+      # Rides THIS job for the reason already recorded above for the seed-pack
+      # tier: it already has the PINNED extension tree on disk
+      # (clone-extensions) and node_modules installed, and it is a REQUIRED
+      # status check whose `always()` + hard-fail guard shape means this gate
+      # inherits "definitive, never a silent skip" rather than needing a new
+      # required context.
+      - name: Extension suites — discovery gate (every materialized suite)
+        env:
+          EXTENSION_SUITE_JOBS: '4'
+        run: node scripts/ci/extension-suite-gate.mjs
+  # FAN-IN, and the required branch-protection context: `Perpetual system loops
+  # invariants` is what `main` requires, exactly as before the shard split. It
+  # hard-fails unless BOTH shards succeeded; always() makes a failed shard a
+  # definitive RED rather than a skip GitHub would count as satisfied;
+  # docs-only/draft PRs (detect skip) skip it exactly as the old single job did.
+  perpetual-loops-invariants:
+    name: Perpetual system loops invariants
+    needs: [detect, perpetual-core, perpetual-extension-suites]
+    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Gate — both perpetual shards must have succeeded
+        run: |
+          fail=0
+          for pair in "detect=${{ needs.detect.result }}" "perpetual-core=${{ needs['perpetual-core'].result }}" "perpetual-extension-suites=${{ needs['perpetual-extension-suites'].result }}"; do
+            case "$pair" in *"=success") ;; *) echo "::error::prerequisite not green: $pair"; fail=1;; esac
+          done
+          [ "$fail" = 0 ] && echo "both perpetual shards green"
+          exit "$fail"
+
   e2e-rbac:
     name: RBAC browser e2e
     needs: detect
@@ -2959,30 +3031,17 @@ jobs:
           fi
           echo "RBAC e2e passed"
 
-  build:
-    # Gate the image build on the test job so a failing typecheck or unit-test
-    # run blocks publishing the image, including the `latest` tag on main.
-    # Without `needs: test`, a regression would still produce a published image.
-    # `needs: detect` is added so a docs-only PR skips the build entirely (the
-    # `skip` gate below has no value without that edge); the publish-after-
-    # test dependency is preserved.
-    # `a2a-unit` (cinatra#2226) joins for the same reason `skills-unit` did: it is
-    # the ONLY CI runner for packages/a2a, and coupling it here is what makes it a
-    # merge gate WITHOUT adding a branch-protection context.
-    # `execution-plane-unit` (cinatra#2316) joins on the identical footing: it is
-    # the ONLY CI runner for the packages/execution-plane unit tier.
-    # `package-unit-suites` (cinatra#2439) joins on the identical footing again:
-    # it is the ONLY CI runner for the unit suites of eighteen workspace
-    # packages — packages/llm, packages/chat, packages/objects,
-    # packages/registries and the rest — which until this change executed in no
-    # workflow at all.
-    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate]
-    # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`/`package-unit-suites`) FAILED, so the guard step
-    # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
-    # skipped required check as successful, so a failed `test` merely *skipping*
-    # `build` would NOT block a merge gated on the build status. The guard closes
-    # that hole with zero success-path latency (it no-ops when prerequisites
-    # pass). Docs-only and draft PRs (detect succeeded + skip) still skip the build.
+  image:
+    # The container build itself, UN-SERIALIZED from the unit tier (critical-path
+    # fix): it now starts at `detect` instead of waiting ~5-6 min for `test` +
+    # the unit jobs, cutting the workflow's wall clock from ~19 to ~13-14 min.
+    # The merge-gate coupling those `needs` used to provide is NOT lost — it
+    # moved wholesale into the `build` FAN-IN job below, which keeps the exact
+    # required-context name (`build`) and hard-fails unless this job AND the
+    # whole unit tier succeeded. Publishing still hangs off `build`, so a red
+    # unit job still blocks every image publish including `latest`; the only
+    # new cost is a discarded image build on a push whose unit tier fails.
+    needs: [detect]
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     # The `build` job (docker buildx build + next build) is the workflow's long
     # pole (~10-11 min, mostly `next build` on a 2-vCPU runner). To accelerate it,
@@ -3008,10 +3067,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites + hosted-mcp-wire-gate)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' || needs['hosted-mcp-wire-gate'].result != 'success' }}
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }} hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}. Refusing to build the image."
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing rather than building on an undetected tree. The unit-tier gate lives in the build fan-in job."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -3184,6 +3243,32 @@ jobs:
   # this out keeps the routine main-push `:latest` publish — which the Docker
   # Hub mirror depends on — running with ZERO behavior change and ZERO approval
   # pause.
+  # FAN-IN, and the required branch-protection context: `build` (this job id) is
+  # what `main` requires, exactly as before the un-serialization. It hard-fails
+  # unless the image job AND the entire unit tier succeeded, preserving the
+  # "merge gate WITHOUT a branch-protection context" coupling for skills-unit /
+  # a2a-unit / execution-plane-unit / package-unit-suites / hosted-mcp-wire-gate
+  # (each the ONLY CI runner for its packages) — see cinatra#2226/#2316/#2439.
+  # Runs on always() so a failed prerequisite produces a definitive RED, never a
+  # skip GitHub would count as satisfied; docs-only/draft PRs (detect skip) skip
+  # it exactly as the old `build` did.
+  build:
+    needs: [detect, image, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate]
+    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: Gate — image + unit tier must all have succeeded
+        run: |
+          fail=0
+          for pair in "detect=${{ needs.detect.result }}" "image=${{ needs.image.result }}" "test=${{ needs.test.result }}" "skills-unit=${{ needs['skills-unit'].result }}" "a2a-unit=${{ needs['a2a-unit'].result }}" "execution-plane-unit=${{ needs['execution-plane-unit'].result }}" "package-unit-suites=${{ needs['package-unit-suites'].result }}" "hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}"; do
+            case "$pair" in *"=success") ;; *) echo "::error::prerequisite not green: $pair"; fail=1;; esac
+          done
+          [ "$fail" = 0 ] && echo "image + unit tier all green"
+          exit "$fail"
+
   publish-nonrelease-image:
     name: Publish image (non-release)
     needs: build
