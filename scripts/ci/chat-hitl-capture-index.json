@@ -92,7 +92,17 @@
     "record in this file, because every record here is a measurement of a card, and asking the recorder for",
     "one would be asking it to measure a card that must not exist. Those two pictures (P6 / P7) and their",
     "counted anchors live in the round's own capture-results.json and its README grading table instead,",
-    "where they read as what they are: a negative control."
+    "where they read as what they are: a negative control.",
+    "",
+    "LABEL NOTE. Nine records picture the audit lane under its former label, `Core analysis`: B1, B2, B3, B4",
+    "(the suggestion block header reads `CORE ANALYSIS · SUGGESTIONS`), G1, G2, G3 (the same block inside the",
+    "review card) and G5, G6 (the audit card's heading and the run rail entry). The shipped label is `Audit`",
+    "everywhere a person reads it (cinatra#2945). The shipped paths do not produce these states: the automatic",
+    "gate hands the suggestion lane the identity-only projector, so a real gate normally writes no suggestion",
+    "snapshot (cinatra#2950), and the blog repair step that would write the audit card's verification record,",
+    "`repairBlogPostDraft`, exists but is never called by the product (cinatra#2951). A record of a state the",
+    "product does not produce is not evidence, so these nine stand as taken; a later record taken through those",
+    "paths supersedes each of them."
   ],
   "schemaVersion": 1,
   "recorder": "cinatra-lifecycle-capture-recorder@1",
