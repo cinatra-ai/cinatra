@@ -1209,7 +1209,7 @@ is checkable rather than promised, including what it does NOT settle:
   (`/configuration/development?tab=tunnel`, `publicBaseUrlSource: "manual"`), the
   app was restarted so the OAuth audience allowlist follows it, and the driver
   proves the ingress answers inside the app's own 2500 ms reachability budget
-  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 313 ms).
+  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 332 ms).
 
 ## What the counters are, and what they are not
 
@@ -1233,7 +1233,7 @@ who exercised it.
 
 ## And this time the run finished
 
-`agent_runs.status = completed`, `error` empty, one `representation` (a 5107-byte
+`agent_runs.status = completed`, `error` empty, one `representation` (a 6232-byte
 `text/markdown` blob), one processed `artifact_produced_outbox` event and one
 `artifact_review_gates` row. `RUN-READBACK.md` reads all of it out of the database
 and states, claim by claim, which field supports it and what that field does not

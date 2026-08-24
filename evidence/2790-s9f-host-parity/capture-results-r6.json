@@ -6,7 +6,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "da915db69558c104dd2d38ccfba85fc8aa003686504652d5e21f6deec1d0456f",
+      "sha256": "5eaf5a46d1770161949fda232460d3a7f0eaf776692bbba5b37ee0ade486a801",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -132,7 +132,7 @@
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (6)",
+          "Blog Draft Writer Agent (7)",
           "Step 1",
           "Review",
           "Agentic Run Progress",
@@ -142,14 +142,14 @@
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
       "providerEvidence": {
         "serverLog": "<the app server's own log>",
-        "at": "2026-08-24T23:42:01.785Z",
+        "at": "2026-08-24T23:54:03.425Z",
         "preRouterShortCircuits": 0,
         "preRouterAttempts": 0,
         "scriptedRuntimeLines": 0,
         "noProviderRefusals": 0,
         "mcpDependencyFailures": 0,
-        "publicMcpCallbacks": 35,
-        "bridgeRunSelects": 6,
+        "publicMcpCallbacks": 40,
+        "bridgeRunSelects": 7,
         "driverScriptedProviderEnv": null,
         "serverScriptedProviderEnv": null,
         "serverEnvReadFrom": "process-table",
@@ -168,7 +168,7 @@
         "width": 2880,
         "height": 3400
       },
-      "sha256": "8c19e928c8273db78dc836fc9b2647e5cf3a3efb418f30d5fadbee993d1237b6",
+      "sha256": "2c11583633b2ac83f2e9ae49238df7442215725e384f98f4588d0b614c0c60d7",
       "observed": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -294,7 +294,7 @@
         ],
         "agenticRunProgressHeadings": 1,
         "headings": [
-          "Blog Draft Writer Agent (6)",
+          "Blog Draft Writer Agent (7)",
           "Step 1",
           "Review",
           "Agentic Run Progress",
@@ -304,14 +304,14 @@
       "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
       "providerEvidence": {
         "serverLog": "<the app server's own log>",
-        "at": "2026-08-24T23:42:02.882Z",
+        "at": "2026-08-24T23:54:04.536Z",
         "preRouterShortCircuits": 0,
         "preRouterAttempts": 0,
         "scriptedRuntimeLines": 0,
         "noProviderRefusals": 0,
         "mcpDependencyFailures": 0,
-        "publicMcpCallbacks": 35,
-        "bridgeRunSelects": 6,
+        "publicMcpCallbacks": 40,
+        "bridgeRunSelects": 7,
         "driverScriptedProviderEnv": null,
         "serverScriptedProviderEnv": null,
         "serverEnvReadFrom": "process-table",

@@ -18,10 +18,11 @@
 // is bounded, not settled, and README.md is where the boundary is drawn:
 //
 //   · THE TURN NAMES NO PACKAGE TOKEN in either form the pre-router reads, so it
-//     matches no branch of that detector and nothing in the platform dispatched
-//     this run from it: the run was started by a model calling `agent_run`
-//     through this instance's MCP toolbox. WHICH model that was is a separate
-//     question, and the boundary of what these records can say about it is set
+//     matches no branch of that detector and nothing in the platform's own
+//     deterministic path dispatched this run from it. That the run was therefore
+//     started by a MODEL calling `agent_run` is an ARCHITECTURAL INFERENCE from
+//     that absence plus the run's own chat-launch carrier — no committed field
+//     records who invoked the tool. The boundary of what these records can say is set
 //     out in README.md. The run is a chat launch because the TRANSPORT says so
 //     (`delegatedRestricted`, stamped from the verified `delegation: "chat"`
 //     actor), which is the same server-stamped carrier the pre-router path
@@ -348,11 +349,13 @@ function readProviderEvidence() {
   // So both are recorded and NAMED apart:
   //   driverScriptedProviderEnv — this process's value. It only says the driver
   //                               refused to start under the flag.
-  //   serverScriptedProviderEnv — the value in the ENVIRONMENT OF THE RUNNING
-  //                               APP SERVER, read from the process table by pid
-  //                               (`ps eww`). This is the one that decides
-  //                               whether the scripted runtime is reachable at
-  //                               all, and it is the load-bearing measurement.
+  //   serverScriptedProviderEnv — the value found in the app server's PROCESS
+  //                               CHAIN, read from the process table (`ps eww`)
+  //                               at the nearest ancestor of the listening
+  //                               process that has a readable environment. It is
+  //                               the stronger of the two, and it still cannot
+  //                               exclude a variable injected into the listener
+  //                               alone — see the asymmetry below.
   //   serverEnvReadFrom         — how that answer was obtained, so a reader can
   //                               tell a real read from a missing one.
   out.driverScriptedProviderEnv = process.env.CINATRA_TEST_LLM_PROVIDER ?? null;
@@ -1119,7 +1122,7 @@ try {
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The run page for the SAME run this conversation's turn started — while the recommendation is still held: the two-column frame, the step rail down the LEFT with `Recommendation` at the trigger position, and the chip row as that step's own surface in the run detail on the RIGHT. Nothing is drawn inline under the rail row (the chip row is a descendant of the run-detail column, not of the rail column and not of the row), and there is no Agentic Run Progress section beside a run that has not run. A held run contributes no work steps of its own, so what the rail carries here is the gate row alone — stated, not glossed.",
+      "The run page for the SAME run this conversation's turn started — while the recommendation is still held: the two-column frame, the step rail down the LEFT with `Recommendation` at the trigger position, and the chip row as that step's own surface in the run detail on the RIGHT. Nothing is drawn inline under the rail row (the chip row is a descendant of the run-detail column, not of the rail column and not of the row), and there is no Agentic Run Progress section beside a run whose agent work step has not run (the run row itself exists and is parked — `runStatus` reads `pending_input` in this record's own `dbAt` block). A held run contributes no work steps of its own, so what the rail carries here is the gate row alone — stated, not glossed.",
   });
   await setTheme("dark");
   await shoot("R5__recommendation-card__run_card__held__dark", {
