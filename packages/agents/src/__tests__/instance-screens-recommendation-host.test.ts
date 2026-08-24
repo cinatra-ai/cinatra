@@ -45,7 +45,12 @@ import {
 } from "../instance-screens";
 
 /** A leaf single-agent template: no policy steps, not orchestrator/flow. */
-const LEAF = { templateType: "agent", sourceType: "package", stepperStepCount: 0 };
+const LEAF = {
+  templateType: "agent",
+  sourceType: "package",
+  stepperStepCount: 0,
+  hasTriggerRow: false,
+};
 
 describe("runDetailPanelKind — which panel owns the run_card host", () => {
   it("answers 'none' for a run that has not been triggered yet", () => {
@@ -58,6 +63,7 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
         templateType: "orchestrator",
         sourceType: "package",
         stepperStepCount: 3,
+        hasTriggerRow: false,
       }),
     ).toBe("none");
   });
@@ -80,6 +86,7 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
         templateType: "orchestrator",
         sourceType: "package",
         stepperStepCount: 0,
+        hasTriggerRow: false,
       }),
     ).toBe("stepper");
     expect(
@@ -88,6 +95,7 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
         templateType: "flow",
         sourceType: "package",
         stepperStepCount: 0,
+        hasTriggerRow: false,
       }),
     ).toBe("stepper");
     // A plain agent that DOES carry renderer gates gets the stepper too.
@@ -97,6 +105,7 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
         templateType: "agent",
         sourceType: "package",
         stepperStepCount: 2,
+        hasTriggerRow: false,
       }),
     ).toBe("stepper");
   });
@@ -110,6 +119,7 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
         templateType: "orchestrator",
         sourceType: "external",
         stepperStepCount: 5,
+        hasTriggerRow: false,
       }),
     ).toBe("agentic");
   });
@@ -123,12 +133,13 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
     // screen can be handed, which is what makes "one rendered instance" true
     // rather than hoped for. The neighbouring `screenHostsRecommendationCard`
     // suite proves the OTHER picker; it does not prove this one.
-    const PANELS: RunDetailPanelKind[] = ["none", "stepper", "agentic"];
+    const PANELS: RunDetailPanelKind[] = ["none", "trigger", "stepper", "agentic"];
     const shapes: Parameters<typeof runDetailPanelKind>[0][] = [];
     for (const runStatus of [
       null,
       undefined,
       "pending_input",
+      "pending_trigger",
       "running",
       "pending_approval",
       "completed",
@@ -138,7 +149,17 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
       for (const templateType of ["agent", "orchestrator", "flow"]) {
         for (const sourceType of ["package", "external"]) {
           for (const stepperStepCount of [0, 2]) {
-            shapes.push({ runStatus, templateType, sourceType, stepperStepCount });
+            // cinatra#2952 added the trigger row to the shape, so the totality
+            // walk has to carry both of its values.
+            for (const hasTriggerRow of [false, true]) {
+              shapes.push({
+                runStatus,
+                templateType,
+                sourceType,
+                stepperStepCount,
+                hasTriggerRow,
+              });
+            }
           }
         }
       }
@@ -153,12 +174,13 @@ describe("runDetailPanelKind — which panel owns the run_card host", () => {
         .map((s) => JSON.stringify(s)),
     ).toEqual([]);
 
-    // …and all three branches are really reachable, so neither run_card adapter
-    // is dead code the picker can never select.
+    // …and all four branches are really reachable, so neither run_card adapter
+    // — nor the scheduling step — is dead code the picker can never select.
     expect([...new Set(shapes.map((s) => runDetailPanelKind(s)))].sort()).toEqual([
       "agentic",
       "none",
       "stepper",
+      "trigger",
     ]);
   });
 });
@@ -179,11 +201,14 @@ describe("screenHostsRecommendationCard — exactly one renderer per branch", ()
   });
 
   it("covers every branch — no shape is left without an answer", () => {
-    const kinds: RunDetailPanelKind[] = ["none", "stepper", "agentic"];
+    const kinds: RunDetailPanelKind[] = ["none", "trigger", "stepper", "agentic"];
     // Every branch has exactly one renderer: either the screen or the panel.
     // (`screenHostsRecommendationCard` is total, so the count is the assertion.)
+    // The `trigger` branch (cinatra#2952) mounts no panel at all, so the screen
+    // keeps the host there too.
     expect(kinds.filter((k) => screenHostsRecommendationCard(k))).toEqual([
       "none",
+      "trigger",
       "stepper",
     ]);
     expect(kinds.filter((k) => !screenHostsRecommendationCard(k))).toEqual(["agentic"]);
