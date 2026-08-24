@@ -13,20 +13,25 @@
 //     row was removed mid-sequence because this instance had no public MCP
 //     ingress and the provider's toolbox fetch answered 424.
 //
-// NEITHER HAPPENS HERE, and neither can:
+// NEITHER IS DONE HERE:
 //
-//   · THE TURN IS NATURAL LANGUAGE and names NO package token. It matches no
-//     branch of the pre-router, so the only thing that can start a run from it
-//     is the REAL MODEL calling `agent_run` through this instance's own public
-//     MCP toolbox. The run is a chat launch because the TRANSPORT says so
+//   · THE TURN NAMES NO PACKAGE TOKEN in either form the pre-router reads, so it
+//     matches no branch of that detector and nothing in the platform dispatched
+//     this run from it: the run was started by a model calling `agent_run`
+//     through this instance's MCP toolbox. WHICH model that was is a separate
+//     question, and the boundary of what these records can say about it is set
+//     out in README.md. The run is a chat launch because the TRANSPORT says so
 //     (`delegatedRestricted`, stamped from the verified `delegation: "chat"`
 //     actor), which is the same server-stamped carrier the pre-router path
 //     used — so the hold fires for the same reason it did before, from a frame
 //     the model cannot forge.
-//   · THE SEALED `openai_connection` ROW STAYS FOR THE WHOLE SEQUENCE. There is
-//     no provider window and no `PROVIDER_CLEAR` step in this file. The public
-//     origin is set through the app's own tunnel surface before the run, so the
-//     provider CAN fetch the toolbox it 424'd on last time.
+//   · NOTHING IN THIS FILE CLEARS THE SEALED `openai_connection` ROW. There is no
+//     provider window and no `PROVIDER_CLEAR` step — the withdrawn round had
+//     both — and the row is READ BACK through the shipped reader on both sides of
+//     the step (T1c and T3a). Two point reads bracket the call; they do not
+//     establish uninterrupted presence between them, and nothing here says they
+//     do. The public origin is set through the app's own tunnel surface before
+//     the run, so the provider CAN fetch the toolbox it 424'd on last time.
 //   · `CINATRA_TEST_LLM_PROVIDER` IS UNSET IN THIS PROCESS, and this driver
 //     REFUSES TO START if it is set. That is the WEAK half and is labelled as
 //     such: the switch that matters is read by the APP SERVER, not by this
@@ -350,7 +355,8 @@ function readProviderEvidence() {
 }
 
 /**
- * Read `CINATRA_TEST_LLM_PROVIDER` out of the running app server's PROCESS CHAIN.
+ * Read `CINATRA_TEST_LLM_PROVIDER` out of the running app server's PROCESS CHAIN
+ * — the chain, not the listening process itself; the asymmetry is below.
  *
  * WHAT THIS CAN AND CANNOT ESTABLISH, first, because a convergence review found
  * the earlier wording overclaimed it. The Next server rewrites its argv, so on
@@ -1062,7 +1068,7 @@ try {
     runId: state.runId,
     dbAt: timeline.at(-1),
     note:
-      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). Both stood-in legs of the withdrawn round are gone here, and the record's own `providerEvidence` block is what that is read from rather than asserted: the deterministic pre-router never fired (`preRouterShortCircuits: 0` and `preRouterAttempts: 0`), the sealed provider row was never cleared (timeline rows T1c and T3a), the app server's process chain carries no scripted-provider switch (`serverScriptedProviderEnv: null`, read one hop above the listening process — presence would be proof, absence there is consistent rather than conclusive), and this instance's own `/api/mcp` surface was posted to while the sequence ran. WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
+      "The whole conversation in one browser window: the person's own turn — naming the agent by its display name and no package token — and the assistant's own reply carrying the recommendation card HELD. One chip per skill, each with its own Confirm / Adjust / Skip; no heading plate, no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either — representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt). Neither of the two things the withdrawn round did is done here, and the record's own `providerEvidence` block is what that is read from rather than asserted: the deterministic pre-router did not dispatch this run (`preRouterShortCircuits: 0`, `preRouterAttempts: 0`, and the turn carries neither package form that detector requires), and no step of this sequence clears the sealed provider row, which is read back present before and after the agent's step (timeline rows T1c and T3a). Two further readings are recorded WITH their limits: the app server's process chain carries no scripted-provider switch (`serverScriptedProviderEnv: null`, taken one hop above the listening process — presence would be proof, absence there is consistent rather than conclusive), and this instance's own `/api/mcp` surface was posted to while the sequence ran (unattributed: the request log does not record the caller). WHICH runtime served each model call is bounded in README.md and RUN-READBACK.md, not claimed here.",
   });
   await setTheme("dark");
   await shoot("S1__recommendation-card__chat_thread__held__dark", {
@@ -1073,7 +1079,7 @@ try {
     assertions: CHAT_HELD_ASSERTIONS,
     runId: state.runId,
     dbAt: timeline.at(-1),
-    note: "The same window and the same held turn in the dark palette — chip row present, no run progress card, same real chain and the same `providerEvidence` counters.",
+    note: "The same window and the same held turn in the dark palette — chip row present, no run progress card, and the same `providerEvidence` block read with the same stated limits.",
   });
   await setTheme("cinatra");
 
@@ -1210,11 +1216,14 @@ try {
 
   // ---- the run runs -------------------------------------------------------
   //
-  // The run was created with a real sealed provider row configured, that row is
-  // STILL configured (T1c above reads it back), and the scripted runtime is
-  // unreachable in this process. So every model call this loop waits on goes to
-  // the real provider through the public toolbox — and the evidence counters
-  // stamped on T3 are where that is read rather than asserted.
+  // The run was created with a real sealed provider row configured, and that row
+  // is read back present on both sides of the step (T1c before, T3a after).
+  // `resolveConfiguredLlmRuntime` reaches the scripted runtime only as a LAST
+  // RESORT, after every configured candidate failed to resolve, so a provider that
+  // RESOLVES at call time preempts it on this seam. What is NOT measured here is
+  // the adapter resolving at that instant — the reads take the sealed ROW, not
+  // `resolveProviderAdapter` — so this loop is not itself evidence of which
+  // runtime answered. README.md states that boundary.
   state.gatePresses = [];
   state.runStatusWalk = [];
   let lastStatus = null;

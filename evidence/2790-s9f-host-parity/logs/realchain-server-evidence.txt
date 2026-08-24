@@ -9,9 +9,15 @@
  POST /api/mcp 200 in 35ms (next.js: 2ms, proxy.ts: 1448µs, application-code: 31ms)
  POST /api/mcp 200 in 40ms (next.js: 6ms, proxy.ts: 6ms, application-code: 27ms)
  POST /api/mcp 200 in 935ms (next.js: 2ms, proxy.ts: 1613µs, application-code: 931ms)
-[wayflow] run=63ba0918-5b74-442e-808b-97dc282cdcbe task=6bc10ab8-16d4-4c6e-8781-5fa6a94bbaf3 state=input-required status={"state":"input-required","timestamp":"2026-08-24T22:23:47.211304"} artifacts=null
-[human-gate-park] run=63ba0918-5b74-442e-808b-97dc282cdcbe parked on WayFlow gate wayflow-6bc10ab8-16d4-4c6e-8781-5fa6a94bbaf3
 [llm-bridge-run-select] served-by=run_token run=63ba0918-5b74-442e-808b-97dc282cdcbe org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
  POST /api/mcp 200 in 109ms (next.js: 4ms, proxy.ts: 1554µs, application-code: 103ms)
  POST /api/mcp 200 in 46ms (next.js: 2ms, proxy.ts: 1437µs, application-code: 42ms)
-[wayflow] run=63ba0918-5b74-442e-808b-97dc282cdcbe task=46779b11-9dca-4c25-a801-37134c91982e state=completed status={"state":"completed","timestamp":"2026-08-24T22:24:36.567348"} artifacts=null
+ POST /api/mcp 200 in 118ms (next.js: 3ms, proxy.ts: 46ms, application-code: 70ms)
+ POST /api/mcp 200 in 33ms (next.js: 2ms, proxy.ts: 1239µs, application-code: 29ms)
+ POST /api/mcp 200 in 831ms (next.js: 2ms, proxy.ts: 1274µs, application-code: 827ms)
+[wayflow] run=06c64824-9899-4c2b-9e25-159fc8a60c2a task=6ad0f631-27c2-4834-8126-b9da6c8da8a5 state=input-required status={"state":"input-required","timestamp":"2026-08-24T22:46:14.728993"} artifacts=null
+[human-gate-park] run=06c64824-9899-4c2b-9e25-159fc8a60c2a parked on WayFlow gate wayflow-6ad0f631-27c2-4834-8126-b9da6c8da8a5
+[llm-bridge-run-select] served-by=run_token run=06c64824-9899-4c2b-9e25-159fc8a60c2a org=197ba74d-3ac5-4647-bcde-7b662323f524 token-invalid=false token-divergent=false
+ POST /api/mcp 200 in 89ms (next.js: 5ms, proxy.ts: 1682µs, application-code: 82ms)
+ POST /api/mcp 200 in 54ms (next.js: 2ms, proxy.ts: 1448µs, application-code: 50ms)
+[wayflow] run=06c64824-9899-4c2b-9e25-159fc8a60c2a task=2b976512-f001-46ab-9bea-4387b71d78f2 state=completed status={"state":"completed","timestamp":"2026-08-24T22:47:01.490256"} artifacts=null

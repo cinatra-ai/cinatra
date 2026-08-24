@@ -327,21 +327,21 @@ ingress probe. No row anywhere is read off a screen.
 
 | # | Time (UTC) | Clock | What |
 |---|---|---|---|
-| 1 | `22:22:21.641` | process | The public ingress is proved BEFORE any pictured turn: `HEAD /api/mcp` answers `405` in **415 ms**, inside the app's own 2500 ms dead-ingress budget, and `/api/health` answers `200`. Row `T0`. |
-| 2 | `22:22:45.637546` | db | The run is created, `human_present = t`. The deterministic pre-router did not dispatch it: it cannot match a message carrying no package token, and its counters read 0 on every record. `agent_runs.created_at`. |
-| 3 | `22:22:46.416334` | db | It parks at the recommendation hold. `lifecycle_continuation_park.created_at`. |
-| 4 | `22:23:04.124` | process | Row `T1` reads the park and the three output tables at **0**, with the evidence block attached. |
-| 5 | `22:23:05.245` / `22:23:06.367` | process | `S1` light and dark. |
-| 6 | `22:23:21.718` / `22:23:22.802` | process | `R5` light and dark, on the run page, the SAME hold still `parked`. |
-| 7 | `22:23:25.457` | process | Row `T1c`: the sealed REAL provider row is READ BACK through the shipped reader and is still there. **This is where the earlier round removed it.** Nothing is cleared here. |
-| 8 | `22:23:45.469506` | db | The three kept decisions are written in one release transaction. |
-| 9 | `22:23:45.475120` | db | The hold is RELEASED. |
-| 10 | `22:24:11.069` / `22:24:12.212` | process | `S2` light and dark — the row settled in place, after a reload. |
-| 11 | `22:24:13.161` | process | The person answers the run's own in-flight gate with its own `Continue`. One press, landed. |
-| 12 | `22:24:37.946623` | db | The artifact the run produced is written — `representation` revision 1, a 5766-byte `text/markdown` blob. |
-| 13 | `22:24:38.020` | db | The run reaches `completed`, `error` empty. `agent_runs.completed_at`. |
-| 14 | `22:24:54.339` | process | Row `T3a`: the sealed provider row is read AGAIN, after the step's own model call. `T1c` and `T3a` BRACKET that call. |
-| 15 | `22:25:09.499` / `22:25:10.595` | process | `R6` light and dark, on the run page, question decided and run finished. |
+| 1 | `22:44:46.662` | process | The public ingress is proved BEFORE any pictured turn: `HEAD /api/mcp` answers `405` in **242 ms**, inside the app's own 2500 ms dead-ingress budget, and `/api/health` answers `200`. Row `T0`. |
+| 2 | `22:45:12.393195` | db | The run is created, `human_present = t`. The deterministic pre-router did not dispatch it: it cannot match a message carrying no package token, and its counters read 0 on every record. `agent_runs.created_at`. |
+| 3 | `22:45:13.070372` | db | It parks at the recommendation hold. `lifecycle_continuation_park.created_at`. |
+| 4 | `22:45:31.425` | process | Row `T1` reads the park and the three output tables at **0**, with the evidence block attached. |
+| 5 | `22:45:32.623` / `22:45:33.765` | process | `S1` light and dark. |
+| 6 | `22:45:49.252` / `22:45:50.338` | process | `R5` light and dark, on the run page, the SAME hold still `parked`. |
+| 7 | `22:45:53.098` | process | Row `T1c`: the sealed REAL provider row is READ BACK through the shipped reader and is still there. **This is where the earlier round removed it.** Nothing is cleared here. |
+| 8 | `22:46:12.888288` | db | The three kept decisions are written in one release transaction. |
+| 9 | `22:46:12.893984` | db | The hold is RELEASED. |
+| 10 | `22:46:39.199` / `22:46:40.408` | process | `S2` light and dark — the row settled in place, after a reload. |
+| 11 | `22:46:41.351` | process | The person answers the run's own in-flight gate with its own `Continue`. One press, landed. |
+| 12 | `22:47:02.792292` | db | The artifact the run produced is written — `representation` revision 1, a 4775-byte `text/markdown` blob. |
+| 13 | `22:47:02.872` | db | The run reaches `completed`, `error` empty. `agent_runs.completed_at`. |
+| 14 | `22:47:22.193` | process | Row `T3a`: the sealed provider row is read AGAIN, after the step's own model call. `T1c` and `T3a` BRACKET that call. |
+| 15 | `22:47:36.886` / `22:47:37.985` | process | `R6` light and dark, on the run page, question decided and run finished. |
 
 ## What the order proves
 

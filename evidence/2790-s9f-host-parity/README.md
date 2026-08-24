@@ -1164,8 +1164,8 @@ states they measure had two legs that never reached a model:
    provider row was REMOVED mid-sequence, because this instance had no public MCP
    ingress and the provider's toolbox fetch answered `424 Failed Dependency`.
 
-Both are replaced, and `drivers/12-real-chain-sequence.mjs` is written so that
-each replacement is checkable rather than promised:
+Neither is done here, and `drivers/12-real-chain-sequence.mjs` is written so that
+what stands in each place is checkable rather than promised:
 
 - **The turn names no package token**, in either form the pre-router reads.
   `detectExplicitDispatchPackage` needs BOTH a verb and a package reference, so it
@@ -1173,12 +1173,13 @@ each replacement is checkable rather than promised:
   prepended. Nothing in the platform dispatched this run from that sentence: it was
   started by a model calling `agent_run` through this instance's MCP toolbox.
   WHICH model served the turn is a separate question, bounded below.
-- **The sealed `openai_connection` row is read on BOTH sides of the step** —
-  timeline rows `T1c` (before) and `T3a` (after the step's own model call). The
-  earlier round removed it at `T1c`'s position; this one reads it there. Two point
-  reads are what is claimed; they bracket the call rather than proving continuity.
-- **The scripted runtime is ruled out for the AGENT'S STEP by the code's own
-  ordering.** `resolveConfiguredLlmRuntime` — the resolver `/api/llm-bridge` takes,
+- **No step of this sequence clears the sealed `openai_connection` row, and it is
+  read on BOTH sides of the step** — timeline rows `T1c` (before) and `T3a` (after
+  the step's own model call). The earlier round removed it at `T1c`'s position;
+  this one reads it there. Two point reads are what is claimed; they bracket the
+  call rather than proving continuity.
+- **For the AGENT'S STEP the code's own ordering is the strongest thing on offer,
+  and it is an argument rather than a proof.** `resolveConfiguredLlmRuntime` — the resolver `/api/llm-bridge` takes,
   which is the seam the agent-run model call goes through — reaches the scripted
   runtime only as a LAST RESORT, *"after every real candidate failed to resolve"*,
   and its own comment states that an install WITH a configured provider never
@@ -1205,7 +1206,7 @@ each replacement is checkable rather than promised:
   (`/configuration/development?tab=tunnel`, `publicBaseUrlSource: "manual"`), the
   app was restarted so the OAuth audience allowlist follows it, and the driver
   proves the ingress answers inside the app's own 2500 ms reachability budget
-  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 415 ms).
+  BEFORE any pictured turn (`HEAD /api/mcp` → `405` in 242 ms).
 
 ## What the counters are, and what they are not
 
@@ -1219,7 +1220,7 @@ the safe direction for something whose only power is to stop the shoot.
 
 `publicMcpCallbacks` is the POSITIVE one: `POST /api/mcp` hits. The raw count is
 cumulative over the whole lane session, so what carries anything is
-`deltaSinceStart`, which rises **0 → 5 → 7** across the eight cells while
+`deltaSinceStart`, which rises **0 → 3 → 5** across the eight cells while
 `bridgeRunSelects` rises **0 → 1**. The driver ABORTS a shutter if that delta has
 not moved, and aborts if any screen has. Its LIMIT is stated as well: the request
 log does not record which caller made the POST, and this branch's scripted
@@ -1229,7 +1230,7 @@ who exercised it.
 
 ## And this time the run finished
 
-`agent_runs.status = completed`, `error` empty, one `representation` (a 5766-byte
+`agent_runs.status = completed`, `error` empty, one `representation` (a 4775-byte
 `text/markdown` blob), one processed `artifact_produced_outbox` event and one
 `artifact_review_gates` row. `RUN-READBACK.md` reads all of it out of the database
 and states, claim by claim, which field supports it and what that field does not

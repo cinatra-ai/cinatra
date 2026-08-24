@@ -1,16 +1,16 @@
 {
-  "startedAt": "2026-08-24T22:22:05.434Z",
+  "startedAt": "2026-08-24T22:44:30.793Z",
   "userId": "50395d2d-1d98-4583-b33a-6e04aab476d1",
   "evidenceAtStart": {
     "serverLog": "<the app server's own log>",
-    "at": "2026-08-24T22:22:12.886Z",
+    "at": "2026-08-24T22:44:38.332Z",
     "preRouterShortCircuits": 0,
     "preRouterAttempts": 0,
     "scriptedRuntimeLines": 0,
     "noProviderRefusals": 0,
     "mcpDependencyFailures": 0,
-    "publicMcpCallbacks": 5,
-    "bridgeRunSelects": 1,
+    "publicMcpCallbacks": 12,
+    "bridgeRunSelects": 2,
     "driverScriptedProviderEnv": null,
     "serverScriptedProviderEnv": null,
     "serverEnvReadFrom": "process-table",
@@ -18,12 +18,12 @@
     "serverEnvHopsFromListener": 1,
     "serverEnvTokensSeen": 63
   },
-  "threadPath": "/chat/cinatra-ai/cinatra-assistant/df576f47-8ea5-480c-a296-ab3d2d27a4a4",
+  "threadPath": "/chat/cinatra-ai/cinatra-assistant/b3aab76d-e5a1-478d-8664-a64c39e4bbda",
   "runIdCandidates": 1,
-  "runId": "63ba0918-5b74-442e-808b-97dc282cdcbe",
+  "runId": "06c64824-9899-4c2b-9e25-159fc8a60c2a",
   "runIdSource": "the ONLY agent_runs row started by this actor since this sequence began",
   "packageName": "@cinatra-ai/blog-draft-writer-agent",
-  "runPath": "/agents/cinatra-ai/blog-draft-writer-agent/63ba0918-5b74-442e-808b-97dc282cdcbe",
+  "runPath": "/agents/cinatra-ai/blog-draft-writer-agent/06c64824-9899-4c2b-9e25-159fc8a60c2a",
   "heldChips": [
     {
       "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
@@ -79,30 +79,30 @@
       "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
       "action": "confirm",
       "cardStateAfter": "held",
-      "at": "2026-08-24T22:23:40.289Z"
+      "at": "2026-08-24T22:46:07.933Z"
     },
     {
       "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
       "action": "adjust",
       "cardStateAfter": "held",
-      "at": "2026-08-24T22:23:43.069Z"
+      "at": "2026-08-24T22:46:10.724Z"
     },
     {
       "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
       "action": "skip",
       "cardStateAfter": "held",
-      "at": "2026-08-24T22:23:44.297Z"
+      "at": "2026-08-24T22:46:11.947Z"
     },
     {
       "skillId": "@cinatra-ai/web-research-skill:web-research",
       "action": "confirm",
       "cardStateAfter": "held",
-      "at": "2026-08-24T22:23:45.523Z"
+      "at": "2026-08-24T22:46:13.177Z"
     }
   ],
   "gatePresses": [
     {
-      "at": "2026-08-24T22:24:13.161Z",
+      "at": "2026-08-24T22:46:41.351Z",
       "pressed": "Continue",
       "landed": true,
       "error": null
@@ -110,13 +110,13 @@
   ],
   "runStatusWalk": [
     {
-      "at": "2026-08-24T22:24:13.117Z",
+      "at": "2026-08-24T22:46:41.318Z",
       "status": "pending_approval"
     },
     {
-      "at": "2026-08-24T22:24:39.201Z",
+      "at": "2026-08-24T22:47:07.387Z",
       "status": "completed"
     }
   ],
-  "reviewTaskId": null
+  "reviewTaskId": "lifecycle-review:688f9cb320554c28639665a49e5695f6d37051dcf9ab54a42b4db8b7d9648a71"
 }
