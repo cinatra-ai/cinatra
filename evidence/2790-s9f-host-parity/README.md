@@ -951,3 +951,165 @@ now verbatim substrings of the plan page again.**
 - On the **dark** `S4` the target island renders light inside the dark page — a
   separate iframe document the theme class does not reach. A pre-existing island
   theme gap, outside S9f, and not what these cells are graded on.
+
+---
+
+# The REWORK round — cinatra#2890 (2026-08-23)
+
+## What was asked for, and what is here
+
+> the skills question and the decided skills, each in the chat AND on the run
+> page, on one real run
+
+**Eight pictures, four states, one run.** The recommendation is photographed HELD
+in the conversation and HELD on the run page while the hold is still parked and
+the run has produced nothing; then every chip is decided IN THE CHAT through the
+card's own per-chip controls; then the settled row is photographed in the
+conversation and on the run page. Light and dark for each. Every cell is the
+FULL BROWSER WINDOW at 1440x1700 CSS px, deviceScaleFactor 2 — this lane's
+committed walk contract — with no crop rectangle and no `fullPage` stitch.
+
+| Cell | Surface | State | Palette |
+|---|---|---|---|
+| `S1__recommendation-card__chat_thread__held` | the conversation | held | light |
+| `S1__recommendation-card__chat_thread__held__dark` | the conversation | held | dark |
+| `R5__recommendation-card__run_card__held` | the run page | held | light |
+| `R5__recommendation-card__run_card__held__dark` | the run page | held | dark |
+| `S2__recommendation-card__chat_thread__decided` | the conversation | decided | light |
+| `S2__recommendation-card__chat_thread__decided__dark` | the conversation | decided | dark |
+| `R6__recommendation-card__run_card__decided` | the run page | decided | light |
+| `R6__recommendation-card__run_card__decided__dark` | the run page | decided | dark |
+
+The run-page pair is numbered R5/R6 rather than R1/R2 because R1–R4 in this lane
+are already the REVIEW-PAGE cells; the host token in each name (`run_card`) says
+which surface it is.
+
+**Read `PLAN-WALK.md` beside this file for the grading.** Every cell carries the
+plan sentences that govern it, the drawing it is graded against, and a
+`DRAWING-CHECK>` written by looking at the picture. **Two of the eight FAIL, and
+they are named as FAILs** — see below. **Read `RUN-READBACK.md`** for who created
+the run, who decided it, what model was configured, and what the run did and did
+not produce, every value read out of the database.
+
+## The withdrawn pair is replaced
+
+The four chat cells this lane first shot were withdrawn: they showed an agentic
+run progress card in the turn while the recommended skills could still be
+chosen, and a skills button row inside the run card after they were decided.
+Both readings are ruled out by the plan and both are fixed in the code this
+branch carries. `S1` now records `[data-inline-run-card]` at **0** on the held
+turn, and `S2` records `[data-hitl-skill-picker]` at **0** inside the run card
+on the decided one — the absences are measured, not asserted.
+
+## The two FAILs
+
+**`R6` does not draw the recommendation's settled rail entry, in either
+palette.** The plan puts the row "at the trigger position, the top entry on the
+step rail", and the rework's own settled reading is the rail's resolved-gate
+history row. `R5` shows the held half working exactly: the two-column frame, `①
+Recommendation` on the left, the chip row as that step's surface in the run
+detail on the right, nothing inline under the rail row and no progress section.
+But once the run leaves `pending_input` the screen stops contributing the step
+at all — it adds one only where the SCREEN hosts the card, and from that moment
+the run panel inside the run detail hosts it instead. So in `R6` the left column
+carries the run's own `✓ Step 1` and the `Recommendation` row is absent
+(`railStepPresent: false`, measured on both cells). The page still has two
+columns — they are the screen's own, which is why the gate frame's instrumented
+columns read absent beside a present `run-surface` — but the recommendation's
+rail entry is not among them.
+
+Everything else `R6` owes it shows: the settled chips are in place, nothing
+inside the card can be pressed (all three per-chip action counts read 0 inside
+the card root), and the run detail is restored with the run's own progress.
+
+**One further shortfall, stated rather than glossed.** In `R5` the rail carries
+only the gate row: the page's own rail is suppressed while the run has no step
+entries yet, so "ahead of the steps it would authorize" is shown as a position
+without the steps it precedes.
+
+## What served the model, and what this environment cannot do
+
+**The chat turn answers on the DETERMINISTIC BRIDGE.** The typed turn carries
+embedded `inputParams`, which takes the hard pre-router's brace-matched fast path
+and dispatches server-side without consulting a model at all. A real-model chat
+turn needs a publicly reachable MCP ingress, which this environment does not
+allow. The HOLD, the chips, the decision and the run are the server's own shipped
+path; only the routing of that one sentence is deterministic.
+
+**The run was created with a REAL model provider configured** — a sealed
+`openai_connection` row written through the shipped `writeOpenAIConnection`
+inside the operator's secret-manager `run` wrapper, `defaultModel` `gpt-5.5`.
+**Its step could not COMPLETE on that provider here, and this round measured
+why**: the bridge loads this instance's cinatra toolbox into the provider call,
+the provider fetches that toolbox from this instance's PUBLIC MCP URL, and this
+machine has none. The run before the pictured one died exactly there —
+`POST /api/llm-bridge 500`, *"could not reach this instance's public MCP server …
+HTTP 424 Failed Dependency"*, read out of the WayFlow runtime's own container log
+into `logs/rework-bridge-readback.txt`. So the connection was removed mid-
+sequence, in the open and on the clock (`TIMELINE.md` row 4), at the one moment
+it was in the way of nothing already photographed, and the scripted runtime
+served that one call. The step then ran and the flow reached `completed` inside
+the runtime.
+
+**No credential and nothing derived from one is in this directory.** The key
+reached exactly one process, through its environment, inside the wrapper; that
+step reports presence and the published model name and nothing else.
+
+## What the pictured run did NOT do
+
+It ended `failed`, at artifact materialization, AFTER the flow completed:
+`titleFrom output "title" did not resolve to a non-empty string` for
+`@cinatra-ai/blog-post-artifact`. That is downstream of every state the eight
+cells show and it is a LANE fact — the scripted model's canned completion carries
+no `title` for the binding to read. It is visible in `R6` itself rather than
+hidden, and `RUN-READBACK.md` reads the row out of the database. The output-and-
+review half of this lane's evidence is the earlier `S3`/`S4` set, which is
+unchanged.
+
+## How it was run
+
+`node scripts/dev-server.mjs` (Next.js, Turbopack), `CINATRA_RUNTIME_MODE=development`,
+on a dedicated lane database and Redis, with the WayFlow runtime up from the
+repository's own compose profile and a lane-local package registry. The lane tree
+is an APFS clone of the repository at this branch's head, with the dev extensions
+synced PINNED to the committed lock shas (112/112) before boot. The drivers are
+`drivers/08-real-provider.test.ts` (the sealed provider row) and
+`drivers/09-chat-and-run-page-sequence.mjs` (the whole sequence). It is the dev
+build, not a production-equivalent one, as every earlier round in this lane was.
+
+## Three corrections made to this round's own artifacts, before it was filed
+
+A convergence review read the records against the prose and caught three places
+where this round's own writing outran its own measurements. All three are fixed
+here rather than argued away, and each is named so a reader can check it.
+
+1. **The two `R6` records asserted the settled rail entry they measure as
+   absent.** The driver wrote that `note` before the shutter; the same record
+   reads `railStepPresent: false`. Both notes now say what was measured, and each
+   carries a `noteCorrection` field saying so. Nothing measured was touched — the
+   screenshots, their digests and every assertion count are exactly as recorded —
+   and the driver's own note text is fixed so a re-run writes the corrected
+   wording.
+2. **The frame claim was wrong.** An earlier draft said `R6` drew no two-column
+   frame ("run-surface children 1"). The record says `surfacePresent: true`,
+   `surfaceChildren: 2`. What is absent is the GATE frame's own instrumented
+   columns; the screen's two columns are still there. Corrected in `PLAN-WALK.md`
+   and above.
+3. **The ordering claim was wrong.** An earlier draft said both decided pictures
+   follow the step. `S2` was shot at `23:39:46`, before the step completed at
+   `23:39:49`; only `R6` follows it. Corrected in `TIMELINE.md`, which now says
+   which picture is on which side of the step.
+
+Two smaller ones came out of the same review and are fixed with them: the raw
+`psql` readback every microsecond timestamp is quoted from is now committed
+(`logs/rework-db-readback.txt`), and `TIMELINE.md` no longer claims that *every*
+one of its timestamps is a database column — the capture, press and runtime times
+are process and runtime clocks, and each row now names which it is.
+
+The `T3` row in `timeline-rework.json` and its line in `logs/rework-sequence.txt`
+were written by the driver as "the step executed against the real model". That is
+wrong — the provider had been removed one row earlier and the scripted runtime
+served the call. The recorded artifacts are left VERBATIM rather than rewritten,
+because they are the driver's own output; the correction rides beside them (a
+`whatCorrection` field on the row, a marked footer on the log), and the driver's
+label is fixed for any re-run.

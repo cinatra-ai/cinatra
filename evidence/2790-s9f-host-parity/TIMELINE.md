@@ -1,9 +1,10 @@
 # cinatra#2790 (S9f) — the order the run actually happened in
 
-Every row below is a timestamp READ FROM THE DATABASE or from a runtime log, not
-from a screen and not from a narrative. The right-hand column names the exact
-source of each one. All times are UTC on 2026-08-22; `timeline.json` beside this
-file carries the same rows machine-readably.
+Every row below is a timestamp READ FROM THE DATABASE or from a runtime log or
+the driver's own clock, not from a screen and not from a narrative. The
+right-hand column names the exact source of each one. All times are UTC on
+2026-08-22; `timeline.json` beside this file carries the same rows
+machine-readably.
 
 The run: `e7c77fc6-da28-4bca-80f7-46c56867772e`, started **person-present** from
 `/agents/cinatra-ai/blog-draft-writer-agent/new`, on the capture lane's own
@@ -83,10 +84,12 @@ should always be visible in the screenshots, not just a close-up of the skill
 recommendation pills"*, and *"the re-shoot does not show the skills
 recommendation card before the agent creates output, only afterwards"*.
 
-Same rule as above: **every timestamp below is read from a database column**,
-named beside it. Nothing is read off a screen. `timeline-chat.json` beside this
-file carries the same rows machine-readably, and `logs/chat-sequence.txt` is the
-driver's own verbatim log.
+Same rule as above: **every lifecycle timestamp below is read from a database
+column**, named beside it, and the capture, press and runtime times are the
+recorder's, the driver's and the runtime's own clocks — the right-hand column
+names which for each row. Nothing is read off a screen. `timeline-chat.json`
+beside this file carries the same rows machine-readably, and
+`logs/chat-sequence.txt` is the driver's own verbatim log.
 
 The run: `c2a07df4-07e1-4bd5-94dd-9167a18e0b9d`, started **from the conversation**
 `/chat/cinatra-ai/cinatra-assistant/dc7b8f36-d868-4ea4-8d5c-f4d9fc539c1c` by one
@@ -138,3 +141,96 @@ Nothing on this page is staged into its state: the decided row in `S3` and `S4`
 is what a decision taken thirty-three seconds before the output existed left
 behind, and the review it sits above could not have existed before the step
 produced something to review.
+
+---
+
+# The REWORK round — cinatra#2790 (S9f), PR #2890, 2026-08-23
+
+The two rounds above walked the run page and then the conversation. This one
+answers the owner's demand for **the skills question and the decided skills,
+each in the chat AND on the run page, on one real run** — eight pictures, four
+states, light and dark, one run.
+
+**Which clock each row is on is named in its own right-hand column, and they are
+not all the same clock.** The run's own lifecycle times — creation, park,
+selection, release, completion — are DATABASE columns, and the raw `psql` output
+they are quoted from is committed beside this file as
+`logs/rework-db-readback.txt`. The capture times are the recorder's `recordedAt`,
+the press times are the driver's clock, and the runtime completion is WayFlow's
+own status payload; those are process and runtime clocks, and the rows say so.
+Nothing anywhere is read off a screen. `timeline-rework.json` carries the
+driver's own rows machine-readably, `logs/rework-sequence.txt` is its verbatim
+log, and **`RUN-READBACK.md` is the full readback of this run** — who created it,
+who decided it, what model was configured, and what it did and did not produce.
+
+**One row in `timeline-rework.json` is wrong and is left standing.** `T3` is
+labelled "the step executed against the real model"; it did not — the provider
+was removed one row earlier and the scripted runtime served that call. The
+recorded artifacts are the driver's own output and are not rewritten; the
+correction rides beside them (`whatCorrection` on the row, a marked footer on the
+log) and the driver's label is fixed for any re-run.
+
+The run: `8ff25a9b-2e54-4daf-acd1-9688a1e196b1`, started **from the
+conversation** by one typed turn, on this round's own lane database.
+
+## The column that IS trusted this time
+
+`cinatra.agent_runs.created_at` reads `23:38:20.260378` — **before** the hold it
+could only have parked on once it existed (`23:38:21.032623`). The two earlier
+rounds could not trust this column; this lane's schema carries
+`core__0096_agent-run-created-at-immutable`, and the column and the park agree.
+
+## The sequence
+
+| # | What happened | Time (UTC) | Read from |
+|---|---|---|---|
+| 1 | The run was created from the conversation and PARKED at the recommendation hold | `23:38:20.260` / `23:38:21.033` | `cinatra.agent_runs.created_at`; `cinatra.lifecycle_continuation_park.created_at` (`checkpoint=recommendation`, `status=parked`) |
+| 2 | **S1 was photographed with NOTHING PRODUCED** — `representation`, `artifact_produced_outbox` and `artifact_review_gates` rows for this run all **0**, and `run_selected_skill_revisions` **0** | `23:38:38.695` / `23:38:39.757` | DB (the zero counts, via each S1 record's `dbAt` block) + RECORDER CLOCK (`recordedAt` on those records) |
+| 3 | **R5 was photographed on the RUN PAGE with the SAME hold still parked** | `23:38:56.218` / `23:38:57.256` | DB (`dbAt`: `parkStatus: parked`) + RECORDER CLOCK (`recordedAt` on the two R5 records) |
+| 4 | The REAL provider connection was removed through the shipped `clearOpenAIConnection`, so the agent's own model call would resolve the scripted runtime | `23:38:59.845` | DRIVER CLOCK — `timeline-rework.json` row `T1c`, with the shipped writer's own read-back (`storeResolvesAKey: false`) |
+| 5 | **The four chips were decided one at a time**, in the chat, through the card's own per-chip controls — `confirm`, `adjust` → *"Keep it in this run"*, `skip`, `confirm` | presses between `23:38:59` and `23:39:20` | DRIVER CLOCK — `logs/rework-sequence.txt` (`PRESS …` lines, in order) |
+| 6 | **The three kept decisions were written** — `blog-post-matcher → user_adjusted`, `blog-writing → recommended_confirmed`, `web-research → recommended_confirmed` (one release transaction, one timestamp) | `23:39:20.352069` | DB — `cinatra.run_selected_skill_revisions.selected_at` + `.selection_source` (`logs/rework-db-readback.txt`) |
+| 7 | **The hold was RELEASED** | `23:39:20.358286` | DB — `cinatra.lifecycle_continuation_park.resolved_at`, `status=released` (`logs/rework-db-readback.txt`) |
+| 8 | **S2 was photographed** — the row settled in place, same slot, after a reload | `23:39:46.673` / `23:39:47.760` | RECORDER CLOCK — `recordedAt` on the two S2 records |
+| 9 | **THE STEP RAN IN THE RUNTIME** — its model call to `POST /api/llm-bridge` answered **200**, and the flow reached `completed` inside WayFlow | `23:39:49.956579` | `logs/rework-bridge-readback.txt`: `[llm-bridge-run-select] served-by=run_token run=8ff25a9b…`, `POST /api/llm-bridge 200 in 523ms`, then `[wayflow] run=8ff25a9b… state=completed` |
+| 10 | The run reached its terminal state — **`failed`**, at artifact materialization, AFTER the flow completed | `23:39:50.537` | DB — `cinatra.agent_runs.completed_at` + `.error` (`logs/rework-db-readback.txt`) |
+| 11 | **R6 was photographed on the RUN PAGE with the question decided** | `23:40:10.326` / `23:40:11.412` | RECORDER CLOCK — `recordedAt` on the two R6 records |
+
+## What the order proves
+
+**The card was photographed HELD in the chat (row 2) AND on the run page (row 3)
+while the run's own representation, produced-outbox and review-gate counts were
+all ZERO and the hold still read `parked`** — so the question was on screen and
+actionable, on both surfaces, before the agent had produced anything at all. The
+chips were then decided (row 6, `23:39:20`), which is earlier than the step that
+used them (row 9, `23:39:49`).
+
+**The two decided pictures fall on OPPOSITE sides of that step, and saying so
+matters.** `S2` (row 8, `23:39:46`) was shot while the step was still running —
+which is exactly why its run progress card reads mid-flight. `R6` (row 11,
+`23:40:10`) was shot after the run had reached its terminal state. Both are after
+the decision, which is the claim these two cells carry; neither is claimed to be
+after the step except `R6`, which is.
+
+Nothing on either surface was staged into its state.
+
+## The two things this round could NOT do, said plainly
+
+1. **The chat turn answers on the DETERMINISTIC BRIDGE.** The turn carries
+   embedded `inputParams`, which takes the hard pre-router's brace-matched fast
+   path and dispatches server-side without consulting a model. A real-model chat
+   turn needs a publicly reachable MCP ingress, which this environment does not
+   have.
+2. **The agent's own step could not COMPLETE on the real model.** The run was
+   created with a REAL sealed `openai_connection` row configured (written through
+   the shipped writer inside the operator's secret-manager wrapper), and the run
+   before the pictured one died proving why it cannot finish here: the bridge
+   loads this instance's cinatra toolbox into the provider call, the provider
+   fetches that toolbox from this instance's PUBLIC MCP URL, and this machine has
+   none — `POST /api/llm-bridge 500`, *"could not reach this instance's public
+   MCP server … HTTP 424 Failed Dependency"* (`logs/rework-bridge-readback.txt`,
+   from the runtime's own container log). So the connection was removed in the
+   open at row 4 and the scripted runtime served that one call.
+
+Neither substitution touches the hold, the chips, the decision, the release or
+the dispatch: those are the server's own shipped path throughout.

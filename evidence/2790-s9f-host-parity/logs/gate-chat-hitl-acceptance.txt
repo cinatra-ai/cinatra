@@ -1,19 +1,6 @@
-# cinatra#2790 (S9f) — scripts/audit/chat-hitl-acceptance-gate.mjs, run at this tree.
+# cinatra#2790 (S9f) — scripts/audit/chat-hitl-acceptance-gate.mjs, rework tree.
 #
-# EXIT 0. Both runs below are verbatim.
+# EXIT 0.
 
 == RUN AT THIS TREE ==
-$ node scripts/audit/chat-hitl-acceptance-gate.mjs
-[chat-hitl-acceptance] manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 50 record(s). Anchor contract ratified at the manifest's design pin.
-exit: 0
-
-== ISOLATION CONTROL — this lane contributing NOTHING ==
-$ node scripts/audit/chat-hitl-acceptance-gate.mjs
-[chat-hitl-acceptance] manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 39 record(s). Anchor contract ratified at the manifest's design pin.
-exit: 0
-
-# The two runs agree apart from the record COUNT the index carries (50 with
-# this lane, 39 without it), which is the only thing this commit changes for
-# this gate. No finding is caused and none is absorbed. (The four
-# capture-index violations the previous evidence commit reported here were
-# the retired grandfathered pair; #2903 removed them.)
+[chat-hitl-acceptance] manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 75 record(s). Anchor contract ratified at the manifest's design pin.

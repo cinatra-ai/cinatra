@@ -1,23 +1,7 @@
-# cinatra#2790 (S9f) — scripts/ci/chat-hitl-evidence-gate.mjs, run at this tree.
+# cinatra#2790 (S9f) — scripts/ci/chat-hitl-evidence-gate.mjs, rework tree.
 #
-# EXIT 0. Both runs below are verbatim.
+# EXIT 0.
 
 == RUN AT THIS TREE ==
-$ node scripts/ci/chat-hitl-evidence-gate.mjs
 [chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
   no findings.
-exit: 0
-
-== ISOLATION CONTROL — this lane contributing NOTHING ==
-# evidence/2790-s9f-host-parity/ moved aside AND this lane's eleven records
-# removed from scripts/ci/chat-hitl-capture-index.json (50 -> 39), so the gate
-# saw a repo this lane had never touched.
-$ node scripts/ci/chat-hitl-evidence-gate.mjs
-[chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
-  no findings.
-exit: 0
-
-# The two runs agree: NO findings either way. This commit therefore causes
-# none and absorbs none. (The two grandfathered chat_thread cells the
-# previous evidence commit reported here were retired by #2903, which has
-# since merged into this branch.)

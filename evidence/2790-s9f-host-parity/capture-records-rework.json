@@ -1,0 +1,1368 @@
+[
+  {
+    "cell": "S1__recommendation-card__chat_thread__held",
+    "declaredHost": "chat_thread",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "pending",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held.png",
+    "sha256": "cd8581871bb8d48447fefb22009381c42417febb8e64d8f93748ff9feee2d4ec",
+    "assertions": [
+      {
+        "selector": "[data-conversation-list]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-chat-thread-recommendation-hold]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-run-recommendation-chip-row]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-inline-run-card]",
+        "scope": "frame",
+        "count": 0
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-23T23:38:38.695Z",
+    "runtime": "dev-runtime",
+    "note": "The whole conversation in one browser window: the person's own turn asking for the agent, and the reply carrying the recommendation card HELD \u2014 one chip per skill, each with its own Confirm / Adjust / Skip, no heading plate and no row-level submit. NO agentic run progress card is anywhere in the turn: the skills are still being chosen, so the run has not started and the run-card count reads ZERO. Nothing has been produced either \u2014 representation, produced-outbox and review-gate rows for this run all read ZERO in the database at this instant (dbAt).",
+    "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "dbAt": {
+      "step": "T1",
+      "what": "held at the recommendation hold; the run has produced NOTHING",
+      "at": "2026-08-23T23:38:37.626Z",
+      "db": {
+        "runStatus": "pending_input",
+        "humanPresent": true,
+        "parkCheckpoint": "recommendation",
+        "parkStatus": "parked",
+        "parkCreatedAt": "2026-08-23T23:38:21.032Z",
+        "representationRows": 0,
+        "producedOutboxRows": 0,
+        "reviewGateRows": 0,
+        "selectionRows": 0
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "held",
+      "data-lifecycle-card-host": "chat_thread",
+      "data-chat-thread-recommendation-hold": "",
+      "data-variant": "inline",
+      "data-can-decide": "true"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Brand Voice Matcher Skill",
+        "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      }
+    ],
+    "transcript": {
+      "turns": 2,
+      "listTop": 88,
+      "listBottom": 401,
+      "listFullyInViewport": true,
+      "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+    },
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": []
+  },
+  {
+    "cell": "S1__recommendation-card__chat_thread__held__dark",
+    "declaredHost": "chat_thread",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "pending",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/S1__recommendation-card__chat_thread__held__dark.png",
+    "sha256": "ba59402f99d67fc241483f2a4fe6d548836b51615c95812d371db7adebef7617",
+    "assertions": [
+      {
+        "selector": "[data-conversation-list]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-chat-thread-recommendation-hold]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-run-recommendation-chip-row]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-inline-run-card]",
+        "scope": "frame",
+        "count": 0
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-23T23:38:39.757Z",
+    "runtime": "dev-runtime",
+    "note": "The same window and the same held turn in the dark palette \u2014 chip row present, no run progress card.",
+    "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "dbAt": {
+      "step": "T1",
+      "what": "held at the recommendation hold; the run has produced NOTHING",
+      "at": "2026-08-23T23:38:37.626Z",
+      "db": {
+        "runStatus": "pending_input",
+        "humanPresent": true,
+        "parkCheckpoint": "recommendation",
+        "parkStatus": "parked",
+        "parkCreatedAt": "2026-08-23T23:38:21.032Z",
+        "representationRows": 0,
+        "producedOutboxRows": 0,
+        "reviewGateRows": 0,
+        "selectionRows": 0
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "held",
+      "data-lifecycle-card-host": "chat_thread",
+      "data-chat-thread-recommendation-hold": "",
+      "data-variant": "inline",
+      "data-can-decide": "true"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Brand Voice Matcher Skill",
+        "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      }
+    ],
+    "transcript": {
+      "turns": 2,
+      "listTop": 88,
+      "listBottom": 401,
+      "listFullyInViewport": true,
+      "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Writing Skill\nConfirm\nAdjust\nSkip\nBlog Post Matcher Skill\nConfirm\nAdjust\nSkip\nBrand Voice Matcher Skill\nConfirm\nAdjust\nSkip\nWeb Research Skill\nConfirm\nAdjust\nSkip\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+    },
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": []
+  },
+  {
+    "cell": "R5__recommendation-card__run_card__held",
+    "declaredHost": "run_card",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "pending",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held.png",
+    "sha256": "a0545aa22dd2aab273db5d46e72bb00b9cc18c02bd41e4386881702bfad87737",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"run_card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"run-surface\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-run-step-rail-column]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-run-detail-column]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-run-recommendation-chip-row]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 4
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-23T23:38:56.218Z",
+    "runtime": "dev-runtime",
+    "note": "The run page for the SAME run while the recommendation is still held: the two-column frame, the step rail down the LEFT with `Recommendation` at the trigger position (numbered 1, ahead of the work steps it would authorize), and the chip row as that step's own surface in the run detail on the RIGHT. Nothing is drawn inline under the rail row (the chip row is a descendant of the run-detail column, not of the rail column and not of the row), and there is no Agentic Run Progress section beside a run that has not run.",
+    "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "dbAt": {
+      "step": "T1b",
+      "what": "the run page is opened while the SAME hold is still parked",
+      "at": "2026-08-23T23:38:56.088Z",
+      "db": {
+        "runStatus": "pending_input",
+        "parkStatus": "parked",
+        "selectionRows": 0,
+        "representationRows": 0,
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "held",
+      "data-lifecycle-card-host": "run_card",
+      "data-variant": "inline",
+      "data-can-decide": "true"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Brand Voice Matcher Skill",
+        "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      }
+    ],
+    "transcript": null,
+    "runSurface": {
+      "surfacePresent": true,
+      "surfaceChildren": 2,
+      "railColumnPresent": true,
+      "detailColumnPresent": true,
+      "chipRowPresent": true,
+      "chipRowInDetailColumn": true,
+      "chipRowInRailColumn": false,
+      "chipRowInsideRailRow": false,
+      "railStepPresent": true,
+      "railStepSelected": "true",
+      "railStepSettled": "false",
+      "railStepText": "1Recommendation",
+      "railStepIndicatorText": "1",
+      "railRowLabels": [
+        "1Recommendation"
+      ],
+      "agenticRunProgressHeadings": 0,
+      "headings": [
+        "Blog Draft Writer Agent",
+        "Command Palette"
+      ]
+    },
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": []
+  },
+  {
+    "cell": "R5__recommendation-card__run_card__held__dark",
+    "declaredHost": "run_card",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "pending",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R5__recommendation-card__run_card__held__dark.png",
+    "sha256": "b86fd07a712c3253421e266abaa42324a1c54ec21da5722eb1e0fd8b72bb5b68",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"run_card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"run-surface\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-run-step-rail-column]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-run-detail-column]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-run-recommendation-chip-row]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 4
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 4
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-23T23:38:57.256Z",
+    "runtime": "dev-runtime",
+    "note": "The same run page and the same held state in the dark palette.",
+    "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "dbAt": {
+      "step": "T1b",
+      "what": "the run page is opened while the SAME hold is still parked",
+      "at": "2026-08-23T23:38:56.088Z",
+      "db": {
+        "runStatus": "pending_input",
+        "parkStatus": "parked",
+        "selectionRows": 0,
+        "representationRows": 0,
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "held",
+      "data-lifecycle-card-host": "run_card",
+      "data-variant": "inline",
+      "data-can-decide": "true"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Brand Voice Matcher Skill",
+        "text": "Brand Voice Matcher SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "undecided",
+        "forced": true,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmAdjustSkip",
+        "actions": [
+          "confirm",
+          "adjust",
+          "skip"
+        ]
+      }
+    ],
+    "transcript": null,
+    "runSurface": {
+      "surfacePresent": true,
+      "surfaceChildren": 2,
+      "railColumnPresent": true,
+      "detailColumnPresent": true,
+      "chipRowPresent": true,
+      "chipRowInDetailColumn": true,
+      "chipRowInRailColumn": false,
+      "chipRowInsideRailRow": false,
+      "railStepPresent": true,
+      "railStepSelected": "true",
+      "railStepSettled": "false",
+      "railStepText": "1Recommendation",
+      "railStepIndicatorText": "1",
+      "railRowLabels": [
+        "1Recommendation"
+      ],
+      "agenticRunProgressHeadings": 0,
+      "headings": [
+        "Blog Draft Writer Agent",
+        "Command Palette"
+      ]
+    },
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": []
+  },
+  {
+    "cell": "S2__recommendation-card__chat_thread__decided",
+    "declaredHost": "chat_thread",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "decided",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided.png",
+    "sha256": "e6a2155a616456e50ac547ce1cc4062380bf3cccc0feb8df82102bd6fc35b426",
+    "assertions": [
+      {
+        "selector": "[data-conversation-list]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-chat-thread-recommendation-hold]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 3
+      },
+      {
+        "selector": "[data-run-recommendation-chip-row]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-inline-run-card]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-hitl-skill-picker]",
+        "scope": "frame",
+        "count": 0
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-23T23:39:46.673Z",
+    "runtime": "dev-runtime",
+    "note": "The same conversation and the same slot after the person decided every chip in the chat, through the card's own per-chip controls. The row SETTLED IN PLACE: same reply, same position, each chip stating its own outcome, nothing left to press. The agentic run progress card is now on screen BELOW the settled chips \u2014 it appears with the decision, not before it \u2014 and there is NO skills button row inside it (the picker count reads ZERO). The hold reads released in the database at this instant.",
+    "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "dbAt": {
+      "step": "T2",
+      "what": "the decisions are written and the hold is RELEASED",
+      "at": "2026-08-23T23:39:46.505Z",
+      "db": {
+        "runStatus": "pending_approval",
+        "parkStatus": "released",
+        "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+        "selections": [
+          {
+            "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+            "selection_source": "user_adjusted",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          },
+          {
+            "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+            "selection_source": "recommended_confirmed",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          },
+          {
+            "skill_id": "@cinatra-ai/web-research-skill:web-research",
+            "selection_source": "recommended_confirmed",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          }
+        ],
+        "representationRows": 0,
+        "reviewGateRows": 0
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "decided",
+      "data-lifecycle-card-host": "chat_thread",
+      "data-chat-thread-recommendation-hold": "",
+      "data-run-recommendation-decision": "confirmed",
+      "data-run-recommendation-settled": "true",
+      "data-variant": "inline"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": {
+      "turns": 2,
+      "listTop": 88,
+      "listBottom": 724,
+      "listFullyInViewport": true,
+      "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+    },
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": []
+  },
+  {
+    "cell": "S2__recommendation-card__chat_thread__decided__dark",
+    "declaredHost": "chat_thread",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "decided",
+    "finalUrl": "/chat/cinatra-ai/cinatra-assistant/bff702ae-f18b-4837-86a2-bcee578295e8",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/S2__recommendation-card__chat_thread__decided__dark.png",
+    "sha256": "60388e9d9da96addd09cc04009edaa26160b7c1800ee7a39a86aba959f76d9ad",
+    "assertions": [
+      {
+        "selector": "[data-conversation-list]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-chat-thread-recommendation-hold]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 3
+      },
+      {
+        "selector": "[data-run-recommendation-chip-row]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-inline-run-card]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-hitl-skill-picker]",
+        "scope": "frame",
+        "count": 0
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-23T23:39:47.760Z",
+    "runtime": "dev-runtime",
+    "note": "The same settled turn in the dark palette \u2014 settled chips above, run progress card below, no skills button row inside it.",
+    "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "dbAt": {
+      "step": "T2",
+      "what": "the decisions are written and the hold is RELEASED",
+      "at": "2026-08-23T23:39:46.505Z",
+      "db": {
+        "runStatus": "pending_approval",
+        "parkStatus": "released",
+        "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+        "selections": [
+          {
+            "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+            "selection_source": "user_adjusted",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          },
+          {
+            "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+            "selection_source": "recommended_confirmed",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          },
+          {
+            "skill_id": "@cinatra-ai/web-research-skill:web-research",
+            "selection_source": "recommended_confirmed",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          }
+        ],
+        "representationRows": 0,
+        "reviewGateRows": 0
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "decided",
+      "data-lifecycle-card-host": "chat_thread",
+      "data-chat-thread-recommendation-hold": "",
+      "data-run-recommendation-decision": "confirmed",
+      "data-run-recommendation-settled": "true",
+      "data-variant": "inline"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": {
+      "turns": 2,
+      "listTop": 88,
+      "listBottom": 724,
+      "listFullyInViewport": true,
+      "text": "S9f Capture Owner\nSC\nPlease run cinatra_blog-draft-writer-agent for me with inputParams: {\"idea\":{\"title\":\"Connector rollout note\",\"summary\":\"The connector ships this week and replaces the manual export step.\",\"outline\":[\"Summary\",\"Rollout\"]}}\nCinatra\nBlog Post Matcher Skill\nADJUSTED\nBlog Writing Skill\nCONFIRMED\nWeb Research Skill\nCONFIRMED\nAgentic Run Progress\npending approval\nDraft Context\nNo eligible context artifacts available for this slot. The agent will run without context for draftContext.\nContinue\nNo messages yet.\nOpen the run page\nDispatched @cinatra-ai/blog-draft-writer-agent (runId: 8ff25a9b-2e54-4daf-acd1-9688a1e196b1, status: pending_input). The run paused for a decision on the recommended skills."
+    },
+    "runSurface": null,
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": []
+  },
+  {
+    "cell": "R6__recommendation-card__run_card__decided",
+    "declaredHost": "run_card",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "decided",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided.png",
+    "sha256": "10a10ac433e8dbe2b32a9629d2fcf1b06622d07077ed7854ebd5c70c5caf20bc",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"run_card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"run-surface\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-run-step-rail-column]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-run-detail-column]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-run-recommendation-chip-row]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 3
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-23T23:40:10.326Z",
+    "runtime": "dev-runtime",
+    "note": "The same run page after the decision, GRADED AGAINST WHAT WAS MEASURED ON IT rather than against what was expected. The settled chips ARE in place and nothing inside them can be pressed (the three per-chip action counts all read 0 inside the card root), and the run detail IS restored \u2014 the Agentic Run Progress section is on screen with the run's own reading. BUT the recommendation's rail entry is ABSENT: `railStepPresent` reads false, the left column carries the run's own `Step 1` instead, and the frame's instrumented columns (`run-step-rail-column` / `run-detail-column`) are not drawn \u2014 the two columns here are the screen's own, not `RunSurfaceRail`'s. `run-surface` itself is present with two children. The settled chip row is drawn INSIDE the run progress card rather than above it. This cell is a FAIL on the settled rail entry; PLAN-WALK.md states it as one.",
+    "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "dbAt": {
+      "step": "T4",
+      "what": "the run page is photographed with the question decided",
+      "at": "2026-08-23T23:40:10.185Z",
+      "db": {
+        "runStatus": "failed",
+        "parkStatus": "released",
+        "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+        "selections": [
+          {
+            "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+            "selection_source": "user_adjusted",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          },
+          {
+            "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+            "selection_source": "recommended_confirmed",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          },
+          {
+            "skill_id": "@cinatra-ai/web-research-skill:web-research",
+            "selection_source": "recommended_confirmed",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          }
+        ],
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "decided",
+      "data-lifecycle-card-host": "run_card",
+      "data-run-recommendation-decision": "confirmed",
+      "data-run-recommendation-settled": "true",
+      "data-variant": "inline"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": null,
+    "runSurface": {
+      "surfacePresent": true,
+      "surfaceChildren": 2,
+      "railColumnPresent": false,
+      "detailColumnPresent": false,
+      "chipRowPresent": true,
+      "chipRowInDetailColumn": false,
+      "chipRowInRailColumn": false,
+      "chipRowInsideRailRow": false,
+      "railStepPresent": false,
+      "railStepSelected": null,
+      "railStepSettled": null,
+      "railStepText": null,
+      "railStepIndicatorText": null,
+      "railRowLabels": null,
+      "agenticRunProgressHeadings": 1,
+      "headings": [
+        "Blog Draft Writer Agent (3)",
+        "Step 1",
+        "Agentic Run Progress",
+        "Command Palette"
+      ]
+    },
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": [],
+    "noteCorrection": "This `note` was CORRECTED after the shutter. The driver wrote it before the measurement and it asserted a settled rail entry the same record measures as absent; a false prose claim beside a true measurement is worse than no prose at all, so the note now says what the record measured. Nothing measured was touched: the screenshot, its sha256 and every assertion count are exactly as recorded. The driver's own note text is fixed too, so a re-run writes the corrected wording."
+  },
+  {
+    "cell": "R6__recommendation-card__run_card__decided__dark",
+    "declaredHost": "run_card",
+    "declaredKind": "recommendation_hold",
+    "declaredState": "decided",
+    "finalUrl": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "screenshot": "evidence/2790-s9f-host-parity/captures/R6__recommendation-card__run_card__decided__dark.png",
+    "sha256": "877b6296396ee354f21503a28ebf13402a0a7de053c7e7867bf5d67dcc2f5c99",
+    "assertions": [
+      {
+        "selector": "[data-lifecycle-card-host=\"run_card\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-conformance-id=\"run-surface\"]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-run-step-rail-column]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-run-detail-column]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-conformance-id=\"recommendation-rail-step\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-conformance-id=\"recommendation-rail-indicator\"]",
+        "scope": "frame",
+        "count": 0
+      },
+      {
+        "selector": "[data-run-recommendation-chip-row]",
+        "scope": "frame",
+        "count": 1
+      },
+      {
+        "selector": "[data-lifecycle-card-state]",
+        "scope": "root",
+        "count": 1
+      },
+      {
+        "selector": "[data-skill-action=\"confirm\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"adjust\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-skill-action=\"skip\"]",
+        "scope": "root",
+        "count": 0
+      },
+      {
+        "selector": "[data-recommendation-chip]",
+        "scope": "root",
+        "count": 3
+      }
+    ],
+    "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+    "recordedAt": "2026-08-23T23:40:11.412Z",
+    "runtime": "dev-runtime",
+    "note": "The same decided run page in the dark palette. Settled chips present with nothing pressable among them, run detail restored \u2014 and the recommendation's rail entry ABSENT for the same reason as the light cell (`railStepPresent: false`, the run's own `Step 1` in its place, the frame's instrumented columns not drawn). A FAIL on the settled rail entry, stated as one in PLAN-WALK.md.",
+    "runId": "8ff25a9b-2e54-4daf-acd1-9688a1e196b1",
+    "dbAt": {
+      "step": "T4",
+      "what": "the run page is photographed with the question decided",
+      "at": "2026-08-23T23:40:10.185Z",
+      "db": {
+        "runStatus": "failed",
+        "parkStatus": "released",
+        "parkResolvedAt": "2026-08-23T23:39:20.358Z",
+        "selections": [
+          {
+            "skill_id": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+            "selection_source": "user_adjusted",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          },
+          {
+            "skill_id": "@cinatra-ai/blog-writing-skill:blog-writing",
+            "selection_source": "recommended_confirmed",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          },
+          {
+            "skill_id": "@cinatra-ai/web-research-skill:web-research",
+            "selection_source": "recommended_confirmed",
+            "selected_at": "2026-08-23T23:39:20.352Z"
+          }
+        ],
+        "url": "/agents/cinatra-ai/blog-draft-writer-agent/8ff25a9b-2e54-4daf-acd1-9688a1e196b1"
+      }
+    },
+    "rootAttributes": {
+      "data-run-recommendation-chip-row": "",
+      "data-conformance-id": "run-chip-row",
+      "data-lifecycle-card": "recommendation_hold",
+      "data-lifecycle-card-state": "decided",
+      "data-lifecycle-card-host": "run_card",
+      "data-run-recommendation-decision": "confirmed",
+      "data-run-recommendation-settled": "true",
+      "data-variant": "inline"
+    },
+    "chips": [
+      {
+        "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+        "mark": "adjusted",
+        "forced": false,
+        "label": "Blog Post Matcher Skill",
+        "text": "Blog Post Matcher SkillAdjusted",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Blog Writing Skill",
+        "text": "Blog Writing SkillConfirmed",
+        "actions": []
+      },
+      {
+        "skillId": "@cinatra-ai/web-research-skill:web-research",
+        "mark": "confirmed",
+        "forced": false,
+        "label": "Web Research Skill",
+        "text": "Web Research SkillConfirmed",
+        "actions": []
+      }
+    ],
+    "transcript": null,
+    "runSurface": {
+      "surfacePresent": true,
+      "surfaceChildren": 2,
+      "railColumnPresent": false,
+      "detailColumnPresent": false,
+      "chipRowPresent": true,
+      "chipRowInDetailColumn": false,
+      "chipRowInRailColumn": false,
+      "chipRowInsideRailRow": false,
+      "railStepPresent": false,
+      "railStepSelected": null,
+      "railStepSettled": null,
+      "railStepText": null,
+      "railStepIndicatorText": null,
+      "railRowLabels": null,
+      "agenticRunProgressHeadings": 1,
+      "headings": [
+        "Blog Draft Writer Agent (3)",
+        "Step 1",
+        "Agentic Run Progress",
+        "Command Palette"
+      ]
+    },
+    "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+    "framing": "window",
+    "viewport": {
+      "width": 1440,
+      "height": 1700,
+      "deviceScaleFactor": 2
+    },
+    "pageErrors": [],
+    "noteCorrection": "This `note` was CORRECTED after the shutter. The driver wrote it before the measurement and it asserted a settled rail entry the same record measures as absent; a false prose claim beside a true measurement is worse than no prose at all, so the note now says what the record measured. Nothing measured was touched: the screenshot, its sha256 and every assertion count are exactly as recorded. The driver's own note text is fixed too, so a re-run writes the corrected wording."
+  }
+]
