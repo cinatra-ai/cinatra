@@ -164,3 +164,17 @@ Assisted-by: Claude Code (claude-fable-5)
 Assisted-by: Claude Code (claude-opus-5)
 Correction-for: 3ceba8711c35760c1d956c373154df7911d2c262
 ```
+
+---
+
+## Correction for `871443b9b7b655da90bd30046b4e477ab13792ef`
+
+```
+correction: truthful-attribution record for 871443b9b (v2)
+
+The record on 871443b9b ("ci(build-image): un-serialize the image build + shard the perpetual gates (#2962)") lacked a verification arm for a high-risk change. The prior correction attempt (5901ca07) asserted the human arm through an UNAPPROVED landing and was rightly flagged; THIS correction lands via an owner-approved PR. The underlying change was humanly approved by @groganz at the reviewed head f87cf995e0eba1fe86ca171eeb7c4b12d08044eb (PR #2962), every required context green after the post-approval rerun. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 871443b9b7b655da90bd30046b4e477ab13792ef
+```
