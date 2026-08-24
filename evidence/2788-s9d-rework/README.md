@@ -1,6 +1,114 @@
 # S9d rework — evidence (cinatra#2788, PR #2939)
 
+## Round 5 — every pictured cell re-shot on a chain with nothing stood in
+
+Rounds 3 and 4 had to report one thing about themselves, and the maintainer
+rejected the round for it: **the assistant's own turn came from the deterministic
+model bridge**, and it was visible in the pictures in the assistant's own words —
+"CINATRA_UAT_OK: deterministic chat reply." That is gone. All **fourteen**
+pictures were taken again, and every leg of every pictured chain is the shipped
+one.
+
+**The chat turn now runs on the REAL provider, over the platform's own public
+ingress.** The limit rounds 3 and 4 named was real: a real-model chat turn hands
+the tool catalogue to the provider as ONE provider-hosted MCP reference, so it
+needs a PUBLICLY reachable MCP URL, and the runtime refuses the turn outright
+without one (`checkPublicMcpReachability`). This round has one. The instance's
+public base URL was stated **through the product's own tunnel tab**
+(`/configuration/development?tab=tunnel`), which is what records
+`publicBaseUrlSource: "manual"` — no database row was hand-edited — and the
+public `/api/mcp` endpoint answers. What follows from that is the whole point of
+the round:
+
+- the model chose the tool itself, and the thread's own dispatch part records it
+  as a provider-hosted MCP call — `{"type":"tool_call","name":
+  "schedule_proposal_render","serverLabel":"cinatra","id":"mcp_0e1afcff…"}`;
+- the provider's servers called back into the shipped MCP endpoint over that
+  public origin (`POST /api/mcp 200`, repeatedly);
+- `usage_events` records `provider openai`, `model gpt-5.5` for the turn;
+- and the assistant's words in the pictures are its own ("Schedule proposal is
+  ready. Please confirm it on the scheduling card in this conversation to arm the
+  one-time run."), not a bridge's marker.
+
+`CINATRA_TEST_LLM_PROVIDER` was **UNSET** for the whole round. The scripted
+runtime served nothing, and the server log carries **zero** scripted-runtime
+lines.
+
+**AND THAT IS NO LONGER ONLY THIS FILE'S WORD FOR IT.** Rounds 3 and 4 asserted
+their database and runtime facts in prose and committed nothing a reader could
+check. This round commits both:
+
+- `readback/db-readback.json` — the rows themselves, produced by
+  `readback/read-back.mjs` (committed beside it, and re-runnable against any
+  lane) and left unedited. Every value `RUN-READBACK.md` and `TIMELINE.md` quote
+  is in it, including the ledger rows naming which provider and model served each
+  call, and every armed run this lane produced, discarded passes included.
+- `readback/runtime-evidence.txt` — the server's own log lines, with the grep that
+  produced each block so the extraction is repeatable, and ONE redaction applied
+  everywhere it occurs: the instance's public origin, because a committed hostname
+  is a leak and a lane the next operator cannot reproduce. Each block states what
+  its lines can and cannot say — a log line does not name a caller's address, and
+  a zero-result grep is not a capture of the process environment — and points at
+  the row in `db-readback.json` that carries the load-bearing half.
+
+Neither artifact makes the round self-proving — a lane can write its own log —
+and this file does not claim it does. What they buy is that the numbers in the
+prose can be checked against the rows and lines they were read from, instead of
+being taken on faith.
+
+**The agent's own execution is real too, and this time the run COMPLETED.** The
+agent runtime called back into the shipped `/api/llm-bridge`, which resolved the
+instance's own sealed `openai_connection` row by this run's own run token
+(`[llm-bridge-run-select] served-by=run_token run=9384a346-…`); `usage_events`
+records `provider openai`, `model gpt-5.5-2026-04-23` at `17:42:11.792+00`, and
+the run reached `completed` with no error twelve seconds after the fire. The row
+was written before the walk through the shipped sealed writer, from a credential
+held only in the process environment: never printed, never logged, never written
+to any file here, never committed.
+
+**ONE RUN NOW CARRIES C1, C2, C3, C6 AND C8.** Round 4 had to say that C1 and C2
+were two pictures of two different conversations; they are not any more. C1 and
+C2 are the same card in the same thread before and after one Confirm, C3 is that
+run's schedule step, C6 is that same card after the one-off came due, and C8 is
+that same run's detail afterwards. C7 is a second, never-armed run — it has to
+be, since an armed run's setup scheduling step is behind it — and C5 rides on its
+own untouched proposal whose shipped 30-minute window was allowed to actually run
+out.
+
+**Nothing pressed *Run now*.** The walk plan contains no such action, no context
+was on the run page between Confirm and the fire, the stamp landed 143 ms after
+the second the person stated, and the runtime named the release job itself
+(`[trigger-release] released gate for run 9384a346-…`).
+
+**TWO typed sentences in `capture-walk.json` changed, and they are named rather
+than left to be noticed** — the one the person types in `state-the-schedule` and
+the one they type in `expired-clock`, which are the plan's only two `type`
+actions. Both now state the instant and the timezone. The deterministic bridge answered any sentence with a daily recurrence,
+so the old wording ("a few minutes from now") never had to be complete; a real
+model reads it as a person would and ASKS which timezone to use instead of
+guessing, ending the turn in a question rather than a card. Stating the instant
+is what a person does when they mean a particular one. Every cell id, every
+context, every viewport and every assertion in the walk is unchanged.
+
+**Five armed runs were discarded before the pictured one**, each for a stated
+reason — `RUN-READBACK.md` lists them with their release stamps. Two of them
+failed artifact materialization because this lane's own dev registry held no
+published copy of the agent package; publishing it there is what let the pictured
+run reach `completed`. That was a LANE gap, not a product finding. All five
+released within 143 ms of the second they were armed for, with nobody on the run
+page — five independent corroborations that the schedule fires on its own tick.
+
+**One cell still carries a FAIL and says so:** C7, against the named drawing's
+two-column frame. It is not a regression this PR introduces; it is a standing gap
+between the drawing and the shipped setup wizard, which this slice does not
+touch. `PLAN-WALK.md` carries the graded verdict for every picture, written after
+looking at the pixels.
+
 ## Round 4 — the two cells that carried a FAIL, re-shot on the fixed card
+
+> **History.** Round 5 re-shot all fourteen pictures, so none of round 4's pixels
+> is committed any more. This section is kept because the conformance fixes it
+> describes are still the reason C2 and C6 read the way they do.
 
 Round 3 reported three honest FAILs. Two of them were conformance failures in the
 settled branch of the one schedule renderer, and both are now fixed:
@@ -34,9 +142,10 @@ executed on the REAL model: `usage_events` records `provider openai`,
 `model gpt-5.5-2026-04-23` at `09:34:04.876+00`, and the run reached `completed`
 with no error five seconds after the fire.
 
-**C1, C3, C5, C7 and C8 keep round 3's pixels**, because the fix touches only the
-settled branch of the renderer: the pending card, the run page's schedule step and
-the two page controls did not move. One consequence is stated rather than left to
+**C1, C3, C5, C7 and C8 kept round 3's pixels at the time**, because the fix
+touched only the settled branch of the renderer. (Round 5 has since re-shot all
+fourteen — see the top of this file — so none of round 3's or round 4's pixels
+are committed any more.) One consequence is stated rather than left to
 be noticed: C1 and C2 are no longer two pictures of ONE conversation — C1 is round
 3's thread and C2/C6 are round 4's — so the "one card, in one place, before and
 after one press" reading is carried by C2's own record (one card instance, one
@@ -45,8 +154,9 @@ context, one page, one press between the two steps — instead of by a picture p
 What a reader can check in the committed pixels is narrower and is stated as such:
 C2 shows ONE settled card in that conversation with Confirm gone and Save changes
 in its place.
-`RUN-READBACK.md` and `TIMELINE.md` carry both runs, and the index count is
-unchanged: four records replaced where they stood, 58 in, 58 out.
+`RUN-READBACK.md` and `TIMELINE.md` carry both runs, and the index count was
+unchanged: four records replaced where they stood, 58 in, 58 out. (Round 5 then
+replaced all ten S9d records the same way.)
 
 Two things about round 4's environment are worth stating plainly, because round 3
 had to report the opposite of the second one:
@@ -68,6 +178,10 @@ had to report the opposite of the second one:
   environment: never printed, never logged, never written to any file here.
 
 ## Round 3 — what the maintainer rejected, and what the proof set is now
+
+> **History.** Round 5 re-shot all fourteen pictures. This section is kept because
+> the two rulings it records are what §7.2/§7.4 were amended to say, and they are
+> still the sentences C3 is graded against.
 
 Round 2's run-page cell (C3) showed a composition the plan does not contain: the
 schedule's configuration opened **inside the rail column, under its own row**,
@@ -112,32 +226,35 @@ that does and does not buy.
 | C5 | expired (extra) | chat | still visible, still editable, **Confirm** alone on the floor | record, light + dark |
 | C4 | — | review page | this run's real artifact review | DROPPED — see `TIMELINE.md` |
 
-Fourteen pictures, from three runs, and every one of them says which.
-**Round 3** walked one run for eight of them (C1, C3, C5, C8) and a second, fresh
-never-armed run for the two C7 pictures — that stage can only exist there, since an
-armed run's setup scheduling step is behind it. **Round 4** re-walked C2 and C6 on
-a third run, for the reason at the top of this file. `RUN-READBACK.md` gives every
-row. `PLAN-WALK.md` carries the graded verdict for each picture, written after
-looking at the pixels; **one cell still carries a FAIL on a clause and says so**
-(C7, against the named drawing — a standing gap in the setup wizard, not a
-regression this PR introduces).
+Fourteen pictures, all taken by **round 5**, and every one of them says which run
+it stands on. **One armed run carries C1, C2, C3, C6 and C8** — the same card in
+the same conversation before and after one Confirm, that run's schedule step, that
+same card once the one-off came due, and that same run's detail afterwards. **C7 is
+a second, never-armed run**, and that stage can only exist there, since an armed
+run's setup scheduling step is behind it. **C5 rides on its own untouched
+proposal**, whose shipped 30-minute window was allowed to actually run out.
+`RUN-READBACK.md` gives every row, including the proposal-ref→consume-key join
+that binds the conversation to the run. `PLAN-WALK.md` carries the graded verdict
+for each picture, written after looking at the pixels; **one cell still carries a
+FAIL on a clause and says so** (C7, against the named drawing — a standing gap in
+the setup wizard, not a regression this PR introduces).
 
 | file | sha256 | filed as |
 |---|---|---|
-| `C1__chat-first-shown__light.png` | `1b8e9b4998ee646ec228affac81bd4140ee44a613eb9a7a161e8565335560060` | record `S9d-C1__schedule-card__chat_thread__pending` |
-| `C1__chat-first-shown__dark.png` | `8573b88f438348488390b10a97b2871f0523910832a8938077b704758a40a4bc` | record `S9d-C1__schedule-card__chat_thread__pending__dark` |
-| `C2__chat-configured__light.png` | `c97d18ccbbca2b329ff7c39dd693c0d13c89f9fb857c5f548b833c4a1a2c622f` | record `S9d-C2__schedule-card__chat_thread__decided` |
-| `C2__chat-configured__dark.png` | `ac4f9dcdc852ca3dd821ae933b7017d1569dbec3ae80fd7161640c3f0100f7cb` | record `S9d-C2__schedule-card__chat_thread__decided__dark` |
-| `C5__chat-expired__light.png` | `59c45ffb4f73437d2d10d684161db83825c04043910092de68a6e374ef0430c5` | record `S9d-C5__schedule-card__chat_thread__pending__expired` |
-| `C5__chat-expired__dark.png` | `8345fbef5ff93b0e5eb51370a654ade0c8fb54d6d32989e66f46593cb6059671` | record `S9d-C5__schedule-card__chat_thread__pending__expired__dark` |
-| `C3__run-page-configured__light.png` | `eb796975fa197e99b7b40b76096d407bf71fad18148973ce5007b499e00bcf1a` | record `S9d-C3__schedule-card__run_card__decided` |
-| `C3__run-page-configured__dark.png` | `5c40280524311292cd08a35a792cd2706c2ba1bcf4596ce567fbbf729c96f3d1` | record `S9d-C3__schedule-card__run_card__decided__dark` |
-| `C6__chat-ran__light.png` | `bb347f2bcbb19b585005bfadac15588100e4b7352ab7d6af39350f2223d105a9` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire` |
-| `C6__chat-ran__dark.png` | `170e3f70ddc20a443bcfb7d6484271140b7c6953a9b5d3c8f4038256e5021b43` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire__dark` |
-| `C7__run-setup-scheduling-step__light.png` | `d1a21a6ba61245c74ee16c317da3645700f5728d7f89465146af84d1b6b98b46` | page control (light) — no index record |
-| `C7__run-setup-scheduling-step__dark.png` | `4765eff1216e9d314bf13394fb6d726e803f548017112d052c6041791a626686` | page control (dark) — no index record |
-| `C8__run-detail-after-fire__light.png` | `55e772fcb20ae68b117dd0ce674cc525ab1c87a270e20cf878dd94d78c4b8c58` | page control (light) — no index record |
-| `C8__run-detail-after-fire__dark.png` | `d38d4360d6784bf158c1f326024a2891d060eed491ac99eff77370615b2e2c30` | page control (dark) — no index record |
+| `C1__chat-first-shown__light.png` | `064fbd044500cf0d50bc46ca31aaea48a1ec2a64b653c5fc1f2c9a5b0b4207dc` | record `S9d-C1__schedule-card__chat_thread__pending` |
+| `C1__chat-first-shown__dark.png` | `3d960614b45231411efdf971d366a88cdfb3fb902bb2a9e2392de21531d77aa3` | record `S9d-C1__schedule-card__chat_thread__pending__dark` |
+| `C2__chat-configured__light.png` | `a56b17646f5b896cb31237ce4424b47584cf60ac4e71097e7a7dc34b2cd41eaf` | record `S9d-C2__schedule-card__chat_thread__decided` |
+| `C2__chat-configured__dark.png` | `65a3d02ad9b46131b8ef75e9e176a78f3f9a373776d60117414fca4f1f8d63af` | record `S9d-C2__schedule-card__chat_thread__decided__dark` |
+| `C5__chat-expired__light.png` | `ddd1973a5607cb2281606623ee3bae19328354a7844ee1521214a4e75fb31b7f` | record `S9d-C5__schedule-card__chat_thread__pending__expired` |
+| `C5__chat-expired__dark.png` | `43cbeb53bd69d9afae925dbcd0e1f8ecce1938f39e1c15979cc8bf8165c529d2` | record `S9d-C5__schedule-card__chat_thread__pending__expired__dark` |
+| `C3__run-page-configured__light.png` | `698f017dc575521f7d73219fbe1219cf946a2134d7093270e42417a2f25867d7` | record `S9d-C3__schedule-card__run_card__decided` |
+| `C3__run-page-configured__dark.png` | `63ab1513f40133c57f7493b68d875e2245e3d4ae0e91b5448c8864504bda7c9d` | record `S9d-C3__schedule-card__run_card__decided__dark` |
+| `C6__chat-ran__light.png` | `e87625ecab474290bf736c54aafca8dfd67f4661a4d7091d585b303fed2f3d3f` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire` |
+| `C6__chat-ran__dark.png` | `ccabf74343e98b9118cee1ca7d434e69ab59dafe1e31e844bf1830dd2f56370e` | record `S9d-C6__schedule-card__chat_thread__decided__after-fire__dark` |
+| `C7__run-setup-scheduling-step__light.png` | `411fc70e6ca118e5be252299bbb9128540cc2617e6375699343f7fceafe33296` | page control (light) — no index record |
+| `C7__run-setup-scheduling-step__dark.png` | `3082afe8621e456965c40b1eacfa30fccdc64a8dd49ff8670e35d97f6a6a8cc0` | page control (dark) — no index record |
+| `C8__run-detail-after-fire__light.png` | `3831af1d87c0a6f4dd60a6b284149d23d472ecbaf2653448fcb792009e64c359` | page control (light) — no index record |
+| `C8__run-detail-after-fire__dark.png` | `86fff475add5688313ea40b11e92b77a65ac601110e0eee0af6e2024a8a32514` | page control (dark) — no index record |
 
 The two round 2's **C3** records were deleted from
 `scripts/ci/chat-hitl-capture-index.json` (56 records → 54) together with their
@@ -146,10 +263,14 @@ describes pixels the product no longer draws is worse than no record. Nothing
 was edited in place and no record was hand-written — the index is
 recorder-measured only, and the next walk writes the new ones.
 
-C1 and C2 were both re-shot after that, C1 by round 3 (the stated schedule
-became a ONE-OFF, so its picture changed even though its cell name did not) and
-C2 again by round 4, on the fixed settled card. Every C1/C2 record in the index is
-a measurement of the pixels the file holds today.
+Round 5 then replaced all ten S9d records where they stood — 58 records in, 58
+out, the other 48 byte-identical and in the same order — and re-took the four page
+controls. Each was written by `chat-hitl-capture-driver.mjs --walk` in this lane,
+and none was edited afterwards. What a READER can check without taking that on
+trust is narrower, and is what the record is worth: every S9d record's `sha256`
+matches the committed PNG beside it, and its `assertions` are counts the image can
+be read against. `recordedBy` is a field in a JSON file, not a signature — it says
+which tool wrote the record, and it cannot prove it.
 
 ## The two cells this index cannot hold — filed as PAGE CONTROLS
 
@@ -188,12 +309,20 @@ in `PLAN-WALK.md`, written from the pixels. A repository search found no earlier
 sidecar of this shape, so this is a filing this round PROPOSES, not one it
 inherits — which is the open question for the maintainer below.
 
-## What the environment forced, said plainly
+## What the environment forced in rounds 3 and 4 — BOTH LIMITS ARE GONE
 
-Two things in this round are not what the walk plan's note describes, and both
-are environment limits rather than product findings. They are stated here, in
-`PLAN-WALK.md`'s verdicts and in `TIMELINE.md` rather than left for a reader to
-notice.
+**Round 5 removed both of the limits below**, and they are kept here only so a
+reader can see what changed and why the earlier pictures looked the way they did.
+The public ingress the first limit needed now exists and is stated through the
+product's own tunnel tab, so the chat turn runs on the real provider; and because
+the real model reads the person's sentence as written, the one-off no longer has
+to be corrected on the card, so the second limit's consequence never arises. See
+"Round 5" at the top.
+
+Two things in ROUNDS 3 AND 4 were not what the walk plan's note describes, and
+both were environment limits rather than product findings. They were stated in
+those rounds' `PLAN-WALK.md` verdicts and in `TIMELINE.md` rather than left for a
+reader to notice.
 
 1. **The assistant's own proposal came from the deterministic model bridge, not
    from a real model.** A real-model chat turn hands the platform's tool
@@ -227,7 +356,7 @@ before the walk through the shipped writer the setup wizard uses, from a
 credential held only in the process environment — never printed, never logged,
 never written to any file produced here, never committed.
 
-**Nothing pressed *Run now*, in either round.** Round 3's one-off was released at
+**Nothing pressed *Run now*, in any round.** Round 3's one-off was released at
 `released_at 2026-08-23 21:22:00.163+00`, 163 ms after the second the person
 stated and seventeen minutes after the row was written; round 4's at
 `released_at 2026-08-24 09:34:00.088+00`, 88 ms after its own stated second and
@@ -245,11 +374,11 @@ touched and failed against `2ba505904` for the stated reasons.
 
 ## What is still owed on this round
 
-- Nothing on the cells: all fourteen pictures are taken, graded and filed. The
-  index holds 58 records. Round 3 wrote ten of them (C1/C2/C5 replaced in place,
-  C3 new); round 4 then replaced four of those ten again where they stood — C2 and
-  C6, light and dark — so six of round 3's ten still stand as round 3 wrote them;
-  C7 and C8 are page controls with no record, by the reasoning above.
+- Nothing on the cells: all fourteen pictures are taken, graded and filed, and
+  every one of them was re-shot by round 5 on a chain with nothing stood in. The
+  index holds 58 records; round 5 replaced the ten S9d records where they stood
+  and left the other 48 byte-identical. C7 and C8 are page controls with no
+  record, by the reasoning above.
 - C4 stays dropped. See `TIMELINE.md`.
 - The maintainer's answer on whether the page-control filing is the one they
   want for C7 / C8 is still the open question. It is a shape this round proposes:
@@ -260,9 +389,8 @@ touched and failed against `2ba505904` for the stated reasons.
   C7 (the named drawing's two-column frame — the setup wizard's page has neither
   column). It is not a regression this PR introduces; it is a standing gap between
   a drawing and the shipped setup wizard, and the slice does not touch that screen.
-  The other two FAILs round 3 reported — C2's supersede line and C6's disabled
-  **Save changes** — were conformance failures in the settled branch of the
-  renderer, and both are fixed and re-shot; see "Round 4" at the top.
+  The two FAILs round 3 reported — C2's supersede line and C6's disabled **Save
+  changes** — were fixed in round 4 and are PASS again on round 5's own pixels.
 
 ## Owed elsewhere: six cells the Audit relabel left with old pixels
 

@@ -4529,11 +4529,11 @@
     {
       "cell": "S9d-C1__schedule-card__chat_thread__pending",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__light.png",
-      "sha256": "1b8e9b4998ee646ec228affac81bd4140ee44a613eb9a7a161e8565335560060",
-      "capturedAt": "2026-08-23T21:04:39.310Z",
+      "sha256": "064fbd044500cf0d50bc46ca31aaea48a1ec2a64b653c5fc1f2c9a5b0b4207dc",
+      "capturedAt": "2026-08-24T17:21:14.338Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4600,11 +4600,11 @@
     {
       "cell": "S9d-C1__schedule-card__chat_thread__pending__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/6b4165d5-b8fa-4c34-862c-cda396070163",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__dark.png",
-      "sha256": "8573b88f438348488390b10a97b2871f0523910832a8938077b704758a40a4bc",
-      "capturedAt": "2026-08-23T21:04:44.455Z",
+      "sha256": "3d960614b45231411efdf971d366a88cdfb3fb902bb2a9e2392de21531d77aa3",
+      "capturedAt": "2026-08-24T17:21:18.067Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4671,11 +4671,11 @@
     {
       "cell": "S9d-C2__schedule-card__chat_thread__decided",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7d5c87b2-84e4-487a-a9f8-103df32f78d1",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__light.png",
-      "sha256": "c97d18ccbbca2b329ff7c39dd693c0d13c89f9fb857c5f548b833c4a1a2c622f",
-      "capturedAt": "2026-08-24T09:26:33.542Z",
+      "sha256": "a56b17646f5b896cb31237ce4424b47584cf60ac4e71097e7a7dc34b2cd41eaf",
+      "capturedAt": "2026-08-24T17:21:18.434Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4751,11 +4751,11 @@
     {
       "cell": "S9d-C2__schedule-card__chat_thread__decided__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7d5c87b2-84e4-487a-a9f8-103df32f78d1",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__dark.png",
-      "sha256": "ac4f9dcdc852ca3dd821ae933b7017d1569dbec3ae80fd7161640c3f0100f7cb",
-      "capturedAt": "2026-08-24T09:26:35.217Z",
+      "sha256": "65a3d02ad9b46131b8ef75e9e176a78f3f9a373776d60117414fca4f1f8d63af",
+      "capturedAt": "2026-08-24T17:21:22.510Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4831,11 +4831,11 @@
     {
       "cell": "S9d-C5__schedule-card__chat_thread__pending__expired",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/36dd7069-b611-4249-8b36-7cb41c2dd238",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/1bfacdfc-871f-4ecc-a9c2-de49fff427f1",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__light.png",
-      "sha256": "59c45ffb4f73437d2d10d684161db83825c04043910092de68a6e374ef0430c5",
-      "capturedAt": "2026-08-23T21:22:59.070Z",
+      "sha256": "ddd1973a5607cb2281606623ee3bae19328354a7844ee1521214a4e75fb31b7f",
+      "capturedAt": "2026-08-24T15:23:49.729Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4902,11 +4902,11 @@
     {
       "cell": "S9d-C5__schedule-card__chat_thread__pending__expired__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/36dd7069-b611-4249-8b36-7cb41c2dd238",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/1bfacdfc-871f-4ecc-a9c2-de49fff427f1",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__dark.png",
-      "sha256": "8345fbef5ff93b0e5eb51370a654ade0c8fb54d6d32989e66f46593cb6059671",
-      "capturedAt": "2026-08-23T21:23:01.070Z",
+      "sha256": "43cbeb53bd69d9afae925dbcd0e1f8ecce1938f39e1c15979cc8bf8165c529d2",
+      "capturedAt": "2026-08-24T15:23:52.428Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -4973,11 +4973,11 @@
     {
       "cell": "S9d-C3__schedule-card__run_card__decided",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/972d5781-c540-45b0-adfd-d3c31dba6277",
+      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/9384a346-d9a6-4403-9beb-51ef347618f3",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-configured__light.png",
-      "sha256": "eb796975fa197e99b7b40b76096d407bf71fad18148973ce5007b499e00bcf1a",
-      "capturedAt": "2026-08-23T21:09:52.609Z",
+      "sha256": "698f017dc575521f7d73219fbe1219cf946a2134d7093270e42417a2f25867d7",
+      "capturedAt": "2026-08-24T17:22:04.370Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -5045,11 +5045,11 @@
     {
       "cell": "S9d-C3__schedule-card__run_card__decided__dark",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/972d5781-c540-45b0-adfd-d3c31dba6277",
+      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/9384a346-d9a6-4403-9beb-51ef347618f3",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-configured__dark.png",
-      "sha256": "5c40280524311292cd08a35a792cd2706c2ba1bcf4596ce567fbbf729c96f3d1",
-      "capturedAt": "2026-08-23T21:09:53.755Z",
+      "sha256": "63ab1513f40133c57f7493b68d875e2245e3d4ae0e91b5448c8864504bda7c9d",
+      "capturedAt": "2026-08-24T17:22:05.349Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -5117,11 +5117,11 @@
     {
       "cell": "S9d-C6__schedule-card__chat_thread__decided__after-fire",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7d5c87b2-84e4-487a-a9f8-103df32f78d1",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__light.png",
-      "sha256": "bb347f2bcbb19b585005bfadac15588100e4b7352ab7d6af39350f2223d105a9",
-      "capturedAt": "2026-08-24T09:34:54.120Z",
+      "sha256": "e87625ecab474290bf736c54aafca8dfd67f4661a4d7091d585b303fed2f3d3f",
+      "capturedAt": "2026-08-24T17:43:31.059Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",
@@ -5197,11 +5197,11 @@
     {
       "cell": "S9d-C6__schedule-card__chat_thread__decided__after-fire__dark",
       "declaredHost": "chat_thread",
-      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/7d5c87b2-84e4-487a-a9f8-103df32f78d1",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
       "build": "development",
       "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__dark.png",
-      "sha256": "170e3f70ddc20a443bcfb7d6484271140b7c6953a9b5d3c8f4038256e5021b43",
-      "capturedAt": "2026-08-24T09:34:55.953Z",
+      "sha256": "ccabf74343e98b9118cee1ca7d434e69ab59dafe1e31e844bf1830dd2f56370e",
+      "capturedAt": "2026-08-24T17:43:36.383Z",
       "assertions": [
         {
           "selector": "[data-conversation-list]",

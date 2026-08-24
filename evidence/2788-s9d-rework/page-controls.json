@@ -5,9 +5,9 @@
     "framing": "window",
     "build": "development",
     "screenshot": "evidence/2788-s9d-rework/captures/C7__run-setup-scheduling-step__light.png",
-    "sha256": "d1a21a6ba61245c74ee16c317da3645700f5728d7f89465146af84d1b6b98b46",
+    "sha256": "411fc70e6ca118e5be252299bbb9128540cc2617e6375699343f7fceafe33296",
     "pixels": "2880x1800",
-    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/86b4a279-99a9-41a2-bba1-6f248d081820/trigger",
+    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/d8e1de27-dc8f-4559-853a-0829a991065b/trigger",
     "resolvedTheme": "normal",
     "visible": {
       "[data-conformance-id=\"run-step-rail-column\"]": 0,
@@ -16,7 +16,7 @@
       "[data-lifecycle-card-host]": 0,
       "[data-conformance-id=\"agentic-run-progress\"]": 0
     },
-    "capturedAt": "2026-08-23T21:12:17.628Z",
+    "capturedAt": "2026-08-24T17:43:40.901Z",
     "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
   },
   {
@@ -25,9 +25,9 @@
     "framing": "window",
     "build": "development",
     "screenshot": "evidence/2788-s9d-rework/captures/C7__run-setup-scheduling-step__dark.png",
-    "sha256": "4765eff1216e9d314bf13394fb6d726e803f548017112d052c6041791a626686",
+    "sha256": "3082afe8621e456965c40b1eacfa30fccdc64a8dd49ff8670e35d97f6a6a8cc0",
     "pixels": "2880x1800",
-    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/86b4a279-99a9-41a2-bba1-6f248d081820/trigger",
+    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/d8e1de27-dc8f-4559-853a-0829a991065b/trigger",
     "resolvedTheme": "dark",
     "visible": {
       "[data-conformance-id=\"run-step-rail-column\"]": 0,
@@ -36,7 +36,7 @@
       "[data-lifecycle-card-host]": 0,
       "[data-conformance-id=\"agentic-run-progress\"]": 0
     },
-    "capturedAt": "2026-08-23T21:12:21.657Z",
+    "capturedAt": "2026-08-24T17:43:44.494Z",
     "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
   },
   {
@@ -45,9 +45,9 @@
     "framing": "window",
     "build": "development",
     "screenshot": "evidence/2788-s9d-rework/captures/C8__run-detail-after-fire__light.png",
-    "sha256": "55e772fcb20ae68b117dd0ce674cc525ab1c87a270e20cf878dd94d78c4b8c58",
+    "sha256": "3831af1d87c0a6f4dd60a6b284149d23d472ecbaf2653448fcb792009e64c359",
     "pixels": "2880x1800",
-    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/972d5781-c540-45b0-adfd-d3c31dba6277",
+    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/9384a346-d9a6-4403-9beb-51ef347618f3",
     "resolvedTheme": "normal",
     "visible": {
       "[data-conformance-id=\"run-step-rail-column\"]": 1,
@@ -56,7 +56,7 @@
       "[data-lifecycle-card-host]": 0,
       "[data-conformance-id=\"schedule-step-detail\"]": 0
     },
-    "capturedAt": "2026-08-23T21:23:27.221Z",
+    "capturedAt": "2026-08-24T17:43:48.199Z",
     "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
   },
   {
@@ -65,9 +65,9 @@
     "framing": "window",
     "build": "development",
     "screenshot": "evidence/2788-s9d-rework/captures/C8__run-detail-after-fire__dark.png",
-    "sha256": "d38d4360d6784bf158c1f326024a2891d060eed491ac99eff77370615b2e2c30",
+    "sha256": "86fff475add5688313ea40b11e92b77a65ac601110e0eee0af6e2024a8a32514",
     "pixels": "2880x1800",
-    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/972d5781-c540-45b0-adfd-d3c31dba6277",
+    "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/9384a346-d9a6-4403-9beb-51ef347618f3",
     "resolvedTheme": "dark",
     "visible": {
       "[data-conformance-id=\"run-step-rail-column\"]": 1,
@@ -76,7 +76,7 @@
       "[data-lifecycle-card-host]": 0,
       "[data-conformance-id=\"schedule-step-detail\"]": 0
     },
-    "capturedAt": "2026-08-23T21:23:30.759Z",
+    "capturedAt": "2026-08-24T17:43:51.633Z",
     "record": "NONE — not a lifecycle host; filed as the page control (see README.md)"
   }
 ]

@@ -181,19 +181,75 @@ describe("the walk plan is judged before the browser opens", () => {
     expect(selectors).not.toContain("confirm-destructive");
     expect(S9D_WALK.steps.some((s) => s.id === "fire-the-schedule")).toBe(false);
 
-    // AND IT WAITS FOR THE RELEASE RATHER THAN FOR THE SETTLED CARD. Absence of
-    // a release control is only half the property: a settled card exists the
-    // MOMENT Confirm is pressed, so an `after-fire` step that waits only on
+    // AND `after-fire` IS GATED ON MORE THAN "settled". Absence of a release
+    // control is only half the property: a settled card exists the MOMENT
+    // Confirm is pressed, so an `after-fire` step gated only on
     // `state="settled"` would let a continuous run photograph the "ran" stage
     // before the schedule was ever due — a picture of a card that had not yet
     // been released, filed as the card after it fired.
+    //
+    // THIS ASSERTION CHANGED WITH THE CARD, and what it can honestly claim
+    // changed with it. The step used to wait on `schedule-released`, the line
+    // that explained the withheld controls. A FIRED one-off no longer draws it:
+    // §7.2 — "once a one-off has fired it cannot be changed" — so the card
+    // withdraws Save changes, Cancel schedule and Run now TOGETHER WITH the
+    // status line that used to explain them (`body.released && !fired` in
+    // packages/agents/src/schedule-proposal-card.tsx). There is no longer ANY
+    // rendered anchor that means "fired" and nothing else: the read-only rows
+    // the fired card draws also stand on an arming card and on a past-due card
+    // whose gate has not opened.
+    //
+    // So this test no longer pretends a selector proves firing, and it is
+    // explicit about the limit of what a PLAN-SHAPE test can enforce at all.
+    //
+    // WHAT IT ENFORCES:
+    //   (1) the step is gated on something BEYOND the settled state, so
+    //       "settled alone" can never be what releases the shutter; and
+    //   (2) that something is EXACTLY one of an ALLOW-LIST of selectors that
+    //       belong to the fired reading — an equality check, not a substring
+    //       one. "Some second selector" would be satisfied by any always-present
+    //       anchor, and a substring check would be satisfied by a comma-union
+    //       like `<settled>, <fired>`, which resolves on the settled branch
+    //       alone. Both bypasses are mutation-checked; and
+    //   (3) the plan's own note carries the DATABASE gate the lane must apply
+    //       before this step is driven — `agent_run_triggers.released_at`.
+    //
+    // WHAT IT CANNOT ENFORCE, said plainly rather than implied: the timing
+    // itself. Every selector on the allow-list is also true of an arming card
+    // and of a past-due card whose gate has not opened, because the card no
+    // longer draws anything that means "fired" and nothing else. Only
+    // `released_at` separates those, a plan cannot poll a database, and this
+    // test judges the plan. So the mechanical guard here is "not settled-alone,
+    // and from the fired vocabulary"; the timing guard is the lane's, and (3)
+    // is what keeps it written down where the next operator will read it.
+    // If the card regains a fired-specific rendered anchor, tighten (2) onto it
+    // and this comment can go.
+    // The EXACT selectors that count as the fired reading. Equality, not
+    // substring: a comma-union like `<settled>, <fired>` resolves on the settled
+    // branch alone, and a substring check would wave it through.
+    const FIRED_READING_SELECTORS = [
+      '[data-lifecycle-card="trigger_schedule_proposal"] [data-field="schedule-run-at"][disabled]',
+      '[data-lifecycle-card="trigger_schedule_proposal"] [data-field="schedule-timezone"][disabled]',
+      '[data-field="schedule-run-at"][disabled]',
+      '[data-field="schedule-timezone"][disabled]',
+    ];
+    const SETTLED_ONLY =
+      '[data-lifecycle-card="trigger_schedule_proposal"][data-lifecycle-card-state="settled"]';
     for (const id of ["after-fire", "after-fire-dark"]) {
       const step = S9D_WALK.steps.find((s) => s.id === id);
       const waits = (step.actions ?? [])
         .filter((a) => a.action === "waitForSelector")
         .map((a) => a.selector);
-      expect(waits).toContain('[data-conformance-id="schedule-released"]');
+      expect(waits).toContain(SETTLED_ONLY);
+      const beyondSettled = waits.filter((w) => w !== SETTLED_ONLY);
+      expect(beyondSettled.length).toBeGreaterThan(0);
+      expect(
+        beyondSettled.some((w) => FIRED_READING_SELECTORS.includes(w.trim())),
+      ).toBe(true);
     }
+    const note = (S9D_WALK.note ?? []).join(" ");
+    expect(note).toContain("agent_run_triggers`.`released_at".replace(/`/g, ""));
+    expect(note).toMatch(/the LANE polls/);
   });
 
   it("REFUSES an action outside the closed vocabulary", () => {

@@ -1,11 +1,41 @@
 {
   "slice": "2788-s9d-rework",
   "note": [
+    "ROUND 5 RE-WALKS EVERY PICTURED CELL ON A FULLY-REAL CHAIN. Round 3 and round 4 had to say",
+    "that the assistant's own turn came from the deterministic model bridge, because a real-model",
+    "chat turn hands the tool catalogue to the provider as ONE provider-hosted MCP reference and",
+    "needs a PUBLICLY reachable MCP URL. That is no longer a limit: the instance's public base URL",
+    "is stated through the product's own tunnel tab (`publicBaseUrlSource: manual`), the public",
+    "`/api/mcp` ingress answers, and the turn runs on the REAL provider — the model reads the",
+    "catalogue over hosted MCP and calls the shipped producer `schedule_proposal_render` itself.",
+    "`CINATRA_TEST_LLM_PROVIDER` is UNSET for the whole round; the scripted runtime serves nothing.",
+    "",
+    "TWO TYPED SENTENCES IN THIS FILE CHANGED WITH IT, and they are named rather than left to be",
+    "noticed — the plan's only two `type` actions, in `state-the-schedule` and in `expired-clock`.",
+    "Both now STATE THE INSTANT AND THE TIMEZONE:",
+    "",
+    "    Please schedule ${WALK_TEMPLATE_ID} to run once at ${WALK_RUN_AT_STATED} in the UTC timezone.",
+    "",
+    "The deterministic bridge answered ANY sentence with a daily recurrence, so the old sentence",
+    "('a few minutes from now') never had to be complete. A real model reads it as a person would:",
+    "asked for 'a few minutes from now' with no timezone it ASKS which timezone to use instead of",
+    "guessing, and the turn ends in a question rather than a card. Stating the instant is what a",
+    "person does when they mean a particular one — it is still one sentence typed into the shipped",
+    "composer, still answered by the model's own choice of tool, and the proposal ref in the",
+    "DATA_PART is still minted by the product. Every cell id, every context, every viewport and",
+    "every assertion below is unchanged.",
+    "",
+    "AND THE CARD IS STILL DRIVEN ON ITS OWN ROWS. The option rows are editable until Confirm, so",
+    "the walk still chooses `Schedule for later` and puts the run-at and the timezone in before the",
+    "press — the plan's own sentence. When the model has already proposed exactly that, those",
+    "actions are idempotent; when it has not, they are the adjustment the plan describes.",
+    "",
     "THE S9d REAL-PATH WALK, executable (cinatra#2788, PR #2939).",
     "",
     "ROUND 4 RE-WALKED C2 AND C6 ONLY, on a run of their own, after the settled branch of the",
     "card was fixed (no supersede line on a settled card; no floor at all on a FIRED one-off).",
-    "So the proof set now spans THREE runs, and README.md says which cell belongs to which.",
+    "That made round 4's proof set span three runs. (ROUND 5 SUPERSEDES THAT: it re-shot all",
+    "fourteen, and one armed run now carries C1, C2, C3, C6 and C8 — see the round 5 note above.)",
     "Everything below is the walk as it stands and is driven step by step; a pass that re-shoots",
     "part of the set drives the steps it needs and declares cells only for the cells it re-shoots.",
     "",
@@ -43,7 +73,7 @@
     "come out fails AT THE CELL rather than at the end of a round nobody can repeat.",
     "",
     "NOTHING HERE IS SEEDED. The schedule is STATED by typing a sentence into the shipped composer;",
-    "the scripted model bridge answers it by calling the shipped producer `schedule_proposal_render`",
+    "the REAL model answers it by calling the shipped producer (round 5; rounds 2-4 used the scripted bridge) `schedule_proposal_render`",
     "over self-MCP; the proposal ref is the product's own. That is why the sentence is an action and",
     "the thread has no address in this file — the product mints it, and the dark context FOLLOWS the",
     "light one to wherever it landed.",
@@ -195,7 +225,7 @@
         {
           "action": "type",
           "selector": "div[contenteditable=\"true\"][role=\"textbox\"]",
-          "text": "Please schedule ${WALK_TEMPLATE_ID} — I want it to run once, a few minutes from now."
+          "text": "Please schedule ${WALK_TEMPLATE_ID} to run once at ${WALK_EXPIRED_AT_STATED} in the UTC timezone."
         },
         {
           "action": "press",
@@ -224,7 +254,7 @@
         {
           "action": "type",
           "selector": "div[contenteditable=\"true\"][role=\"textbox\"]",
-          "text": "Please schedule ${WALK_TEMPLATE_ID} — I want it to run once, a few minutes from now."
+          "text": "Please schedule ${WALK_TEMPLATE_ID} to run once at ${WALK_RUN_AT_STATED} in the UTC timezone."
         },
         {
           "action": "press",

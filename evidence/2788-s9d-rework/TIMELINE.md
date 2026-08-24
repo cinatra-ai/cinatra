@@ -1,10 +1,77 @@
 # TIMELINE — the real runs behind every capture
 
+**Round 5 re-shot all fourteen pictures**, and its rows are the first table
+below. Rounds 4 and 3 follow unchanged, as the record of what they walked; no
+committed picture stands on them any more.
+
+## Round 5 — the runs behind all fourteen pictures
+
+Every row is read out of the lane database, not out of a driver's log. The run
+is `9384a346-d9a6-4403-9beb-51ef347618f3`; the two conversations are real
+assistant threads written by the shipped chat route —
+`1bfacdfc-871f-4ecc-a9c2-de49fff427f1` for the proposal nobody touched and
+`efba5760-304d-4b6a-9ca7-80b7b9af9262` for the run. `RUN-READBACK.md` carries
+the full rows and the proposal-ref→consume-key join that binds the conversation to
+the run; `readback/db-readback.json` carries those rows as the reader printed them,
+and `readback/runtime-evidence.txt` the server log lines quoted below.
+
+**NOTHING IN ANY PICTURED CHAIN IS STOOD IN.** A sentence was typed into the
+shipped composer; the REAL model answered it, reading the platform's tool
+catalogue as one provider-hosted MCP reference and calling the SHIPPED producer
+`schedule_proposal_render` itself over the public ingress; the proposal ref in
+the dispatch part is the product's own. The person then confirmed on the card.
+`CINATRA_TEST_LLM_PROVIDER` was UNSET throughout and the server log carries zero
+scripted-runtime lines.
+
+Capture times are the `capturedAt` of the record each picture is filed with (and,
+for the two page controls, of `page-controls.json`), so a reader can line every
+picture up against the row it belongs to.
+
+| UTC (2026-08-24) | what | where it is recorded |
+|---|---|---|
+| 14:51:53.227 | the expired cell's schedule stated in a conversation | `cinatra.assistant_turns` (user turn, thread `1bfacdfc-…`) |
+| ~14:51:5x | the assistant answers with the card — **the shipped 30-minute window starts here** | `cinatra.assistant_turns` (assistant turn, same thread) |
+| 15:23:49.729 / 15:23:52.428 | **C5** shot, light and dark, after the window had ACTUALLY run out (`PROPOSAL_TTL_SECONDS = 1800`) — no clock was moved | the two C5 records |
+| 16:43:33.532 | a FRESH run started from the product's own **Run** control, never armed | `cinatra.agent_runs` (no `agent_run_triggers` row) |
+| 17:21:03.867 | the run's schedule stated in a second conversation | `cinatra.assistant_turns` (user turn, thread `efba5760-…`) |
+| 17:21:12 | the proposal minted — `iat` inside the ref itself, `exp` 1800 s later | the ref in the thread's dispatch part |
+| 17:21:13.852 | the model call that produced it: `openai` / `gpt-5.5`, 21231 in / 118 out | `cinatra.usage_events` |
+| 17:21:14.338 / 17:21:18.067 | **C1** shot, light and dark: the card `pending`, rows editable, Confirm on the floor | the two C1 records |
+| 17:21:18.164 | **Confirm pressed:** the proposal CONSUMED — single-use, bound to this reader, org and template — and the run created | `cinatra.trigger_schedule_proposal_consumes`, `cinatra.agent_runs` |
+| 17:21:18.181 | the trigger written: `scheduled`, a ONE-OFF at `2026-08-24 17:42:00+00` UTC, no cron, enabled, delayed job `trigger-release-9384a346-…` | `cinatra.agent_run_triggers` |
+| 17:21:18.434 / 17:21:22.510 | **C2** shot, light and dark: the SAME card, Save changes where Confirm stood, nothing above the rows | the two C2 records |
+| 17:22:04.370 / 17:22:05.349 | **C3** shot, light and dark: the rail on the left with Schedule selected, the form in the run detail on the right, no run progress card | the two C3 records |
+| 17:42:00.143 | **the one-off FIRED on its own tick** — 143 ms after the second the person stated, nobody on the run page; the runtime logged `[trigger-release] released gate for run 9384a346-…` then `[trigger-release] enqueued execution for run 9384a346-…` | `cinatra.agent_run_triggers.released_at` |
+| 17:42:11.792 | the agent's own model call: `openai` / `gpt-5.5-2026-04-23`, 37093 in / 37 out, resolved by this run's own run token through the shipped `/api/llm-bridge` | `cinatra.usage_events` |
+| 17:42:12.471 | the run reached `completed`, no error | `cinatra.agent_runs` |
+| 17:43:31.059 / 17:43:36.383 | **C6** shot, light and dark: the same card in the same conversation, rows read-only, no floor at all | the two C6 records |
+| 17:43:40.901 / 17:43:44.494 | **C7** (page control) shot, light and dark, on the never-armed run above | `page-controls.json` |
+| 17:43:48.199 / 17:43:51.633 | **C8** (page control) shot, light and dark: the rail still listing Schedule, the run detail carrying the completed progress card | `page-controls.json` |
+
+**C4 IS ABSENT AND STAYS ABSENT.** It asked for the review page carrying THIS
+run's real artifact review, and this run has none: a schedule decides WHEN the
+agent runs, and a review card exists only after the agent has run and produced
+something to review. The walk contains no C4 step, so there is nothing to answer
+with the wrong screen, and no stand-in was used.
+
+**FIVE ARMED RUNS WERE DISCARDED** before this one, each for a stated reason;
+`RUN-READBACK.md` lists them with their release stamps. All five released within
+143 ms of the second they were armed for, with nobody on the run page.
+
+---
+
+# Earlier rounds, kept for the record
+
+**Everything below is HISTORY.** It is reproduced as rounds 3 and 4 wrote it, and
+no committed picture stands on any run named below — round 5 re-shot all fourteen.
+Sentences below that read in the present tense about which cell a run carries were
+true when written and are not true now.
+
 Round 4 re-shot C2 and C6 on a run of its own; its rows are the second table
 below. Round 3's two runs are unchanged: the armed run it walked carries C1, C3,
 C5 and C8, and the fresh never-armed run beside it carries C7.
 
-## Round 3 — the two runs behind C1, C3, C5, C7 and C8
+## Round 3 — the two runs that WERE behind C1, C3, C5, C7 and C8 (superseded by round 5)
 
 Every row is read out of the lane database, not out of a driver's log. The run
 is `972d5781-c540-45b0-adfd-d3c31dba6277`; the two conversations are real
@@ -57,7 +124,7 @@ administrator's *Run now* writes the same stamp — applies to the 21:22:00.163 
 as well; what round 3 established for it is that its own walk pressed nothing and
 that the stamp landed 163 ms after the second the person stated.
 
-## Round 4 — the run behind C2 and C6
+## Round 4 — the run that WAS behind C2 and C6 (superseded by round 5)
 
 Same recipe, same file, a run of its own. The run is
 `98f50b86-8619-48bf-adf1-3278684daa02`; the conversation is
