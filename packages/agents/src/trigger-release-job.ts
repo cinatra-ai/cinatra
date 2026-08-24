@@ -313,10 +313,28 @@ export async function runAgentRunTriggerReleaseJob(
   //
   // A TRANSIENT ENQUEUE FAILURE IS THE JOB'S RETRY, which is why this branch
   // wants none of the coordinator's compensation. BullMQ re-runs this job; the
-  // re-run finds the run already `queued`, the `armed → queued` release loses
-  // its race and ANSWERS with the state it read — the default reading, not a
-  // throw — and the code below it runs again and re-enqueues. Returning the run
-  // to `armed` here would race that retry instead of helping it.
+  // re-run finds the run already `queued`, so the `armed → queued` release LOSES
+  // its race — and the retry still has to re-enqueue.
+  //
+  // THE LOST RACE THEREFORE THROWS rather than answering. `onLostRace: "answer"`
+  // reports the state it re-read and RETURNS NORMALLY, which reads the retry
+  // correctly and reads every other loser wrong: a run cancelled to `stopped`
+  // before its instant, or one that was never armed, would fall straight through
+  // to the enqueue below and have its moment wiped by a job that released
+  // nothing. The coordinator's own note says which shape this is — a caller that
+  // has to know WHICH writer won asks it to throw — and the re-read below is what
+  // this branch decides on:
+  //
+  //   • the run reads `queued` — an earlier fire (or its own retry) already
+  //     released it and the execution job did not stick. Re-enqueue: the job id
+  //     is derived from the run id, so BullMQ collapses the duplicate, and a
+  //     `queued` run with no job behind it is the one state nothing recovers
+  //     from on its own.
+  //   • the run reads ANYTHING ELSE — stopped, still pre-dispatch, already
+  //     finished, or gone. This job released nothing, so it enqueues nothing and
+  //     never reaches the clear at the end of this function: the moment on that
+  //     run states what its own writer is waiting at, and is not this fire's to
+  //     take off.
   try {
     await advanceAgentRun({
       run: runForFire,
@@ -325,22 +343,30 @@ export async function runAgentRunTriggerReleaseJob(
         from: "armed",
         to: "queued",
         dispatch: { kind: "caller_dispatches", why: "the scope-denial compensation below owns this enqueue" },
+        onLostRace: "throw",
       },
       authority: releaseAuthority,
     });
   } catch (err) {
-    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
-      // Run was not armed (e.g. immediate trigger fired without going through
-      // pending_input → armed; user cancelled to stopped before fire; twin-fire
-      // window where the first call already transitioned). Log and skip the
-      // execution enqueue — the run is not in a state that wants to run, OR
-      // execution was already enqueued by a prior fire.
+    if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+      throw err;
+    }
+    // The run id is request-influenced, so it stays a discrete ARGUMENT and is
+    // never interpolated into a format string (CodeQL js/tainted-format-string).
+    const afterTheRace = await readAgentRunById(data.runId);
+    if (afterTheRace?.status !== "queued") {
       console.log(
-        `[trigger-release] run ${data.runId} not armed — skipping execution enqueue`,
+        "[trigger-release] run",
+        data.runId,
+        `was not released by this fire (it reads ${afterTheRace?.status ?? "absent"}) — skipping the execution enqueue, and leaving the moment to whoever owns the run now`,
       );
       return;
     }
-    throw err;
+    console.log(
+      "[trigger-release] run",
+      data.runId,
+      "was already released before this fire — re-enqueueing its execution (the job id collapses the duplicate)",
+    );
   }
 
   // Enqueue the actual execution job. Idempotent on jobId — re-enqueue is safe

@@ -368,6 +368,10 @@ async function stateMoment(input: {
   /** Write only while the run is still in this status — see the writer's own
    *  note. Omitted for a record that is true whatever the run is doing. */
   onlyWhileStatus?: string;
+  /** Write only while the run still states this moment — the compare-and-set a
+   *  writer wants when it must not displace what it read. `null` is a value
+   *  ("only while it states nothing"), `undefined` leaves it unconstrained. */
+  onlyWhileMoment?: string | null;
 }): Promise<void> {
   try {
     await recordRunLifecycleMoment(
@@ -380,6 +384,9 @@ async function stateMoment(input: {
         ...(input.onlyWhileStatus === undefined
           ? {}
           : { onlyWhileStatus: input.onlyWhileStatus }),
+        ...(input.onlyWhileMoment === undefined
+          ? {}
+          : { onlyWhileMoment: input.onlyWhileMoment }),
       },
       input.authority,
     );
@@ -395,9 +402,119 @@ async function stateMoment(input: {
   }
 }
 
+/**
+ * State a moment WITHOUT DISPLACING A LIVE PARK (cinatra#2928 review, finding 5).
+ *
+ * THE TRIPLE IS ONE SLOT. A run states one moment, and the card reference beside
+ * it is the only server-checked route back to the screen that moment mounts. So
+ * a writer that states its moment unconditionally does not merely add a record —
+ * it takes the HITL gate's reference off a run somebody is waiting to answer,
+ * and no later write puts it back.
+ *
+ * The two entries that need this are the ones that report a READING about work
+ * — an artifact write, a change landing on reviewed work. Both can arrive while
+ * the run is parked at something a person has to answer, and neither is
+ * evidence that the park is over.
+ *
+ * COMPARE AND SET, with the mechanism already built: read what the run states,
+ * refuse when that is a moment which PARKS the run, and otherwise write pinned
+ * to the value that was read — so a park landing between the read and the write
+ * keeps its card too. A read that cannot answer refuses as well: not writing is
+ * a missing record, writing blind is a lost park, and only one of those is
+ * recoverable.
+ *
+ * IT ANSWERS NOTHING, and cannot. The write is guarded, best-effort and returns
+ * no affected-row count, so "did it land" is not knowable from here — a park
+ * arriving between the read and the write refuses it silently, and so does a
+ * storage failure. The entries therefore RE-READ THE ROW and answer with the
+ * moment it really states, which is the only claim either of them can support.
+ */
+async function stateMomentOverNoPark(input: {
+  run: Pick<AgentRunRecord, "id" | "orgId" | "status">;
+  moment: LifecycleMoment;
+  cardRef: string | null;
+  authority: OrgWriteAuthority | undefined;
+}): Promise<void> {
+  let standing: string | null;
+  try {
+    const current = await readAgentRunById(input.run.id);
+    if (!current) return;
+    standing = current.lifecycleMoment ?? null;
+  } catch (err) {
+    console.warn(
+      "[lifecycle-coordinator] could not read what run",
+      input.run.id,
+      "is waiting at, so the",
+      input.moment,
+      "moment is not recorded — a record that might take a live park off a run is worse than a missing one:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return;
+  }
+  if (standing !== null && lifecycleMomentParksRun(standing as LifecycleMoment)) {
+    console.log(
+      "[lifecycle-coordinator] run",
+      input.run.id,
+      `is parked at ${standing}, so the ${input.moment} reading is not written over its card`,
+    );
+    return;
+  }
+  await stateMoment({
+    run: input.run,
+    moment: input.moment,
+    cardRef: input.cardRef,
+    authority: input.authority,
+    onlyWhileMoment: standing,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 1. launch
 // ---------------------------------------------------------------------------
+
+/**
+ * THE RUN A FAILED LAUNCH HAD ALREADY CREATED.
+ *
+ * A launch that throws from its dispatch has, by then, created a run and climbed
+ * its compensation ladder to put that run back somewhere decidable. A caller
+ * whose SURFACE OPENS ON THAT RUN — the step-by-step preview does — otherwise
+ * has no way to name it, and the person is left with a run nothing points at.
+ *
+ * The id is ATTACHED TO THE ERROR THE LAUNCH RETHROWS rather than replacing it
+ * with a wrapper, so every existing reading of that error is untouched: the
+ * actionable-preflight classifier still recognizes its own shapes, and an
+ * `instanceof` on a transport's error still holds. A caller that does not ask
+ * sees exactly what it saw before.
+ *
+ * A symbol key, so the marker cannot collide with a property an error already
+ * carries and cannot be read off by accident.
+ */
+const LAUNCHED_RUN_ID = Symbol.for("cinatra.lifecycle.launch.runId");
+
+function nameRunOnLaunchFailure(err: unknown, runId: string): void {
+  if (typeof err !== "object" || err === null) return;
+  try {
+    (err as Record<symbol, unknown>)[LAUNCHED_RUN_ID] = runId;
+  } catch {
+    // A frozen error still throws; the caller simply gets no id, which is the
+    // same answer it gets for a failure that happened before creation.
+  }
+}
+
+/**
+ * The run id a failed `launchAgentRun` created, or null when the failure landed
+ * before there was a run (no template, no authority, a refused create).
+ *
+ * Null is also the answer for a thrown value that cannot carry a property — a
+ * string, a frozen error — and the caller's fallback for "no run to point at"
+ * is the same answer in both cases.
+ */
+export function runIdFromFailedLaunch(err: unknown): string | null {
+  if (typeof err !== "object" || err === null) return null;
+  const named = (err as Record<symbol, unknown>)[LAUNCHED_RUN_ID];
+  return typeof named === "string" ? named : null;
+}
+
 
 /** The creation inputs a caller owns. Presence and initial status are NOT among
  *  them: this module derives both, so no caller can hand in a presence claim. */
@@ -494,6 +611,25 @@ export type LaunchInput = {
  *               and claims no state it did not produce.
  */
 export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAnswer> {
+  // ONE PLACE THAT NAMES THE RUN, rather than one per throw site. The launch
+  // body raises from several rungs after the row exists — a lost compensation
+  // CAS, a post-create transition that is not a stale race, a re-read that
+  // cannot answer — and a list of annotate-here sites would go stale the first
+  // time a rung was added. The cell is written the moment the run is created,
+  // so every failure past that point carries it.
+  const created: { id: string | null } = { id: null };
+  try {
+    return await runTheLaunch(input, created);
+  } catch (err) {
+    if (created.id !== null) nameRunOnLaunchFailure(err, created.id);
+    throw err;
+  }
+}
+
+async function runTheLaunch(
+  input: LaunchInput,
+  created: { id: string | null },
+): Promise<CoordinatorAnswer> {
   const { create, dispatch } = input;
   const frame = (input.frame ?? {}) as LaunchFrame;
   const orgId = create.input.orgId;
@@ -519,6 +655,24 @@ export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAns
   // moment may open before it dispatches — and `queued` otherwise.
   const parkOnCreate = dispatch.kind === "await_trigger" || humanPresent;
 
+  // REFUSED BY CONSTRUCTION, before anything is created (cinatra#2928 review,
+  // finding 4). The pre-dispatch creator always makes a `pending_input` row, and
+  // the only `pending_input → queued` transition in this function sits inside the
+  // human-present branch below. A HEADLESS caller combining the two would
+  // therefore have its run reported — and enqueued — as `queued` while the row
+  // still read `pending_input`: the worker would skip it, and the status this
+  // function answered with would be a claim the row does not support.
+  //
+  // No producer reaches this today, and the creation fence is what guarantees
+  // every future one arrives HERE — so the trap is closed by refusal rather than
+  // by caller discipline. A headless run that must start now is `create.kind:
+  // "full"`, which creates it `queued` and needs no transition at all.
+  if (create.kind === "pre_dispatch" && dispatch.kind !== "await_trigger" && !humanPresent) {
+    throw new Error(
+      "launchAgentRun: a headless launch cannot create a run PRE-DISPATCH and dispatch it in the same call — the row would stay `pending_input` while this call reported `queued`. Use create.kind \"full\" for a run that starts now, or dispatch.kind \"await_trigger\" for one that waits.",
+    );
+  }
+
   const run =
     create.kind === "pre_dispatch"
       ? await createAgentRunPendingInput(
@@ -537,6 +691,7 @@ export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAns
           },
           authority,
         );
+  created.id = run.id;
 
   if (dispatch.kind === "await_trigger") {
     // Created and left pre-dispatch on purpose. The moments that apply at a
@@ -759,6 +914,15 @@ export async function clearRunLifecycleMoment(
 }
 
 /**
+ * The statuses a run states the SCHEDULE moment in.
+ *
+ * `pending_trigger` waits for the person's choice; `armed` waits for the instant
+ * that choice named. Both are the same wait to a reader — "this run is waiting at
+ * its schedule" — and the release job is what ends it.
+ */
+const SCHEDULE_PARK_STATUSES: readonly string[] = ["pending_trigger", "armed"];
+
+/**
  * State the SCHEDULE moment on a run that has just parked at the schedule step.
  *
  * NOT A SIXTH ENTRY — the five entries are the lifecycle ACTS, and this is the
@@ -775,11 +939,47 @@ export async function stateRunScheduleMoment(input: {
   cardRef?: string | null;
   authority: OrgWriteAuthority | undefined;
 }): Promise<void> {
+  // ONLY WHILE THE RUN IS STILL PARKED AT ITS SCHEDULE, for the reason the HITL
+  // entry states one screen down: the park and this record are two writes, and a
+  // stop that wins the CAS between them would leave a STOPPED run saying it is
+  // waiting at a live schedule card. Nothing clears that afterwards — no release
+  // path touches a stopped run — so the guard has to be on the write.
+  //
+  // THE PARK IS TWO STATUSES, not one. `pending_trigger` is where the run waits
+  // for the choice; `armed` is where it waits for the instant once the choice is
+  // made, and it goes on stating the schedule moment there — the release job
+  // reads exactly that run and clears the moment when it fires. Pinning this
+  // write to `pending_trigger` alone would silently drop it whenever a schedule
+  // submitted in the window won the race to `armed`, leaving an armed run with no
+  // card. So the pin is READ, then named: the status the row is really in, when
+  // that status is one the schedule moment is true of.
+  let parkedAt: string | null = null;
+  try {
+    const current = await readAgentRunById(input.run.id);
+    parkedAt = current?.status ?? null;
+  } catch (err) {
+    console.warn(
+      "[lifecycle-coordinator] could not read the status of run",
+      input.run.id,
+      "— its schedule moment is not stated:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return;
+  }
+  if (parkedAt === null || !SCHEDULE_PARK_STATUSES.includes(parkedAt)) {
+    console.log(
+      "[lifecycle-coordinator] run",
+      input.run.id,
+      `is ${parkedAt ?? "gone"}, not waiting at a schedule — no schedule moment stated`,
+    );
+    return;
+  }
   await stateMoment({
     run: input.run,
     moment: "schedule",
     cardRef: input.cardRef ?? null,
     authority: input.authority,
+    onlyWhileStatus: parkedAt,
   });
 }
 
@@ -1074,11 +1274,14 @@ export type ProducedInput = {
 export async function onArtifactProduced(
   input: ProducedInput,
 ): Promise<CoordinatorAnswer> {
-  const moment: LifecycleMoment | null = input.reviewOpened ? "review" : null;
-  if (moment !== null) {
-    await stateMoment({
+  // NOT OVER A LIVE PARK. A review opening is not evidence that whatever the run
+  // was already waiting at is over — an artifact write can land on a run parked
+  // at its HITL gate — and the triple is one slot, so an unpinned write here
+  // would take that gate's card reference off the run.
+  if (input.reviewOpened) {
+    await stateMomentOverNoPark({
       run: input.run,
-      moment,
+      moment: "review",
       cardRef: input.reviewRef ?? null,
       authority: input.authority,
     });
@@ -1089,7 +1292,12 @@ export async function onArtifactProduced(
       ? { kind: "run", run: current }
       : { kind: "run", run: input.run as AgentRunRecord },
     status: current?.status ?? input.run.status,
-    moment,
+    // WHAT THE ROW STATES, read back after the write. Not what this call wanted
+    // to state: the write is guarded and best-effort, so a park that arrived in
+    // the window, or a storage failure, leaves the run saying something else —
+    // and answering with the intention would be a claim the row does not
+    // support, which is the defect the moment column exists to end.
+    moment: (current?.lifecycleMoment as LifecycleMoment | null) ?? null,
   };
 }
 
@@ -1112,6 +1320,16 @@ export type ReviewedWorkChangedInput = {
  * touches the status not at all — the invariant is asserted here rather than
  * left to each caller to remember, and `lifecycleMomentParksRun` is the one
  * place that says which moments do park.
+ *
+ * WHAT THE PARK GUARD COSTS, said plainly: the moment triple is ONE SLOT, so a
+ * run already parked at something a person must answer cannot also carry the
+ * audit's card reference. The reading is not lost — the audit has its own row,
+ * which is where a surface reads it from — but the SIGNAL on the run is dropped
+ * for as long as the park holds it, and nothing re-states it when the park ends.
+ * Carrying both needs the run to state more than one moment at a time, which is
+ * a change to the column shape and belongs with W2b's review core (cinatra#2929),
+ * not here. Given the choice between dropping this signal and taking a live
+ * gate's card off the person waiting at it, this drops the signal.
  */
 export async function onReviewedWorkChanged(
   input: ReviewedWorkChangedInput,
@@ -1123,7 +1341,12 @@ export async function onReviewedWorkChanged(
       "the audit moment is recorded WITHOUT parking the run — the shared moment table now says otherwise, and one of the two is wrong",
     );
   }
-  await stateMoment({
+  // NOT OVER A LIVE PARK, and this entry is the clearer case of the two: it
+  // deliberately does not touch the status, so it has no signal at all that the
+  // run is waiting at something somebody has to answer. An audit landing on a
+  // run parked at its HITL gate would otherwise take that gate's card reference
+  // off it — the audit has its own row, and a reading is not worth a lost park.
+  await stateMomentOverNoPark({
     run: input.run,
     moment: "audit",
     cardRef: input.auditRef,
@@ -1136,6 +1359,7 @@ export async function onReviewedWorkChanged(
       : { kind: "run", run: input.run as AgentRunRecord },
     // UNCHANGED, and that is the point of this entry.
     status: current?.status ?? input.run.status,
-    moment: "audit",
+    // WHAT THE ROW STATES, read back after the write — see `onArtifactProduced`.
+    moment: (current?.lifecycleMoment as LifecycleMoment | null) ?? null,
   };
 }

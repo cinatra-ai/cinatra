@@ -55,6 +55,7 @@ import {
   advanceAgentRun,
   clearRunLifecycleMoment,
   launchAgentRun,
+  runIdFromFailedLaunch,
 } from "./lifecycle-coordinator";
 /** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
  *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
@@ -263,9 +264,12 @@ export async function triggerAgentRun(
     return { ok: false, error: "enqueue failed" };
   }
 
-  // DISPATCHED — the moment is over (cinatra#2928). Guarded on `queued`, the
-  // status this frame produced, so a run that has parked again in the meantime
-  // keeps whatever its new park stated.
+  // DISPATCHED — the moment is over (cinatra#2928). The clear is COMPARE-AND-
+  // CLEAR ON THE MOMENT, not on a status: it takes off the moment it read, so a
+  // run that has parked again in the meantime keeps whatever its new park
+  // stated. A status guard would be the wrong shape here — the status this frame
+  // dispatched into is left almost at once, as soon as a worker picks the run
+  // up, and a clear pinned to it would miss the ordinary case.
   await clearRunLifecycleMoment(args.runId, authority);
 
   return { ok: true };
@@ -921,10 +925,24 @@ export async function startDevChildPreviewRun(
       dispatch: { kind: "enqueue", options: (run) => ({ jobId: run.id }) },
     });
   } catch (err) {
-    // The preview's own posture, unchanged: a dispatch failure is logged and the
-    // panel still opens on the run that exists. The coordinator has already
-    // returned the run to a decidable state.
+    // THE PREVIEW'S OWN POSTURE, UNCHANGED — and now the code says what the
+    // comment always did (cinatra#2928 review, finding 2). A dispatch failure is
+    // logged and the panel still opens ON THE RUN THAT EXISTS: this surface is
+    // the only route a person has to that run, so discarding its id would leave
+    // them a run created for them that nothing points at.
+    //
+    // The run is in BETTER shape than it was before this slice — the
+    // coordinator's ladder has already returned it to `pending_input`, where it
+    // is decidable and retryable, instead of the base's `queued` with no job
+    // behind it — and it is not held for a recommendation, because the launch
+    // got past the hold and failed at the dispatch.
     console.error("[startDevChildPreviewRun] launch failed", err);
+    const createdRunId = runIdFromFailedLaunch(err);
+    if (createdRunId !== null) return previewResult(createdRunId, false);
+    // NO RUN WAS CREATED — the launch failed before there was one (a refused
+    // create, a missing authority). There is nothing for a panel to open on, so
+    // the caller gets the error, which is what it already did for every failure
+    // ahead of this point.
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
   if (launched.carrier.kind !== "run") {

@@ -415,13 +415,13 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       // lifecycle coordinator's `launchAgentRun`, and
       // `scripts/audit/run-creation-fence.mjs` is what keeps it so. The rows
       // struck below are the producers that used to name the creator directly
-      // and now go through it; the two that remain are the surfaces that bypass
-      // the worker today and reach the coordinator through an adapter W2b
-      // (cinatra#2929) builds.
+      // and now go through it — the MCP `agent_run` handler among them, which
+      // names the launch frame's creator now and no longer this one. The two
+      // that remain are the surfaces that bypass the worker today and reach the
+      // coordinator through an adapter W2b (cinatra#2929) builds.
       "packages/agents/src/lifecycle-coordinator.ts",
       "packages/agents/src/a2a-actions.ts",
       "packages/agents/src/index.ts",
-      "packages/agents/src/mcp/handlers.ts",
       "src/lib/host-content-editor-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on
       // transitionRunStatus/updateAgentRunStatus):
