@@ -149,3 +149,18 @@ Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
 Assisted-by: Claude Code (claude-fable-5)
 Correction-for: 871443b9b7b655da90bd30046b4e477ab13792ef
 ```
+
+---
+
+## Correction for `3ceba8711c35760c1d956c373154df7911d2c262`
+
+```
+correction: truthful-attribution record for 3ceba8711
+
+The record on 3ceba8711 ("ci: consolidate 12 micro-gate workflows into gates.yml (~12 runner slots per PR) (#2963)") is invalid under the ratified record grammar: a high-risk change (.github/**) merged with no verification arm, and its Assisted-by line was malformed (comma-joined agents and a serving alias claude-opus-5[1m] instead of the model id). The change was humanly approved by @groganz at the reviewed head 5056f76a72a29677811f0313342c67e10d5eefdb (PR #2963) with every required context green after the post-approval gate rerun; the corrected record carries that human arm and one well-formed Assisted-by line per agent. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: 3ceba8711c35760c1d956c373154df7911d2c262
+```
