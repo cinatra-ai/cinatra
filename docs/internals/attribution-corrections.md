@@ -178,3 +178,18 @@ Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
 Assisted-by: Claude Code (claude-fable-5)
 Correction-for: 871443b9b7b655da90bd30046b4e477ab13792ef
 ```
+
+---
+
+## Correction for `3ceba8711c35760c1d956c373154df7911d2c262`
+
+```
+correction: truthful-attribution record for 3ceba8711 (v2)
+
+The record on 3ceba8711 ("ci: consolidate 12 micro-gate workflows into gates.yml (#2963)") lacked a verification arm for a high-risk change and carried a malformed Assisted-by line (comma-joined agents; serving alias claude-opus-5[1m]). The prior correction attempt (770744b74) asserted the human arm through an unapproved landing and was rightly flagged; THIS correction lands via an owner-approved PR. The underlying change was humanly approved by @groganz at the reviewed head 5056f76a72a29677811f0313342c67e10d5eefdb (PR #2963), every required context green after the post-approval rerun. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: 3ceba8711c35760c1d956c373154df7911d2c262
+```
