@@ -68,6 +68,19 @@ function callsLaunch(raw: string): boolean {
   return /(?<![A-Za-z0-9_.])launchAgentRun\s*\(/.test(executable(raw));
 }
 
+/**
+ * Does this module launch UNDER THIS PRODUCER'S OWN KEY?
+ *
+ * "The module contains a launch somewhere" is not the claim the inventory
+ * makes. Three producers live in `run-actions.ts` and a fourth was added to it
+ * mid-slice; a module-level check cannot tell them apart, so a row could be
+ * added, or forgotten, with the suite green either way. Every launch names the
+ * producer it is, and that name is what is read back here.
+ */
+function launchesAs(raw: string, key: string): boolean {
+  return new RegExp(String.raw`producer:\s*["'\`]${key}["'\`]`).test(executable(raw));
+}
+
 describe("the run-producer inventory", () => {
   it("names every producer exactly once", () => {
     const keys = RUN_PRODUCERS.map((p) => p.key);
@@ -93,6 +106,10 @@ describe("the run-producer inventory", () => {
       expect(
         callsLaunch(source),
         `${producer.module} is recorded as routed but never calls launchAgentRun`,
+      ).toBe(true);
+      expect(
+        launchesAs(source, producer.key),
+        `${producer.module} launches, but nothing in it launches as "${producer.key}" — the row names a producer the module does not have`,
       ).toBe(true);
       // …and it does NOT still create around it. The coordinator and the store
       // are the two modules where the creators may be named at all.
@@ -141,6 +158,26 @@ describe("the run-producer inventory", () => {
         `${rel} is recorded as a pre-dispatch creator caller but no longer calls it`,
       ).toBe(true);
     }
+  });
+
+  it("names EVERY producer key the tree launches under — a launch the inventory does not know is a producer nobody counted", () => {
+    // THE REVERSE DIRECTION, and the one that catches an omission. The check
+    // above walks the list and looks for each row in the tree; this walks the
+    // TREE and looks for each launch in the list. `release_now_recurring_copy`
+    // was added mid-slice and passed the first check by living in a module that
+    // already launched — this is what would have caught it.
+    const seen = new Set<string>();
+    for (const module of new Set(RUN_PRODUCERS.map((p) => p.module))) {
+      for (const m of executable(read(module)).matchAll(/producer:\s*["'`]([a-z0-9_]+)["'`]/g)) {
+        seen.add(m[1]);
+      }
+    }
+    const known = new Set(RUN_PRODUCERS.map((p) => p.key));
+    const unlisted = [...seen].filter((k) => !known.has(k)).sort();
+    expect(
+      unlisted,
+      "these producers launch runs and the inventory does not name them",
+    ).toEqual([]);
   });
 
   it("routes every producer that is not explicitly owed", () => {

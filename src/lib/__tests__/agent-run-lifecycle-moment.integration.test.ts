@@ -27,6 +27,14 @@ import { Client } from "pg";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import { agentRunLifecycleMomentSchemaQueries } from "@/lib/agent-run-lifecycle-moment-schema";
+// THE REAL WRITER, and the real entries. This suite used to write the triple
+// with its own UPDATE, which proved the COLUMNS work and nothing about the
+// code: a production writer that had become a no-op would have passed it.
+import { recordRunLifecycleMoment } from "@cinatra-ai/agents/store";
+import {
+  advanceAgentRun,
+  onReviewedWorkChanged,
+} from "@cinatra-ai/agents/lifecycle-coordinator";
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB =
@@ -54,11 +62,46 @@ const ORG_ID = "org-x2928";
 
 let admin: Client;
 
+/**
+ * The write authority these calls carry.
+ *
+ * BUILT HERE, not minted. The mint helpers are named consumers behind the
+ * org-write boundary gate, and widening that allowlist for a test would trade a
+ * real perimeter for a convenience. The authority interface is what the kernel
+ * checks — an org and a capability answer — and the kernel then re-reads the
+ * organization itself, which is why this suite seeds a real one and why a
+ * missing org still refuses. Nothing here weakens the guard: the write goes
+ * through `guardedRunWrite` exactly as production does.
+ */
+function writeAuthority() {
+  return {
+    orgId: ORG_ID,
+    can: (capability: string) => capability === "run.execute",
+  } as unknown as Parameters<typeof recordRunLifecycleMoment>[1];
+}
+
 /** Run the bootstrap list exactly as a fresh server process's cold init does. */
 async function replayBootstrap(): Promise<void> {
   for (const stmt of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
     await admin.query(stmt.text);
   }
+}
+
+/**
+ * The organization the guarded writer re-reads.
+ *
+ * The write perimeter refuses an org it cannot find — correctly, and that is
+ * why this suite seeds a real one rather than mocking the guard away. The row
+ * lives in the Better Auth `public` schema, outside the throwaway app schema
+ * this tier builds and drops, so it is created idempotently and left alone.
+ */
+async function seedOrganization(): Promise<void> {
+  await admin.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt")
+     VALUES ($1, 'x2928', $1, now())
+     ON CONFLICT (id) DO NOTHING`,
+    [ORG_ID],
+  );
 }
 
 async function seedTemplate(): Promise<void> {
@@ -93,8 +136,27 @@ async function readTriple(id: string): Promise<Triple | null> {
   return (res.rows[0] ?? null) as Triple | null;
 }
 
-/** Write the triple the way the guarded writer does — the same SET clause. */
+/** Write the triple through the PRODUCTION writer, guarded exactly as it is. */
 async function writeTriple(
+  id: string,
+  moment: string | null,
+  cardKind: string | null,
+  cardRef: string | null,
+): Promise<void> {
+  await recordRunLifecycleMoment(
+    { runId: id, orgId: ORG_ID, moment, cardKind, cardRef },
+    writeAuthority(),
+  );
+}
+
+/**
+ * Put a moment on a row WITHOUT the writer.
+ *
+ * For the cases that are about the SCHEMA — a replay, a table that never had
+ * the columns — where routing through the writer would only add a second thing
+ * that could be the reason a case failed.
+ */
+async function seedTriple(
   id: string,
   moment: string | null,
   cardKind: string | null,
@@ -112,6 +174,7 @@ beforeAll(async () => {
   await admin.connect();
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
   await replayBootstrap();
+  await seedOrganization();
   await seedTemplate();
 }, 300_000);
 
@@ -179,7 +242,7 @@ describeDb("a stated moment survives a bootstrap replay", () => {
   it("keeps the triple a run already carries", async () => {
     await admin.query(`DELETE FROM ${RUNS}`);
     await seedRun("run-replay");
-    await writeTriple("run-replay", "hitl", "agent_hitl_screen", "gate-7");
+    await seedTriple("run-replay", "hitl", "agent_hitl_screen", "gate-7");
 
     // Exactly what a cold init does — the list runs again, whole.
     await replayBootstrap();
@@ -227,18 +290,60 @@ describeDb("the writer states and clears the triple together", () => {
     });
   });
 
-  it("clears all three together — no card kind survives the moment that is over", async () => {
+  it("clears all three together when the RELEASE ENTRY lets the run go", async () => {
+    // Driven through `advanceAgentRun` itself, not through a stand-in for it:
+    // the clear belongs to the coordinator, and what this case is about is that
+    // releasing a run really performs it.
     await admin.query(`DELETE FROM ${RUNS}`);
-    await seedRun("run-cleared");
+    await seedRun("run-cleared", "pending_input");
     await writeTriple("run-cleared", "schedule", "trigger_schedule_proposal", "sched-9");
 
-    // What `advanceAgentRun` does before it lets a run go.
-    await writeTriple("run-cleared", null, null, null);
+    const answer = await advanceAgentRun({
+      run: { id: "run-cleared", orgId: ORG_ID, status: "pending_input" },
+      release: {
+        reason: "continue",
+        from: "pending_input",
+        to: "queued",
+        dispatch: { kind: "caller_dispatches", why: "this suite is about the row, not the queue" },
+      },
+      authority: writeAuthority(),
+    });
 
+    expect(answer.moment).toBeNull();
     expect(await readTriple("run-cleared")).toEqual({
       lifecycle_moment: null,
       lifecycle_card_kind: null,
       lifecycle_card_ref: null,
+    });
+    const res = await admin.query(`SELECT status FROM ${RUNS} WHERE id = $1`, ["run-cleared"]);
+    expect(res.rows[0].status).toBe("queued");
+  });
+
+  it("does NOT clear a moment it did not release — a lost race states nothing", async () => {
+    // The clear waits on the CAS, and this is why. A release that arrives at a
+    // run somebody else already moved has released nothing; wiping the moment
+    // there would erase a record a concurrent writer had just made.
+    await admin.query(`DELETE FROM ${RUNS}`);
+    await seedRun("run-raced", "running");
+    await writeTriple("run-raced", "hitl", "agent_hitl_screen", "gate-raced");
+
+    const answer = await advanceAgentRun({
+      run: { id: "run-raced", orgId: ORG_ID, status: "pending_input" },
+      release: {
+        reason: "continue",
+        // The row is `running`, so this CAS cannot win.
+        from: "pending_input",
+        to: "queued",
+        dispatch: { kind: "caller_dispatches", why: "this suite is about the row, not the queue" },
+      },
+      authority: writeAuthority(),
+    });
+
+    expect(answer.status).toBe("running");
+    expect(await readTriple("run-raced")).toEqual({
+      lifecycle_moment: "hitl",
+      lifecycle_card_kind: "agent_hitl_screen",
+      lifecycle_card_ref: "gate-raced",
     });
   });
 
@@ -246,13 +351,24 @@ describeDb("the writer states and clears the triple together", () => {
     await admin.query(`DELETE FROM ${RUNS}`);
     await seedRun("run-audited", "running");
 
-    await writeTriple("run-audited", "audit", "verification_summary", "verification-3");
+    // Driven through the real entry, so "does not park" is measured on what the
+    // entry does rather than on what this suite chose to write.
+    const answer = await onReviewedWorkChanged({
+      run: { id: "run-audited", orgId: ORG_ID, status: "running" },
+      auditRef: "verification-3",
+      authority: writeAuthority(),
+    });
 
+    expect(answer.moment).toBe("audit");
     const res = await admin.query(`SELECT status FROM ${RUNS} WHERE id = $1`, ["run-audited"]);
     // UNCHANGED, and that is the invariant: four moments park the run, the audit
     // records and signals its reading and the run goes on.
     expect(res.rows[0].status).toBe("running");
-    expect((await readTriple("run-audited"))?.lifecycle_moment).toBe("audit");
+    expect(await readTriple("run-audited")).toEqual({
+      lifecycle_moment: "audit",
+      lifecycle_card_kind: "verification_summary",
+      lifecycle_card_ref: "verification-3",
+    });
   });
 
   it("the partial index really covers the read it exists for", async () => {

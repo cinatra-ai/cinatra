@@ -40,6 +40,12 @@ export const CREATE_ALLOWLIST = new Set([
   "packages/agents/src/store.ts",
   // The ONE caller: the lifecycle coordinator's launch entry.
   "packages/agents/src/lifecycle-coordinator.ts",
+  // The workspace barrel RE-EXPORTS the creators; it calls neither. Allowlisting
+  // it costs nothing, because a file that reaches a creator THROUGH the barrel
+  // is caught by the same import rule that catches a direct one — the specifier
+  // list below covers "@cinatra-ai/agents" as well as "./store", so the barrel
+  // is a pass-through and not a way around.
+  "packages/agents/src/index.ts",
   // Self-allowlist — this script names the banned call to ban it.
   "scripts/audit/run-creation-fence.mjs",
 ]);
@@ -81,6 +87,38 @@ export const OWED_BY_ADAPTER = Object.freeze({
     "cinatra#2929 (lifecycle-b W2b) — the worker-backed adapter that keeps the widget content-edit run's blocking reply and its timeout",
 });
 
+/**
+ * The two creator names, and every shape a file can reach one by.
+ *
+ * A CALL is the obvious shape and the easy one to miss things around. Three
+ * others reach the same function and used to walk straight past this gate:
+ *
+ *   · `store.createAgentRun(...)` — a namespace or object access, which the
+ *     call pattern's own left-boundary deliberately excludes so that the WORD
+ *     inside a longer identifier is not a hit;
+ *   · `import { createAgentRun as mint }` — an alias, after which no line in
+ *     the file names the creator at all;
+ *   · a call written across lines, whose `(` sits on the next line.
+ *
+ * So the gate reads the file's IMPORTS as well as its calls: naming a creator
+ * in an import is itself the violation, whatever the file goes on to do with
+ * it, and that closes the alias and the namespace at once. A namespace import
+ * of the store (`import * as store from "./store"`) is a hit for the same
+ * reason — it reaches every export without naming one.
+ */
+const CREATOR_NAMES = ["createAgentRun", "createAgentRunPendingInput"];
+
+/** `X.createAgentRun(` / `X.createAgentRunPendingInput(` — a member call. */
+const MEMBER_CALL = new RegExp(
+  String.raw`\.\s*(?:${CREATOR_NAMES.join("|")})\s*\(`,
+);
+
+/** The store modules a creator can be imported FROM. */
+const STORE_SPECIFIERS = [
+  /from\s+["'](?:\.{1,2}\/)*store["']/,
+  /from\s+["']@cinatra-ai\/agents(?:\/store)?["']/,
+];
+
 const BANNED = [
   {
     label: "createAgentRun(",
@@ -89,7 +127,39 @@ const BANNED = [
     remedy:
       "Every agent run is created through `launchAgentRun` in packages/agents/src/lifecycle-coordinator.ts — it derives presence, owns the create-parked ordering, and states the run's lifecycle moment.",
   },
+  {
+    label: "member call on a creator",
+    re: MEMBER_CALL,
+    allow: CREATE_ALLOWLIST,
+    remedy:
+      "A creator reached through a namespace or an object is still a run created outside `launchAgentRun`.",
+  },
 ];
+
+/**
+ * Every creator name this file IMPORTS, aliased or not, plus a namespace import
+ * of a store module. Returns the offending fragments, or an empty array.
+ */
+export function creatorImports(source) {
+  const hits = [];
+  // Import statements can span lines; join the file and scan the statements.
+  for (const m of source.matchAll(/import\s+([\s\S]*?)\s+from\s+["'][^"']+["']/g)) {
+    const statement = m[0];
+    if (!STORE_SPECIFIERS.some((re) => re.test(statement))) continue;
+    if (/^\s*import\s+type\b/.test(statement)) continue;
+    if (/import\s+\*\s+as\s+/.test(statement)) {
+      hits.push(statement.replace(/\s+/g, " ").trim());
+      continue;
+    }
+    for (const name of CREATOR_NAMES) {
+      if (new RegExp(String.raw`(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`).test(m[1])) {
+        hits.push(statement.replace(/\s+/g, " ").trim());
+        break;
+      }
+    }
+  }
+  return hits;
+}
 
 async function collectFiles() {
   const out = execSync('git ls-files "src/**/*.ts" "src/**/*.tsx" "packages/**/*.ts" "packages/**/*.tsx"', {
@@ -113,6 +183,25 @@ export async function scan(files, read) {
   const seenOwed = new Set();
   for (const rel of files) {
     const content = await read(rel);
+    // THE IMPORT PASS, ahead of the line pass. Naming a creator in an import is
+    // the violation on its own — that is what makes an alias unable to hide a
+    // call, and a namespace import unable to reach one without naming it.
+    if (!CREATE_ALLOWLIST.has(rel)) {
+      for (const statement of creatorImports(content)) {
+        if (rel in OWED_BY_ADAPTER) {
+          seenOwed.add(rel);
+          continue;
+        }
+        violations.push({
+          file: rel,
+          line: 1,
+          label: "creator import",
+          text: statement,
+          remedy:
+            "A file that imports a run creator can create a run. Import `launchAgentRun` from packages/agents/src/lifecycle-coordinator.ts instead.",
+        });
+      }
+    }
     const lines = content.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];

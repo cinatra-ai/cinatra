@@ -15,7 +15,7 @@ import {
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
-import { stateRunScheduleMoment } from "./lifecycle-coordinator";
+import { onAgentHitl, stateRunScheduleMoment } from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
   resolveWayflowUrl,
@@ -1571,15 +1571,30 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: (artifact) =>
-        writeDurableHitlGateArtifact({
+      persistArtifact: async (artifact) => {
+        await writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
           inputSchema: artifact.schema,
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
-        }),
+        });
+        // THE RUN STATES ITS MOMENT (cinatra#2928). The agent has paused to ask,
+        // and the durable gate artifact written just above IS the screen's
+        // server-checked reference — so the run records WHAT it is waiting at
+        // beside the row that says HOW. This is what lets
+        // `classifyRunWaitInterrupt` read the moment instead of recognizing a
+        // synthetic task-id prefix.
+        //
+        // AFTER the artifact, deliberately: a run that named a screen the
+        // durable row does not carry would point every host at nothing.
+        await onAgentHitl({
+          run: { id: runId, orgId: run.orgId, status: run.status },
+          screenRef: artifact.reviewTaskId,
+          authority: authority,
+        });
+      },
       parkRun: () =>
         transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
@@ -2550,15 +2565,30 @@ async function runAgentBuilderExecutionJobInner(
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: (artifact) =>
-        writeDurableHitlGateArtifact({
+      persistArtifact: async (artifact) => {
+        await writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
           inputSchema: artifact.schema,
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
-        }),
+        });
+        // THE RUN STATES ITS MOMENT (cinatra#2928). The agent has paused to ask,
+        // and the durable gate artifact written just above IS the screen's
+        // server-checked reference — so the run records WHAT it is waiting at
+        // beside the row that says HOW. This is what lets
+        // `classifyRunWaitInterrupt` read the moment instead of recognizing a
+        // synthetic task-id prefix.
+        //
+        // AFTER the artifact, deliberately: a run that named a screen the
+        // durable row does not carry would point every host at nothing.
+        await onAgentHitl({
+          run: { id: runId, orgId: run.orgId, status: run.status },
+          screenRef: artifact.reviewTaskId,
+          authority: executionAuthority,
+        });
+      },
       parkRun: () =>
         transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
@@ -2640,15 +2670,30 @@ async function runAgentBuilderExecutionJobInner(
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: (artifact) =>
-        writeDurableHitlGateArtifact({
+      persistArtifact: async (artifact) => {
+        await writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
           inputSchema: artifact.schema,
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
-        }),
+        });
+        // THE RUN STATES ITS MOMENT (cinatra#2928). The agent has paused to ask,
+        // and the durable gate artifact written just above IS the screen's
+        // server-checked reference — so the run records WHAT it is waiting at
+        // beside the row that says HOW. This is what lets
+        // `classifyRunWaitInterrupt` read the moment instead of recognizing a
+        // synthetic task-id prefix.
+        //
+        // AFTER the artifact, deliberately: a run that named a screen the
+        // durable row does not carry would point every host at nothing.
+        await onAgentHitl({
+          run: { id: runId, orgId: run.orgId, status: run.status },
+          screenRef: artifact.reviewTaskId,
+          authority: executionAuthority,
+        });
+      },
       parkRun: () =>
         transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;

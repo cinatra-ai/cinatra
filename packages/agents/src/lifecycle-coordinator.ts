@@ -189,6 +189,13 @@ export const RUN_PRODUCERS: readonly RunProducer[] = Object.freeze([
     what: "the repair run a rejected review sends back",
   },
   {
+    key: "release_now_recurring_copy",
+    module: "packages/agents/src/run-actions.ts",
+    routed: true,
+    tracking: null,
+    what: "Release now on a recurring schedule — one copy, started by a person instead of by the clock",
+  },
+  {
     key: "recurring_trigger_tick",
     module: "packages/agents/src/trigger-release-job.ts",
     routed: true,
@@ -266,7 +273,7 @@ export function verifiedHumanPresence(input: {
   frame: unknown;
   /** An interactive producer's own claim, itself derived from a live session. */
   interactive?: boolean;
-  /** The owner the run is being created FOR, when the caller resolved it. */
+  /** The owner the run ROW will carry. This is the owner that counts. */
   runBy?: string | null;
 }): boolean {
   const frame = (input.frame ?? {}) as LaunchFrame;
@@ -274,13 +281,23 @@ export function verifiedHumanPresence(input: {
     frame.delegatedRestricted === true || frame.launchOrigin === "chat";
   const interactive = fromChatSurface || input.interactive === true;
   if (!interactive) return false;
-  // THE SECOND HALF. A human owner the server resolved — from the frame's own
-  // principal, or from the owner the caller is creating the run for. Without
-  // one there is nobody the card could belong to.
+  // THE SECOND HALF, AND IT IS THE ROW'S OWNER — not the frame's principal.
+  //
+  // The frame's `userId` is who is CALLING; `runBy` is who the run will BELONG
+  // to, and it is the only one a card can be shown to later, long after the
+  // frame is gone. Accepting the frame's principal as the owner would readmit
+  // the very defect this function exists to close, one step further along: a
+  // run stamped human-present whose row carries no owner at all.
   const owner =
-    (typeof frame.userId === "string" && frame.userId.length > 0 ? frame.userId : null) ??
-    (typeof input.runBy === "string" && input.runBy.length > 0 ? input.runBy : null);
-  return owner !== null;
+    typeof input.runBy === "string" && input.runBy.length > 0 ? input.runBy : null;
+  if (owner === null) return false;
+  // AND THEY MUST BE THE SAME PERSON when the frame names one. A frame acting
+  // for somebody else is not a person sitting in front of this run: the card
+  // would be shown to the owner while the presence claim came from the caller.
+  if (typeof frame.userId === "string" && frame.userId.length > 0) {
+    return frame.userId === owner;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -301,8 +318,13 @@ export type ScheduleDefault =
  * schedule has no artifact type, destination or origin, so it is not a row in
  * the policy table and no organization rule governs it.
  *
- * Nothing this function returns ARMS anything. It answers what the screen would
- * offer; arming is Confirm, which is `launchAgentRun`.
+ * Nothing this function returns ARMS anything, and `launchAgentRun` does not
+ * call it. It answers what the SCREEN would offer, and the screen is W3's
+ * (cinatra#2930) — this slice changes no screen and parks no run that does not
+ * park today, so a launch that applied this default would be inventing a wait
+ * with no card to release it. What lives here is the DECISION, stated once and
+ * in the coordinator rather than as a row in the policy table; what consumes it
+ * is the slice that draws the card.
  */
 export function scheduleDefaultForLaunch(input: {
   humanPresent: boolean;
@@ -442,8 +464,6 @@ export type LaunchInput = {
   dispatch: LaunchDispatch;
   /** An interactive producer's own presence claim, derived from a live session. */
   interactive?: boolean;
-  /** A schedule the person already stated, if any. */
-  statedSchedule?: unknown;
   /** Needed only when a hold may apply — i.e. when a human may be present. */
   template?: Pick<AgentTemplateRecord, "packageName"> & { lifecycleConfig?: string | null };
   /** A headless producer that mints its own authority hands it in here. */
@@ -671,6 +691,28 @@ export async function launchAgentRun(input: LaunchInput): Promise<CoordinatorAns
 }
 
 /**
+ * Clear whatever moment a run states, for a release that is not `advanceAgentRun`.
+ *
+ * ONE EXISTS, and it is named rather than left implicit: the immediate-trigger
+ * arm of `setRunTriggerForActor` releases a run parked at `pending_trigger` with
+ * a CAS ladder of its own, wound together with a trigger row it may have to
+ * unwind. Calling `advanceAgentRun` there would mean either duplicating that
+ * unwind inside the coordinator or losing it — so that path keeps its own CAS
+ * and borrows only the clear.
+ *
+ * Best-effort, on the same contract as every other lifecycle record: a failure
+ * is logged and the run still goes.
+ */
+export async function clearRunLifecycleMoment(
+  runId: string,
+  authority: OrgWriteAuthority | undefined,
+): Promise<void> {
+  const run = await readAgentRunById(runId);
+  if (!run) return;
+  await stateMoment({ run, moment: null, authority });
+}
+
+/**
  * State the SCHEDULE moment on a run that has just parked at the schedule step.
  *
  * NOT A SIXTH ENTRY — the five entries are the lifecycle ACTS, and this is the
@@ -737,19 +779,24 @@ export type AdvanceInput = {
 /**
  * Release a parked run.
  *
- * The moment is CLEARED before the run moves, not after: a row that is running
- * again while still stating a moment is a card every host would keep mounting.
+ * THE CAS COMES FIRST, AND THE CLEAR FOLLOWS IT. The clear used to run ahead of
+ * the transition, which reads better and is wrong: a call that then LOSES the
+ * CAS has already wiped a moment it does not own, and the writer that really
+ * released the run — or a writer that parked it at a different moment in the
+ * window — finds its own record gone. Winning the CAS is the only proof that
+ * this call is the one releasing this run, so it is what the clear waits for.
+ *
+ * The residual runs the other way and is the small one: between the transition
+ * and the clear the row is released while still naming a moment. A host that
+ * mounts in that window re-reads the run's state server-side on mount and finds
+ * a run that is no longer waiting — which is the same answer it gets for any
+ * card whose moment has just ended.
+ *
  * All three columns go null together — a card kind left behind by a moment that
  * is over is the same defect in a quieter form.
- *
- * The CAS is the authority on whether this call released anything. Losing it
- * means another writer already did, and this call then reports the state it
- * re-read rather than the one it wanted.
  */
 export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorAnswer> {
   const { run, release, authority } = input;
-
-  await stateMoment({ run, moment: null, authority });
 
   try {
     await transitionRunStatus(run.id, release.from, release.to, undefined, authority);
@@ -763,6 +810,8 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
       if (!current) {
         throw new Error(`Run ${run.id} lost the release race and no longer reads back.`);
       }
+      // NOT CLEARED. This call released nothing, so it states nothing about
+      // what the run is waiting at.
       return {
         carrier: { kind: "run", run: current },
         status: current.status,
@@ -772,12 +821,77 @@ export async function advanceAgentRun(input: AdvanceInput): Promise<CoordinatorA
     throw err;
   }
 
+  // WON. The run is ours to have released, so the moment it was waiting at is
+  // over. Best-effort by the same contract as every other lifecycle record: a
+  // failure is logged loudly and the run still goes, because a bookkeeping
+  // write must never strand a released run.
+  await stateMoment({ run, moment: null, authority });
+
   if (release.dispatch.kind === "enqueue") {
     const options = release.dispatch.options;
-    await enqueueAgentRun(
-      { runId: run.id },
-      typeof options === "function" ? options(run as AgentRunRecord) : options,
-    );
+    try {
+      await enqueueAgentRun(
+        { runId: run.id },
+        typeof options === "function" ? options(run as AgentRunRecord) : options,
+      );
+    } catch (enqueueErr) {
+      // THE SAME LADDER `launchAgentRun` CLIMBS, and for the same reason: a run
+      // sitting in the released status with no job behind it is the one state
+      // nothing recovers on its own. No worker picks it up, and no surface
+      // offers a person a way to move it.
+      //
+      // Back to the state it was parked at — decidable again, and the person
+      // can retry — failing that to `failed` with the reason, which is terminal
+      // and visible and which every surface already renders. Failing both, the
+      // throw NAMES the run as stranded instead of reporting only the enqueue
+      // failure that started it.
+      //
+      // Reverting is safe even when the enqueue error was ambiguous: exactly-once
+      // dispatch rests on the RUN ROW, not on the queue — the worker skips a run
+      // that is not `queued`, and the work sits behind a `queued → running` CAS.
+      // The residual is the benign direction: a dispatch that succeeded but
+      // reported ambiguously is compensated away and the run waits to be
+      // retried. A lost dispatch on a visible run, never a duplicate one.
+      let recovered: string | null = null;
+      try {
+        await transitionRunStatus(run.id, release.to, release.from, undefined, authority);
+        recovered = release.from;
+      } catch (revertErr) {
+        console.error(
+          "[lifecycle-coordinator] release compensation revert failed for run",
+          run.id,
+          revertErr,
+        );
+        try {
+          await transitionRunStatus(
+            run.id,
+            release.to,
+            "failed",
+            {
+              error: `Dispatch failed and the run could not be returned to its waiting state: ${
+                enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)
+              }`,
+            },
+            authority,
+          );
+          recovered = "failed";
+        } catch (failErr) {
+          console.error(
+            "[lifecycle-coordinator] could not land run in any terminal state after a failed release enqueue",
+            run.id,
+            failErr,
+          );
+        }
+      }
+      if (recovered === null) {
+        throw new Error(
+          `Run ${run.id} is STRANDED: its release dispatched nothing, it could not be returned to its waiting state, and it could not be failed. Original dispatch error: ${
+            enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)
+          }`,
+        );
+      }
+      throw enqueueErr;
+    }
   }
 
   const released = await readAgentRunById(run.id);
@@ -844,9 +958,11 @@ export type ProducedInput = {
  * An artifact write was recorded.
  *
  * A REVIEW EXISTS ONLY FOR ARTIFACT-BOUND WORK. An agent whose outputs are bound
- * to no artifact never reaches a review, so this entry records nothing for one —
- * `reviewOpened: false` leaves the run at no moment, which is the truthful
- * reading.
+ * to no artifact never reaches a review, so this entry records NOTHING for one:
+ * `reviewOpened: false` writes no moment and — deliberately — clears none
+ * either. A write that produced no review is not evidence about whatever else
+ * the run may be waiting at, and clearing a moment this entry did not set would
+ * take a card off a host on the strength of an unrelated event.
  *
  * THE REVIEW CORE ITSELF IS W2b's (cinatra#2929): one core with two inputs, the
  * declared targets and the typed output confirmed by the write. This entry is

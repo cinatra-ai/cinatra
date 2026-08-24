@@ -195,6 +195,73 @@ describe("release now on a RECURRING schedule", () => {
   });
 });
 
+describe("a copy whose dispatch fails is never left queued with no job", () => {
+  beforeEach(() => {
+    readRunTriggerByRunId.mockResolvedValue({
+      runId: RUN_ID,
+      triggerType: "recurring",
+      cronExpression: "0 9 * * *",
+      timezone: "UTC",
+      enabled: true,
+      releasedAt: null,
+      jobSchedulerId: "sched-2928",
+    });
+  });
+
+  it("returns the copy to its waiting state — the person can retry it", async () => {
+    // THE STATE NOTHING RECOVERS ON ITS OWN. The copy has already been created,
+    // armed and had its gate opened by the time the enqueue runs; a Redis or
+    // preflight failure there would otherwise leave a `queued` row no worker
+    // picks up and no surface offers a way to move.
+    enqueueAgentRun.mockRejectedValueOnce(new Error("redis is down"));
+
+    await expect(releaseTriggerNow({ runId: RUN_ID })).rejects.toThrow(/redis is down/);
+
+    // Reverted to the state it was parked at, not left `queued`.
+    expect(transitionRunStatus).toHaveBeenCalledWith(
+      COPY_ID,
+      "queued",
+      "pending_input",
+      undefined,
+      expect.anything(),
+    );
+    // …and the schedule is STILL not frozen: nothing touched the defining run.
+    for (const call of transitionRunStatus.mock.calls) {
+      expect(call[0]).toBe(COPY_ID);
+    }
+  });
+
+  it("fails the copy visibly when it cannot be returned to its waiting state", async () => {
+    // The second rung. A terminal, visible run beats a phantom queued one, and
+    // every surface already renders a failed run.
+    enqueueAgentRun.mockRejectedValueOnce(new Error("redis is down"));
+    transitionRunStatus.mockImplementation(async (_id: string, from: string, to: string) => {
+      if (from === "queued" && to === "pending_input") {
+        throw new Error("the revert failed too");
+      }
+    });
+
+    await expect(releaseTriggerNow({ runId: RUN_ID })).rejects.toThrow(/redis is down/);
+
+    expect(transitionRunStatus).toHaveBeenCalledWith(
+      COPY_ID,
+      "queued",
+      "failed",
+      expect.objectContaining({ error: expect.stringContaining("Dispatch failed") }),
+      expect.anything(),
+    );
+  });
+
+  it("NAMES the run as stranded when it can be landed in no honest state at all", async () => {
+    enqueueAgentRun.mockRejectedValueOnce(new Error("redis is down"));
+    transitionRunStatus.mockImplementation(async (_id: string, from: string) => {
+      if (from === "queued") throw new Error("every recovery write failed");
+    });
+
+    await expect(releaseTriggerNow({ runId: RUN_ID })).rejects.toThrow(/STRANDED/);
+  });
+});
+
 describe("release now on a ONE-OFF schedule is unchanged", () => {
   beforeEach(() => {
     readRunTriggerByRunId.mockResolvedValue({

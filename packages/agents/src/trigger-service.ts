@@ -27,6 +27,7 @@ import { scheduleTrigger, cancelTriggerSchedule } from "./trigger-schedule";
 // immediate-trigger transition is a run-START dispatch and must consult the same
 // hold every other interactive run-start does.
 import { maybeHoldRunForRecommendation } from "./recommendation-hold";
+import { clearRunLifecycleMoment } from "./lifecycle-coordinator";
 import {
   transitionRunStatus,
   RunTransitionError,
@@ -358,6 +359,17 @@ async function dispatchImmediateNow(
         actingUserId: actor.userId,
       });
       transitionedFrom = from;
+      // THE MOMENT IS OVER (cinatra#2928). This is the OTHER Continue: choosing
+      // "run right after setup" on the schedule screen releases a run parked at
+      // `pending_trigger` exactly as the run page's Continue does, so it has to
+      // clear what the run says it is waiting at. Without this a run could begin
+      // executing while still stating the schedule moment, and every host would
+      // keep mounting that card.
+      //
+      // AFTER the winning CAS, for the same reason `advanceAgentRun` clears
+      // there: winning is the only proof this call is the one releasing the run.
+      // Best-effort — a lifecycle record must never strand a released run.
+      await clearRunLifecycleMoment(runId, authority);
       break;
     } catch (err) {
       // cinatra#2485 C — a SCOPE DENIAL from the `→queued` guard is a decision,
@@ -614,6 +626,21 @@ export async function setRunTriggerForActor(
   // FIRED is read off the trigger's OWN record — `releasedAt`, the stamp the
   // release job writes when it opens the gate — never off the run's status,
   // which moves on for reasons that have nothing to do with the schedule.
+  //
+  // WHAT THIS COVERS, precisely: every caller of THIS function — the run page's
+  // schedule form, the server action behind it, and the tool path — which is
+  // every way a trigger's WHEN can be rewritten. Deleting a spent trigger row
+  // is a different act and is deliberately not refused here: clearing a
+  // schedule that has already run is tidying, not a claim about a past moment.
+  //
+  // THE WINDOW IS REAL AND IT IS NOT CLOSED HERE. A one-off can fire between
+  // this read and the cancel/upsert below, exactly as it can between the
+  // terminal-run gate (cinatra#2482) and the in-flight gate (cinatra#2523) that
+  // stand above it — this function holds no lock on the trigger row and takes
+  // none. Closing it needs a conditional write (`released_at IS NULL`) or a row
+  // lock, which reshapes the trigger service rather than adding a refusal to
+  // it. What this guard removes is the ordinary case: a person changing a
+  // schedule they can see has already run.
   //
   // A RECURRING schedule is deliberately NOT refused: its future ticks are still
   // ahead of it, and a change applies to them. Ticks already fired are separate

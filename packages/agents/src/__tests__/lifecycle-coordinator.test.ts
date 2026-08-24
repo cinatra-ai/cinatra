@@ -32,16 +32,19 @@ import {
 } from "../lifecycle-coordinator";
 
 describe("verified human presence", () => {
-  it("is TRUE for a delegated chat frame carrying its principal", () => {
+  it("is TRUE for a delegated chat frame whose run will belong to that person", () => {
     expect(
-      verifiedHumanPresence({ frame: { delegatedRestricted: true, userId: "user-1" } }),
+      verifiedHumanPresence({
+        frame: { delegatedRestricted: true, userId: "user-1" },
+        runBy: "user-1",
+      }),
     ).toBe(true);
   });
 
-  it("is TRUE for the in-process pre-router's stamp with a human principal", () => {
-    expect(verifiedHumanPresence({ frame: { launchOrigin: "chat", userId: "user-1" } })).toBe(
-      true,
-    );
+  it("is TRUE for the in-process pre-router's stamp with a human owner", () => {
+    expect(
+      verifiedHumanPresence({ frame: { launchOrigin: "chat", userId: "user-1" }, runBy: "user-1" }),
+    ).toBe(true);
   });
 
   it("cinatra#2892: is FALSE for a chat-surface frame with NO resolvable owner", () => {
@@ -54,28 +57,83 @@ describe("verified human presence", () => {
     expect(verifiedHumanPresence({ frame: { launchOrigin: "chat", userId: "" } })).toBe(false);
   });
 
+  it("the owner that counts is the ROW's, not the frame's", () => {
+    // A verified frame naming a live principal is NOT the same thing as a run
+    // that will belong to somebody. The frame is who is CALLING; `runBy` is who
+    // the row will carry, and it is the only one a card can be shown to later,
+    // long after the frame is gone. Accepting the caller as the owner would
+    // readmit cinatra#2892 one step further along: a human-present run whose
+    // row is unowned.
+    expect(
+      verifiedHumanPresence({ frame: { launchOrigin: "chat", userId: "user-1" }, runBy: "user-1" }),
+    ).toBe(true);
+    expect(verifiedHumanPresence({ frame: { launchOrigin: "chat", userId: "user-1" } })).toBe(
+      false,
+    );
+    expect(
+      verifiedHumanPresence({ frame: { launchOrigin: "chat", userId: "user-1" }, runBy: null }),
+    ).toBe(false);
+    expect(
+      verifiedHumanPresence({ frame: { launchOrigin: "chat", userId: "user-1" }, runBy: "" }),
+    ).toBe(false);
+  });
+
+  it("refuses a frame acting for SOMEBODY ELSE", () => {
+    // Not a person sitting in front of this run: the card would be shown to the
+    // owner while the presence claim came from a different caller.
+    expect(
+      verifiedHumanPresence({
+        frame: { launchOrigin: "chat", userId: "user-1" },
+        runBy: "user-2",
+      }),
+    ).toBe(false);
+    // …and agrees when they are the same person.
+    expect(
+      verifiedHumanPresence({
+        frame: { launchOrigin: "chat", userId: "user-1" },
+        runBy: "user-1",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts an interactive producer's own claim, but still needs the owner", () => {
     expect(verifiedHumanPresence({ frame: null, interactive: true, runBy: "user-1" })).toBe(true);
     expect(verifiedHumanPresence({ frame: null, interactive: true })).toBe(false);
     expect(verifiedHumanPresence({ frame: null, interactive: true, runBy: null })).toBe(false);
+    // An interactive producer that also names its principal is held to the same
+    // agreement rule.
+    expect(
+      verifiedHumanPresence({
+        frame: { userId: "user-1" },
+        interactive: true,
+        runBy: "user-2",
+      }),
+    ).toBe(false);
   });
 
   it("is FALSE for every headless origin", () => {
     expect(verifiedHumanPresence({ frame: null })).toBe(false);
     expect(verifiedHumanPresence({ frame: undefined })).toBe(false);
     expect(verifiedHumanPresence({ frame: {}, runBy: "user-1" })).toBe(false);
-    // A run created FOR a person by a scheduler is still nobody-present.
+    // A run created FOR a person by a scheduler is still nobody-present: the
+    // recurring tick copies the owner, and nobody is watching.
     expect(verifiedHumanPresence({ frame: { userId: "user-1" }, runBy: "user-1" })).toBe(false);
   });
 
   it("cannot be widened by a truthy-but-wrong value", () => {
     for (const wrong of ["true", 1, {}, [], "chatty"]) {
       expect(
-        verifiedHumanPresence({ frame: { delegatedRestricted: wrong, userId: "user-1" } }),
+        verifiedHumanPresence({
+          frame: { delegatedRestricted: wrong, userId: "user-1" },
+          runBy: "user-1",
+        }),
         String(wrong),
       ).toBe(false);
       expect(
-        verifiedHumanPresence({ frame: { launchOrigin: wrong, userId: "user-1" } }),
+        verifiedHumanPresence({
+          frame: { launchOrigin: wrong, userId: "user-1" },
+          runBy: "user-1",
+        }),
         String(wrong),
       ).toBe(false);
     }

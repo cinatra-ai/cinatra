@@ -31,6 +31,7 @@ const TEMPLATE = "tmpl-2928-confirm";
 const RUN_ID = "run-2928-confirmed";
 
 const launchAgentRun = vi.fn();
+const spendProposalWithinTx = vi.fn(async (..._a: unknown[]): Promise<void> => {});
 const verifyTriggerScheduleProposalToken = vi.fn();
 const readProposalConsume = vi.fn();
 const readAgentTemplateById = vi.fn();
@@ -49,7 +50,7 @@ vi.mock("../trigger-schedule-proposal-store", () => ({
   ProposalAlreadyConsumedError: class ProposalAlreadyConsumedError extends Error {},
   readProposalConsume: (...a: unknown[]) => readProposalConsume(...a),
   readInstallIntent: vi.fn(async () => null),
-  spendProposalWithinTx: vi.fn(async () => undefined),
+  spendProposalWithinTx: (...a: unknown[]) => spendProposalWithinTx(...a),
   claimPendingInstallIntents: vi.fn(async () => []),
   markInstallIntentArmed: vi.fn(async () => undefined),
   markInstallIntentDone: vi.fn(async () => undefined),
@@ -148,6 +149,28 @@ describe("Confirm is LAUNCH, not advance", () => {
     // together — so the launch has to carry the companion write through
     // untouched. Routing that dropped it would leave a second Confirm able to
     // create a second run.
+    //
+    // THE HOOK IS CALLED, not merely inspected. Asserting that the field holds
+    // a function proves nothing about what the function does: a routing that
+    // handed over an empty closure would satisfy that and lose the consume
+    // edge. So this launch RUNS the hook, exactly as the creator's guarded
+    // transaction does, and reads what it wrote.
+    launchAgentRun.mockImplementation(
+      async (input: {
+        create: { input: { withinCreateTx?: (tx: unknown, run: { id: string; orgId: string }) => Promise<void> } };
+      }) => {
+        await input.create.input.withinCreateTx?.(
+          { fakeTx: true },
+          { id: RUN_ID, orgId: ORG },
+        );
+        return {
+          carrier: { kind: "run", run: { id: RUN_ID, orgId: ORG, status: "pending_input" } },
+          status: "pending_input",
+          moment: null,
+        };
+      },
+    );
+
     await confirmTriggerScheduleProposal(actor, "held-token");
 
     const call = launchAgentRun.mock.calls[0][0] as {
@@ -159,6 +182,41 @@ describe("Confirm is LAUNCH, not advance", () => {
       runBy: USER,
       orgId: ORG,
     });
+    // …and the hook spent the proposal against the run the launch created,
+    // inside the transaction it was handed.
+    expect(spendProposalWithinTx).toHaveBeenCalledTimes(1);
+    expect(spendProposalWithinTx).toHaveBeenCalledWith(
+      { fakeTx: true },
+      expect.objectContaining({
+        consumeKey: "consume:nonce-2928",
+        runId: RUN_ID,
+        orgId: ORG,
+        templateId: TEMPLATE,
+        consumedBy: USER,
+        install: expect.objectContaining({ triggerType: "scheduled" }),
+      }),
+    );
+  });
+
+  it("rolls the run back with the companion write — a lost consume creates no run", async () => {
+    // The other half of "together". If the consume insert loses its race, the
+    // run it was creating must go with it. The creator's transaction is what
+    // performs that; what this asserts is that Confirm lets the failure OUT of
+    // the launch instead of swallowing it and reporting a run.
+    launchAgentRun.mockImplementation(
+      async (input: {
+        create: { input: { withinCreateTx?: (tx: unknown, run: { id: string; orgId: string }) => Promise<void> } };
+      }) => {
+        // The guarded transaction calls the hook and unwinds on a throw.
+        await input.create.input.withinCreateTx?.({ fakeTx: true }, { id: RUN_ID, orgId: ORG });
+        throw new Error("rolled back with the companion write");
+      },
+    );
+    spendProposalWithinTx.mockRejectedValueOnce(new Error("consume lost the race"));
+
+    const result = await confirmTriggerScheduleProposal(actor, "held-token");
+
+    expect(result.ok).toBe(false);
   });
 
   it("does NOT dispatch the run — the schedule decides when it starts", async () => {
