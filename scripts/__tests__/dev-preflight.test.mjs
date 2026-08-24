@@ -288,12 +288,13 @@ describe("classifyServiceUrl", () => {
   // surface may say about it: does the value name an address, or does it not?
   //
   // `theirs` and `unusable` are both stood down and are NOT interchangeable in
-  // speech. A `theirs` row any local surface speaks about has an address the URL
+  // speech. A `theirs` row the LAUNCHER speaks about has an address the URL
   // itself states, so "not reachable yet at <address>" is a fact about it. (The
   // one `theirs` shape carrying a fallback port is an unknown scheme on a REMOTE
-  // host, which no local surface prints, because it is never probed: see
-  // "condemns an unknown scheme only where an address would be invented for it"
-  // below.) An `unusable` row has none,
+  // host. The launcher never speaks about it, since it probes loopback rows
+  // only; `check-services.mjs` has no such guard and does print it, which is
+  // pre-existing. See "condemns an unknown scheme only where an address would be
+  // invented for it" below.) An `unusable` row has none,
   // and every address a local surface could print for it comes from
   // `parseHostPort`'s FALLBACK — which is how `REDIS_URL=not a url` was reported
   // as "not reachable yet at 127.0.0.1:6379", an address the app never uses.

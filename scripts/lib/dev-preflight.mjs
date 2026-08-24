@@ -646,24 +646,30 @@ function statedUrlDefect(raw) {
  *     publishes, and it is the lane's own claim.
  *   - `theirs` — a URL this module can resolve an address FROM, and one this
  *     checkout does not publish: a remote host, or a loopback host with no port
- *     stated (which resolves to the scheme default). Wherever a LOCAL surface
- *     will speak about the row, that address is the URL's own rather than a
+ *     stated (which resolves to the scheme default). For every shape the
+ *     LAUNCHER speaks about, that address is the URL's own rather than a
  *     fallback, and that is the only claim made about it: whether the service's
  *     client can speak that scheme is a different question. The one `theirs`
  *     shape whose port IS a fallback is an unknown scheme on a REMOTE host
  *     (`redsi://cache.example.com/0`, which `parseHostPort` resolves to the
- *     bundled port). No surface here ever prints that address, because a remote
- *     row is never probed, and that is exactly why `no-known-port` condemns the
- *     LOOPBACK half of the shape and leaves this one alone. Either way the
- *     service is not one this checkout publishes, so the preflight must neither
- *     claim a host port for it nor start a local copy of it.
+ *     bundled port). The launcher never speaks about that row, because it
+ *     probes loopback rows only (the `isLoopbackHost` guard in
+ *     `scripts/dev-server.mjs`). `scripts/check-services.mjs` has NO such guard:
+ *     it probes and prints `host:port` for every row, so it does show that
+ *     fallback port beside a remote host. That is pre-existing behaviour on the
+ *     reporting surface and is untouched here. It is also why `no-known-port`
+ *     condemns only the LOOPBACK half of the shape: there the invented address
+ *     is local, and it gets probed, reported AND remedied as though the
+ *     operator had stated it. Either way the service is not one this checkout
+ *     publishes, so the preflight must neither claim a host port for it nor
+ *     start a local copy of it.
  *   - `unusable` — stated, and names no address at all (see `statedUrlDefect`).
  *
  * `unusable` IS A DISTINCT STATE AND NOT A FLAVOUR OF `theirs` (cinatra#2839,
  * round-4 finding). Both are stood down, so the PLAN treats them identically —
  * neither is this checkout's to publish. What they may be SAID about is not
- * identical: a `theirs` row any local surface speaks about has an address its
- * own URL states, so "not reachable yet at <address>" is a fact about that
+ * identical: a `theirs` row the launcher speaks about has an address its own
+ * URL states, so "not reachable yet at <address>" is a fact about that
  * address, while `unusable` has none, and the
  * address a caller would otherwise print for it is one `parseHostPort` invented
  * as a fallback. Filing both as `theirs` is what let the launcher tell an
