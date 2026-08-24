@@ -61,6 +61,7 @@ import { ScheduleRailStepRow, ScheduleStepSurface } from "./schedule-rail-step";
 // §V's card at its plan-designated rail position (cinatra#2790, epic #2784 S9f):
 // the recommendation is the run's FIRST step, and the two-column frame both
 // steps stand in.
+import { recommendationRailEntry } from "./recommendation-rail-entry";
 import { RecommendationRailStepRow } from "./recommendation-rail-step";
 import {
   RunSurfaceRail,
@@ -781,13 +782,28 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     stepperStepCount: stepperSteps.length,
   });
 
-  // Does the SCREEN own the recommendation card on this branch? The step is
-  // drawn only where its surface is: on the `agentic` branch the panel inside
-  // the run detail mounts the card itself (`screenHostsRecommendationCard`), and
-  // a row opening onto a card another module draws would be a second mount of
-  // the one renderer.
+  // Does the SCREEN own the recommendation card on this branch? On the
+  // `agentic` branch the panel inside the run detail mounts the card itself
+  // (`screenHostsRecommendationCard`), and a step opening onto a card another
+  // module draws would be a second mount of the one renderer.
   const hostsRecommendationCard = screenHostsRecommendationCard(runDetailPanel);
-  const hasRecommendationStep = recommendationPark !== null && hostsRecommendationCard;
+
+  // IS THERE AN ENTRY, AND HOW DOES IT READ? That is not the same question as
+  // "who draws the card" (cinatra#2790, S9f — R6). The ratified run-surface
+  // drawing: "A resolved gate stays on the rail as read-only history — its entry
+  // keeps its place and records how it was settled." Tying the ENTRY to the host
+  // gate made a decided run lose it on this branch — a decided run has been
+  // dispatched, so it is no longer `pending_input`, the panel takes the card
+  // over, and the row vanished from the rail with the whole frame behind it. A
+  // history row does not need a surface of its own to justify its place, so the
+  // settled entry survives every branch — on THIS one by opening nothing, and on
+  // the branch this screen hosts by opening the same read-only card as before.
+  const recommendationEntry = recommendationRailEntry({
+    hasPark: recommendationPark !== null,
+    held: recommendationHeld,
+    hostsCard: hostsRecommendationCard,
+  });
+  const hasRecommendationStep = recommendationEntry !== "none";
 
   // Has the agent run at all? A gate step is the run detail's first paint while
   // it has not (cinatra#2788, S9d; cinatra#2790, S9f) — there is no progress to
@@ -870,7 +886,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   row: (
                     <RecommendationRailStepRow
                       displayStep={railSteps.length + 1}
-                      settled={!recommendationHeld}
+                      settled={recommendationEntry === "settled"}
                     />
                   ),
                   // THE SAME MOUNT the run detail draws below — not a second
@@ -879,6 +895,14 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   // handed over BARE: the card is the whole surface of this step
                   // (§V — "the row is the whole card"), and a wrapper would be a
                   // new anchor on a surface whose closed set is ratified.
+                  //
+                  // It is NULL on the branch whose panel draws the card —
+                  // there `recommendationCardNode` is null because this screen
+                  // mounts no card at all — so that step opens nothing, the run
+                  // detail stays as this screen composed it, and the decided
+                  // summary the row stands for is the one already in that panel
+                  // (`RunSurfaceRailStep.surface`). On every other branch this
+                  // IS the surface, settled or live alike.
                   surface: recommendationCardNode,
                 });
               }

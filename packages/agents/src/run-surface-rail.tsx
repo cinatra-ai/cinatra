@@ -52,7 +52,25 @@ export type RunSurfaceRailStep = {
   key: Exclude<RunStepSelection, "detail">;
   /** The rail ROW. Drawn inside the rail column, above the page's own rows. */
   row: ReactNode;
-  /** The step's own surface, drawn in the run detail while this step is open. */
+  /**
+   * The step's own surface, drawn in the run detail while this step is open.
+   *
+   * NULLISH (`null` or `undefined`) means this step HAS no surface of its own,
+   * and the run detail stays as the page composed it. `ReactNode` already admits
+   * both, which is why the sentinel is stated as nullish rather than narrowed to
+   * `null` — a narrower type here would be a claim the type system does not make.
+   *
+   * That is the settled recommendation on the branch whose panel draws the card
+   * (cinatra#2790, S9f): the entry keeps its place on the rail as read-only
+   * history, and the reading it would open onto is already inside the run detail
+   * beside it. Handing it the card a second time would be a second mount of the
+   * one renderer; handing it nothing is exactly right, and is why the run detail
+   * FALLS BACK rather than emptying — without that fallback a row resolving to
+   * what is already on screen would blank the column instead.
+   *
+   * Every OTHER step supplies a real surface, including the settled
+   * recommendation on the branch the screen hosts.
+   */
   surface: ReactNode;
 };
 
@@ -162,7 +180,12 @@ export function RunSurfaceRail({
         data-run-detail-column=""
         className="flex min-w-0 flex-1 flex-col gap-4"
       >
-        {open ? open.surface : detail}
+        {/* A step with no surface of its own keeps the run detail — see
+            `RunSurfaceRailStep.surface`. `??` and not a truth test: a surface is
+            a ReactNode, and a FALSY one that exists — `false`, `0`, `""` — is
+            still the step's own and must not fall back. Nullish is the sentinel,
+            which is what `??` tests and `ReactNode` admits. */}
+        {open?.surface ?? detail}
       </div>
     </RunStepSelectionContext.Provider>
   );

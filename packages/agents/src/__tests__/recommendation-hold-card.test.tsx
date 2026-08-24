@@ -949,10 +949,12 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     // `instance-screens-recommendation-host.test.ts`).
     expect(instanceScreens).toMatch(/<RecommendationHoldCard/);
     expect(instanceScreens).toMatch(/host="run_card"/);
-    // The gate is NAMED once since cinatra#2790 (S9f), because the same answer
-    // decides two things: whether this screen mounts the card, and whether the
-    // rail carries the recommendation STEP that opens onto it. A step whose
-    // surface another module draws would be a second mount.
+    // The gate is NAMED once since cinatra#2790 (S9f) because a second reader
+    // depends on it: it decides the rail step's SURFACE — a step whose surface
+    // another module draws would be a second mount, so on that branch the step
+    // is handed none. It does NOT decide whether the entry EXISTS: a settled
+    // entry keeps its place on every branch, because a history row needs no
+    // surface to justify it (`recommendationRailEntry`).
     expect(instanceScreens).toMatch(
       /const hostsRecommendationCard = screenHostsRecommendationCard\(runDetailPanel\);/,
     );

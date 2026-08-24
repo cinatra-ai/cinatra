@@ -69,6 +69,7 @@ import {
   type RunStepSelection,
   type RunSurfaceRailStep,
 } from "../run-surface-rail";
+import { recommendationRailEntry } from "../recommendation-rail-entry";
 
 const HELD: HoldState = {
   state: "held",
@@ -297,6 +298,141 @@ describe("a DECIDED hold — the settled reading in the rail, the run detail res
     await waitFor(() =>
       expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
     );
+  });
+});
+
+/**
+ * THE BRANCH WHOSE PANEL DRAWS THE CARD (cinatra#2790, S9f — R6).
+ *
+ * `AgenticRunPanel` declares `run_card` and mounts the one card itself, so the
+ * screen hosts none (`screenHostsRecommendationCard("agentic") === false`, pinned
+ * in `instance-screens-recommendation-step.test.ts` together with the run
+ * statuses that reach this branch). Whether the rail still carries the entry is
+ * `recommendationRailEntry`'s answer — the screen's own — so what this renders is
+ * what the run page renders. The step gets NO surface of its own here: the
+ * settled card is already inside the panel, which is the frame's "this step
+ * keeps the run detail" case.
+ */
+function panelHostedSurface(opts: { hasPark: boolean; held: boolean }) {
+  const hostsCard = false;
+  const entry = recommendationRailEntry({
+    hasPark: opts.hasPark,
+    held: opts.held,
+    hostsCard,
+  });
+  const detail = (
+    <section data-testid="run-detail-panel">
+      <h2>Agentic Run Progress</h2>
+      <LifecycleCardSurfaceProvider host="run_card">
+        <RecommendationHoldCard
+          runId="run-2790"
+          agentPackageName="@cinatra-test/rail-fixture-agent"
+          wireRef={null}
+        />
+      </LifecycleCardSurfaceProvider>
+    </section>
+  );
+  const steps: RunSurfaceRailStep[] = [];
+  if (entry !== "none") {
+    steps.push({
+      key: "recommendation",
+      row: (
+        <RecommendationRailStepRow displayStep={steps.length + 1} settled={entry === "settled"} />
+      ),
+      surface: null,
+    });
+  }
+  return (
+    <div
+      className="flex items-start gap-6"
+      data-run-detail-contract=""
+      data-conformance-id="run-surface"
+    >
+      <RunSurfaceRail
+        steps={steps}
+        rail={<ReviewRow />}
+        detail={detail}
+        initialSelection="detail"
+      />
+    </div>
+  );
+}
+
+describe("a DECIDED hold on the branch whose PANEL draws the card — R6", () => {
+  it("keeps the settled entry on the rail, to the LEFT of the run detail", async () => {
+    holdStateMock.mockImplementation(async () => DECIDED);
+    const { container } = render(panelHostedSurface({ hasPark: true, held: false }));
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
+    );
+
+    const entry = recommendationRow(container);
+    expect(entry).not.toBeNull();
+    expect(entry!.getAttribute("data-recommendation-step-settled")).toBe("true");
+    expect(entry!.getAttribute("data-recommendation-step-selected")).toBe("false");
+    // The rail's own completed reading: the numeral replaced by the check, and
+    // no status word added beside the title.
+    expect(
+      entry!.querySelector('[data-conformance-id="recommendation-rail-indicator"]')!.textContent,
+    ).toBe("");
+    expect(entry!.textContent).toBe("Recommendation");
+
+    // TWO COLUMNS, the rail first — the drawing's frame.
+    const contract = container.querySelector("[data-run-detail-contract]")!;
+    expect(contract.children.length).toBe(2);
+    expect(contract.children[0]).toBe(railColumn(container));
+    expect(contract.children[1]).toBe(detailColumn(container));
+    expect(railColumn(container).contains(entry!)).toBe(true);
+    expect(detailColumn(container).contains(entry!)).toBe(false);
+  });
+
+  it("leaves the run detail exactly as the branch draws it — the panel and its ONE card", async () => {
+    holdStateMock.mockImplementation(async () => DECIDED);
+    const { container } = render(panelHostedSurface({ hasPark: true, held: false }));
+
+    await waitFor(() => expect(chipRow(container)).not.toBeNull());
+
+    const detail = detailColumn(container);
+    expect(detail.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull();
+    expect(container.textContent).toContain("Agentic Run Progress");
+    // Still exactly one chip row on this host, and it is the panel's.
+    expect(container.querySelectorAll("[data-run-recommendation-chip-row]").length).toBe(1);
+    expect(detail.contains(chipRow(container)!)).toBe(true);
+    expect(railColumn(container).contains(chipRow(container)!)).toBe(false);
+  });
+
+  it("selecting the settled entry keeps the run detail — it opens no surface of its own", async () => {
+    holdStateMock.mockImplementation(async () => DECIDED);
+    const { container } = render(panelHostedSurface({ hasPark: true, held: false }));
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
+    );
+
+    fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
+
+    // The row takes the selection — it is a rail row — but the detail stays put,
+    // because the settled card it would show is already inside that panel.
+    expect(recommendationRow(container)!.getAttribute("data-recommendation-step-selected")).toBe(
+      "true",
+    );
+    expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull();
+    expect(container.textContent).toContain("Agentic Run Progress");
+    expect(container.querySelectorAll("[data-run-recommendation-chip-row]").length).toBe(1);
+  });
+
+  it("a run on that branch that NEVER held draws no entry at all — unchanged", async () => {
+    holdStateMock.mockImplementation(async () => ({ state: "none" }));
+    const { container } = render(panelHostedSurface({ hasPark: false, held: false }));
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="run-detail-panel"]')).not.toBeNull(),
+    );
+
+    expect(recommendationRow(container)).toBeNull();
+    expect(container.querySelector('[data-action="open-recommendation-step"]')).toBeNull();
+    expect(chipRow(container)).toBeNull();
   });
 });
 
