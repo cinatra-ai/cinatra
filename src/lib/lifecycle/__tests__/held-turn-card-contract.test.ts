@@ -296,9 +296,16 @@ describe("the per-kind table", () => {
     expect(new Set(kinds).size).toBe(kinds.length);
   });
 
-  it("binds only recommendation_hold to the agent_run result and the held dispatch turn", () => {
+  it("binds the two INTERRUPT kinds to the agent_run result, and nothing else", () => {
+    // The rule is about WHY a kind is an interrupt, not about how many are:
+    // the run is genuinely BLOCKED on the answer, so the slot is the dispatch's
+    // own tool result. `recommendation_hold` parks before the run starts;
+    // `agent_hitl_screen` (cinatra#2928) parks it mid-flight while the agent
+    // asks. Every other kind is a fire-and-forget DATA_PART with no tool of its
+    // own to bind to.
+    const INTERRUPT_KINDS = ["recommendation_hold", "agent_hitl_screen"];
     for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
-      if (row.kind === "recommendation_hold") {
+      if (INTERRUPT_KINDS.includes(row.kind)) {
         expect(row.carriage).toBe("interrupt");
         expect(row.triggerToolName).toBe("agent_run");
       } else {
@@ -364,7 +371,7 @@ describe("the per-kind table", () => {
   });
 });
 
-describe("the four-kind carriage matrix (cinatra#2827)", () => {
+describe("the five-kind carriage matrix (cinatra#2827, cinatra#2928)", () => {
   /** One element carrying every root anchor, at the producing slot, with the
    *  row's controls inside it — the shape a real owner produces. */
   function drawnAt(
@@ -619,12 +626,17 @@ describe("the positive arm is the DEFAULT, and the obligation list is its only e
     ).toContain("card_not_mounted");
   });
 
-  it("has no exemption left to take — the obligation list is empty", () => {
-    // The list is the ONLY ruled reason a held turn may show no card. Empty
-    // means every ruled kind is asserted, so a future kind arriving unmounted
-    // has to add its own row deliberately rather than inherit an exemption.
-    expect([...HELD_TURN_MOUNT_OBLIGATIONS]).toEqual([]);
-    for (const kind of RULED_KINDS) expect(heldTurnMountIsOwed(kind)).toBe(false);
+  it("exempts exactly the kind that declared its own row, and no other", () => {
+    // The list is the ONLY ruled reason a held turn may show no card, and it
+    // was emptied by S9b. A future kind arriving unmounted therefore has to add
+    // its OWN row deliberately rather than inherit an exemption — which is
+    // exactly what cinatra#2928 did when it registered `agent_hitl_screen`
+    // without drawing it. W3 (cinatra#2930) lands the mount and strikes the
+    // row; this assertion turns red the day either half moves alone.
+    expect([...HELD_TURN_MOUNT_OBLIGATIONS]).toEqual(["agent_hitl_screen"]);
+    for (const kind of RULED_KINDS) {
+      expect(heldTurnMountIsOwed(kind)).toBe(kind === "agent_hitl_screen");
+    }
   });
 
   it("DEMANDS the card for a kind whose row is struck, without anyone passing a flag", () => {

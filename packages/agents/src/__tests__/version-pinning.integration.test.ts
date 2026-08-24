@@ -138,6 +138,10 @@ describe("AgentRunRecord type surface", () => {
       oboCeiling: null,
       dependentInstallId: null,
       humanPresent: null, // cinatra#2067 presence discriminator (headless fixture)
+      // cinatra#2928 lifecycle moment triple — a fixture run is at no moment.
+      lifecycleMoment: null,
+      lifecycleCardKind: null,
+      lifecycleCardRef: null,
       executionAttemptId: null,
     };
     expect(sample.packageVersion).toBeNull();

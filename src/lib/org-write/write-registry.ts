@@ -323,6 +323,9 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // entries are those opaque accessors; the rest name transitionRunStatus.
     importBanned: true,
     allowedImporters: [
+      // cinatra#2928 — the coordinator releases a parked run through its
+      // advance entry, and states the moment before the run moves.
+      "packages/agents/src/lifecycle-coordinator.ts",
       "packages/agents/src/actions.ts",
       "packages/agents/src/execution.ts",
       "packages/agents/src/index.ts",
@@ -408,15 +411,18 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "inert-history",
     importBanned: true,
     allowedImporters: [
+      // cinatra#2928 — THE ONE CALLER. Every producer creates through the
+      // lifecycle coordinator's `launchAgentRun`, and
+      // `scripts/audit/run-creation-fence.mjs` is what keeps it so. The rows
+      // struck below are the producers that used to name the creator directly
+      // and now go through it — the MCP `agent_run` handler among them, which
+      // names the launch frame's creator now and no longer this one. The two
+      // that remain are the surfaces that bypass the worker today and reach the
+      // coordinator through an adapter W2b (cinatra#2929) builds.
+      "packages/agents/src/lifecycle-coordinator.ts",
       "packages/agents/src/a2a-actions.ts",
-      "packages/agents/src/actions.ts",
       "packages/agents/src/index.ts",
-      "packages/agents/src/lifecycle-repair-dispatch-store.ts",
-      "packages/agents/src/mcp/agent-tools-registry.ts",
-      "packages/agents/src/mcp/handlers.ts",
-      "src/lib/a2a-server.ts",
       "src/lib/host-content-editor-dispatch.ts",
-      "src/lib/project-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on
       // transitionRunStatus/updateAgentRunStatus):
       "src/app/plugins-registry.tsx",
@@ -435,17 +441,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "inert-history",
     importBanned: true,
     allowedImporters: [
+      // cinatra#2928 — THE ONE CALLER, for the same reason as `createAgentRun`
+      // above. The pre-dispatch creator is reached through the coordinator's
+      // launch entry, which carries the caller's `withinCreateTx` hook through
+      // unchanged — so the schedule proposal's CONFIRM keeps writing the run,
+      // the single-use consume edge and the schedule-install intent inside ONE
+      // guarded transaction, which is the whole reason that caller exists.
+      "packages/agents/src/lifecycle-coordinator.ts",
       "packages/agents/src/index.ts",
-      "packages/agents/src/run-actions.ts",
-      "packages/agents/src/trigger-release-job.ts",
-      // cinatra#2569 (epic #2564 S5) — the schedule proposal's CONFIRM. This is
-      // the run-creating half of a one-transaction commit: the writer's
-      // `withinCreateTx` hook carries the single-use proposal consume edge and
-      // the schedule-install intent INSIDE this same guarded transaction, so a
-      // second Confirm loses the consume insert and the run it was creating
-      // rolls back with it. Splitting the writes across transactions is exactly
-      // what this caller exists to avoid.
-      "packages/agents/src/trigger-schedule-proposal-service.ts",
       // opaque store.ts / agents-barrel accessors (also on
       // transitionRunStatus/updateAgentRunStatus):
       "src/app/plugins-registry.tsx",

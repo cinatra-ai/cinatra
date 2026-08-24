@@ -27,6 +27,7 @@ import { scheduleTrigger, cancelTriggerSchedule } from "./trigger-schedule";
 // immediate-trigger transition is a run-START dispatch and must consult the same
 // hold every other interactive run-start does.
 import { maybeHoldRunForRecommendation } from "./recommendation-hold";
+import { clearRunLifecycleMoment } from "./lifecycle-coordinator";
 import {
   transitionRunStatus,
   RunTransitionError,
@@ -451,6 +452,26 @@ async function dispatchImmediateNow(
     };
   }
 
+  // THE MOMENT IS OVER (cinatra#2928). This is the OTHER Continue: choosing
+  // "run right after setup" on the schedule screen releases a run parked at
+  // `pending_trigger` exactly as the run page's Continue does, so it has to
+  // clear what the run says it is waiting at. Without it a run could begin
+  // executing while still stating the schedule moment, and every host would keep
+  // mounting that card.
+  //
+  // LAST, after the enqueue, for the reason `advanceAgentRun` clears last: every
+  // failure above compensates the run BACK to where it came from, and a run
+  // returned to its wait with nothing left to say what it is waiting for is a
+  // park with no card. Reaching this line means the run really is dispatched.
+  //
+  // The helper compares before it clears, so a run that has already reached a
+  // NEW moment — a worker fast enough to pick it up and park it again — keeps
+  // that one rather than having it taken off by this call.
+  //
+  // Best-effort by construction — the helper swallows and logs — so a
+  // bookkeeping write can never strand a run that is already on its way.
+  await clearRunLifecycleMoment(runId, authority);
+
   return { ok: true };
 }
 
@@ -600,6 +621,50 @@ export async function setRunTriggerForActor(
     if (ts <= Date.now()) {
       return { ok: false, error: "scheduledAt must be in the future" };
     }
+  }
+
+  // A ONE-OFF THAT HAS FIRED CANNOT BE CHANGED (cinatra#2928).
+  //
+  // A one-off schedule is a single instant, and once that instant has passed the
+  // run it named has already been let go. Rewriting the row afterwards is not a
+  // reschedule — it is a claim about a moment that is over. The screen refuses
+  // it, and so does every server path that changes a trigger, which is what this
+  // check makes true: the run page's form, the server action and the tool path
+  // all arrive here.
+  //
+  // FIRED is read off the trigger's OWN record — `releasedAt`, the stamp the
+  // release job writes when it opens the gate — never off the run's status,
+  // which moves on for reasons that have nothing to do with the schedule.
+  //
+  // WHAT THIS COVERS, precisely: every caller of THIS function — the run page's
+  // schedule form, the server action behind it, and the tool path — which is
+  // every way a trigger's WHEN can be rewritten. Deleting a spent trigger row
+  // is a different act and is deliberately not refused here: clearing a
+  // schedule that has already run is tidying, not a claim about a past moment.
+  //
+  // THE WINDOW IS REAL AND IT IS NOT CLOSED HERE. A one-off can fire between
+  // this read and the cancel/upsert below, exactly as it can between the
+  // terminal-run gate (cinatra#2482) and the in-flight gate (cinatra#2523) that
+  // stand above it — this function holds no lock on the trigger row and takes
+  // none. Closing it needs a conditional write (`released_at IS NULL`) or a row
+  // lock, which reshapes the trigger service rather than adding a refusal to
+  // it. What this guard removes is the ordinary case: a person changing a
+  // schedule they can see has already run.
+  //
+  // A RECURRING schedule is deliberately NOT refused: its future ticks are still
+  // ahead of it, and a change applies to them. Ticks already fired are separate
+  // runs of their own and no change here reaches back into them.
+  const beforeChange = await readRunTriggerByRunId(args.runId);
+  if (
+    beforeChange &&
+    beforeChange.triggerType === "scheduled" &&
+    beforeChange.releasedAt !== null
+  ) {
+    return {
+      ok: false,
+      error:
+        "This run's schedule has already fired, so it can't be changed. Start a new run to schedule it again.",
+    };
   }
 
   // Read existing row first → cancel old schedule → upsert (no orphan jobs).

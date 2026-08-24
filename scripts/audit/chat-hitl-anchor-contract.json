@@ -1,5 +1,5 @@
 {
- "note": "THE ANCHOR CONTRACT (cinatra#2826, epic #2784 S9m) \u2014 the drift alarm between the design pin, the executable DOM expectations and the anchors a capture is graded against. `digest` is a sha256 over exactly three inputs: the acceptance manifest's `specCommit` (read from the manifest, never from here \u2014 the copy below is a readable mirror), the `domExpectations` recorded below, and the capture requirement anchors recomputed live from scripts/audit/lib/chat-hitl-capture-recorder.mjs. Moving the design pin therefore invalidates the digest by itself, and so does renaming an anchor, adding a host cell, weakening an observation or changing what a capture must observe. The only way back is an explicit re-ratification: re-examine the anchors against the drawing at the new pin and record the new digest by hand. `node scripts/audit/chat-hitl-acceptance-gate.mjs --print-anchor-digest` prints the recomputed value; nothing writes it, because a digest a script refreshes on its own alarms about nothing. The other half of the binding is src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts, which asserts these `domExpectations` deep-equal the executable ones \u2014 so the code cannot move without this file, and this file cannot move without the digest. RE-RATIFIED 2026-08-22 (cinatra#2893): the pin moved to the \u00a7V addition drawing the ZERO-CHIP SETTLED READING, and the anchors were re-examined against it rather than refreshed. The two DOM expectation halves are UNCHANGED and that is the finding, not an omission \u2014 `carriage` names the ONE owner that draws each kind and the root declarations it is ruled by, and `hostParity` names which host draws each kind and how; the addition gives the recommendation card a new FACE for one state, not a new owner, a new root declaration or a new host. The capture requirements are unchanged for the same reason: a zero-chip settled capture is a `recommendation_hold` in the `decided` state, and the decided contract already asks for the state declaration inside the card root and the absence of every per-chip control \u2014 which is exactly what the outcome panel draws. The digest moved on the pin alone, which is the alarm working as designed.",
+ "note": "THE ANCHOR CONTRACT (cinatra#2826, epic #2784 S9m) \u2014 the drift alarm between the design pin, the executable DOM expectations and the anchors a capture is graded against. `digest` is a sha256 over exactly three inputs: the acceptance manifest's `specCommit` (read from the manifest, never from here \u2014 the copy below is a readable mirror), the `domExpectations` recorded below, and the capture requirement anchors recomputed live from scripts/audit/lib/chat-hitl-capture-recorder.mjs. Moving the design pin therefore invalidates the digest by itself, and so does renaming an anchor, adding a host cell, weakening an observation or changing what a capture must observe. The only way back is an explicit re-ratification: re-examine the anchors against the drawing at the new pin and record the new digest by hand. `node scripts/audit/chat-hitl-acceptance-gate.mjs --print-anchor-digest` prints the recomputed value; nothing writes it, because a digest a script refreshes on its own alarms about nothing. The other half of the binding is src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts, which asserts these `domExpectations` deep-equal the executable ones \u2014 so the code cannot move without this file, and this file cannot move without the digest. RE-RATIFIED 2026-08-22 (cinatra#2893): the pin moved to the \u00a7V addition drawing the ZERO-CHIP SETTLED READING, and the anchors were re-examined against it rather than refreshed. The two DOM expectation halves are UNCHANGED and that is the finding, not an omission \u2014 `carriage` names the ONE owner that draws each kind and the root declarations it is ruled by, and `hostParity` names which host draws each kind and how; the addition gives the recommendation card a new FACE for one state, not a new owner, a new root declaration or a new host. The capture requirements are unchanged for the same reason: a zero-chip settled capture is a `recommendation_hold` in the `decided` state, and the decided contract already asks for the state declaration inside the card root and the absence of every per-chip control \u2014 which is exactly what the outcome panel draws. The digest moved on the pin alone, which is the alarm working as designed. RE-RATIFIED 2026-08-24 (cinatra#2928, lifecycle-b W2a): a FIFTH kind, `agent_hitl_screen`, was registered \u2014 the agent pausing to ask for input, which this vocabulary had no name for, so every surface told it apart from a review by pattern-matching the shape of the pause. THE DESIGN PIN DID NOT MOVE, and that is the finding rather than an omission: W2a draws nothing and changes no screen. So the new carriage row names the owner the drawing slice will build and the root declaration it will be ruled by, and the new parity row records NO host at all and OWES three to cinatra#2930 \u2014 an honest record of a kind with no card, never a claim that one renders. The other four kinds are untouched. The digest moved on the new rows alone.",
  "issue": 2826,
  "epic": 2784,
  "specCommit": "design@71398a49c1f8adfe6176ab0dda25486920fac958 specs/app-lifecycle-cards.html",
@@ -47,6 +47,16 @@
      "[data-lifecycle-card=\"verification_summary\"]",
      "[data-lifecycle-card-host=\"chat_thread\"]"
     ]
+   },
+   "agent_hitl_screen": {
+    "owner": "AgentHitlScreenCard",
+    "ownerAnchors": [
+     "[data-conformance-id=\"agent-hitl-screen-card\"]"
+    ],
+    "ruledRootAnchors": [
+     "[data-lifecycle-card=\"agent_hitl_screen\"]",
+     "[data-lifecycle-card-host=\"chat_thread\"]"
+    ]
    }
   },
   "hostParity": {
@@ -83,8 +93,16 @@
      "site_widget": "transcript"
     },
     "owed": []
+   },
+   "agent_hitl_screen": {
+    "hosts": {},
+    "owed": [
+     "chat_thread",
+     "run_card",
+     "site_widget"
+    ]
    }
   }
  },
- "digest": "04532845eadddd0f38fcd5994fc2e432935ee7879fc6dceb41e4b43984e1dd54"
+ "digest": "4d9a00cb8bf5111f5bb478bb0a99bad6d1d3c31a4e255d6a711ad333a14e2fc9"
 }
