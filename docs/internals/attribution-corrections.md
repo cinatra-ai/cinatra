@@ -341,3 +341,47 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: dfb4822b96efd81aad8cc0049e2756d686c5e33f
 ```
+
+---
+
+## Correction for `b8c27563d0eeb0e3c2a1f1a05727c2222e943898`
+
+```
+correction: verification record for b8c27563d (correction: truthful-attribution record for df27cbee8)
+
+The record on b8c27563d ("correction: truthful-attribution record for df27cbee8") cites `Gate-suite:
+cinatra-core@2026.08.1`. That version is true of the commit this record repairs —
+.github/gate-suite.json at df27cbee8 reads cinatra-core@2026.08.1 — but the engine reads the suite
+at the RECORD's own merged sha, and at b8c27563d the committed suite reads cinatra-core@2026.08.2:
+576297d34a45c2f7f61abf0ce385e805366efc12 (#2706) advanced the pin from cinatra-core@2026.08.1 to
+cinatra-core@2026.08.2 earlier the same day, and this record landed after it — no commit of PR #2709
+touched .github/gate-suite.json. The gate arm is therefore structurally unverifiable for this
+record: it is the pin-transition class already on record for d7ff228f8.
+
+What was verified at the time is unchanged by any of this. PR #2709 was approved by @groganz at
+ca36beaf17e8d7ae1b8c43e01cc00eb8bc88a5d3 on 2026-08-13T13:33:16Z — that login's latest non-dismissed
+review, APPROVED at the reviewed head, non-self (the pull request's author is @groganz-bot[bot]),
+and that login's repository permission is admin, which meets tier=maintainer. Both required contexts
+named by the suite concluded at that reviewed head: `source-leak-gate / source-leak-gate` success;
+`truthful-attribution-gate / truthful-attribution-gate` success. Separately, the suite committed at
+the merged sha reads cinatra-core@2026.08.2.
+
+The corrected record carries the human arm only, per the pin-advance precedent set by the correction
+for d7ff228f8, which landed in this same batch and stands unflagged.
+
+The `Assisted-by` lines are this record's own assistants — carried over verbatim where the original
+lines were well-formed, repaired from the pull request's own commits where they were not — together
+with the agents that produced this correction, deduplicated on name and model id. No assistant the
+original record named is dropped, and none is invented; the lines added beyond the original set are
+the correcting agents, named as such.
+
+The merged change itself is untouched — this repairs the RECORD only. This correction is submitted
+for the maintainer's approval, and that approval on the correction pull request is the human
+ratification of the record it states.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-sonnet-5)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: b8c27563d0eeb0e3c2a1f1a05727c2222e943898
+```
