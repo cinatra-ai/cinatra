@@ -14,29 +14,37 @@
 //      MISSING or partial rows — it is not satisfied by "no false claim found".
 //      An all-red manifest is the case that must never read as clean.
 //   3. THE REAL MANIFEST is honest right now: every referenced test really
-//      exists. The CLI is RED, for two INDEPENDENT reasons that are held apart
-//      below, because conflating them is how one of them would get fixed and
-//      the other forgotten:
+//      exists. The CLI is RED, for one criterion MISSING and one partial, which
+//      are held apart from the evidence-binding arm below because conflating
+//      the two is how one of them would get fixed and the other forgotten:
 //
-//      THE CRITERIA HALF. Strict reports the program NOT READY: two criteria
+//      THE CRITERIA HALF. Strict reports the program NOT READY: one criterion
 //      MISSING and one partial, each naming what is absent. That expectation
-//      has now been inverted twice, and each inversion is recorded where it
-//      happened. It asserted NOT READY by design so that no lane could flip a
-//      row green in passing; the finisher round (2026-08-13) flipped it to
+//      has now been inverted THREE times, and each inversion is recorded where
+//      it happened. It asserted NOT READY by design so that no lane could flip
+//      a row green in passing; the finisher round (2026-08-13) flipped it to
 //      READY once the two S7-found defects had LANDED ON MAIN — D-1
 //      cinatra#2710 (`7123d2bf1`) and D-2 cinatra#2711 (`6b4c3e887`) — and the
 //      owner had ruled on the three open questions (coordination-tracker entry
 //      334). A code-grounded audit then showed that flip was wrong on two rows:
 //      the schedule criterion was mapped onto tests that never draw a card, and
 //      the conformance matrix was recorded ready with no cells at all on two of
-//      its four cards. It reads NOT READY again, and it goes green when those
-//      cards are DRAWN — never when they are re-read.
+//      its four cards. It read NOT READY again, and cinatra#2788 (PR #2939, the
+//      S9d rework) then DREW the schedule card — packages/chat/src/renderable-
+//      views/registry.tsx now maps `trigger_schedule_proposal` to the shipped
+//      `ScheduleProposalCard` — and its own ten-record capture round
+//      (evidence/2788-s9d-rework) gave AC-3 the rendered proof its gap named as
+//      absent, so that row is MAPPED again. The conformance-matrix row is
+//      UNTOUCHED by this round and stays MISSING: it asks for the S0 spec-
+//      matrix capture sweep specifically, which is a different round's work.
 //
 //      THE EVIDENCE HALF. The manifest's chat_thread cells point at screenshots
 //      the canonical capture index never validated, and an unindexed screenshot
 //      counts as zero. The CLI refuses that in BOTH modes, and it refuses it
 //      before it reports on the criteria at all — so the criteria half is
-//      asserted against the library below rather than against CLI output.
+//      asserted against the library below rather than against CLI output. The
+//      ten S9d cells this round adds are bound the same way: driven through the
+//      shipped recorder and registered in the capture index before being cited.
 //
 //      Both halves must be true before READY prints again.
 
@@ -224,8 +232,9 @@ describe("the REAL manifest", () => {
     // onto the new cell names. The evidence half is therefore silent.
     //
     // It is the EVIDENCE half this arm asserts, not readiness: `--strict` still
-    // exits 1 because two criteria are legitimately MISSING (see the next test),
-    // and conflating the two is exactly what the comment above warns against.
+    // exits 1 because one criterion is legitimately MISSING and one is partial
+    // (see the next test), and conflating the two is exactly what the comment
+    // above warns against.
     for (const args of [[], ["--strict"]]) {
       const res = spawnSync(process.execPath, [GATE, ...args], {
         cwd: REPO_ROOT,
@@ -242,29 +251,26 @@ describe("the REAL manifest", () => {
     ).toBe(0);
   });
 
-  it("the criteria half reports the program NOT READY — the two proof gaps, named", () => {
-    // The honest state of the program at this commit, and the SECOND time this
+  it("the criteria half reports the program NOT READY — one proof gap and one partial row, named", () => {
+    // The honest state of the program at this commit, and the THIRD time this
     // expectation has been inverted. It read NOT READY until the finisher round
-    // flipped it, and it is flipped back now because a code-grounded audit found
-    // that two of the sixteen criteria were never met: the schedule criterion
-    // was mapped onto transaction tests that draw no card, and the conformance
-    // matrix was recorded ready with zero cells on two of its four cards.
-    //
-    // Flipping this expectation is a deliberate act in either direction, which
-    // is why it carries its reason inline. Going green again needs the two cards
-    // DRAWN and their cells captured — not a re-reading of the same evidence.
+    // flipped it, a code-grounded audit flipped it back for two rows, and this
+    // round flips ONE of those two forward again: cinatra#2788 (PR #2939, the
+    // S9d rework) drew the schedule card and its ten-record capture round gave
+    // AC-3 the rendered proof the earlier gap named as absent. The conformance-
+    // matrix row is untouched here and stays MISSING — it asks for the S0
+    // spec-matrix capture sweep specifically, and this round did not run it.
     //
     // Asked of the LIBRARY, not of CLI output, because the evidence half above
     // refuses both modes before the CLI reaches its readiness report. Holding
     // the two halves apart is what keeps either from hiding the other: binding
-    // the captures does not make the program ready, and drawing the two cards
-    // does not bind them.
+    // the captures does not make the program ready, and drawing a card does not
+    // bind it.
     const { violations, unproven, partial, total } = strictReport();
     expect(violations).toEqual([]);
     expect(total).toBe(CANONICAL_CRITERIA.length);
-    expect(unproven).toHaveLength(2);
+    expect(unproven).toHaveLength(1);
     expect(partial).toHaveLength(1);
-    expect(unproven.map((r) => r.gap).join("\n")).toMatch(/UI PROOF MISSING/);
     // "CARD AXIS MISSING" became "CARD AXIS PARTIAL" with cinatra#2791 (S9g):
     // six cells landed — the review gate on chat_thread pending AND decided, the
     // review gate on the page gate region, the audit card on two hosts, the chip
@@ -272,13 +278,17 @@ describe("the REAL manifest", () => {
     // still MISSING as a criterion, and the gap now names each remaining cell
     // with the shipped line that blocks it, which is what this assertion pins.
     expect(unproven.map((r) => r.gap).join("\n")).toMatch(/CARD AXIS PARTIAL/);
-    expect(unproven.map((r) => r.gap).join("\n")).toMatch(
-      /§VI is NOT DRAWN on main/,
-    );
+    // NOT pinned here: row 15's gap also still says trigger_schedule_proposal
+    // "is NOT DRAWN on main" (item (a) of its own STILL-ABSENT list). That
+    // sentence is stale as of this same commit — the card IS drawn — but row 15
+    // is untouched by this round (it asks for the S0 spec-matrix capture sweep
+    // specifically, a different round's work), and this suite must not pin a
+    // sentence it knows to be false. See the manifest row itself for the open
+    // follow-up this leaves.
     // The line the CLI would print, spelled out here so a regression in either
     // count is still legible as the sentence a reader sees.
     expect(`${total - unproven.length}/${total} criteria proven, ${unproven.length} MISSING, ${partial.length} partial`).toBe(
-      "14/16 criteria proven, 2 MISSING, 1 partial",
+      "15/16 criteria proven, 1 MISSING, 1 partial",
     );
   });
 
@@ -308,13 +318,38 @@ describe("the REAL manifest", () => {
     expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-22/);
   });
 
-  it("both flipped rows keep the proofs they had — a flip withdraws a claim, not evidence", () => {
-    const rows = manifest().rows;
-    for (const i of [2, 14]) {
-      expect(rows[i].disposition, rows[i].criterion.slice(0, 40)).toBe("MISSING");
-      expect(rows[i].partial).toBe(true);
-      expect(proofsOf(rows[i]).length, rows[i].criterion.slice(0, 40)).toBeGreaterThan(0);
-      expect(rows[i].gap.length).toBeGreaterThan(200);
+  it("row 15 keeps the proofs it had — a flip withdraws a claim, not evidence", () => {
+    const row = manifest().rows[14];
+    expect(row.disposition, row.criterion.slice(0, 40)).toBe("MISSING");
+    expect(row.partial).toBe(true);
+    expect(proofsOf(row).length, row.criterion.slice(0, 40)).toBeGreaterThan(0);
+    expect(row.gap.length).toBeGreaterThan(200);
+  });
+
+  it("row 3 is MAPPED again and kept every proof it had before the UI gap existed", () => {
+    // The mirror of the test above: this flip runs the OTHER way, and the same
+    // rule holds regardless of direction. The transaction proofs cinatra#2573's
+    // acceptance round wrote are untouched below — mint/consume identity,
+    // arm-before-expose, single-use, replay, the concurrent double-Confirm and
+    // drain reconciliation — and cinatra#2788 (PR #2939) adds the UI proof
+    // beside them rather than replacing anything.
+    const row = manifest().rows[2];
+    expect(row.disposition).toBe("MAPPED");
+    expect(row.partial).toBeUndefined();
+    expect(row.gap).toBeUndefined();
+    expect(row.unitProofs).toHaveLength(3);
+    expect(row.integrationProofs).toHaveLength(6);
+    // The S9d rework round produced exactly ten records (five cells, light +
+    // dark) and this row cites all ten — pinned exactly, not merely "some",
+    // so a future citation dropped or silently added is caught here.
+    expect(row.e2eProofs).toHaveLength(10);
+    expect(row.e2eProofs.every((p) => p.file === "evidence/2788-s9d-rework/README.md")).toBe(
+      true,
+    );
+    expect(new Set(row.e2eProofs.map((p) => p.testName)).size).toBe(10);
+    for (const stem of ["C1", "C2", "C3", "C5", "C6"]) {
+      const cell = row.e2eProofs.filter((p) => p.testName.startsWith(`S9d-${stem}__`));
+      expect(cell, stem).toHaveLength(2); // light + dark
     }
   });
 
