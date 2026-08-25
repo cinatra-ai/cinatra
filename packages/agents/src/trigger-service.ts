@@ -699,12 +699,55 @@ export async function setRunTriggerForActor(
   // A RECURRING schedule is deliberately NOT refused: its future ticks are still
   // ahead of it, and a change applies to them. Ticks already fired are separate
   // runs of their own and no change here reaches back into them.
+  //
+  // BOTH ONE-OFFS, NOT ONE OF THEM (cinatra#2980). **Run right after setup** is
+  // a one-off as much as **Schedule for later** is: its row is `immediate`, and
+  // the immediate path stamps `releasedAt` through `markTriggerReleased` when it
+  // opens the gate, exactly as a `scheduled` fire does. Naming `scheduled` alone
+  // left a fired immediate row changeable, and the run page's standalone form
+  // took that route — a finished run's own trigger row could be replaced with a
+  // recurring schedule. The condition therefore reads the way the save guard
+  // already reads it (`saveScheduleGuardRefusal` below): everything that is not
+  // recurring is a one-off, so a one-off kind added later is refused by default
+  // rather than let through by omission, which is precisely how `immediate` was
+  // let through.
+  //
+  // AND A REPLAY OF THE SAME IMMEDIATE ARM IS NOT A CHANGE. `scheduleTrigger`
+  // stamps `releasedAt` for an `immediate` trigger BEFORE this function
+  // dispatches it (`markTriggerReleased`, then the recommendation hold, then
+  // `dispatchImmediateNow`), and the installation path that arms an immediate
+  // trigger is an at-least-once worker: a crash in that window leaves a stamped
+  // row whose retry must still be able to finish. Refusing it would turn a
+  // recoverable retry into a terminal park with "this schedule has already
+  // fired" on a run that may never have been dispatched. An immediate request
+  // against an immediate row rewrites no WHEN — it is the same instruction
+  // arriving twice — so the ladder ABOVE this guard owns it: the terminal-run
+  // gate refuses it on a finished run, the in-flight gate on a paused one, and
+  // the recommendation hold answers a retry with the existing park. A fired
+  // `scheduled` row asked for an immediate arm is NOT this case and stays
+  // refused, exactly as cinatra#2928 shipped it.
   const beforeChange = await readRunTriggerByRunId(args.runId);
+  const replaysTheSameImmediateArm =
+    args.triggerType === "immediate" &&
+    beforeChange?.triggerType === "immediate" &&
+    // AND IT CARRIES NO SCHEDULE. `scheduledAt` and `cronExpression` are the two
+    // fields that make a request a schedule, and the upsert below persists them
+    // onto the row whatever the type says. An "immediate" request carrying one
+    // is not the replay this exemption is for, so it is refused with the rest —
+    // the exemption stays exactly "run now, again", which names no moment and
+    // rewrites nothing (`timezone` is only ever read to interpret those two).
+    !args.scheduledAt &&
+    !args.cronExpression &&
+    args.enabled !== false;
   if (
     beforeChange &&
-    beforeChange.triggerType === "scheduled" &&
-    beforeChange.releasedAt !== null
+    beforeChange.triggerType !== "recurring" &&
+    beforeChange.releasedAt &&
+    !replaysTheSameImmediateArm
   ) {
+    // ONE SENTENCE FOR BOTH KINDS. The reader is told the same thing whichever
+    // one-off they set, because it is the same fact about the same moment — and
+    // the sentence names the next action that does work.
     return {
       ok: false,
       error:

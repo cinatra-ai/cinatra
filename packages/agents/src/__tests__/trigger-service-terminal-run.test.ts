@@ -65,6 +65,9 @@ type ExistingTrigger = {
   runId: string;
   triggerType: string;
   jobSchedulerId: string | null;
+  /** The stamp the release job writes when it opens the gate. Its ABSENCE is
+   *  what makes the row below an UNFIRED one — see cinatra#2980. */
+  releasedAt?: Date | null;
 } | null;
 const triggerStore = vi.hoisted(() => ({
   createOrUpdateRunTrigger: vi.fn(async () => undefined),
@@ -126,11 +129,15 @@ beforeEach(() => {
   });
 });
 
-/** An already-configured immediate trigger — i.e. the arm is a RE-arm. */
+/** An already-configured immediate trigger that has NOT fired — i.e. the arm is
+ *  a RE-arm, and the schedule it re-arms is still the run's to change
+ *  (cinatra#2980: `releasedAt` is the stamp that ends that, and it is absent
+ *  here). */
 const existingImmediate: ExistingTrigger = {
   runId: TEST_RUN_ID,
   triggerType: "immediate",
   jobSchedulerId: null,
+  releasedAt: null,
 };
 
 describe("setRunTriggerForActor — immediate re-arm on a terminal run (cinatra#2482)", () => {
@@ -279,7 +286,13 @@ describe("setRunTriggerForActor — immediate re-arm on a terminal run (cinatra#
     expect(enqueue.enqueueAgentRun).not.toHaveBeenCalled();
   });
 
-  it("does NOT gate a scheduled trigger on a finished run — that row is a future fire", async () => {
+  // BOTH OF THE TWO BELOW ARE ABOUT AN UNFIRED ROW (cinatra#2980). The gate this
+  // file is named for is the IMMEDIATE one, and it never reached a scheduled or
+  // recurring request — that is what these pin, and it is unchanged. What a
+  // FIRED one-off row does to the same two requests is a different rule, and it
+  // is pinned in `schedule-moment-server-refusals.test.ts`: plan (A) §7.2 item 4,
+  // "once a one-off has fired it cannot be changed".
+  it("does NOT gate a scheduled trigger on a finished run whose row never fired", async () => {
     store.readAgentRunById.mockResolvedValue(runInStatus("completed"));
     triggerStore.readRunTriggerByRunId.mockResolvedValue(existingImmediate);
     const scheduledAt = new Date(Date.now() + 60 * 60 * 1000)
@@ -297,9 +310,7 @@ describe("setRunTriggerForActor — immediate re-arm on a terminal run (cinatra#
     expect(schedule.scheduleTrigger).toHaveBeenCalledTimes(1);
   });
 
-  // Codex round-B finding: converting a FINISHED immediate run to a recurring
-  // schedule is legitimate — a recurring trigger clones a fresh run each fire.
-  it("does NOT gate a recurring trigger on a finished, already-triggered run", async () => {
+  it("does NOT gate a recurring trigger on a finished run whose row never fired", async () => {
     store.readAgentRunById.mockResolvedValue(runInStatus("completed"));
     triggerStore.readRunTriggerByRunId.mockResolvedValue(existingImmediate);
 
