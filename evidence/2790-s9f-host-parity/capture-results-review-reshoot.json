@@ -473,6 +473,246 @@
           "bridgeRunSelects": 1
         }
       }
+    },
+    {
+      "cell": "R2__recommendation-card__page_gate_region__decided__above-gate",
+      "pixels": {
+        "width": 2880,
+        "height": 3740
+      },
+      "sha256": "be6abcbc8b2b3efc1d27de3671c1ff29b1001b8c4e455da72f463544db6f31d2",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "page_gate_region",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": null,
+      "runSurface": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable cinatra",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-25T12:57:41.744Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 144,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "21230",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 87,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 9,
+          "bridgeRunSelects": 1
+        }
+      }
+    },
+    {
+      "cell": "R4__recommendation-card__page_gate_region__decided__above-gate__dark",
+      "pixels": {
+        "width": 2880,
+        "height": 3740
+      },
+      "sha256": "c9170b63bd630b22f95db19ed0f2cba7556a69f047dc72208b13f300559e86d1",
+      "observed": [
+        {
+          "selector": "[data-lifecycle-card-host=\"page_gate_region\"]",
+          "scope": "frame",
+          "count": 2
+        },
+        {
+          "selector": "[data-lifecycle-card=\"recommendation_hold\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"artifact_review_gate\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-gate-card\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-conformance-id=\"review-decision-bar\"]",
+          "scope": "frame",
+          "count": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1
+        },
+        {
+          "selector": "[data-skill-action=\"confirm\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"adjust\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-skill-action=\"skip\"]",
+          "scope": "root",
+          "count": 0
+        },
+        {
+          "selector": "[data-recommendation-chip]",
+          "scope": "root",
+          "count": 3
+        }
+      ],
+      "rootAttributes": {
+        "data-run-recommendation-chip-row": "",
+        "data-conformance-id": "run-chip-row",
+        "data-lifecycle-card": "recommendation_hold",
+        "data-lifecycle-card-state": "decided",
+        "data-lifecycle-card-host": "page_gate_region",
+        "data-run-recommendation-decision": "confirmed",
+        "data-run-recommendation-settled": "true",
+        "data-variant": "inline"
+      },
+      "chips": [
+        {
+          "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+          "mark": "adjusted",
+          "forced": false,
+          "label": "Blog Post Matcher Skill",
+          "text": "Blog Post Matcher SkillAdjusted",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Blog Writing Skill",
+          "text": "Blog Writing SkillConfirmed",
+          "actions": []
+        },
+        {
+          "skillId": "@cinatra-ai/web-research-skill:web-research",
+          "mark": "confirmed",
+          "forced": false,
+          "label": "Web Research Skill",
+          "text": "Web Research SkillConfirmed",
+          "actions": []
+        }
+      ],
+      "transcript": null,
+      "runSurface": null,
+      "themeClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
+      "providerEvidence": {
+        "serverLog": "<the app server's own log>",
+        "at": "2026-08-25T12:57:43.047Z",
+        "preRouterShortCircuits": 0,
+        "preRouterAttempts": 0,
+        "scriptedRuntimeLines": 0,
+        "noProviderRefusals": 0,
+        "mcpDependencyFailures": 0,
+        "publicMcpCallbacks": 144,
+        "bridgeRunSelects": 3,
+        "driverScriptedProviderEnv": null,
+        "serverScriptedProviderEnv": null,
+        "serverEnvReadFrom": "process-table",
+        "serverEnvReadOfPid": "21230",
+        "serverEnvHopsFromListener": 1,
+        "serverEnvTokensSeen": 87,
+        "deltaSinceStart": {
+          "publicMcpCallbacks": 9,
+          "bridgeRunSelects": 1
+        }
+      }
     }
   ],
   "wire": [

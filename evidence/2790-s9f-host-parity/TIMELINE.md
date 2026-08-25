@@ -382,3 +382,67 @@ on both sides of the call (rows 7 and 14). What the CHAT TURN rests on is the
 pre-router counters, which are structural, plus an environment read taken one hop
 above the listening process: presence would be proof, absence there is consistent
 rather than conclusive. That difference is stated, not smoothed over.
+
+---
+
+# The REVIEW-CELL re-shoot — the order ITS run actually happened in
+
+The run behind `S3` (+ dark), `S4` (+ dark), `R2` and `R4`:
+`aa84c060-15e9-4298-90fe-8cb33c130d6b`. All times UTC on **2026-08-25**;
+`timeline-review-reshoot.json` beside this file carries the same rows machine-readably,
+and `logs/review-reshoot-sequence.txt` is the whole run of the recorder verbatim.
+
+## Which clock each row is on
+
+Every lifecycle row below is read from a DATABASE COLUMN, named in the right-hand
+column. Rows that are the recorder's own clock say so. Nothing here is read off a
+screen.
+
+**On this run `agent_runs.created_at` is trustworthy, and that is worth saying
+because on an earlier run in this lane's history it was not.** It reads
+`12:54:29.136`, one second BEFORE the hold row it must precede
+(`12:54:30.167`) — not equal to `completed_at`, which is `12:56:11.824`. The
+earlier round observed the terminal write overwriting that column; this run does
+not show it. Both readings stand as measured.
+
+## The sequence
+
+| # | What happened | Time (UTC) | Read from |
+|---|---|---|---|
+| 1 | The recorder signed in and read its evidence baseline | `12:53:56.110` | `logs/review-reshoot-sequence.txt` (the recorder's own clock) |
+| 2 | The public ingress answered inside the app's own reachability budget — three consecutive HEAD probes, the last at 205 ms, against the app's own 2500 ms budget | `12:54:01.275` | `timeline-review-reshoot.json` row `T0` |
+| 3 | The person's turn was typed into the app's own composer and reached the transcript | `12:54:16.665` | `logs/review-reshoot-sequence.txt` (`TURN sent`) |
+| 4 | **The run was created** | `12:54:29.136` | `cinatra.agent_runs.created_at`, in `logs/review-reshoot-db-readback.json` |
+| 5 | **The run PARKED at the recommendation hold** | `12:54:30.167` | `cinatra.lifecycle_continuation_park.created_at` — `checkpoint=recommendation`, `status=parked` |
+| 6 | The sealed provider row was read back BEFORE the step — `keyPresent: true`, `defaultModel: gpt-5.5` | `12:54:51.877` | `timeline-review-reshoot.json` row `T1c`, through the shipped `readOpenAIConnection` |
+| 7 | **The four chips were decided one at a time** through the card's own per-chip controls — `confirm`, `adjust` → *“Keep it in this run”*, `skip`, `confirm` | presses between `12:55:07.235` and `12:55:12.468` | `logs/review-reshoot-sequence.txt` (`PRESS …` lines, in order) |
+| 8 | **The three kept decisions were written and the hold RELEASED** | `12:55:12.644` / `12:55:12.655` | `cinatra.run_selected_skill_revisions.selected_at` / `cinatra.lifecycle_continuation_park.resolved_at` |
+| 9 | The run's own in-flight gate was answered by one press of its own `Continue` | `12:55:38.040` | `logs/review-reshoot-sequence.txt` (`GATE Continue pressed (#1)`) |
+| 10 | **Model calls recorded against the REAL provider, across this run's own window.** The step's own call happened inside these bounds and so did the conversation's turns, but the table carries no run id and no turn id — the WINDOW is what is bound, never a particular call | rows span `12:54:32.214` → `12:57:03.990`; the query's own bounds were `12:54:29.136` → `12:58:29.136` | `cinatra.usage_events`, in `logs/review-reshoot-db-readback.json` — `provider=openai`, `model=gpt-5.5-2026-04-23`, 11 rows in that window; 2 more on `gpt-5.5` at `12:54:32` and `12:57:03`; and 40 rows in the whole database, every one of them `openai` |
+| 11 | **THE RUN WROTE ITS OWN OUTPUT** | `12:56:11.718` | `cinatra.representation.created_at`, `created_by_run_id` = this run; `cinatra.artifact_produced_outbox.created_at`, `emitter=createSemanticArtifact`, `origin_kind=agent_produced` |
+| 12 | The run completed | `12:56:11.824` | `cinatra.agent_runs.completed_at`, `error` empty |
+| 13 | **The shipped sweeper opened the review** | `12:56:34.423` | `cinatra.artifact_review_gates.created_at`, `status=pending`; the sweeper's own log line is committed verbatim in `logs/review-reshoot-sweeper.txt` |
+| 14 | The outbox row was processed | `12:56:34.611` | `cinatra.artifact_produced_outbox.processed_at` |
+| 15 | The sealed provider row was read back AFTER the step — same answer | `12:56:42.021` | `timeline-review-reshoot.json` row `T3a` |
+| 16 | The person asked *“Is there anything waiting on me for review?”* and the review card drew in the conversation | asked `12:56:50.299` | `logs/review-reshoot-sequence.txt` (`ASK typed…`). A `gpt-5.5` usage row sits at `12:57:03.990`, between the ask and the shutter; `usage_events` carries no run id and no turn id, so it is NOT claimed as that turn's own call |
+| 17 | **`S3` and `S3 dark` were shot** | `12:57:20.218` / `12:57:21.415` | `capture-records-review-reshoot.json` `recordedAt` |
+| 18 | **`S4`, `S4 dark`, `R2`, `R4` were shot** on the review page for the same run | `12:57:36.845` → `12:57:43.337` | `capture-records-review-reshoot.json` `recordedAt` |
+
+## What the order proves, and what it does not
+
+It proves the run was HELD before it was decided, DECIDED before it ran, that it
+RAN before anything was produced, that the output existed before the gate was
+opened on it, and that every picture was taken after all of that. Each of those
+steps is a column the app itself wrote, in order, and the lane wrote none of them
+by hand — so the state each cell shows is a state this run actually reached, in
+this order, rather than one arranged for the shutter. What it does not prove is
+that the pixels and the DOM readings beside them were taken at the same instant:
+the screenshot comes first and the readings a second or two later. README.md says
+why that is a limit rather than a hole here.
+
+It does not identify which runtime answered a particular model call. What comes
+closest is row 10: `usage_events` on this database holds rows for `provider=openai`
+and for no other provider, written by the platform when it made a call. It carries
+no run id, so it binds a WINDOW rather than a step — and rows 4, 10 and the run's
+own columns are re-derivable from `logs/review-reshoot-db-readback.json`, which is
+the verbatim output of the committed readback driver rather than prose.

@@ -304,3 +304,91 @@ honestly (`Setup approval rejected: run … is not pending_approval (current
 status: pending_trigger)`), and the driver now fails LOUD on that state instead
 of photographing a run that did not run. That is why the person's turn states the
 idea it wants the agent to work from: it removes a stall, not a step.
+
+---
+
+# The review-cell re-shoot's own run, read out of the database
+
+The run behind `S3` (+ dark), `S4` (+ dark), `R2` and `R4`. Every value below is
+a database row on the lane database, read after the pictures were taken —
+**and every one of them is committed verbatim beside this file** as
+`logs/review-reshoot-db-readback.json`, the output of
+`drivers/16-review-reshoot-db-readback.mjs`, which only ever SELECTs. The blocks
+below are that file, laid out for reading; the file is the record.
+
+```
+agent_runs
+  id            aa84c060-15e9-4298-90fe-8cb33c130d6b
+  status        completed
+  error         (empty)
+  human_present true
+  source_type   agent_builder
+  created_at    2026-08-25 12:54:29.136
+  completed_at  2026-08-25 12:56:11.824
+
+lifecycle_continuation_park
+  checkpoint    recommendation
+  status        released
+  created_at    2026-08-25 12:54:30.167
+  resolved_at   2026-08-25 12:55:12.655
+
+run_selected_skill_revisions            (selected_at 2026-08-25 12:55:12.644)
+  @cinatra-ai/blog-post-matcher-skill:blog-post-matcher   user_adjusted
+  @cinatra-ai/blog-writing-skill:blog-writing             recommended_confirmed
+  @cinatra-ai/web-research-skill:web-research             recommended_confirmed
+
+run_rejected_recommendations
+  (empty — and that is correct: the skipped chip, brand-voice-matcher, was never
+   recommended for this run, and that table records a RECOMMENDED skill that was
+   not kept)
+
+representation                          (created_by_run_id = this run)
+  id            7fe0f4ed-2ead-4b30-b986-8204dcf040f0
+  artifact_id   b41511b5-4e3e-44c9-91db-da6356e90a4f
+  revision      1
+  form          file
+  created_at    2026-08-25 12:56:11.718
+
+artifact_produced_outbox                (producer_run_id = this run)
+  emitter       createSemanticArtifact
+  origin_kind   agent_produced
+  created_at    2026-08-25 12:56:11.718
+  processed_at  2026-08-25 12:56:34.611
+
+artifact_review_gates                   (run_id = this run)
+  id              79b6f313-de40-4d42-8e3a-856101ec1c25
+  review_task_id  lifecycle-review:6c263a6047e2fd2302b3807146259df851a0f6ae6c1b5ab8fe71535f3b83642f
+  status          pending
+  created_at      2026-08-25 12:56:34.423
+```
+
+## What served the model, read from the platform's own meter
+
+```
+usage_events, whole lane database
+  provider=openai   40 rows        (no rows for any other provider)
+
+usage_events, inside the pictured run's window (12:54:29.136 - 12:58:29.136,
+                the run's own creation plus four minutes - the exact bounds the
+                committed readback driver queried)
+  provider=openai  model=gpt-5.5-2026-04-23   11 rows   12:56:10.644 → 12:56:59.982
+  provider=openai  model=gpt-5.5               2 rows   12:54:32.214 → 12:57:03.990
+```
+
+This is the strongest statement this directory makes about which runtime served
+the calls, and its limit is exact: `usage_events` has no run id column on this
+schema, so it binds a WINDOW to a provider, not a step to a call. The sealed
+connection row itself was read through the shipped `readOpenAIConnection` on both
+sides of the step (`keyPresent: true`, `defaultModel: gpt-5.5`, sealed at rest),
+and it was written by the app itself when the key was typed into the shipped
+`/setup/model` form.
+
+## What is NOT in this directory, from this round
+
+No credential, no key, no token, no private hostname and no lane filesystem path.
+The lane's public origin and the app server's log path appear as placeholders
+because the recorder replaces them at the moment it writes the record. The lane's
+own organization and user UUIDs do appear, in `logs/review-reshoot-sequence-state.json`
+and above, because "created by the lane's own signed-in person" is only checkable
+if the row it was read from is named; they identify a throwaway database that is
+dropped when the lane is torn down.

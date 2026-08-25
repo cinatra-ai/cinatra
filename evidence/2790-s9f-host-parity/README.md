@@ -8,6 +8,77 @@ it), plus this evidence commit.
 here, the exact plan sentences that govern the surface and the state it shows,
 copied character-for-character from `PLAN: Agents Lifecycle`.
 
+## What stands behind every picture in this directory TODAY
+
+This directory has been shot in rounds, and the rounds did not all run the same
+way. This table is the answer to "which run is this picture of, and is it proof
+under the rule that a picture must come from a real run on the real provider?" —
+read it before anything else below, because the prose further down was written
+round by round and each part still describes the round that wrote it.
+
+| Cells | Run behind them | When | Proof under the real-run rule |
+|---|---|---|---|
+| `S3` (+ dark), `S4` (+ dark), `R2`, `R4` | `aa84c060-15e9-4298-90fe-8cb33c130d6b` | 2026-08-25 | **YES** — a run the app's own dispatch created from a person's turn, decided by real presses, executed its own step with a real provider connection configured, with no scripted-runtime line anywhere in the app server's log and the scripted switch not found one hop above the listening process — a null there is consistent with absence, not a proof of it — and reviewed by the shipped sweeper. Nothing is seeded and nothing is stood in for. *Which* runtime answered a given model call is not recorded by any row — see *The REVIEW-CELL re-shoot* below for exactly how far the attribution goes |
+| `S1` (+ dark), `S2` (+ dark), `R5` (+ dark), `R6` (+ dark) | `aef0f05a-94c9-41ed-a497-798603ecd6bc` | 2026-08-25 | **YES** — the stood-in-legs re-shoot, `drivers/12-real-chain-sequence.mjs` |
+| `H1` `H2` `H3` `H4` `W1` `W2` `W3` (the widget) | a run SEEDED and parked by the walk, read into the widget by a turn naming it | 2026-08-21 | **NO — SCRIPTED-RUNTIME ERA, kept as dated history.** The card, the presses and the settle in them are real; the assistant reply above them came from the deterministic provider and the run under them was seeded rather than dispatched. They are NOT proof of the chain, and the obstacle that keeps them un-re-shootable is code, not effort — see the next section |
+
+Nothing in this directory claims a widget cell is a real-run cell. The seven
+widget PNGs are left in place, at their own commit, because they are the only
+pictures of the card on that host that exist and the round that took them said
+truthfully what it did; what has changed is that they are now labelled.
+
+## The one cell set this round could NOT re-shoot, and why it is a code fact
+
+The re-shoot was asked for as ONE chain that starts in the widget's own
+conversation: the visitor asks the Blog Draft Writer Agent for a draft, the
+recommendation hold lands in the widget column, the chips are decided inside the
+frame, the step runs, and the draft reaches its review gate.
+
+**The widget's own conversation cannot start THIS run on this branch, and it is
+not a lane gap.** A `public_site_widget` delegation carries a CLOSED, kind-keyed
+MCP allowlist (`packages/mcp-server/src/delegated-widget-tool-policy.ts`). For the
+`wordpress` kind that set is exactly five primitives: the kind's own
+`wordpress_content_editor_run`, plus the four read-only lifecycle pulls
+`artifact_review_gates_list`, `artifact_review_gate_render`,
+`verification_record_render` and `schedule_proposal_render`. Deny-by-default is
+the rule for everything else, and a decision/mutation verb backstop denies that
+whole class again by construction.
+
+**Said precisely, because the narrow version is the true one:** the widget CAN
+start one run — the kind's own CMS content-editor carrier, which
+`wordpress_content_editor_run` creates through `launchAgentRun`
+(`src/lib/host-content-editor-dispatch.ts`, `sourceType="public_site_widget"`).
+What it cannot do is dispatch an ARBITRARY agent: the general `agent_run`
+primitive is not in its set. The chain this re-shoot asks for needs the **Blog
+Draft Writer Agent** — the agent the recommendation card's four assigned skills
+belong to — and there is no primitive on that allowlist that can start it.
+
+It was driven anyway rather than argued from the source alone, on this lane, on
+the real provider, through the real embedded cross-site frame after its own
+hosted sign-in — twice, and the second run is committed verbatim as
+`logs/widget-real-turn-probe.txt`, from `drivers/18-widget-real-turn-probe.mjs`.
+The frame signed itself in, the turn went through the widget's own composer, the
+hosted MCP connector reached this instance's own public MCP surface while the turn
+ran (`POST /api/mcp 200`, twice, in the app server's own log beneath the
+transcript), the model wrote the draft in the conversation itself — and no
+`agent_runs` row appeared for it, which the probe polls for and records at both
+ends. What the assistant said, verbatim from that committed transcript:
+
+> *“I can’t dispatch the Blog Draft Writer Agent from the tools currently
+> available in this chat, but here’s a ready-to-use draft based on the brief.”*
+
+(The first run of the same probe said the same thing in its own words: *“I don’t
+have agent-dispatch access available in this chat, so I drafted it here
+directly.”* Its transcript was not captured to a file; the committed one is the
+second.)
+
+That is the block, and it is reported rather than worked around. Standing a run
+in by seeding one and naming it in the turn is exactly what the scripted-era
+widget round did; doing it again and calling the result a real chain is the one
+thing the rule forbids. The widget cells therefore stay as dated history, and
+what they are owed by — a widget-reachable way to reach a run's recommendation
+hold — is a product question for the slice that opens it, not a capture question.
+
 ## The headline, first
 
 **The widget mount works, the decision is taken inside the frame, and the row
@@ -1299,3 +1370,211 @@ and read back through the shipped reader), `drivers/08-real-provider.test.ts` (t
 sealed provider row, written inside the operator's secret-manager wrapper — the
 credential never touches this repository), and `drivers/12-real-chain-sequence.mjs`
 for the sequence itself.
+
+---
+
+# The REVIEW-CELL re-shoot — cinatra#2790 (S9f), PR #2890, 2026-08-25
+
+**Six cells were re-shot from ONE real run, on a lane built from nothing for
+this round:** `S3` + `S3 dark` (the review card in the conversation), `S4` +
+`S4 dark` (the review page in the declared window) and `R2` + `R4` (the same
+review page, full-length). They were the last cells in this directory that still
+came from the scripted runtime, apart from the seven widget cells named at the
+top, which are blocked by the tool policy rather than by this round.
+
+The run: `aa84c060-15e9-4298-90fe-8cb33c130d6b`.
+
+## The chain, and what is measured about each leg
+
+The sequence is `drivers/12-real-chain-sequence.mjs` carried forward as
+`drivers/14-real-chain-review-sequence.mjs` — the same negative screens, the same
+shutter, the same clock, walked further. It re-shoots none of `12`'s cells and
+never writes their files.
+
+| # | Leg | Driven how | Measured outcome |
+|---|---|---|---|
+| 1 | **The person's turn** | typed into the app's own composer at `/chat`; it names the agent by its DISPLAY NAME and carries no package token in either form `detectExplicitDispatchPackage` reads | the run was created and PARKED at the recommendation hold; `preRouterShortCircuits` and `preRouterAttempts` both **0**, so nothing in the platform dispatched it deterministically |
+| 2 | **The decision, chip by chip** | four real presses on the card's own per-chip controls — `confirm`, `adjust` → *“Keep it in this run”*, `skip`, `confirm` | the hold released; three durable selections, one skipped chip that was never recommended and so leaves `run_rejected_recommendations` correctly empty |
+| 3 | **The run's own gate** | one press of the run's own `Continue` | the flow resumed inside the WayFlow runtime |
+| 4 | **THE STEP RAN, and its model call was answered** | the agent's model call out through the shipped bridge | `bridgeRunSelects` moved by 1, `noProviderRefusals` **0**, `mcpDependencyFailures` **0**. WHICH runtime answered that call is not recorded on any row: what is recorded is that the sealed OpenAI connection was present on both sides of it and that `cinatra.usage_events` holds `provider=openai` rows — and only `openai` rows — across the run's window. See *What the provider evidence says* below for the limit |
+| 5 | **THE RUN WROTE ITS OWN OUTPUT** | the shipped materialization path | one `cinatra.representation` row with `created_by_run_id` = this run, and an `artifact_produced_outbox` row with `emitter=createSemanticArtifact`, `origin_kind=agent_produced` |
+| 6 | **The review gate** | the shipped sweeper's own loop, unprompted — nothing in the driver asks for it | one `artifact_review_gates` row, `status=pending`, opened 23 s after the output; the sweeper's own line `[lifecycle-review-orchestration] scanned=1 gatesCreated=1 noGate=0 notClassifiable=0 failed=0` is committed verbatim in `logs/review-reshoot-sweeper.txt`, between two matcher lines naming THIS run's artifact — the sweep line itself carries no run id, and that is how it is tied |
+| 7 | **The review reaches the conversation** | a real second turn — *“Is there anything waiting on me for review?”* — the plan's own affordance (§4.1 step 1); which primitive answers it is the model's choice | the review card drew IN the conversation, under the decided row |
+
+`RUN-READBACK.md` carries every row verbatim and `TIMELINE.md` the clock.
+
+## What the provider evidence says, and where it stops
+
+Every one of the six shutters passed the same gate the previous round's did, and
+the record on each cell carries the reading:
+
+* `preRouterShortCircuits` **0**, `preRouterAttempts` **0** — the deterministic
+  chat dispatch never fired.
+* `scriptedRuntimeLines` **0** — no line naming the scripted provider or runtime
+  is anywhere in the app server's log for this lane. The lane's own boot
+  environment explicitly unsets `CINATRA_TEST_LLM_PROVIDER`, and the read below
+  found it absent one hop above the listening process; neither of those is a
+  proof that nothing injected it into the listener alone, and this round does not
+  claim one.
+* `noProviderRefusals` **0**, `mcpDependencyFailures` **0** — no `NO_LLM_PROVIDER`,
+  and no `424` on the hosted connector's toolbox fetch.
+* `serverScriptedProviderEnv` **null**, read from the app server's own process
+  chain one hop above the listening process, with the same asymmetry stated as
+  before: a non-null answer would be proof of presence; a null answer there is
+  consistent with absence rather than a proof of it.
+* `publicMcpCallbacks` moved (baseline 135, **144** at every one of the six
+  shutters — delta **9**, the number carried on each record's own
+  `deltaSinceStart`). It is UNATTRIBUTED —
+  the request log does not record the caller — and this lane additionally ran a
+  keep-warm loop against the public MCP route. That loop sends **HEAD only**, on
+  purpose, so it cannot move this counter; it is disclosed here anyway because a
+  counter nobody can attribute should not also be quietly shared.
+
+**And one reading this lane can make that the previous round could not.**
+`cinatra.usage_events` on this database holds **40 rows, every one of them
+`provider=openai`**, and none for any other provider — 13 of them inside the
+pictured run's own window (`gpt-5.5` and `gpt-5.5-2026-04-23`). That is a row the
+platform writes for a model call it actually made, so it is the strongest
+statement in this directory about WHICH runtime served the calls. It still does
+not bind a specific row to a specific step: there is no run id on the table.
+
+## The provider was configured through the APP'S OWN form
+
+Not through a writer called from a harness. The lane signed in, opened the
+shipped `/setup/model` step, chose OpenAI, and typed the key into the form's own
+field; the app sealed the connection itself. The driver that did it is committed
+(`drivers/17-provider-setup-through-the-app.mjs`), and so is the APP SERVER'S OWN
+request log for that submission (`logs/provider-setup-through-the-app.txt`):
+`POST /setup/model` → `selectSetupProviderAction`, then
+`POST /setup/model?stay=1` → `continueSetupModelStepAction`, and the wizard
+moving on to `/setup/secrets`. What that log proves is the FORM PATH; the row it
+produced is then read through the shipped reader below. The credential reached that one
+browser process through the operator's secret-manager wrapper, and from there it
+went where typing a key into that form sends it — to the app's own server action,
+which sealed it at rest. That is the whole point of using the form. What is
+claimed beyond that is narrow and checkable: it is in no file in this repository,
+in no log and in no record here, and the staged tree was scanned for it. The
+shipped reader `readOpenAIConnection` was then read back on BOTH sides of the
+step (timeline rows `T1c` and `T3a`) and answered `keyPresent: true`,
+`defaultModel: gpt-5.5` both times. Two point reads bracket the call; they do not
+establish uninterrupted presence between them, and nothing here says they do.
+
+## The framings, said plainly
+
+* `S3`, `S3 dark`, `S4`, `S4 dark` — the FULL BROWSER WINDOW, uncropped, at
+  1440×1700 CSS px and `deviceScaleFactor: 2`. The two `S3` cells grow the window
+  to whatever height puts the whole transcript in frame; the grown size is on the
+  record.
+* `R2`, `R4` — the same review page at the same window WIDTH, carried to its FULL
+  LENGTH. That is this cell's own contract ("in its page, uncropped and
+  full-length") and it is the only thing that separates it from `S4`, which is
+  the declared window on the same page and the same run minutes apart. Both
+  records say which they are, in `framing`.
+
+## The shutter's own limit, stated
+
+Each cell's screenshot is taken FIRST and the DOM readings beside it
+(`assertions`, `rootAttributes`, `chips`, `order`, `gate`) a second or two after,
+so a state that changed in between would put pixels and record slightly out of
+step. Nothing here re-checks the pixels against the record after the fact. What
+makes that acceptable rather than glossed is what these four states ARE: a review
+gate that is `pending` until a person decides it, and a recommendation row that is
+`decided` for good — terminal states, not transitions, and both read back from the
+database rows quoted above. It is a limit, and it is written down instead of
+being argued away.
+
+## What is honestly visible in the pictures, and is not dressed up
+
+1. **The review target does not render.** Inside the gate card, the island reads
+   *review target unavailable — slot "detail", reason "no-semantic-renderer"* and
+   falls back to the generic read-only view (type, mime, revision, Preview /
+   Download). The artifact IS there and the review IS open on it — the card names
+   it, `text/markdown`, revision `7fe0f4ed…` — but no semantic renderer resolves
+   for `@cinatra-ai/blog-post-artifact:post` on this lane. It is in every one of
+   the six pictures, it is reported rather than fixed here, and the cells are
+   presented with it visible rather than framed around it.
+2. **The island keeps the light palette in the dark cells.** The review target is
+   a separate document in an `<iframe>`; the palette class the shipped theme
+   control writes lands on the host document, so the island inside the gate card
+   stays light in `S3 dark`, `S4 dark` and `R4`. Stated, not cropped out.
+3. **The decided row on the review page carries three chips, not four.** The
+   skipped skill (`brand-voice-matcher`) is not drawn there. The row shows what
+   the run kept.
+4. **The account pill in the sidebar shows the lane's own throwaway address**,
+   truncated (`s9f-reshoot-…@l…`). It is a `.invalid` address minted for this lane
+   and dropped with its database — no person, no domain that resolves, and no
+   credential. It is named here rather than masked, because masking a picture is
+   editing it.
+
+## The lane, and every write that was not the app's own
+
+Built from an EMPTY database for this round: the better-auth migration, the app's
+own boot migrations and extension import, the shipped `/setup/name` step for the
+instance identity, the compose file's own Verdaccio with the branch's
+`@cinatra-ai/blog-draft-writer-agent@0.1.2` published into it, the WayFlow runtime
+from the same compose file (`/.health` → `{"status":"ok","agents":29,"failed":0}`),
+the four organization-owned skill assignments through the shipped writer
+`upsertCustomSkillAssignment`, and the widget instance + connect-site through the
+two shipped writers `writeConnectorConfigToDatabase` and
+`upsertConnectSiteAndMintCredential` (`deriveFrameBinding` closed, `{"ok":true}`)
+for the widget drive named at the top of this file.
+
+**The direct database writes this lane made, in full — three repairs, five
+statements, and none of them on the pictured path:**
+
+1. `public."user".role='admin'` for the lane's own throwaway account (the same
+   lane-data promotion every earlier round in this lane made).
+2. `cinatra.agent_templates.org_id` repointed to the one organization that
+   exists here.
+3. The second organization the lane-setup driver created was deleted (one
+   `delete` on `public.organization`), with its membership row (one `delete` on
+   `public.member`), and one `public.session.activeOrganizationId` repointed to
+   the remaining one (one `update`) — three statements, one repair. The shipped
+   delete route refuses (`ORGANIZATION_DELETION_DISABLED`), and the platform's own
+   bootstrap adopts a platform admin into `slug="default"` regardless, so two
+   organizations is a lane artefact that would have made the run unreadable to its
+   own viewer.
+
+And nothing else. No run row, no park row, no gate row, no selection row and no
+representation row was written by hand — every one of them is the app's own, and
+the drivers this round ran contain no `insert into`, no seeding helper and no
+status update. Statements 1 and 2 are the committed `drivers/01-lane-setup.mjs`;
+statement 3's three are the organization repair, made from a database client and
+written down here because nothing else records them.
+
+**Two earlier attempts ran on this same lane before the pictured one**, and both
+completed the same way. Their reviews were then APPROVED through the shipped
+review page — a real press on the page's own control, `drivers/`-free, recorded
+in the lane's own audit trail — so that the pull turn in the pictured round would
+find exactly one open review rather than three. That is stated because the S3
+cell's own sentence ("1 item waiting on you") is only true because of it.
+
+## How this round was run
+
+`node scripts/dev-server.mjs` (Next.js 16.2.10, Turbopack),
+`CINATRA_RUNTIME_MODE=development`, `NODE_ENV != production`, on a dedicated lane
+database on the verify Postgres (5634) and the verify Redis (6579), loopback-only;
+the WayFlow runtime and the package registry from this repository's own compose
+file; the public origin set through the app's OWN tunnel surface at
+`/configuration/development?tab=tunnel` and verified before any pictured turn
+(`/api/health` → `200`, and three consecutive sub-1250 ms probes of the public MCP
+route, inside the app's own 2500 ms reachability budget). Drivers:
+`drivers/01-lane-setup.mjs`, `drivers/02-provision-instance-identity.mjs`,
+`drivers/walk.test.ts` with `WALK_STEP=ASSIGN`, `WIDGET` and `BINDINGS`,
+`drivers/17-provider-setup-through-the-app.mjs` for the provider (the app's own
+form, inside the operator's secret-manager wrapper),
+`drivers/14-real-chain-review-sequence.mjs` for the sequence,
+`drivers/16-review-reshoot-db-readback.mjs` for the readback quoted in
+`RUN-READBACK.md` (its output is committed verbatim as
+`logs/review-reshoot-db-readback.json`), and
+`drivers/15-splice-review-records.mjs` for the index splice — which re-derives
+every record this round did NOT take and refuses to write unless those are
+byte-identical to the commit under proof.
+
+Gates, real exits: `chat-hitl-evidence-gate` **0**, `gate:chat-hitl-acceptance`
+**0**, `gate:chat-hitl-one-card:audit` **0**, `gate:chat-hitl-retirement` **0**,
+capture-record contract tests **124/124**. `gate:chat-hitl-acceptance:strict`,
+`gate:chat-hitl-one-card` and `gate:chat-hitl-one-card:complete` exit **1** — and
+their whole output is BYTE-IDENTICAL to the same three commands run at the commit
+this round started from, so those three exits are the branch's pre-existing state
+and not something this round introduced.

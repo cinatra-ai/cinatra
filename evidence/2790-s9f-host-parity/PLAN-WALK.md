@@ -314,3 +314,39 @@ disclose a failure after the pictured states — a model call that answered
 what a scripted model returned. This run completed: `agent_runs.status =
 completed`, no error, one representation, one processed produced-outbox event and
 one review gate. `RUN-READBACK.md` reads all of it out of the database.
+
+
+## The REVIEW-CELL re-shoot (2026-08-25) — the same sentences, a real run under them
+
+`S3` (+ dark), `S4` (+ dark), `R2` and `R4` are now shot on the run
+`aa84c060-15e9-4298-90fe-8cb33c130d6b`, which was started from a person's turn in
+the app's own chat, decided chip by chip, and executed its own step: the
+model call went out through the shipped bridge and was answered, with no provider
+refusal, no scripted-runtime line anywhere in the server's log, and only
+`provider=openai` rows in the platform's own meter across the run's window. Which
+runtime answered a given call is not recorded on any row, and README.md draws that
+boundary rather than glossing it. The review was opened by the shipped sweeper. The plan sentences that govern
+those six cells are UNCHANGED — they are the ones walked above — and each cell is
+still graded against them by looking at the pixels, not at the record.
+
+Two things the grader should see in those pixels and not be surprised by, because
+they are stated rather than framed out:
+
+* the gate card's review-target island reads *review target unavailable — slot
+  "detail", reason "no-semantic-renderer"* and falls back to the generic
+  read-only view. The artifact and the review are real; no semantic renderer
+  resolves for `@cinatra-ai/blog-post-artifact:post` on this lane. Reported, not
+  fixed here.
+* in the dark cells the island keeps the light palette: it is a separate document
+  in an `<iframe>`, and the palette class the shipped theme control writes lands
+  on the host document.
+
+The seven `site_widget` cells above (`H1`–`H4`, `W1`–`W3`) are NOT re-shot on a
+real chain, and the obstacle is code rather than effort: a `public_site_widget`
+delegation's MCP allowlist
+(`packages/mcp-server/src/delegated-widget-tool-policy.ts`) is CLOSED, and the one
+dispatch primitive on it is the kind's own CMS content editor — there is no
+general `agent_run`, so a turn typed into the widget cannot start the **Blog Draft
+Writer Agent** this chain needs. (It can start that one carrier run, and that is
+said here so the sentence is the narrow true one rather than the broad one.) They
+stay as dated scripted-era history; README.md carries the measurement.
