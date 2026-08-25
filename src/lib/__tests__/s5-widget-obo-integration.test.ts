@@ -98,14 +98,34 @@ vi.mock("@cinatra-ai/llm", () => ({
   buildA2aBearerToken: (...a: unknown[]) => buildA2aBearerToken(...(a as [])),
 }));
 
-// cinatra#1940 P3: createAgentRun now takes a REQUIRED trailing `authority`
+// cinatra#1940 P3: createCarrierRun now takes a REQUIRED trailing `authority`
 // param (the guarded creation perimeter); the mock forwards it.
-const createAgentRun = vi.fn<(input: { id: string }, authority?: unknown) => Promise<unknown>>();
+const createCarrierRun = vi.fn<(input: { id: string }, authority?: unknown) => Promise<unknown>>();
+
+// cinatra#2929 (epic #2926 W2b) — the carrier run is created THROUGH the
+// lifecycle coordinator now, not around it. The spy observes the same two
+// things it always did — the run being created and the authority it is created
+// under — one rung further out, so every assertion below still reads the
+// carrier this dispatch asks for. The launch answers with the coordinator's own
+// carrier shape, and a refusal still travels by throwing.
+vi.mock("@cinatra-ai/agents/lifecycle-coordinator", () => ({
+  launchAgentRun: async (launch: {
+    create: { input: { id: string } };
+    authority?: unknown;
+  }) => ({
+    carrier: {
+      kind: "run",
+      run: await createCarrierRun(launch.create.input, launch.authority),
+    },
+    status: "queued",
+    moment: null,
+  }),
+}));
+
 const readAgentTemplateByPackageName = vi.fn<(pkg: string) => Promise<unknown>>();
 const readLatestAgentVersionIdForTemplate = vi.fn<(id: string) => Promise<unknown>>();
 const transitionRunStatus = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 vi.mock("@cinatra-ai/agents", () => ({
-  createAgentRun: (input: { id: string }, authority?: unknown) => createAgentRun(input, authority),
   // #1193: the carrier run now also mints + persists a per-run token and embeds
   // the RAW value in the initial message. Mirror the real builder's
   // spread-then-overwrite so the identity keys stay dispatch-owned.
@@ -227,7 +247,7 @@ function withWidgetFrame<T>(actor: WidgetMcpActor, fn: () => Promise<T>): Promis
 }
 
 function lastRunInput(): { runBy?: string; orgId?: string; sourceType?: string } {
-  return (createAgentRun.mock.calls.at(-1)?.[0] ?? {}) as {
+  return (createCarrierRun.mock.calls.at(-1)?.[0] ?? {}) as {
     runBy?: string;
     orgId?: string;
     sourceType?: string;
@@ -246,7 +266,7 @@ beforeEach(() => {
   createExternalA2AClient.mockResolvedValue({ sendTask });
   readAgentTemplateByPackageName.mockResolvedValue({ id: "tmpl_wp" });
   readLatestAgentVersionIdForTemplate.mockResolvedValue("ver_1");
-  createAgentRun.mockImplementation(async (input: { id: string }) => ({
+  createCarrierRun.mockImplementation(async (input: { id: string }) => ({
     id: input.id,
     inputParams: {},
   }));
@@ -384,7 +404,7 @@ describe("T2 — instance pin (host half of the G3 origin re-pin)", () => {
         }),
       ).rejects.toThrow(/does not match the server-verified/);
     });
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 });
 
@@ -514,7 +534,7 @@ describe("T7 — no-downgrade (per-user OBO, never install/anonymous)", () => {
       ).rejects.toThrow(/public_site_widget delegation is active/);
     });
     expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 
   it("G11: absent a caller hook, a REVOKED member is refused at the carrier boundary", async () => {
@@ -536,7 +556,7 @@ describe("T7 — no-downgrade (per-user OBO, never install/anonymous)", () => {
         }),
       ).rejects.toThrow();
     });
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 });
 

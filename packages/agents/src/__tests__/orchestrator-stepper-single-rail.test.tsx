@@ -156,7 +156,7 @@ const RAIL_EXTRAS: RailEntry[] = [
     key: "verification:task-resolved",
     ordinal: 6,
     kind: "verification",
-    label: "Core analysis",
+    label: "Audit",
     status: "completed",
     sources: ["verification"],
     verification: { gateId: "gate-1", reviewTaskId: "task-resolved", outcome: "verified" },

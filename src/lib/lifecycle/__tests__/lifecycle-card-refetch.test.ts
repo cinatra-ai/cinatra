@@ -313,7 +313,7 @@ describe("verification_summary — advisory, and now a reading to draw (§VII)",
         gateId: "gate-row-1",
         authorId: "svc",
         authorKind: "service",
-        body: "Core analysis of 1 disclosed field(s). [provenance] lane=core-analysis-lane",
+        body: "Audit of 1 disclosed field(s). [provenance] lane=core-analysis-lane",
         createdAt: new Date(0),
       },
     ] as never);
@@ -326,7 +326,7 @@ describe("verification_summary — advisory, and now a reading to draw (§VII)",
       advisoryComments: [
         {
           authorKind: "service",
-          body: "Core analysis of 1 disclosed field(s). [provenance] lane=core-analysis-lane",
+          body: "Audit of 1 disclosed field(s). [provenance] lane=core-analysis-lane",
         },
       ],
     });

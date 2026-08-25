@@ -10,10 +10,6 @@ import { AuthzError } from "@/lib/authz";
 // acting MEMBER's session (owner / org-admin, already checked above). A member
 // mint fail-closes if membership was revoked — acceptable per the design.
 import { verifySessionAuthority } from "@/lib/org-write/authority";
-// cinatra#1940 P3 (Decision 1): the archived-org pre-check for the admin
-// releaseTriggerNow fire path (routing/UX only — the kernel's run.execute
-// ruling on the subsequent transition is the real backstop).
-import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
 import { resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
@@ -28,7 +24,6 @@ import {
   transitionRunStatus,
   RunTransitionError,
   clearAgentRunFailureMetadata,
-  createAgentRunPendingInput,
   slugifyAgentTemplateName,
   readAllHitlPromptsForRun,
 } from "./store";
@@ -42,23 +37,23 @@ import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import {
   setRunTriggerForActor,
   deleteRunTriggerForActor,
+  releaseTriggerNowForActor,
   type SetTriggerForActorResult,
   type DeleteTriggerForActorResult,
+  type ReleaseTriggerNowArgs,
+  type ReleaseTriggerNowResult,
 } from "./trigger-service";
 import type { TriggerType } from "./trigger-store";
-import { readRunTriggerByRunId } from "./trigger-store";
-import { markTriggerReleased } from "./trigger-gate";
 import {
   maybeHoldRunForRecommendation,
   readRecommendationParkForRun,
 } from "./recommendation-hold";
-/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
- *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
- *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
- *  for OBO_CEILING_DISJOINT_CODE). */
-const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
-const isScopeDenial = (err: unknown): err is { reason: string } =>
-  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
+import {
+  advanceAgentRun,
+  clearRunLifecycleMoment,
+  launchAgentRun,
+  runIdFromFailedLaunch,
+} from "./lifecycle-coordinator";
 
 export type TriggerAgentRunArgs = {
   runId: string;
@@ -182,10 +177,34 @@ export async function triggerAgentRun(
   // check above: both pre-dispatch waiting states are legal dispatch sources,
   // and the rung that WINS is remembered so the compensation below reverts the
   // run to where it actually was rather than rewriting its state.
+  //
+  // CONTINUE IS ADVANCE (cinatra#2928). Both rungs go through the coordinator's
+  // release entry. The rung ladder is unchanged, and the release is asked to
+  // THROW on a lost race precisely so the losing rung stays distinguishable
+  // from the winning one.
+  //
+  // THE MOMENT IS CLEARED AFTER THE ENQUEUE BELOW, not inside the release: this
+  // frame owns the dispatch (`caller_dispatches`), so the release cannot see
+  // whether the run really got a job, and a clear made before that answer is
+  // lost the moment the compensation puts the run back at its wait — leaving a
+  // parked run with nothing to say what it is waiting for.
   let dispatchedFrom: (typeof RUN_START_DISPATCH_FROM_STATUSES)[number] | null = null;
   for (const from of RUN_START_DISPATCH_FROM_STATUSES) {
     try {
-      await transitionRunStatus(args.runId, from, "queued", undefined, authority);
+      await advanceAgentRun({
+        run,
+        release: {
+          reason: "continue",
+          from,
+          to: "queued",
+          onLostRace: "throw",
+          dispatch: {
+            kind: "caller_dispatches",
+            why: "the compensation below reverts to the rung that actually won, so this frame owns the enqueue",
+          },
+        },
+        authority,
+      });
       dispatchedFrom = from;
       break;
     } catch (err) {
@@ -234,6 +253,14 @@ export async function triggerAgentRun(
     if (actionable) return { ok: false, ...actionable };
     return { ok: false, error: "enqueue failed" };
   }
+
+  // DISPATCHED — the moment is over (cinatra#2928). The clear is COMPARE-AND-
+  // CLEAR ON THE MOMENT, not on a status: it takes off the moment it read, so a
+  // run that has parked again in the meantime keeps whatever its new park
+  // stated. A status guard would be the wrong shape here — the status this frame
+  // dispatched into is left almost at once, as soon as a worker picks the run
+  // up, and a clear pinned to it would miss the ordinary case.
+  await clearRunLifecycleMoment(args.runId, authority);
 
   return { ok: true };
 }
@@ -297,19 +324,36 @@ export async function createPendingRunForZeroInputTemplate(
   // Create an empty pending_input run owned by the actor. The setup loop in
   // execution.ts will emit INTERRUPTs for any required fields when the user
   // triggers the run.
-  const created = await createAgentRunPendingInput(
-    {
-      templateId: template.id,
-      runBy: userId,
-      inputParams: {},
-      orgId,
-      // Interactive UI/chat run-start → human-present (cinatra#2067).
-      humanPresent: true,
-    },
+  // Routed through the coordinator (cinatra#2928). This creates the run and
+  // STOPS: the Run button triggers it later, and the moments that apply at a
+  // run's start are decided when it starts. Presence is not asserted here
+  // either — the coordinator derives it from this interactive claim together
+  // with the session user, so a call with no resolvable owner is headless
+  // rather than a stamp nobody can act on.
+  const launched = await launchAgentRun({
+    producer: "run_page_pending",
+    frame: { userId },
+    interactive: true,
     authority,
-  );
+    create: {
+      kind: "pre_dispatch",
+      input: {
+        templateId: template.id,
+        runBy: userId,
+        inputParams: {},
+        orgId,
+      },
+    },
+    dispatch: {
+      kind: "await_trigger",
+      why: "the run page creates the row and the Run button triggers it; the setup loop asks for its fields then",
+    },
+  });
+  if (launched.carrier.kind !== "run") {
+    return { ok: false, error: "the launch answered with a carrier that is not a run" };
+  }
 
-  return { ok: true, runId: created.id };
+  return { ok: true, runId: launched.carrier.run.id };
 }
 
 // Create a run AND immediately trigger it so the user lands on the Setup tab
@@ -339,92 +383,61 @@ async function createAndTriggerRunCore(
   // pending_input→queued transition (was previously minted only for the
   // transition, after the — then unguarded — create).
   const authority = await verifySessionAuthority(userId, orgId);
-  const created = await createAgentRunPendingInput(
-    {
-      templateId: template.id,
-      runBy: userId,
-      inputParams: {},
-      orgId,
-      // Interactive UI/chat run-start → human-present (cinatra#2067). This run may
-      // park at the recommendation chip-row before it dispatches.
-      humanPresent: true,
-    },
-    authority,
-  );
 
-  // Run-start recommendation HOLD (cinatra#2067). A human-present run parks at
-  // the recommendation interception before dispatch; the chip-row decision
-  // releases it. Best-effort — a hold failure fails OPEN to normal dispatch.
+  // ONE ORDERING, IN ONE PLACE (cinatra#2928). This function used to carry its
+  // own copy of create-parked → evaluate the recommendation → release-or-park →
+  // enqueue → compensate, which is the same sequence the `agent_run` primitive
+  // carried and the same one the coordinator now owns. The copy is gone; what
+  // is left here is this surface's own reading of the answer.
+  //
+  // The compensation ladder that stood below is the coordinator's now, and it is
+  // stricter: it reverts to `pending_input`, failing that fails the run with the
+  // reason, and only then throws — so a run can no longer be left `queued` with
+  // no job behind it. The actionable-preflight conversion this surface needs
+  // stays here, where the caller can act on it.
+  let launched;
   try {
-    const hold = await maybeHoldRunForRecommendation({
-      run: created,
+    launched = await launchAgentRun({
+      producer: "run_page_create_and_trigger",
+      frame: { userId },
+      interactive: true,
+      authority,
       template: {
         packageName: template.packageName,
         lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
       },
+      create: {
+        kind: "pre_dispatch",
+        input: {
+          templateId: template.id,
+          runBy: userId,
+          inputParams: {},
+          orgId,
+        },
+      },
+      dispatch: {
+        kind: "enqueue",
+        // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity.
+        // The job id is the run's own, as it has always been — read off the run
+        // the coordinator created, because the pre-dispatch creator mints it.
+        options: (run) => ({ jobId: run.id, ...enqueueDepsForTemplate(template) }),
+      },
     });
-    if (hold.held) {
-      // Parked — do NOT transition/enqueue. The run view shows the chip-row.
-      return { ok: true, runId: created.id };
-    }
-  } catch (err) {
-    console.warn(
-      `[createAndTriggerRun] recommendation hold evaluation failed for run ${created.id}; dispatching normally:`,
-      err instanceof Error ? err.message : String(err),
-    );
-  }
-  // `authority` (minted above, before the create) grounds both the dispatch
-  // and its compensation revert.
-
-  // Atomically transition pending_input → queued then enqueue.
-  try {
-    await transitionRunStatus(created.id, "pending_input", "queued", undefined, authority);
-  } catch (err) {
-    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
-      return { ok: true, runId: created.id }; // best-effort; run exists
-    }
-    throw err;
-  }
-
-  try {
-    await enqueueAgentRun(
-      { runId: created.id },
-      // cinatra#1056 connector edges + cinatra#1062 LLM-provider package identity.
-      { jobId: created.id, ...enqueueDepsForTemplate(template) },
-    );
   } catch (enqueueErr) {
-    // Revert to pending_input so the user can retry via the Run button.
-    // Discriminate the compensation catch so illegal_transition (programmer
-    // error) surfaces loudly while stale_from_status (benign race — worker
-    // already advanced the row) is logged and tolerated.
-    await transitionRunStatus(
-      created.id,
-      "queued",
-      "pending_input",
-      undefined,
-      authority,
-    ).catch((err) => {
-      if (err instanceof RunTransitionError && err.code === "stale_from_status") {
-        console.warn(
-          `[createAndTriggerRun] compensation skipped for ${created.id}: run already advanced past queued`,
-        );
-        return;
-      }
-      console.error(
-        "[createAndTriggerRun] compensation revert failed for run",
-        created.id,
-        err,
-      );
-      // Do not rethrow — the enqueue error is the user-facing error.
-    });
     // An actionable connector/LLM-provider preflight failure won't fix on retry
     // — surface it so the user can configure the provider (cinatra#1056/#1062),
-    // rather than reporting a false success with a silently-pending run.
+    // rather than reporting a false success with a silently-pending run. The
+    // run has already been compensated back to a decidable state by the
+    // coordinator, so the retry the message asks for has somewhere to land.
     const actionable = asActionablePreflightError(enqueueErr);
     if (actionable) return { ok: false, ...actionable };
+    throw enqueueErr;
+  }
+  if (launched.carrier.kind !== "run") {
+    return { ok: false, error: "the launch answered with a carrier that is not a run" };
   }
 
-  return { ok: true, runId: created.id };
+  return { ok: true, runId: launched.carrier.run.id };
 }
 
 export async function createAndTriggerRun(
@@ -581,11 +594,20 @@ export async function deleteRunTrigger(
 // server action re-checks `session.user.role === "admin"`.
 // ---------------------------------------------------------------------------
 
-export type ReleaseTriggerNowArgs = { runId: string };
-export type ReleaseTriggerNowResult =
-  | { ok: true }
-  | { ok: false; error: string };
-
+/**
+ * Server-action entry point for the run page's Release now control.
+ *
+ * THIN, LIKE `deleteRunTrigger` (cinatra#2788, epic #2784 S9d). The whole body
+ * moved to `releaseTriggerNowForActor` in `trigger-service.ts` — unchanged —
+ * so §VI's settled card can reach the SAME path from the widget, whose identity
+ * does not travel by cookie. This wrapper resolves the Better Auth session into
+ * the actor envelope and delegates; the admin re-check, the archived-org
+ * pre-check, the install-scope assertion, the gate write, the transition and
+ * the enqueue compensation all still happen there, in that order — as does
+ * the recurring branch cinatra#2928 added to that body: Release now on a
+ * recurring schedule starts ONE COPY through the coordinator's launch entry
+ * and leaves the defining run, and its schedule, exactly as they were.
+ */
 export async function releaseTriggerNow(
   args: ReleaseTriggerNowArgs,
 ): Promise<ReleaseTriggerNowResult> {
@@ -595,115 +617,7 @@ export async function releaseTriggerNow(
     (session?.user as { role?: string | null } | null | undefined)?.role ??
     null;
   if (!userId) return { ok: false, error: "unauthorized" };
-  if (role !== "admin") return { ok: false, error: "forbidden — admin only" };
-
-  const run = await readAgentRunById(args.runId);
-  if (!run) return { ok: false, error: "run not found" };
-
-  const trigger = await readRunTriggerByRunId(args.runId);
-  if (!trigger) return { ok: false, error: "no trigger configured for this run" };
-
-  // cinatra#1940 P3 (Decision 1): refuse BEFORE any side-effect (the gate
-  // flag, the transition) when the org is archived. Fail-open on `null`
-  // (unknown) — this is a pre-check, not the enforcement point; the guarded
-  // transition below refuses regardless.
-  if ((await readOrgArchivedAtForDispatch(run.orgId)) === true) {
-    return {
-      ok: false,
-      error: "This organization is archived — agents cannot start new work.",
-    };
-  }
-
-  // cinatra#2485 C: this is the ONE interactive dispatch that starts SOMEONE
-  // ELSE's run, so the shared dispatch guard's default (authorize the run's
-  // owner) is not enough — the releasing admin must ALSO be inside the agent's
-  // install scope. Admin standing counts at ORG scope only; an org admin who is
-  // not in the owning team/project cannot force-start work that scope reserves
-  // for its members. Asserted BEFORE `markTriggerReleased`, which is a
-  // monotonic gate write that no later refusal can undo.
-  try {
-    const { assertAgentRunDispatchAuthorized } = await import(
-      "./agent-run-serde"
-    );
-    await assertAgentRunDispatchAuthorized({
-      runId: args.runId,
-      stage: "dispatch",
-      actingUserId: userId,
-    });
-  } catch (err) {
-    if (isScopeDenial(err)) {
-      return { ok: false, error: "forbidden — this agent's scope does not include you" };
-    }
-    throw err;
-  }
-
-  await markTriggerReleased(args.runId);
-
-  // Admin (org-role admin, checked above) acts as a member of the run's org.
-  const authority = await verifySessionAuthority(userId, run.orgId);
-
-  // Transition armed → queued so the dispatcher can pick up the run.
-  // Swallow stale_from_status: the run may already be queued (race with the
-  // scheduled release job) or in a terminal state.
-  try {
-    await transitionRunStatus(args.runId, "armed", "queued", undefined, authority);
-  } catch (err) {
-    if (
-      !(err instanceof RunTransitionError && err.code === "stale_from_status")
-    ) {
-      throw err;
-    }
-  }
-
-  // Enqueue an execution job now that the gate is open. Idempotent on jobId.
-  //
-  // cinatra#2485 C — COMPENSATION on a scope denial. The run is already `queued`
-  // at this point, and `enqueueAgentRun` re-asserts the dispatch guard: if the
-  // agent's scope changed in the window between the transition's own guard and
-  // this one, the enqueue throws and the run would otherwise sit `queued`
-  // forever with no job to run it and no operator signal.
-  //
-  // The failure is landed HERE rather than inside the enqueue chokepoint because
-  // this frame already holds a member session `authority` for the run, whereas
-  // the chokepoint would have to mint an org-wide run authority it is
-  // deliberately not allowed to hold (org-write-boundary-gate R2/R5).
-  //
-  // `stale_from_status` is swallowed for the same reason as the transition
-  // above: another writer already moved the run off `queued`.
-  try {
-    await enqueueAgentRun(
-      { runId: args.runId },
-      { jobId: `agent-builder-${args.runId}` },
-    );
-  } catch (err) {
-    if (!isScopeDenial(err)) throw err;
-    try {
-      await transitionRunStatus(
-        args.runId,
-        "queued",
-        "failed",
-        {
-          error:
-            `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
-        },
-        authority,
-      );
-    } catch (compErr) {
-      if (
-        !(compErr instanceof RunTransitionError && compErr.code === "stale_from_status")
-      ) {
-        console.error(
-          "[releaseTriggerNow] run",
-          args.runId,
-          "was refused by the install-scope gate but could not be failed — it stays queued with no job:",
-          compErr instanceof Error ? compErr.message : String(compErr),
-        );
-      }
-    }
-    return { ok: false, error: "forbidden — this agent's scope does not include you" };
-  }
-
-  return { ok: true };
+  return releaseTriggerNowForActor({ userId, role, source: "ui" }, args);
 }
 
 // ---------------------------------------------------------------------------
@@ -762,26 +676,18 @@ export async function startDevChildPreviewRun(
   // this function (the mint at the former call site, after creation, is
   // removed to avoid a duplicate membership read).
   const authority = await verifySessionAuthority(userId, orgId);
-  const created = await createAgentRunPendingInput(
-    {
-      templateId: template.id,
-      runBy: userId,
-      inputParams: {},
-      orgId,
-      // Dev Stepper preview is an interactive, present-human run (cinatra#2067).
-      humanPresent: true,
-    },
-    authority,
-  );
 
   // For vendor-scoped packages (@vendor/name), agentSlug becomes "vendor/name"
   // so router.push paths match /agents/[vendor]/[pkg]/... routing.
   const resolvedPkg = template.packageName ?? packageName;
   const resolvedMatch = resolvedPkg.match(/^@([^/]+)\/(.+)$/);
   const agentSlug = resolvedMatch ? `${resolvedMatch[1]}/${resolvedMatch[2]}` : fallbackSlug;
-  const previewResult = (heldForRecommendation: boolean): StartDevChildPreviewResult => ({
+  const previewResult = (
+    runId: string,
+    heldForRecommendation: boolean,
+  ): StartDevChildPreviewResult => ({
     ok: true,
-    runId: created.id,
+    runId,
     templateId: template.id,
     agentSlug,
     templateName: template.name,
@@ -794,48 +700,59 @@ export async function startDevChildPreviewRun(
   // preview marks its run humanPresent and used to transition + enqueue
   // DIRECTLY, so under the default-on chip-row it was the one interactive
   // run-start that never paused — contradicting "a human-present run pauses when
-  // recommendations exist". It now consults the SAME hold as every other
-  // interactive run-start: parked ⇒ return the panel metadata WITHOUT
-  // dispatching (the embedded child panel renders the chip-row, whose
-  // confirm/adjust/skip releases the park and dispatches through the canonical
-  // `triggerAgentRun`). Best-effort — a hold failure fails OPEN to the previous
-  // direct dispatch.
+  // recommendations exist". It consults the SAME hold as every other
+  // interactive run-start, and since cinatra#2928 it does so by taking the SAME
+  // road: the coordinator's launch, which owns the ordering this function used
+  // to repeat. Parked ⇒ return the panel metadata WITHOUT dispatching (the
+  // embedded child panel renders the chip-row, whose decision releases the park
+  // through the canonical trigger path).
+  let launched;
   try {
-    const hold = await maybeHoldRunForRecommendation({
-      run: created,
+    launched = await launchAgentRun({
+      producer: "run_page_dev_preview",
+      frame: { userId },
+      interactive: true,
+      authority,
       template: {
         packageName: template.packageName,
         lifecycleConfig: (template as { lifecycleConfig?: string | null }).lifecycleConfig,
       },
+      create: {
+        kind: "pre_dispatch",
+        input: {
+          templateId: template.id,
+          runBy: userId,
+          inputParams: {},
+          orgId,
+        },
+      },
+      dispatch: { kind: "enqueue", options: (run) => ({ jobId: run.id }) },
     });
-    if (hold.held) return previewResult(true);
   } catch (err) {
-    console.warn(
-      "[startDevChildPreviewRun] recommendation hold evaluation failed for run",
-      created.id,
-      "— dispatching normally:",
-      err instanceof Error ? err.message : String(err),
-    );
+    // THE PREVIEW'S OWN POSTURE, UNCHANGED — and now the code says what the
+    // comment always did (cinatra#2928 review, finding 2). A dispatch failure is
+    // logged and the panel still opens ON THE RUN THAT EXISTS: this surface is
+    // the only route a person has to that run, so discarding its id would leave
+    // them a run created for them that nothing points at.
+    //
+    // The run is in BETTER shape than it was before this slice — the
+    // coordinator's ladder has already returned it to `pending_input`, where it
+    // is decidable and retryable, instead of the base's `queued` with no job
+    // behind it — and it is not held for a recommendation, because the launch
+    // got past the hold and failed at the dispatch.
+    console.error("[startDevChildPreviewRun] launch failed", err);
+    const createdRunId = runIdFromFailedLaunch(err);
+    if (createdRunId !== null) return previewResult(createdRunId, false);
+    // NO RUN WAS CREATED — the launch failed before there was one (a refused
+    // create, a missing authority). There is nothing for a panel to open on, so
+    // the caller gets the error, which is what it already did for every failure
+    // ahead of this point.
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-
-  try {
-    await transitionRunStatus(created.id, "pending_input", "queued", undefined, authority);
-  } catch (err) {
-    if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
-      throw err;
-    }
+  if (launched.carrier.kind !== "run") {
+    return { ok: false, error: "the launch answered with a carrier that is not a run" };
   }
-
-  try {
-    await enqueueAgentRun(
-      { runId: created.id },
-      { jobId: created.id },
-    );
-  } catch (err) {
-    console.error("[startDevChildPreviewRun] enqueue failed", err);
-  }
-
-  return previewResult(false);
+  return previewResult(launched.carrier.run.id, launched.moment === "recommendation");
 }
 
 // ---------------------------------------------------------------------------

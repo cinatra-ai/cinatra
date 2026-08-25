@@ -335,7 +335,7 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(viaSuccessor!.lineageId).toBe(original!.lineageId);
   });
 
-  it("ADVISOR LANE: the Core analysis lane writes a provenance-stamped advisory comment on a gate (idempotent), readable by the run view", async () => {
+  it("ADVISOR LANE: the Audit lane writes a provenance-stamped advisory comment on a gate (idempotent), readable by the run view", async () => {
     const runId = `run-${randomUUID()}`;
     const artifactId = `art-${randomUUID()}`;
     const rev = `rev-${randomUUID()}`;
@@ -361,7 +361,7 @@ describe.skipIf(!HAS_DB)("cinatra#2042 — post-change verification (real store)
     expect(comments).toHaveLength(1);
     expect(comments[0].authorKind).toBe("service");
     expect(comments[0].authorId).toBe("core-analysis-lane");
-    expect(comments[0].body).toMatch(/Core analysis of 2 disclosed field\(s\)/);
+    expect(comments[0].body).toMatch(/Audit of 2 disclosed field\(s\)/);
     expect(comments[0].body).toMatch(/\[provenance\] lane=core-analysis-lane/);
     // The withheld field value is never in the output.
     expect(comments[0].body).not.toMatch(/ssn=/);

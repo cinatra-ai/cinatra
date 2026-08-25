@@ -506,6 +506,15 @@ export async function observeCapture({
   screenshot,
   build,
   /**
+   * HOW THIS CAPTURE IS FRAMED — `window` (the browser window the operator
+   * sees, with the navigation, the transcript and the composer around the card)
+   * or `page` (the scrolled-out full document). It is written into the record
+   * because it is a fact about the picture that the picture cannot state, and
+   * because round 1 of S9d was rejected on framing alone. It is NOT a
+   * requirement: a record that names none is judged without it.
+   */
+  framing = undefined,
+  /**
    * WHICH card instance this cell photographs, when the page holds more than
    * one of the kind. It is a SELECTOR of the instance, not a fact about it:
    * the value has to appear in some attribute the card itself renders, and the
@@ -547,10 +556,21 @@ export async function observeCapture({
   }
 
   // 2. The anchors the host (and kind) require, in the CANONICAL vocabulary.
-  const required =
-    declaredHost === "chat_thread" && kind
-      ? captureRequirementsFor(declaredHost, kind, state)
-      : captureRequirementsFor(declaredHost);
+  // THE KIND IS MEASURED WHEREVER IT IS DECLARED. This used to read
+  // `declaredHost === "chat_thread" && kind`, so a run_card or page_gate_region
+  // capture measured the HOST anchors and nothing else — no card root, no state
+  // declaration inside it, no absence of the decision controls. The record still
+  // carried `declaredKind`, and the CANONICAL half derives its requirements from
+  // the kind on ANY host, so this observer could only ever produce a run-page
+  // record that the CI gate then refused for anchors it was never asked to look
+  // for. Every non-chat record already committed carries them, because the
+  // drivers that made them asked for them by hand. A walk cannot: it goes
+  // through the observer. So the observer asks for what the kind owes, wherever
+  // it is drawn — which is also what makes the S9d run-page cell recordable at
+  // all, since the schedule step's controls ARE the kind's requirement set.
+  const required = kind
+    ? captureRequirementsFor(declaredHost, kind, state)
+    : captureRequirementsFor(declaredHost);
   const specs = [...required, ...extraAssertions.map((a) => ({ scope: "frame", ...a }))];
 
   // 2a. The reader each scope is answered from. `page` scope is always the outer
@@ -639,7 +659,7 @@ export async function observeCapture({
 
   // 3. The image, written and then hashed from disk.
   const abs = join(repoRoot, screenshot);
-  await page.screenshot(abs);
+  await page.screenshot(abs, { framing: framing ?? "page" });
 
   // 4. MEASURE AGAIN. A page can move between the counts and the shutter —
   //    hydration, a poll, a streamed state change — and a record whose numbers
@@ -696,6 +716,8 @@ export async function observeCapture({
   // those hosts get a state-derived requirement set of their own, which is the
   // slice that produces their records, not this one.
   if (state) record.declaredState = state;
+  // ADDITIVE, and declined by every record written before the field existed.
+  if (framing) record.framing = framing;
   // WHICH card the root-scoped counts came from, so the record names an instance
   // rather than leaving a reader to assume the screenshot holds only one.
   if (instance) record.instance = instance;
@@ -833,6 +855,13 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
   // a real one; a record that names none is judged without it.
   if ((strict || record?.build !== undefined) && !CAPTURE_BUILDS.includes(record?.build)) {
     v.push(`${where}: build "${record?.build}" is not one of ${CAPTURE_BUILDS.join("/")}`);
+  }
+  // GRADED. A record that names how it was framed must name a real framing; a
+  // record that names none is judged without it, which is every record committed
+  // before the field existed -- including several that pin an instance and are
+  // therefore read at the audit tier.
+  if (record?.framing !== undefined && !CAPTURE_FRAMINGS.includes(record.framing)) {
+    v.push(`${where}: framing "${record?.framing}" is not one of ${CAPTURE_FRAMINGS.join("/")}`);
   }
   if (record?.recordedBy !== RECORDER_ID) {
     v.push(
@@ -1031,10 +1060,9 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
   // does not say which root that was is a measurement of "a card of this kind
   // somewhere on the page", and the reader comparing it to the screenshot has
   // no way to check the two describe the same thing.
-  const cardRoot =
-    host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.declaredKind)
-      ? cardRootFor(record.declaredKind)
-      : null;
+  const cardRoot = LIFECYCLE_KINDS.includes(record?.declaredKind)
+    ? cardRootFor(record.declaredKind)
+    : null;
   // GRADED. The pin is this tier's own. A record that carries one must be able
   // to stand behind it, in every particular below; a record that carries none
   // simply does not pin a card, and is judged on what it does assert.
@@ -1085,10 +1113,14 @@ export function validateCaptureRecord(record, { hashOf, tier = "graded" } = {}) 
   // own observed map by. The earlier arm matched on frame alone and IGNORED
   // `within`, so a frame-wide count answered a requirement that was supposed to
   // be taken inside the card root.
-  const hostRequirements =
-    host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.declaredKind)
-      ? captureRequirementsFor(host, record.declaredKind, record.declaredState ?? "pending")
-      : captureRequirementsFor(host);
+  // The same widening as the observer's: a record that DECLARES a kind is read
+  // against that kind's requirement set on whatever host it declares, because
+  // the canonical half already reads it that way and two halves that derive
+  // different requirements from one record is the drift this module exists to
+  // close.
+  const hostRequirements = LIFECYCLE_KINDS.includes(record?.declaredKind)
+    ? captureRequirementsFor(host, record.declaredKind, record.declaredState ?? "pending")
+    : captureRequirementsFor(host);
   // Keyed by scope, selector AND `within`. A root-scoped requirement names the
   // root it is counted inside; an observation that declares a DIFFERENT root
   // answers a different question, and matching on scope alone let it stand in.
@@ -1221,4 +1253,317 @@ export function validateCaptureIndex({ index, hashOf, tier = "graded" } = {}) {
     v.push(...validateCaptureRecord(record, { hashOf, tier }));
   }
   return v;
+}
+
+// ---------------------------------------------------------------------------
+// THE WALK — a capture round that is a PATH rather than a list of URLs.
+//
+// WHY THIS EXISTS, stated as the gap it closes. `driveCapture` above knows one
+// shape of capture: open a URL, wait for a selector, shoot. Every cell gets its
+// own context, its own page, and no cell can be reached by ACTING on the one
+// before it. That shape cannot express the S9d walk at all:
+//
+//   · C1 and C2 are the SAME card in the SAME conversation, photographed before
+//     and after ONE press of Confirm. There is no URL that means "after the
+//     press" — the press is the only way there, and it is not repeatable, so the
+//     two cells must share one live page.
+//   · the schedule is STATED by typing a sentence into the shipped composer; the
+//     conversation it creates has no address until it exists.
+//   · C3 needs a real press of the run page's rail row to open the schedule step.
+//   · light and dark are two contexts of the same walk, not two plans.
+//
+// So the S9d round-2 lane drove its own Playwright file, shot four cells, and
+// could register none of them: nothing it produced was a recorder observation,
+// and an index record's assertions are observations or they are inventions.
+// This is the missing shape. A walk is CONTEXTS (a theme, a viewport, a session)
+// and STEPS; a step runs ACTIONS on its context's live page and then names the
+// CELLS to observe on the screen those actions produced. Everything written into
+// a record is still read off the page by `observeCapture` — a walk says where to
+// stand and what to press, never what was seen.
+//
+// THE PLAN IS CHECKED BEFORE THE BROWSER LAUNCHES. A walk is long, expensive and
+// in S9d's case gated on a real 30-minute TTL; a cell name that contradicts its
+// own declaration, a screenshot path outside `evidence/`, two cells writing one
+// file — each is a refusal the index would issue at the END, and each is worth
+// issuing before the first click instead. Same reason the shutter check moved
+// ahead of the shutter.
+// ---------------------------------------------------------------------------
+
+/**
+ * HOW A CAPTURE WAS FRAMED, recorded rather than assumed.
+ *
+ * `window` is the browser window as the operator sees it — what the maintainer
+ * asked for after round 1 ("close ups of the card, but I cannot tell the
+ * surrounding"): the navigation, the transcript and the composer around the
+ * card. `page` is the scrolled-out full document, which is what `driveCapture`
+ * has always shot.
+ *
+ * GRADED WHEN PRESENT, NEVER REQUIRED. Every record committed before this field
+ * existed declines it, and several of those records pin an instance and are
+ * therefore judged at the audit tier — requiring the field would refuse them for
+ * an omission that says nothing about their pixels. A record that names a
+ * framing must name a real one; a record that names none is judged without it.
+ */
+export const CAPTURE_FRAMINGS = Object.freeze(["window", "page"]);
+
+/**
+ * THE CLOSED SET OF ACTIONS a walk step may take, with the argument each needs.
+ *
+ * Closed on purpose. An open action vocabulary — "run this snippet" — would let
+ * a plan reach into the page and arrange what the recorder is about to measure,
+ * which is the one thing this whole tier exists to prevent. Every action here
+ * either moves the operator (goto, click, press, type, reload) or waits
+ * (waitForSelector, waitForTimeout, scrollIntoView). None of them writes to the
+ * DOM, and none of them can produce an assertion.
+ */
+export const WALK_ACTIONS = Object.freeze({
+  goto: ["url"],
+  // Navigate this context's page to the URL ANOTHER context's page is on.
+  //
+  // It is here because a walk photographs one screen in two themes, and the
+  // screen is a conversation that had no address until the walk created it: the
+  // schedule is STATED into the composer, and the thread the assistant answers
+  // in is minted by the product. So the dark context cannot `goto` it — it can
+  // only follow where the light context ended up. Still a navigation: it reads
+  // one page's URL and drives another page to it, and touches no DOM.
+  followContext: ["context"],
+  click: ["selector"],
+  type: ["selector", "text"],
+  // SET a form field to an exact value, in one step.
+  //
+  // It is here because §VI's option rows are EDITABLE BY THE PERSON before they
+  // confirm — the plan says so in as many words — and a walk that states a
+  // schedule on the card has to be able to put a value into a `datetime-local`
+  // input. `type` cannot: that control is segmented, so keystrokes land in
+  // whichever segment the click happened to focus and the value that comes out
+  // depends on the browser's locale rather than on the plan. `fill` states the
+  // value and nothing else. It is an INPUT action, exactly like `type` and
+  // `click` — it arranges what the PERSON did, never what the recorder is about
+  // to measure, which is the property the closed vocabulary exists to protect.
+  fill: ["selector", "value"],
+  press: ["key"],
+  reload: [],
+  waitForSelector: ["selector"],
+  waitForTimeout: ["ms"],
+  scrollIntoView: ["selector"],
+});
+
+/** Every cell in a walk plan, in the order the walk reaches them. */
+export function walkCellsOf(plan) {
+  const out = [];
+  for (const [stepIndex, step] of (plan?.steps ?? []).entries()) {
+    for (const cell of step?.cells ?? []) {
+      out.push({ ...cell, step: stepIndex, context: step?.context ?? null });
+    }
+  }
+  return out;
+}
+
+/**
+ * Refuse a walk plan that cannot produce valid records, BEFORE a browser opens.
+ *
+ * Returns a list of human-readable violations; an empty list means the plan is
+ * WELL FORMED, which is a much smaller claim than "the walk will pass". Whether
+ * the card is actually on the screen is a question only the page can answer, and
+ * `observeWalkCell` asks it there.
+ */
+export function validateWalkPlan(plan) {
+  const v = [];
+  if (plan === null || typeof plan !== "object") return ["the walk plan is not an object"];
+  if (!isNonEmptyString(plan.slice)) {
+    v.push("the walk plan names no `slice` — a record set nobody can place is a record set nobody can retire");
+  }
+  const contexts = plan.contexts;
+  if (contexts === null || typeof contexts !== "object" || Array.isArray(contexts)) {
+    v.push("the walk plan declares no `contexts` map");
+  }
+  if (!Array.isArray(plan.steps) || plan.steps.length === 0) {
+    v.push("the walk plan declares no `steps`");
+    return v;
+  }
+  for (const [i, step] of plan.steps.entries()) {
+    const at = `step ${i}`;
+    if (step === null || typeof step !== "object") {
+      v.push(`${at}: not an object`);
+      continue;
+    }
+    if (!isNonEmptyString(step.context)) {
+      v.push(`${at}: names no context — a step runs on a named context's own live page`);
+    } else if (contexts && typeof contexts === "object" && !(step.context in contexts)) {
+      v.push(`${at}: names context "${step.context}", which the plan does not declare`);
+    }
+    for (const [j, action] of (step.actions ?? []).entries()) {
+      const label = `${at} action ${j}`;
+      const name = action?.action;
+      if (!Object.prototype.hasOwnProperty.call(WALK_ACTIONS, name)) {
+        v.push(
+          `${label}: "${name}" is not one of ${Object.keys(WALK_ACTIONS).join("/")} — the action ` +
+            "vocabulary is closed so a plan cannot arrange what the recorder is about to measure",
+        );
+        continue;
+      }
+      for (const arg of WALK_ACTIONS[name]) {
+        if (action[arg] === undefined || action[arg] === null || action[arg] === "") {
+          v.push(`${label}: "${name}" needs \`${arg}\``);
+        }
+      }
+    }
+    if (step.id !== undefined && !isNonEmptyString(step.id)) {
+      v.push(`${at}: \`id\` must be a non-empty string — it is how a pass names the steps it drives`);
+    }
+    if (!Array.isArray(step.cells)) {
+      v.push(`${at}: \`cells\` must be an array — a step that observes nothing may declare []`);
+    }
+  }
+
+  const seenStepId = new Set();
+  for (const [i, step] of plan.steps.entries()) {
+    if (!isNonEmptyString(step?.id)) continue;
+    if (seenStepId.has(step.id)) v.push(`step ${i}: id "${step.id}" is declared twice`);
+    seenStepId.add(step.id);
+  }
+
+  const cells = walkCellsOf(plan);
+  const seenCell = new Map();
+  const seenShot = new Map();
+  for (const cell of cells) {
+    const at = `cell "${cell?.cell ?? "(unnamed)"}"`;
+    if (!isNonEmptyString(cell?.cell)) {
+      v.push(`${at}: no cell name`);
+      continue;
+    }
+    if (seenCell.has(cell.cell)) {
+      v.push(`${at}: declared twice (steps ${seenCell.get(cell.cell)} and ${cell.step})`);
+    } else seenCell.set(cell.cell, cell.step);
+
+    if (!CAPTURE_HOSTS.includes(cell.declaredHost)) {
+      v.push(`${at}: declaredHost "${cell.declaredHost}" is not one of ${CAPTURE_HOSTS.join("/")}`);
+    }
+    // THE NAME MAY NOT CONTRADICT THE DECLARATION — the same rule the record is
+    // judged by, applied to the plan that will produce it, so a mislabel costs a
+    // parse rather than a walk.
+    const nameHost = hostTokenInCell(cell.cell);
+    if (nameHost !== null && nameHost !== cell.declaredHost) {
+      v.push(`${at}: the name says host "${nameHost}" and the cell declares "${cell.declaredHost}"`);
+    }
+    const nameState = stateTokenInCell(cell.cell);
+    if (nameState !== null && cell.state !== undefined && nameState !== cell.state) {
+      v.push(`${at}: the name says state "${nameState}" and the cell declares "${cell.state}"`);
+    }
+    const nameKind = kindTokenInCell(cell.cell);
+    if (nameKind !== null && cell.kind !== undefined && nameKind !== cell.kind) {
+      v.push(`${at}: the name says kind "${nameKind}" and the cell declares "${cell.kind}"`);
+    }
+    if (cell.kind !== undefined && !LIFECYCLE_KINDS.includes(cell.kind)) {
+      v.push(`${at}: kind "${cell.kind}" is not one of ${LIFECYCLE_KINDS.join("/")}`);
+    }
+    if (cell.state !== undefined && !CAPTURE_STATES.includes(cell.state)) {
+      v.push(`${at}: state "${cell.state}" is not one of ${CAPTURE_STATES.join("/")}`);
+    }
+    if (cell.build !== undefined && !CAPTURE_BUILDS.includes(cell.build)) {
+      v.push(`${at}: build "${cell.build}" is not one of ${CAPTURE_BUILDS.join("/")}`);
+    }
+    if (cell.framing !== undefined && !CAPTURE_FRAMINGS.includes(cell.framing)) {
+      v.push(`${at}: framing "${cell.framing}" is not one of ${CAPTURE_FRAMINGS.join("/")}`);
+    }
+    const pathViolation = screenshotPathViolation(cell.screenshot);
+    if (pathViolation) {
+      v.push(`${at}: ${pathViolation}`);
+    } else if (seenShot.has(cell.screenshot)) {
+      v.push(
+        `${at}: writes ${cell.screenshot}, already written by "${seenShot.get(cell.screenshot)}" — ` +
+          "one image cannot be the evidence for two cells",
+      );
+    } else seenShot.set(cell.screenshot, cell.cell);
+  }
+
+  for (const retired of plan.retires ?? []) {
+    if (!isNonEmptyString(retired)) v.push("`retires` must name cells as strings");
+    else if (seenCell.has(retired)) {
+      v.push(
+        `the plan both retires and produces "${retired}" — a cell this walk writes is replaced by ` +
+          "the write, and naming it as retired would delete the record the walk just made",
+      );
+    }
+  }
+  return v;
+}
+
+/**
+ * OBSERVE one walk cell, and refuse to hand back a record the index would not take.
+ *
+ * This is the recorder's own walk path. `observeCapture` measures the screen;
+ * this wraps it in the promise the driver above makes only for its own output —
+ * that a record is validated at the AUDIT tier, against the image on disk,
+ * BEFORE anything holds it. A walk is expensive and mostly unrepeatable, so a
+ * cell that did not come out has to say so at the cell rather than at the end of
+ * the round, when the page it failed on is long gone.
+ *
+ * It takes the same `CapturePage` port `observeCapture` takes, so it runs
+ * against a fake page in a unit test and against Playwright in the driver, and
+ * neither of those is a special case of the other.
+ */
+export async function observeWalkCell({
+  page,
+  cell,
+  repoRoot = process.cwd(),
+  readImpl = readFileSync,
+  now = () => new Date().toISOString(),
+}) {
+  const record = await observeCapture({
+    page,
+    cell: cell.cell,
+    declaredHost: cell.declaredHost,
+    kind: cell.kind,
+    state: cell.state,
+    instance: cell.instance ?? null,
+    screenshot: cell.screenshot,
+    build: cell.build ?? "development",
+    framing: cell.framing ?? "window",
+    repoRoot,
+    readImpl,
+    now,
+  });
+  const violations = validateCaptureRecord(record, {
+    hashOf: (rel) => hashFile(join(repoRoot, rel), readImpl),
+    tier: "audit",
+  });
+  if (violations.length > 0) {
+    throw new Error(
+      `walk cell "${cell.cell}" produced a record the index would refuse:\n  ` +
+        violations.join("\n  "),
+    );
+  }
+  return record;
+}
+
+/**
+ * MERGE a walk's records into an index, surgically.
+ *
+ * `main` below rewrote `records` with ONLY the run's own output, which meant a
+ * lane adding four cells silently deleted the other fifty-four. Nothing caught
+ * it because a smaller index is still a valid index. So a walk MERGES: every
+ * record it did not write survives untouched and in place, a record it rewrote
+ * is replaced where it stood, and the cells the plan RETIRES are dropped. The
+ * retirement is part of the plan rather than a separate act, because a round
+ * that replaces an earlier round's pictures is the only thing that has standing
+ * to say the earlier records are stale.
+ */
+export function mergeWalkRecords({ index, records, retires = [] }) {
+  const retired = new Set(retires);
+  const written = new Map(records.map((r) => [r.cell, r]));
+  const out = [];
+  for (const existing of index?.records ?? []) {
+    if (retired.has(existing?.cell)) continue;
+    if (written.has(existing?.cell)) {
+      out.push(written.get(existing.cell));
+      written.delete(existing.cell);
+      continue;
+    }
+    out.push(existing);
+  }
+  for (const record of records) {
+    if (written.has(record.cell)) out.push(record);
+  }
+  return { ...index, records: out };
 }

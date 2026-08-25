@@ -15,6 +15,7 @@ import {
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
+import { onAgentHitl, stateRunScheduleMoment } from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
   resolveWayflowUrl,
@@ -79,6 +80,22 @@ const isScopeDenial = (err: unknown): err is { reason: string } =>
 // makes a marked gate FAIL CLOSED to the review surface (never the legacy gate,
 // which could dual-path an already-pinned gate); see the branch below.
 type ArtifactReviewGateSeam = {
+  // cinatra#2929: the one review core, reached the same way the gate store is —
+  // through the boot-bound slot, so this file gains no import edge for it.
+  decideDeclaredReview(input: {
+    orgId: string;
+    templateId: string | null;
+    packageVersion: string | null;
+    targets: unknown;
+  }): Promise<
+    | {
+        review: true;
+        /** The set to PIN — validated, deduped, and policy-filtered. */
+        targets: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>;
+        reason: string;
+      }
+    | { review: false; why: string }
+  >;
   emit(input: {
     runId: string;
     orgId: string;
@@ -1365,6 +1382,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // redirecting to a gate that isn't this run's — an invalid-targets error (no
       // gate), a different-org conflict, or a vanished row all fall open to the
       // legacy HITL gate so the run degrades rather than dead-ends.
+      // What the gate will pin. It starts as the marker's own value — which is
+      // what an unbound seam and a core that cannot answer both fall back to —
+      // and is replaced by the core's decided set when there is one.
+      let pinnedTargets: unknown = rawTargets;
       let routeToReviewSurface = false;
       const gateSeam = resolveArtifactReviewGateSeam();
       if (!gateSeam) {
@@ -1384,12 +1405,79 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         );
         routeToReviewSurface = true;
       } else {
-        const emitResult = await gateSeam.emit({
-          runId,
-          orgId: run.orgId,
-          reviewTaskId,
-          targets: rawTargets,
-        });
+        // ------------------------------------------------------------------
+        // THE ONE REVIEW CORE (cinatra#2929, epic #2926 W2b) — the DECLARED
+        // input. Until this slice a marked gate pinned and routed
+        // unconditionally: the one review kind an agent author states outright
+        // was the one kind the policy table had no say over, and an agent whose
+        // marker named nothing usable was told so by the emitter rather than by
+        // the predicate both kinds share.
+        //
+        // Now both kinds prove the same binding and ask the same policy, and
+        // only then is the gate emitted. A DECLINE — an unusable marker, or an
+        // organization that forbids a review for this work — falls through to
+        // the legacy human gate below, which is exactly what an unusable marker
+        // has always done. That keeps the single-decision-path property this
+        // branch is built around: the review surface OR the legacy gate, and
+        // never both, because nothing is pinned when the core declines.
+        //
+        // FAIL-OPEN, deliberately, on a core that THROWS: a decision that cannot
+        // be reached must not decide. The pre-#2929 behaviour is the fallback —
+        // pin and route — because a marked step is a step whose author asked for
+        // a review, and refusing one on a resolver fault would drop it silently.
+        let coreDecision: {
+          review: boolean;
+          why?: string;
+          reason?: string;
+          targets?: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>;
+        };
+        try {
+          coreDecision = await gateSeam.decideDeclaredReview({
+            orgId: run.orgId,
+            templateId: run.templateId,
+            // The version the RUN is pinned to. `agent_templates` is a mutable
+            // row a reinstall overwrites in place, so a template that has moved
+            // on must not supply a declared skip that takes this run's review
+            // away.
+            packageVersion: run.packageVersion ?? null,
+            targets: rawTargets,
+          });
+        } catch (coreErr) {
+          console.warn(
+            `[artifact-review-gate] run=${runId} task=${task.id} review core unavailable ` +
+              `(${coreErr instanceof Error ? coreErr.message : String(coreErr)}) — ` +
+              `opening the review the marked step asked for`,
+          );
+          coreDecision = { review: true };
+        }
+        if (!coreDecision.review) {
+          console.log(
+            `[artifact-review-gate] run=${runId} task=${task.id} no review for this work ` +
+              `(${coreDecision.why ?? "the review core declined"}) — falling through to the ordinary human gate`,
+          );
+        }
+        // WHAT THE GATE PINS IS WHAT THE CORE DECIDED FOR, not what the flow
+        // input happened to hold. The core validated the set, deduped it and
+        // dropped any target the organization forbids a review for — emitting
+        // the raw value again would put a refused artifact back under the gate
+        // and ask the emitter to re-derive a set that had already been decided.
+        // The fail-open branch above resolves no set, so it keeps the raw value:
+        // a core that could not answer must not narrow what a person reviews.
+        if (coreDecision.review && coreDecision.targets) {
+          pinnedTargets = coreDecision.targets;
+        }
+        const emitResult = coreDecision.review
+          ? await gateSeam.emit({
+              runId,
+              orgId: run.orgId,
+              reviewTaskId,
+              targets: pinnedTargets,
+            })
+          : ({
+              ok: false as const,
+              code: "invalid-targets" as const,
+              message: coreDecision.why ?? "the review core opened no review",
+            });
         if (emitResult.ok) {
           routeToReviewSurface = true;
         } else {
@@ -1472,7 +1560,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             reviewSurfaceUrl,
             reviewTaskId,
             lifecycleCardRef,
-            targetCount: Array.isArray(rawTargets) ? rawTargets.length : null,
+            targetCount: Array.isArray(pinnedTargets) ? pinnedTargets.length : null,
             agentSummary: historyText ?? "",
           },
           reviewTaskId,
@@ -2508,6 +2596,10 @@ async function runAgentBuilderExecutionJobInner(
         buildA2UiMidRunTranslatorResolver(),
       ),
     );
+    // The gate identity the park will state as its lifecycle card reference
+    // (cinatra#2928). Set by `persistArtifact` below, read by `parkRun` after
+    // its CAS wins — the two callbacks are the only writer and the only reader.
+    let parkedGateRef: string | null = null;
     await parkRunOnHumanGate({
       runId,
       gateLabel: `setup field '${fieldName}'`,
@@ -2549,20 +2641,50 @@ async function runAgentBuilderExecutionJobInner(
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: (artifact) =>
-        writeDurableHitlGateArtifact({
+      persistArtifact: (artifact) => {
+        // The gate identity this park will state as its card reference. Held
+        // here because `parkRun` below takes no arguments and the reference has
+        // to survive into it; captured BEFORE the write, so a failed durable
+        // write does not also cost the run its moment.
+        parkedGateRef = artifact.reviewTaskId;
+        return writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
           inputSchema: artifact.schema,
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
-        }),
-      parkRun: () =>
-        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority).catch((e) => {
+        });
+      },
+      parkRun: async () => {
+        try {
+          await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
+        } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        }
+        // THE RUN STATES ITS MOMENT (cinatra#2928) — and only now.
+        //
+        // AFTER THE WINNING CAS, which is the whole placement. Written beside
+        // the durable artifact instead, it landed before the park, and a
+        // concurrent stop that won the CAS left a stopped run still saying it
+        // was waiting at a live screen. Winning is the only proof the run is
+        // really parked here.
+        //
+        // THE SETUP LOOP ONLY. This branch is the agent asking for a field it
+        // needs — which is what the `hitl` moment IS. The generic mid-run gate
+        // in `handleWayflowTaskState` is an APPROVAL of work already done, and
+        // recording it as an input ask would make every surface tell a review
+        // gate as "needs your input". Which moment that gate is at belongs to
+        // the review core, which is W2b's (cinatra#2929).
+        if (parkedGateRef) {
+          await onAgentHitl({
+            run: { id: runId, orgId: run.orgId, status: "pending_approval" },
+            screenRef: parkedGateRef,
+            authority: executionAuthority,
+          });
+        }
+      },
       failRun: (error) =>
         transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
@@ -2611,6 +2733,10 @@ async function runAgentBuilderExecutionJobInner(
         buildA2UiMidRunTranslatorResolver(),
       ),
     );
+    // The gate identity the park will state as its lifecycle card reference
+    // (cinatra#2928). Set by `persistArtifact` below, read by `parkRun` after
+    // its CAS wins — the two callbacks are the only writer and the only reader.
+    let parkedGateRef: string | null = null;
     await parkRunOnHumanGate({
       runId,
       gateLabel: `grouped setup (${pendingFields.length} required fields: ${pendingFields.join(", ")})`,
@@ -2639,20 +2765,50 @@ async function runAgentBuilderExecutionJobInner(
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: (artifact) =>
-        writeDurableHitlGateArtifact({
+      persistArtifact: (artifact) => {
+        // The gate identity this park will state as its card reference. Held
+        // here because `parkRun` below takes no arguments and the reference has
+        // to survive into it; captured BEFORE the write, so a failed durable
+        // write does not also cost the run its moment.
+        parkedGateRef = artifact.reviewTaskId;
+        return writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
           inputSchema: artifact.schema,
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
-        }),
-      parkRun: () =>
-        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority).catch((e) => {
+        });
+      },
+      parkRun: async () => {
+        try {
+          await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
+        } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
-        }),
+        }
+        // THE RUN STATES ITS MOMENT (cinatra#2928) — and only now.
+        //
+        // AFTER THE WINNING CAS, which is the whole placement. Written beside
+        // the durable artifact instead, it landed before the park, and a
+        // concurrent stop that won the CAS left a stopped run still saying it
+        // was waiting at a live screen. Winning is the only proof the run is
+        // really parked here.
+        //
+        // THE SETUP LOOP ONLY. This branch is the agent asking for a field it
+        // needs — which is what the `hitl` moment IS. The generic mid-run gate
+        // in `handleWayflowTaskState` is an APPROVAL of work already done, and
+        // recording it as an input ask would make every surface tell a review
+        // gate as "needs your input". Which moment that gate is at belongs to
+        // the review core, which is W2b's (cinatra#2929).
+        if (parkedGateRef) {
+          await onAgentHitl({
+            run: { id: runId, orgId: run.orgId, status: "pending_approval" },
+            screenRef: parkedGateRef,
+            authority: executionAuthority,
+          });
+        }
+      },
       failRun: (error) =>
         transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
@@ -2721,6 +2877,12 @@ async function runAgentBuilderExecutionJobInner(
     }
     const configuredInTheWindow = await readRunTriggerByRunId(runId);
     if (configuredInTheWindow === null) {
+      // THE RUN IS AT ITS SCHEDULE MOMENT, and now it says so (cinatra#2928).
+      // `pending_trigger` is the status; the moment is what the run is WAITING
+      // AT, and the two are not the same fact — the run page used to have only
+      // the status to go on. Continue is `advanceAgentRun`, which clears this
+      // before the run moves.
+      await stateRunScheduleMoment({ run, authority: executionAuthority });
       console.log(
         "[setup-interrupt-loop] setup finished with no trigger configured — awaiting the trigger choice for run",
         runId,

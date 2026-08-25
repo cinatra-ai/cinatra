@@ -7,7 +7,6 @@ import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import {
   readPublishedAgentTemplates,
   isAgentPubliclyDiscoverable,
-  createAgentRun,
   readAgentRunById,
 } from "../store";
 // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
@@ -16,6 +15,7 @@ import {
 // principal's id) or refuses (no live path loses: §8.1 says an agent-OBO
 // context always carries the delegating human).
 import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
+import { launchAgentRun } from "../lifecycle-coordinator";
 // ---------------------------------------------------------------------------
 // MCP tool name sanitization
 // ---------------------------------------------------------------------------
@@ -230,8 +230,22 @@ async function invokePublishedAgentTool(
     const authority = await resolveRunCreationAuthority(orgId, {
       userId: ctx?.principalType === "HumanUser" ? ctx.principalId : undefined,
     });
-    await createAgentRun(
-      {
+    // Routed through the coordinator (cinatra#2928). Agent-as-tool is HEADLESS:
+    // no person is sitting in front of it, so no moment applies at its start and
+    // the run is created `queued` exactly as it was. The dispatch stays the
+    // caller's, because the enqueue below is followed by this callback's own
+    // wait loop.
+    await launchAgentRun({
+      producer: "agent_as_tool",
+      frame: null,
+      authority,
+      dispatch: {
+        kind: "caller_dispatches",
+        why: "the agent-as-tool callback enqueues and then waits on the child run itself",
+      },
+      create: {
+        kind: "full",
+        input: {
         id: runId,
         templateId,
         inputParams,
@@ -257,9 +271,9 @@ async function invokePublishedAgentTool(
         // any org could run any published agent. The ALS frame is the same
         // trust anchor the `orgId` above comes from.
         scopeActor: ctx ?? null,
+        },
       },
-      authority,
-    );
+    });
   } catch (err) {
     if (err instanceof OboCeilingCompositionError) {
       return { error: err.message, code: err.code, runId };

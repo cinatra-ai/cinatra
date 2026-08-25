@@ -1,0 +1,79 @@
+RUNTIME EVIDENCE — the server's own log lines behind round 5's claims
+=====================================================================
+
+Extracted from the lane dev server's stdout. ONE redaction, applied everywhere it
+occurs: the instance's public origin is written as <the lane's public origin>,
+because a committed hostname is a leak and a lane the next operator cannot
+reproduce. Nothing else is altered — no line is reordered, reworded or invented —
+and the grep that produced each block is given, so the extraction is repeatable.
+
+WHAT A LOG LINE CAN AND CANNOT SAY. These lines are the server's own account of
+what it served; they are not a network capture and they do not name a caller's
+address. Where the caller's identity matters, the load-bearing evidence is in
+`db-readback.json` instead, and each block below says which.
+
+1. THE PUBLIC MCP ENDPOINT SERVED AUTHENTICATED MCP CALLS DURING THE TURNS.
+   grep -E 'POST /api/mcp 200'
+   READ THIS EXACTLY: the line says the shipped MCP route answered 200. It does
+   NOT name who called. What names the caller is the turn's own recorded part in
+   `db-readback.json` -> threadDispatch: a tool_call whose id is `mcp_0e1afcff…`
+   with serverLabel "cinatra" — an id in the PROVIDER's own id space, which is
+   what a provider-hosted MCP call looks like and what the scripted bridge has
+   nothing to emit. The two together are the claim: the model held the catalogue
+   as a hosted MCP reference, and this endpoint served the calls it made.
+   (count in this round's two server logs, and the last ten lines)
+   total: 65
+
+    POST /api/mcp 200 in 79ms (next.js: 3ms, proxy.ts: 1708µs, application-code: 74ms)
+    POST /api/mcp 200 in 118ms (next.js: 6ms, proxy.ts: 1790µs, application-code: 110ms)
+    POST /api/mcp 200 in 53ms (next.js: 2ms, proxy.ts: 1305µs, application-code: 50ms)
+    POST /api/mcp 200 in 106ms (next.js: 4ms, proxy.ts: 21ms, application-code: 81ms)
+    POST /api/mcp 200 in 41ms (next.js: 2ms, proxy.ts: 1352µs, application-code: 37ms)
+    POST /api/mcp 200 in 83ms (next.js: 7ms, proxy.ts: 1977µs, application-code: 75ms)
+    POST /api/mcp 200 in 33ms (next.js: 3ms, proxy.ts: 2ms, application-code: 28ms)
+    POST /api/mcp 200 in 104ms (next.js: 9ms, proxy.ts: 7ms, application-code: 88ms)
+    POST /api/mcp 200 in 108ms (next.js: 6ms, proxy.ts: 2ms, application-code: 100ms)
+    POST /api/mcp 200 in 55ms (next.js: 2ms, proxy.ts: 1344µs, application-code: 51ms)
+
+2. THE SCHEDULE FIRED ON ITS OWN TICK, AND THE RUNTIME NAMED THE ACTOR.
+   grep -E '\[trigger-release\].*9384a346-d9a6-4403-9beb-51ef347618f3'
+   [trigger-release] released gate for run 9384a346-d9a6-4403-9beb-51ef347618f3
+   [trigger-release] enqueued execution for run 9384a346-d9a6-4403-9beb-51ef347618f3
+
+3. THE AGENT'S OWN MODEL CALL WENT OUT OVER THE SHIPPED BRIDGE,
+   RESOLVED BY THIS RUN'S OWN RUN TOKEN.
+   grep -E 'llm-bridge-run-select|POST /api/llm-bridge|\[wayflow\] run=' (this run only)
+   [llm-bridge-run-select] served-by=run_token run=9384a346-d9a6-4403-9beb-51ef347618f3 org=e44780e4-c4fc-4e64-84ee-4a6177a6dca7 token-invalid=false token-divergent=false
+   [wayflow] run=9384a346-d9a6-4403-9beb-51ef347618f3 task=0b6a72ff-e5e8-4ed5-ac6a-0df6de4a6372 state=completed status={"state":"completed","timestamp":"2026-08-24T17:42:11.797224"} artifacts=null
+    POST /api/llm-bridge 200 in 10.9s (next.js: 50ms, proxy.ts: 7ms, application-code: 10.8s)
+
+4. THE SCRIPTED RUNTIME SERVED NOTHING.
+   READ THIS EXACTLY: a grep returning zero shows that no scripted-runtime line
+   was ever emitted; it is not by itself a capture of the process environment.
+   The load-bearing evidence that the scripted provider never served a call is in
+   `db-readback.json` -> usageEvents, which is the shipped ledger: EVERY row in
+   this lane records provider `openai` and a real model id. A scripted call would
+   have written the model `scripted-test-model` there (packages/llm/src/
+   scripted-test-provider.ts), and no such row exists. The grep below is the
+   corroborating half.
+   grep -ciE 'scripted|CINATRA_UAT_OK|deterministic' over BOTH server logs:
+   0
+   (zero. The scripted provider is reachable ONLY through
+    CINATRA_TEST_LLM_PROVIDER — SCRIPTED_TEST_PROVIDER_ENV in
+    packages/llm/src/scripted-test-provider.ts — and the lane's env file does not
+    contain that variable. A reader cannot verify a process environment from a
+    committed file, which is why the ledger above, not this count, is what the
+    claim rests on.)
+
+5. THE REACHABILITY PROBE THE RUNTIME MAKES BEFORE EVERY TURN.
+   grep -E 'HEAD /api/mcp' — the shipped dead-ingress guard
+   (checkPublicMcpReachability) probing the public origin; 405 from a
+   POST-only route is a LIVE ingress, which is what the guard asks for.
+    HEAD /api/mcp 405 in 25ms (next.js: 16ms, proxy.ts: 1638µs, application-code: 8ms)
+    HEAD /api/mcp 405 in 56ms (next.js: 26ms, proxy.ts: 11ms, application-code: 19ms)
+    HEAD /api/mcp 405 in 13ms (next.js: 5ms, proxy.ts: 1538µs, application-code: 7ms)
+
+   The guard also REFUSED turns in this lane when the probe missed its
+   2.5 s budget, and those refusals are in the log too — a turn that was
+   refused produced no card and no picture. grep -cE 'refusing to run the turn':
+   11 refusals across the round; every one of them ended that attempt.

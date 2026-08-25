@@ -48,7 +48,7 @@ const BODY: VerificationSummaryBody = {
     },
   ],
   advisoryComments: [
-    { authorKind: "service", body: "Core analysis of 3 disclosed field(s)." },
+    { authorKind: "service", body: "Audit of 3 disclosed field(s)." },
   ],
 };
 

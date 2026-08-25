@@ -136,13 +136,15 @@ describe("every digest input is really an input", () => {
   });
 
   // The added cell must be one the contract does NOT already record, or the
-  // clone is byte-identical and the discriminator proves nothing.
-  // `verification_summary` stopped being that example when S9e (cinatra#2789)
-  // landed its run-card and gate-region mounts; `trigger_schedule_proposal`
-  // still reaches the two conversation hosts only.
+  // clone is byte-identical and the discriminator proves nothing. The subject
+  // has moved twice for exactly that reason: `verification_summary` stopped
+  // being it when S9e (cinatra#2789) landed its run-card and gate-region
+  // mounts, and `trigger_schedule_proposal` stopped being it when S9d
+  // (cinatra#2788) landed the same two. `recommendation_hold` is what is left —
+  // a typed interrupt with no gate-region cell recorded on any row.
   it("a HOST CELL added to the parity row invalidates the digest", () => {
     const drifted = clone(contract());
-    drifted.domExpectations.hostParity.trigger_schedule_proposal.hosts.run_card = "composition";
+    drifted.domExpectations.hostParity.recommendation_hold.hosts.page_gate_region = "composition";
     expect(
       auditAnchorContract({ anchorContract: drifted, manifest: manifest() }).join("\n"),
     ).toContain("the anchor digest is stale");

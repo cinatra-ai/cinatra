@@ -259,13 +259,20 @@ describe("decideMessageRouting — honest no-responder (the retired @chatgpt rou
     expect(r).toEqual({ shouldCallLlm: false, isBroadcast: true });
   });
 
-  it("a scoped agent-dispatch ref (not an in-audience assistant) → honest no-responder", () => {
+  it("a scoped agent-dispatch ref is NOT a no-responder — it streams the host reply", () => {
+    // cinatra#2820 (contract change): this case used to return the no-responder
+    // plan, which meant the client POSTed nothing and the server-side
+    // explicit-dispatch pre-router never saw the canonical
+    // `use @cinatra-ai/<slug>` form. An agent-dispatch ref now streams the host
+    // reply, exactly like the no-mention default. Full coverage — the two-token
+    // form, the legacy underscore form, and the surviving no-responder cases —
+    // lives in `scoped-agent-dispatch-streams.test.ts`.
     const r = decideMessageRouting({
       classified: [agentDispatch("acme", "some-agent")],
       deliveryFor: NO_DELIVERY,
       cinatraHostId: "cin-host",
     });
-    expect(r).toEqual({ shouldCallLlm: false, isBroadcast: true });
+    expect(r).toEqual({ shouldCallLlm: true, hostAssistantUserId: "cin-host" });
   });
 
   it("an unknown handle STILL honors tagged broadcast participants (silent-reply-bug fix)", () => {

@@ -166,7 +166,35 @@ export const CARD_KINDS = {
   trigger_schedule_proposal: {
     cellTokens: ["trigger-card", "schedule-card", "trigger-schedule-proposal"],
     root: '[data-lifecycle-card="trigger_schedule_proposal"]',
-    decisionControls: ["[data-action]"],
+    // §VI's DECISION floor is **Confirm**, and it is the only thing a capture of
+    // this kind owes: present while the card is undecided, absent once it is
+    // settled.
+    //
+    // TWO CORRECTIONS ARE FOLDED IN HERE. The placeholder-era `[data-action]`
+    // was written before any of the card existed and matched too much — the
+    // settled reading draws Save changes, and on the two page hosts Cancel
+    // schedule and Run now as well — so a truthful settled capture was
+    // refused as "still offers a decision". And the interim wording named an
+    // `adjust-schedule-proposal` control that no longer exists: plan (A) §7.2,
+    // "The option rows are editable as they stand: until you confirm, you change
+    // the proposal directly on the card — the rows are never locked behind a
+    // separate step. The floor is **Confirm**". Naming a retired control would
+    // make a correct card unindexable.
+    //
+    // ONE MEMBER, and it is the same one in every undecided phase: a live
+    // proposal and an EXPIRED one both end on Confirm ("an expired proposal
+    // **stays visible**, still editable, with **Confirm** to propose again",
+    // §7.2 step 2). So there is no group to read as "any" or "every" — the
+    // requirement is the same selector for both, which is what makes the two
+    // tiers agree without either weakening.
+    //
+    // SAVE CHANGES IS DELIBERATELY NOT LISTED. It is the settled card's control,
+    // and a DECIDED capture owes the ABSENCE of the decision controls — listing
+    // Save changes would make every honest armed capture fail for showing the
+    // control the plan puts on it. What a settled capture owes is graded by the
+    // anchor set instead, where `[data-action="save-schedule-changes"]` is a
+    // ratified member.
+    decisionControls: ['[data-action="confirm-schedule-proposal"]'],
   },
   verification_summary: {
     cellTokens: ["verification-card", "audit-card", "verification"],

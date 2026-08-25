@@ -43,7 +43,7 @@ const VERIFICATION_BODY: VerificationSummaryBody = {
   // §VII's advisory comments (epic S9, slice S9e) — the panel per comment the
   // card closes with, and the only place the reading's PROVENANCE travels.
   advisoryComments: [
-    { authorKind: "service", body: "Core analysis of 2 disclosed field(s). [provenance] lane=core-analysis-lane" },
+    { authorKind: "service", body: "Audit of 2 disclosed field(s). [provenance] lane=core-analysis-lane" },
   ],
 };
 
@@ -62,11 +62,30 @@ const SCHEDULE_SETTLED_BODY: TriggerScheduleProposalViewBody = {
   version: TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION,
   agentName: "Weekly digest",
   runId: "run-1",
+  // The ARMED selections the settled card draws its rows from (cinatra#2788).
+  schedule: {
+    kind: "recurring",
+    timezone: "Europe/Berlin",
+    selection: {
+      frequency: "weekly",
+      interval: 1,
+      weekdays: [1, 2, 3, 4, 5],
+      dayOfMonth: 1,
+      monthlyMode: "date",
+      nthWeek: 1,
+      monthlyWeekday: 1,
+      quarterAnchor: "start",
+      yearlyMonth: 1,
+      hour: 9,
+      minute: 0,
+    },
+  },
   triggerType: "recurring",
   scheduleCopy: "Every weekday at 9:00 AM",
   timezone: "Europe/Berlin",
   gatedSteps: [],
   released: false,
+  canSave: true,
   canCancel: true,
   canRelease: false,
   arming: false,
@@ -387,10 +406,15 @@ describe("`absent` reveals nothing about the target", () => {
 // ---------------------------------------------------------------------------
 
 describe("the recommendation hold stays outside the DATA_PART envelope", () => {
-  it("is the sole typed-interrupt kind, so it never rides this resolve", () => {
+  it("is typed-interrupt carried, so it never rides this resolve", () => {
     expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
-    expect(LIFECYCLE_INTERRUPT_KINDS).toEqual(["recommendation_hold"]);
+    // cinatra#2928 added a second interrupt kind; what this case is about is
+    // that an INTERRUPT kind has no data-part resolve arm, so it asserts the
+    // membership rather than the size of the set.
+    expect(LIFECYCLE_INTERRUPT_KINDS).toContain("recommendation_hold");
+    expect(LIFECYCLE_INTERRUPT_KINDS).toContain("agent_hitl_screen");
     expect(LIFECYCLE_DATA_PART_VIEW_TYPES).not.toContain("recommendation_hold");
+    expect(LIFECYCLE_DATA_PART_VIEW_TYPES).not.toContain("agent_hitl_screen");
   });
 
   it("has no envelope arm — asking for it fails closed", () => {

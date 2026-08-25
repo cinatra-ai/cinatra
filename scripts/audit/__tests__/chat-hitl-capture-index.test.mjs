@@ -35,6 +35,7 @@ import {
   HOST_ANCHOR_REQUIREMENTS,
   KIND_REQUIRED_ACTIONS,
   RECORDER_ID,
+  captureRequirementsFor,
   chatThreadRequirementsFor,
   classifyUrl,
   collectAssertions,
@@ -74,6 +75,24 @@ const hashOf = (rel) => {
  */
 function chatAssertions(kind = "recommendation_hold", state = "pending") {
   return chatThreadRequirementsFor(kind, state).map((r) => ({
+    ...r,
+    expect: r.expect ?? "present",
+    count: (r.expect ?? "present") === "absent" ? 0 : 1,
+    visible: (r.expect ?? "present") === "absent" ? 0 : 1,
+  }));
+}
+
+/**
+ * The same, for a card drawn on a host that is not a chat thread.
+ *
+ * It exists because the observer and both validators derive a kind's anchors on
+ * WHATEVER host the kind is declared on -- they used to derive them for
+ * chat_thread alone, which is how a run_card record could declare a kind and
+ * assert nothing about the card, be accepted here, and be refused by the
+ * canonical half that never had the chat-only guard.
+ */
+function hostAssertions(host, kind = "recommendation_hold", state = "pending") {
+  return captureRequirementsFor(host, kind, state).map((r) => ({
     ...r,
     expect: r.expect ?? "present",
     count: (r.expect ?? "present") === "absent" ? 0 : 1,
@@ -270,15 +289,13 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
       cell: "S9x-4__run_card__recommendation-hold-held",
       declaredHost: "run_card",
       finalUrl: "http://localhost:3000/agents/proof/pkg/run-1",
-      assertions: [
-        {
-          frame: "main",
-          selector: '[data-lifecycle-card-host="run_card"]',
-          expect: "present",
-          count: 1,
-          visible: 1,
+      assertions: hostAssertions("run_card"),
+      instance: chatInstance("recommendation_hold", {
+        attributes: {
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-host": "run_card",
         },
-      ],
+      }),
     });
     expect(validateCaptureRecord(runCard, { hashOf })).toEqual([]);
 
@@ -286,15 +303,13 @@ describe("the host-anchored capture — what the index ACCEPTS", () => {
       cell: "S9x-5__page_gate_region__review-pending",
       declaredHost: "page_gate_region",
       finalUrl: "http://localhost:3000/agents/proof/pkg/run-1/review/task-1",
-      assertions: [
-        {
-          frame: "main",
-          selector: '[data-lifecycle-card-host="page_gate_region"]',
-          expect: "present",
-          count: 1,
-          visible: 1,
+      assertions: hostAssertions("page_gate_region"),
+      instance: chatInstance("recommendation_hold", {
+        attributes: {
+          "data-lifecycle-card": "recommendation_hold",
+          "data-lifecycle-card-host": "page_gate_region",
         },
-      ],
+      }),
     });
     expect(validateCaptureRecord(pageGate, { hashOf })).toEqual([]);
   });

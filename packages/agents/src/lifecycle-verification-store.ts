@@ -15,7 +15,7 @@ import "server-only";
 //   2. COMPUTES the verdict (lifecycle-verification.computeVerificationVerdict):
 //      before/after field diff, in-scope-unapplied findings, out-of-scope drift.
 //   3. PERSISTS ONE immutable `artifact_verification_records` row bound to the
-//      gate (idempotent on a deterministic id) — the "Core analysis" before/after
+//      gate (idempotent on a deterministic id) — the "Audit" before/after
 //      the run rail surfaces.
 //   4. On a NON-`verified` verdict WITHIN the S2 cycle bound, reopens EXACTLY ONE
 //      bounded gate on the SAME run (the epic spine item 5), pinned to the
@@ -148,7 +148,7 @@ async function writeVerificationRecordAndMaybeReopen(
     representationMatches: input.representationMatches,
   });
 
-  // S4 core advisor lane: attach a provenance-stamped "Core analysis" advisory
+  // S4 core advisor lane: attach a provenance-stamped "Audit" advisory
   // comment over the repaired target's DISCLOSED projection (the same fields the
   // verification projected — already host-authorized). Idempotent per (gate,
   // projection digest); best-effort so it never fails the verification write.

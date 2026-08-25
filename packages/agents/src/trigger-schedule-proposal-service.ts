@@ -42,11 +42,14 @@ import "server-only";
 import {
   buildCron,
   describeRecurrence,
+  parseCronToRecurring,
+  DEFAULT_RECURRING_CONFIG,
   type RecurringConfig,
 } from "./trigger-recurrence";
 import {
   proposalConsumeKey,
   verifyTriggerScheduleProposalToken,
+  verifyTriggerScheduleProposalTokenDetailed,
   type ProposalSchedule,
   type TriggerScheduleProposal,
 } from "@/lib/trigger-schedule-proposal-token";
@@ -58,6 +61,7 @@ import {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  reproposeExpiredSchedule,
   type AdjustScheduleInput,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
@@ -67,12 +71,13 @@ export {
   naiveDatetimeToUtcMs,
   proposeTriggerSchedule,
   adjustTriggerSchedule,
+  reproposeExpiredSchedule,
   type AdjustScheduleInput,
   type ProposeScheduleInput,
   type ProposeScheduleResult,
 };
+import { launchAgentRun } from "./lifecycle-coordinator";
 import {
-  createAgentRunPendingInput,
   readAgentRunById,
   readAgentTemplateById,
   transitionRunStatus,
@@ -93,6 +98,7 @@ import {
   parkInstallIntent,
   readInstallIntent,
   readProposalConsume,
+  readProposalConsumeByRunId,
   releaseInstallIntent,
   spendProposalWithinTx,
   type InstallIntentRow,
@@ -113,20 +119,20 @@ import { verifySessionAuthority } from "@/lib/org-write/authority";
 // in `assistant_turns.content` and is re-fed to the model — naming what was
 // refused there would build a durable enumeration oracle.
 
-/** What Confirm says when the proposal is no longer good. */
+/** What Confirm says when the stated schedule is no longer good. */
 export const PROPOSAL_REFUSALS = {
   invalid:
-    "This schedule proposal is no longer valid — it may have expired. Ask again and confirm the new one.",
+    "This schedule is no longer valid — it may have expired. Ask again and confirm the new card.",
   notRunnable:
     "This agent can't be run right now. Open its listing to see what it needs.",
   unknownAgent:
-    "The agent this schedule was proposed for is no longer available.",
+    "The agent this schedule was for is no longer available.",
   installFailed:
     "The schedule could not be armed just now — please try again.",
   past:
     "That time has already passed. Ask for a new time and confirm the new card.",
   supersededBySchedule:
-    "This schedule was already set from this card, with different times than the ones shown here. Open the run to see the schedule that was set.",
+    "This schedule was already set from this card, with different times than the ones shown here. The rows below show the schedule that was set.",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -221,35 +227,57 @@ export async function confirmTriggerScheduleProposal(
 
   let runId: string;
   try {
-    const created = await createAgentRunPendingInput(
-      {
-        templateId: proposal.templateId,
-        runBy: actor.userId,
-        inputParams: {},
-        orgId: actor.orgId,
-        // Interactive: the reader is looking at the card they just pressed.
-        // cinatra#2067 — the run may park at the recommendation interception
-        // before it dispatches, exactly as every other interactive run-start.
-        humanPresent: true,
-        // `scopeActor` is deliberately left to the default, as every other
-        // interactive create does: the #2485 C scope guard resolves the run's
-        // OWN owner (`runBy`, the confirming human) and the acting principal is
-        // already this session. Passing a hand-built actor here would be the
-        // only call site in the codebase doing so.
-        // The one transaction. See `spendProposalWithinTx`.
-        withinCreateTx: async (tx, run) =>
-          spendProposalWithinTx(tx, {
-            consumeKey,
-            runId: run.id,
-            orgId: run.orgId,
-            templateId: proposal.templateId,
-            consumedBy: actor.userId,
-            install,
-          }),
-      },
+    // CONFIRM IS LAUNCH, NOT ADVANCE (cinatra#2928). Until this moment there is
+    // no run: the carrier is the schedule the person stated, held in its signed
+    // reference, and nothing has been written. Confirm consumes that reference
+    // and creates the run WITH its schedule in one transaction — which is why
+    // this launch uses the pre-dispatch creator and hands it the companion
+    // write. Routing it through the coordinator is what makes "every way of
+    // starting an agent calls launch" true of the schedule card too.
+    //
+    // The run is left pre-dispatch on purpose: the install drain below arms the
+    // schedule before it exposes it, and a run enqueued here would start now
+    // rather than when the person asked for.
+    const launched = await launchAgentRun({
+      producer: "schedule_confirm",
+      // The reader is looking at the card they just pressed, under a live cookie
+      // session this action already re-derived the user and org from.
+      frame: { userId: actor.userId },
+      interactive: true,
       authority,
-    );
-    runId = created.id;
+      create: {
+        kind: "pre_dispatch",
+        input: {
+          templateId: proposal.templateId,
+          runBy: actor.userId,
+          inputParams: {},
+          orgId: actor.orgId,
+          // `scopeActor` is deliberately left to the default, as every other
+          // interactive create does: the #2485 C scope guard resolves the run's
+          // OWN owner (`runBy`, the confirming human) and the acting principal is
+          // already this session. Passing a hand-built actor here would be the
+          // only call site in the codebase doing so.
+          // The one transaction. See `spendProposalWithinTx`.
+          withinCreateTx: async (tx, run) =>
+            spendProposalWithinTx(tx, {
+              consumeKey,
+              runId: run.id,
+              orgId: run.orgId,
+              templateId: proposal.templateId,
+              consumedBy: actor.userId,
+              install,
+            }),
+        },
+      },
+      dispatch: {
+        kind: "await_trigger",
+        why: "the install drain arms the schedule before it exposes it; this run starts when the schedule says so",
+      },
+    });
+    if (launched.carrier.kind !== "run") {
+      return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+    }
+    runId = launched.carrier.run.id;
   } catch (err) {
     if (err instanceof ProposalAlreadyConsumedError) {
       // The race we designed for: a concurrent Confirm won. Our run rolled back
@@ -650,6 +678,37 @@ export type ProposalResolution =
       canConfirm: boolean;
       restrictedReason: string | null;
     }
+  /**
+   * EXPIRED, AND STILL THIS READER'S (cinatra#2836). The thirty-minute window
+   * closed with nobody pressing anything, and the token is otherwise perfect:
+   * authentic, unstretched, minted for exactly this reader in exactly this org.
+   *
+   * A READING, NOT AN ABSENCE. Plan (A) §7.2 step 2 — an expired card "stays
+   * visible", still editable, with Confirm to set the schedule again — and
+   * design §IV reserves the undrawn answer for a reader who may not see the
+   * subject AT ALL. Collapsing the two, which is what this resolver did before
+   * this fix, deleted the card and the question it asked out of the reader's
+   * own transcript, and made every timed-out reader indistinguishable from one
+   * who was never entitled to anything.
+   *
+   * Only a reader who OWNS the token can ever reach this arm: the verify
+   * reports `expired` strictly behind both bindings, so an expired token
+   * belonging to somebody else is the same flat refusal a forged one is, and
+   * lands on `absent` exactly as before.
+   *
+   * It carries the same fields the live proposal does. `canConfirm` is still
+   * the floor read against the reader — an agent the instance would refuse to
+   * run cannot be scheduled by re-proposing it either — and `proposal` carries
+   * the rows the reader last saw, so the expired card re-opens on those rather
+   * than on an empty form.
+   */
+  | {
+      phase: "expired";
+      proposal: TriggerScheduleProposal;
+      agentName: string;
+      canConfirm: boolean;
+      restrictedReason: string | null;
+    }
   | {
       phase: "settled";
       runId: string;
@@ -657,8 +716,27 @@ export type ProposalResolution =
       triggerType: "immediate" | "scheduled" | "recurring";
       scheduleCopy: string;
       timezone: string;
+      /**
+       * THE ARMED SCHEDULE AS SELECTIONS — what the settled card's option rows
+       * draw (plan (A) §7.2: "the same card, with the same option rows, now
+       * shows the armed schedule"). Read back from what was INSTALLED, never
+       * from the token: the durable trigger row (or the install intent while it
+       * drains) is what the family actually settled on, so a superseded card's
+       * rows are right for the same reason its `scheduleCopy` is honest.
+       */
+      schedule: ProposalSchedule;
       released: boolean;
       arming: boolean;
+      /**
+       * May **Save changes** re-arm from this card (plan (A) §7.2 step 6)?
+       *
+       * The three refusals, and each is the server's rule read forward rather
+       * than a second policy: a RELEASED trigger has already opened its gate,
+       * one still ARMING has no scheduler to replace yet, and a ONE-OFF THAT
+       * HAS ALREADY FIRED is not a schedule any more — re-arming it would make
+       * a second run out of a card that says "change this one".
+       */
+      canSave: boolean;
       /**
        * This card's rows are NOT the ones the family settled on — it was
        * adjusted away from before Confirm landed. `scheduleCopy` says so and
@@ -696,12 +774,22 @@ export async function resolveProposalForReader(
   token: string,
   actor: ConfirmProposalActor,
 ): Promise<ProposalResolution> {
-  const proposal = verifyTriggerScheduleProposalToken({
+  // THE FINER READ, AND ONLY HERE (cinatra#2836). Confirm and the live Adjust
+  // keep the collapsing verify, because for them an expired token has nothing
+  // left to spend. RESOLUTION is the one caller that must tell an expired card
+  // apart from an absent one, because it is the caller that decides whether the
+  // card is DRAWN at all — and drawing it is what plan (A) §7.2 step 2 asks for.
+  //
+  // `refused` still swallows everything, on the identical path and with the
+  // identical answer as before this change: forged, foreign, stretched,
+  // future-dated, AND expired-but-foreign all arrive here as one value.
+  const verified = verifyTriggerScheduleProposalTokenDetailed({
     token,
     expectedUserId: actor.userId,
     expectedOrgId: actor.orgId,
   });
-  if (!proposal) return { phase: "absent" };
+  if (verified.outcome === "refused") return { phase: "absent" };
+  const proposal = verified.proposal;
 
   const template = await readAgentTemplateById(proposal.templateId);
   if (!template) return { phase: "absent" };
@@ -732,9 +820,30 @@ export async function resolveProposalForReader(
         ? SUPERSEDED_SCHEDULE_COPY
         : describeProposalSchedule(proposal.schedule),
       timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+      // THE ROWS COME FROM THE INSTALLED ROW, not from `proposal.schedule`.
+      // Under #2859's shared consume identity this card's own token may be
+      // holding rows the family was corrected away from; the durable trigger
+      // row is what is armed, and "shows the armed schedule in the same rows"
+      // (plan (A) §7.2) is only true if the rows are read from it.
+      schedule: selectionsFromInstalled({
+        triggerType:
+          (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
+          (intent?.triggerType ?? "immediate"),
+        scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+        cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+        timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+      }),
       released: !!trigger?.releasedAt,
       // "Arming…" rather than controls over a schedule still being installed.
       arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      canSave: canSaveInstalled({
+        triggerType:
+          (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
+          (intent?.triggerType ?? "immediate"),
+        scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+        released: !!trigger?.releasedAt,
+        arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      }),
       superseded,
     };
   }
@@ -745,7 +854,14 @@ export async function resolveProposalForReader(
     { packageVersion: template.packageVersion ?? null },
   );
   return {
-    phase: "proposal",
+    // THE EXPIRY READING IS TAKEN LAST, and that order carries meaning rather
+    // than convenience. An expired token whose family was already CONFIRMED is
+    // a settled card, not an expired one — the run exists and the reader should
+    // see it — so the consume lookup above answers first. An expired token for
+    // a template that has since vanished is still `absent`, for the same reason
+    // a live one is. What is left here is exactly the plan's case: the window
+    // closed and nothing was ever armed.
+    phase: verified.outcome === "expired" ? "expired" : "proposal",
     proposal,
     agentName,
     canConfirm: !notRunnable,
@@ -753,4 +869,212 @@ export async function resolveProposalForReader(
     // without enumerating anything about the instance.
     restrictedReason: notRunnable ? PROPOSAL_REFUSALS.notRunnable : null,
   };
+}
+
+/**
+ * Resolve a proposal card for a RUN, for one reader (cinatra#2788, S9d).
+ *
+ * The run-page / review-page identity. Those hosts hold no proposal token, so
+ * they address the card by the run it settled into; this call re-derives the
+ * (viewer, organization, template) binding the plan keys the card by from the
+ * proposal's own CONSUME row — the one row that recorded all three, at the one
+ * moment they were all true.
+ *
+ * FOUR REFUSALS, ALL `absent`, and each is deliberate:
+ *
+ *   · the run came from no proposal — its schedule is the run's own scheduling
+ *     step's and the Trigger tab is that schedule's surface. Drawing it here
+ *     would be a second renderer of one thing on one host.
+ *   · the reader is not the person who confirmed it — the proposal was bound to
+ *     ONE (user, org) pair and stays bound to it. A colleague with run access
+ *     reads the run's own Trigger tab, not somebody else's proposal card.
+ *   · the organization does not match the reader's active one.
+ *   · the run or its template has vanished.
+ *
+ * There is NO proposal phase on this path, and that is structural rather than
+ * an omission: Confirm CREATES the run, so a run exists only after a proposal
+ * was confirmed. The pre-confirm phases live where the proposal does — in the
+ * conversation that made it.
+ */
+export async function resolveProposalForRun(
+  runId: string,
+  actor: ConfirmProposalActor,
+): Promise<ProposalResolution> {
+  const consumed = await readProposalConsumeByRunId(runId);
+  if (!consumed) return { phase: "absent" };
+  // The proposal's own binding, re-checked against the LIVE reader. Neither
+  // half comes from the caller: both are read off the row the confirm
+  // transaction wrote.
+  if (consumed.consumedBy !== actor.userId) return { phase: "absent" };
+  if (consumed.orgId !== actor.orgId) return { phase: "absent" };
+
+  const [template, trigger, intent] = await Promise.all([
+    readAgentTemplateById(consumed.templateId),
+    readRunTriggerByRunId(runId),
+    readInstallIntent(runId),
+  ]);
+  if (!template) return { phase: "absent" };
+  if (template.orgId && template.orgId !== actor.orgId) return { phase: "absent" };
+
+  const triggerType =
+    (trigger?.triggerType as "immediate" | "scheduled" | "recurring" | undefined) ??
+    intent?.triggerType ??
+    null;
+  // Neither a trigger row nor an install intent means there is nothing armed to
+  // draw the chrome of — the install never reached the outbox.
+  if (!triggerType) return { phase: "absent" };
+
+  return {
+    phase: "settled",
+    runId,
+    agentName: template.name ?? template.packageName ?? "this agent",
+    triggerType,
+    // The plain-language line is the SETTLED trigger's, read back from the row
+    // the install wrote rather than from a token this host does not hold.
+    scheduleCopy: describeInstalledSchedule({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+    }),
+    timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+    // The same read-back the conversation's settled card uses, from the same
+    // durable row, so the run page's schedule step and the chat card cannot
+    // draw two different sets of rows for one armed trigger.
+    schedule: selectionsFromInstalled({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      cronExpression: trigger?.cronExpression ?? intent?.cronExpression ?? null,
+      timezone: trigger?.timezone ?? intent?.timezone ?? "UTC",
+    }),
+    released: !!trigger?.releasedAt,
+    arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+    canSave: canSaveInstalled({
+      triggerType,
+      scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
+      released: !!trigger?.releasedAt,
+      arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+    }),
+    // NEVER superseded on this path, and structurally so rather than by
+    // omission (cinatra#2859). `superseded` answers "this CARD is holding rows
+    // the family did not settle on", and it can only be asked where the card
+    // holds rows of its own — a proposal TOKEN. A run-addressed card holds
+    // none: every line above is read back from the durable trigger row and the
+    // install intent, which ARE what the family settled on. There is nothing
+    // for the installed schedule to disagree with.
+    superseded: false,
+  };
+}
+
+/**
+ * The INSTALLED schedule, read back as §VI's SELECTIONS (cinatra#2788, S9d).
+ *
+ * The settled card draws the same three option rows as the proposal — plan (A)
+ * §7.2, "the same card, with the same option rows, now shows the armed
+ * schedule" — and rows cannot be drawn from prose. So the durable row is read
+ * back into the closed selection vocabulary by `parseCronToRecurring`, the ONE
+ * module that says what a selection means, completed against its own defaults
+ * exactly as the scheduling step completes a partial reading before drawing it.
+ * A cron that will not parse falls back to the vocabulary's default selection
+ * rather than inventing one: `scheduleCopy` beside the rows still carries the
+ * raw expression, so nothing is claimed that the row does not say.
+ *
+ * A NAIVE WALL CLOCK is what the one-off row hands back, because that is what
+ * the `datetime-local` control and the wire schema both take. The stored
+ * instant is UTC; it is rendered in the trigger's OWN timezone, so re-saving
+ * an untouched card re-arms the same moment rather than shifting it by the
+ * offset.
+ */
+export function selectionsFromInstalled(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  cronExpression: string | null;
+  timezone: string;
+}): ProposalSchedule {
+  if (input.triggerType === "immediate") return { kind: "immediate" };
+  if (input.triggerType === "scheduled") {
+    return {
+      kind: "scheduled",
+      runAt: naiveWallClockIn(input.scheduledAt ?? new Date(), input.timezone),
+      timezone: input.timezone,
+    };
+  }
+  const partial = input.cronExpression ? parseCronToRecurring(input.cronExpression) : null;
+  return {
+    kind: "recurring",
+    selection: { ...DEFAULT_RECURRING_CONFIG, ...(partial ?? {}) },
+    timezone: input.timezone,
+  };
+}
+
+/** A UTC instant as the timezone-naive "YYYY-MM-DDTHH:MM" the form emits,
+ *  rendered in `timezone`. The inverse of `naiveDatetimeToUtcMs`. */
+function naiveWallClockIn(at: Date, timezone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(at);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const hour = get("hour") === "24" ? "00" : get("hour");
+    return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}`;
+  } catch {
+    return at.toISOString().slice(0, 16);
+  }
+}
+
+/**
+ * May **Save changes** re-arm this installed trigger?
+ *
+ * The reading the server enforces, computed once so the card and the endpoint
+ * cannot disagree about which schedules are still changeable.
+ */
+export function canSaveInstalled(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  released: boolean;
+  arming: boolean;
+}): boolean {
+  if (input.released || input.arming) return false;
+  // A ONE-OFF THAT HAS FIRED IS NOT A SCHEDULE. Re-arming it would create a
+  // second run from a control whose whole promise is "change this one".
+  if (input.triggerType === "scheduled") {
+    return !!input.scheduledAt && input.scheduledAt.getTime() > Date.now();
+  }
+  return true;
+}
+
+/**
+ * The settled schedule in plain words, from the INSTALLED row.
+ *
+ * The conversation's settled card reads its line off the proposal token it
+ * still holds; this host has no token, so the line is derived from what was
+ * actually installed. `parseCronToRecurring` + `describeRecurrence` is the SAME
+ * pair the scheduling step and the proposal both use, so the two readings of
+ * one schedule cannot drift; the raw expression is the honest fallback the
+ * Trigger tab already falls back to when no preview can be built.
+ */
+function describeInstalledSchedule(input: {
+  triggerType: "immediate" | "scheduled" | "recurring";
+  scheduledAt: Date | null;
+  cronExpression: string | null;
+}): string {
+  if (input.triggerType === "immediate") return "Runs right after setup";
+  if (input.triggerType === "scheduled") {
+    return input.scheduledAt
+      ? `Once, at ${input.scheduledAt.toISOString().slice(0, 16).replace("T", " ")} UTC`
+      : "Once, at the scheduled time";
+  }
+  if (!input.cronExpression) return "On its recurring schedule";
+  // `parseCronToRecurring` answers a PARTIAL selection — it reads back only what
+  // the expression actually pins — so it is completed against the vocabulary's
+  // own defaults, exactly as the scheduling step completes it before drawing.
+  const selection = parseCronToRecurring(input.cronExpression);
+  return selection
+    ? describeRecurrence({ ...DEFAULT_RECURRING_CONFIG, ...selection })
+    : input.cronExpression;
 }

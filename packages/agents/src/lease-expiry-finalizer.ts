@@ -252,13 +252,25 @@ async function bestEffortCancelRuntime(row: SweptLeaseRow, schema: string): Prom
       return true;
     }
     const { createInProcessA2AClient } = await import("@cinatra-ai/a2a");
-    const { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } = await import("@/lib/background-jobs");
+    // A CANCEL-ONLY CLIENT (cinatra#2928, the queue fence's one red seam).
+    //
+    // The client's constructor requires an enqueue hook, and this call site
+    // used to satisfy it by wiring a real background-job enqueue — a live
+    // dispatch path around `enqueueAgentRun`, sitting in a module the queue
+    // fence does not allowlist, and the reason that fence was red.
+    //
+    // Nothing here can ever reach it. `cancelTask` aborts the observer-side
+    // poll and publishes a canceled status-update; the hook is reached only
+    // from the executor's `execute()` (message/send), which this finalizer
+    // never calls. So the honest repair is neither an allowlist entry nor a
+    // detour through `enqueueAgentRun` — it is a hook that says what it is: a
+    // refusal. If a future change ever DID make cancel dispatch work, it
+    // throws here, loudly, instead of quietly enqueueing an unfenced job.
     const client = await createInProcessA2AClient({
       packageName: template.packageName,
-      enqueueJob: async (jobName: string, data: unknown) => {
-        await enqueueBackgroundJob(
-          jobName as typeof BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
-          data as Record<string, unknown>,
+      enqueueJob: async () => {
+        throw new Error(
+          "[lease-expiry-finalizer] this A2A client is cancel-only and dispatches nothing — a run start must go through the lifecycle coordinator's launch entry, which enqueues through the one chokepoint",
         );
       },
     });

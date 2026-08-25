@@ -23,14 +23,34 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 // --- agents store ------------------------------------------------------------
-// cinatra#1940 P3: createAgentRun now takes a REQUIRED trailing `authority`
+// cinatra#1940 P3: createCarrierRun now takes a REQUIRED trailing `authority`
 // param (the guarded creation perimeter); the mock forwards it.
-const createAgentRun = vi.fn<(input: { id: string }, authority?: unknown) => Promise<unknown>>();
+const createCarrierRun = vi.fn<(input: { id: string }, authority?: unknown) => Promise<unknown>>();
+
+// cinatra#2929 (epic #2926 W2b) — the carrier run is created THROUGH the
+// lifecycle coordinator now, not around it. The spy observes the same two
+// things it always did — the run being created and the authority it is created
+// under — one rung further out, so every assertion below still reads the
+// carrier this dispatch asks for. The launch answers with the coordinator's own
+// carrier shape, and a refusal still travels by throwing.
+vi.mock("@cinatra-ai/agents/lifecycle-coordinator", () => ({
+  launchAgentRun: async (launch: {
+    create: { input: { id: string } };
+    authority?: unknown;
+  }) => ({
+    carrier: {
+      kind: "run",
+      run: await createCarrierRun(launch.create.input, launch.authority),
+    },
+    status: "queued",
+    moment: null,
+  }),
+}));
+
 const readAgentTemplateByPackageName = vi.fn<(pkg: string) => Promise<unknown>>();
 const readLatestAgentVersionIdForTemplate = vi.fn<(id: string) => Promise<unknown>>();
 const transitionRunStatus = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 vi.mock("@cinatra-ai/agents", () => ({
-  createAgentRun: (input: { id: string }, authority?: unknown) => createAgentRun(input, authority),
   // #1193: the carrier run now also mints + persists a per-run token and embeds
   // the RAW value in the initial message. Mirror the real builder's
   // spread-then-overwrite so the identity keys stay dispatch-owned.
@@ -75,7 +95,7 @@ const OVERRIDE = {
 };
 
 function lastRunInput(): { runBy?: string; orgId?: string; sourceType?: string } {
-  return (createAgentRun.mock.calls.at(-1)?.[0] ?? {}) as {
+  return (createCarrierRun.mock.calls.at(-1)?.[0] ?? {}) as {
     runBy?: string;
     orgId?: string;
     sourceType?: string;
@@ -95,7 +115,7 @@ beforeEach(() => {
   createExternalA2AClient.mockResolvedValue({ sendTask });
   readAgentTemplateByPackageName.mockResolvedValue({ id: "tmpl_wp" });
   readLatestAgentVersionIdForTemplate.mockResolvedValue("ver_1");
-  createAgentRun.mockImplementation(async (input: { id: string }) => ({ id: input.id, inputParams: {} }));
+  createCarrierRun.mockImplementation(async (input: { id: string }) => ({ id: input.id, inputParams: {} }));
   sendTask.mockResolvedValue({
     history: [{ role: "agent", parts: [{ kind: "text", text: '{"postId":"7"}' }] }],
   });
@@ -115,7 +135,7 @@ describe("host content-editor dispatch — S5 delegated-widget", () => {
         // NO actorOverride — the parity gap.
       }),
     ).rejects.toThrow(/public_site_widget delegation is active/);
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
     expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
   });
 
@@ -132,7 +152,7 @@ describe("host content-editor dispatch — S5 delegated-widget", () => {
         preCreateAuthorize: async () => true,
       }),
     ).rejects.toThrow(/does not match the server-verified/);
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 
   it("forwards actorOverride VERBATIM into the carrier run + injects cinatra_run_id (G1/G4)", async () => {
@@ -166,7 +186,7 @@ describe("host content-editor dispatch — S5 delegated-widget", () => {
       // no preCreateAuthorize — the host default membership re-check applies.
     });
     expect(resolveOrgRoleForUser).toHaveBeenCalledWith("org-9", "user-77");
-    expect(createAgentRun).toHaveBeenCalledTimes(1);
+    expect(createCarrierRun).toHaveBeenCalledTimes(1);
   });
 
   it("G11 default re-assert: absent caller hook, a REVOKED member → refused, no run", async () => {
@@ -181,7 +201,7 @@ describe("host content-editor dispatch — S5 delegated-widget", () => {
         actorOverride: OVERRIDE,
       }),
     ).rejects.toThrow();
-    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(createCarrierRun).not.toHaveBeenCalled();
   });
 
   it("no widget frame + no override → normal path (guard inert, install identity)", async () => {

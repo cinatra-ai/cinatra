@@ -24,10 +24,11 @@
     "URL, or whose chat anchors were never asserted, is a mislabeled capture and fails. A PENDING",
     "capture owes its decision controls; a DECIDED one owes their ABSENCE and its own decided summary.",
     "",
-    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: THIRTY-NINE",
+    "WHAT IS ACTUALLY IN IT, read off the records below rather than remembered: FIFTY-EIGHT",
     "records, on all four hosts. Each group is ONE run of the recorder against a LIVE app on a",
-    "lane database, not a hand-assembled set. The A / B / C groups are described here; the V, D",
-    "and I groups arrived with later slices and each record carries its own `note`:",
+    "lane database, not a hand-assembled set. The A / B / C groups are described here; the V, D,",
+    "I, S9b, C, P and SCHEDULE groups arrived with later slices, each described in its own",
+    "paragraph below where it has one, and each record carries its own `note`:",
     "",
     "  A1 / A3 / A4 / A5 - cinatra#2855 (PR #2862), evidence/2855-settled-outcome. A1 is the gate",
     "  region on the review page. A3 / A4 / A5 are chat_thread: a real gate PENDING, the same card",
@@ -92,7 +93,53 @@
     "record in this file, because every record here is a measurement of a card, and asking the recorder for",
     "one would be asking it to measure a card that must not exist. Those two pictures (P6 / P7) and their",
     "counted anchors live in the round's own capture-results.json and its README grading table instead,",
-    "where they read as what they are: a negative control."
+    "where they read as what they are: a negative control.",
+    "",
+    "LABEL NOTE. Nine records picture the audit lane under its former label, `Core analysis`: B1, B2, B3, B4",
+    "(the suggestion block header reads `CORE ANALYSIS · SUGGESTIONS`), G1, G2, G3 (the same block inside the",
+    "review card) and G5, G6 (the audit card's heading and the run rail entry). The shipped label is `Audit`",
+    "everywhere a person reads it (cinatra#2945). The shipped paths do not produce these states: the automatic",
+    "gate hands the suggestion lane the identity-only projector, so a real gate normally writes no suggestion",
+    "snapshot (cinatra#2950), and the blog repair step that would write the audit card's verification record,",
+    "`repairBlogPostDraft`, exists but is never called by the product (cinatra#2951). A record of a state the",
+    "product does not produce is not evidence, so these nine stand as taken; a later record taken through those",
+    "paths supersedes each of them.",
+    "",
+    "THE SCHEDULE GROUP IS NOT HERE - cinatra#2788 (PR #2939, S9d), and its absence is the honest",
+    "state rather than an omission. This file used to carry TEN records of the schedule card from",
+    "S9d round 1 (evidence/2788-s9d-schedule-card): A1 / A2 and B1 / B2 in a transcript, R1 / R2 on",
+    "the run page, P1 / P2 on the review page, and E1 / E2 - two records whose cell names carried",
+    "`standin`, because that round could not reach the expired phase through the server and stood in",
+    "the RESOLVE RESPONSE. All ten are RETIRED here, for two separate reasons that both stand on",
+    "their own:",
+    "",
+    "  · THE CARD THEY PHOTOGRAPH NO LONGER EXISTS. The S9d rework removed the summary box, the",
+    "    held-steps block and the status label from every host, renamed the two run-page controls",
+    "    (Cancel trigger -> Cancel schedule, Release now -> Run now), and moved the schedule from a",
+    "    card in the gate region to a STEP in the left rail. Every one of the ten shows drawings the",
+    "    shipped card does not draw any more. A record whose anchors still hash to a real image of a",
+    "    retired reading is not evidence for the card that ships; it is evidence against it.",
+    "",
+    "  · TWO OF THEM WERE NEVER A CAPTURE OF THE THING CLAIMED. The `standin` pair says so in its own",
+    "    names, and a stand-in is not acceptable evidence at any tier.",
+    "",
+    "WHAT REPLACES THEM IS NOW RECORDED. The rework's walk was driven THROUGH THIS RECORDER -",
+    "`node scripts/audit/lib/chat-hitl-capture-driver.mjs --walk evidence/2788-s9d-rework/capture-walk.json",
+    "--merge` - over the shipped product: a schedule stated into the /chat composer, answered by the",
+    "shipped `schedule_proposal_render` producer, one press of Confirm, the run page's schedule step",
+    "opened by a real press of the rail row, and the expired reading after the shipped 30-minute window",
+    "actually ran out, plus the fired reading after the schedule went off on its own. The TEN cells it",
+    "produced - S9d-C1 / C2 / C3 / C5 / C6, light and dark - are",
+    "registered below, and every assertion on each is a count the recorder took on the screen that",
+    "cell's picture shows, validated at the AUDIT tier before anything was written. C4 is DROPPED and",
+    "stated rather than staged: the schedule is armed and has not fired, so the run has produced",
+    "nothing for anybody to review - see that round's TIMELINE.md.",
+    "",
+    "THE WALK IS A COMMITTED PLAN. evidence/2788-s9d-rework/capture-walk.json is that same path written",
+    "as a plan this driver executes (`--walk`), with the ten cells it produces and the ten cells above",
+    "named as the ones it retires. It closes the gap that made the earlier round unrecordable:",
+    "`driveCapture` knows one shape of capture - open a URL, wait, shoot - and C1 and C2 are ONE card",
+    "before and after ONE press, on a thread the product minted, which no URL can reach."
   ],
   "schemaVersion": 1,
   "recorder": "cinatra-lifecycle-capture-recorder@1",
@@ -4489,6 +4536,754 @@
       "runtime": "DEV runtime - pnpm dev (Next.js, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production; a dedicated lane database and lane Redis on loopback, placeholder-only environment, no model credential on this host",
       "documentClass": "inter_c15e96cb-module__0bjUvq__variable manrope_9b24f49e-module__hJlnFq__variable geist_e799d87a-module__u8MhCG__variable archivo_9443aef7-module__vKFuNW__variable jetbrains_mono_7ea1d0f9-module__6GV5LG__variable dark",
       "note": "The rejected gate on the dark ground, opened fresh."
+    },
+    {
+      "cell": "S9d-C1__schedule-card__chat_thread__pending",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__light.png",
+      "sha256": "064fbd044500cf0d50bc46ca31aaea48a1ec2a64b653c5fc1f2c9a5b0b4207dc",
+      "capturedAt": "2026-08-24T17:21:14.338Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "proposal",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C1__schedule-card__chat_thread__pending__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C1__chat-first-shown__dark.png",
+      "sha256": "3d960614b45231411efdf971d366a88cdfb3fb902bb2a9e2392de21531d77aa3",
+      "capturedAt": "2026-08-24T17:21:18.067Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "proposal",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C2__schedule-card__chat_thread__decided",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__light.png",
+      "sha256": "a56b17646f5b896cb31237ce4424b47584cf60ac4e71097e7a7dc34b2cd41eaf",
+      "capturedAt": "2026-08-24T17:21:18.434Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C2__schedule-card__chat_thread__decided__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C2__chat-configured__dark.png",
+      "sha256": "65a3d02ad9b46131b8ef75e9e176a78f3f9a373776d60117414fca4f1f8d63af",
+      "capturedAt": "2026-08-24T17:21:22.510Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C5__schedule-card__chat_thread__pending__expired",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/1bfacdfc-871f-4ecc-a9c2-de49fff427f1",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__light.png",
+      "sha256": "ddd1973a5607cb2281606623ee3bae19328354a7844ee1521214a4e75fb31b7f",
+      "capturedAt": "2026-08-24T15:23:49.729Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "expired",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C5__schedule-card__chat_thread__pending__expired__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/1bfacdfc-871f-4ecc-a9c2-de49fff427f1",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C5__chat-expired__dark.png",
+      "sha256": "43cbeb53bd69d9afae925dbcd0e1f8ecce1938f39e1c15979cc8bf8165c529d2",
+      "capturedAt": "2026-08-24T15:23:52.428Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "pending",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "pending",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "expired",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C3__schedule-card__run_card__decided",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/9384a346-d9a6-4403-9beb-51ef347618f3",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-configured__light.png",
+      "sha256": "698f017dc575521f7d73219fbe1219cf946a2134d7093270e42417a2f25867d7",
+      "capturedAt": "2026-08-24T17:22:04.370Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C3__schedule-card__run_card__decided__dark",
+      "declaredHost": "run_card",
+      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/9384a346-d9a6-4403-9beb-51ef347618f3",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-configured__dark.png",
+      "sha256": "63ab1513f40133c57f7493b68d875e2245e3d4ae0e91b5448c8864504bda7c9d",
+      "capturedAt": "2026-08-24T17:22:05.349Z",
+      "assertions": [
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"run_card\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "run_card",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C6__schedule-card__chat_thread__decided__after-fire",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__light.png",
+      "sha256": "e87625ecab474290bf736c54aafca8dfd67f4661a4d7091d585b303fed2f3d3f",
+      "capturedAt": "2026-08-24T17:43:31.059Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
+    },
+    {
+      "cell": "S9d-C6__schedule-card__chat_thread__decided__after-fire__dark",
+      "declaredHost": "chat_thread",
+      "finalUrl": "/chat/cinatra-ai/cinatra-assistant/efba5760-304d-4b6a-9ca7-80b7b9af9262",
+      "build": "development",
+      "screenshot": "evidence/2788-s9d-rework/captures/C6__chat-ran__dark.png",
+      "sha256": "ccabf74343e98b9118cee1ca7d434e69ab59dafe1e31e844bf1830dd2f56370e",
+      "capturedAt": "2026-08-24T17:43:36.383Z",
+      "assertions": [
+        {
+          "selector": "[data-conversation-list]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+          "scope": "frame",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1
+        },
+        {
+          "selector": "[data-lifecycle-card-state]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-lifecycle-card-host=\"chat_thread\"]",
+          "scope": "root",
+          "count": 1,
+          "frame": "main",
+          "expect": "present",
+          "visible": 1,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        },
+        {
+          "selector": "[data-action=\"confirm-schedule-proposal\"]",
+          "scope": "root",
+          "count": 0,
+          "frame": "main",
+          "expect": "absent",
+          "visible": 0,
+          "within": "[data-lifecycle-card=\"trigger_schedule_proposal\"]"
+        }
+      ],
+      "recordedBy": "cinatra-lifecycle-capture-recorder@1",
+      "declaredKind": "trigger_schedule_proposal",
+      "declaredState": "decided",
+      "framing": "window",
+      "instance": {
+        "selector": "[data-lifecycle-card=\"trigger_schedule_proposal\"]",
+        "matched": 1,
+        "index": 0,
+        "id": null,
+        "attributes": {
+          "class": "my-3 flex w-full flex-col gap-3",
+          "data-lifecycle-card": "trigger_schedule_proposal",
+          "data-lifecycle-card-state": "settled",
+          "data-lifecycle-card-host": "chat_thread",
+          "data-lifecycle-card-phase": "settled",
+          "data-conformance-id": "schedule-proposal-card"
+        }
+      }
     }
   ]
 }

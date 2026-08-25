@@ -163,8 +163,19 @@ describe("layer 2: shared dispatch guard", () => {
     );
     expect(enqueue).not.toMatch(/\bmintAgentRunExecutionAuthority\s*\(/);
 
-    const actions = read("packages/agents/src/run-actions.ts");
-    const body = actions.slice(at(actions, "export async function releaseTriggerNow("));
+    // THE PATH MOVED, THE PROPERTY DID NOT (cinatra#2788, epic #2784 S9d).
+    // `run-actions.ts:releaseTriggerNow` is now a thin server-action wrapper
+    // that resolves the Better Auth session into an actor envelope and
+    // delegates; the whole transition-then-enqueue body — and every guarantee
+    // this test pins — moved UNCHANGED into `releaseTriggerNowForActor`, so
+    // §VI's settled card can reach the same path from the widget, whose
+    // identity does not travel by cookie. This test follows the body: reading
+    // the wrapper would anchor on a function that no longer transitions
+    // anything, and `at()` would fail loudly rather than pass vacuously.
+    const actions = read("packages/agents/src/trigger-service.ts");
+    const body = actions.slice(
+      at(actions, "export async function releaseTriggerNowForActor("),
+    );
     const enqueueAt = at(body, "enqueueAgentRun(");
     const block = body.slice(enqueueAt);
     expect(block).toContain("isScopeDenial(err)");
@@ -397,8 +408,15 @@ describe("layer 2: shared dispatch guard", () => {
   });
 
   it("requires the DISPATCHING admin — not just the run owner — on releaseTriggerNow", () => {
-    const src = read("packages/agents/src/run-actions.ts");
-    const body = src.slice(src.indexOf("export async function releaseTriggerNow("));
+    // Read where the dispatch body LIVES, not where the server action is
+    // exported — see the note on the compensation test above (cinatra#2788 S9d
+    // moved the body into `releaseTriggerNowForActor` so the widget reaches the
+    // same guard). The admin re-check, the acting-user binding and the
+    // before-`markTriggerReleased` ordering all moved with it, unchanged.
+    const src = read("packages/agents/src/trigger-service.ts");
+    const body = src.slice(
+      at(src, "export async function releaseTriggerNowForActor("),
+    );
     const guardAt = body.indexOf("assertAgentRunDispatchAuthorized");
     expect(guardAt).toBeGreaterThan(-1);
     expect(body.slice(guardAt, guardAt + 400)).toContain("actingUserId: userId");
@@ -551,9 +569,13 @@ describe("paths that carry an explicit actor thread it into the perimeter", () =
 
   it("the non-BullMQ content-editor carrier run is covered by the CREATION layer", () => {
     const src = read("src/lib/host-content-editor-dispatch.ts");
-    // Two createAgentRun call sites; the actorOverride one is never enqueued,
-    // which is exactly why an enqueue-only guard would miss it.
-    expect((src.match(/await createAgentRun\(/g) ?? []).length).toBe(2);
+    // Two carrier-creating call sites; the actorOverride one is never enqueued,
+    // which is exactly why an enqueue-only guard would miss it. Since
+    // cinatra#2929 both reach the creation perimeter THROUGH the coordinator's
+    // launch entry — the guard is unmoved (it lives inside the creator the
+    // coordinator calls), only the road to it is.
+    expect((src.match(/await launchAgentRun\(/g) ?? []).length).toBe(2);
+    expect(src).not.toContain("createAgentRun(");
     expect(src).not.toContain("enqueueAgentRun");
   });
 });

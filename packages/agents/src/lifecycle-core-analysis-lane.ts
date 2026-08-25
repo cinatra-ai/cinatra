@@ -3,12 +3,12 @@ import "server-only";
 // ---------------------------------------------------------------------------
 // lifecycle-core-analysis-lane (cinatra#2042, epic #2037 — S4 core advisor lane).
 //
-// The store-writing half of the "Core analysis" advisor lane that REPLACES the
+// The store-writing half of the "Audit" advisor lane that REPLACES the
 // reviewer-agent's rendering advisor. It builds the core analysis over an
 // authorized, disclosed content projection (lifecycle-core-analysis) and WRITES it
 // through the zero-authority advisory seam (lifecycle-advisory-store) as a
 // provenance-stamped, decision-free advisory comment the run's verification view
-// displays under the "Core analysis" chrome.
+// displays under the "Audit" chrome.
 //
 // Author kind is `service` (a CORE lane, not an agent); author id is the lane id.
 // Idempotent per (gate, projection digest): re-running the lane over the SAME
@@ -44,7 +44,7 @@ export interface RunCoreAnalysisLaneResult {
 /**
  * Run the core analysis lane against a gate: build the analysis over the
  * authorized projection, then attach it as a provenance-stamped advisory comment.
- * The chrome labels it "Core analysis". Idempotent per (gate, projection digest).
+ * The chrome labels it "Audit". Idempotent per (gate, projection digest).
  */
 export async function runCoreAnalysisLane(
   input: RunCoreAnalysisLaneInput,
