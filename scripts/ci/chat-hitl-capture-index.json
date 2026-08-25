@@ -5008,11 +5008,11 @@
     {
       "cell": "S9d-C3__schedule-card__run_card__decided",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/9384a346-d9a6-4403-9beb-51ef347618f3",
+      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/433ab1ee-2707-4054-af41-8592d91294ab",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-configured__light.png",
-      "sha256": "698f017dc575521f7d73219fbe1219cf946a2134d7093270e42417a2f25867d7",
-      "capturedAt": "2026-08-24T17:22:04.370Z",
+      "screenshot": "evidence/2972-schedule-controls/captures/S9d-C3__schedule-card__run_card__decided.png",
+      "sha256": "f38260425b318bc4e6050edb14c3f92aaf5e6c176a31924cc21379f31d3aff72",
+      "capturedAt": "2026-08-25T16:27:28.976Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",
@@ -5080,11 +5080,11 @@
     {
       "cell": "S9d-C3__schedule-card__run_card__decided__dark",
       "declaredHost": "run_card",
-      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/9384a346-d9a6-4403-9beb-51ef347618f3",
+      "finalUrl": "/agents/cinatra-ai/company-discovery-agent/433ab1ee-2707-4054-af41-8592d91294ab",
       "build": "development",
-      "screenshot": "evidence/2788-s9d-rework/captures/C3__run-page-configured__dark.png",
-      "sha256": "63ab1513f40133c57f7493b68d875e2245e3d4ae0e91b5448c8864504bda7c9d",
-      "capturedAt": "2026-08-24T17:22:05.349Z",
+      "screenshot": "evidence/2972-schedule-controls/captures/S9d-C3__schedule-card__run_card__decided__dark.png",
+      "sha256": "4378036ebc41ccd62dda54126cd416f36c5a7864d23d88391c34a835381c28a9",
+      "capturedAt": "2026-08-25T16:27:45.065Z",
       "assertions": [
         {
           "selector": "[data-lifecycle-card-host=\"run_card\"]",

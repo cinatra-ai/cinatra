@@ -43,7 +43,6 @@ const READER = {
   ref: "ref-opaque",
   userId: "u1",
   orgId: "o1",
-  isAdmin: false,
 };
 
 /**
@@ -117,6 +116,12 @@ function settledResolution(superseded: boolean) {
     },
     released: false,
     arming: false,
+    // cinatra#2972 — the two readings the settled resolution gained. This
+    // fixture is a recurring schedule that has NOT fired yet, so it carries no
+    // **Cancel schedule** ("shown only for a recurring schedule that has fired
+    // once", plan (A) §7.2 amended 2026-08-25) and has been stopped by nobody.
+    firedOnce: false,
+    stopped: false,
     canSave: true,
     superseded,
   };
@@ -167,7 +172,12 @@ describe("an ordinary settled card is byte-compatible with a stale client", () =
       released: false,
       arming: false,
       canSave: true,
-      canCancel: true,
+      // cinatra#2972 — Cancel schedule is the recurring schedule's control
+      // AFTER its first fire, and this fixture has not fired.
+      canCancel: false,
+      // `canRelease` is still EMITTED as a constant false — a compatibility
+      // shim for a stale bundle whose strict settled schema still requires the
+      // key. The control it once gated is gone; nothing reads this.
       canRelease: false,
     });
   });
@@ -195,13 +205,14 @@ describe("an ordinary settled card is byte-compatible with a stale client", () =
     );
   });
 
-  it("holds for an ADMIN reader too — the emission does not vary by standing", async () => {
+  // cinatra#2972 retired the card's one admin-varying reading (`canRelease`, the
+  // Run now the plan withdrew), so the resolver no longer takes an `isAdmin` at
+  // all. The pin stays as "the emission does not vary" — there is now nothing
+  // left for it to vary by, which is the stronger statement.
+  it("does not vary by the reader's standing — nothing on this card reads one", async () => {
     resolveProposalForReader.mockResolvedValue(settledResolution(false));
 
-    const { view } = await resolveTriggerScheduleProposalCard({
-      ...READER,
-      isAdmin: true,
-    });
+    const { view } = await resolveTriggerScheduleProposalCard(READER);
 
     expect("superseded" in (view as object)).toBe(false);
     expect(preSupersededSettledViewSchema.safeParse(view).success).toBe(true);

@@ -599,6 +599,14 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // `runId` (the "Open the run" link) and `gatedSteps` (the held-steps
       // tree) stay off the list: §7.2 as amended 2026-08-23 removes both
       // drawings.
+      //
+      // `canRelease` IS REMOVED AND `stopped` TAKES ITS PLACE (cinatra#2972).
+      // Plan (A) §7.2 as amended 2026-08-25 withdrew the control it authorized:
+      // "there is no Run now". A field no drawing may read is not an authorized
+      // body field, so it leaves the list with the control — and the reading
+      // that replaced it joins: **Cancel schedule** "stops the recurring
+      // schedule and then makes the scheduler non-editable", which the card
+      // draws off `stopped`.
       fields: [
         "state",
         "phase",
@@ -612,7 +620,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "arming",
         "canSave",
         "canCancel",
-        "canRelease",
+        "stopped",
       ],
     },
     // THE RATIFIED SET, RE-RATIFIED AGAINST THE PLAN RATHER THAN REFRESHED.
@@ -649,12 +657,19 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     // requirement, so it is dropped rather than made conditional. The two
     // operations keep their data-action ids and change only their labels
     // (Cancel schedule, Run now), which is why the ids below are untouched.
+    //
+    // `[data-action="release-trigger-now"]` IS RETIRED FROM THIS SET
+    // (cinatra#2972), for the same reason `scheduled-run-chrome` was: plan (A)
+    // §7.2 as amended 2026-08-25 says "there is no Run now", and an anchor no
+    // host may draw cannot be a requirement. **Cancel schedule** stays a
+    // requirement and keeps its id — what the same amendment narrowed is WHEN
+    // it is drawn ("shown only for a recurring schedule that has fired once"),
+    // which is a body reading rather than an anchor.
     anchors: [
       "schedule-option-rows",
       "schedule-proposal-floor",
       '[data-action="save-schedule-changes"]',
       '[data-action="cancel-trigger-schedule"]',
-      '[data-action="release-trigger-now"]',
     ],
     instanceRootSelector: '[data-lifecycle-card="trigger_schedule_proposal"]',
     hosts: {

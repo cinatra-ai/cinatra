@@ -35,11 +35,8 @@ import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import {
   setRunTriggerForActor,
   deleteRunTriggerForActor,
-  releaseTriggerNowForActor,
   type SetTriggerForActorResult,
   type DeleteTriggerForActorResult,
-  type ReleaseTriggerNowArgs,
-  type ReleaseTriggerNowResult,
 } from "./trigger-service";
 import type { TriggerType } from "./trigger-store";
 import {
@@ -394,41 +391,6 @@ export async function deleteRunTrigger(
     (session?.user as { role?: string | null } | null | undefined)?.role ??
     null;
   return deleteRunTriggerForActor({ userId, role, source: "ui" }, args);
-}
-
-// ---------------------------------------------------------------------------
-// admin-only releaseTriggerNow.
-//
-// Forces the trigger gate open immediately for `runId`. Used only when an
-// operator needs to bypass the schedule (e.g. emergency send). Two-layer
-// auth: the client component hides the button when isAdmin === false; this
-// server action re-checks `session.user.role === "admin"`.
-// ---------------------------------------------------------------------------
-
-/**
- * Server-action entry point for the run page's Release now control.
- *
- * THIN, LIKE `deleteRunTrigger` (cinatra#2788, epic #2784 S9d). The whole body
- * moved to `releaseTriggerNowForActor` in `trigger-service.ts` — unchanged —
- * so §VI's settled card can reach the SAME path from the widget, whose identity
- * does not travel by cookie. This wrapper resolves the Better Auth session into
- * the actor envelope and delegates; the admin re-check, the archived-org
- * pre-check, the install-scope assertion, the gate write, the transition and
- * the enqueue compensation all still happen there, in that order — as does
- * the recurring branch cinatra#2928 added to that body: Release now on a
- * recurring schedule starts ONE COPY through the coordinator's launch entry
- * and leaves the defining run, and its schedule, exactly as they were.
- */
-export async function releaseTriggerNow(
-  args: ReleaseTriggerNowArgs,
-): Promise<ReleaseTriggerNowResult> {
-  const session = await requireAuthSession().catch(() => null);
-  const userId = session?.user?.id ?? null;
-  const role =
-    (session?.user as { role?: string | null } | null | undefined)?.role ??
-    null;
-  if (!userId) return { ok: false, error: "unauthorized" };
-  return releaseTriggerNowForActor({ userId, role, source: "ui" }, args);
 }
 
 // ---------------------------------------------------------------------------

@@ -221,7 +221,6 @@ export async function POST(request: Request): Promise<Response> {
       // empty string is never a valid binding, so the resolve answers `absent`.
       userId: actorCtx.actor.userId ?? "",
       orgId: actorCtx.orgId,
-      isAdmin: actorCtx.roleHints?.platformRole === "platform_admin",
     });
     return Response.json(
       {

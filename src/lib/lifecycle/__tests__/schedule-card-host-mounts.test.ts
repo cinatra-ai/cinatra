@@ -226,16 +226,17 @@ describe("the owner's contract, read off its own source", () => {
     ]) {
       expect(owner, anchor).toContain(`data-conformance-id="${anchor}"`);
     }
-    for (const action of [
-      "save-schedule-changes",
-      "cancel-trigger-schedule",
-      "release-trigger-now",
-    ]) {
+    for (const action of ["save-schedule-changes", "cancel-trigger-schedule"]) {
       expect(owner, action).toContain(`data-action="${action}"`);
     }
-    // PLAN §7.2, as an absence in the source itself: the retired control cannot
-    // come back through a stray callsite.
+    // PLAN §7.2, as an absence in the source itself: the retired controls
+    // cannot come back through a stray callsite. `release-trigger-now` — Run
+    // now — joins Adjust here: plan (A) §7.2 as amended 2026-08-25 says "there
+    // is no Run now", and the gate's ratified anchor set dropped it with the
+    // control (cinatra#2972). The pin flips from "is emitted" to "cannot be
+    // emitted", which is the stronger reading for a withdrawn control.
     expect(owner).not.toContain('data-action="adjust-schedule-proposal"');
+    expect(owner).not.toContain('data-action="release-trigger-now"');
   });
 
   it("it consumes its AUTHORIZED body through the one resolve seam, and reads every phase", () => {
@@ -266,6 +267,12 @@ describe("the owner's contract, read off its own source", () => {
     // tells a fired one-off from a released or still-arming schedule by reading
     // `triggerType` beside `canSave`.
     //
+    // `.canRelease` LEAVES AND `.stopped` ARRIVES (cinatra#2972). Plan (A) §7.2
+    // as amended 2026-08-25 withdrew Run now, so the gate's authorized body
+    // dropped the field that authorized it, and the reading that replaced it is
+    // the state **Cancel schedule** leaves behind: "it stops the recurring
+    // schedule and then makes the scheduler non-editable".
+    //
     // THE CARD IS NOT CHANGED TO SATISFY THIS. The direction of the fix is the
     // one the seam has always had: the gate says what the server sends, the
     // card draws it, and this file records that the card reads what it draws.
@@ -282,10 +289,17 @@ describe("the owner's contract, read off its own source", () => {
       ".arming",
       ".canSave",
       ".canCancel",
-      ".canRelease",
+      ".stopped",
     ]) {
       expect(owner, field).toContain(field);
     }
+  });
+
+  // cinatra#2972 — the withdrawn field is emitted for wire compatibility and
+  // must stay unread. A renderer that started consulting it would be the first
+  // step back to a control the plan removed.
+  it("the retired canRelease reading has no reader in the card", () => {
+    expect(owner).not.toContain("canRelease");
   });
 
   it("no raw cron field can be drawn or posted from the card", () => {

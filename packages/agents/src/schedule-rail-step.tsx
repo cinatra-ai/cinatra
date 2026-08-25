@@ -60,12 +60,13 @@
 // "above '1 Review'" rather than a second row numbered 1.
 // ---------------------------------------------------------------------------
 
-import type { ReactElement, ReactNode } from "react";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 import { ScheduleProposalCard } from "./schedule-proposal-card";
+import { SchedulePromptWindow } from "./schedule-prompt-window";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
 import {
   RUN_SURFACE_RAIL_ROW_CLASS,
@@ -130,6 +131,42 @@ export function ScheduleRailStepRow({
 }
 
 /**
+ * HAS THE SCHEDULER ACTUALLY BEEN DRAWN in this step (cinatra#2972)?
+ *
+ * `ScheduleProposalCard` renders NO DOM AT ALL for a run its resolver answers
+ * `absent` for — a run whose schedule was set on the run's own scheduling step
+ * rather than stated in a conversation, which is most of them today. That empty
+ * step is a pre-existing gap this slice does not close.
+ *
+ * What this slice must not do is WIDEN it, and without this gate it would: the
+ * prompt window would stand alone in the otherwise-empty column, a prompt about
+ * a scheduler that is not there. Plan (A) §7.2 as amended 2026-08-25 puts the
+ * window "below the scheduler", so where there is no scheduler there is no
+ * window.
+ *
+ * IT IS MEASURED, NOT PREDICTED. The card resolves after mount and the surface
+ * around it cannot ask it what it decided, so the honest reading is the DOM it
+ * produced. `MutationObserver` is what makes that reading LIVE — a card that
+ * resolves late, or re-resolves into `absent`, moves the window with it.
+ */
+function useSchedulerDrawn(host: HTMLElement | null): boolean {
+  const [drawn, setDrawn] = useState(false);
+  useEffect(() => {
+    if (!host) {
+      setDrawn(false);
+      return;
+    }
+    const read = () => setDrawn(host.childElementCount > 0);
+    read();
+    if (typeof MutationObserver === "undefined") return;
+    const observer = new MutationObserver(read);
+    observer.observe(host, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [host]);
+  return drawn;
+}
+
+/**
  * THE SCHEDULE STEP'S SURFACE — the configuration, and nothing else.
  *
  * The same component the chat thread, the widget and the other page mount — the
@@ -141,6 +178,9 @@ export function ScheduleRailStepRow({
  * schedule** and **Run now**". The card draws NO DOM at all for a run no
  * proposal produced, so an ordinary run shows the row and an empty column rather
  * than an invented one.
+ *
+ * AND, WHERE THE PAGE ASKS FOR ONE, THE PROMPT WINDOW UNDER IT (cinatra#2972) —
+ * see `promptWindowTemplateId`.
  *
  * THE HOST IS DECLARED BY NAME, ONCE PER PAGE, rather than threaded through as
  * `host={host}`. Two readers depend on a LITERAL declaration and neither can
@@ -154,6 +194,7 @@ export function ScheduleRailStepRow({
 export function ScheduleStepSurface({
   host,
   cardRef,
+  promptWindowTemplateId = null,
 }: {
   /** Which page this rail belongs to. The two page hosts are the only
    *  callers: a transcript has no rail, and its card is served by the registry
@@ -161,7 +202,20 @@ export function ScheduleStepSurface({
   host: "run_card" | "page_gate_region";
   /** The run-scoped schedule ref, minted server-side by the page. */
   cardRef: string;
+  /**
+   * The template the schedule step's PROMPT WINDOW asks its questions about
+   * (cinatra#2972). Plan (A) §7.2 as amended 2026-08-25: "The run page's prompt
+   * window shows below the scheduler."
+   *
+   * A prop rather than a fixed mount, because the plan names the RUN PAGE: the
+   * run page passes the template and gets the window, the review page passes
+   * `null` and its schedule step is the scheduler alone. One composition, one
+   * decision, made by the page that the plan names.
+   */
+  promptWindowTemplateId?: string | null;
 }): ReactElement {
+  const [cardHost, setCardHost] = useState<HTMLElement | null>(null);
+  const schedulerDrawn = useSchedulerDrawn(cardHost);
   const cardView = {
     viewType: "trigger_schedule_proposal" as const,
     schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
@@ -169,15 +223,31 @@ export function ScheduleStepSurface({
   };
   return (
     <div data-conformance-id="schedule-step-detail">
-      {host === "run_card" ? (
-        <LifecycleCardSurfaceProvider host="run_card">
-          <ScheduleProposalCard view={cardView} />
-        </LifecycleCardSurfaceProvider>
-      ) : (
-        <LifecycleCardSurfaceProvider host="page_gate_region">
-          <ScheduleProposalCard view={cardView} />
-        </LifecycleCardSurfaceProvider>
-      )}
+      <div data-schedule-card-host="" ref={setCardHost}>
+        {host === "run_card" ? (
+          <LifecycleCardSurfaceProvider host="run_card">
+            <ScheduleProposalCard view={cardView} />
+          </LifecycleCardSurfaceProvider>
+        ) : (
+          <LifecycleCardSurfaceProvider host="page_gate_region">
+            <ScheduleProposalCard view={cardView} />
+          </LifecycleCardSurfaceProvider>
+        )}
+      </div>
+      {/* AND THE PROMPT WINDOW UNDER IT (cinatra#2972). Plan (A) §7.2 as
+          amended 2026-08-25: "The run page's prompt window shows below the
+          scheduler." It is drawn HERE — after the card, inside the run detail
+          column — rather than at the end of the page, which is where the
+          Trigger tab's own mount puts it. The window portals into its own div,
+          so "below the scheduler" is where it actually lands and not only where
+          it is written.
+
+          AND ONLY WHERE THERE IS A SCHEDULER TO BE BELOW. The card draws
+          nothing for a run its resolver answers `absent` for; a window alone in
+          that empty column would be a prompt about a form that is not there. */}
+      {promptWindowTemplateId && schedulerDrawn ? (
+        <SchedulePromptWindow templateId={promptWindowTemplateId} />
+      ) : null}
     </div>
   );
 }
@@ -195,6 +265,7 @@ export function ScheduleRailStep({
   rail = null,
   detail = null,
   initialSelection = "schedule",
+  promptWindowTemplateId = null,
 }: {
   /** Which page this rail belongs to. The two page hosts are the only
    *  callers: a transcript has no rail, and its card is served by the registry
@@ -216,6 +287,18 @@ export function ScheduleRailStep({
    * 5); once the run has fired, the run's own detail is what the page opens on.
    */
   initialSelection?: "schedule" | "detail";
+  /**
+   * The template the schedule step's PROMPT WINDOW asks its questions about
+   * (cinatra#2972). Plan (A) §7.2 as amended 2026-08-25: "The run page's prompt
+   * window shows below the scheduler." Threaded straight through to
+   * `ScheduleStepSurface`, which is where the window is drawn.
+   *
+   * A prop rather than a fixed mount, because the plan names the RUN PAGE: the
+   * run page passes the template and gets the window, the review page passes
+   * `null` and its schedule step is the scheduler alone. One composition, one
+   * decision, made by the page that the plan names.
+   */
+  promptWindowTemplateId?: string | null;
 }): ReactElement {
   return (
     <RunSurfaceRail
@@ -223,7 +306,13 @@ export function ScheduleRailStep({
         {
           key: "schedule",
           row: <ScheduleRailStepRow host={host} displayStep={displayStep} />,
-          surface: <ScheduleStepSurface host={host} cardRef={cardRef} />,
+          surface: (
+            <ScheduleStepSurface
+              host={host}
+              cardRef={cardRef}
+              promptWindowTemplateId={promptWindowTemplateId}
+            />
+          ),
         },
       ]}
       rail={rail}

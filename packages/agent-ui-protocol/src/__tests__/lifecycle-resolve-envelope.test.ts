@@ -87,7 +87,6 @@ const SCHEDULE_SETTLED_BODY: TriggerScheduleProposalViewBody = {
   released: false,
   canSave: true,
   canCancel: true,
-  canRelease: false,
   arming: false,
 };
 

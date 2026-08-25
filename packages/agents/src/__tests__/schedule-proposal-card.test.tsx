@@ -88,8 +88,9 @@ function settledBody(
     released: false,
     arming: false,
     canSave: true,
+    // cinatra#2972 — the default fixture is a RECURRING schedule that has fired
+    // once, which is the one state plan (A) §7.2 puts **Cancel schedule** in.
     canCancel: true,
-    canRelease: false,
     ...over,
   };
 }
@@ -250,8 +251,8 @@ describe("§VI the schedule proposal card", () => {
   // step on the run page and the review page shows the same form and nothing
   // else — no summary box, no status label". The step is still where you "see
   // the configuration or change it", so the rows stay editable.
-  it("settled on a PAGE host: the form only — no chrome, the SAME editable rows, Save changes, and the two controls", async () => {
-    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+  it("settled on a PAGE host: the form only — no chrome, the SAME editable rows, Save changes, and the ONE control", async () => {
+    mockTransport({ state: "settled" }, settledBody());
     const { container } = renderOn("run_card");
 
     await waitFor(() =>
@@ -261,7 +262,9 @@ describe("§VI the schedule proposal card", () => {
     expect(container.textContent).not.toContain("Trigger configuration");
     expect(container.textContent).not.toContain("Steps held until trigger fires");
     expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull();
-    expect(container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull();
+    // cinatra#2972 — "there is no Run now" (plan (A) §7.2, amended 2026-08-25).
+    expect(container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
+    expect(container.textContent).not.toContain("Run now");
     // The SAME option rows the proposal drew, showing the armed schedule and
     // open to change — one set of them, not two.
     expect(container.querySelectorAll('[data-conformance-id="schedule-option-rows"]')).toHaveLength(1);
@@ -273,12 +276,11 @@ describe("§VI the schedule proposal card", () => {
 
   // PLAN §7.2, and the whole of it: after Confirm the conversation shows the SAME
   // card, the SAME rows and a Save-changes control — and NEITHER of the
-  // trigger's own controls. Plan (A) §7.2: "**Cancel trigger** and **Release
-  // now** for an administrator — lives on the run page's schedule step, not in
-  // the conversation."
-  it("settled in a CONVERSATION: the same rows and Save changes, and NO trigger chrome, Cancel or Release", async () => {
+  // trigger's own control. Plan (A) §7.2 as amended 2026-08-25: **Cancel
+  // schedule** "is on the run page's schedule step; there is no Run now."
+  it("settled in a CONVERSATION: the same rows and Save changes, and NO trigger chrome or Cancel", async () => {
     for (const host of ["chat_thread", "site_widget"] as const) {
-      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      mockTransport({ state: "settled" }, settledBody());
       const view = renderOn(host);
       await waitFor(() =>
         expect(
@@ -409,39 +411,46 @@ describe("§VI the schedule proposal card", () => {
     expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
   });
 
-  it("settled: Run now is admin-only — a non-admin body draws no control at all", async () => {
-    mockTransport({ state: "settled" }, settledBody({ canRelease: false }));
-    const { container } = renderOn("run_card");
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
-    );
-    expect(container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
-    expect(isDisabled(container.querySelector('[data-action="cancel-trigger-schedule"]'))).toBe(false);
+  // WAS: "Run now is admin-only — a non-admin body draws no control at all".
+  // cinatra#2972 withdrew the control from every reader, admin included, so the
+  // statement is now unconditional (plan (A) §7.2 amended 2026-08-25: "there is
+  // no Run now").
+  it("settled: NO reader gets a Run now — the control is gone from every host", async () => {
+    for (const host of [
+      "chat_thread",
+      "site_widget",
+      "run_card",
+      "page_gate_region",
+    ] as const) {
+      mockTransport({ state: "settled" }, settledBody());
+      const view = renderOn(host);
+      await waitFor(() =>
+        expect(
+          view.container.querySelector('[data-conformance-id="schedule-option-rows"]'),
+        ).not.toBeNull(),
+      );
+      expect(view.container.querySelector('[data-action="release-trigger-now"]'), host).toBeNull();
+      expect(view.container.textContent, host).not.toContain("Run now");
+      view.unmount();
+      cleanup();
+    }
   });
 
-  it("settled: ARMING withholds Cancel and says why, rather than drawing a control that fails on press", async () => {
+  // cinatra#2972 CHANGED THE SHAPE OF A WITHHELD CANCEL. It used to be drawn
+  // disabled; the plan now defines the control as "shown only for a recurring
+  // schedule that has fired once", so wherever the plan does not put it the
+  // control is ABSENT, not dead. The arming LINE is unchanged — the reader is
+  // still owed the reason.
+  it("settled: ARMING withholds Cancel and says why, rather than drawing a control at all", async () => {
     mockTransport(
       { state: "settled" },
-      settledBody({ arming: true, canCancel: false, canRelease: false }),
+      settledBody({ arming: true, canCancel: false }),
     );
     const { container } = renderOn("run_card");
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-arming"]')).not.toBeNull(),
     );
-    expect(isDisabled(container.querySelector('[data-action="cancel-trigger-schedule"]'))).toBe(true);
-  });
-
-  it("settled: an ALREADY-RELEASED trigger offers neither control and reads back why", async () => {
-    mockTransport(
-      { state: "settled" },
-      settledBody({ released: true, canCancel: false, canRelease: false }),
-    );
-    const { container } = renderOn("run_card");
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="schedule-released"]')).not.toBeNull(),
-    );
-    expect(isDisabled(container.querySelector('[data-action="cancel-trigger-schedule"]'))).toBe(true);
-    expect(container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
+    expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
   });
 
   it("the CHOSEN weekdays are drawn on the legible variant, on both grounds", async () => {
@@ -513,7 +522,7 @@ describe("§VI the schedule proposal card", () => {
     for (const host of ["chat_thread", "site_widget", "run_card", "page_gate_region"] as const) {
       for (const [state, body] of [
         [{ state: "pending", canDecide: true, canComment: false } as LifecycleCardState, proposalBody()],
-        [{ state: "settled" } as LifecycleCardState, settledBody({ canRelease: true })],
+        [{ state: "settled" } as LifecycleCardState, settledBody()],
         [{ state: "settled" } as LifecycleCardState, EXPIRED_BODY],
       ] as const) {
         mockTransport(state, body);
@@ -615,7 +624,7 @@ describe("§IX every host draws the same card", () => {
       // nothing else"), and the conversation is ruled not to have the two
       // operations either, so they are read on the hosts that draw them.
       const pageHost = host === "run_card" || host === "page_gate_region";
-      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      mockTransport({ state: "settled" }, settledBody());
       const settled = renderOn(host);
       await waitFor(() =>
         expect(
@@ -643,9 +652,12 @@ describe("§IX every host draws the same card", () => {
       expect(
         settled.container.querySelectorAll('[data-action="cancel-trigger-schedule"]'),
       ).toHaveLength(pageHost ? 1 : 0);
+      // cinatra#2972 — the anchor set lost one member: "there is no Run now"
+      // (plan (A) §7.2, amended 2026-08-25). Zero on EVERY host, page hosts
+      // included, which is the only reading the plan leaves.
       expect(
         settled.container.querySelectorAll('[data-action="release-trigger-now"]'),
-      ).toHaveLength(pageHost ? 1 : 0);
+      ).toHaveLength(0);
       settled.unmount();
       cleanup();
     }
@@ -728,29 +740,21 @@ describe("credential-aware decisions", () => {
     // Asked, not done.
     const strip = container.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
     expect(strip).not.toBeNull();
-    expect(strip?.textContent).toContain("Cancel this schedule?");
-    expect(strip?.textContent).toContain("The run will stay paused.");
+    // cinatra#2972 rewrote these words with the act: Cancel schedule STOPS a
+    // recurring schedule; it "never deletes the schedule or pauses the run".
+    expect(strip?.textContent).toContain("Stop this recurring schedule?");
+    expect(strip?.textContent).not.toContain("paused");
     expect(decisionBodies(fetchMock)).toHaveLength(0);
 
     fireEvent.click(strip!.querySelector('[data-action="confirm-destructive"]')!);
     await waitFor(() => expect(lastDecision(fetchMock).op).toBe("cancel"));
   });
 
-  it("Run now asks first with its irreversibility warning, then reaches the release operation", async () => {
-    const fetchMock = mockTransport({ state: "settled" }, settledBody({ canRelease: true }), {
-      kind: "released",
-    });
-    const { container } = renderOn("run_card");
-    await waitFor(() =>
-      expect(container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull(),
-    );
-    fireEvent.click(container.querySelector('[data-action="release-trigger-now"]')!);
-    const strip = container.querySelector('[data-conformance-id="schedule-release-confirm"]');
-    expect(strip?.textContent).toContain("Run this schedule now?");
-    expect(strip?.textContent).toContain("This cannot be undone.");
-    fireEvent.click(strip!.querySelector('[data-action="confirm-destructive"]')!);
-    await waitFor(() => expect(lastDecision(fetchMock).op).toBe("release"));
-  });
+  // WAS: "Run now asks first with its irreversibility warning, then reaches the
+  // release operation". The control, its warning and its `release` op are all
+  // withdrawn (cinatra#2972). What replaces the pin is the op-level statement in
+  // "the decision surface carries no `release` op" below, so the property is
+  // asserted rather than deleted.
 
   it("a refused decision is said on the card, and nothing is drawn optimistically", async () => {
     const fetchMock = mockTransport(
@@ -958,7 +962,7 @@ describe("the rework — the step is the form and nothing else", () => {
 
   it("NO summary box and NO held-steps block on either page host", async () => {
     for (const host of PAGE_HOSTS) {
-      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      mockTransport({ state: "settled" }, settledBody());
       const view = renderOn(host);
       await waitFor(() =>
         expect(
@@ -980,7 +984,7 @@ describe("the rework — the step is the form and nothing else", () => {
 
   it("NO status label — the word Armed is drawn on no host", async () => {
     for (const host of ALL_HOSTS) {
-      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      mockTransport({ state: "settled" }, settledBody());
       const view = renderOn(host);
       await waitFor(() =>
         expect(
@@ -998,7 +1002,7 @@ describe("the rework — the step is the form and nothing else", () => {
 
   it("NO Open-the-run link on any host", async () => {
     for (const host of ALL_HOSTS) {
-      mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+      mockTransport({ state: "settled" }, settledBody());
       const view = renderOn(host);
       await waitFor(() =>
         expect(
@@ -1014,8 +1018,8 @@ describe("the rework — the step is the form and nothing else", () => {
     }
   });
 
-  it("the two controls are named Cancel schedule and Run now — the data-action ids are unchanged", async () => {
-    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+  it("the ONE control is named Cancel schedule — the data-action id is unchanged", async () => {
+    mockTransport({ state: "settled" }, settledBody());
     const { container } = renderOn("run_card");
     await waitFor(() =>
       expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull(),
@@ -1023,44 +1027,36 @@ describe("the rework — the step is the form and nothing else", () => {
     expect(
       container.querySelector('[data-action="cancel-trigger-schedule"]')?.textContent,
     ).toContain("Cancel schedule");
-    expect(
-      container.querySelector('[data-action="release-trigger-now"]')?.textContent,
-    ).toContain("Run now");
     expect(container.textContent).not.toContain("Cancel trigger");
     expect(container.textContent).not.toContain("Release now");
+    expect(container.textContent).not.toContain("Run now");
   });
 
-  it("the confirm dialogs say schedule, not trigger", async () => {
-    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
-    const cancelView = renderOn("run_card");
+  // cinatra#2972 REWROTE THIS DIALOG'S WORDS, because the act changed. It used
+  // to promise "The run will stay paused", which described the DELETE this
+  // control performed; the plan withdrew both halves — Cancel schedule "never
+  // deletes the schedule or pauses the run".
+  it("the confirm dialog says what stopping a schedule actually does", async () => {
+    mockTransport({ state: "settled" }, settledBody());
+    const { container } = renderOn("run_card");
     await waitFor(() =>
-      expect(
-        cancelView.container.querySelector('[data-action="cancel-trigger-schedule"]'),
-      ).not.toBeNull(),
+      expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull(),
     );
-    fireEvent.click(cancelView.container.querySelector('[data-action="cancel-trigger-schedule"]')!);
-    const cancelStrip = cancelView.container.querySelector(
+    fireEvent.click(container.querySelector('[data-action="cancel-trigger-schedule"]')!);
+    const strip = container.querySelector(
       '[data-conformance-id="schedule-cancel-confirm"]',
     );
-    expect(cancelStrip?.textContent).toContain("Cancel this schedule?");
-    expect(cancelStrip?.textContent).toContain("Keep schedule");
-    expect(cancelStrip?.textContent).not.toContain("trigger");
-    cancelView.unmount();
-    cleanup();
-
-    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
-    const releaseView = renderOn("run_card");
-    await waitFor(() =>
-      expect(
-        releaseView.container.querySelector('[data-action="release-trigger-now"]'),
-      ).not.toBeNull(),
-    );
-    fireEvent.click(releaseView.container.querySelector('[data-action="release-trigger-now"]')!);
-    const releaseStrip = releaseView.container.querySelector(
-      '[data-conformance-id="schedule-release-confirm"]',
-    );
-    expect(releaseStrip?.textContent).toContain("Run this schedule now?");
-    expect(releaseStrip?.textContent).not.toContain("trigger");
+    expect(strip?.textContent).toContain("Stop this recurring schedule?");
+    expect(strip?.textContent).toContain("Keep schedule");
+    expect(strip?.textContent).toContain("Cancel schedule");
+    expect(strip?.textContent).not.toContain("trigger");
+    // The two promises the amendment struck out.
+    expect(strip?.textContent).not.toContain("paused");
+    expect(strip?.textContent).not.toContain("delete");
+    // And no release dialog exists to open at all.
+    expect(
+      container.querySelector('[data-conformance-id="schedule-release-confirm"]'),
+    ).toBeNull();
   });
 });
 
@@ -1141,7 +1137,7 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
    * a flag chosen to match the renderer's reading. Natural firing runs the
    * release job, which marks the trigger released (`markTriggerReleased` →
    * `releasedAt`), so the resolver reads back `released: true` — and with it
-   * `canSave: false`, `canCancel: false`, `canRelease: false`. An earlier draft
+   * `canSave: false` and `canCancel: false`. An earlier draft
    * of this fix keyed off `canSave` alone and demanded `!released`, which is
    * the one shape a fired one-off never has; it is spelled out here so that
    * cannot come back.
@@ -1160,7 +1156,6 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
           scheduleCopy: "Once, at 2020-03-04 09:00",
           canSave: false,
           canCancel: false,
-          canRelease: false,
           released: true,
           arming: false,
         }),
@@ -1206,11 +1201,11 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
   /**
    * FIRING IS THE LINE, and this is the state on the other side of it. A
    * one-off whose moment has passed while the release job has not drained yet
-   * has NOT fired: its gate is shut and **Cancel schedule** still acts on a
-   * live job, so the server keeps authorizing it (`canCancel: true`) even
-   * though it refuses a save. That card is UNCHANGED by this fix — the floor
-   * stands, with Save changes dead and Cancel live — because widening "fired"
-   * to reach it would take away an operation the server is still granting.
+   * has NOT fired: its gate is shut, so the card is not frozen and the floor
+   * still stands with Save changes dead. What it no longer carries is a
+   * **Cancel schedule**: cinatra#2972 made that control the recurring
+   * schedule's alone (`canCancel: false` for every one-off), which is why the
+   * body below differs from the one this test shipped with.
    */
   it("a one-off past its moment but NOT yet released keeps the floor it always had", async () => {
     mockTransport(
@@ -1220,8 +1215,7 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
         schedule: FIRED_ONE_OFF,
         scheduleCopy: "Once, at 2020-03-04 09:00",
         canSave: false,
-        canCancel: true,
-        canRelease: true,
+        canCancel: false,
         released: false,
         arming: false,
       }),
@@ -1231,10 +1225,10 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
       expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
     );
     expect(isDisabled(container.querySelector('[data-action="save-schedule-changes"]'))).toBe(true);
-    expect(isDisabled(container.querySelector('[data-action="cancel-trigger-schedule"]'))).toBe(
-      false,
-    );
-    expect(container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull();
+    // …and NO Cancel schedule: cinatra#2972 made that control the recurring
+    // schedule's alone, so a one-off never carries it whatever its stamps say.
+    expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).toBeNull();
+    expect(container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
   });
 
   /**
@@ -1253,7 +1247,6 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
         scheduleCopy: "Once, at 2020-03-04 09:00",
         canSave: false,
         canCancel: false,
-        canRelease: false,
         released: true,
         arming: true,
       }),
@@ -1276,25 +1269,24 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
   /**
    * A confirm strip cannot outlive the floor that opened it. The card
    * re-resolves on focus without remounting `SettledPhase`, so a reader who
-   * opens "Cancel this schedule?" on a still-changeable one-off and comes back
-   * after it has fired would otherwise be left holding a live confirm button
-   * over a card that no longer offers the operation.
+   * opens the Cancel-schedule question and comes back after the schedule has
+   * been stopped would otherwise be left holding a live confirm button over a
+   * card that no longer offers the operation.
+   *
+   * THE SUBJECT MOVED WITH THE CONTROL (cinatra#2972). It used to be a one-off
+   * firing under an open strip; a one-off carries no Cancel schedule any more,
+   * so the same property is pinned on the state that DOES have one — a
+   * recurring schedule that was stopped while the strip was open, which is the
+   * plan's own "and then makes the scheduler non-editable".
    */
-  it("an open confirm strip is withdrawn when the card re-resolves as fired", async () => {
-    let settled = settledBody({
-      triggerType: "scheduled",
-      schedule: { kind: "scheduled", runAt: "2099-03-04T09:00", timezone: "Europe/Berlin" },
-      scheduleCopy: "Once, at 2099-03-04 09:00",
-      canSave: true,
-      canCancel: true,
-      canRelease: true,
-    });
+  it("an open confirm strip is withdrawn when the card re-resolves as stopped", async () => {
+    let settled = settledBody({ canSave: true, canCancel: true });
     const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const isDecision = typeof init?.body === "string" && init.body.includes('"op"');
       return new Response(
         JSON.stringify(
           isDecision
-            ? { kind: "confirmed", runId: "run-777", alreadyConfirmed: false }
+            ? { kind: "cancelled" }
             : { kind: "trigger_schedule_proposal", state: { state: "settled" }, body: settled },
         ),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -1312,23 +1304,16 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     ).not.toBeNull();
 
     // The reader also starts editing the rows and never saves.
-    fireEvent.change(container.querySelector('[data-field="schedule-run-at"]')!, {
-      target: { value: "2098-01-01T07:30" },
+    fireEvent.change(container.querySelector('[data-field="recurring-timezone"]')!, {
+      target: { value: "Pacific/Auckland" },
     });
     expect(
-      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
-    ).toBe("2098-01-01T07:30");
+      (container.querySelector('[data-field="recurring-timezone"]') as HTMLInputElement).value,
+    ).toBe("Pacific/Auckland");
 
-    // The schedule fires underneath the open strip, and the card re-resolves.
-    settled = settledBody({
-      triggerType: "scheduled",
-      schedule: FIRED_ONE_OFF,
-      scheduleCopy: "Once, at 2020-03-04 09:00",
-      canSave: false,
-      canCancel: false,
-      canRelease: false,
-      released: true,
-    });
+    // The schedule is stopped underneath the open strip, and the card
+    // re-resolves.
+    settled = settledBody({ canSave: false, canCancel: false, stopped: true });
     fireEvent.focus(window);
     await waitFor(() =>
       expect(
@@ -1337,11 +1322,11 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     );
     expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull();
     // AND THE UNSAVED EDIT IS GONE WITH IT. The rows now stand read-only, so
-    // whatever they show is a claim about what ran — it must be the server's
-    // schedule, never the draft nobody armed.
+    // whatever they show is a claim about what is armed — it must be the
+    // server's schedule, never the draft nobody saved.
     expect(
-      (container.querySelector('[data-field="schedule-run-at"]') as HTMLInputElement).value,
-    ).toBe("2020-03-04T09:00");
+      (container.querySelector('[data-field="recurring-timezone"]') as HTMLInputElement).value,
+    ).toBe("Europe/Berlin");
   });
 
   /**
@@ -1368,12 +1353,12 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     upcoming.unmount();
     cleanup();
 
-    mockTransport({ state: "settled" }, settledBody({ canRelease: true }));
+    mockTransport({ state: "settled" }, settledBody());
     const recurring = renderOn("run_card");
     await waitFor(() =>
       expect(recurring.container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull(),
     );
     expect(recurring.container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull();
-    expect(recurring.container.querySelector('[data-action="release-trigger-now"]')).not.toBeNull();
+    expect(recurring.container.querySelector('[data-action="release-trigger-now"]')).toBeNull();
   });
 });
