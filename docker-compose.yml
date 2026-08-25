@@ -147,7 +147,7 @@ services:
     # moving tag. The works-after nango arm (CI) proves the synthetic
     # connection-store round-trip on the candidate; the OAuth smoke is a
     # deploy-time gate. Converged 2026-07-11. See docs/internals/workflows/upgrade-track.md.
-    image: nangohq/nango-server:hosted@sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1
+    image: nangohq/nango-server:hosted@sha256:7743507cd7b6bbcf9d3cbcfa108cfd40ca7bbfefc2fabcbd632d92d75624b2f2
     # Keep the connector backend alive across the intermittent qemu SIGSEGVs the
     # amd64-only image hits on arm64 dev hosts. `unless-stopped` (NOT
     # `on-failure:N`, which exhausts its retry budget and returns to
