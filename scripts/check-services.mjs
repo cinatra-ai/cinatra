@@ -38,6 +38,7 @@ import {
   isLinkedWorktree,
   planMessages,
   readEnvFileValue,
+  redactUrlCredentials,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
   resolvePublishedHostPort,
@@ -77,6 +78,16 @@ const lookupEnvFile = (key) => readEnvFileValue(envLocalPath, key);
 // So the keys are enumerated here and every VALUE comes back through the shared
 // reader. Not a second copy of the comment rule: the same function, so the two
 // readers cannot drift apart again.
+//
+// THE ENUMERATION DECIDES NOTHING (cinatra#2913, round-6 finding B1). It only
+// says WHICH keys the file states; which LINE of a duplicated key wins is the
+// shared reader's answer, and that answer is the last one — the same line
+// `@next/env` hands the app. So the skip below is a re-scan guard and nothing
+// more: `lookupEnvFile` returns the same value however many times it is asked,
+// so the order these keys are met in cannot change what any of them resolves
+// to. The regex tolerates the `export ` prefix the shared reader has always
+// tolerated, so a key stated as `export REDIS_URL=…` is enumerated here too
+// instead of being read as unset while the launcher and the app both saw it.
 function readEnvLocal() {
   const env = {};
   if (!existsSync(envLocalPath)) return env;
@@ -84,7 +95,7 @@ function readEnvLocal() {
     const match = line.match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=/);
     if (!match) continue;
     const key = match[1];
-    if (key in env) continue; // first stated wins, exactly as the shared reader does
+    if (key in env) continue; // already resolved — the shared reader is the one that picks the line
     const value = lookupEnvFile(key);
     if (value !== undefined) env[key] = value;
   }
@@ -163,9 +174,16 @@ const fileEnv = readEnvLocal();
 // the plan and the app agree on. Restricted to the endpoint variables on
 // purpose: MCP_PUBLIC_BASE_URL / APP_PUBLIC_URL stay file-only, which is what
 // their own note below documents.
+//
+// NEO4J_URI is here for the same reason and was missing (cinatra#2913, round-5
+// finding N3). It has no row address of its own — Neo4j's row is the fixed
+// 127.0.0.1:7687 — but it IS a `BUNDLED_DB_SERVICES` endpoint variable, so the
+// classification below reads it, and reading it from the file alone let this
+// check condemn a URI the shell had already corrected.
 const ENDPOINT_VARS = [
   "SUPABASE_DB_URL",
   "REDIS_URL",
+  "NEO4J_URI",
   "NANGO_SERVER_URL",
   "GRAPHITI_URL",
   "WAYFLOW_BASE_URL",
@@ -279,6 +297,51 @@ const services = [
   },
 ];
 
+// WHAT EACH BUNDLED SERVICE'S OWN URL SAYS, classified ONCE, before anything is
+// probed. The note below reads the same map, so the row and the note cannot
+// reach different answers about one stated URL.
+const statedByLabel = new Map(
+  BUNDLED_DB_SERVICES.map((svc) => [svc.label, { svc, stated: classifyServiceUrl(env[svc.envVar]) }]),
+);
+
+// A ROW MAY NOT ASSERT AN ADDRESS ITS OWN URL DISOWNS (cinatra#2913, round-5
+// finding N1).
+//
+// `parseHostPort` falls back to this checkout's bundled `127.0.0.1:<default>`
+// whenever the stated URL yields no address, so `REDIS_URL=not a url` built a
+// Redis row reading `127.0.0.1:6379` — and on a host where that port answers,
+// the row printed `✓ Redis 127.0.0.1:6379 up` two lines above a note saying no
+// address for Redis can come from REDIS_URL. The row is the half that counts:
+// Redis is required-tier, so the tier accounting and this command's EXIT CODE
+// followed the ✓, and an operator whose app cannot reach Redis at all was told
+// Redis was up and sent away with exit 0.
+//
+// So a row whose stated URL classifies `unusable` prints no address, is not
+// probed at all, and is never `up`. Not probing is the substance of it: the
+// only address there was to probe is one this checkout invented, and a result
+// measured there is a fact about the operator's other stack, not about the app.
+//
+// THE ACCOUNTING IS THEN COMPUTED FROM THE DEFECT, NOT FROM AN ADDRESS. The row
+// stays in its tier and counts as unreachable there, because it IS unreachable:
+// `getRedisUrl` hands BullMQ the stated value verbatim, so a value that names
+// no address is an app that cannot connect. Required-tier therefore exits 1, as
+// it does for any other required service the app cannot reach. That is this
+// command's ordinary reporting semantic and not a new refusal: nothing is
+// stopped, no plan is failed, and `formatUnusableServiceUrl`'s rule — that the
+// LAUNCHER warns and lets the app boot — is untouched. What changed is only
+// that the checker no longer reports success it did not measure.
+//
+// SCOPED TO THE SERVICES THAT ALSO GET THE NOTE, deliberately: `BUNDLED_DB_SERVICES`
+// is the set `unusableUrlNotes` speaks about, so every disowning row has the
+// sentence that explains it. (Under a REFUSED plan the note is withheld with
+// everything else port-shaped, and the refusal block prints instead; the row
+// still disowns, because whether a stated URL names an address is a question
+// about that URL alone and no plan changes the answer.)
+for (const svc of services) {
+  const entry = statedByLabel.get(svc.name);
+  if (entry?.stated.state === "unusable") svc.noAddress = entry.svc.envVar;
+}
+
 const results = await Promise.all(
   services.map(async (svc) => ({
     ...svc,
@@ -286,18 +349,28 @@ const results = await Promise.all(
     // (hung-but-port-bound must read DOWN); everything else TCP-connects. A
     // service-specific probeHealth (WayFlow: 200 + status ok|degraded) wins
     // over the generic 2xx probeHttpHealth.
-    up: svc.healthUrl
-      ? svc.probeHealth
-        ? await svc.probeHealth(svc.healthUrl, 2500)
-        : (await probeHttpHealth(svc.healthUrl, 2500)).ok
-      : await probe(svc.host, svc.port),
+    // …unless the row states no address (`noAddress`): the only thing there is
+    // to connect to is the fallback this checkout invented, and whatever
+    // answers there answers for somebody else.
+    up: svc.noAddress
+      ? false
+      : svc.healthUrl
+        ? svc.probeHealth
+          ? await svc.probeHealth(svc.healthUrl, 2500)
+          : (await probeHttpHealth(svc.healthUrl, 2500)).ok
+        : await probe(svc.host, svc.port),
   })),
 );
 
 console.log(`\n${useColor ? "[1m" : ""}Cinatra service check${useColor ? "[0m" : ""}\n`);
 
+// The address column says what the row is about. For a row that states none,
+// that is the words "no address stated" and NOT an invented `host:port` — see
+// the `noAddress` note above.
+const rowAddress = (r) => (r.noAddress ? "no address stated" : `${r.host}:${r.port}`);
+
 const nameWidth = Math.max(...results.map((r) => r.name.length));
-const addrWidth = Math.max(...results.map((r) => `${r.host}:${r.port}`.length));
+const addrWidth = Math.max(...results.map((r) => rowAddress(r).length));
 
 for (const r of results) {
   let mark;
@@ -305,9 +378,16 @@ for (const r of results) {
   else if (r.tier === "required") mark = red("✗");
   else if (r.tier === "recommended") mark = yellow("✗");
   else mark = dim("○"); // app / optional — informational, not a problem
-  const addr = `${r.host}:${r.port}`.padEnd(addrWidth);
+  const addr = rowAddress(r).padEnd(addrWidth);
   let status;
   if (r.up) status = green("up");
+  // Before the tier lines: "DOWN" is the outcome of a probe, and this row was
+  // never probed. Say what is actually wrong, and let the note below say it in
+  // full.
+  else if (r.noAddress)
+    status = (r.tier === "required" ? red : yellow)(
+      `unreachable — ${r.tier}; ${r.noAddress} states no address`,
+    );
   else if (r.tier === "app") status = dim("not started — run `make dev`");
   else if (r.tier === "optional") status = dim("not started; enable its compose profile");
   else if (r.tier === "required") status = red("DOWN — required");
@@ -323,7 +403,11 @@ const mcpPublicUrl =
   env.MCP_PUBLIC_BASE_URL?.trim() || env.APP_PUBLIC_URL?.trim() || "";
 console.log("");
 if (mcpPublicUrl) {
-  console.log(`  ${green("✓")}  MCP public URL (env): ${mcpPublicUrl}`);
+  // Redacted like every other stated URL this surface echoes (cinatra#2913,
+  // round-5 finding N4). A tunnel URL is ordinarily credential-free, so this
+  // usually prints unchanged — but the rule is "no surface here prints
+  // userinfo", and a rule with an exception in it is not a rule.
+  console.log(`  ${green("✓")}  MCP public URL (env): ${redactUrlCredentials(mcpPublicUrl)}`);
 } else {
   console.log(
     `  ${yellow("○")}  MCP public URL: not set in the environment — the AI chat needs it.`,
@@ -392,7 +476,9 @@ if (!planRefused) {
     // stated URL never mentions — the connect/publish note and the drift
     // diagnosis would both be judging that fallback. Say what is actually wrong
     // instead, and judge nothing: there is no address of this checkout's here.
-    const stated = classifyServiceUrl(env[svc.envVar]);
+    // The SAME classification the row was shaped from — read, not recomputed,
+    // so no ordering here can make the note and the row disagree.
+    const stated = statedByLabel.get(svc.label).stated;
     if (stated.state === "unusable") {
       unusableUrlNotes.push(
         formatUnusableServiceUrl({
@@ -474,6 +560,14 @@ if (requiredDown.length > 0) {
   // it neither pins this checkout's compose project — Docker reads
   // COMPOSE_PROJECT_NAME from its own env, never from `.env.local` — nor honors
   // any of the refusals `make dev` now stops on. Same builder as the recipes.
+  //
+  // LEFT AS IT WAS for a row that states no address (cinatra#2913, round-5
+  // finding N1). Starting the stack cannot fix a defective URL, so this line is
+  // not that row's remedy — but it IS the remedy for whatever else is down
+  // beside it, and the row's own note above already names the fix in full. The
+  // generic remedy's fit is a question about every row, which the review
+  // records as a follow-up of its own; narrowing it here would be a second
+  // change riding on this one.
   console.log(
     dim(
       `  Start them with \`make dev\` (or \`${formatGuardedComposeCommand({

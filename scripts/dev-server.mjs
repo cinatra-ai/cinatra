@@ -42,6 +42,7 @@ import {
   isLinkedWorktree,
   planMessages,
   readEnvFileValue,
+  redactUrlCredentials,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
   resolvePublishedHostPort,
@@ -458,9 +459,13 @@ async function runNangoHealthPreflight() {
   if ((await probeHttpHealth(healthUrl, 4000)).ok) return; // healthy → silent
 
   // A custom remote Nango (hosted / shared infra) is not ours to start — flag it.
+  // The address is redacted like every other stated URL this preflight echoes
+  // (cinatra#2913, round-5 finding N4): a hosted Nango URL is the shape most
+  // likely to carry userinfo, and this line is printed on every `pnpm dev`
+  // while that host is down.
   if (!isLocalNangoUrl(rawUrl)) {
     console.warn(
-      `[dev-server] ⚠ Nango connector service at ${resolveNangoBaseUrl(rawUrl)} is not answering /health — connectors will fail until it recovers.`,
+      `[dev-server] ⚠ Nango connector service at ${redactUrlCredentials(resolveNangoBaseUrl(rawUrl))} is not answering /health — connectors will fail until it recovers.`,
     );
     return;
   }

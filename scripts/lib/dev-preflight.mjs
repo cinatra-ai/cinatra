@@ -126,11 +126,58 @@ function parseEnvValue(rawValue) {
 }
 
 /**
- * Read one KEY=value out of a dotenv-style file. Mirrors the launcher's original
- * inline reader: `export ` prefix tolerated, surrounding quotes stripped, blank
- * and `#` lines skipped, first match wins — plus the inline-comment handling in
- * `parseEnvValue`. Returns undefined when the file is absent or the key is
- * unset/empty.
+ * Read one KEY=value out of a dotenv-style file: `export ` prefix tolerated,
+ * surrounding quotes stripped, blank and `#` lines skipped, LAST match wins —
+ * plus the inline-comment handling in `parseEnvValue`. Returns undefined when
+ * the file is absent or the key is unset/empty.
+ *
+ * A DUPLICATED KEY RESOLVES TO ITS LAST OCCURRENCE, AND THAT IS THE APP'S
+ * ANSWER (cinatra#2913, round-6 finding B1). This reader mirrored the
+ * launcher's original inline reader, which returned on the FIRST match. The app
+ * does not: it boots `.env.local` through `@next/env`'s `loadEnvConfig`, which
+ * parses with dotenv and assigns in line order, so the last statement of a key
+ * is the one every runtime consumer gets. Measured out of this checkout's own
+ * `node_modules` (`@next/env` 16.2.10):
+ *
+ *     REDIS_URL=redis://127.0.0.1:6379
+ *     REDIS_URL=redis://127.0.0.1:19999
+ *     → loadEnvConfig(dir, true).combinedEnv.REDIS_URL = redis://127.0.0.1:19999
+ *
+ * First-wins therefore made every local surface speak about an endpoint the app
+ * would not dial: the launcher's PORT, the compose plan's derived host ports,
+ * and — once `scripts/check-services.mjs` was moved onto this one reader — the
+ * Redis row, its required-tier accounting, its exit code and its drift
+ * diagnosis. One file cannot be read two ways, and of the two ways only one is
+ * a fact about the running app; this is that one. The launcher inherits it, and
+ * that is the point rather than the cost: `pnpm dev`, `pnpm check:services` and
+ * the app now agree on which line of a duplicated key wins.
+ *
+ * IT IS ALSO WHAT THE REST OF THIS REPO ALREADY DID. `parseDotenv` in
+ * scripts/gen-nango-env.mjs, scripts/gen-graphiti-env.mjs and
+ * scripts/gen-wayflow-env.mjs assigns each match into an object in line order,
+ * so those three generators have always taken the last statement — and their
+ * own comment says they mirror `scripts/check-services.mjs` "so the parsers
+ * never drift". First-wins put this reader on the other side of every one of
+ * them. (Those parsers know nothing of the `export ` prefix or of inline
+ * comments, which this one does; that divergence is older than this change and
+ * is not touched here.)
+ *
+ * Nothing in a well-formed `.env.local` changes: a key stated ONCE reads
+ * identically, which is every key in every checked-in template here. Only a
+ * file that states the same key twice moves, and it moves onto the value the
+ * app was already using.
+ *
+ * ONE DIVERGENCE FROM THE LOADER REMAINS, AND IT IS NAMED RATHER THAN CHANGED.
+ * dotenv cuts an UNQUOTED value at ANY `#`; the rule below cuts it only at a
+ * `#` that begins the value or follows whitespace. So `REDIS_URL=redis://…/#x`
+ * reads whole here and truncated in the app. That narrowness was chosen against
+ * a review finding of its own — it is what keeps a DSN password (`pa#ssword`)
+ * and a URL fragment from being silently truncated — and it is pinned by cases
+ * of its own further down this suite's file. Swapping it now would be a second
+ * behaviour change riding on the duplicate-key one, and would re-open a
+ * decision an earlier round settled. It is recorded here, and pinned as a KNOWN
+ * divergence in scripts/__tests__/dev-preflight.test.mjs, so it stays a
+ * follow-up somebody chose rather than a surprise somebody finds.
  *
  * The inline-comment handling is DELIBERATELY not scoped to the skip flag. This
  * is the launcher's one `.env.local` reader, so widening it also widens how
@@ -161,14 +208,16 @@ export function readEnvFileValue(filePath, key) {
   } catch {
     return undefined; // unreadable → treat as unset, never throw out of a preflight
   }
+  const pattern = new RegExp(`^(?:export\\s+)?${key}\\s*=\\s*(.*)$`);
+  let value;
   for (const raw of contents.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;
-    const m = new RegExp(`^(?:export\\s+)?${key}\\s*=\\s*(.*)$`).exec(line);
+    const m = pattern.exec(line);
     if (!m) continue;
-    return parseEnvValue(m[1]);
+    value = parseEnvValue(m[1]); // LAST stated wins — see above
   }
-  return undefined;
+  return value;
 }
 
 /**
@@ -1042,7 +1091,11 @@ export function resolveComposeHostPortPlan({
       }
       if (configured.state === "ours") {
         portEnv[spec.envVar] = String(configured.port);
-        origin[spec.envVar] = `read from ${spec.urlVar}=${configured.url}`;
+        // Redacted: `origin` is interpolated into the duplicate-host-port
+        // refusal/warning an operator reads, and an `ours` URL is still allowed
+        // userinfo (cinatra#2913, round-5 finding N4).
+        origin[spec.envVar] =
+          `read from ${spec.urlVar}=${redactUrlCredentials(configured.url)}`;
         continue;
       }
 
@@ -1391,6 +1444,151 @@ export function formatStandDownUnreachable({ service, urlVar, hostPortVar, host,
 }
 
 /**
+ * The schemes WHATWG calls SPECIAL. They are the only ones for which a
+ * backslash ends the authority exactly as a slash does; under every other
+ * scheme a `\` is an ordinary character that a password may contain.
+ */
+const SPECIAL_URL_SCHEMES = new Set(["http", "https", "ws", "wss", "ftp", "file"]);
+
+/**
+ * Everything between `scheme://` and the authority's last `@`. A NON-special
+ * scheme reaches an authority only through exactly `//`, so the prefix is
+ * literal.
+ */
+const URL_USERINFO = /^(\s*[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#]*)@/;
+
+/**
+ * The same for a SPECIAL scheme, which reaches its authority through ANY run of
+ * `/` and `\` — including none at all. `http:u:pw@host`, `http:\\u:pw@host` and
+ * `http:////u:pw@host` all parse to host `host` with password `pw`, so a rule
+ * that insisted on `://` would print those credentials whole.
+ */
+const URL_USERINFO_SPECIAL = /^(\s*[A-Za-z][A-Za-z0-9+.-]*:[/\\]*)([^/?#\\]*)@/;
+
+/** The scheme of a `scheme:…` value, lowercased, or undefined. */
+const urlScheme = (raw) => /^\s*([A-Za-z][A-Za-z0-9+.-]*):/.exec(raw)?.[1].toLowerCase();
+
+/**
+ * Strip any userinfo out of a URL-shaped value before it reaches an operator.
+ *
+ * NO SURFACE HERE MAY PRINT A CREDENTIAL (cinatra#2913, round-5 finding N4).
+ * These messages are printed by `pnpm dev` and `pnpm check:services`, which run
+ * in terminals, CI logs and pasted bug reports, and the values they echo are
+ * service URLs — `SUPABASE_DB_URL`, `REDIS_URL`, `NANGO_SERVER_URL` — whose
+ * ordinary shape is `scheme://user:password@host:port/path`. A message that
+ * exists to tell an operator their URL is wrong must not be the thing that
+ * publishes their password.
+ *
+ * The WHOLE userinfo goes, username included. A username is not a secret in the
+ * way a password is, but keeping it means the rule is "print part of the
+ * credential", which is a rule nobody can hold: `redis://opossum@host` states a
+ * password in the username position, and there is no way to tell from the
+ * string which half of a userinfo is which. The host, port, scheme and path
+ * survive, and those are the parts an operator needs to see to fix the value.
+ *
+ * IT CUTS AT THE AUTHORITY'S LAST `@`, NOT ITS FIRST. WHATWG splits there, so
+ * `redis://user:p@ss@host` is user `user`, password `p@ss`, host `host` — a `@`
+ * inside a password is legal and ordinary. Stopping at the first `@` redacted
+ * `user:p` and printed `ss` as though it were the host, which leaks half the
+ * password in the line that exists to withhold it.
+ *
+ * THE SCHEME DECIDES WHETHER `\` ENDS THE AUTHORITY, and getting that backwards
+ * costs a credential. For a WHATWG SPECIAL scheme a backslash ends the
+ * authority exactly as a slash does, so in `http://host\path@x` the host is
+ * `host` and `@x` is path — treating that `@` as userinfo would hide a hostname
+ * for no reason. Under every OTHER scheme `\` is an ordinary character:
+ * `redis://u:p\q@127.0.0.1:6379/0` really does have the password `p\q`, and a
+ * rule that stopped at the `\` would match no `@` at all and print the password
+ * whole. One class cannot be right for both, so the scheme picks the class. The
+ * service URLs this preflight speaks about sit on both sides of that line —
+ * `redis:`/`rediss:`/`postgresql:`/`bolt:` on one, `http:`/`https:` on the
+ * other — so neither side is hypothetical.
+ *
+ * A SPECIAL SCHEME ALSO REACHES ITS AUTHORITY WITHOUT `//`. WHATWG accepts any
+ * run of `/` and `\` after `scheme:` for those schemes, zero included, so
+ * `http:u:pw@host` parses to host `host` with password `pw`. A rule keyed on a
+ * literal `://` never saw those and printed them whole, which is why the prefix
+ * is `:[/\\]*` on the special side.
+ *
+ * A value with no `scheme:` at all is returned unchanged: there is no authority
+ * in it, so there is no userinfo to find. Such a value never reaches an
+ * operator through `formatStatedUrlValue`, which withholds it outright.
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function redactUrlCredentials(value) {
+  const raw = String(value ?? "");
+  // THE PARSER ANSWERS FIRST, WHENEVER THERE IS A PARSER'S ANSWER TO HAVE. A
+  // value that parses and carries no username or password has no credential in
+  // it, whatever its `@` looks like — `http://127.0.0.1:3003/nango/@me` puts one
+  // in the path, and `file:user:pw@host` is a path too, because a `file:` URL
+  // may not carry credentials at all. Asking the parser is what keeps those
+  // printed exactly as the operator wrote them.
+  try {
+    const url = new URL(raw);
+    if (!url.username && !url.password) return raw;
+  } catch {
+    // Unparseable: there is no structure to consult, so the textual rule below
+    // decides — and it FAILS CLOSED. It would rather hide a hostname than print
+    // a password, which is the right way round for a value whose most likely
+    // defect is an unquoted password with a space in it.
+  }
+  // THE TEXTUAL RULE READS WHAT THE PARSER READS, NOT WHAT THE FILE SPELLS, and
+  // it does so by running WHATWG's OWN PREPROCESSING first rather than by
+  // patching one character class at a time.
+  //
+  // The basic URL parser begins by stripping leading and trailing C0 controls
+  // and spaces, then deleting every ASCII tab, LF and CR anywhere in the value.
+  // So `http:<TAB>//u:pw@host` and `<NUL>http://u:pw@host` are
+  // both perfectly ordinary credentialled URLs to the app, while a rule applied
+  // to the raw text matches neither and prints the password whole. Two edges of
+  // that shape were found one after the other; doing the whole preprocessing
+  // closes the class instead of the two examples.
+  //
+  // It is never visible in an ordinary echo: a value that parses with no
+  // userinfo has already returned above, so what is left is either a value
+  // becoming `***@…` or one this module withholds outright.
+  const scrubbed = raw
+    .replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "")
+    .replace(/[\t\n\r]/g, "");
+  const scheme = urlScheme(scrubbed);
+  if (scheme === undefined) return scrubbed;
+  return scrubbed.replace(
+    SPECIAL_URL_SCHEMES.has(scheme) ? URL_USERINFO_SPECIAL : URL_USERINFO,
+    "$1***@",
+  );
+}
+
+/**
+ * Render a STATED service URL for operator output: `VAR=<value>` with any
+ * userinfo redacted, or — when the value does not parse as a URL at all — the
+ * variable's name alone.
+ *
+ * AN UNPARSEABLE VALUE IS NOT ECHOED (cinatra#2913, round-5 finding N4). The
+ * redaction above is structural: it finds the userinfo because the value has
+ * the structure of a URL. A value that parses as nothing has no structure to
+ * find, so nothing can be said about where a secret is in it — and the way a
+ * URL most often becomes unparseable is an unquoted password containing a
+ * space, which puts the credential in exactly the branch that has no way to
+ * locate it. So that branch names the variable and the defect, and shows no
+ * part of the value. The operator has the file open; the variable name is what
+ * they need to find the line.
+ *
+ * @param {{ urlVar?: string, url?: unknown }} input
+ * @returns {string}
+ */
+export function formatStatedUrlValue({ urlVar, url } = {}) {
+  const value = String(url ?? "");
+  try {
+    new URL(value);
+  } catch {
+    return String(urlVar);
+  }
+  return `${urlVar}=${redactUrlCredentials(value)}`;
+}
+
+/**
  * What a surface owes an operator when a service URL is STATED and names no
  * address at all (cinatra#2839, round-4 finding).
  *
@@ -1433,7 +1631,10 @@ export function formatStandDownUnreachable({ service, urlVar, hostPortVar, host,
  */
 export function formatUnusableServiceUrl({ service, urlVar, url, hostPortVar, standDown = false } = {}) {
   const stated = classifyServiceUrl(url);
-  const shown = `${urlVar}=${stated.url ?? String(url ?? "")}`;
+  // Redacted, and for an unparseable value withheld entirely — see
+  // `formatStatedUrlValue`. `shown` is therefore `REDIS_URL=redis://***@host/0`
+  // or bare `REDIS_URL`, never the operator's password.
+  const shown = formatStatedUrlValue({ urlVar, url: stated.url ?? url });
   // The FALLBACK sentence is the finding's first half and the IMPOSSIBLE-REMEDY
   // sentence its second, so each reason carries the one that is true of it. A
   // `:0` URL really does resolve to the address it states — 127.0.0.1:0 is no
@@ -1451,7 +1652,8 @@ export function formatUnusableServiceUrl({ service, urlVar, url, hostPortVar, st
         : stated.reason === "no-known-port"
           ? `${shown} states no port, and this checkout knows no default port for the ` +
             `\`${new URL(stated.url).protocol}\` scheme. ${invented}`
-          : `${shown} does not parse as a URL at all, so no address here can come from it. ${invented}`;
+          : `${shown} does not parse as a URL at all (its value is not echoed here: an unparseable value has no ` +
+            `structure a credential could be redacted out of), so no address here can come from it. ${invented}`;
   return (
     `${urlVar} does not state a usable address for ${service}: ${why}. ` +
     `Point ${urlVar} at the host and port ${service} really answers on: a 127.0.0.1 port this worktree owns if it ` +
@@ -1480,11 +1682,16 @@ export function unmanagedComposeServices(unmanaged = []) {
  * the line names the configured URL that made the preflight stand down. A
  * derived port repeats its source's URL, so entries are de-duplicated.
  *
+ * Through `formatStatedUrlValue`, so this line is under the same no-credential
+ * rule as every other place a stated URL is echoed (cinatra#2913, round-5
+ * finding N4). `unmanaged` carries `unusable` URLs as well as `theirs` ones, so
+ * an unparseable value reaches here too and is named without being shown.
+ *
  * @param {Array<{ urlVar: string, url: string }>} unmanaged
  * @returns {string}
  */
 export function formatUnmanagedServices(unmanaged = []) {
-  return [...new Set(unmanaged.map(({ urlVar, url }) => `${urlVar}=${url}`))].join(", ");
+  return [...new Set(unmanaged.map((entry) => formatStatedUrlValue(entry)))].join(", ");
 }
 
 /**

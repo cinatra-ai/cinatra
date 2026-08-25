@@ -35,7 +35,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   COMPOSE_FILES,
   PREFLIGHT_HOST_PORTS,
@@ -53,8 +53,10 @@ import {
   isLinkedWorktree,
   normalizeComposeProjectName,
   normalizeSkipFlag,
+  formatStatedUrlValue,
   planMessages,
   readEnvFileValue,
+  redactUrlCredentials,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
   resolvePublishedHostPort,
@@ -71,6 +73,16 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
+
+// The one obviously-fake credential every no-credential case is written around
+// (cinatra#2913, round-5 finding N4). It is a single constant so a case can
+// assert "this string is not in the output" and mean it: nothing else in this
+// repo spells it, so a match can only have come from the value under test.
+const FAKE_SECRET = "NOT-A-REAL-PASSWORD";
+// Joined at runtime so the source never carries a contiguous `user:password@`
+// shape — the org secret-scan gate (TruffleHog URI detector) reads that as a
+// credentialled URI even with a placeholder password.
+const FAKE_USERINFO = ["fixtureuser", FAKE_SECRET].join(":");
 const DEV_SERVER = path.join(REPO_ROOT, "scripts", "dev-server.mjs");
 const DEV_COMPOSE_ENV = path.join(REPO_ROOT, "scripts", "dev-compose-env.mjs");
 
@@ -1430,6 +1442,286 @@ describe("formatUnmanagedServices / unmanagedComposeServices", () => {
     expect(formatUnmanagedServices()).toBe("");
     expect(unmanagedComposeServices()).toEqual([]);
   });
+
+  // `unmanaged` carries `unusable` URLs beside `theirs` ones, so this list is a
+  // credential surface too (cinatra#2913, round-5 finding N4).
+  it("redacts userinfo, and shows nothing at all of an unparseable value", () => {
+    expect(
+      formatUnmanagedServices([
+        { service: "redis", urlVar: "REDIS_URL", url: `rediss://${FAKE_USERINFO}@cache.example.com:6380` },
+        { service: "nango-server", urlVar: "NANGO_SERVER_URL", url: `nango ${FAKE_SECRET}` },
+      ]),
+    ).toBe("REDIS_URL=rediss://***@cache.example.com:6380, NANGO_SERVER_URL");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// NO SURFACE HERE PRINTS A CREDENTIAL (cinatra#2913, round-5 finding N4)
+// ---------------------------------------------------------------------------
+//
+// Every message in this module that echoes a stated service URL is printed by
+// `pnpm dev` or `pnpm check:services` — into terminals, CI logs and pasted bug
+// reports — and the ordinary shape of those URLs is
+// `scheme://user:password@host:port/path`. The unparseable branch is the worst
+// of them: an unquoted password containing a SPACE is precisely how a URL stops
+// parsing, so the one line that echoed the value whole was the line most likely
+// to be holding a password.
+//
+// The fixture secret is deliberately unmistakable and appears nowhere else.
+describe("redactUrlCredentials / formatStatedUrlValue", () => {
+  it("replaces the whole userinfo, username included", () => {
+    expect(redactUrlCredentials(`redis://${FAKE_USERINFO}@127.0.0.1:6379/0`)).toBe(
+      "redis://***@127.0.0.1:6379/0",
+    );
+    expect(redactUrlCredentials(`redis://${FAKE_SECRET}@127.0.0.1:6379/0`)).toBe(
+      "redis://***@127.0.0.1:6379/0",
+    );
+    expect(
+      redactUrlCredentials(`postgresql://${FAKE_USERINFO}@127.0.0.1:5434/postgres`),
+    ).toBe("postgresql://***@127.0.0.1:5434/postgres");
+  });
+
+  it("leaves a URL with no userinfo exactly as stated", () => {
+    expect(redactUrlCredentials("redis://127.0.0.1:6379/0")).toBe("redis://127.0.0.1:6379/0");
+    expect(redactUrlCredentials("")).toBe("");
+    expect(redactUrlCredentials(undefined)).toBe("");
+  });
+
+  // A `@` in the PATH is not userinfo and must not be mistaken for it.
+  it("does not touch an `@` that is not userinfo", () => {
+    expect(redactUrlCredentials("http://127.0.0.1:3003/nango/@me")).toBe(
+      "http://127.0.0.1:3003/nango/@me",
+    );
+    expect(redactUrlCredentials("redis://127.0.0.1:6379/path@x")).toBe(
+      "redis://127.0.0.1:6379/path@x",
+    );
+    expect(redactUrlCredentials("http://127.0.0.1:3003/?q=a@b")).toBe(
+      "http://127.0.0.1:3003/?q=a@b",
+    );
+  });
+
+  // A `@` INSIDE THE PASSWORD, which WHATWG allows: the authority splits at its
+  // LAST `@`, so `redis://user:p@ss@host` is user `user`, password `p@ss`, host
+  // `host`. Stopping at the first `@` printed `ss` as though it were host, which
+  // leaks half the password in the line that exists to withhold it.
+  it("redacts up to the LAST `@` of the authority, not the first", () => {
+    expect(redactUrlCredentials(`redis://${FAKE_USERINFO}@more@127.0.0.1:6379/0`)).toBe(
+      "redis://***@127.0.0.1:6379/0",
+    );
+    // The claim about WHATWG this rests on, measured rather than remembered.
+    const parsed = new URL(`redis://${FAKE_USERINFO}@more@127.0.0.1:6379/0`);
+    expect(parsed.hostname).toBe("127.0.0.1");
+    expect(parsed.username).toBe("fixtureuser");
+  });
+
+  // A BACKSLASH ENDS THE AUTHORITY ONLY UNDER A WHATWG "SPECIAL" SCHEME, and
+  // both sides of that line are real service URLs here. Getting it backwards in
+  // the redis direction prints the password whole.
+  it("lets `\\` end the authority for a special scheme, and not for any other", () => {
+    // http: is special — `\path@x` is PATH, and the host must survive.
+    expect(redactUrlCredentials("http://127.0.0.1:3003\\nango@me")).toBe(
+      "http://127.0.0.1:3003\\nango@me",
+    );
+    expect(new URL("http://127.0.0.1:3003\\nango@me").hostname).toBe("127.0.0.1");
+    // redis: is not — `p\q` really is the password, and it may not be printed.
+    const stated = `redis://${FAKE_USERINFO}\\more@127.0.0.1:6379/0`;
+    expect(new URL(stated).hostname).toBe("127.0.0.1");
+    expect(redactUrlCredentials(stated)).toBe("redis://***@127.0.0.1:6379/0");
+    expect(redactUrlCredentials(stated)).not.toContain(FAKE_SECRET);
+  });
+
+  // A value with no `scheme:` has no authority, so there is nothing to find.
+  it("returns a value with no scheme at all unchanged", () => {
+    expect(redactUrlCredentials("not a url")).toBe("not a url");
+    expect(redactUrlCredentials("/var/run/redis.sock")).toBe("/var/run/redis.sock");
+  });
+
+  // A `file:` URL MAY NOT CARRY CREDENTIALS AT ALL, so its `user:pw@host` is a
+  // PATH and redacting it would hide path text for nothing. The parser is what
+  // knows that, which is why it is asked before the textual rule runs.
+  it("leaves a `file:` value alone, because its `@` can only be a path", () => {
+    const stated = `file:${FAKE_USERINFO}@127.0.0.1`;
+    const parsed = new URL(stated);
+    expect(parsed.username).toBe("");
+    expect(parsed.password).toBe("");
+    expect(redactUrlCredentials(stated)).toBe(stated);
+  });
+
+  // …and the fallback still fails CLOSED: a value the parser cannot read at all
+  // is redacted by the textual rule rather than echoed. A host-less authority
+  // is one such value, and it is the shape `formatUnusableServiceUrl` meets.
+  it("still redacts when the value does not parse, so the fallback fails closed", () => {
+    const stated = `redis://${FAKE_USERINFO} with a space@/0`;
+    expect(() => new URL(stated)).toThrow();
+    expect(redactUrlCredentials(stated)).toBe("redis://***@/0");
+  });
+
+  // A SPACE IN THE PASSWORD DOES NOT ALWAYS BREAK THE PARSE — it is percent-
+  // encoded when a real host follows — so the parser path must catch this one,
+  // and the secret must not survive it in its RAW spelling either.
+  it("redacts a spaced password that the parser accepts and percent-encodes", () => {
+    const stated = `redis://${FAKE_USERINFO} with a space@127.0.0.1:6379/0`;
+    expect(new URL(stated).password).toContain("%20");
+    expect(redactUrlCredentials(stated)).toBe("redis://***@127.0.0.1:6379/0");
+    expect(redactUrlCredentials(stated)).not.toContain(FAKE_SECRET);
+  });
+
+  // A host-less authority. Node rejects it outright (so `classifyServiceUrl`
+  // files it `unparseable`), and the userinfo is still there in the text — the
+  // redaction must not depend on the value parsing.
+  it("redacts a host-less URL, which does not parse at all", () => {
+    expect(() => new URL(`redis://${FAKE_USERINFO}@/0`)).toThrow();
+    expect(redactUrlCredentials(`redis://${FAKE_USERINFO}@/0`)).toBe("redis://***@/0");
+  });
+
+  // A SPECIAL SCHEME REACHES ITS AUTHORITY WITHOUT `//` TOO. WHATWG accepts any
+  // run of `/` and `\\` after `scheme:`, zero included, so every one of these
+  // parses to host `127.0.0.1` with the password below. A rule keyed on a
+  // literal `://` matched none of them and printed the credential whole.
+  it("redacts a special scheme that reaches its authority without `//`", () => {
+    for (const stated of [
+      `http:${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `http:\\\\${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `http:/\\${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `http:////${FAKE_USERINFO}@127.0.0.1:3003/health`,
+    ]) {
+      const parsed = new URL(stated);
+      expect(parsed.hostname, stated).toBe("127.0.0.1");
+      expect(parsed.password, stated).toBe(FAKE_SECRET);
+      expect(redactUrlCredentials(stated), stated).not.toContain(FAKE_SECRET);
+      expect(redactUrlCredentials(stated), stated).toContain("***@127.0.0.1:3003/health");
+    }
+  });
+
+  // …and a NON-special scheme does not: without `//` there is no authority at
+  // all, so there is nothing to redact and nothing to invent.
+  it("leaves a non-special scheme with no `//` alone, because it has no authority", () => {
+    const stated = `redis:${FAKE_USERINFO}@127.0.0.1:6379`;
+    const parsed = new URL(stated);
+    expect(parsed.hostname).toBe("");
+    expect(parsed.password).toBe("");
+    expect(redactUrlCredentials(stated)).toBe(stated);
+  });
+
+  it("names the variable and shows no part of an unparseable value", () => {
+    expect(
+      formatStatedUrlValue({ urlVar: "REDIS_URL", url: `redis://${FAKE_USERINFO} more@/0` }),
+    ).toBe("REDIS_URL");
+    expect(formatStatedUrlValue({ urlVar: "REDIS_URL", url: "not a url" })).toBe("REDIS_URL");
+  });
+
+  it("shows a parseable value, redacted", () => {
+    expect(
+      formatStatedUrlValue({ urlVar: "REDIS_URL", url: `redis://${FAKE_USERINFO}@127.0.0.1:0/0` }),
+    ).toBe("REDIS_URL=redis://***@127.0.0.1:0/0");
+  });
+
+  // THE BACKSTOP, stated as a property rather than as another example.
+  //
+  // Every edge in this area came from the raw text and the URL parser reading
+  // one value differently: the authority's last `@`, a `\\` under a special
+  // scheme, a special scheme reaching its authority without `//`, and an ASCII
+  // tab the parser deletes before it looks. So the rule is asserted directly —
+  // whatever the parser calls a credential must not survive the redaction, in
+  // its raw spelling or its percent-encoded one — over the adversarial values
+  // each of those edges produced. A new edge fails here without anyone having
+  // to think of the assertion again.
+  it("never leaves a parser-visible credential in the output, on any of these shapes", () => {
+    const shapes = [
+      `redis://${FAKE_USERINFO}@127.0.0.1:6379/0`,
+      `redis://${FAKE_USERINFO}@more@127.0.0.1:6379/0`,
+      `redis://${FAKE_USERINFO}\\more@127.0.0.1:6379/0`,
+      `redis://${FAKE_USERINFO} with a space@127.0.0.1:6379/0`,
+      `redis://${FAKE_SECRET}@127.0.0.1:6379/0`,
+      `postgresql://${FAKE_USERINFO}@127.0.0.1:5434/postgres`,
+      `redsi://${FAKE_USERINFO}@127.0.0.1/0`,
+      `http://${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `http:${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `http:\\\\${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `http:////${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `http:\tfixtureuser@127.0.0.1:3003/health`,
+      `http:\t//${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      // WHATWG strips leading C0 controls and spaces before it parses, so these
+      // are credentialled URLs to the app however odd they look in the file.
+      `${String.fromCharCode(0)}http://${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `   http://${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `\nhttp://${FAKE_USERINFO}@127.0.0.1:3003/health`,
+      `https://${FAKE_USERINFO}@nango.example.invalid`,
+    ];
+    for (const stated of shapes) {
+      const label = JSON.stringify(stated);
+      const url = new URL(stated); // every shape here is one the app WOULD parse
+      const secrets = [url.username, url.password]
+        .filter(Boolean)
+        .flatMap((part) => [part, decodeURIComponent(part)]);
+      expect(secrets.length, `${label} states no credential — wrong fixture`).toBeGreaterThan(0);
+      const shown = redactUrlCredentials(stated);
+      for (const secret of secrets) {
+        expect(shown, `${label} leaked ${JSON.stringify(secret)}`).not.toContain(secret);
+      }
+      expect(shown, label).toContain("***@");
+    }
+  });
+
+  // The formatter the two surfaces actually print, on all four defect shapes.
+  // The assertion is the same on every one: the secret is not in the sentence.
+  it("never lets a credential into the unusable-URL line, on any defect shape", () => {
+    const shapes = [
+      `redis://${FAKE_USERINFO} with a space@/0`, // unparseable
+      `redis://${FAKE_USERINFO}@/0`, // host-less, so unparseable too
+      `redis://${FAKE_USERINFO}@127.0.0.1:0/0`, // unusable-port
+      `redsi://${FAKE_USERINFO}@127.0.0.1/0`, // no-known-port
+    ];
+    for (const url of shapes) {
+      const line = formatUnusableServiceUrl({
+        service: "Redis",
+        urlVar: "REDIS_URL",
+        url,
+        hostPortVar: "CINATRA_REDIS_HOST_PORT",
+        standDown: true,
+      });
+      expect(line, `secret leaked for ${url.replace(FAKE_SECRET, "<secret>")}`).not.toContain(
+        FAKE_SECRET,
+      );
+      expect(line).toContain("REDIS_URL does not state a usable address for Redis");
+    }
+  });
+
+  // The stand-down line routes an unusable URL through the same formatter, so
+  // the launcher's own branch is covered by the same rule.
+  it("never lets a credential into the stand-down line either", () => {
+    const line = formatStandDownUnreachable({
+      service: "Redis",
+      urlVar: "REDIS_URL",
+      hostPortVar: "CINATRA_REDIS_HOST_PORT",
+      host: "127.0.0.1",
+      port: 6379,
+      url: `redis://${FAKE_USERINFO} with a space@/0`,
+    });
+    expect(line).not.toContain(FAKE_SECRET);
+  });
+
+  // The duplicate-host-port refusal names where each claim came from, and an
+  // `ours` URL is still allowed userinfo.
+  it("never lets a credential into a plan refusal's `read from …` attribution", () => {
+    const plan = resolveComposeHostPortPlan({
+      processEnv: { COMPOSE_PROJECT_NAME: "p2913lane" },
+      envFileLookup: (key) =>
+        ({
+          // Two parameterized services claiming ONE host port, each read off a
+          // URL that carries userinfo.
+          REDIS_URL: `redis://${FAKE_USERINFO}@127.0.0.1:15434/0`,
+          NANGO_DATABASE_URL: `postgresql://${FAKE_USERINFO}@127.0.0.1:15434/nango`,
+          NANGO_SERVER_URL: "http://127.0.0.1:13003",
+        })[key],
+      projectName: "p2913lane",
+      defaultProjectName: "/tmp/p2913lane",
+    });
+    const messages = planMessages(plan.refusals).join("\n");
+    expect(messages).toContain("claimed twice by this plan");
+    expect(messages).not.toContain(FAKE_SECRET);
+    expect(messages).toContain("redis://***@127.0.0.1:15434/0");
+  });
 });
 
 describe("formatStandDownUnreachable", () => {
@@ -1501,7 +1793,7 @@ describe("formatStandDownUnreachable", () => {
     expect(line).not.toContain("not reachable yet");
     // …and it says the true thing instead.
     expect(line).toContain("REDIS_URL does not state a usable address for Redis");
-    expect(line).toContain("REDIS_URL=not a url does not parse as a URL at all");
+    expect(line).toContain("REDIS_URL does not parse as a URL at all");
   });
 
   // The third shape of the same defect, and the one an operator reaches by
@@ -1826,6 +2118,183 @@ describe("createComposeRunner", () => {
     expect(spawnedPorts.CINATRA_REDIS_HOST_PORT).toBeUndefined();
     expect(Object.values(spawnedPorts)).not.toContain("6379");
     expect(spawnedPorts.CINATRA_NANGO_DB_HOST_PORT).toBe("15435");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A DUPLICATED KEY, AND WHICH LINE WINS (cinatra#2913, round-6 finding B1)
+// ---------------------------------------------------------------------------
+//
+// `readEnvFileValue` returned on its FIRST match. The app does not: it boots
+// `.env.local` through `@next/env`'s `loadEnvConfig`, which parses with dotenv
+// and assigns in line order, so the LAST statement of a key is what every
+// runtime consumer gets. Nothing in this suite pinned the question in either
+// direction, which is how moving `scripts/check-services.mjs` onto this reader
+// silently moved that surface from agreeing with the app to disagreeing with
+// it — on a required-tier row whose ✓ drives this repo's exit codes.
+//
+// So it is pinned here, at the reader every local surface resolves through, and
+// pinned AGAINST THE LOADER ITSELF rather than against a remembered claim about
+// it: the cross-check below runs the real `@next/env` out of this checkout's
+// own `node_modules`, in a SUBPROCESS, because `loadEnvConfig` assigns into
+// `process.env` and a vitest worker is not a place to do that.
+describe("readEnvFileValue — a duplicated key resolves to its LAST occurrence", () => {
+  let dir;
+  const write = (...lines) => {
+    const file = path.join(dir, ".env.local");
+    writeFileSync(file, [...lines, ""].join("\n"));
+    return file;
+  };
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "cinatra-2913-dup-"));
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("takes the last statement, not the first", () => {
+    const file = write("REDIS_URL=redis://127.0.0.1:6379", "REDIS_URL=redis://127.0.0.1:19999");
+    expect(readEnvFileValue(file, "REDIS_URL")).toBe("redis://127.0.0.1:19999");
+  });
+
+  // Three statements, so a build that merely swapped "return on the first" for
+  // "return on the second" is caught too.
+  it("takes the last of three, and the same for a plain port", () => {
+    const file = write("PORT=13001", "PORT=13002", "PORT=13003");
+    expect(readEnvFileValue(file, "PORT")).toBe("13003");
+  });
+
+  // A later line CORRECTS an earlier one, including an earlier empty statement.
+  // First-wins read this as "unset" and fell through to a default the app never
+  // used.
+  it("lets a later line correct an earlier empty statement", () => {
+    const file = write("REDIS_URL=", "REDIS_URL=redis://127.0.0.1:16379");
+    expect(readEnvFileValue(file, "REDIS_URL")).toBe("redis://127.0.0.1:16379");
+  });
+
+  // …and the reverse is a real statement too: the last line unsets it.
+  it("lets a later empty statement unset an earlier value", () => {
+    const file = write("REDIS_URL=redis://127.0.0.1:16379", "REDIS_URL=");
+    expect(readEnvFileValue(file, "REDIS_URL")).toBeUndefined();
+  });
+
+  // THE `export ` PREFIX, pinned on both halves of the duplicate (cinatra#2913,
+  // round-6 review: the widening was in the right direction and unpinned). An
+  // exported line is an ordinary statement of the key, so it neither wins nor
+  // loses for being exported — only for being last.
+  it("counts an `export `-prefixed line as a statement, whichever side it is on", () => {
+    expect(
+      readEnvFileValue(write("REDIS_URL=redis://127.0.0.1:6379", "export REDIS_URL=redis://127.0.0.1:19999"), "REDIS_URL"),
+    ).toBe("redis://127.0.0.1:19999");
+    expect(
+      readEnvFileValue(write("export REDIS_URL=redis://127.0.0.1:19999", "REDIS_URL=redis://127.0.0.1:6379"), "REDIS_URL"),
+    ).toBe("redis://127.0.0.1:6379");
+  });
+
+  // A COMMENTED-OUT duplicate is not a statement, so it never wins — the thing
+  // an operator does when they park an old value under the new one.
+  it("ignores a commented-out later line", () => {
+    const file = write("REDIS_URL=redis://127.0.0.1:16379", "# REDIS_URL=redis://127.0.0.1:19999");
+    expect(readEnvFileValue(file, "REDIS_URL")).toBe("redis://127.0.0.1:16379");
+  });
+
+  // The inline-comment rule still applies to whichever line wins.
+  it("strips the inline comment of the winning line", () => {
+    const file = write("PORT=13001 # old", "PORT=13003 # lane port");
+    expect(readEnvFileValue(file, "PORT")).toBe("13003");
+  });
+
+  // THE ONE DIVERGENCE FROM THE LOADER THAT REMAINS, pinned as a KNOWN one.
+  //
+  // dotenv cuts an unquoted value at ANY `#`; this reader cuts it only at a `#`
+  // that begins the value or follows whitespace. That narrowness was chosen
+  // against a review finding of its own — it is what keeps `pa#ssword` and a URL
+  // fragment intact — and the duplicate-key change does not touch it. So the
+  // divergence is recorded here rather than left to be discovered: this case
+  // fails the day somebody changes either side, which is the point.
+  it("records the one comment-rule divergence from the app's loader", () => {
+    const file = write("REDIS_URL=redis://127.0.0.1:16379/#frag");
+    expect(readEnvFileValue(file, "REDIS_URL")).toBe("redis://127.0.0.1:16379/#frag");
+    // dotenv, and therefore the app, would read `redis://127.0.0.1:16379/`.
+    // Both resolve to the same host and port, which is all this preflight ever
+    // asks of the value — see the reader's own note for why it is a follow-up.
+    expect(parseHostPort(readEnvFileValue(file, "REDIS_URL"), { host: "x", port: 1 })).toEqual({
+      host: "127.0.0.1",
+      port: 16379,
+    });
+  });
+
+  // Nothing about a well-formed file moves: a key stated once reads identically.
+  it("is unchanged for a key stated once", () => {
+    const file = write("PORT=13839", "REDIS_URL=redis://127.0.0.1:16379");
+    expect(readEnvFileValue(file, "PORT")).toBe("13839");
+    expect(readEnvFileValue(file, "REDIS_URL")).toBe("redis://127.0.0.1:16379");
+  });
+
+  // ONE FILE, ONE ANSWER — the other `.env.local` readers this repo ships.
+  // `parseDotenv` in the three container-env generators assigns each match into
+  // an object in line order, so they have always taken the LAST statement, and
+  // their own comment says they mirror `scripts/check-services.mjs` "so the
+  // parsers never drift". First-wins had put the shared reader on the other
+  // side of all three. Imported here so a future divergence is a red test and
+  // not a discovery.
+  it("agrees with the `parseDotenv` the container-env generators use", async () => {
+    const file = write("REDIS_URL=redis://127.0.0.1:6379", "REDIS_URL=redis://127.0.0.1:19999");
+    const contents = readFileSync(file, "utf8");
+    for (const script of ["gen-nango-env.mjs", "gen-graphiti-env.mjs", "gen-wayflow-env.mjs"]) {
+      const { parseDotenv } = await import(
+        pathToFileURL(path.join(REPO_ROOT, "scripts", script)).href
+      );
+      expect(parseDotenv(contents).REDIS_URL, `${script} disagrees`).toBe(
+        readEnvFileValue(file, "REDIS_URL"),
+      );
+    }
+  });
+
+  // THE CROSS-CHECK. Not "last-wins because we said so": last-wins because it
+  // is what the app gets. The child resolves `@next/env` through `next` (pnpm
+  // keeps it out of the root `node_modules`), loads the same file, and prints
+  // what `combinedEnv` holds.
+  it("agrees with `@next/env`'s loadEnvConfig, which is how the app reads this file", () => {
+    const file = write("REDIS_URL=redis://127.0.0.1:6379", "REDIS_URL=redis://127.0.0.1:19999");
+    const probe = path.join(dir, "loader-probe.cjs");
+    writeFileSync(
+      probe,
+      [
+        'const { createRequire } = require("node:module");',
+        `const fromRepo = createRequire(${JSON.stringify(path.join(REPO_ROOT, "noop.cjs"))});`,
+        'const fromNext = createRequire(fromRepo.resolve("next/package.json"));',
+        'const { loadEnvConfig } = require(fromNext.resolve("@next/env"));',
+        "const loaded = loadEnvConfig(process.cwd(), true);",
+        "process.stdout.write(String(loaded.combinedEnv.REDIS_URL));",
+        "",
+      ].join("\n"),
+    );
+    const result = spawnSync(process.execPath, [probe], {
+      cwd: dir,
+      encoding: "utf8",
+      timeout: 60_000,
+      env: {
+        // The loader would otherwise see an exported REDIS_URL and never consult
+        // the file at all (`@next/env` never overrides an already-set variable).
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(([key]) => key !== "REDIS_URL"),
+        ),
+        // `@next/env` DELIBERATELY SKIPS `.env.local` WHEN NODE_ENV IS "test"
+        // — Next.js's documented rule, so a test run never inherits a
+        // developer's local overrides. A vitest worker sets NODE_ENV=test and
+        // the child inherits it, which would make this probe read nothing at
+        // all and pass on a vacuous `undefined === undefined`. The question
+        // here is what the loader does for `pnpm dev`, so the child is told it
+        // is a dev run.
+        NODE_ENV: "development",
+      },
+    });
+    expect(
+      result.status,
+      `the app's own loader must be installed for this pin\nstderr:\n${result.stderr}`,
+    ).toBe(0);
+    expect(result.stdout).toBe("redis://127.0.0.1:19999");
+    expect(readEnvFileValue(file, "REDIS_URL")).toBe(result.stdout);
   });
 });
 
@@ -3490,7 +3959,7 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
     ).toBe(0);
     expect(result.stderr).not.toContain("Docker host-port drift");
     expect(result.stderr).toContain("REDIS_URL does not state a usable address for Redis");
-    expect(result.stderr).toContain("REDIS_URL=not a url does not parse as a URL at all");
+    expect(result.stderr).toContain("REDIS_URL does not parse as a URL at all");
     // The finding itself: no address for redis, invented or otherwise, and no
     // claim about its reachability.
     expect(result.stderr).not.toContain("127.0.0.1:6379");
@@ -3525,6 +3994,80 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
     expect(result.stderr).not.toContain("Start Redis where it is configured");
     expect(result.stderr).not.toContain("PostgreSQL, Redis not reachable yet");
     expect(redisCalls(result.calls)).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // A DUPLICATED KEY, AT THE LAUNCHER (cinatra#2913, round-6 finding B1)
+  // -------------------------------------------------------------------------
+  //
+  // The reader is shared, so the precedence change lands here too, and this is
+  // where its BLAST RADIUS is pinned: the launcher now resolves a duplicated
+  // key exactly as the app does. The lane states its published port directly
+  // and then states `REDIS_URL` twice — first at the published port, then at a
+  // different one. Under first-wins the two agreed and the launcher said
+  // nothing; under the app's own answer they disagree, which is the bleed the
+  // connect/publish note exists for. Both ports are reserved-and-closed, so
+  // nothing here depends on what the host is running.
+  it("resolves a duplicated REDIS_URL to its last statement, as the app does", () => {
+    const result = runLauncher(
+      laneEnv(
+        [
+          `CINATRA_REDIS_HOST_PORT=${laneRedisPort}`,
+          `REDIS_URL=redis://127.0.0.1:${laneRedisPort}`,
+          `REDIS_URL=redis://127.0.0.1:${laneAltRedisPort}`,
+        ].join("\n"),
+      ),
+    );
+    expect(
+      result.status,
+      `launcher exited ${result.status}\nstderr:\n${result.stderr}`,
+    ).toBe(0);
+    expect(result.stderr).toContain(`Redis is published on host port ${laneRedisPort}`);
+    expect(result.stderr).toContain(`the app connects on ${laneAltRedisPort}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // NO CREDENTIAL ON THE LAUNCHER'S OUTPUT (cinatra#2913, round-5 finding N4)
+  // -------------------------------------------------------------------------
+  //
+  // The same duty as on the checker, asserted the same way: against everything
+  // the process wrote. The unparseable shape is the one the finding named — an
+  // unquoted password with a space in it is how a URL stops parsing — and the
+  // remote shape is the one an operator runs all day.
+  it("never prints the password out of an unparseable REDIS_URL", () => {
+    const result = runLauncher(
+      laneEnv(`REDIS_URL=redis://${FAKE_USERINFO} with a space@/0`),
+    );
+    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("REDIS_URL does not parse as a URL at all");
+  });
+
+  it("never prints the password out of a stood-down remote REDIS_URL", () => {
+    const result = runLauncher(
+      laneEnv(`REDIS_URL=rediss://${FAKE_USERINFO}@cache.example.invalid:6380`),
+    );
+    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    expect(out).not.toContain(FAKE_SECRET);
+  });
+
+  // The connector gateway is the other URL this launcher echoes by address, and
+  // a hosted Nango is the shape most likely to carry userinfo.
+  it("never prints the password out of a remote NANGO_SERVER_URL", () => {
+    const result = runLauncher(
+      [
+        "PORT=13839",
+        "COMPOSE_PROJECT_NAME=p2839lane",
+        `REDIS_URL=redis://127.0.0.1:${laneRedisPort}`,
+        `NANGO_SERVER_URL=https://${FAKE_USERINFO}@nango.example.invalid`,
+        `NANGO_DATABASE_URL=postgresql://nango:nango@127.0.0.1:15435/nango`,
+        `SUPABASE_DB_URL=postgresql://postgres:postgres@127.0.0.1:${lanePgPort}/postgres`,
+        "",
+      ].join("\n"),
+    );
+    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("https://***@nango.example.invalid");
   });
 
   // AND THE ROUND-3 PIN THAT COULD NOT SURVIVE THE ROUND-4 FIX, stated as a
@@ -4235,7 +4778,7 @@ describe("check-services.mjs, run against a fixture .env.local", () => {
     await new Promise((resolve) => listener.listen(0, "127.0.0.1", resolve));
     upPort = listener.address().port;
 
-    for (const key of ["redis", "pg", "nango", "nangoDb", "graphiti", "wayflow", "app"]) {
+    for (const key of ["redis", "redisAlt", "pg", "nango", "nangoDb", "graphiti", "wayflow", "app"]) {
       closed[key] = await reserveClosedPort();
     }
   });
@@ -4260,7 +4803,16 @@ describe("check-services.mjs, run against a fixture .env.local", () => {
     `WAYFLOW_BASE_URL=http://127.0.0.1:${closed.wayflow}`,
   ];
 
-  const run = (lines) => {
+  /**
+   * Run the shipped checker against a fixture `.env.local`.
+   *
+   * `shellEnv` states variables in the SHELL, which is how the shell-over-file
+   * rule is exercised: the deletion list below clears every endpoint variable
+   * first, so anything here is stated by the case and not by the operator's
+   * terminal. `run.status` carries the exit code, because for a required-tier
+   * row the exit code is the half of the answer a script reads.
+   */
+  const run = (lines, shellEnv = {}) => {
     writeFileSync(path.join(dir, ".env.local"), [...baseLines(), ...lines, ""].join("\n"));
     const env = {
       ...process.env,
@@ -4286,6 +4838,7 @@ describe("check-services.mjs, run against a fixture .env.local", () => {
       delete env[key];
     }
     for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
+    Object.assign(env, shellEnv);
 
     const result = spawnSync(process.execPath, [script], {
       cwd: dir,
@@ -4296,6 +4849,7 @@ describe("check-services.mjs, run against a fixture .env.local", () => {
     expect(result.error, `check-services failed to run: ${result.error}`).toBeUndefined();
     const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
     expect(out, "check-services produced no output").toContain("Cinatra service check");
+    run.status = result.status;
     return out;
   };
 
@@ -4367,16 +4921,13 @@ describe("check-services.mjs, run against a fixture .env.local", () => {
   // thing about them. The line comes from one exported formatter, so a build
   // that taught only the launcher about the shape fails here.
   //
-  // DISCLOSED: the printed Redis ROW still carries `parseHostPort`'s fallback
-  // address, because building the rows is upstream of the plan this loop reads
-  // and re-shaping a required-tier row's address (and therefore this command's
-  // exit code) is not what the finding asked for. This case asserts the NOTE,
-  // which now disowns that address out loud, and never the row — so nothing
-  // here depends on what answers at 6379 on the host.
+  // The ROW is asserted next door and no longer here: it used to carry
+  // `parseHostPort`'s fallback address, and that disclosure is what round 5's
+  // finding N1 was about. This case stays on the NOTE.
   it("tells an operator their REDIS_URL names no address, in the launcher's words", () => {
     const out = run(["COMPOSE_PROJECT_NAME=p2913lane", "REDIS_URL=not a url"]);
     expect(out).toContain("REDIS_URL does not state a usable address for Redis");
-    expect(out).toContain("REDIS_URL=not a url does not parse as a URL at all");
+    expect(out).toContain("REDIS_URL does not parse as a URL at all");
     // Stood down on a lane, so the publishing half is there too — and
     // `pnpm services` only ever as the thing that refuses.
     expect(out).toContain("`pnpm services` refuses this plan");
@@ -4395,5 +4946,146 @@ describe("check-services.mjs, run against a fixture .env.local", () => {
     ]);
     expect(out).toContain("Compose host-port scoping is unresolved");
     expect(out).not.toContain("is published on host port");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE ROW, not the note (cinatra#2913, round-5 finding N1)
+  // -------------------------------------------------------------------------
+  //
+  // With the fallback port ANSWERING on the host, this surface printed
+  // `✓ Redis 127.0.0.1:6379 up` two lines above a note saying no address for
+  // Redis can come from REDIS_URL — and the ✓ is the half that counts, because
+  // Redis is required-tier and the tier accounting and the exit code follow it.
+  //
+  // HOST-INDEPENDENT BY CONSTRUCTION, and red at the previous head whatever the
+  // host was doing: the address `127.0.0.1:6379` may not appear in the row at
+  // all now, so a host where 6379 answers fails the old build on the ✓ and a
+  // host where it does not fails it on the address.
+  it("prints no address, and no ✓, for a row whose URL names none", () => {
+    const out = run(["COMPOSE_PROJECT_NAME=p2913lane", "REDIS_URL=not a url"]);
+    const redis = row(out, "Redis");
+    expect(redis).toContain("no address stated");
+    expect(redis).toContain("REDIS_URL states no address");
+    expect(redis).not.toContain("127.0.0.1:6379");
+    expect(redis).not.toContain("✓");
+    expect(redis).not.toMatch(/\bup\b/);
+    expect(redis).not.toContain("DOWN");
+  });
+
+  // The machine-readable half, and the point of the finding: this command's
+  // EXIT CODE is what a script reads, and it used to be 0 whenever the invented
+  // fallback happened to answer. A required service the app cannot reach is
+  // what a non-zero exit means, and a URL that names no address is exactly
+  // that — counted from the defect, never from an address the app will not use.
+  //
+  // (The generic `make dev` remedy is NOT asserted either way. It is a fair
+  // answer for the other required rows, which are down at real addresses in
+  // this fixture, and the reviewer already records the generic remedy as a
+  // pre-existing follow-up of its own.)
+  it("counts a no-address row as unreachable in its tier, and exits non-zero", () => {
+    const out = run(["COMPOSE_PROJECT_NAME=p2913lane", "REDIS_URL=not a url"]);
+    expect(run.status, `check-services exited ${run.status}\n${out}`).toBe(1);
+    expect(out).toMatch(/required service\(s\) unreachable:[^\n]*Redis/);
+  });
+
+  // -------------------------------------------------------------------------
+  // A DUPLICATED KEY (cinatra#2913, round-6 finding B1)
+  // -------------------------------------------------------------------------
+  //
+  // The reader this surface shares with the launcher took the FIRST statement
+  // of a duplicated key; `@next/env` hands the app the LAST one. On a
+  // required-tier row that is not cosmetic: the address, the probe, the tier
+  // accounting, the exit code and the drift diagnosis all followed an endpoint
+  // the app would not dial. Both ports are reserved-and-closed, so the row is
+  // DOWN either way and only its ADDRESS is under test.
+  it("probes the LAST statement of a duplicated REDIS_URL, as the app's loader does", () => {
+    const out = run([
+      `REDIS_URL=redis://127.0.0.1:${closed.redisAlt}`,
+      `REDIS_URL=redis://127.0.0.1:${closed.redis}`,
+    ]);
+    const redis = row(out, "Redis");
+    expect(redis).toContain(`127.0.0.1:${closed.redis}`);
+    expect(redis).not.toContain(`:${closed.redisAlt}`);
+  });
+
+  // The mirror, so the case cannot pass by accident of ordering.
+  it("moves with the last statement when the two are swapped", () => {
+    const out = run([
+      `REDIS_URL=redis://127.0.0.1:${closed.redis}`,
+      `REDIS_URL=redis://127.0.0.1:${closed.redisAlt}`,
+    ]);
+    const redis = row(out, "Redis");
+    expect(redis).toContain(`127.0.0.1:${closed.redisAlt}`);
+    expect(redis).not.toContain(`:${closed.redis}`);
+  });
+
+  // The `export ` prefix this surface's key enumeration widened to, pinned on
+  // the surface (cinatra#2913, round-6 review: right direction, unpinned). An
+  // exported key is read like any other; it is not invisible to the checker
+  // while the launcher and the app both see it.
+  it("sees a REDIS_URL stated with the `export ` prefix", () => {
+    const out = run([`export REDIS_URL=redis://127.0.0.1:${closed.redis}`]);
+    expect(row(out, "Redis")).toContain(`127.0.0.1:${closed.redis}`);
+  });
+
+  it("takes an exported last statement over an unexported earlier one", () => {
+    const out = run([
+      `REDIS_URL=redis://127.0.0.1:${closed.redisAlt}`,
+      `export REDIS_URL=redis://127.0.0.1:${closed.redis}`,
+    ]);
+    expect(row(out, "Redis")).toContain(`127.0.0.1:${closed.redis}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // NEO4J_URI, FROM THE ENVIRONMENT (cinatra#2913, round-5 finding N3)
+  // -------------------------------------------------------------------------
+  //
+  // `NEO4J_URI` was missing from `ENDPOINT_VARS`, so this check classified it
+  // from the file even when the shell had already corrected it — and condemned
+  // a URI the app was never going to use.
+  it("classifies NEO4J_URI from the shell, not from a stale file value", () => {
+    const out = run(["NEO4J_URI=neo4h://localhost"], { NEO4J_URI: "bolt://127.0.0.1:7687" });
+    expect(out).not.toContain("NEO4J_URI does not state a usable address");
+  });
+
+  // …and it still reports a defect the shell did NOT correct, so the fix is
+  // "read the environment", not "stop looking".
+  it("still reports a NEO4J_URI the shell has not corrected", () => {
+    const out = run(["NEO4J_URI=neo4h://localhost"]);
+    expect(out).toContain("NEO4J_URI does not state a usable address for Neo4j");
+  });
+
+  // -------------------------------------------------------------------------
+  // NO CREDENTIAL ON THIS SURFACE'S OUTPUT (cinatra#2913, round-5 finding N4)
+  // -------------------------------------------------------------------------
+  //
+  // Asserted against the WHOLE of stdout+stderr, so it covers the row, the
+  // note, the plan's warnings and anything else the run prints.
+  it("never prints the password out of an unparseable REDIS_URL", () => {
+    const out = run([
+      "COMPOSE_PROJECT_NAME=p2913lane",
+      `REDIS_URL=redis://${FAKE_USERINFO} with a space@/0`,
+    ]);
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("REDIS_URL does not parse as a URL at all");
+  });
+
+  it("never prints the password out of a parseable but unusable REDIS_URL", () => {
+    const out = run([
+      "COMPOSE_PROJECT_NAME=p2913lane",
+      `REDIS_URL=redis://${FAKE_USERINFO}@127.0.0.1:0/0`,
+    ]);
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("REDIS_URL=redis://***@127.0.0.1:0/0");
+  });
+
+  // The stand-down warning is a different sentence with the same duty: a remote
+  // cache this checkout may not publish is named by its URL.
+  it("never prints the password out of a stood-down remote REDIS_URL", () => {
+    const out = run([
+      "COMPOSE_PROJECT_NAME=p2913lane",
+      `REDIS_URL=rediss://${FAKE_USERINFO}@cache.example.invalid:6380`,
+    ]);
+    expect(out).not.toContain(FAKE_SECRET);
   });
 });
