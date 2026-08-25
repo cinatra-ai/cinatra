@@ -64,7 +64,7 @@
       "migrationMechanism": "logical-dump-restore",
       "appManagedSchema": true,
       "upstreamDictated": true,
-      "baselinePin": { "image": "postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193", "major": "17", "digest": "sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193" },
+      "baselinePin": { "image": "postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73", "major": "17", "digest": "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73" },
       "coupledAppImages": [
         { "image": "nangohq/nango-server:hosted@sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1", "major": "hosted", "digest": "sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1" }
       ],
