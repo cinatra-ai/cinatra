@@ -835,3 +835,141 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: 281f005922afb6f3cc8eac3a4f4da3a3a9965bf2
 ```
+
+---
+
+## Seven merges no correction commit can repair
+
+Finding B of the gate-suite re-audit (#2974) found twenty landed merge records with an
+uncorrected verification-record defect. Thirteen are repaired above, each by a
+`Correction-for` commit restating a human arm. The remaining seven cannot be repaired
+the same way, or any way, under the engine's own rules (`scripts/truthful-attribution-gate.mjs`
+at `fdc26811b97f435bbf8a754247631db39267a197`, the SHA this repository's
+`.github/gate-suite.json` pins): `classifyArm` (`:383-386`) requires a record to carry a
+`Reviewed-by` or a complete `Gate-suite`+`Accountable` pair. An armless `Correction-for`
+commit fails on two independent paths: check 1 (`:2769-2770`) finds no arm in ITS OWN
+record and reds its own landing directly the moment it reaches main, exactly like any
+ordinary commit with no arm; and separately, on the dedicated re-verify path that names
+an original commit explicitly, `selectGoverningCorrection` (`:2580-2587`) refuses to let
+an armless candidate govern — "correction-malformed," "it does NOT govern" — so even
+past the first failure, it could never repair the commit it names. None of the seven
+pull requests carries an approving review by anyone, so a human arm cannot be written
+truthfully. A machine arm cannot be restated either: `verifyGateArm` (`:1675`) compares
+the cited suite version against `.github/gate-suite.json` read at the sha the record
+sits on, and a correction commit sits at today's sha, where the committed suite has
+long since moved past the version that was true when each of these seven merged —
+citing the old version reds the correction's own landing; citing today's would claim a
+suite verified a merge before that suite version existed. There is no third option in
+this grammar. Separately, and run directly against the pinned engine's own
+`classifyHighRisk` (`:483`) with each merge's own `.github/gate-suite.json` and its own
+changed-file set: all seven are normal-risk, so the machine arm — incomplete on six of
+them, structurally complete on the seventh whose overall record was invalid only on a
+separate, equally mandatory field (`Assisted-by`) — was the only arm any of them ever
+had available. So for each of the seven, this is what was true at the time, stated
+plainly instead of asserted as a record that never was.
+
+**`dd32cf8a6f967cfca14dbf84d1ca6928582c8b2b` — PR #2693** — "fix(metrics): #2691 the This
+Week boundary is timezone-independent — aligned with the #2673 month fix (#2693)"
+
+The record today carries `Gate-suite: cinatra-core@2026.08.1` with no `Accountable` line,
+and `Assisted-by: Claude Code (claude-sonnet-5)`. A `Gate-suite` without its paired
+`Accountable` is not a complete gate arm, and no other arm is present. `GET
+/pulls/2693/reviews` returns no review of any kind on this pull request — no maintainer
+approved it. Both required contexts concluded `success` at the reviewed head
+`f0383f3b70308154f446aed780ecf52581d90695`: `source-leak-gate / source-leak-gate` and
+`truthful-attribution-gate / truthful-attribution-gate`. The suite committed at the
+merged sha reads `cinatra-core@2026.08.1`. No verification record existed for this
+merge, and none is asserted here.
+
+**`579f8d29f7b7425c16bb1a5fb6dc94ebfced9d1d` — PR #2678** — "feat(agents): #2675 a
+colliding publish refuses before any registry write — read-only claim preflight
+(#2678)"
+
+The record today carries `Gate-suite: cinatra-core@2026.08.1` with no `Accountable`
+line, and three `Assisted-by` lines (`Claude Code (claude-opus-5)`, `Codex
+(gpt-5.6-sol)`, `Claude Code (claude-fable-5)`). A `Gate-suite` without its paired
+`Accountable` is not a complete gate arm, and no other arm is present. `GET
+/pulls/2678/reviews` returns one review — `github-advanced-security[bot]`,
+`COMMENTED` — and no `APPROVED` review by anyone; no maintainer approved this pull
+request. Both required contexts concluded `success` at the reviewed head
+`e312d78cb586a9e89b91727100d9db7275f682d6`: `source-leak-gate / source-leak-gate` and
+`truthful-attribution-gate / truthful-attribution-gate`. The suite committed at the
+merged sha reads `cinatra-core@2026.08.1`. No verification record existed for this
+merge, and none is asserted here.
+
+**`8860d5cfa960fc71f2c4759eddf9ee213e6545e6` — PR #2677** — "chore(extensions): #2641
+advance the gemini-connector pin — image rows price up, register retires, logo rides
+the regen (#2677)"
+
+The record today carries `Gate-suite: cinatra-core@2026.08.1` with no `Accountable`
+line, and `Assisted-by: Claude Code (claude-sonnet-5)`. A `Gate-suite` without its
+paired `Accountable` is not a complete gate arm, and no other arm is present. `GET
+/pulls/2677/reviews` returns no review of any kind on this pull request — no maintainer
+approved it. Both required contexts concluded `success` at the reviewed head
+`9a504c5fa8a11b894e04178a121889d8bc73b946`: `source-leak-gate / source-leak-gate` and
+`truthful-attribution-gate / truthful-attribution-gate`. The suite committed at the
+merged sha reads `cinatra-core@2026.08.1`. No verification record existed for this
+merge, and none is asserted here.
+
+**`04c205f0b1c8bea83040af28f9df84534a02ecdd` — PR #2673** — "fix(metrics): #2669
+unknown-cost rows are visible in the time series, llm_usage cube, and budget alert
+(#2673)"
+
+The record today carries `Gate-suite: cinatra-core@2026.08.1` with no `Accountable`
+line, and two `Assisted-by` lines (`Claude Code (claude-opus-5)`, `Codex
+(gpt-5.6-sol)`). A `Gate-suite` without its paired `Accountable` is not a complete gate
+arm, and no other arm is present. `GET /pulls/2673/reviews` returns no review of any
+kind on this pull request — no maintainer approved it. Both required contexts
+concluded `success` at the reviewed head `66ada11861e2c0e171037546dac90f714e996e01`:
+`source-leak-gate / source-leak-gate` and `truthful-attribution-gate /
+truthful-attribution-gate`. The suite committed at the merged sha reads
+`cinatra-core@2026.08.1`. No verification record existed for this merge, and none is
+asserted here.
+
+**`c56c007f66fcd28432bdf86c87503f20668f9310` — PR #2671** — "fix(llm): #2670 metering
+proxy answers for the adapter through a facade — frozen/non-configurable methods stay
+metered (#2671)"
+
+The record today carries `Gate-suite: cinatra-core@2026.08.1` with no `Accountable`
+line, and two `Assisted-by` lines (`Claude Code (claude-opus-5)`, `Codex
+(gpt-5.6-sol)`). A `Gate-suite` without its paired `Accountable` is not a complete gate
+arm, and no other arm is present. `GET /pulls/2671/reviews` returns no review of any
+kind on this pull request — no maintainer approved it. Both required contexts
+concluded `success` at the reviewed head `f756050a19951a2031fe39181c39de45a074b714`:
+`source-leak-gate / source-leak-gate` and `truthful-attribution-gate /
+truthful-attribution-gate`. The suite committed at the merged sha reads
+`cinatra-core@2026.08.1`. No verification record existed for this merge, and none is
+asserted here.
+
+**`841375f1883e7d04c2a6dbb397caf3d1684102e2` — PR #2667** — "fix(llm): #2641 meter
+generateImage at the seam as a counted, unpriced usage_events row (#2667)"
+
+The record today carries `Gate-suite: cinatra-core@2026.08.1` with no `Accountable`
+line, and three `Assisted-by` lines (`Claude Code (claude-opus-5)`, `Codex
+(gpt-5.6-sol)`, `Claude Code (claude-fable-5)`). A `Gate-suite` without its paired
+`Accountable` is not a complete gate arm, and no other arm is present. `GET
+/pulls/2667/reviews` returns no review of any kind on this pull request — no maintainer
+approved it. Both required contexts concluded `success` at the reviewed head
+`17fa65b0218bfbf82fa8d3ae66e14fb5063def5d`: `source-leak-gate / source-leak-gate` and
+`truthful-attribution-gate / truthful-attribution-gate`. The suite committed at the
+merged sha reads `cinatra-core@2026.08.1`. No verification record existed for this
+merge, and none is asserted here.
+
+**`c2df5be84c063352df204bdd20a03f8a0742f1c6` — PR #2184** — "pacote 22 + libnpmpublish
+12 with a token-redacting registry-error facade (#2184)"
+
+The record today carries an empty `Assisted-by:` line, then `Gate-suite:
+cinatra-core@2026.07.7` immediately followed by `Accountable: Sandro Groganz
+<sandro@cinatra.ai> (@groganz)` — unlike the other six here, the gate arm's own pairing
+and adjacency rule is satisfied, so a complete machine arm is present. But a
+display-name must contain at least one non-whitespace character, and the `Assisted-by`
+line has none, so that separate, equally mandatory field is malformed and the record
+carries no `Assisted-by` at all. `GET /pulls/2184/reviews` returns no review of any
+kind on this pull request — no maintainer approved it, so a human arm cannot be
+substituted, and, as above, the intact gate arm cannot be restated in a correction at
+today's suite version either. Both required contexts concluded `success` at the
+reviewed head `22cfb69d91091a166274ebeeb9011f56df766637`: `source-leak-gate /
+source-leak-gate` and `truthful-attribution-gate / truthful-attribution-gate`. The
+suite committed at the merged sha reads `cinatra-core@2026.07.7`. No *valid*
+verification record existed for this merge — the arm was intact, the record was not —
+and none is asserted here.
