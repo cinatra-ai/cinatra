@@ -779,3 +779,59 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: d6a3fa6660d54988783f5e4b571a750c56003361
 ```
+
+---
+
+## Correction for `281f005922afb6f3cc8eac3a4f4da3a3a9965bf2`
+
+```
+correction: verification record for 281f00592 (test(mcp): provider-scale smoke for trusted-read native injection + the pinned-…)
+
+The record on 281f00592 ("test(mcp): provider-scale smoke for trusted-read native injection + the
+pinned-stack empty-emission proof (#2019) (#2189)") carries `Assisted-by: Claude Code (Claude Sonnet
+5)`. The parenthesised model id admits only [A-Za-z0-9._/:-], and the value written contains spaces,
+so the line is a malformed owned trailer and the record carries no valid `Assisted-by` for that
+assistant.
+
+What was verified at the time is unchanged by any of this. PR #2189 was approved by @groganz at
+f2e8d01450a9d6ff5bc8ecc55353d85775e2c26e on 2026-07-28T18:21:15Z — that login's latest non-dismissed
+review, APPROVED at the reviewed head, non-self (the pull request's author is @marcushorndt), and
+that login's repository permission is admin, which meets tier=maintainer. Both required contexts
+named by the suite concluded at that reviewed head: `source-leak-gate / source-leak-gate` success
+then success; `truthful-attribution-gate / truthful-attribution-gate` failure then success.
+Separately, the suite committed at the merged sha reads cinatra-core@2026.07.7.
+
+The malformed line is repaired as a grammar-safe normalisation of the label it wrote: the same
+assistant, with the spaces the model-id character class forbids replaced by the hyphenated form this
+repository writes elsewhere. The label is what the original record attests; the normalised form is
+not independent provenance for the model, and nothing here claims it is.
+
+For completeness: the context ran twice at that reviewed head — a failure completed
+2026-07-28T18:12:20Z and a later run completed success at 2026-07-28T18:29:47Z. The engine reads the
+freshest qualifying run, so the context stands green there; the earlier failure does not change
+that.
+
+The machine half is left out deliberately, and not because it was absent. The engine compares a
+`Gate-suite:` trailer against `.github/gate-suite.json` read at the sha the record sits on, so a
+correction can only restate a gate arm whose suite version is the same at the corrected commit and
+at the correction itself. Here those differ — cinatra-core@2026.07.7 then, cinatra-core@2026.08.3 at
+this correction — so restating the machine arm would red this record exactly as the 2026-08-13 batch
+was redded. The human arm is true in both readings and is what this record carries.
+
+The `Assisted-by` lines are this record's own assistants — carried over verbatim where the original
+lines were well-formed, repaired from the pull request's own commits where they were not — together
+with the agents that produced this correction, deduplicated on name and model id. No assistant the
+original record named is dropped, and none is invented; the lines added beyond the original set are
+the correcting agents, named as such.
+
+The merged change itself is untouched — this repairs the RECORD only. This correction is submitted
+for the maintainer's approval, and that approval on the correction pull request is the human
+ratification of the record it states.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-sonnet-5)
+Assisted-by: Codex (gpt-5.5)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 281f005922afb6f3cc8eac3a4f4da3a3a9965bf2
+```
