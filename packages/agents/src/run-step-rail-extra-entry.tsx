@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import type { RunStepRailEntry } from "./run-step-rail";
 
 // ---------------------------------------------------------------------------
-// The NON-STEP rail rows — gates ("Review"), verifications ("Core analysis")
+// The NON-STEP rail rows — gates ("Review"), verifications ("Audit")
 // and lifecycle policy decisions — as ONE implementation (cinatra#2739).
 //
 // WHY THIS FILE EXISTS. The run detail used to mount TWO step rails for a
@@ -135,7 +135,7 @@ export function RailExtraEntry({
         </Link>
       ) : isVerification && entry.verification ? (
         // A verification row (S4) deep-links into the same review surface's
-        // VERIFICATION view — the before/after "Core analysis".
+        // VERIFICATION view — the before/after "Audit".
         <Link
           href={`${reviewHrefBase}/${encodeURIComponent(entry.verification.reviewTaskId)}?view=verification`}
           className="flex items-center gap-2 rounded-sm px-0 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

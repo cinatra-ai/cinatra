@@ -49,8 +49,8 @@ import "server-only";
 // workflow executor's contract.
 
 import { randomUUID } from "node:crypto";
+import { launchAgentRun } from "@cinatra-ai/agents/lifecycle-coordinator";
 import {
-  createAgentRun,
   readAgentRunById,
   readAgentTemplateById,
   readAgentTemplateByPackageName,
@@ -634,8 +634,22 @@ export async function dispatchProjectWorker(
     });
     let run;
     try {
-      run = await createAgentRun(
-        {
+      // Routed through the coordinator (cinatra#2928). A project tick is
+      // HEADLESS — no person is present — so no moment applies at its start and
+      // the row is created `queued` exactly as before. The enqueue stays here,
+      // because the enqueue-repair rule below has to see the run's real status
+      // to decide whether an idempotent hit still needs a job.
+      const launched = await launchAgentRun({
+        producer: "project_dispatch",
+        frame: null,
+        authority: dispatchAuthority,
+        dispatch: {
+          kind: "caller_dispatches",
+          why: "the enqueue-repair rule below decides whether an idempotent hit still needs a job",
+        },
+        create: {
+          kind: "full",
+          input: {
           id: runId,
           templateId: template.id,
           versionId: latestVersionId,
@@ -656,9 +670,13 @@ export async function dispatchProjectWorker(
           // accepted from input.
           parentRunId: parentRun.id,
           parentOboCeiling: parentRun.oboCeiling ?? null,
+          },
         },
-        dispatchAuthority,
-      );
+      });
+      if (launched.carrier.kind !== "run") {
+        throw new Error("the project dispatch launch answered with a carrier that is not a run");
+      }
+      run = launched.carrier.run;
     } catch (err) {
       if ((err as { code?: string } | null)?.code === OBO_CEILING_DISJOINT_CODE) {
         const message = err instanceof Error ? err.message : String(err);

@@ -205,5 +205,25 @@ export default defineConfig({
       },
       dependencies: ["setup"],
     },
+    {
+      // The approval-gated trigger step (cinatra#2952). Drives ONE agent named
+      // by env through its setup approval on the development runtime and
+      // asserts the run page then offers the scheduling step, that arming from
+      // it creates the `agent_run_triggers` row, and that the stale-approval
+      // refusal can no longer be produced from the page's own controls.
+      //
+      // OPT-IN. It needs an approval-gated agent installed and its runtime
+      // reachable, which neither CI nor a bare dev boot has, so the spec
+      // self-skips unless E2E_TRIGGER_STEP_AFTER_APPROVAL=1. Depends on `setup`
+      // (auth) ONLY: it drives an agent by name rather than the locked visible
+      // set, so the fixture preflight is not a precondition.
+      name: "trigger-step-after-approval",
+      testMatch: /trigger-step-after-approval\.spec\.ts/,
+      use: {
+        ...desktopChrome,
+        storageState: suitePath("agents-run", ".auth/state.json"),
+      },
+      dependencies: ["setup"],
+    },
   ],
 });

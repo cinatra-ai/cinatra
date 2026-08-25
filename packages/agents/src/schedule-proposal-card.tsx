@@ -656,6 +656,42 @@ function SettledPhase({
     [draft, body.schedule],
   );
 
+  // ONCE A ONE-OFF HAS FIRED IT CANNOT BE CHANGED (plan (A) §7.2, and §7.4
+  // as-designed step 4 in the same words). **Save changes** is defined for the
+  // changeable state only — "As long as the schedule has not fired, you can
+  // change it" — so a fired one-off draws no floor at all: not a disabled Save
+  // changes, and not Cancel schedule or Run now either. There is nothing left
+  // to change, cancel or release, and a control that exists only to refuse is
+  // the card offering what the plan withdrew. The rows simply stand.
+  //
+  // HAS THIS ONE-OFF FIRED? Plan (A) §7.2 draws the line at firing — "once a
+  // one-off has fired it cannot be changed" — so the card reads exactly that
+  // and nothing broader.
+  //
+  // `released` IS THE FIRING, and it is the only honest signal for it. The
+  // release job opens the gate through `markTriggerReleased`, which stamps
+  // `releasedAt`; the resolver reads `released` straight off that stamp. An
+  // administrator's **Run now** lands on the same stamp, and it means the same
+  // thing for a one-off: the single run this schedule existed for has been let
+  // go. Nothing on the card is inferred from a clock.
+  //
+  // WHAT THIS DELIBERATELY DOES NOT CATCH. A one-off whose moment has passed
+  // while the release job has not drained yet has NOT fired — its gate is still
+  // shut, `Cancel schedule` still acts on a live job, and the server still
+  // authorizes it. The server does refuse a SAVE there (`canSaveInstalled`
+  // wants a future instant), so that card keeps the floor it has always had,
+  // with Save changes dead and Cancel live. Widening "fired" to cover it would
+  // take away an operation the server is still granting.
+  //
+  // AND WHY `arming` IS NOT CONSULTED. The installer exposes the schedule to
+  // the scheduler BEFORE it marks the intent done, so a near-term one-off can
+  // fire while the intent still reads as arming. A rule that required `!arming`
+  // would leave the floor standing on a schedule that had already run.
+  //
+  // ONLY A ONE-OFF. A released RECURRING trigger keeps its line and its whole
+  // floor: "a change to a recurring schedule applies to its future runs".
+  const fired = body.triggerType === "scheduled" && body.released;
+
   const act = async (op: "cancel" | "release") => {
     setRefusal(null);
     setConfirming(null);
@@ -684,39 +720,35 @@ function SettledPhase({
 
   return (
     <div className="flex w-full flex-col gap-4 rounded-card border border-line bg-surface-strong p-4">
-      {/* THE SUPERSEDED READING (cinatra#2859), and the ONLY thing drawn above
-          the rows. This is not the status label plan (A) §7.2 removes — an
-          ordinary settled card draws nothing here. It fires only when this
-          card's family was corrected away from these times before Confirm
-          landed, and it is the one moment the reader cannot get from the rows
-          alone: the rows below are RIGHT (they are read back off the durable
-          row the family settled on), so without this line the card silently
-          shows different times than the reader stated.
+      {/* NOTHING IS DRAWN ABOVE THE ROWS for an ordinary settled card, and an
+          ADJUSTED-THEN-CONFIRMED one is an ordinary settled card. Plan (A)
+          §7.2: "the same card, with the same option rows, shows the schedule as
+          it stands — no label, no summary box". The card re-opens on the
+          SETTLED rows and says nothing over them.
 
-          Until now `superseded` and `scheduleCopy` reached the card and nothing
-          drew either — the one-card gate's contract row recorded that gap in
-          writing. Removing the "Armed ·" line is what forced it closed: that
-          line was `scheduleCopy`'s only reader, so the warning would have
-          disappeared with it. */}
-      {body.superseded ? (
-        <p
-          data-conformance-id="schedule-superseded"
-          role="status"
-          className="text-sm text-foreground"
-        >
-          {body.scheduleCopy}
-        </p>
-      ) : null}
-
+          `superseded` STAYS A RESOLVER ANSWER (cinatra#2859) and stops being
+          chrome. It answers whether THIS card's own proposal token holds the
+          rows the family settled on — a question the resolver has to ask
+          because Confirm refuses on it, and the rows it guards are already
+          right: they are read back off the installed row, not off the token.
+          The plan defines no drawing for it, so the renderer draws none rather
+          than inventing a line the reader was never promised. `scheduleCopy`
+          has no reader here for the same reason the "Armed ·" line has none —
+          the settled card is the form, and a form does not restate itself in
+          prose. */}
       {/* The state the controls are withheld for, said out loud rather than
           drawn as dead buttons. Both hosts draw these: a reader in the
-          conversation whose Save changes is disabled is owed the reason too. */}
-      {body.arming ? (
+          conversation whose Save changes is disabled is owed the reason too.
+          NEITHER IS DRAWN ON A FIRED CARD. Both lines exist to explain a
+          withheld control, and a fired one-off has none left to explain — the
+          released/arming race can reach this card, and a status line standing
+          over rows that simply stand is the label §7.2 removes. */}
+      {body.arming && !fired ? (
         <p data-conformance-id="schedule-arming" className="text-sm text-muted-foreground">
           Arming… the schedule is still being installed.
         </p>
       ) : null}
-      {body.released ? (
+      {body.released && !fired ? (
         <p data-conformance-id="schedule-released" className="text-sm text-muted-foreground">
           Released — every held step is eligible now, so there is nothing left to
           cancel.
@@ -725,8 +757,14 @@ function SettledPhase({
 
       {/* THE SAME OPTION ROWS AS THE PROPOSAL — one component, drawing the armed
           selections the resolver read back off the installed row. */}
+      {/* A FIRED CARD HAS NO DRAFT. `draft` is the reader's local edit, and it
+          outlives a re-resolve because `SettledPhase` is not remounted — so a
+          one-off that fires under half-typed rows would otherwise stand there
+          read-only, showing times that were never armed. That is the same
+          dishonesty §7.2's "shows the schedule as it stands" rules out, so the
+          terminal card draws the server's schedule and only that. */}
       <ScheduleOptionRows
-        schedule={draft}
+        schedule={fired ? body.schedule : draft}
         editable={body.canSave}
         onChange={(next) => {
           setSaved(false);
@@ -735,66 +773,68 @@ function SettledPhase({
         durationCopy={null}
       />
 
-      <div
-        data-conformance-id="schedule-proposal-floor"
-        className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
-      >
-        {refusal ? (
-          <p
-            data-conformance-id="schedule-proposal-refusal"
-            role="status"
-            className="mr-auto text-sm text-destructive"
-          >
-            {refusal}
-          </p>
-        ) : null}
-        {saved && !refusal ? (
-          <p
-            data-conformance-id="schedule-saved"
-            role="status"
-            className="mr-auto text-sm text-muted-foreground"
-          >
-            Saved — the trigger is re-armed on these rows.
-          </p>
-        ) : null}
-        <Button
-          type="button"
-          size="sm"
-          data-action="save-schedule-changes"
-          disabled={!body.canSave || !edited || pending !== null}
-          onClick={save}
+      {fired ? null : (
+        <div
+          data-conformance-id="schedule-proposal-floor"
+          className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
         >
-          <Check aria-hidden="true" className="size-3.5" />
-          {pending === "save" ? "Saving…" : "Save changes"}
-        </Button>
-        {/* CANCEL AND RELEASE ARE THE PAGE STEP'S, NOT THE CONVERSATION'S. */}
-        {showsChrome ? (
+          {refusal ? (
+            <p
+              data-conformance-id="schedule-proposal-refusal"
+              role="status"
+              className="mr-auto text-sm text-destructive"
+            >
+              {refusal}
+            </p>
+          ) : null}
+          {saved && !refusal ? (
+            <p
+              data-conformance-id="schedule-saved"
+              role="status"
+              className="mr-auto text-sm text-muted-foreground"
+            >
+              Saved — the trigger is re-armed on these rows.
+            </p>
+          ) : null}
           <Button
             type="button"
-            variant="secondary"
             size="sm"
-            data-action="cancel-trigger-schedule"
-            disabled={!body.canCancel || pending !== null}
-            onClick={() => setConfirming("cancel")}
+            data-action="save-schedule-changes"
+            disabled={!body.canSave || !edited || pending !== null}
+            onClick={save}
           >
-            {pending === "cancel" ? "Cancelling…" : "Cancel schedule"}
+            <Check aria-hidden="true" className="size-3.5" />
+            {pending === "save" ? "Saving…" : "Save changes"}
           </Button>
-        ) : null}
-        {showsChrome && body.canRelease ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            data-action="release-trigger-now"
-            disabled={pending !== null}
-            onClick={() => setConfirming("release")}
-          >
-            {pending === "release" ? "Releasing…" : "Run now"}
-          </Button>
-        ) : null}
-      </div>
+          {/* CANCEL AND RELEASE ARE THE PAGE STEP'S, NOT THE CONVERSATION'S. */}
+          {showsChrome ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              data-action="cancel-trigger-schedule"
+              disabled={!body.canCancel || pending !== null}
+              onClick={() => setConfirming("cancel")}
+            >
+              {pending === "cancel" ? "Cancelling…" : "Cancel schedule"}
+            </Button>
+          ) : null}
+          {showsChrome && body.canRelease ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              data-action="release-trigger-now"
+              disabled={pending !== null}
+              onClick={() => setConfirming("release")}
+            >
+              {pending === "release" ? "Releasing…" : "Run now"}
+            </Button>
+          ) : null}
+        </div>
+      )}
 
-      {confirming === "cancel" ? (
+      {!fired && confirming === "cancel" ? (
         <ConfirmStrip
           conformanceId="schedule-cancel-confirm"
           title="Cancel this schedule?"
@@ -805,7 +845,7 @@ function SettledPhase({
           onConfirm={() => void act("cancel")}
         />
       ) : null}
-      {confirming === "release" ? (
+      {!fired && confirming === "release" ? (
         <ConfirmStrip
           conformanceId="schedule-release-confirm"
           title="Run this schedule now?"

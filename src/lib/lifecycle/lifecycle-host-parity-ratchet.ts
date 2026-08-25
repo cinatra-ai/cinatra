@@ -274,6 +274,21 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
     }),
     owed: Object.freeze([]),
   },
+  // cinatra#2928 (lifecycle-b W2a) registers the HITL screen as the fifth kind
+  // so a run can STATE that it is paused asking for input. W2a draws nothing —
+  // it changes no screen — so this row records NO host and OWES the ones the
+  // ruling gives the kind. Recording a cell here for a mount that does not
+  // exist is exactly the false evidence the ratchet exists to refuse; the
+  // `owed` list is how a kind declares its cells honestly until the slice that
+  // lands them arrives.
+  agent_hitl_screen: {
+    hosts: Object.freeze({}),
+    owed: Object.freeze([
+      { host: "chat_thread" as LifecycleCardHost, tracking: "cinatra#2930 (lifecycle-b W3)" },
+      { host: "site_widget" as LifecycleCardHost, tracking: "cinatra#2930 (lifecycle-b W3)" },
+      { host: "run_card" as LifecycleCardHost, tracking: "cinatra#2930 (lifecycle-b W3)" },
+    ]),
+  },
 });
 
 /** What a caller observed: kind → host → the method that saw it. */

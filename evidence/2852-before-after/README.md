@@ -155,3 +155,14 @@ No credential, token, password or host identity appears in any file here. The
 sealed gate refs are addressing handles and are not committed.
 
 Assisted-by: Claude Code (claude-opus-5)
+
+## Label note — B1, B2, B3, B4
+
+These four pictures show the suggestion block under the audit lane's former label,
+`CORE ANALYSIS · SUGGESTIONS`. The shipped label is `Audit` everywhere a person reads
+it (cinatra#2945). The shipped path does not produce this state: the automatic gate
+hands the suggestion lane the identity-only projector, so a real gate normally
+writes no suggestion snapshot (cinatra#2950). A record of a state the product does
+not produce is not evidence, so these four stand as taken; a later record taken
+through that path supersedes each of them. The table above describes the pictures
+as they are.

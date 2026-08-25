@@ -147,6 +147,11 @@ describe("recommendationRailEntry — a decided gate stays on the rail as histor
       templateType: "agent",
       sourceType: "package",
       stepperStepCount: 0,
+      // cinatra#2952 made the trigger row part of the branch table. This run is
+      // running, so it is past every pre-dispatch wait and the row is not what
+      // decides its panel; `false` is the truthful value for a run that never
+      // took the scheduling step.
+      hasTriggerRow: false,
     });
     expect(panel).toBe("agentic");
     const hostsCard = screenHostsRecommendationCard(panel);

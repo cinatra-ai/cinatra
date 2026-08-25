@@ -85,7 +85,7 @@ const BODY: VerificationSummaryBody = {
   advisoryComments: [
     {
       authorKind: "service",
-      body: "Core analysis of 3 disclosed field(s). [provenance] lane=core-analysis-lane",
+      body: "Audit of 3 disclosed field(s). [provenance] lane=core-analysis-lane",
     },
   ],
 };

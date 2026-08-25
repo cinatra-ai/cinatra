@@ -28,6 +28,11 @@ import { scheduleTrigger, cancelTriggerSchedule } from "./trigger-schedule";
 // hold every other interactive run-start does.
 import { maybeHoldRunForRecommendation } from "./recommendation-hold";
 import {
+  advanceAgentRun,
+  clearRunLifecycleMoment,
+  launchAgentRun,
+} from "./lifecycle-coordinator";
+import {
   transitionRunStatus,
   RunTransitionError,
   readAgentRunById,
@@ -494,6 +499,26 @@ async function dispatchImmediateNow(
     };
   }
 
+  // THE MOMENT IS OVER (cinatra#2928). This is the OTHER Continue: choosing
+  // "run right after setup" on the schedule screen releases a run parked at
+  // `pending_trigger` exactly as the run page's Continue does, so it has to
+  // clear what the run says it is waiting at. Without it a run could begin
+  // executing while still stating the schedule moment, and every host would keep
+  // mounting that card.
+  //
+  // LAST, after the enqueue, for the reason `advanceAgentRun` clears last: every
+  // failure above compensates the run BACK to where it came from, and a run
+  // returned to its wait with nothing left to say what it is waiting for is a
+  // park with no card. Reaching this line means the run really is dispatched.
+  //
+  // The helper compares before it clears, so a run that has already reached a
+  // NEW moment — a worker fast enough to pick it up and park it again — keeps
+  // that one rather than having it taken off by this call.
+  //
+  // Best-effort by construction — the helper swallows and logs — so a
+  // bookkeeping write can never strand a run that is already on its way.
+  await clearRunLifecycleMoment(runId, authority);
+
   return { ok: true };
 }
 
@@ -644,6 +669,50 @@ export async function setRunTriggerForActor(
     if (ts <= Date.now()) {
       return { ok: false, error: "scheduledAt must be in the future" };
     }
+  }
+
+  // A ONE-OFF THAT HAS FIRED CANNOT BE CHANGED (cinatra#2928).
+  //
+  // A one-off schedule is a single instant, and once that instant has passed the
+  // run it named has already been let go. Rewriting the row afterwards is not a
+  // reschedule — it is a claim about a moment that is over. The screen refuses
+  // it, and so does every server path that changes a trigger, which is what this
+  // check makes true: the run page's form, the server action and the tool path
+  // all arrive here.
+  //
+  // FIRED is read off the trigger's OWN record — `releasedAt`, the stamp the
+  // release job writes when it opens the gate — never off the run's status,
+  // which moves on for reasons that have nothing to do with the schedule.
+  //
+  // WHAT THIS COVERS, precisely: every caller of THIS function — the run page's
+  // schedule form, the server action behind it, and the tool path — which is
+  // every way a trigger's WHEN can be rewritten. Deleting a spent trigger row
+  // is a different act and is deliberately not refused here: clearing a
+  // schedule that has already run is tidying, not a claim about a past moment.
+  //
+  // THE WINDOW IS REAL AND IT IS NOT CLOSED HERE. A one-off can fire between
+  // this read and the cancel/upsert below, exactly as it can between the
+  // terminal-run gate (cinatra#2482) and the in-flight gate (cinatra#2523) that
+  // stand above it — this function holds no lock on the trigger row and takes
+  // none. Closing it needs a conditional write (`released_at IS NULL`) or a row
+  // lock, which reshapes the trigger service rather than adding a refusal to
+  // it. What this guard removes is the ordinary case: a person changing a
+  // schedule they can see has already run.
+  //
+  // A RECURRING schedule is deliberately NOT refused: its future ticks are still
+  // ahead of it, and a change applies to them. Ticks already fired are separate
+  // runs of their own and no change here reaches back into them.
+  const beforeChange = await readRunTriggerByRunId(args.runId);
+  if (
+    beforeChange &&
+    beforeChange.triggerType === "scheduled" &&
+    beforeChange.releasedAt !== null
+  ) {
+    return {
+      ok: false,
+      error:
+        "This run's schedule has already fired, so it can't be changed. Start a new run to schedule it again.",
+    };
   }
 
   // Read existing row first → cancel old schedule → upsert (no orphan jobs).
@@ -987,7 +1056,10 @@ export async function deleteRunTriggerForActor(
 //
 // EXTRACTED, NOT REIMPLEMENTED. The body below is `run-actions.ts`'s
 // `releaseTriggerNow` verbatim, with its session read replaced by the actor
-// envelope every other trigger operation in this module already takes.
+// envelope every other trigger operation in this module already takes — and
+// with the recurring branch cinatra#2928 added to that body while this
+// extraction was in flight, moved here whole rather than left behind in the
+// action, so both surfaces release a recurring schedule the same way.
 // `releaseTriggerNow` stays exactly where it was and becomes the same thin
 // session wrapper `deleteRunTrigger` has always been — so the run page's
 // transport is unchanged to the byte, and §VI's settled card can reach the
@@ -1058,10 +1130,97 @@ export async function releaseTriggerNowForActor(
     throw err;
   }
 
-  await markTriggerReleased(args.runId);
-
   // Admin (org-role admin, checked above) acts as a member of the run's org.
   const authority = await verifySessionAuthority(userId, run.orgId);
+
+  // RELEASE NOW ON A RECURRING SCHEDULE STARTS ONE COPY, AND LEAVES THE
+  // SCHEDULE RUNNING (cinatra#2928).
+  //
+  // It used to start the schedule-DEFINING run: the gate was opened on it and it
+  // moved off `armed`, so the schedule the person set up stopped reading as
+  // armed and the run that represents it was spent. Release now means "run it
+  // once, now" — never "and stop the schedule". A recurring tick already knows
+  // how to make a fresh copy; this is the same act, asked for by a person
+  // instead of by the clock, so it goes through the same launch entry, and the
+  // defining run is left exactly as it was.
+  //
+  // The one-off and immediate cases are unchanged: their trigger names a single
+  // firing, and releasing it IS that firing.
+  //
+  // IT LIVES HERE, not in the server action, because cinatra#2788 moved this
+  // whole body out of `run-actions.ts` so a surface whose identity does not
+  // travel by cookie reaches the SAME path. A copy of this branch left behind in
+  // the action would be a second road: the card's Run now would release a
+  // recurring schedule's defining run while the run page's would not.
+  if (trigger.triggerType === "recurring") {
+    let launched;
+    try {
+      launched = await launchAgentRun({
+        producer: "release_now_recurring_copy",
+        // A person pressed Release now, and the caller already resolved them
+        // from a real credential — but the COPY is a run of a schedule, exactly
+        // like a tick, so it is started the way a tick starts one.
+        frame: null,
+        authority,
+        create: {
+          kind: "pre_dispatch",
+          input: {
+            templateId: run.templateId,
+            runBy: run.runBy,
+            orgId: run.orgId,
+            inputParams: run.inputParams ?? {},
+            projectId: run.projectId,
+          },
+        },
+        dispatch: {
+          kind: "await_trigger",
+          why: "the copy's own immediate trigger is armed and its gate opened below",
+        },
+      });
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    if (launched.carrier.kind !== "run") {
+      return { ok: false, error: "the release answered with a carrier that is not a run" };
+    }
+    const copy = launched.carrier.run;
+    await createOrUpdateRunTrigger({
+      runId: copy.id,
+      triggerType: "immediate",
+      timezone: trigger.timezone,
+      enabled: true,
+      jobSchedulerId: null,
+    });
+    await markTriggerReleased(copy.id);
+    try {
+      await advanceAgentRun({
+        run: copy,
+        release: {
+          reason: "trigger_fired",
+          from: "pending_input",
+          to: "queued",
+          dispatch: {
+            kind: "enqueue",
+            options: { jobId: `agent-builder-${copy.id}` },
+          },
+        },
+        authority,
+      });
+    } catch (err) {
+      if (isScopeDenial(err)) {
+        return { ok: false, error: "forbidden — this agent's scope does not include you" };
+      }
+      // Every other dispatch failure has already been compensated by the release
+      // ladder — the copy is back at its wait, or failed, or the throw names it
+      // as stranded. What is left to do here is not swallow it.
+      throw err;
+    }
+    // The defining run keeps its `armed` status and its schedule keeps its
+    // scheduler, so the next tick fires as it would have.
+    return { ok: true };
+  }
+
+  await markTriggerReleased(args.runId);
 
   // Transition armed → queued so the dispatcher can pick up the run.
   // Swallow stale_from_status: the run may already be queued (race with the
@@ -1123,6 +1282,12 @@ export async function releaseTriggerNowForActor(
     }
     return { ok: false, error: "forbidden — this agent's scope does not include you" };
   }
+
+  // DISPATCHED — the schedule moment this run was waiting at is over
+  // (cinatra#2928). The recurring branch above never reaches here: it releases a
+  // COPY and deliberately leaves the defining run exactly as it was, moment
+  // included, because that run is still the schedule.
+  await clearRunLifecycleMoment(args.runId, authority);
 
   return { ok: true };
 }

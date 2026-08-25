@@ -219,6 +219,7 @@ export const LIFECYCLE_CARD_KINDS = Object.freeze([
   "verification_summary",
   "recommendation_hold",
   "trigger_schedule_proposal",
+  "agent_hitl_screen",
 ]);
 
 /** How each kind reaches a surface. Mirrors `LIFECYCLE_CARD_CARRIAGE`. */
@@ -227,6 +228,7 @@ export const LIFECYCLE_CARD_CARRIAGE = Object.freeze({
   verification_summary: "data_part",
   recommendation_hold: "interrupt",
   trigger_schedule_proposal: "data_part",
+  agent_hitl_screen: "interrupt",
 });
 
 /** The four hosts. Mirrors `LIFECYCLE_CARD_HOSTS`. */
@@ -573,25 +575,30 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // the paraphrase instead would make this gate assert that the card
       // consumes fields the server never sends.
       //
-      // `superseded` JOINS THIS LIST (PR #2939), and that closes half of the
-      // gap this comment used to record. It and `scheduleCopy` were both sent
-      // and drawn by nobody; removing the "Armed ·" line took away
-      // `scheduleCopy`'s only reader, which would have deleted cinatra#2859's
-      // superseded warning outright, so the card now draws that warning from
-      // the two of them together. `agentName` is still sent and read by no part
-      // of the drawing — that half of the gap is real and belongs to whoever
-      // ratifies where it appears.
+      // `superseded` AND `scheduleCopy` ARE NOT ON THIS LIST, and the reason is
+      // the plan rather than an omission. Both were briefly drawn as a warning
+      // line above the settled rows; the S9d capture round graded that line a
+      // conformance FAIL against plan (A) §7.2 — "the same card, with the same
+      // option rows, shows the schedule as it stands — no label, no summary
+      // box" — so the renderer stopped drawing it. `superseded` remains a
+      // RESOLVER answer (cinatra#2859: does this card's own token hold the rows
+      // the family settled on?) and remains on the wire, because Confirm
+      // refuses on the same comparison; what it no longer is, is chrome.
+      // `scheduleCopy` lost its only reader with that line, for the same reason
+      // the "Armed ·" line has none: the settled card IS the form. `agentName`
+      // is likewise sent and read by no part of the drawing. All four are
+      // server fields no host draws — pruning them from the protocol is a wire
+      // change with its own version story (the schema is `.strict()`) and is
+      // deliberately NOT folded into this rework. Listed here so the gap is
+      // discovered by reading rather than by a later gate failure.
       //
-      // THREE FIELDS LEAVE THIS LIST, and they leave because the drawing that
-      // read them is gone, not because the server stopped sending them:
-      // `runId` (the "Open the run" link), `triggerType` and `gatedSteps` (the
-      // Trigger configuration summary and the held-steps tree). Plan (A) §7.2
-      // as amended 2026-08-23 removes all three drawings. The settled view
-      // schema still CARRIES the three, so the server now computes fields no
-      // host draws; pruning them from the protocol is a wire change with its
-      // own version story (the schema is `.strict()`) and is deliberately NOT
-      // folded into this rework. Listed here so it is discovered by reading
-      // rather than by a later gate failure.
+      // `triggerType` IS BACK, because a drawing reads it again: plan (A) §7.2
+      // closes the fired one-off to changes ("once a one-off has fired it
+      // cannot be changed"), and the card tells a fired one-off from a released
+      // or still-arming schedule by reading `triggerType` beside `canSave`.
+      // `runId` (the "Open the run" link) and `gatedSteps` (the held-steps
+      // tree) stay off the list: §7.2 as amended 2026-08-23 removes both
+      // drawings.
       fields: [
         "state",
         "phase",
@@ -599,8 +606,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
         "durationCopy",
         "canConfirm",
         "restrictedReason",
-        "scheduleCopy",
-        "superseded",
+        "triggerType",
         "timezone",
         "released",
         "arming",
@@ -893,6 +899,46 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       // registry-served, so a JSX-mount scan alone would leave them uncounted.
       hosts: ["chat_thread", "site_widget", "run_card", "page_gate_region"],
     },
+  },
+
+  // Registered by cinatra#2928 (lifecycle-b W2a) as the FIFTH kind, and NOT
+  // drawn by it: that slice changes no screen. The moment the agent pauses to
+  // ask for input had no name in this vocabulary, so every surface told it
+  // apart from a review by pattern-matching the shape of the pause. Naming it
+  // is what lets a run STATE it; drawing it is W3's (cinatra#2930).
+  agent_hitl_screen: {
+    status: "PLACEHOLDER",
+    design:
+      "the HITL screen the run page already shows — fields with a Continue button. It carries no card identity of its own today, which is exactly what the plan's section 3 gives it.",
+    component: "AgentHitlScreenCard",
+    wireCarriage: "interrupt",
+    owner: null,
+    composes: [],
+    body: {
+      // A typed INTERRUPT like `recommendation_hold`, so its authorized state
+      // does not come from the data-part resolve seam. The obligation the
+      // drawing slice inherits is named for the reader that exists.
+      validator: "useLifecycleCardResolve",
+      params: ["view"],
+      fields: ["state"],
+    },
+    // The two the plan states in prose — the fields the screen asks for, and
+    // the Continue that submits them. Named here so the drawing slice has a
+    // target to be measured against; this is the obligation W3 inherits, not a
+    // description of anything shipped.
+    anchors: ["hitl-screen-fields", '[data-action="submit-hitl-screen"]'],
+    instanceRootSelector: '[data-lifecycle-card="agent_hitl_screen"]',
+    instanceProof: null,
+    hosts: {
+      chat_thread: null,
+      site_widget: null,
+      run_card: null,
+      page_gate_region: null,
+    },
+    hostGap:
+      "No host mounts this kind as a card, because no component draws it as one. The run page shows the screen today, but not through this vocabulary. W3 (cinatra#2930) draws the card and binds it to the moment the run now records, on the hosts the parity ratchet already owes.",
+    renderedProof: null,
+    gap: "The card is not drawn. W2a registers the kind so a run can state the moment it is paused at, and changes no screen; the run page keeps the HITL screen it already renders, unchanged and outside this vocabulary. The anchors and body fields above are the obligation the drawing slice inherits, not a description of anything shipped.",
   },
 });
 

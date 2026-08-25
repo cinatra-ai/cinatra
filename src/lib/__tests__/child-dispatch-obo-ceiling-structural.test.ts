@@ -95,6 +95,32 @@ const DISPATCH_SITES: Record<string, { role: "child-dispatch" | "top-level"; why
     role: "top-level",
     why: "the agent_run MCP tool — the top-level chat/API entry; agent-as-tool child dispatch goes through agent-tools-registry, not here.",
   },
+  // cinatra#2928 — the coordinator's launch entry and the surfaces that reach it.
+  "packages/agents/src/lifecycle-coordinator.ts": {
+    role: "top-level",
+    why:
+      "the coordinator's launch entry — the ONE creator. It composes whatever ceiling its caller threaded; it never invents one, which is what makes every classification below still the caller's own.",
+  },
+  "packages/agents/src/run-actions.ts": {
+    role: "top-level",
+    why: "the run page's three run-starts — a person pressing Run, with no parent run to compose from.",
+  },
+  "packages/agents/src/trigger-service.ts": {
+    role: "top-level",
+    why:
+      "release now on a recurring schedule starts one copy — cinatra#2788 moved that launch " +
+      "here out of run-actions.ts so a surface whose identity does not travel by cookie reaches " +
+      "the same path. Unchanged in kind: a person asks for the copy the clock would have made, " +
+      "and it is started the way a tick starts one, with no parent run to compose from.",
+  },
+  "packages/agents/src/trigger-schedule-proposal-service.ts": {
+    role: "top-level",
+    why: "Confirm on a schedule stated in a conversation — a person's own run, no parent.",
+  },
+  "packages/agents/src/trigger-release-job.ts": {
+    role: "top-level",
+    why: "a recurring schedule's tick — a fresh copy of a top-level run, not a child of it.",
+  },
 };
 
 /** Recursively collect product .ts/.tsx files under a root (no tests/dist/node_modules). */
@@ -133,11 +159,21 @@ function balancedArgs(src: string, openParen: number): string {
 
 type Site = { file: string; args: string };
 
-/** Every createAgentRun CALL site (not the definition/import) in the product tree. */
+/**
+ * Every RUN-CREATION call site (not the definition/import) in the product tree.
+ *
+ * TWO NAMES SINCE cinatra#2928. Every producer now creates through the
+ * coordinator's `launchAgentRun`, which is the one caller of `createAgentRun`
+ * left — so scanning only the old name would find the coordinator and NOTHING
+ * ELSE, and this guard would go quietly vacuous over exactly the dispatch paths
+ * it exists to classify. The invariant is unchanged: a call that spawns a run
+ * UNDER a parent run threads the parent's persisted ceiling, whichever entry it
+ * goes through.
+ */
 function findCreateAgentRunCallSites(): Site[] {
   const sites: Site[] = [];
   const files = SCAN_ROOTS.flatMap((r) => collectFiles(join(ROOT, r)));
-  const CALL = /createAgentRun\s*\(/g;
+  const CALL = /(?:createAgentRun|launchAgentRun)\s*\(/g;
   for (const abs of files) {
     const src = readFileSync(abs, "utf8");
     const rel = abs.slice(ROOT.length + 1);
@@ -161,11 +197,16 @@ function findCreateAgentRunCallSites(): Site[] {
 describe("child-dispatch OBO-ceiling structural guard (#1035)", () => {
   const sites = findCreateAgentRunCallSites();
 
-  it("scanned a non-empty set of createAgentRun call sites (scanner sanity)", () => {
+  it("scanned a non-empty set of run-creation call sites (scanner sanity)", () => {
     // Guards against the walker false-greening on an empty tree.
     expect(sites.length).toBeGreaterThanOrEqual(3);
     // The canonical child-dispatch primitive is reached.
     expect(sites.some((s) => s.file === "src/lib/project-dispatch.ts")).toBe(true);
+    // …and so is the one creator every producer now goes through, which is what
+    // stops this scanner from measuring a name nothing calls any more.
+    expect(
+      sites.some((s) => s.file === "packages/agents/src/lifecycle-coordinator.ts"),
+    ).toBe(true);
   });
 
   it("every createAgentRun call site is CLASSIFIED (a new dispatch path fails closed)", () => {

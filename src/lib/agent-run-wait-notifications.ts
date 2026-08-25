@@ -342,12 +342,21 @@ export const runWaitNotifier: RunWaitNotifier = {
       // `.then(...)` (not a bare call) so a synchronous throw is caught too:
       // the copy refinement must never be able to suppress the notification.
       const { deriveRunHitlContext } = await import("@cinatra-ai/agents");
-      const interrupt =
+      const derived =
         reason === "pending_approval"
           ? await Promise.resolve()
               .then(() => deriveRunHitlContext(run))
               .catch(() => null)
           : null;
+      // THE RUN'S OWN MOMENT RIDES ALONG (cinatra#2928). The row in hand states
+      // which lifecycle moment it is waiting at, so the discriminator reads
+      // that instead of re-deriving it from the shape of the pause. The derived
+      // context stays beneath it: a run created before the column existed, and
+      // a wait whose context is the only thing readable, both still classify.
+      const interrupt =
+        derived === null && run.lifecycleMoment == null
+          ? null
+          : { ...(derived ?? {}), lifecycleMoment: run.lifecycleMoment ?? null };
       const { resolveAgentRunHref, createNotificationForRecipient } =
         await import("@cinatra-ai/notifications/server");
       // Canonical run deep-link (templateId → packageName). Undefined for an

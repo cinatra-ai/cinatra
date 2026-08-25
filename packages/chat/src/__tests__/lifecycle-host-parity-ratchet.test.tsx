@@ -342,8 +342,21 @@ describe("the host set of every kind, read off rendered cards", () => {
     expect(violations.map((v) => `${v.code}: ${v.detail}`)).toEqual([]);
   });
 
-  it("the observation is not empty — every kind reaches at least one host", () => {
+  it("the observation is not empty — every kind with a card reaches at least one host", () => {
     for (const kind of LIFECYCLE_CARD_KINDS) {
+      // A kind that RECORDS no host and owes all of them has no card yet, so
+      // "rendered nowhere" is what the ratchet already says about it — asking
+      // for a host here would demand the very mount the owed cells defer.
+      // cinatra#2928 registered `agent_hitl_screen` in exactly that state; W3
+      // (cinatra#2930) lands its hosts, and the row above turns red the moment
+      // one is observed without being recorded.
+      if (Object.keys(LIFECYCLE_HOST_PARITY_RATCHET[kind].hosts).length === 0) {
+        expect(
+          Object.keys(OBSERVED[kind] ?? {}).length,
+          `${kind} records no host but rendered on one`,
+        ).toBe(0);
+        continue;
+      }
       expect(Object.keys(OBSERVED[kind] ?? {}).length, `${kind} rendered nowhere`).toBeGreaterThan(0);
     }
   });

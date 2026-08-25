@@ -325,6 +325,11 @@ export async function runWalkAction(page, action, { env = process.env, pageOf = 
       await page.click(selector);
       await page.type(selector, resolveWalkString(action.text, env), { delay: action.delay ?? 8 });
       return;
+    case "fill":
+      await page.fill(selector, resolveWalkString(action.value, env), {
+        timeout: action.timeout ?? 180_000,
+      });
+      return;
     case "press":
       await page.keyboard.press(action.key);
       return;

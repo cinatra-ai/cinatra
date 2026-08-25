@@ -93,6 +93,14 @@ export type RunWaitInterruptKind = "input" | "approval";
 export type RunWaitInterruptDescriptor = {
   reviewTaskId?: string | null;
   fieldName?: string | null;
+  /**
+   * The moment the RUN ITSELF states (cinatra#2928, `agent_runs.lifecycle_moment`).
+   *
+   * This is the recorded fact the two heuristics below were standing in for.
+   * Optional because a run created before the column existed carries none, and
+   * because the surfaces that hold only an interrupt still classify from it.
+   */
+  lifecycleMoment?: string | null;
 };
 
 /** True for the synthetic `setup-<runId>` gate identity. */
@@ -108,14 +116,32 @@ export function isSetupInterruptTaskId(
 /**
  * PURE. Classify an interrupt as an INPUT pause or an APPROVAL gate.
  *
- * Fails CLOSED to `"approval"`: with no interrupt in hand (a wait whose context
- * is not yet readable) the pre-existing approval copy is kept, so this change
- * can never relabel a genuine review gate.
+ * A READER FIRST (cinatra#2928). The run now STATES which lifecycle moment it is
+ * waiting at, so when the row carries one this function reads it instead of
+ * inferring it — a wait for a setup field and a wait for a review are two
+ * different recorded facts, and telling them apart stops being a matter of
+ * recognizing a synthetic task-id prefix.
+ *
+ * The two heuristics stay BENEATH the reader, and deliberately: every run
+ * created before the column existed carries no moment, and the SSE path holds
+ * an interrupt without holding the row. They are the fallback now, not the
+ * answer.
+ *
+ * Fails CLOSED to `"approval"`: with nothing readable at all the pre-existing
+ * approval copy is kept, so this can never relabel a genuine review gate.
  */
 export function classifyRunWaitInterrupt(
   interrupt: RunWaitInterruptDescriptor | null | undefined,
 ): RunWaitInterruptKind {
   if (!interrupt) return "approval";
+  // THE RECORDED FACT, when the run states one.
+  //   hitl   — the agent paused to ask for input.
+  //   review — the agent produced something bound to an artifact.
+  // Any other recorded moment falls through: a run parked for the skills
+  // question or its schedule is not waiting at an interrupt at all, so this
+  // classifier has nothing to say about it and keeps its fail-closed answer.
+  if (interrupt.lifecycleMoment === "hitl") return "input";
+  if (interrupt.lifecycleMoment === "review") return "approval";
   if (
     typeof interrupt.fieldName === "string" &&
     interrupt.fieldName.trim().length > 0

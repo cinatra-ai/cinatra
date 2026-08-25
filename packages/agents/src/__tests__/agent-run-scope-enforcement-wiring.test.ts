@@ -569,9 +569,13 @@ describe("paths that carry an explicit actor thread it into the perimeter", () =
 
   it("the non-BullMQ content-editor carrier run is covered by the CREATION layer", () => {
     const src = read("src/lib/host-content-editor-dispatch.ts");
-    // Two createAgentRun call sites; the actorOverride one is never enqueued,
-    // which is exactly why an enqueue-only guard would miss it.
-    expect((src.match(/await createAgentRun\(/g) ?? []).length).toBe(2);
+    // Two carrier-creating call sites; the actorOverride one is never enqueued,
+    // which is exactly why an enqueue-only guard would miss it. Since
+    // cinatra#2929 both reach the creation perimeter THROUGH the coordinator's
+    // launch entry — the guard is unmoved (it lives inside the creator the
+    // coordinator calls), only the road to it is.
+    expect((src.match(/await launchAgentRun\(/g) ?? []).length).toBe(2);
+    expect(src).not.toContain("createAgentRun(");
     expect(src).not.toContain("enqueueAgentRun");
   });
 });

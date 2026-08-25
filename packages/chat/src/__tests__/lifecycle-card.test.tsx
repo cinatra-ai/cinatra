@@ -70,7 +70,7 @@ const VERIFICATION_BODY = {
   // optional: a body that omits it cannot be told apart from one whose producer
   // dropped the reading's provenance, so the parse refuses it and the card
   // draws nothing at all.
-  advisoryComments: [{ authorKind: "service", body: "Core analysis of 1 disclosed field(s)." }],
+  advisoryComments: [{ authorKind: "service", body: "Audit of 1 disclosed field(s)." }],
 };
 
 function mockResolve(state: LifecycleCardState) {

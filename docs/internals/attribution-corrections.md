@@ -121,3 +121,105 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: d7ff228f89addacb8ead2d63832863d7f4b7b3ff
 ```
+
+---
+
+## Correction for `ed215702ae06aa726b2c23ebbe688dbd3455b119`
+
+```
+correction: truthful-attribution record for ed215702a
+
+The record on ed215702a ("fix(runtime): derive the model-bridge output_schema from each node's declared outputs — a credential-free run reaches an artifact (#2949)") is malformed under the ratified record grammar: the Gate-suite line carries an empty version (a shell-quoting failure at merge time swallowed the value). The change itself was gated — all required contexts green at the reviewed head 30eb4b153e4a38f594705333c933361ce031a972 — and is untouched; this corrects the RECORD only.
+
+Gate-suite: cinatra-core@2026.08.3
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: ed215702ae06aa726b2c23ebbe688dbd3455b119```
+
+---
+
+## Correction for `871443b9b7b655da90bd30046b4e477ab13792ef`
+
+```
+correction: truthful-attribution record for 871443b9b
+
+The record on 871443b9b ("ci(build-image): un-serialize the image build + shard the perpetual gates — wall ~19 → ~13-14 min (#2962)") is invalid under the ratified record grammar: a high-risk change (.github/**) merged with no verification arm — the human approval existed but no Reviewed-by trailer carried it into the record. The change was humanly approved by @groganz at the reviewed head f87cf995e0eba1fe86ca171eeb7c4b12d08044eb (PR #2962) with every required context green after the post-approval gate rerun; the corrected record carries that human arm. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 871443b9b7b655da90bd30046b4e477ab13792ef
+```
+
+---
+
+## Correction for `3ceba8711c35760c1d956c373154df7911d2c262`
+
+```
+correction: truthful-attribution record for 3ceba8711
+
+The record on 3ceba8711 ("ci: consolidate 12 micro-gate workflows into gates.yml (~12 runner slots per PR) (#2963)") is invalid under the ratified record grammar: a high-risk change (.github/**) merged with no verification arm, and its Assisted-by line was malformed (comma-joined agents and a serving alias claude-opus-5[1m] instead of the model id). The change was humanly approved by @groganz at the reviewed head 5056f76a72a29677811f0313342c67e10d5eefdb (PR #2963) with every required context green after the post-approval gate rerun; the corrected record carries that human arm and one well-formed Assisted-by line per agent. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: 3ceba8711c35760c1d956c373154df7911d2c262
+```
+
+---
+
+## Correction for `871443b9b7b655da90bd30046b4e477ab13792ef`
+
+```
+correction: truthful-attribution record for 871443b9b (v2)
+
+The record on 871443b9b ("ci(build-image): un-serialize the image build + shard the perpetual gates (#2962)") lacked a verification arm for a high-risk change. The prior correction attempt (5901ca07) asserted the human arm through an UNAPPROVED landing and was rightly flagged; THIS correction lands via an owner-approved PR. The underlying change was humanly approved by @groganz at the reviewed head f87cf995e0eba1fe86ca171eeb7c4b12d08044eb (PR #2962), every required context green after the post-approval rerun. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 871443b9b7b655da90bd30046b4e477ab13792ef
+```
+
+---
+
+## Correction for `3ceba8711c35760c1d956c373154df7911d2c262`
+
+```
+correction: truthful-attribution record for 3ceba8711 (v2)
+
+The record on 3ceba8711 ("ci: consolidate 12 micro-gate workflows into gates.yml (#2963)") lacked a verification arm for a high-risk change and carried a malformed Assisted-by line (comma-joined agents; serving alias claude-opus-5[1m]). The prior correction attempt (770744b74) asserted the human arm through an unapproved landing and was rightly flagged; THIS correction lands via an owner-approved PR. The underlying change was humanly approved by @groganz at the reviewed head 5056f76a72a29677811f0313342c67e10d5eefdb (PR #2963), every required context green after the post-approval rerun. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Claude Code (claude-opus-5)
+Correction-for: 3ceba8711c35760c1d956c373154df7911d2c262
+```
+
+---
+
+## Correction for `5901ca07cb3f42945fc5a06b34f26ce092dfd8b6`
+
+```
+correction: truthful-attribution record for 5901ca07
+
+The record on 5901ca07 (correction attempt for 871443b9b) asserted a maintainer-tier human arm, but the commit landed through PR #2964 with no review by the named login — the fabrication flag was correct. The commit is a docs-only ledger append (no high-risk path), so its corrected record carries the gate arm. Its Correction-for assertion is superseded by the v2 correction above (latest-wins).
+
+Gate-suite: cinatra-core@2026.08.3
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 5901ca07cb3f42945fc5a06b34f26ce092dfd8b6
+```
+
+---
+
+## Correction for `770744b74613706220430b640ad4a73369f7ab86`
+
+```
+correction: truthful-attribution record for 770744b74
+
+The record on 770744b74 (correction attempt for 3ceba8711) asserted a maintainer-tier human arm, but the commit landed through PR #2964 with no review by the named login — the fabrication flag was correct. The commit is a docs-only ledger append (no high-risk path), so its corrected record carries the gate arm. Its Correction-for assertion is superseded by the v2 correction above (latest-wins).
+
+Gate-suite: cinatra-core@2026.08.3
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 770744b74613706220430b640ad4a73369f7ab86
+```

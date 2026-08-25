@@ -3252,6 +3252,310 @@ def _read_bridge_token() -> Optional[str]:
 #: A declared-input title we are willing to fold into a synthesized
 #: ``message_template``. Restricted to plain Jinja identifiers so the
 #: generated ``{% if <name> %}{% endif %}`` guard can never inject markup.
+# ---------------------------------------------------------------------------
+# cinatra#2949 — derive `output_schema` for bridge ApiNodes from their own
+# declared outputs.
+#
+# `/api/llm-bridge` accepts an OPTIONAL `output_schema` on the request body and
+# forwards it to the orchestration layer, which is what makes a provider answer
+# in a declared SHAPE rather than in prose (host: `src/app/api/llm-bridge/
+# route.ts` -> `packages/llm/src/index.ts`; the development scripted provider
+# shapes its deterministic answer from the same field). Authored OAS files never
+# write that field — a bridge ApiNode ships `agent_id`, `system`, `user`,
+# `agent_run_id` and the compiler-injected `cinatra_llm`, and nothing else.
+#
+# So a node could DECLARE typed outputs (`title`, `content`, ...) and still ask
+# for free text. The host route parses the answer as JSON and spreads its keys;
+# prose parses to nothing, so every declared output came back EMPTY while the
+# call itself reported success, and the run failed one frame later at
+# materialisation ("titleFrom output \"title\" did not resolve to a non-empty
+# string") instead of at the call that actually went wrong.
+#
+# This is the load-time counterpart of `_reconcile_input_message_gates`: the
+# shipped OAS on the read-only mount is never touched, EVERY installed agent
+# benefits without an extension-repo change, and — because the request body is
+# what changes — the scripted development provider and a real provider are
+# asked for the same shape and cannot drift apart.
+#
+# Each property follows the SAME agentspec-property -> JSON-Schema convention
+# the host compiler uses for an agent's own output schema
+# (`packages/agents/src/oas-compiler.ts`, step 8 "Derive outputSchema"):
+# `{type, title, format?, description?, items?}`.
+#
+# The ROOT additionally carries `required` (EVERY declared output) and
+# `additionalProperties: false`. That is not decoration: this schema is
+# forwarded VERBATIM into the OpenAI Responses API `text.format.json_schema`
+# (`extensions/cinatra-ai/openai-connector/src/adapter/openai-adapter.ts`), and
+# the strict structured-output contract requires `required` to name every key in
+# `properties` — an under-specified `required` is a deterministic 400 at the real
+# provider (cinatra#1891 walk-2 DEFECT-2, pinned in
+# `src/lib/artifacts/__tests__/matcher-runtime.test.ts`). The one other place in
+# the repo that hands this path a schema, the artifact matcher
+# (`src/lib/artifacts/matcher-runtime.ts`), emits exactly this root shape, so
+# this pass matches the caller that is already proven against a live provider.
+# A declared output is not optional — the node names it as an output it will
+# read — so "every property is required" is the truthful reading, not a
+# tightening. The compiler's step 8 omits both keywords because its schema is
+# STORED on the template and never sent verbatim to a provider on this path.
+#
+# THE SAME RULE HOLDS BELOW THE ROOT (the second walk of cinatra#2949). The
+# first version stopped at the root, so a node declaring `ideas: array<object>`
+# asked for an array and said NOTHING about what belongs in an entry: a shaped
+# answer came back as `{"ideas": [{}]}` — a non-empty list of empty entries, and
+# the gate that offers those entries had nothing to offer. `required` +
+# `additionalProperties: false` are not a root-only decoration: the strict
+# structured-output surface applies the same rule to EVERY `properties` map it
+# is handed, so a DECLARED member map at any depth needs exactly what the root
+# needs. `_strict_declared_subschema` therefore walks the declaration and
+# supplies those two keywords wherever the author declared members — and
+# NOTHING else: every keyword the author actually wrote (`type`, `enum`,
+# `format`, `description`, bounds) reaches the provider verbatim.
+#
+# The same holds for an ARRAY whose `items` the author never declared: the
+# request then asks for a list and says nothing about its elements, which is
+# the weakest thing this pass can ask for — a provider is free to answer with
+# an empty list, and the compiled INPUT path has already been observed to be
+# refused outright for an array with no `items` (see the step-7 note in
+# `packages/agents/src/oas-compiler.ts`). Inventing an element shape would be
+# worse: it would send a list shape the agent never declared. So the pass
+# leaves it exactly as declared and names the path out loud instead.
+#
+# WHERE THE AUTHOR DECLARED NO MEMBERS the pass stays silent about the shape:
+# `{"type": "object"}` is a declaration that says nothing about the inside, and
+# inventing members would send the provider something the agent never said. The
+# request keeps asking for a free-form object, an answer therefore need carry
+# nothing inside it, and the pass SAYS SO — each such path is named in the
+# per-node report and printed at load. That disclosure is the actionable half:
+# the fix for a free-form member is one line in the AGENT's own OAS
+# (`json_schema.items` / `json_schema.properties`), which is the other branch
+# the issue itself names, and this pass then carries it without further change.
+# ---------------------------------------------------------------------------
+
+#: The host route the derivation applies to. Mirrors `targetsLlmBridge` in
+#: `packages/agents/src/oas-compiler.ts`: the bare path, the authored
+#: `{{CINATRA_BASE_URL}}` template form, or any absolute URL ending in it.
+_LLM_BRIDGE_PATH = "/api/llm-bridge"
+
+
+def _targets_llm_bridge(url: Any) -> bool:
+    """True when an ApiNode `url` addresses the host's LLM bridge."""
+    return isinstance(url, str) and url.endswith(_LLM_BRIDGE_PATH)
+
+
+def _declared_members(node: Any) -> Optional[Dict[str, Any]]:
+    """The member map a declaration carries, in EITHER agentspec spelling.
+
+    A top-level `properties` and a nested `json_schema.properties` are the same
+    declaration — the same fallback the host compiler applies to an object-typed
+    input (`packages/agents/src/oas-compiler.ts`, step 7). An EMPTY map is not a
+    declaration of members, so it reads as "nothing declared".
+    """
+    if not isinstance(node, dict):
+        return None
+    members = node.get("properties")
+    if not isinstance(members, dict):
+        nested = node.get("json_schema")
+        members = nested.get("properties") if isinstance(nested, dict) else None
+    return members if isinstance(members, dict) and members else None
+
+
+def _declared_items(node: Any) -> Any:
+    """The item declaration a declaration carries, in EITHER spelling."""
+    if not isinstance(node, dict):
+        return None
+    items = node.get("items")
+    if items is None:
+        nested = node.get("json_schema")
+        items = nested.get("items") if isinstance(nested, dict) else None
+    return items
+
+
+def _strict_declared_subschema(
+    node: Any, path: str, free_form: List[str]
+) -> Any:
+    """One declared subschema -> the JSON Schema the request carries for it.
+
+    Returns a COPY (the document's own declaration is read, never adopted), with
+    exactly two keywords supplied and only where the author declared members:
+    `required` naming every declared member and `additionalProperties: False`.
+    Everything else the author wrote rides through byte-for-byte.
+
+    A level that declares NO members (`{"type": "object"}`, or an array with no
+    `items` at all) is left exactly as declared and its path is appended to
+    ``free_form`` — the caller reports it rather than inventing a shape.
+
+    An authored `required` that names a SUBSET of the declared members is
+    WIDENED, for the same reason the root widens: the strict surface has no
+    notion of an optional key, and a member a node declares is a member it will
+    read. That is the one authored keyword this pass overrides, and it overrides
+    it only where it also supplies `additionalProperties`.
+    """
+    if not isinstance(node, dict):
+        return node
+    shape: Dict[str, Any] = {
+        key: value for key, value in node.items() if key != "json_schema"
+    }
+    members = _declared_members(node)
+    if members is not None:
+        shape["properties"] = {
+            name: _strict_declared_subschema(member, f"{path}.{name}", free_form)
+            for name, member in members.items()
+        }
+        shape["required"] = list(shape["properties"])
+        shape["additionalProperties"] = False
+    elif node.get("type") == "object":
+        free_form.append(path)
+    items = _declared_items(node)
+    if items is not None:
+        shape["items"] = _strict_declared_subschema(items, f"{path}[]", free_form)
+    elif node.get("type") == "array":
+        free_form.append(f"{path}[]")
+    return shape
+
+
+def _output_property_json_schema(
+    prop: Any, free_form: Optional[List[str]] = None
+) -> Optional[Dict[str, Any]]:
+    """One declared output -> its JSON-Schema property, or None if unusable.
+
+    `items` (and a nested `properties` map) accept BOTH the agentspec spellings
+    the shipped OAS files use — a top-level key and the `json_schema` nesting —
+    the same fallback the host compiler applies. The declared member shapes are
+    carried down to every level by `_strict_declared_subschema`; the paths that
+    declare no members land in ``free_form`` for the caller to report.
+    """
+    if not isinstance(prop, dict):
+        return None
+    title = prop.get("title")
+    type_ = prop.get("type")
+    if not isinstance(title, str) or not title:
+        return None
+    if not isinstance(type_, str) or not type_:
+        return None
+    unreported: List[str] = []
+    collected = unreported if free_form is None else free_form
+    shape: Dict[str, Any] = {"type": type_, "title": title}
+    fmt = prop.get("format")
+    if isinstance(fmt, str) and fmt:
+        shape["format"] = fmt
+    description = prop.get("description")
+    if isinstance(description, str) and description:
+        shape["description"] = description
+    members = _declared_members(prop)
+    if members is not None:
+        shape["properties"] = {
+            name: _strict_declared_subschema(member, f"{title}.{name}", collected)
+            for name, member in members.items()
+        }
+        shape["required"] = list(shape["properties"])
+        shape["additionalProperties"] = False
+    elif type_ == "object":
+        collected.append(title)
+    items = _declared_items(prop)
+    if items is not None:
+        shape["items"] = _strict_declared_subschema(items, f"{title}[]", collected)
+    elif type_ == "array":
+        collected.append(f"{title}[]")
+    return shape
+
+
+def _derive_bridge_output_schemas(
+    doc: Any, label: str
+) -> List[Dict[str, Any]]:
+    """Give every bridge ApiNode that DECLARES outputs an `output_schema`.
+
+    Mutates ``doc`` in place; returns a per-node report (empty when nothing was
+    derived). Walks the WHOLE document, so a bridge ApiNode nested in a subflow
+    — including one the context-subflow injection just composed in — is reached.
+
+    Conservative on every edge:
+      - a node whose `data` is missing or not an object is left alone (there is
+        no request body to describe);
+      - an AUTHORED `data.output_schema` always wins, so a hand-written shape is
+        never overwritten (this also makes the pass idempotent);
+      - a node that declares no outputs, or whose outputs are not ALL usable
+        (a plain string `title` and `type`), is left alone rather than sent a
+        partial shape that would silently drop a declared output.
+
+    The root names every declared output in ``required`` and sets
+    ``additionalProperties: False`` — see the block comment above for why that
+    is load-bearing at the real provider and not cosmetic. EVERY declared member
+    map below the root gets the same two keywords; a level that declares no
+    members stays free-form and is named in that node's report entry (and
+    printed), because the request can then promise nothing about its contents.
+    """
+    report: List[Dict[str, Any]] = []
+
+    def _walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            if obj.get("component_type") == "ApiNode" and _targets_llm_bridge(
+                obj.get("url")
+            ):
+                _visit_bridge_node(obj)
+            for value in obj.values():
+                _walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                _walk(value)
+
+    def _visit_bridge_node(node: Dict[str, Any]) -> None:
+        data = node.get("data")
+        if not isinstance(data, dict):
+            return
+        if data.get("output_schema") is not None:
+            return  # authored override — never overwritten
+        outputs = node.get("outputs")
+        if not isinstance(outputs, list) or not outputs:
+            return
+        properties: Dict[str, Any] = {}
+        free_form: List[str] = []
+        for prop in outputs:
+            shape = _output_property_json_schema(prop, free_form)
+            if shape is None:
+                print(
+                    f"[agent_loader] WARNING: {label}: bridge ApiNode "
+                    f"{node.get('id') or node.get('name')!r} declares an output "
+                    f"without a usable title/type ({prop!r}); deriving NO "
+                    f"output_schema for it — it keeps asking for free text."
+                )
+                return
+            properties[shape["title"]] = shape
+        data["output_schema"] = {
+            "type": "object",
+            "properties": properties,
+            # Every declared output, and nothing else — the strict
+            # structured-output contract the real provider enforces.
+            "required": list(properties),
+            "additionalProperties": False,
+        }
+        node_id = node.get("id") or node.get("name")
+        free_form = sorted(set(free_form))
+        if free_form:
+            # Not a defect in this pass: the agent declared these members as
+            # free-form, so the request cannot promise what is inside them. Said
+            # out loud because it is exactly what an answer will come back
+            # EMPTY inside — and because the fix is one declaration in the
+            # agent's own OAS.
+            print(
+                f"[agent_loader] NOTE: {label}: bridge ApiNode {node_id!r} "
+                f"declares no members for {', '.join(free_form)}; the request "
+                f"keeps them free-form. Nothing tells a provider what belongs "
+                f"inside, so an answer may carry nothing there. Declare the "
+                f"members in the agent's own OAS (`json_schema.items` / "
+                f"`json_schema.properties`) to close it."
+            )
+        report.append(
+            {
+                "node": node_id,
+                "outputs": sorted(properties),
+                "free_form": free_form,
+            }
+        )
+
+    _walk(doc)
+    return report
+
+
 #: Matched with ``fullmatch`` (no anchors) so a trailing newline cannot sneak
 #: past a ``$``-anchored ``match``.
 _GATE_INPUT_TITLE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -3483,6 +3787,30 @@ def _mount_one_sync(
                 f"gates={[r['node'] for r in gate_report]} "
                 f"(InputMessageNode → PluginInputMessageNode, "
                 f"inputs folded into message_template)"
+            )
+
+    # cinatra#2949 — derive `output_schema` for every bridge ApiNode that
+    # declares outputs, so the model is asked for the SHAPE the node declared
+    # instead of free text. Runs LAST on the current working document, so it
+    # also covers ApiNodes the context-subflow injection composed in. See
+    # _derive_bridge_output_schemas for the full contract.
+    schema_working_doc: Optional[Dict[str, Any]] = (
+        composed_oas if composed_oas is not None else parsed_doc
+    )
+    if isinstance(schema_working_doc, dict):
+        schema_report = _derive_bridge_output_schemas(schema_working_doc, label)
+        if schema_report:
+            raw_text = json.dumps(schema_working_doc)
+            if composed_oas is not None:
+                composed_oas = schema_working_doc
+                composed_sha256 = hashlib.sha256(
+                    raw_text.encode("utf-8")
+                ).hexdigest()
+            print(
+                f"[agent_loader] bridge output_schema derived {label}: "
+                + ", ".join(
+                    f"{r['node']}({'/'.join(r['outputs'])})" for r in schema_report
+                )
             )
 
     substituted = _substitute_placeholders(raw_text)

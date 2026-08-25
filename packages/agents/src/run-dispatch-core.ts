@@ -14,6 +14,10 @@ import {
   maybeHoldRunForRecommendation,
   readRecommendationParkForRun,
 } from "./recommendation-hold";
+import {
+  advanceAgentRun,
+  clearRunLifecycleMoment,
+} from "./lifecycle-coordinator";
 
 // ===========================================================================
 // THE ACTOR-PARAMETERIZED RUN-START DISPATCHER (cinatra#2790, epic #2784 S9f).
@@ -247,10 +251,34 @@ export async function dispatchRunStartForPrincipal(
   // check above: both pre-dispatch waiting states are legal dispatch sources,
   // and the rung that WINS is remembered so the compensation below reverts the
   // run to where it actually was rather than rewriting its state.
+  //
+  // CONTINUE IS ADVANCE (cinatra#2928). Both rungs go through the coordinator's
+  // release entry. The rung ladder is unchanged, and the release is asked to
+  // THROW on a lost race precisely so the losing rung stays distinguishable
+  // from the winning one.
+  //
+  // THE MOMENT IS CLEARED AFTER THE ENQUEUE BELOW, not inside the release: this
+  // frame owns the dispatch (`caller_dispatches`), so the release cannot see
+  // whether the run really got a job, and a clear made before that answer is
+  // lost the moment the compensation puts the run back at its wait — leaving a
+  // parked run with nothing to say what it is waiting for.
   let dispatchedFrom: (typeof RUN_START_DISPATCH_FROM_STATUSES)[number] | null = null;
   for (const from of RUN_START_DISPATCH_FROM_STATUSES) {
     try {
-      await transitionRunStatus(args.runId, from, "queued", undefined, authority);
+      await advanceAgentRun({
+        run,
+        release: {
+          reason: "continue",
+          from,
+          to: "queued",
+          onLostRace: "throw",
+          dispatch: {
+            kind: "caller_dispatches",
+            why: "the compensation below reverts to the rung that actually won, so this frame owns the enqueue",
+          },
+        },
+        authority,
+      });
       dispatchedFrom = from;
       break;
     } catch (err) {
@@ -299,6 +327,14 @@ export async function dispatchRunStartForPrincipal(
     if (actionable) return { ok: false, ...actionable };
     return { ok: false, error: "enqueue failed" };
   }
+
+  // DISPATCHED — the moment is over (cinatra#2928). The clear is COMPARE-AND-
+  // CLEAR ON THE MOMENT, not on a status: it takes off the moment it read, so a
+  // run that has parked again in the meantime keeps whatever its new park
+  // stated. A status guard would be the wrong shape here — the status this frame
+  // dispatched into is left almost at once, as soon as a worker picks the run
+  // up, and a clear pinned to it would miss the ordinary case.
+  await clearRunLifecycleMoment(args.runId, authority);
 
   return { ok: true };
 }

@@ -586,7 +586,7 @@
     },
     {
      "file": "scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs",
-     "testName": "the REQUIRED gate — no flag at all — is CLEAN on this branch, and says why"
+     "testName": "the REQUIRED gate — no flag at all — still FAILS today, on the fifth kind's missing card"
     }
    ],
    "unitProofs": [

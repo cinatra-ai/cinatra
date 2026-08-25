@@ -402,6 +402,23 @@ function observeContainer(root: HTMLElement): string[] {
 const HOLD_MOUNT_OWED = HELD_TURN_MOUNT_OBLIGATIONS.includes("recommendation_hold");
 const HOLD_ROOT_OWED = ROOT_DECLARATION_OBLIGATIONS.includes("recommendation_hold");
 
+/**
+ * The kinds THIS observation can see.
+ *
+ * Both ledgers below are program-wide, but this suite only walks the rows
+ * whose enforcer is this contract. cinatra#2928 registered a fifth kind
+ * (`agent_hitl_screen`) enforced by the one-card gate instead, so comparing a
+ * whole ledger against an observation that never looks at that row would fail
+ * on a kind this file is not measuring. Scoping the expectation keeps the
+ * ratchet exactly as strict for every row it DOES walk.
+ */
+const OBSERVED_KINDS = new Set(
+  CHAT_THREAD_CARRIAGE_CONTRACT.filter((r) => r.enforcer === "held-turn-card-contract").map(
+    (r) => r.kind,
+  ),
+);
+const observedOwed = (ledger: readonly string[]) => ledger.filter((k) => OBSERVED_KINDS.has(k as never));
+
 async function observeProductionCarriage(): Promise<string[]> {
   holdStateMock.mockImplementation(async () => HELD);
   const { root } = await mountHeldChat();
@@ -501,7 +518,7 @@ describe("the PRODUCTION chat transcript, on a held dispatch turn", () => {
       observed,
       "the PRODUCTION view's unmounted set drifted from HELD_TURN_MOUNT_OBLIGATIONS — " +
         "strike the row when the mount lands, and never before",
-    ).toEqual([...HELD_TURN_MOUNT_OBLIGATIONS]);
+    ).toEqual(observedOwed(HELD_TURN_MOUNT_OBLIGATIONS));
   });
 
   it("asks the authority for the hold state exactly when a card is mounted to ask", async () => {
@@ -540,7 +557,7 @@ describe("the PRODUCTION chat transcript, on a held dispatch turn", () => {
       name: "agent_run",
       result: DURABLE_RESULT,
     });
-    expect(observeContainer(root)).toEqual([...HELD_TURN_MOUNT_OBLIGATIONS]);
+    expect(observeContainer(root)).toEqual(observedOwed(HELD_TURN_MOUNT_OBLIGATIONS));
 
     mountRealCardInto(triggerContainer);
     await waitFor(() =>
@@ -821,7 +838,7 @@ describe("the root-declaration obligation, measured on the real card's own root"
       owed,
       "the real card's root declaration drifted from ROOT_DECLARATION_OBLIGATIONS — " +
         "strike the row when the declaration lands, and never before",
-    ).toEqual([...ROOT_DECLARATION_OBLIGATIONS]);
+    ).toEqual(observedOwed(ROOT_DECLARATION_OBLIGATIONS));
   });
 
   it.runIf(!HOLD_ROOT_OWED)("the struck root obligation is backed by a real declaration", () => {

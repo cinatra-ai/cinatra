@@ -23,6 +23,13 @@
  *   - the broadcast branch (tagged participants, no explicit assistant mention)
  *     is unchanged.
  *
+ * Ruling (cinatra#2820): a scoped ref that MISSES the assistant registry — the
+ * canonical explicit agent-dispatch form — is a REQUEST FOR THE HOST, not a
+ * no-responder. It streams the host reply so the request reaches the server-side
+ * explicit-dispatch pre-router that exists to force `agent_run` for that wording.
+ * The no-responder branch survives for its legitimate case: an @-token that is
+ * neither an assistant nor an agent ref (a delisted handle, a human tag).
+ *
  * PURE given the classification + a delivery lookup + the pre-resolved Cinatra
  * host principal (all built server-side in `./server-audience-resolver`) — so the
  * whole routing decision is unit-testable without a DB, a session, or the network.
@@ -193,10 +200,35 @@ export function decideMessageRouting(input: RouteDecisionInput): MessageRoutingR
     };
   }
 
+  if (classified.some((c) => c.kind === "agent-dispatch")) {
+    // A scoped ref that MISSED the assistant registry — the canonical explicit
+    // agent-dispatch form the `chat-assistant-core` skill documents
+    // (`use @cinatra-ai/<slug> to …`). It is a REQUEST FOR THE HOST, not a
+    // no-responder: the host Cinatra reply streams, so the request actually
+    // reaches the server and the deterministic explicit-dispatch PRE-ROUTER
+    // (`src/app/api/chat/explicit-dispatch.ts`) — built for exactly this wording —
+    // finally sees the message and forces the `agent_run` call (cinatra#2820).
+    //
+    // Before this branch the ref fell into the no-responder below and the client
+    // POSTed nothing, so the pre-router never ran and the documented form was
+    // dead on arrival. Nothing about the CLASSIFIER changes: a scoped ref is an
+    // `agent-dispatch` candidate precisely because it is not an in-audience
+    // assistant, and the broadcast classifier is not re-taught about agents.
+    //
+    // Same return shape as the no-mention default: the host reply, attributed to
+    // the Cinatra principal, in DEFAULT layout (one mention token does not trip
+    // `shouldEnterSlackModeOnSend`, so message parts and the inline run card
+    // survive). Deliberately NOT `isBroadcast` — nothing was tagged.
+    return {
+      shouldCallLlm: true,
+      ...(cinatraHostId ? { hostAssistantUserId: cinatraHostId } : {}),
+    };
+  }
+
   if (classified.length > 0) {
     // The message carried @-tokens but NONE resolved to an in-audience assistant
-    // (an unknown/delisted handle like @chatgpt post-ruling, a human tag, or a
-    // scoped agent-dispatch ref) AND there is no tagged broadcast participant:
+    // NOR to an agent-dispatch ref (an unknown/delisted handle like @chatgpt
+    // post-ruling, or a human tag) AND there is no tagged broadcast participant:
     // HONEST NO-RESPONDER — the message posts, nothing streams, nothing hangs
     // (the #1935 delisted pattern: `{ kind: "none" }` in resolveDispatchPlan).
     // Distinct from the true no-mention default below, which keeps the @cinatra

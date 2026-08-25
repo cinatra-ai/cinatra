@@ -41,18 +41,93 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Every lifecycle interaction that becomes a card. Closed set of four. Adding a
- * fifth interaction means adding a kind HERE first — that is what keeps "one
+ * Every lifecycle interaction that becomes a card. Closed set of FIVE. Adding a
+ * sixth interaction means adding a kind HERE first — that is what keeps "one
  * card per interaction" enforceable instead of aspirational.
+ *
+ * `agent_hitl_screen` is the fifth (cinatra#2928, lifecycle-b W2a). It is the
+ * agent PAUSING TO ASK for input — the screen a run parks on mid-flight — and
+ * until now it was the one lifecycle moment this vocabulary had no name for, so
+ * every surface told it apart from a review by pattern-matching the shape of
+ * the pause. Registering it here is what lets a run STATE it. The card itself
+ * is not drawn by this slice: W2a registers the kind as data, and W3
+ * (cinatra#2930) mounts it — which is why its host cells are OWED in the
+ * parity ratchet rather than recorded.
  */
 export const LIFECYCLE_CARD_KINDS = [
   "artifact_review_gate",
   "verification_summary",
   "recommendation_hold",
   "trigger_schedule_proposal",
+  "agent_hitl_screen",
 ] as const;
 
 export type LifecycleCardKind = (typeof LIFECYCLE_CARD_KINDS)[number];
+
+// ---------------------------------------------------------------------------
+// The lifecycle MOMENTS — the closed set the coordinator decides (cinatra#2928)
+// ---------------------------------------------------------------------------
+
+/**
+ * The five moments a run can reach, as a closed set.
+ *
+ *   recommendation — before the run, a person is present, and the agent has
+ *                    skills to recommend. Decided by the policy.
+ *   schedule       — before a person's run begins; always shown. Decided by the
+ *                    coordinator's own default, not by an organization rule: a
+ *                    schedule has no artifact type, destination or origin, so it
+ *                    is not a row in the policy table.
+ *   hitl           — during the run, when the agent pauses to ask for input.
+ *                    Decided by the agent — the step that asks. No policy.
+ *   review         — after the agent produces something bound to an artifact.
+ *                    Decided by the policy, and only for artifact-bound output.
+ *   audit          — after a change lands on reviewed work. Decided by the
+ *                    policy. THE ONE MOMENT THAT DOES NOT PARK THE RUN: it
+ *                    records and signals its reading, and the run goes on.
+ *
+ * The policy table keeps its own three checkpoints unchanged; two of these five
+ * moments are simply not policy matters.
+ */
+export const LIFECYCLE_MOMENTS = [
+  "recommendation",
+  "schedule",
+  "hitl",
+  "review",
+  "audit",
+] as const;
+
+export type LifecycleMoment = (typeof LIFECYCLE_MOMENTS)[number];
+
+export function isLifecycleMoment(value: unknown): value is LifecycleMoment {
+  return (
+    typeof value === "string" &&
+    (LIFECYCLE_MOMENTS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Which card each moment mounts. One row per moment, exhaustively — the type
+ * refuses a moment with no card, which is the whole reason the moment is worth
+ * recording: a host reads the kind off the run instead of deciding it.
+ */
+export const LIFECYCLE_MOMENT_CARD_KIND = {
+  recommendation: "recommendation_hold",
+  schedule: "trigger_schedule_proposal",
+  hitl: "agent_hitl_screen",
+  review: "artifact_review_gate",
+  audit: "verification_summary",
+} as const satisfies Record<LifecycleMoment, LifecycleCardKind>;
+
+/**
+ * Does this moment PARK the run?
+ *
+ * Four of the five do. The audit is a READING: it is recorded and signalled and
+ * the run continues, so a caller that parks on it would stall a run nobody is
+ * waiting for. Stated once, here, so no surface has to remember the exception.
+ */
+export function lifecycleMomentParksRun(moment: LifecycleMoment): boolean {
+  return moment !== "audit";
+}
 
 /**
  * How a kind REACHES a surface on the one wire.
@@ -71,6 +146,11 @@ export const LIFECYCLE_CARD_CARRIAGE = {
   verification_summary: "data_part",
   recommendation_hold: "interrupt",
   trigger_schedule_proposal: "data_part",
+  // `agent_hitl_screen` is an INTERRUPT for the same reason
+  // `recommendation_hold` is: the run is genuinely BLOCKED on the answer, so a
+  // fire-and-forget data part would be the wrong frame. It carries no
+  // data-part view type and therefore no resolve envelope.
+  agent_hitl_screen: "interrupt",
 } as const satisfies Record<LifecycleCardKind, "data_part" | "interrupt">;
 
 export type LifecycleCardCarriage =
@@ -671,7 +751,7 @@ export type TriggerScheduleProposalView = z.infer<
 // that state.
 //
 // IT IS THE SHIPPED CORE-ANALYSIS READING, SANITIZED. The fields below are the
-// ones the run's own "Core analysis" surface already shows the SAME reader,
+// ones the run's own "Audit" surface already shows the SAME reader,
 // after the SAME run-read check: the verdict, the two pinned revisions, the
 // before/after field diff and §VII's advisory comments.
 //
@@ -1053,6 +1133,12 @@ export const LIFECYCLE_INTERACTION_SCHEMA_VERSION = LIFECYCLE_VIEW_SCHEMA_VERSIO
  */
 export const LIFECYCLE_INTERRUPT_RENDERER_IDS = {
   recommendation_hold: "@cinatra-ai/lifecycle:recommendation-hold",
+  // cinatra#2928 — the HITL screen's own namespaced id. The agent's pause is
+  // an interrupt like the hold, so it declares a renderer id of the same shape.
+  // Registering the id here is what stops the pause from being told apart by
+  // pattern-matching a task-id prefix; the card W3 (cinatra#2930) mounts on it
+  // is not part of this slice.
+  agent_hitl_screen: "@cinatra-ai/lifecycle:agent-hitl-screen",
 } as const satisfies Record<LifecycleInterruptKind, string>;
 
 /**

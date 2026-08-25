@@ -60,6 +60,7 @@ describe("screenHostsStepRail — the screen stands down exactly where the panel
           templateType,
           sourceType: "package",
           stepperStepCount: 5,
+          hasTriggerRow: false,
         });
         expect(panel).toBe("stepper");
         expect(screenHostsStepRail({ panel, stepperStepCount: 5 })).toBe(false);
@@ -74,6 +75,7 @@ describe("screenHostsStepRail — the screen stands down exactly where the panel
         templateType: "agent",
         sourceType: "package",
         stepperStepCount: 0,
+        hasTriggerRow: false,
       });
       expect(panel).toBe("agentic");
       expect(screenHostsStepRail({ panel, stepperStepCount: 0 })).toBe(true);
@@ -89,6 +91,7 @@ describe("screenHostsStepRail — the screen stands down exactly where the panel
       templateType: "flow",
       sourceType: "package",
       stepperStepCount: 0,
+      hasTriggerRow: false,
     });
     expect(panel).toBe("stepper");
     expect(screenHostsStepRail({ panel, stepperStepCount: 0 })).toBe(true);

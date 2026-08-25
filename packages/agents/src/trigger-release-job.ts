@@ -25,8 +25,12 @@ import {
   RunTransitionError,
   readAgentRunById,
   readAgentTemplateById,
-  createAgentRunPendingInput,
 } from "./store";
+import {
+  advanceAgentRun,
+  clearRunLifecycleMoment,
+  launchAgentRun,
+} from "./lifecycle-coordinator";
 // cinatra#1939 wave 2 (§2b): this scheduler has NO session — it mints the
 // SYSTEM `agent-run-dispatch` authority (run.execute + run.complete) per fire to
 // ground the run's armed/pending→queued/stopped transitions, scoped to the run's
@@ -206,25 +210,54 @@ export async function runAgentRunTriggerReleaseJob(
     // pending_input status. Propagate orgId so the cloned run preserves tenant
     // scope, AND projectId so the run stays project-scoped — the clone otherwise
     // dropped it, silently widening the run out of its project. Copying projectId
-    // also makes createAgentRunPendingInput re-derive the SAME OBO scope-ceiling
-    // chain as the schedule-defining run (the template owner anchor is locked
-    // after first run), so the cloned run carries the identical ceiling.
+    // also makes the pre-dispatch creator re-derive the same OBO scope-ceiling
+    // ANCHOR as the schedule-defining run (the template owner anchor is locked
+    // after first run).
+    //
+    // "THE SAME ANCHOR" IS NOT "THE SAME CEILING", and this note used to say the
+    // stronger thing. A run that was itself dispatched UNDER a parent carries a
+    // COMPOSED chain narrower than its own anchor, and a copy derived from
+    // template and project alone does not inherit that narrowing — the
+    // pre-dispatch creator takes no parent chain at all. Every tick has worked
+    // this way since recurring schedules existed and this change does not widen
+    // it; what changed is that the comment no longer claims otherwise. Threading
+    // the source run's persisted chain through the copy is a change to the
+    // creator's own inputs and belongs with the epic's review-core wave.
     // cinatra#1940 P3 (Decision 2): mint BEFORE the clone insert — the
     // creation perimeter is now guarded, so the authority must exist before
     // createAgentRunPendingInput runs (was previously minted only after, for
     // the transition below). The clone shares sourceRun.orgId (non-null,
     // checked above == newRun.orgId).
     const releaseAuthority = mintTriggerReleaseAuthority(sourceRun.orgId);
-    const newRun = await createAgentRunPendingInput(
-      {
-        templateId: sourceRun.templateId,
-        runBy: sourceRun.runBy,
-        orgId: sourceRun.orgId,
-        inputParams: sourceRun.inputParams ?? {},
-        projectId: sourceRun.projectId,
+    // A RECURRING TICK IS A LAUNCH, not a release (cinatra#2928): each tick is a
+    // FRESH copy of the run, so it goes through the coordinator's launch entry
+    // like every other way of starting an agent. It stays headless — nobody is
+    // present for a schedule firing, so no moment applies and the schedule the
+    // run was given is what applies. The dispatch stays here because this branch
+    // arms the copy's own immediate trigger and opens its gate first.
+    const launched = await launchAgentRun({
+      producer: "recurring_trigger_tick",
+      frame: null,
+      authority: releaseAuthority,
+      create: {
+        kind: "pre_dispatch",
+        input: {
+          templateId: sourceRun.templateId,
+          runBy: sourceRun.runBy,
+          orgId: sourceRun.orgId,
+          inputParams: sourceRun.inputParams ?? {},
+          projectId: sourceRun.projectId,
+        },
       },
-      releaseAuthority,
-    );
+      dispatch: {
+        kind: "await_trigger",
+        why: "the copy is armed as immediate and its gate opened below before it is enqueued",
+      },
+    });
+    if (launched.carrier.kind !== "run") {
+      throw new Error("the recurring tick's launch answered with a carrier that is not a run");
+    }
+    const newRun = launched.carrier.run;
     // Arm the new run as immediate so the gate opens at run-start.
     // We call createOrUpdateRunTrigger directly here (we are inside the worker
     // — no actor context). The setRunTriggerForActor service is for
@@ -237,19 +270,20 @@ export async function runAgentRunTriggerReleaseJob(
       jobSchedulerId: null,
     });
     await markTriggerReleased(newRun.id);
-    try {
-      await transitionRunStatus(newRun.id, "pending_input", "queued", undefined, releaseAuthority);
-    } catch (err) {
-      if (
-        !(err instanceof RunTransitionError && err.code === "stale_from_status")
-      ) {
-        throw err;
-      }
-    }
-    await enqueueAgentRun(
-      { runId: newRun.id },
-      { jobId: `agent-builder-${newRun.id}` },
-    );
+    // …and the copy is RELEASED through advance, so a tick's two halves — the
+    // fresh run and letting it go — are the same two entries every other surface
+    // uses. The coordinator clears the moment before the run moves, so a copy
+    // cannot start while still stating one.
+    await advanceAgentRun({
+      run: newRun,
+      release: {
+        reason: "trigger_fired",
+        from: "pending_input",
+        to: "queued",
+        dispatch: { kind: "enqueue", options: { jobId: `agent-builder-${newRun.id}` } },
+      },
+      authority: releaseAuthority,
+    });
     console.log(
       `[trigger-release] recurring tick — created new run ${newRun.id} from ${data.runId}`,
     );
@@ -269,21 +303,70 @@ export async function runAgentRunTriggerReleaseJob(
     return;
   }
   const releaseAuthority = mintTriggerReleaseAuthority(runForFire.orgId);
+  // A ONE-OFF FIRING IS ADVANCE (cinatra#2928): the run already exists and is
+  // parked at its schedule moment, and the schedule is what says to let it go.
+  //
+  // THE ENQUEUE STAYS BELOW rather than riding the release, because this branch
+  // already carries its own compensation for the one failure it treats as
+  // terminal — a scope denial, which fails the run rather than returning it to a
+  // wait it has no schedule left to be released from.
+  //
+  // A TRANSIENT ENQUEUE FAILURE IS THE JOB'S RETRY, which is why this branch
+  // wants none of the coordinator's compensation. BullMQ re-runs this job; the
+  // re-run finds the run already `queued`, so the `armed → queued` release LOSES
+  // its race — and the retry still has to re-enqueue.
+  //
+  // THE LOST RACE THEREFORE THROWS rather than answering. `onLostRace: "answer"`
+  // reports the state it re-read and RETURNS NORMALLY, which reads the retry
+  // correctly and reads every other loser wrong: a run cancelled to `stopped`
+  // before its instant, or one that was never armed, would fall straight through
+  // to the enqueue below and have its moment wiped by a job that released
+  // nothing. The coordinator's own note says which shape this is — a caller that
+  // has to know WHICH writer won asks it to throw — and the re-read below is what
+  // this branch decides on:
+  //
+  //   • the run reads `queued` — an earlier fire (or its own retry) already
+  //     released it and the execution job did not stick. Re-enqueue: the job id
+  //     is derived from the run id, so BullMQ collapses the duplicate, and a
+  //     `queued` run with no job behind it is the one state nothing recovers
+  //     from on its own.
+  //   • the run reads ANYTHING ELSE — stopped, still pre-dispatch, already
+  //     finished, or gone. This job released nothing, so it enqueues nothing and
+  //     never reaches the clear at the end of this function: the moment on that
+  //     run states what its own writer is waiting at, and is not this fire's to
+  //     take off.
   try {
-    await transitionRunStatus(data.runId, "armed", "queued", undefined, releaseAuthority);
+    await advanceAgentRun({
+      run: runForFire,
+      release: {
+        reason: "trigger_fired",
+        from: "armed",
+        to: "queued",
+        dispatch: { kind: "caller_dispatches", why: "the scope-denial compensation below owns this enqueue" },
+        onLostRace: "throw",
+      },
+      authority: releaseAuthority,
+    });
   } catch (err) {
-    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
-      // Run was not armed (e.g. immediate trigger fired without going through
-      // pending_input → armed; user cancelled to stopped before fire; twin-fire
-      // window where the first call already transitioned). Log and skip the
-      // execution enqueue — the run is not in a state that wants to run, OR
-      // execution was already enqueued by a prior fire.
+    if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+      throw err;
+    }
+    // The run id is request-influenced, so it stays a discrete ARGUMENT and is
+    // never interpolated into a format string (CodeQL js/tainted-format-string).
+    const afterTheRace = await readAgentRunById(data.runId);
+    if (afterTheRace?.status !== "queued") {
       console.log(
-        `[trigger-release] run ${data.runId} not armed — skipping execution enqueue`,
+        "[trigger-release] run",
+        data.runId,
+        `was not released by this fire (it reads ${afterTheRace?.status ?? "absent"}) — skipping the execution enqueue, and leaving the moment to whoever owns the run now`,
       );
       return;
     }
-    throw err;
+    console.log(
+      "[trigger-release] run",
+      data.runId,
+      "was already released before this fire — re-enqueueing its execution (the job id collapses the duplicate)",
+    );
   }
 
   // Enqueue the actual execution job. Idempotent on jobId — re-enqueue is safe
@@ -333,6 +416,12 @@ export async function runAgentRunTriggerReleaseJob(
     }
     return;
   }
+  // DISPATCHED — the schedule moment this run was waiting at is over
+  // (cinatra#2928). Here rather than inside the release, because this branch
+  // owns its own enqueue: a clear made before the dispatch answered would be
+  // lost to the scope-denial compensation above, and a run failed for scope
+  // should keep the record of what it was waiting at.
+  await clearRunLifecycleMoment(data.runId, releaseAuthority);
   console.log(`[trigger-release] enqueued execution for run ${data.runId}`);
 }
 
