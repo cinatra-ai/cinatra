@@ -228,6 +228,11 @@ describe("the row keeps every anchor its readers address it by", () => {
     // on. An `available` handed down from here would print the mark and change
     // the tokens, so its ABSENCE is what is pinned, not just the rest.
     expect(entry.hasAttribute("data-run-surface-rail-reached")).toBe(false);
+    // NOR did the shared row close it. Since cinatra#2970 a row whose step has
+    // no surface cannot be opened; this step always has its form, so the row
+    // keeps its handler and says nothing about being disabled.
+    expect(entry.hasAttribute("aria-disabled")).toBe(false);
+    expect(entry.className).toContain("hover:opacity-90");
     expect(indicator.className).toContain("bg-primary");
     expect(indicator.className).not.toContain("bg-muted-foreground/40");
     expect(entry.querySelector("span:last-of-type")!.className).toContain("text-foreground");
@@ -262,6 +267,7 @@ describe("the row keeps every anchor its readers address it by", () => {
     expect(entry.getAttribute("data-schedule-step-selected")).toBe("false");
     expect(entry.hasAttribute("aria-current")).toBe(false);
     expect(entry.hasAttribute("data-run-surface-rail-reached")).toBe(false);
+    expect(entry.hasAttribute("aria-disabled")).toBe(false);
     // The UNSELECTED tokens, unchanged by the shared row.
     const indicator = entry.querySelector<HTMLElement>(
       '[data-conformance-id="schedule-rail-indicator"]',
