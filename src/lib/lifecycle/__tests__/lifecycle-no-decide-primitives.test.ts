@@ -283,9 +283,9 @@ describe("the exception is named WHERE IT IS ENFORCED, not merely allowed", () =
 
   it("the typed CarveOut twin exists at the delegated-chat boundary", () => {
     // The policy override and the typed record are kept in lockstep by the authz
-    // drift gate; this assertion is here so the RULE'S own file states that the
-    // exception is written down in the authorization record too, not only in a
-    // transport allowlist.
+    // inventory coverage suite; this assertion is here so the RULE'S own file
+    // states that the exception is written down in the authorization record too,
+    // not only in a transport allowlist.
     const source = readFileSync(
       resolve(__dirname, "../../authz/carve-out.ts"),
       "utf8",
