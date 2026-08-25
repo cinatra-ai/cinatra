@@ -15,7 +15,7 @@
  *      (cinatra#2972) — in particular it never opens the run's own gate
  *  10. stopRunTriggerInDb STOPS without deleting (cinatra#2972) — the row
  *      survives, `stopped_at` is stamped, `enabled` goes false and the
- *      scheduler id is cleared
+ *      scheduler id is KEPT, so the release job can still unschedule it
  *  11. a config upsert cannot resurrect a stopped schedule — `stopped_at`
  *      has no escape hatch on the upsert path, unlike `releasedAt`
  *
@@ -226,9 +226,14 @@ describe("trigger-store", () => {
     expect(after?.cronExpression).toBe("0 9 * * 1-5");
     expect(after?.timezone).toBe("Europe/Berlin");
     expect(after?.lastFiredAt).toBeInstanceOf(Date);
-    // The scheduler this row named has been cancelled by the caller, so the id
-    // is cleared rather than left pointing at a job that no longer exists.
-    expect(after?.jobSchedulerId).toBeNull();
+    // THE SCHEDULER ID SURVIVES THE STOP, and that is deliberate. The stop
+    // stamps BEFORE it cancels, so the cancel can still fail and leave the
+    // scheduler live — and a stopped row with the id erased would leave a
+    // scheduler nothing can name. The retained id is what the release job
+    // unschedules with, on BOTH of its teardown paths: the `enabled: false`
+    // branch at the top of a tick, and the pre-clone re-read that finds a
+    // `stopped_at` landed mid-tick (see trigger-release-job).
+    expect(after?.jobSchedulerId).toBe("sched-2972-stop");
     // And the gate is still shut: stopping a schedule releases nothing.
     expect(after?.releasedAt).toBeNull();
   });

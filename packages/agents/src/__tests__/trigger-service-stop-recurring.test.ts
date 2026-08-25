@@ -202,7 +202,9 @@ describe("what may be stopped — the plan's own subject", () => {
       // writes for reasons that have nothing to do with Cancel schedule.
       stoppedAt: new Date("2026-08-24T10:00:00Z"),
       enabled: false,
-      jobSchedulerId: null,
+      // The stop KEEPS the scheduler id, so that is what an already-stopped
+      // row really looks like.
+      jobSchedulerId: "sched-2972",
     });
     await expect(
       stopRecurringTriggerForActor(owner, { runId: RUN_ID }),
