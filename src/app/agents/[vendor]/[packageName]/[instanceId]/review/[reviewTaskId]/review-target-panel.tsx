@@ -11,6 +11,7 @@ import {
   reviewProvenanceConformanceId,
   reviewProvenanceLabel,
   reviewRevisionMarker,
+  reviewTargetRowFacts,
   reviewTypeLabel,
 } from "@/lib/artifacts/review-surface-model";
 
@@ -86,8 +87,7 @@ export function ReviewTargetPanel({
           {props ? (
             <>
               {" · "}
-              {props.artifact.ownerLevel} · {props.artifact.visibility} · {props.artifact.mime} · updated{" "}
-              {props.artifact.updatedAt}
+              {reviewTargetRowFacts(props.artifact).join(" · ")}
             </>
           ) : null}
         </p>

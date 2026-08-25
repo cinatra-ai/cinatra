@@ -22,6 +22,7 @@ import {
   reviewProvenanceLabel,
   reviewRevisionMarker,
   reviewTypeLabel,
+  reviewTargetRowFacts,
   REVIEW_DISPOSITIONS,
 } from "../review-surface-model";
 import type { RecordChangesRequestedResult } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
@@ -340,5 +341,47 @@ describe("the settled copy names the outcome and its decider", () => {
       expect(reviewSettledCopy(outcome).body).not.toBe(generic.body);
     }
     expect(generic.title).toBe("This review is no longer open");
+  });
+});
+
+describe("reviewTargetRowFacts — the header meta line's read-only row facts", () => {
+  // THE HONESTY FIX (plan `PLAN: Agents Lifecycle (B)` §5). The line used to
+  // print the two scope facts bare, so the common case read the SAME WORD twice
+  // for two different facts.
+  it("labels the two scope facts so they are not the same word twice", () => {
+    const facts = reviewTargetRowFacts({
+      ownerLevel: "organization",
+      visibility: "organization",
+      mime: "text/markdown",
+      updatedAt: "8 min ago",
+    });
+    const line = facts.join(" · ");
+    expect(line).toBe("Ownership: organization · Visibility: organization · text/markdown · updated 8 min ago");
+    expect(line).not.toContain("organization · organization");
+  });
+
+  it("keeps BOTH facts, in the order the drawing draws them", () => {
+    // design@fe2182547d4a specs/app-artifact-review.html §IV — "the read-only row
+    // facts the host authorized — owner level / visibility, MIME, and updated
+    // time" — and §II's example line "… · Team · Private · text/html · updated 8
+    // min ago". Neither fact is dropped; both are labelled.
+    const facts = reviewTargetRowFacts({
+      ownerLevel: "team",
+      visibility: "private",
+      mime: "text/html",
+      updatedAt: "8 min ago",
+    });
+    expect(facts).toEqual([
+      "Ownership: team",
+      "Visibility: private",
+      "text/html",
+      "updated 8 min ago",
+    ]);
+  });
+
+  it("carries no type keying — every artifact type reads the same line", () => {
+    const a = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "application/pdf", updatedAt: "now" });
+    const b = reviewTargetRowFacts({ ownerLevel: "user", visibility: "private", mime: "text/plain", updatedAt: "now" });
+    expect(a.slice(0, 2)).toEqual(b.slice(0, 2));
   });
 });

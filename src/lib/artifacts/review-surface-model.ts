@@ -205,6 +205,39 @@ export function reviewTypeLabel(objectType: string): string {
   return pretty || objectType;
 }
 
+/**
+ * The read-only row facts the header's meta line carries (§II) — the ones the
+ * drawing names: "the read-only row facts the host authorized — owner level /
+ * visibility, MIME, and updated time"
+ * (design@fe2182547d4a specs/app-artifact-review.html §IV).
+ *
+ * THE HONESTY FIX (plan `PLAN: Agents Lifecycle (B)` §5). The line printed the
+ * two scope facts BARE, one after the other, so the ordinary case read
+ * "organization · organization" — the same word twice for two facts that are not
+ * the same thing at all: which scope HOLDS the artifact, and who can SEE it. The
+ * plan's fix is that "the line gets labels or drops the storage fact". The
+ * drawing keeps BOTH facts on the line ("… · Team · Private · text/html ·
+ * updated 8 min ago", specs/app-lifecycle-cards.html §II), so dropping the
+ * storage fact would delete a fact the drawing draws: the facts are LABELLED
+ * instead, in the drawing's own order, with the label the host already uses for
+ * ownership on its other screens.
+ *
+ * Pure copy, no type keying — every artifact type reads the same line.
+ */
+export function reviewTargetRowFacts(artifact: {
+  ownerLevel: string;
+  visibility: string;
+  mime: string;
+  updatedAt: string;
+}): string[] {
+  return [
+    `Ownership: ${artifact.ownerLevel}`,
+    `Visibility: ${artifact.visibility}`,
+    artifact.mime,
+    `updated ${artifact.updatedAt}`,
+  ];
+}
+
 /** A short, stable revision marker for the header (§II) — the mono revision id,
  * truncated for display, with the exact id preserved for the title attribute. */
 export function reviewRevisionMarker(representationRevisionId: string): {
