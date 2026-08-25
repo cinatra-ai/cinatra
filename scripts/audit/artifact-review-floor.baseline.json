@@ -1,0 +1,17 @@
+{
+  "$comment": "THE FLOOR GATE baseline (cinatra#2931 W4, plan `PLAN: Agents Lifecycle (B)` §5). Every artifact type here is one whose review resolves through NO renderer today and therefore lands on the card's metadata floor. The gate requires the LIVE floor set to equal this file exactly: a type that newly lands on the floor fails, and a type that stops landing on it fails until its entry is deleted. The committed set may only shrink against the base branch. The plan names exactly these two as the work it defers: 'everything a review shows is an artifact, and its package's renderer renders it — a dashboard and content held in a third-party CMS included. How exactly those two packages store and render their work is decided outside this plan.' So the gate lands as 'no new fallbacks' now and finishes at none when those two packages convert.",
+  "floorTypes": [
+    {
+      "type": "@cinatra-ai/dashboard-artifact:dashboard",
+      "package": "@cinatra-ai/dashboard-artifact",
+      "mime": "application/vnd.cinatra.dashboard+json",
+      "reason": "The dashboard. The pack declares the `dashboard` representation form and no renderer of its own, and the host resource MIME that form carries matches no representation provider and no first-party form arm. Converting it is decided outside plan (B) §5."
+    },
+    {
+      "type": "@cinatra-ai/drupal:node",
+      "package": "@cinatra-ai/drupal-artifacts",
+      "mime": "text/html",
+      "reason": "Content held in a third-party CMS. The pack declares a connector-reference form resolving to text/html and no renderer of its own; text/html is not a safe-transport form the host renders and no package provides a viewer for it. Converting it is decided outside plan (B) §5."
+    }
+  ]
+}
