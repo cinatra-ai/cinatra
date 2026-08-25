@@ -96,6 +96,11 @@ const DISPATCH_SITES: Record<string, { role: "child-dispatch" | "top-level"; why
     why: "the agent_run MCP tool — the top-level chat/API entry; agent-as-tool child dispatch goes through agent-tools-registry, not here.",
   },
   // cinatra#2928 — the coordinator's launch entry and the surfaces that reach it.
+  // `packages/agents/src/trigger-service.ts` was classified here until
+  // cinatra#2972: its only launch was Run now's recurring copy, and plan (A)
+  // §7.2 as amended 2026-08-25 withdrew that control and its whole action path.
+  // The module launches nothing now, so the row is removed rather than left
+  // classifying a call site the scanner can no longer find.
   "packages/agents/src/lifecycle-coordinator.ts": {
     role: "top-level",
     why:
@@ -104,14 +109,6 @@ const DISPATCH_SITES: Record<string, { role: "child-dispatch" | "top-level"; why
   "packages/agents/src/run-actions.ts": {
     role: "top-level",
     why: "the run page's three run-starts — a person pressing Run, with no parent run to compose from.",
-  },
-  "packages/agents/src/trigger-service.ts": {
-    role: "top-level",
-    why:
-      "release now on a recurring schedule starts one copy — cinatra#2788 moved that launch " +
-      "here out of run-actions.ts so a surface whose identity does not travel by cookie reaches " +
-      "the same path. Unchanged in kind: a person asks for the copy the clock would have made, " +
-      "and it is started the way a tick starts one, with no parent run to compose from.",
   },
   "packages/agents/src/trigger-schedule-proposal-service.ts": {
     role: "top-level",

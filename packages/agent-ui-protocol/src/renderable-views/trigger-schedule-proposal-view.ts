@@ -236,9 +236,24 @@ export const triggerScheduleProposalSettledViewSchema = z
     superseded: z.boolean().optional(),
     timezone: z.string().min(1).max(64),
     gatedSteps: z.array(gatedStepViewSchema).max(50),
-    /** True once the gate has been opened (the trigger fired or was released).
-     *  §VI's controls are both disabled past that point. */
+    /** True once the gate has been opened. For a ONE-OFF and an IMMEDIATE
+     *  trigger that IS the firing, and the card freezes on it. For a RECURRING
+     *  schedule it says nothing — a tick opens the COPY's gate, never this
+     *  run's — so the recurring readings key off `stopped` and `canCancel`
+     *  instead (cinatra#2972). */
     released: z.boolean(),
+    /**
+     * THE SCHEDULE WAS STOPPED — **Cancel schedule** was pressed
+     * (cinatra#2972). Plan (A) §7.2 as amended 2026-08-25: it "stops the
+     * recurring schedule and then makes the scheduler non-editable". The card
+     * draws the rows read-only and no floor at all.
+     *
+     * OPTIONAL AND OMITTED unless true, exactly like `superseded` above and for
+     * the same reason: this schema is `.strict()`, so a client still running an
+     * older bundle would reject EVERY settled payload if the key were always
+     * sent. Omission confines that to the genuinely stopped card.
+     */
+    stopped: z.boolean().optional(),
     /**
      * May this reader press **Save changes** — re-arm the trigger from the rows
      * on this card (plan (A) §7.2 step 6, "change the rows and press **Save
@@ -251,9 +266,43 @@ export const triggerScheduleProposalSettledViewSchema = z
      * the card offering a control it knows will be refused.
      */
     canSave: z.boolean(),
+    /**
+     * May this reader press **Cancel schedule** — the ONE control the page's
+     * schedule step carries (cinatra#2972)?
+     *
+     * Plan (A) §7.2 as amended 2026-08-25: "its one control is **Cancel
+     * schedule**, shown only for a recurring schedule that has fired once".
+     * The whole reading is the producer's, so the renderer draws the control on
+     * this boolean alone and no host re-derives the rule.
+     *
+     * `canRelease` — "Run now for an administrator" — is RETIRED with the
+     * control the same amendment withdrew ("there is no Run now"). It is kept
+     * here as an OPTIONAL key that the producer still emits as a CONSTANT
+     * FALSE and that no renderer reads — a deliberate compatibility choice
+     * rather than dead weight.
+     *
+     * A ROLLING DEPLOY HAS TWO DIRECTIONS, and both are served by that pair:
+     *
+     *   · a NEW client against an OLD server still sending `canRelease` — the
+     *     `.strict()` parse would reject the unknown key and blank the card.
+     *     `.optional()` is what tolerates it.
+     *   · an OLD client against a NEW server — the stale bundle's own schema
+     *     still REQUIRES the key, so the new server has to keep sending one.
+     *     That is why the producer emits a constant `false` rather than
+     *     omitting the field.
+     *
+     * Emitting `false` cannot bring Run now back: there is no control, no
+     * confirm strip and no `release` op left to read it, and a test pins that
+     * the card's source never mentions the name. Bumping
+     * `TRIGGER_SCHEDULE_PROPOSAL_VIEW_VERSION` would have served neither
+     * direction — it is a `z.literal`, so a bump makes every stale client
+     * reject every card of every state.
+     *
+     * The emission is removable once no bundle predating this change can still
+     * be live; the schema entry goes with it.
+     */
+    canRelease: z.boolean().optional(),
     canCancel: z.boolean(),
-    /** "Release now for an administrator" — admin-only, by design. */
-    canRelease: z.boolean(),
     /** The install is durable but not yet visible to the scheduler: the outbox
      *  intent has not drained. The card says "arming…" rather than offering
      *  controls over a schedule that is still being installed. */
