@@ -66,6 +66,10 @@ type SetupCompletionWatcherProps = {
    * whichever entry path brought them here.
    */
   initialHitlContext?: HitlGateContext | null;
+  /** cinatra#2997 — the run's review slot, read server-side by the screen that
+   *  mounts this watcher and threaded straight through to the panel, so the run
+   *  page's FIRST paint of a run that already has a review draws that review. */
+  initialReviewGate?: { ref: string | null; awaiting: boolean } | null;
 };
 
 export function SetupCompletionWatcher({
@@ -86,6 +90,7 @@ export function SetupCompletionWatcher({
   triggerConfigured = false,
   initialStreamedText,
   initialHitlContext,
+  initialReviewGate,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
   const hasFiredRef = useRef(false);
@@ -224,6 +229,7 @@ export function SetupCompletionWatcher({
       inputParams={initialInputParams ?? undefined}
       initialStreamedText={initialStreamedText}
       initialHitlContext={initialHitlContext}
+      initialReviewGate={initialReviewGate}
     />
   );
 }

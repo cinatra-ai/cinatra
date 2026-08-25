@@ -30,11 +30,18 @@ import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
   LifecycleCardSurfaceProvider,
   runCardOwnsLifecycleCopy,
+  defaultRunReviewSlotReader,
   useComposerFocusStore,
   useComposerTarget,
   useLifecycleCardHost,
+  useRunReviewSlot,
+  type RunReviewSlot,
+  type RunReviewSlotReader,
 } from "./lifecycle-card-runtime";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
+// The review screen's PLACEHOLDER (cinatra#2997) — one of the review screen's
+// own states, so it lives with them rather than in this panel.
+import { ReviewGatePlaceholder } from "./review-gate-states";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
 // Shared gate-submit payload builders (cinatra#853) — the WayFlow
@@ -192,6 +199,30 @@ type AgenticRunPanelProps = {
    * off that mount instead — same authority, resolved once either way.
    */
   recommendationDecided?: boolean;
+  /**
+   * THE RUN'S REVIEW SLOT, AS THE SERVER ALREADY KNOWS IT (cinatra#2997).
+   *
+   * `ref` is the server-minted ticket for this run's own review gate, and
+   * `awaiting` says a produced output's review question is still open in the
+   * outbox. Both are read from the run's own rows by whoever mounts this panel —
+   * the run screen reads them server-side, the chat card gets them on its seed —
+   * so the FIRST paint of a run that already has a review draws that review,
+   * with no tick of placeholder in front of it.
+   *
+   * INITIAL ONLY, exactly like `initialHitlContext`: the panel's own read owns
+   * every later value, so a gate that opens after the mount still lands here and
+   * a resolved one is never pinned.
+   */
+  initialReviewGate?: RunReviewSlot | null;
+  /**
+   * HOW THIS SURFACE READS THE SLOT, when the run finishes while the card is on
+   * screen. A first-party, same-origin surface (the run page) passes none and
+   * the panel uses the default reader. The embedded widget passes its own: it
+   * holds a broker credential, `credentials: "omit"`, and must never send an
+   * ambient cookie — a run is somebody's work, and this same-origin route would
+   * otherwise answer as whoever else is signed in on that browser.
+   */
+  readReviewSlot?: RunReviewSlotReader;
 };
 
 export type ChatGateField = {
@@ -254,7 +285,13 @@ type RunPollResponse = {
   completedAt: string | null;
   messages: SerializedAgentRunMessage[];
   hitlContext?: HitlContext | null;
+  /** cinatra#2997 — the run's own review slot, as the seed route answers it.
+   *  Read by `useRunReviewSlot`'s reader rather than by this tick, so the two
+   *  panels share one answer; declared here because it is part of the shape
+   *  this response really has. */
+  reviewGate?: RunReviewSlot | null;
 };
+
 
 // statusBadgeVariant is shared with the orchestrator stepper — see
 // ./run-surface-status.
@@ -350,6 +387,8 @@ export function AgenticRunPanel({
   surface = "agent-detail",
   initialHitlContext,
   recommendationDecided,
+  initialReviewGate,
+  readReviewSlot,
 }: AgenticRunPanelProps) {
   // May this viewer reach `/configuration`? Drives the two config CTAs in the
   // error block below (cinatra#2701, epic #2699 S2).
@@ -384,6 +423,7 @@ export function AgenticRunPanel({
     INITIAL_HITL_DERIVATION_STATE,
   );
   const [isRechecking, setIsRechecking] = useState(false);
+
   const [isApproving, setIsApproving] = useState(false);
   // cinatra#2444 — bare-gate inline Reject. Tracks WHICH decision is in
   // flight so the Approve button doesn't flip to its pending label while a
@@ -1017,6 +1057,37 @@ export function AgenticRunPanel({
     return () => window.clearInterval(interval);
   }, [isPollLive, isPollPendingApproval, refetchDerivedContext]);
 
+  // -------------------------------------------------------------------------
+  // THE REVIEW SLOT (cinatra#2997) — kept current by the ONE shared reader both
+  // run panels use (`useRunReviewSlot`), so the run page's two panels cannot
+  // drift into two answers about the same run.
+  //
+  // WHICH CREDENTIAL IT ASKS WITH is the caller's to say. The run page is
+  // first-party and same-origin, so it takes the default reader. A surface that
+  // asks with something else — the embedded widget, which holds a broker
+  // credential and must never send an ambient cookie — passes its own, exactly
+  // as it already does for the seed.
+  // -------------------------------------------------------------------------
+  const fallbackSlotReader = useMemo(
+    () => defaultRunReviewSlotReader(runId),
+    [runId],
+  );
+  const {
+    slot: reviewSlot,
+    mayStillOpen: reviewMayStillOpen,
+  } = useRunReviewSlot({
+    status,
+    initial: initialReviewGate,
+    read: readReviewSlot ?? fallbackSlotReader,
+  });
+  // KNOWN COST, stated rather than hidden: for a run with no A2A task id this
+  // panel's own tick reads the SAME seed route on its own 2s schedule, so during
+  // the settle window the run is read on two schedules. The window is the
+  // seconds between `completed` and the gate row, the hook's cadence backs off
+  // and its belt ends it, and folding the slot into the tick would only cover
+  // ONE of the two transports (the A2A snapshot cannot carry it without putting
+  // the gate store on every route that reaches the A2A actions).
+
   // The recovery state's explicit re-check. Runs the same refetch the tick
   // runs, and additionally DROPS the just-submitted suppression: that guard
   // exists only to stop a stale gate flashing back for a moment after a submit,
@@ -1342,6 +1413,192 @@ export function AgenticRunPanel({
   const showCompletionCard = status === "completed";
   const completionAgentId = surface === "chat" ? undefined : agentId;
 
+  // The sticky field-assist panel is the SAME mount on every reading of this
+  // card, so it is built once here and rendered by whichever return runs. Its
+  // own `visible` rule is untouched: it is off in a conversation, off for a
+  // marked review gate, and off unless a gate with fields is open — which is
+  // why the two readings above render it without ever showing it.
+  const hitlConversationPanelNode: ReactNode = (
+    <>
+    {/* Sticky bottom-of-page AI-assist
+        conversation panel. Rendered via createPortal into <main> by the shared
+        component HitlConversationPanel. resetSignal={currentXRenderer}
+        preserves the renderer-change reset. */}
+    <HitlConversationPanel
+      portalTarget={portalTarget}
+      // cinatra#2566 (epic #2564 S2): a MARKED review gate is excluded. The
+      // field-assist panel exists to help a human fill a gate's FIELDS; a review
+      // gate has none — it has a target to read and one decision to take, and the
+      // card owns both. Leaving it visible also fed the gate's interrupt values,
+      // including its opaque card ref, into an LLM prompt (the assist route
+      // serializes `currentValue`), which is exactly the "a ref never reaches an
+      // LLM-visible payload" rule the wire slice established.
+      visible={
+        surface !== "chat" &&
+        isPendingApproval &&
+        !!effectiveHitlContext?.xRenderer &&
+        effectiveHitlContext.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID &&
+        !!templateId &&
+        !!portalTarget
+      }
+      conversation={conversation}
+      promptPending={promptPending}
+      storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}
+      onSubmit={handlePromptSubmit}
+      resetSignal={currentXRenderer}
+      // Opt in to paperclip uploads. The panel captures uploads, calls our
+      // onSubmit with the 2nd arg, we persist into pendingAttachmentsRef, and
+      // the active-gate submit paths wrap the `userResponse` text with the
+      // WayFlow envelope at Continue time. Setup gates intentionally omit
+      // `userResponse` because the setup-loop server path doesn't read it, so
+      // the paperclip is hidden for those gates to prevent attaching files that
+      // would never reach the flow.
+      enableAttachments={
+        !!effectiveHitlContext &&
+        !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
+      }
+    />
+    </>
+  );
+
+  // -------------------------------------------------------------------------
+  // THE SLOT (cinatra#2997) — the maintainer's reading of this card, verbatim:
+  //
+  //   "The 'Agentic Run Progress' card should basically just be a card (maybe
+  //    even an empty review screen) with a spinning icon which is a temporary
+  //    placeholder for the review screen. Once the agent is done and the output
+  //    generated, that 'Agentic Run Progress' card is being automatically
+  //    replaced with the 'Review requested' screen. On the run page, the same is
+  //    true."
+  //
+  // So this card has THREE readings and the run's own state picks between them:
+  //
+  //   WORKING     — the agent is doing the work and nothing is waiting on the
+  //                 reader. The card is the placeholder: the frame, the spinner,
+  //                 the empty review screen. No heading, no status word, no
+  //                 progress list, no transcript — the words describe a card
+  //                 that says nothing, and everything it used to say is a claim
+  //                 about progress the reader did not ask for.
+  //
+  //   REVIEW      — the work opened a review. The SAME box now holds the
+  //                 'Review requested' screen — the shipped `ReviewGateCard`,
+  //                 with its Comment / Reject / Approve floor — resolved from
+  //                 the run's own ref. No new turn, and nobody had to ask.
+  //
+  //   EVERYTHING  — anything else the run can be: paused on a gate that needs
+  //   ELSE          input (the setup form, the skills question), failed, waiting
+  //                 on a trigger, or finished with nothing to review. Those keep
+  //                 the section exactly as it was, heading included, because the
+  //                 request is about the review screen's placeholder and says
+  //                 nothing about them.
+  //
+  // THE ONE READING THE WORDS DO NOT COVER, stated rather than invented: a run
+  // that finishes and produced NOTHING REVIEWABLE. There is no review screen for
+  // the placeholder to be a placeholder FOR, so the completion notice stays —
+  // that is the third reading above, unchanged from what shipped.
+  //
+  // WHICH REF THE SCREEN IS ADDRESSED BY. A gate the run is PARKED on carries
+  // its own server-minted ref in the interrupt (`reviewGateCardRef`), and that
+  // one wins: it is the gate the run is actually blocked on. Otherwise the ref
+  // is the one the run's own rows answered with (`reviewSlot`), which is how a
+  // COMPLETED run — the async effects-gated shape, where the run never pauses
+  // and the sweeper opens the review after the fact — reaches its own review
+  // screen. Both are minted by the server from (runId, reviewTaskId) and the
+  // card re-authorizes itself against whichever it is handed.
+  //
+  // A GATE THAT NEEDS INPUT IS NOT A REVIEW, and it wins over both: a run parked
+  // on a setup field must draw that field, even if a review from an earlier step
+  // is on file.
+  const markedReviewGate =
+    isPendingApproval &&
+    effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID;
+  const blockedOnInputGate = isPendingApproval && !markedReviewGate;
+  //
+  // AND IT IS THE RUN'S CURRENT READING OR IT IS NOTHING. The slot's ref is
+  // deliberately NOT enough on its own: a run carries its gate for ever, so a
+  // run that was reviewed and then went back to work — a retry, a re-trigger, a
+  // failure, a schedule — would keep showing the settled review in place of the
+  // spinner, the error block with its Retry, or the scheduling step. The slot's
+  // ref draws only for a run that has FINISHED, which is the state the request
+  // is about ("once the agent is done and the output generated"); a parked
+  // marked gate draws from its own ref, whatever the rest of the run is doing.
+  //
+  // AND THE SLOT'S REVIEW IS WITHHELD ON THE SITE WIDGET, which is a containment
+  // rather than a rule about the widget. The card's host declaration here is
+  // `run_card`, a COOKIE-session host: the runtime refuses a broker credential
+  // on it, so a card mounted inside a widget frame resolves and decides with the
+  // frame's ambient cookie instead of the reader's own credential. That is a
+  // PRE-EXISTING property of the marked-gate mount at the base of this branch,
+  // and it is left exactly as it was; what this change must not do is carry the
+  // COMPLETED-run review down the same wrong wall for the first time. The widget
+  // keeps the terminal rendering it has today, and this branch's own evidence
+  // already records the widget's run panel as blocked pending that work.
+  const widgetHostedPanel = ambientLifecycleHost === "site_widget";
+  const inPlaceReviewRef = blockedOnInputGate
+    ? null
+    : markedReviewGate
+      ? reviewGateCardRef
+      : status === "completed" && !widgetHostedPanel
+        ? reviewSlot.ref
+        : null;
+  const runIsWorking =
+    inPlaceReviewRef === null &&
+    !blockedOnInputGate &&
+    (status === "queued" ||
+      status === "running" ||
+      (reviewMayStillOpen && !widgetHostedPanel));
+
+  // The recommendation card's ONE mount, lifted to a value so the slot's three
+  // readings share it instead of each carrying a copy (the one-card rule is
+  // about instances, and this is how there stays exactly one).
+  const recommendationCardNode: ReactNode = panelMountsRecommendationCard ? (
+    <LifecycleCardSurfaceProvider host="run_card">
+      <RecommendationHoldCard
+        runId={runId}
+        agentPackageName={agentPackageName ?? ""}
+        wireRef={holdWireRef}
+        onStateChange={setOwnRecommendation}
+      />
+    </LifecycleCardSurfaceProvider>
+  ) : null;
+
+  // The review screen's ONE mount, for the same reason. cinatra#2566's account
+  // of it is unchanged and still applies: the display-only REDIRECT card that
+  // used to sit here is deleted, this is the SAME `ReviewGateCard` the chat
+  // thread and the review page's gate region mount, and the reviewer decides in
+  // place. The composer descriptor for a marked gate is still comment-only
+  // (see the publish effect above), so this mount adds no second resume path.
+  const reviewScreenNode: ReactNode = inPlaceReviewRef ? (
+    <LifecycleCardSurfaceProvider host="run_card">
+      <ReviewGateCard
+        view={{
+          viewType: "artifact_review_gate",
+          schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+          ref: inPlaceReviewRef,
+        }}
+      />
+    </LifecycleCardSurfaceProvider>
+  ) : null;
+
+  if (reviewScreenNode !== null || runIsWorking) {
+    return (
+      <>
+        <section
+          className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
+          // Which of the two readings this box is drawing. Passive — it draws
+          // nothing and drives nothing — and it exists because the SWAP is the
+          // ruled property: a proof has to be able to see the placeholder go and
+          // the review screen arrive in the same slot.
+          data-run-review-slot={reviewScreenNode !== null ? "review" : "working"}
+        >
+          {recommendationCardNode}
+          {reviewScreenNode ?? <ReviewGatePlaceholder />}
+        </section>
+        {hitlConversationPanelNode}
+      </>
+    );
+  }
+
   return (
     <>
     <section className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4">
@@ -1382,52 +1639,22 @@ export function AgenticRunPanel({
           prop. The condition itself lives in `runCardOwnsLifecycleCopy` so this
           mount and the transcript's own test cannot drift into two copies of
           the same rule. */}
-      {panelMountsRecommendationCard ? (
-        <LifecycleCardSurfaceProvider host="run_card">
-          <RecommendationHoldCard
-            runId={runId}
-            agentPackageName={agentPackageName ?? ""}
-            wireRef={holdWireRef}
-            onStateChange={setOwnRecommendation}
-          />
-        </LifecycleCardSurfaceProvider>
-      ) : null}
+      {recommendationCardNode}
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (
-        // cinatra#2566 (epic #2564 S2) — a MARKED artifact-review gate. The
-        // display-only REDIRECT card that used to sit here ("continue on the
-        // review surface") is DELETED: the run card is one of §IX's first-party
-        // hosts, so it mounts the SAME `ReviewGateCard` the chat thread and the
-        // review page's gate region mount, and the reviewer decides in place.
-        //
-        // The card is addressed by the SERVER-MINTED opaque ref the gate carries
-        // (`lifecycleCardRef`). Without one — a gate emitted before this slice,
-        // or an instance whose auth secret rotated — there is nothing safe to
-        // address, so the panel renders nothing here rather than inventing a
-        // client-side handle to the gate. The run rail and the review page are
-        // unaffected in that case.
-        //
-        // The composer descriptor for this gate is COMMENT-ONLY, and only while
-        // the reader has this card bound (see the publish effect above). The
-        // panel's own submittable descriptor is still never published for a
-        // marked gate — that would be the second resume path cinatra#1796
-        // closed. What the composer gets is the card's comment action, so the
-        // ONLY way to resolve the gate remains the one decision module.
-        reviewGateCardRef ? (
-          <>
-            <Separator />
-            <LifecycleCardSurfaceProvider host="run_card">
-              <ReviewGateCard
-                view={{
-                  viewType: "artifact_review_gate",
-                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
-                  ref: reviewGateCardRef,
-                }}
-              />
-            </LifecycleCardSurfaceProvider>
-          </>
-        ) : null
+        // A MARKED artifact-review gate NEVER draws here any more (cinatra#2997).
+        // The review screen is the whole card now — it is mounted by the slot
+        // above, in the box the placeholder was standing in, which is what "that
+        // card is being automatically replaced with the 'Review requested'
+        // screen" means. Reaching this arm therefore means one thing only: a
+        // marked gate with NO server-minted ref to address (a gate emitted
+        // before the ref existed, or an instance whose secret rotated). There is
+        // nothing safe to address, so the card draws nothing rather than
+        // inventing a client-side handle to the gate — exactly the behaviour
+        // cinatra#2566 shipped for that case, and the run rail and the review
+        // page are unaffected by it.
+        null
       ) : isPendingApproval && effectiveHitlContext?.xRenderer ? (
         // Inline HITL bubble.
         <>
@@ -1877,44 +2104,7 @@ export function AgenticRunPanel({
         )
       )}
     </section>
-    {/* Sticky bottom-of-page AI-assist
-        conversation panel. Rendered via createPortal into <main> by the shared
-        component HitlConversationPanel. resetSignal={currentXRenderer}
-        preserves the renderer-change reset. */}
-    <HitlConversationPanel
-      portalTarget={portalTarget}
-      // cinatra#2566 (epic #2564 S2): a MARKED review gate is excluded. The
-      // field-assist panel exists to help a human fill a gate's FIELDS; a review
-      // gate has none — it has a target to read and one decision to take, and the
-      // card owns both. Leaving it visible also fed the gate's interrupt values,
-      // including its opaque card ref, into an LLM prompt (the assist route
-      // serializes `currentValue`), which is exactly the "a ref never reaches an
-      // LLM-visible payload" rule the wire slice established.
-      visible={
-        surface !== "chat" &&
-        isPendingApproval &&
-        !!effectiveHitlContext?.xRenderer &&
-        effectiveHitlContext.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID &&
-        !!templateId &&
-        !!portalTarget
-      }
-      conversation={conversation}
-      promptPending={promptPending}
-      storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}
-      onSubmit={handlePromptSubmit}
-      resetSignal={currentXRenderer}
-      // Opt in to paperclip uploads. The panel captures uploads, calls our
-      // onSubmit with the 2nd arg, we persist into pendingAttachmentsRef, and
-      // the active-gate submit paths wrap the `userResponse` text with the
-      // WayFlow envelope at Continue time. Setup gates intentionally omit
-      // `userResponse` because the setup-loop server path doesn't read it, so
-      // the paperclip is hidden for those gates to prevent attaching files that
-      // would never reach the flow.
-      enableAttachments={
-        !!effectiveHitlContext &&
-        !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
-      }
-    />
+    {hitlConversationPanelNode}
     </>
   );
 }

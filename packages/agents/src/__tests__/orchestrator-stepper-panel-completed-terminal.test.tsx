@@ -23,7 +23,7 @@
  *     src/__tests__/orchestrator-stepper-panel-completed-terminal.test.tsx
  */
 import React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("lucide-react", () => {
@@ -110,8 +110,28 @@ const readRunOutputEvidenceMock = vi.fn(
   },
 );
 
+// cinatra#2997 — the run card holds its placeholder for ONE look before drawing
+// a terminal rendering, so that a completion notice is never painted in front of
+// a review that is about to open. These cases are about a run with NO review, so
+// the look is answered with exactly that: the run's own seed route, saying the
+// slot is empty. Without it the answer arrives as a transport failure instead,
+// which is the same drawing by a slower route and makes the timing of these
+// assertions depend on how loaded the machine is.
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      new Response(JSON.stringify({ reviewGate: { ref: null, awaiting: false } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ),
+  );
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -141,10 +161,15 @@ describe("OrchestratorStepperPanel — terminal completed stage card (cinatra#24
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     render(<OrchestratorStepperPanel {...baseProps()} />);
 
+    // WAIT FOR THE CARD'S OWN COPY, not just its root. The card mounts with its
+    // output evidence still in flight and names the outcome once it lands, and
+    // since cinatra#2997 the card itself mounts one look later — so asserting
+    // the copy the instant the root appears is a race this test used to win by
+    // accident.
     await waitFor(() =>
-      expect(document.querySelector("[data-run-completion]")).not.toBeNull(),
+      expect(screen.queryByText(/run finished without output/i)).not.toBeNull(),
     );
-    expect(screen.queryByText(/run finished without output/i)).not.toBeNull();
+    expect(document.querySelector("[data-run-completion]")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /start new run/i })).not.toBeNull();
   });
 

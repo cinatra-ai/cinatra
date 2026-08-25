@@ -760,3 +760,217 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
 
   return resolved !== null && resolved.identity === identity ? resolved.envelope : null;
 }
+
+// ---------------------------------------------------------------------------
+// THE RUN'S REVIEW SLOT (cinatra#2997) — one reader for both run panels.
+//
+// The maintainer's request for changes on pull request 2890, verbatim:
+//
+//   "The 'Agentic Run Progress' card should basically just be a card (maybe even
+//    an empty review screen) with a spinning icon which is a temporary
+//    placeholder for the review screen. Once the agent is done and the output
+//    generated, that 'Agentic Run Progress' card is being automatically replaced
+//    with the 'Review requested' screen. On the run page, the same is true."
+//
+// AUTOMATICALLY is the load-bearing word: the replacement may not wait for a
+// model to mention the review, and it may not wait for the person to ask for it
+// in a new turn. So the surface goes and looks — and BOTH run panels do, which
+// is why the looking lives here rather than inside either of them.
+//
+// THE RUN SHAPE THIS IS FOR. The reviewed run does not park: it produces its
+// artifact, reaches `completed`, and the shipped sweeper opens the review gate
+// on the produced output a moment later. There is therefore a real window in
+// which the run is done and its review does not exist yet, and this hook is what
+// holds the placeholder across it.
+// ---------------------------------------------------------------------------
+
+/** The run's review slot: the server-minted ticket for its review screen, and
+ *  whether a produced output's review question is still open. */
+export type RunReviewSlot = { ref: string | null; awaiting: boolean };
+
+/**
+ * Reads the slot with the surface's OWN credential, and with the caller's abort
+ * signal so a look that outlives its deadline is really cancelled rather than
+ * merely ignored. A surface that cannot say who is asking answers `null` and
+ * nothing is read.
+ */
+export type RunReviewSlotReader = (
+  signal: AbortSignal,
+) => Promise<RunReviewSlot | null>;
+
+export const EMPTY_RUN_REVIEW_SLOT: RunReviewSlot = { ref: null, awaiting: false };
+
+/**
+ * How often the slot is re-read while it is waiting for a gate, how many times,
+ * and how long one look may take.
+ *
+ * THE CADENCE BACKS OFF because the two cases have different shapes. The normal
+ * one is a sweeper a second or two behind the run, and it wants a brisk look.
+ * The pathological one is a sweeper that is not running at all, where a
+ * two-second poll for minutes is just load — so the interval widens, and the
+ * COUNT is the belt that ends it.
+ *
+ * TWO BUDGETS, NOT ONE, and they answer different questions. `SLOT_READ_LIMIT`
+ * is how long the surface keeps LOOKING; `SLOT_HOLD_LIMIT` is how long it keeps
+ * a placeholder up while it has never had an answer at all. They differ because
+ * a dead transport must not hold a spinner in front of a finished run for
+ * minutes — the surface falls back to the run's own terminal rendering after a
+ * few seconds of silence, and the reader goes on looking behind it, so a late
+ * answer still swaps the review in.
+ *
+ * The per-look DEADLINE exists for the same reason as the belt. The count only
+ * advances when a look finishes, so a request that never settles would never be
+ * counted; the deadline aborts it, which both frees the request and lets the
+ * count move.
+ */
+const SLOT_READ_LIMIT = 30;
+const SLOT_HOLD_LIMIT = 5;
+const SLOT_READ_TIMEOUT_MS = 8000;
+
+function slotReadDelay(reads: number): number {
+  if (reads < 5) return 2000;
+  if (reads < 15) return 5000;
+  return 10_000;
+}
+
+/** Parse the seed route's answer into a slot. Shared by every reader so a
+ *  surface cannot invent a shape the route does not send. */
+export function parseRunReviewSlot(data: unknown): RunReviewSlot | null {
+  const slot = (data as { reviewGate?: { ref?: unknown; awaiting?: unknown } })
+    ?.reviewGate;
+  if (!slot) return null;
+  return {
+    ref: typeof slot.ref === "string" && slot.ref.length > 0 ? slot.ref : null,
+    awaiting: Boolean(slot.awaiting),
+  };
+}
+
+/**
+ * The DEFAULT reader: the run's own seed route, same-origin. Used by every
+ * first-party surface (the run page). A surface that asks with something other
+ * than a cookie — the embedded widget, which holds a broker credential and must
+ * never send an ambient cookie — passes its own reader instead.
+ */
+export function defaultRunReviewSlotReader(runId: string): RunReviewSlotReader {
+  return async (signal) => {
+    const response = await fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, {
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) return null;
+    return parseRunReviewSlot(await response.json());
+  };
+}
+
+/**
+ * Keep a run's review slot current, for the surface that draws it.
+ *
+ * `initial` is the answer the MOUNT was handed (the run screen reads it
+ * server-side; the chat card gets it on its seed), so a run that already has a
+ * review draws it on the first paint with no tick of placeholder in front.
+ *
+ * FRESHNESS IS KEYED TO THE RUN'S STATUS, AND IT IS ADJUSTED DURING RENDER. An
+ * answer read while the run was `running` says nothing about the run once it is
+ * `completed`, and the caller has to see it go stale IN THE SAME FRAME the
+ * status changes — an effect runs after that frame, which is long enough to
+ * paint one frame of a completion notice in front of a review that is about to
+ * open. So this uses React's own "adjusting state when a prop changes" shape: a
+ * comparison against the last status this hook saw, resolved during render.
+ *
+ * AND THE ANSWER IS DROPPED, not just marked stale. A run can complete, be
+ * retried, and complete again; the ticket from the first completion is not the
+ * second completion's review, and keeping it would draw the previous review's
+ * settled card over a run that is about to open a new one.
+ */
+export function useRunReviewSlot({
+  status,
+  initial,
+  read,
+}: {
+  status: string;
+  initial?: RunReviewSlot | null;
+  read: RunReviewSlotReader;
+}): { slot: RunReviewSlot; answered: boolean; mayStillOpen: boolean } {
+  const [seenStatus, setSeenStatus] = useState(status);
+  const [slot, setSlot] = useState<RunReviewSlot>(initial ?? EMPTY_RUN_REVIEW_SLOT);
+  const [probe, setProbe] = useState<{ answered: boolean; reads: number }>({
+    answered: initial != null,
+    reads: 0,
+  });
+  if (seenStatus !== status) {
+    setSeenStatus(status);
+    setSlot(EMPTY_RUN_REVIEW_SLOT);
+    setProbe({ answered: false, reads: 0 });
+  }
+  const answered = probe.answered;
+
+  useEffect(() => {
+    // Only after the work is done. While the run is still working there is
+    // nothing to find, and the placeholder is already the right drawing.
+    if (status !== "completed") return;
+    // Answered under this status, with nothing further owed.
+    if (answered && !slot.awaiting) return;
+    if (probe.reads >= SLOT_READ_LIMIT) return;
+    let cancelled = false;
+    const timer = window.setTimeout(
+      () => {
+        void (async () => {
+          const abort = new AbortController();
+          const deadline = window.setTimeout(() => abort.abort(), SLOT_READ_TIMEOUT_MS);
+          let landed = false;
+          try {
+            const next = await read(abort.signal);
+            if (cancelled) return;
+            if (next) {
+              setSlot(next);
+              landed = true;
+            }
+          } catch {
+            // Transport failure or the deadline: `landed` stays false, so this
+            // look does not count as an ANSWER — the loop retries on the backoff
+            // until the belt ends it, and the surface falls back to the run's own
+            // terminal rendering while it does.
+          } finally {
+            window.clearTimeout(deadline);
+            if (!cancelled) {
+              setProbe((prev) => ({
+                answered: prev.answered || landed,
+                reads: prev.reads + 1,
+              }));
+            }
+          }
+        })();
+      },
+      // The first look under a new status is immediate — the gate is usually
+      // already open by the time the run reports done.
+      probe.reads === 0 ? 0 : slotReadDelay(probe.reads),
+    );
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [status, slot.awaiting, answered, probe.reads, read]);
+
+  return {
+    slot,
+    answered,
+    // The window between "the run reports done" and "its review exists": the
+    // outbox still holds an unanswered review question, or this surface has not
+    // heard back yet under the current status.
+    //
+    // THE UNHEARD WINDOW IS SHORT, AND ITS LENGTH IS WHAT IS KNOWN. Every
+    // completed mount holds it for its FIRST look, which is immediate — that is
+    // what stops a completion notice being painted in front of a review nobody
+    // has asked about yet, and it costs one request. A mount that ALSO arrived
+    // with a slot has been told a review is expected here, so it holds through a
+    // few transport failures rather than falling back on the first one. Neither
+    // holds indefinitely: past the budget the surface draws the run's own
+    // terminal rendering and the reader goes on looking behind it, so a late
+    // answer still swaps the review in.
+    mayStillOpen:
+      status === "completed" &&
+      probe.reads < SLOT_READ_LIMIT &&
+      (slot.awaiting ||
+        (!answered && probe.reads < (initial != null ? SLOT_HOLD_LIMIT : 1))),
+  };
+}

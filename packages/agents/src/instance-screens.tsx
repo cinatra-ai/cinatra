@@ -18,7 +18,11 @@ import { randomUUID } from "node:crypto";
 import { resolveEffectivePolicy, buildScopeReason, resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "./run-stepper-steps";
-import { listReviewGatesForRun, readVerificationRecordsForGates } from "./artifact-review-gate-store";
+import {
+  listReviewGatesForRun,
+  readRunReviewSlot,
+  readVerificationRecordsForGates,
+} from "./artifact-review-gate-store";
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
@@ -798,6 +802,33 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           (entry): entry is { reviewTaskId: string; ref: string } => entry.ref !== null,
         )
     : [];
+  // ── THE RUN'S REVIEW SLOT, ON THE RUN PAGE (cinatra#2997) ────────────────
+  //
+  // "On the run page, the same is true": the run panel below is a placeholder
+  // for the review screen while the agent works, and becomes that screen when
+  // the work opens one. So this screen answers the question server-side and
+  // hands the panel the answer, rather than making the reader watch a spinner
+  // for one client read on a page that already knows.
+  //
+  // BOTH ANSWERS COME FROM THE ONE READER, and the rail's own gate list is NOT
+  // used as a shortcut for either. A run can owe a SECOND review — its first
+  // gate decided, another artifact produced, its outbox row still pending — and
+  // deriving `awaiting` from "does a gate exist" would answer `false` for
+  // exactly that run, so the panel would stop looking and sit on the settled
+  // card while the next review opened behind it. One extra run-scoped read is
+  // the price of an answer that cannot be wrong in that direction.
+  const runReviewSlot = run ? await readRunReviewSlot(run.id) : null;
+  const initialReviewGate = run
+    ? {
+        ref: runReviewSlot?.reviewTaskId
+          ? encodeLifecycleGateRef({
+              runId: run.id,
+              reviewTaskId: runReviewSlot.reviewTaskId,
+            })
+          : null,
+        awaiting: Boolean(runReviewSlot?.awaiting),
+      }
+    : null;
   // cinatra#2739 — the merged rail's NON-SPINE entries: review gates, their
   // verifications, lifecycle policy decisions, and any surplus stepResult row
   // past the policy spine. On the stepper branch the panel's own LIVE column is
@@ -1148,6 +1179,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     templateId={template.id}
                     templateName={template.name}
                     submissionMap={submissionMap}
+                    initialReviewGate={initialReviewGate}
                     policySteps={policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string; firesRendererGate?: boolean }>}
                     // cinatra#2739: this panel's column is THE step rail on this
                     // branch, so the merged rail's trailing rows — review gates,
@@ -1179,6 +1211,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     triggerConfigured={trigger !== null}
                     initialStreamedText={run.streamedText ?? ""}
                     initialHitlContext={initialHitlContext}
+                    initialReviewGate={initialReviewGate}
                   />
                 )
               )}
