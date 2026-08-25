@@ -239,3 +239,19 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Claude Code (claude-fable-5)
 Correction-for: 3fa0807e4b493611f6fc1aa09fbdd07bae4147e7
 ```
+
+---
+
+## Correction for `c2eb50a75a619d61f507c17cd71617f6a99fc1af`
+
+```
+correction: truthful-attribution record for c2eb50a75
+
+The record on c2eb50a75 ("feat(lifecycle): the schedule card through its states in the chat and on the run page — S9d rework (#2939)") is true in every line it asserts, and the gate's single finding on it is the tree-identity bridge: tree(c2eb50a75) = 13103a84945772f951470e65a7bfe3fc291b397c differs from tree(b0a9fe9d79) = 849873c8a2704cdb0ddbcca5bc0b1f970046a085, the reviewed head. PR #2939 was approved by @groganz at b0a9fe9d790f5c6bfda84743513b4af762b28c56 on 2026-08-25T04:34:38Z — that login's latest review, tier=maintainer, non-self (the PR author is @groganz-bot). The branch was ALREADY behind main at that moment and was never brought up to date: main had advanced by 3fa0807e4b493611f6fc1aa09fbdd07bae4147e7 (the squash of #2912) at 2026-08-25T01:12:02Z, three hours before the approval, and 3fa0807e4 is not an ancestor of b0a9fe9d79. The coordinator loop then performed the merge at 2026-08-25T05:00:07Z under the maintainer's login (GitHub records merged_by @groganz), onto that moved tip; main's protection does not require a branch to be up to date (strict=false), so no up-to-date check ran and the branch was not refreshed first. That intervening squash is the SOLE difference between the reviewed tree and the landed tree: the diff b0a9fe9d79..c2eb50a75 is byte-identical to the diff 95f3dd651..3fa0807e4 (9 files, 788 insertions, 11 deletions; stable patch-id db76c31cf0d29a53a1099f699217403ff56f4d8d on both sides). The landed change IS the reviewed change: the engine's content bridge re-derives fingerprint 98b4cbef5f9507551e9930576825c5170fa0eba2eec0e0120a93d5a48642dee4 on both sides wherever b0a9fe9d79 resolves — and on the origin that commit is reachable only through refs/pull/2939/head, which the gate's checkout does not fetch, so the bridge cannot decide and falls through to the tree finding. This correction therefore restates the record truthfully; it does not by itself clear the finding, which is a fact about c2eb50a75's context, not about its record. The merged change itself is untouched — this corrects the RECORD only. #2939 is high-risk under the live suite (src/lib/trigger-schedule-proposal-token.ts matches src/lib/**/*token*.ts), so the corrected record carries the maintainer human arm exactly as it was performed on #2939; this correction is submitted for the maintainer's approval, and that approval on the correction PR is the human ratification of this record.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Claude Code (claude-fable-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: c2eb50a75a619d61f507c17cd71617f6a99fc1af
+```
