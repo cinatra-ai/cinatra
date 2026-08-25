@@ -18,7 +18,7 @@
 # MULTI-ARCH OCI INDEX digest (amd64 + arm64 + …), so the same reference builds
 # on an arm64 laptop and an amd64 CI runner. Re-resolve at bump time with:
 #   docker buildx imagetools inspect drupal:11-apache
-FROM drupal:11-apache@sha256:b9d4e9efbe1cf15e84573871c91d2b717c55697c822298c3c86e224ed198b062
+FROM drupal:11-apache@sha256:19d937805c0ad5e5dde5750237633b5da5d367779ebb9b694b53a4e1cdf79ef5
 
 # ---------------------------------------------------------------------------
 # LAYOUT BRIDGE — /drupal is the Cinatra-side contract path.
