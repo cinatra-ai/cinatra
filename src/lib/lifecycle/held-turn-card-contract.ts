@@ -453,13 +453,23 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     owner: "ScheduleProposalCard",
     ownerAnchors: Object.freeze([`[data-lifecycle-card="trigger_schedule_proposal"]`]),
     ruledRootAnchors: rootAnchorsFor("trigger_schedule_proposal"),
-    // §VI's two acts. NAMED BEFORE THEY EXIST, on purpose: the row is an owed
-    // ratchet until S9d draws the card, and an obligation with no named target
-    // is a row that can be struck against nothing.
-    decisionControls: Object.freeze([
-      '[data-action="adjust-schedule-proposal"]',
-      '[data-action="confirm-schedule-proposal"]',
-    ]),
+    // §VI's acts, as the PLAN rules them (cinatra#2788). The row named an
+    // `adjust-schedule-proposal` control before either existed; plan (A) §7.2
+    // then ruled it out in as many words — "The option rows are editable as they
+    // stand: until you confirm, you change the proposal directly on the card —
+    // the rows are never locked behind a separate step. The floor is
+    // **Confirm**" — so the control is gone and the row names what ships.
+    //
+    // ONE MEMBER, and `save-schedule-changes` is deliberately NOT the second.
+    // This list is read as "every one of these renders inside the card's own
+    // root", on the card the chat transcript actually draws — and Confirm and
+    // Save changes are PHASE-EXCLUSIVE by the plan's own design: Confirm is the
+    // undecided floor (proposal and expired), Save changes is the armed card's,
+    // and no reading of §VI ever draws both. Listing the second would demand a
+    // card that cannot exist. Save changes is pinned where it belongs instead:
+    // in the one-card gate's ratified anchor set for this kind, and in the card
+    // suite's own settled cases.
+    decisionControls: Object.freeze(['[data-action="confirm-schedule-proposal"]']),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
@@ -646,16 +656,21 @@ export function chatCarriageRootAnchorsFor(
 }
 
 /**
- * Kinds whose chat_thread OWNER is not drawn on main yet, and why each is here:
+ * Kinds whose chat_thread OWNER is not drawn on main yet — and the list is now
+ * EMPTY, which is a state this ratchet was built to reach rather than a gap in
+ * it. Both entries were struck by the slices that drew their cards:
  *
- *   · `trigger_schedule_proposal` — the registry still dispatches it to the S1
- *     shell; S9d (#2788) draws `ScheduleProposalCard` and strikes it.
+ *   · `verification_summary` — STRUCK by S9e (cinatra#2789); the registry
+ *     dispatches it to `VerificationSummaryCard`.
+ *   · `trigger_schedule_proposal` — STRUCK by S9d (cinatra#2788); the registry
+ *     dispatches it to `ScheduleProposalCard`.
  *
- * `verification_summary` WAS here for the same reason and is STRUCK by S9e
- * (cinatra#2789): the registry now dispatches it to `VerificationSummaryCard`,
- * so the shell no longer owns its chat root. The list is a red done-check in
- * both directions — leaving the row standing after the owner lands turns the
- * matrix red, which is exactly how the seam was found.
+ * The list stays, empty, because it is a red done-check in BOTH directions:
+ * leaving a row standing after its owner lands turns the matrix red (which is
+ * how this seam was found), and adding a row back without a shell-owned kind to
+ * justify it is equally visible. An empty list is the honest reading of a tree
+ * where no chat root is owned by the S1 shell any more — not a reason to delete
+ * the ratchet.
  *
  * `recommendation_hold` is deliberately NOT repeated here. Its chat mount is
  * owed for its own reason (S9b, #2786) and already ratcheted by
@@ -663,9 +678,7 @@ export function chatCarriageRootAnchorsFor(
  * lands the mount strikes ONE row and both ratchets move together. Two lists
  * naming the same kind is exactly how a struck ratchet goes stale somewhere else.
  */
-export const SHELL_OWNED_CHAT_KINDS: readonly LifecycleCardKind[] = Object.freeze([
-  "trigger_schedule_proposal",
-]);
+export const SHELL_OWNED_CHAT_KINDS: readonly LifecycleCardKind[] = Object.freeze([]);
 
 /**
  * The whole owed set of the matrix — a RED DONE-CHECK, never a waiver. The

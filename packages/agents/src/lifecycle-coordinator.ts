@@ -192,7 +192,10 @@ export const RUN_PRODUCERS: readonly RunProducer[] = Object.freeze([
   },
   {
     key: "release_now_recurring_copy",
-    module: "packages/agents/src/run-actions.ts",
+    // In the trigger SERVICE, not the server action: cinatra#2788 moved the
+    // whole Release-now body there so a surface whose identity does not travel
+    // by cookie reaches the same path, and this producer moved with it.
+    module: "packages/agents/src/trigger-service.ts",
     routed: true,
     tracking: null,
     what: "Release now on a recurring schedule — one copy, started by a person instead of by the clock",

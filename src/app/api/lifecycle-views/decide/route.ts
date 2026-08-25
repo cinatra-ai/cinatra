@@ -3,8 +3,10 @@ import "server-only";
 import { z } from "zod";
 
 import { LIFECYCLE_VIEW_REF_MAX_LENGTH } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { proposedScheduleSchema } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 import { enforceReviewRunAccess } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import { decideTriggerScheduleProposal } from "@/lib/lifecycle/trigger-schedule-proposal-card";
 import {
   MAX_SUGGESTION_ID_CHARS,
   MAX_SUGGESTION_PARTITION_IDS,
@@ -94,8 +96,14 @@ import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports"
 // embed iframe and an ambient cookie would RECORD A DECISION as somebody else.
 // ---------------------------------------------------------------------------
 
-const requestSchema = z
+const reviewRequestSchema = z
   .object({
+    /** The kind this body decides. OPTIONAL and defaulted for the review card
+     *  (cinatra#2788, epic #2784 S9d): the shipped card posts no discriminant,
+     *  and a decision endpoint is the last place to break a client that already
+     *  works. A body that names the kind is checked against it; one that does
+     *  not is the review shape, which is what it has always been. */
+    kind: z.literal("artifact_review_gate").optional(),
     ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
     disposition: z.enum(["approve", "reject", "comment"]),
     // The rationale (§IV) — optional on approve, expected on reject, and the
@@ -117,6 +125,59 @@ const requestSchema = z
       .optional(),
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+// §VI's decisions, on the SAME endpoint (cinatra#2788, epic #2784 S9d).
+//
+// THE SCHEDULE CARD DOES NOT GET AN ENDPOINT OF ITS OWN, for exactly the reason
+// this route's own header gives for the widget: "it gets an auth BRANCH on the
+// endpoint that already exists". A second decision route would need a second
+// widget AUDIENCE, which no already-minted `cwu_` carries — so every widget
+// session that signed in before it existed would find §VI's floor dead, and the
+// only fix would be a scope vocabulary nobody re-checks. One endpoint, one
+// audience (`lifecycle.decide`), one consent class: "this decision changes org
+// state". Which OPERATION a body asks for is the discriminant below, and each
+// one is handed to the canonical path that already owns it — this route
+// implements no scheduling logic of its own.
+//
+// FIVE OPERATIONS, ALL RE-AUTHORIZED SERVER-SIDE:
+//
+//   confirm — `confirmTriggerScheduleProposal`, the one transaction that spends
+//             the proposal and creates the run. The token is re-verified against
+//             the LIVE actor there, so a ref replayed by anyone else is refused
+//             by the same sentence a forged one gets.
+//   adjust  — `adjustTriggerSchedule`, i.e. RE-PROPOSE. It writes nothing. The
+//             template is taken from the VERIFIED token, never from the body:
+//             a caller cannot re-point somebody else's proposal at another agent.
+//   save    — `updateRunTriggerScheduleForActor`, plan (A) §7.2's "Save changes,
+//             which re-arms the trigger". It re-verifies the actor, refuses a
+//             released trigger and a one-off that has already fired, and hands
+//             the rest to the ONE `setRunTriggerForActor` — so a recurring change
+//             cancels the prior scheduler and takes effect on future ticks only.
+//   cancel  — `deleteRunTriggerForActor` (owner-or-admin), the canonical path.
+//   release — `releaseTriggerNowForActor` (admin + install-scope dispatch
+//             authority), the canonical path.
+//
+// THE CLIENT NEVER NAMES A RUN. `save`, `cancel` and `release` act on the run the REF
+// resolves to, server-side, through the same resolver that drew the card. A body
+// carrying a run id would be a way to operate a trigger the card never showed.
+// ---------------------------------------------------------------------------
+
+/** The re-proposed selections — §VI's option rows, and no cron field. */
+const scheduleRequestSchema = z
+  .object({
+    kind: z.literal("trigger_schedule_proposal"),
+    ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
+    op: z.enum(["confirm", "adjust", "save", "cancel", "release"]),
+    /** Present for `adjust` (re-propose) and `save` (re-arm an already-armed
+     *  trigger — plan (A) §7.2's "Save changes"). Validated as §VI's closed
+     *  selection vocabulary, which HAS no cron field, so a raw expression
+     *  cannot enter through this door however it is spelled. */
+    schedule: proposedScheduleSchema.optional(),
+  })
+  .strict();
+
+const requestSchema = z.union([reviewRequestSchema, scheduleRequestSchema]);
 
 /** The one refusal a caller ever sees for "not yours" / "not there". */
 const UNIFORM_REFUSAL = {
@@ -190,6 +251,26 @@ export async function POST(request: Request): Promise<Response> {
   const parsed = requestSchema.safeParse(raw);
   if (!parsed.success) {
     return Response.json({ error: "Invalid lifecycle decision request" }, { status: 400 });
+  }
+
+  // §VI's operations branch here — BEFORE the gate-ref decode, because a
+  // schedule ref is not a gate ref and decoding it as one would answer the
+  // uniform review refusal for a body that never asked a review question.
+  if (parsed.data.kind === "trigger_schedule_proposal") {
+    const outcome = await decideTriggerScheduleProposal({
+      ref: parsed.data.ref,
+      op: parsed.data.op,
+      schedule: parsed.data.schedule,
+      // A principal with no attributable user cannot hold or settle a proposal.
+      userId: actorCtx.actor.userId ?? "",
+      orgId: actorCtx.orgId,
+      // The role the ACTOR was resolved with. `releaseTriggerNowForActor`
+      // re-checks it, and then re-checks the install-scope dispatch authority
+      // on top — this route asserts nothing about admin standing itself.
+      role:
+        actorCtx.roleHints?.platformRole === "platform_admin" ? "admin" : null,
+    });
+    return Response.json({ outcome }, { headers: { "Cache-Control": "no-store" } });
   }
 
   const payload = decodeLifecycleGateRef(parsed.data.ref);

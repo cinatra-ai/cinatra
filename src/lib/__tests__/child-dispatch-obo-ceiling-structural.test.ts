@@ -105,6 +105,14 @@ const DISPATCH_SITES: Record<string, { role: "child-dispatch" | "top-level"; why
     role: "top-level",
     why: "the run page's three run-starts — a person pressing Run, with no parent run to compose from.",
   },
+  "packages/agents/src/trigger-service.ts": {
+    role: "top-level",
+    why:
+      "release now on a recurring schedule starts one copy — cinatra#2788 moved that launch " +
+      "here out of run-actions.ts so a surface whose identity does not travel by cookie reaches " +
+      "the same path. Unchanged in kind: a person asks for the copy the clock would have made, " +
+      "and it is started the way a tick starts one, with no parent run to compose from.",
+  },
   "packages/agents/src/trigger-schedule-proposal-service.ts": {
     role: "top-level",
     why: "Confirm on a schedule stated in a conversation — a person's own run, no parent.",

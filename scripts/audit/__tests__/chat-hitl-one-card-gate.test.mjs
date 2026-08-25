@@ -173,7 +173,7 @@ describe("R4 — one registry row per data-part kind", () => {
       "  artifact_review_gate: ReviewGateCard,",
       "  artifact_review_gate: OtherCard,",
       "  verification_summary: LifecycleCard,",
-      "  trigger_schedule_proposal: LifecycleCard,",
+      "  trigger_schedule_proposal: ScheduleProposalCard,",
       "};",
     ].join("\n");
     const hits = scanRegistry(src);
@@ -202,7 +202,7 @@ describe("R4 — one registry row per data-part kind", () => {
         "const M = {",
         "  artifact_review_gate: ReviewGateCard,",
         "  verification_summary: LifecycleCard,",
-        "  trigger_schedule_proposal: LifecycleCard,",
+        "  trigger_schedule_proposal: ScheduleProposalCard,",
         "};",
       ].join("\n"),
     );
@@ -219,7 +219,7 @@ describe("R4 — one registry row per data-part kind", () => {
         "const M = {",
         "  artifact_review_gate: ReviewGateCard,",
         "  verification_summary: pick(kind),",
-        "  trigger_schedule_proposal: LifecycleCard,",
+        "  trigger_schedule_proposal: ScheduleProposalCard,",
         "};",
       ].join("\n"),
     );
@@ -253,7 +253,7 @@ describe("R4 — one registry row per data-part kind", () => {
           "const M = {",
           "  artifact_review_gate: ReviewGateCard,",
           `  verification_summary: ${rhs},`,
-          "  trigger_schedule_proposal: LifecycleCard,",
+          "  trigger_schedule_proposal: ScheduleProposalCard,",
           "};",
         ].join("\n"),
       );
@@ -268,7 +268,7 @@ describe("R4 — one registry row per data-part kind", () => {
         "const M = {",
         "  artifact_review_gate: ReviewGateCard,",
         `  verification_summary: ${CARD_OWNERS.verification_summary.component},`,
-        "  trigger_schedule_proposal: LifecycleCard,",
+        "  trigger_schedule_proposal: ScheduleProposalCard,",
         "};",
       ].join("\n"),
     );
@@ -429,9 +429,9 @@ const PROPER_CONTRACT = {
   body: { validator: "useCardState", params: ["view"], fields: ["state", "title", "actions"] },
   anchors: ["proper-card", "proper-floor", '[data-lifecycle-card="fixture"]'],
   hosts: {
-    chat_thread: [{ module: "packages/fixture/registry.tsx", adapter: "registry", surface: "production", why: "the fixture transcript dispatch, named here" }],
+    chat_thread: [{ module: "packages/fixture/registry.tsx", adapter: "registry", region: "transcript", surface: "production", why: "the fixture transcript dispatch, named here" }],
     site_widget: null,
-    run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "the fixture run card, named here so a second one is visible" }],
+    run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", region: "run_panel", surface: "production", why: "the fixture run card, named here so a second one is visible" }],
     page_gate_region: null,
   },
   hostGap: "The fixture declares two hosts only; the other two are out of the fixture's scope on purpose.",
@@ -444,8 +444,8 @@ const TWO_ADAPTER_CONTRACT = {
   hosts: {
     ...PROPER_CONTRACT.hosts,
     run_card: [
-      { module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "the leaf-run panel branch of this host" },
-      { module: "packages/fixture/screen.tsx", adapter: "mount", surface: "production", why: "the stepped-run screen branch of the same host" },
+      { module: "packages/fixture/panel.tsx", adapter: "mount", region: "run_panel", surface: "production", why: "the leaf-run panel branch of this host" },
+      { module: "packages/fixture/screen.tsx", adapter: "mount", region: "run_panel", surface: "production", why: "the stepped-run screen branch of the same host" },
     ],
   },
   exclusions: {
@@ -839,7 +839,7 @@ describe("R8 — one declared mount set per host", () => {
         ...PROPER_CONTRACT.hosts,
         run_card: [
           ...PROPER_CONTRACT.hosts.run_card,
-          { module: "packages/fixture/dev-preview.tsx", adapter: "mount", surface: "dev_preview", why: "the dev preview row, which draws only inside an opened preview" },
+          { module: "packages/fixture/dev-preview.tsx", adapter: "mount", region: "run_panel", surface: "dev_preview", why: "the dev preview row, which draws only inside an opened preview" },
         ],
       },
     };
@@ -873,7 +873,7 @@ describe("R8 — one declared mount set per host", () => {
       ...PROPER_CONTRACT,
       hosts: {
         ...PROPER_CONTRACT.hosts,
-        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", surface: "production", why: "" }],
+        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", region: "run_panel", surface: "production", why: "" }],
       },
     };
     const hits = scanHostMounts("fixture", vague, ["packages/fixture/panel.tsx"], registry, () => null);
@@ -885,7 +885,7 @@ describe("R8 — one declared mount set per host", () => {
       ...PROPER_CONTRACT,
       hosts: {
         ...PROPER_CONTRACT.hosts,
-        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", why: "the fixture run card, named here" }],
+        run_card: [{ module: "packages/fixture/panel.tsx", adapter: "mount", region: "run_panel", why: "the fixture run card, named here" }],
       },
     };
     const hits = scanHostMounts("fixture", vague, ["packages/fixture/panel.tsx"], registry, () => null);
@@ -993,10 +993,17 @@ describe("the closed anchor sets are the ratified ones, verbatim", () => {
       '[data-skill-action="adjust"]',
       '[data-skill-action="skip"]',
     ],
+    // ONE MEMBER JOINED when the plan added the control it names (cinatra#2788):
+    // PLAN: Agents Lifecycle (A) §7.2 — "to change it you return to the card,
+    // change the rows and press **Save changes**, which re-arms the trigger".
+    // An armed card with no Save-changes control does not implement §7, so the
+    // anchor set has to be able to say so. The other five are the placeholder's
+    // verbatim; no `adjust` anchor was ever in the set, which is the one place
+    // the placeholder was already right about the target.
     trigger_schedule_proposal: [
       "schedule-option-rows",
       "schedule-proposal-floor",
-      "scheduled-run-chrome",
+      '[data-action="save-schedule-changes"]',
       '[data-action="cancel-trigger-schedule"]',
       '[data-action="release-trigger-now"]',
     ],
@@ -1294,18 +1301,17 @@ describe("the contract mirrors the epic table's shape", () => {
 });
 
 describe("the two modes on the real tree", () => {
-  // ONE kind, not two, since cinatra#2789 drew the verification card. The
-  // count is pinned rather than the mere presence of a placeholder, so a kind
-  // quietly slipping BACK to placeholder is as visible as one being drawn.
+  // ONE kind, since the two slices that moved this list moved it in opposite
+  // directions and both are recorded here. cinatra#2788 (S9d) DREW the schedule
+  // card and struck `trigger_schedule_proposal`; cinatra#2928 (lifecycle-b W2a)
+  // REGISTERED a fifth kind, `agent_hitl_screen`, without drawing it — that
+  // slice changes no screen — so its row is an honest record of a card nobody
+  // has drawn yet, struck by the slice that draws it (cinatra#2930). The list is
+  // pinned rather than the mere presence of a placeholder, so a kind quietly
+  // slipping BACK to placeholder is as visible as one being drawn.
   it("names the kinds that are still placeholders, and no others", () => {
-    // `agent_hitl_screen` joined the list when cinatra#2928 registered the
-    // fifth kind WITHOUT drawing it — that slice changes no screen. Both rows
-    // are honest records of a card nobody has drawn, and each is struck by the
-    // slice that draws it (S9d for the schedule card, cinatra#2930 for the
-    // HITL screen).
     expect(placeholderKinds().map((p) => p.kind).sort()).toEqual([
       "agent_hitl_screen",
-      "trigger_schedule_proposal",
     ]);
   });
 
@@ -1323,26 +1329,54 @@ describe("the two modes on the real tree", () => {
     expect(collectContractViolations()).toEqual([]);
   });
 
-  it("the REQUIRED gate — no flag at all — FAILS today and NAMES the undrawn kind", () => {
+  it("the REQUIRED gate — no flag at all — still FAILS today, now on the HOST gap", () => {
     // The ordinary run is the done-check. This is the claim "the gate fails on
     // main": it has to be true of the run somebody actually makes, not of an
     // opt-in flag nobody passes.
+    //
+    // THE NAME PINS THE HOST GAP because that is the finding this arm was
+    // written for and the acceptance manifest binds it by name; the fifth
+    // kind's row is asserted here too, and named below.
+    //
+    // WHAT IT FAILS ON HAS MOVED, and that is the point of pinning it. The two
+    // kinds this epic drew are gone from the findings (cinatra#2789 drew §VII,
+    // cinatra#2788 drew §VI). TWO things are left, and both are asserted below:
+    // §IX's other half — `recommendation_hold` reaches two of the four hosts —
+    // and the FIFTH kind, `agent_hitl_screen`, which cinatra#2928 registered
+    // without drawing (its card is owed to cinatra#2930). The done-check stays
+    // red until both land. A gate that went green here while a kind still
+    // missed two hosts, or had no card at all, would be the same dishonesty in
+    // a new place.
     const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
     expect(res.status).toBe(1);
-    expect(out).toMatch(/'trigger_schedule_proposal' has no card of its own/);
-    // …and it no longer names the kind cinatra#2789 drew. A done-check that
+    expect(out).toMatch(/'recommendation_hold' has no production mount on host 'site_widget'/);
+    expect(out).toMatch(/'recommendation_hold' has no production mount on host 'page_gate_region'/);
+    // …and the fifth kind, registered by cinatra#2928 and drawn by nobody yet,
+    // is NAMED. The required gate's other half is that it says which card is
+    // missing, not merely that something is.
+    expect(out).toMatch(/'agent_hitl_screen' has no card of its own/);
+    // …and it names NEITHER of the two kinds that were drawn. A done-check that
     // kept reporting a drawn card as missing would be the mirror image of the
     // dishonesty this gate exists to end.
     expect(out).not.toMatch(/'verification_summary' has no card of its own/);
+    expect(out).not.toMatch(/'trigger_schedule_proposal' has no card of its own/);
   });
 
-  it("the lenient read is the one that needs a flag, and says so", () => {
+  it("the lenient read is the one that needs a flag, and counts the drawn kinds", () => {
     const res = spawnSync(process.execPath, [GATE, "--audit"], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
     expect(res.status).toBe(0);
     expect(out).toMatch(/no NEW false claim/);
+    // 4 of 5 DRAWN, so BOTH halves are asserted: the count says how much of the
+    // tree the lenient read actually verified, and the placeholder rider is
+    // back — cinatra#2928 registered a fifth kind and drew nothing, so the
+    // lenient read must still name the gap rather than let exit 0 read as
+    // "everything is drawn".
+    expect(out).toMatch(/4\/5 kinds drawn by a named owner/);
     expect(out).toMatch(/the REQUIRED gate \(no flag\) fails on these/);
+    expect(out).toMatch(/STILL A PLACEHOLDER/);
+    expect(out).toMatch(/agent_hitl_screen/);
   });
 
   it("--complete is the RULED name for the done-check and runs the same check", () => {
@@ -1422,11 +1456,20 @@ describe("exemptions and the live tree", () => {
     expect(collectViolations()).toEqual([]);
   });
 
-  it("the CLI's lenient read exits 0 on the real tree and still names the gaps", () => {
+  it("the CLI's lenient read exits 0 on the real tree, counts the drawn kinds and still names the gap", () => {
+    // TWO sentences, and both are asserted. The COUNT says how much of the tree
+    // the lenient read verified, so a reader cannot mistake "exit 0" for
+    // "everything is drawn"; the `STILL A PLACEHOLDER` rider names what is not
+    // drawn — `agent_hitl_screen`, which cinatra#2928 registered without drawing
+    // and whose card is OWED to cinatra#2930. cinatra#2788 struck the schedule
+    // row and cinatra#2789 the verification one, which is why the count is 4 of
+    // 5 rather than 3.
     const res = spawnSync(process.execPath, [GATE, "--audit"], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
     expect(out).toMatch(/no NEW false claim/);
+    expect(out).toMatch(/4\/5 kinds drawn by a named owner/);
     expect(out).toMatch(/STILL A PLACEHOLDER/);
+    expect(out).toMatch(/agent_hitl_screen/);
     expect(res.status).toBe(0);
   });
 });

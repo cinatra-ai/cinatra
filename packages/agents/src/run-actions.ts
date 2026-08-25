@@ -10,10 +10,6 @@ import { AuthzError } from "@/lib/authz";
 // acting MEMBER's session (owner / org-admin, already checked above). A member
 // mint fail-closes if membership was revoked — acceptable per the design.
 import { verifySessionAuthority } from "@/lib/org-write/authority";
-// cinatra#1940 P3 (Decision 1): the archived-org pre-check for the admin
-// releaseTriggerNow fire path (routing/UX only — the kernel's run.execute
-// ruling on the subsequent transition is the real backstop).
-import { readOrgArchivedAtForDispatch } from "@/lib/org-write/dispatch-freeze";
 import { resolveTemplateVisibilityActor } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
@@ -41,12 +37,13 @@ import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import {
   setRunTriggerForActor,
   deleteRunTriggerForActor,
+  releaseTriggerNowForActor,
   type SetTriggerForActorResult,
   type DeleteTriggerForActorResult,
+  type ReleaseTriggerNowArgs,
+  type ReleaseTriggerNowResult,
 } from "./trigger-service";
 import type { TriggerType } from "./trigger-store";
-import { createOrUpdateRunTrigger, readRunTriggerByRunId } from "./trigger-store";
-import { markTriggerReleased } from "./trigger-gate";
 import {
   maybeHoldRunForRecommendation,
   readRecommendationParkForRun,
@@ -57,13 +54,6 @@ import {
   launchAgentRun,
   runIdFromFailedLaunch,
 } from "./lifecycle-coordinator";
-/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
- *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
- *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
- *  for OBO_CEILING_DISJOINT_CODE). */
-const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
-const isScopeDenial = (err: unknown): err is { reason: string } =>
-  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
 
 export type TriggerAgentRunArgs = {
   runId: string;
@@ -604,11 +594,20 @@ export async function deleteRunTrigger(
 // server action re-checks `session.user.role === "admin"`.
 // ---------------------------------------------------------------------------
 
-export type ReleaseTriggerNowArgs = { runId: string };
-export type ReleaseTriggerNowResult =
-  | { ok: true }
-  | { ok: false; error: string };
-
+/**
+ * Server-action entry point for the run page's Release now control.
+ *
+ * THIN, LIKE `deleteRunTrigger` (cinatra#2788, epic #2784 S9d). The whole body
+ * moved to `releaseTriggerNowForActor` in `trigger-service.ts` — unchanged —
+ * so §VI's settled card can reach the SAME path from the widget, whose identity
+ * does not travel by cookie. This wrapper resolves the Better Auth session into
+ * the actor envelope and delegates; the admin re-check, the archived-org
+ * pre-check, the install-scope assertion, the gate write, the transition and
+ * the enqueue compensation all still happen there, in that order — as does
+ * the recurring branch cinatra#2928 added to that body: Release now on a
+ * recurring schedule starts ONE COPY through the coordinator's launch entry
+ * and leaves the defining run, and its schedule, exactly as they were.
+ */
 export async function releaseTriggerNow(
   args: ReleaseTriggerNowArgs,
 ): Promise<ReleaseTriggerNowResult> {
@@ -618,202 +617,7 @@ export async function releaseTriggerNow(
     (session?.user as { role?: string | null } | null | undefined)?.role ??
     null;
   if (!userId) return { ok: false, error: "unauthorized" };
-  if (role !== "admin") return { ok: false, error: "forbidden — admin only" };
-
-  const run = await readAgentRunById(args.runId);
-  if (!run) return { ok: false, error: "run not found" };
-
-  const trigger = await readRunTriggerByRunId(args.runId);
-  if (!trigger) return { ok: false, error: "no trigger configured for this run" };
-
-  // cinatra#1940 P3 (Decision 1): refuse BEFORE any side-effect (the gate
-  // flag, the transition) when the org is archived. Fail-open on `null`
-  // (unknown) — this is a pre-check, not the enforcement point; the guarded
-  // transition below refuses regardless.
-  if ((await readOrgArchivedAtForDispatch(run.orgId)) === true) {
-    return {
-      ok: false,
-      error: "This organization is archived — agents cannot start new work.",
-    };
-  }
-
-  // cinatra#2485 C: this is the ONE interactive dispatch that starts SOMEONE
-  // ELSE's run, so the shared dispatch guard's default (authorize the run's
-  // owner) is not enough — the releasing admin must ALSO be inside the agent's
-  // install scope. Admin standing counts at ORG scope only; an org admin who is
-  // not in the owning team/project cannot force-start work that scope reserves
-  // for its members. Asserted BEFORE `markTriggerReleased`, which is a
-  // monotonic gate write that no later refusal can undo.
-  try {
-    const { assertAgentRunDispatchAuthorized } = await import(
-      "./agent-run-serde"
-    );
-    await assertAgentRunDispatchAuthorized({
-      runId: args.runId,
-      stage: "dispatch",
-      actingUserId: userId,
-    });
-  } catch (err) {
-    if (isScopeDenial(err)) {
-      return { ok: false, error: "forbidden — this agent's scope does not include you" };
-    }
-    throw err;
-  }
-
-  // Admin (org-role admin, checked above) acts as a member of the run's org.
-  const authority = await verifySessionAuthority(userId, run.orgId);
-
-  // RELEASE NOW ON A RECURRING SCHEDULE STARTS ONE COPY, AND LEAVES THE
-  // SCHEDULE RUNNING (cinatra#2928).
-  //
-  // It used to start the schedule-DEFINING run: the gate was opened on it and it
-  // moved off `armed`, so the schedule the person set up stopped reading as
-  // armed and the run that represents it was spent. Release now means "run it
-  // once, now" — never "and stop the schedule". A recurring tick already knows
-  // how to make a fresh copy; this is the same act, asked for by a person
-  // instead of by the clock, so it goes through the same launch entry, and the
-  // defining run is left exactly as it was.
-  //
-  // The one-off and immediate cases are unchanged: their trigger names a single
-  // firing, and releasing it IS that firing.
-  if (trigger.triggerType === "recurring") {
-    let launched;
-    try {
-      launched = await launchAgentRun({
-        producer: "release_now_recurring_copy",
-        // A person pressed Release now, and this action already resolved them
-        // from a live session — but the COPY is a run of a schedule, exactly
-        // like a tick, so it is started the way a tick starts one.
-        frame: null,
-        authority,
-        create: {
-          kind: "pre_dispatch",
-          input: {
-            templateId: run.templateId,
-            runBy: run.runBy,
-            orgId: run.orgId,
-            inputParams: run.inputParams ?? {},
-            projectId: run.projectId,
-          },
-        },
-        dispatch: {
-          kind: "await_trigger",
-          why: "the copy's own immediate trigger is armed and its gate opened below",
-        },
-      });
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-    if (launched.carrier.kind !== "run") {
-      return { ok: false, error: "the release answered with a carrier that is not a run" };
-    }
-    const copy = launched.carrier.run;
-    await createOrUpdateRunTrigger({
-      runId: copy.id,
-      triggerType: "immediate",
-      timezone: trigger.timezone,
-      enabled: true,
-      jobSchedulerId: null,
-    });
-    await markTriggerReleased(copy.id);
-    try {
-      await advanceAgentRun({
-        run: copy,
-        release: {
-          reason: "trigger_fired",
-          from: "pending_input",
-          to: "queued",
-          dispatch: {
-            kind: "enqueue",
-            options: { jobId: `agent-builder-${copy.id}` },
-          },
-        },
-        authority,
-      });
-    } catch (err) {
-      if (isScopeDenial(err)) {
-        return { ok: false, error: "forbidden — this agent's scope does not include you" };
-      }
-      // Every other dispatch failure has already been compensated by the release
-      // ladder — the copy is back at its wait, or failed, or the throw names it
-      // as stranded. What is left to do here is not swallow it.
-      throw err;
-    }
-    // The defining run keeps its `armed` status and its schedule keeps its
-    // scheduler, so the next tick fires as it would have.
-    return { ok: true };
-  }
-
-  await markTriggerReleased(args.runId);
-
-  // Transition armed → queued so the dispatcher can pick up the run.
-  // Swallow stale_from_status: the run may already be queued (race with the
-  // scheduled release job) or in a terminal state.
-  try {
-    await transitionRunStatus(args.runId, "armed", "queued", undefined, authority);
-  } catch (err) {
-    if (
-      !(err instanceof RunTransitionError && err.code === "stale_from_status")
-    ) {
-      throw err;
-    }
-  }
-
-  // Enqueue an execution job now that the gate is open. Idempotent on jobId.
-  //
-  // cinatra#2485 C — COMPENSATION on a scope denial. The run is already `queued`
-  // at this point, and `enqueueAgentRun` re-asserts the dispatch guard: if the
-  // agent's scope changed in the window between the transition's own guard and
-  // this one, the enqueue throws and the run would otherwise sit `queued`
-  // forever with no job to run it and no operator signal.
-  //
-  // The failure is landed HERE rather than inside the enqueue chokepoint because
-  // this frame already holds a member session `authority` for the run, whereas
-  // the chokepoint would have to mint an org-wide run authority it is
-  // deliberately not allowed to hold (org-write-boundary-gate R2/R5).
-  //
-  // `stale_from_status` is swallowed for the same reason as the transition
-  // above: another writer already moved the run off `queued`.
-  try {
-    await enqueueAgentRun(
-      { runId: args.runId },
-      { jobId: `agent-builder-${args.runId}` },
-    );
-  } catch (err) {
-    if (!isScopeDenial(err)) throw err;
-    try {
-      await transitionRunStatus(
-        args.runId,
-        "queued",
-        "failed",
-        {
-          error:
-            `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
-        },
-        authority,
-      );
-    } catch (compErr) {
-      if (
-        !(compErr instanceof RunTransitionError && compErr.code === "stale_from_status")
-      ) {
-        console.error(
-          "[releaseTriggerNow] run",
-          args.runId,
-          "was refused by the install-scope gate but could not be failed — it stays queued with no job:",
-          compErr instanceof Error ? compErr.message : String(compErr),
-        );
-      }
-    }
-    return { ok: false, error: "forbidden — this agent's scope does not include you" };
-  }
-
-  // DISPATCHED — the schedule moment this run was waiting at is over
-  // (cinatra#2928). The recurring branch above never reaches here: it releases a
-  // COPY and deliberately leaves the defining run exactly as it was, moment
-  // included, because that run is still the schedule.
-  await clearRunLifecycleMoment(args.runId, authority);
-
-  return { ok: true };
+  return releaseTriggerNowForActor({ userId, role, source: "ui" }, args);
 }
 
 // ---------------------------------------------------------------------------

@@ -90,6 +90,11 @@ export const HOST_COMPOSITION_SOURCES: Readonly<
     "packages/agents/src/agentic-run-panel.tsx",
     "packages/agents/src/instance-screens.tsx",
     "packages/agents/src/orchestrator-stepper-panel.tsx",
+    // The run page's SCHEDULE STEP declares its own provider inside the rail
+    // row the screen places (cinatra#2788, S9d): plan (A) §7.2 step 5 moved the
+    // schedule out of the screen body and into the step rail, so the screen file
+    // alone no longer sees every owner this host mounts.
+    "packages/agents/src/schedule-rail-step.tsx",
   ]),
   page_gate_region: Object.freeze([
     "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
@@ -99,6 +104,10 @@ export const HOST_COMPOSITION_SOURCES: Readonly<
     // that stops at the route file would read the audit card's gate-region
     // cell as absent and call the loss a regression.
     "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/verification-view.tsx",
+    // The review page's SCHEDULE STEP, for the same reason: the schedule left
+    // the gate region for the rail (cinatra#2788), and the rail row is where its
+    // `page_gate_region` declaration now lives.
+    "packages/agents/src/schedule-rail-step.tsx",
   ]),
 });
 
@@ -195,8 +204,12 @@ export type HostParityRatchetRow = {
  * and the review page's gate region each compose `ReviewGateCard` under their
  * own provider.
  *
- * The two shell kinds reach the conversation hosts and nothing else — no run-card
- * or gate-region composition mounts them, so those cells are not targets.
+ * `trigger_schedule_proposal` joined it with S9d (cinatra#2788): the registry
+ * dispatches the DRAWN `ScheduleProposalCard` on both conversation hosts, the
+ * run screen composes it above the scheduling form for a run a proposal
+ * produced, and the review page composes it in its gate region. The two
+ * composition cells are RECORDED here rather than left off — a host set that
+ * grows silently is a host set nobody read, which `host-unratcheted` refuses.
  *
  * `recommendation_hold` is the mirror image: it is composed on the run card,
  * and it now draws on the chat thread too — S9b (#2786) landed that mount, so
@@ -234,7 +247,12 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
     owed: Object.freeze([]),
   },
   trigger_schedule_proposal: {
-    hosts: Object.freeze({ chat_thread: "transcript", site_widget: "transcript" }),
+    hosts: Object.freeze({
+      chat_thread: "transcript",
+      site_widget: "transcript",
+      run_card: "composition",
+      page_gate_region: "composition",
+    }),
     owed: Object.freeze([]),
   },
   recommendation_hold: {

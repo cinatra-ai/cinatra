@@ -41,12 +41,7 @@
  */
 
 import React from "react";
-import { readFileSync } from "node:fs";
-import { dirname, resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
 import { act, cleanup, waitFor } from "@testing-library/react";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- the owner cards' server-side graph, stubbed as the sibling suites do ----
@@ -158,7 +153,6 @@ import {
 import {
   CHAT_OWNER_MOUNT_OBLIGATIONS,
   CHAT_THREAD_CARRIAGE_CONTRACT,
-  SHELL_OWNED_CHAT_KINDS,
   carriageRowFor,
   carriesChatOwner,
   chatCarriageRootAnchorsFor,
@@ -661,41 +655,27 @@ describe("the review row — the one kind whose owner is drawn today", () => {
 // ---------------------------------------------------------------------------
 
 describe("what cannot satisfy a row", () => {
-  it("a SOURCE DECLARATION does not: the registry maps both owed kinds and the rows still fail", async () => {
-    // The registry really does declare an owner for every kind — that is the
-    // claim a source-reading gate would accept, and it is why this suite reads
-    // DOM instead. Both halves are asserted together so the point is executed
-    // rather than described: the declaration is there, and it buys nothing.
-    const registry = readFileSync(
-      resolvePath(__dirname, "../renderable-views/registry.tsx"),
-      "utf8",
-    );
-    for (const kind of SHELL_OWNED_CHAT_KINDS) {
-      expect(registry, `${kind} is not declared in the registry at all`).toContain(`${kind}:`);
-      const row = carriageRowFor(kind);
-      const { mounted, root, producingSlot } = await mountKind(kind);
-      expect(carriesChatOwner(observeChatCarriage(root, row, producingSlot), row)).toBe(false);
-      mounted.unmount();
-    }
-  });
-
-  it("a REGISTRY ROW alone does not: the shell draws for both owed kinds and still fails", async () => {
-    for (const kind of SHELL_OWNED_CHAT_KINDS) {
-      const row = carriageRowFor(kind);
-      const { mounted, root, producingSlot } = await mountKind(kind);
-      // The registry DID dispatch and the shell DID draw — the kind and a
-      // resolved state are on screen. That is exactly the state of main, and it
-      // is not this kind's owner.
-      const shell = root.querySelector<HTMLElement>(`[data-lifecycle-card="${kind}"]`);
-      expect(shell, `${kind} did not dispatch at all — this arm proves nothing`).not.toBeNull();
-      expect(shell!.getAttribute("data-lifecycle-card-state")).not.toBeNull();
-      expect(shell!.getAttribute("data-lifecycle-card-host")).toBeNull();
-      expect(evaluateChatCarriage(observeChatCarriage(root, row, producingSlot), row).map(
-        (v) => v.code,
-      )).toContain("root_declaration_incomplete");
-      mounted.unmount();
-    }
-  });
+  // THE TWO SHELL ARMS ARE RETIRED, and the reason is recorded rather than the
+  // arms silently deleted. Both drove `SHELL_OWNED_CHAT_KINDS` — they mounted a
+  // kind the registry dispatched to the S1 shell and showed that neither the
+  // source declaration nor the drawn shell satisfies a row. That list is EMPTY
+  // as of S9d (cinatra#2788), which struck its last entry (S9e struck the other
+  // in cinatra#2789), so both arms had no subject left: a `for` over an empty
+  // list is a green test that executes nothing, which is worse than no test.
+  //
+  // NEITHER PROPERTY IS DROPPED. The shell's shape is still refused, on a
+  // SYNTHETIC observation that needs no shell-owned kind to exist — see
+  // `src/lib/lifecycle/__tests__/held-turn-card-contract.test.ts`, "refuses the
+  // SHELL's shape — the kind and a state, with no host declared", which builds
+  // exactly the kind+state-without-host root these arms used to mount and
+  // asserts the same `root_declaration_incomplete` code. And the registry
+  // declaration still buys nothing on its own: every row in this file is
+  // decided by reading DOM, and the `OBSERVED unmounted set` arm above is what
+  // makes that a done-check in both directions.
+  //
+  // If a kind is ever added to `SHELL_OWNED_CHAT_KINDS` again, restore these two
+  // arms with it — a shell-owned kind and no executed refusal of the shell in
+  // the REAL view is the hole this file exists to close.
 
   it("a component that RETURNS NULL does not: an absent resolve draws no root", async () => {
     // §IV's `absent` is "no card DOM at all", and the review card honours it.

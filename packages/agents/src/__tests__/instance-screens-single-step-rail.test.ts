@@ -104,9 +104,20 @@ describe("screenHostsStepRail — the screen stands down exactly where the panel
 
 describe("the screen's JSX reads the predicate — no second unconditional rail mount", () => {
   it("gates the RunStepRailPanel mount on screenHostsStepRail", () => {
+    // THE PREDICATE IS NOW READ INTO A NAMED LOCAL, not inlined into the JSX
+    // condition (cinatra#2788): the left column also carries the SCHEDULE STEP
+    // above the rail, and the column has to exist when either of them draws —
+    // so the screen computes `railDraws` once and uses it twice. The property
+    // this test is here for is unchanged and is asserted the same way: the
+    // page-level rail draws ONLY where the predicate says so, and it is mounted
+    // exactly once.
     expect(SCREEN_SRC).toMatch(
-      /rail\.entries\.length > 0 && screenHostsStepRail\(\{[\s\S]*?panel: runDetailPanel,[\s\S]*?stepperStepCount: stepperSteps\.length,[\s\S]*?\}\) && \(/,
+      /const railDraws =[\s\S]*?rail\.entries\.length > 0 &&[\s\S]*?screenHostsStepRail\(\{[\s\S]*?panel: runDetailPanel,[\s\S]*?stepperStepCount: stepperSteps\.length,[\s\S]*?\}\);/,
     );
+    // The mount is now the value of a named node — the schedule step is handed
+    // the rail as a slot (`rail={railNode}`) rather than the screen drawing a
+    // column of its own — so the gating reads as the node's own conditional.
+    expect(SCREEN_SRC).toMatch(/const railNode = railDraws \? \(\s*<RunStepRailPanel/);
     // Exactly ONE mount of the page-level rail survives in the screen.
     expect(SCREEN_SRC.match(/<RunStepRailPanel\b/g)?.length).toBe(1);
   });
@@ -119,6 +130,10 @@ describe("the screen's JSX reads the predicate — no second unconditional rail 
   });
 
   it("keeps the pre-execution hold: a pending_input run still shows no rail (cinatra#2067)", () => {
-    expect(SCREEN_SRC).toMatch(/run\.status !== "pending_input" && rail\.entries\.length > 0/);
+    // Same guard, now the first conjunct of the named `railDraws` local rather
+    // than of an inline JSX condition (cinatra#2788).
+    expect(SCREEN_SRC).toMatch(
+      /const railDraws =\s*\n?\s*run\.status !== "pending_input" &&\s*\n?\s*rail\.entries\.length > 0/,
+    );
   });
 });
