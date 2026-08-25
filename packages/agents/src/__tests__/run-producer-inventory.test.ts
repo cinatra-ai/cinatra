@@ -180,9 +180,10 @@ describe("the run-producer inventory", () => {
     // THE WHOLE TREE, not the modules the list already names. Scanning only the
     // listed modules could never discover a launch in a module nobody had
     // listed, which is the shape of every omission that matters: a new producer
-    // arrives in a new file. `release_now_recurring_copy` was added mid-slice
-    // and passed the forward check by living in a module that already launched;
-    // a genuinely new module would have passed both.
+    // arrives in a new file. The now-withdrawn `release_now_recurring_copy`
+    // (cinatra#2972) was the worked example: added mid-slice, it passed the
+    // forward check by living in a module that already launched, and a
+    // genuinely new module would have passed both.
     const tracked = execSync(
       'git ls-files "src/**/*.ts" "src/**/*.tsx" "packages/**/*.ts" "packages/**/*.tsx"',
       { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },

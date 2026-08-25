@@ -145,9 +145,10 @@ describe("layer 2: shared dispatch guard", () => {
   });
 
   it("FAILS the run on denial rather than leaving it queued with no job — at the CALLER that holds an authority", () => {
-    // `releaseTriggerNow` transitions armed→queued and THEN enqueues, so a guard
-    // that only throws would strand the run `queued` forever with nothing left to
-    // run it. A denial is terminal (the PR contract), never a park.
+    // A transition-then-enqueue caller moves the run armed→queued and THEN
+    // enqueues, so a guard that only throws would strand the run `queued`
+    // forever with nothing left to run it. A denial is terminal (the PR
+    // contract), never a park.
     //
     // The compensation lives in the CALLER, not in the enqueue chokepoint: the
     // caller already holds a member session authority for this run, whereas the
@@ -163,31 +164,20 @@ describe("layer 2: shared dispatch guard", () => {
     );
     expect(enqueue).not.toMatch(/\bmintAgentRunExecutionAuthority\s*\(/);
 
-    // THE PATH MOVED, THE PROPERTY DID NOT (cinatra#2788, epic #2784 S9d).
-    // `run-actions.ts:releaseTriggerNow` is now a thin server-action wrapper
-    // that resolves the Better Auth session into an actor envelope and
-    // delegates; the whole transition-then-enqueue body — and every guarantee
-    // this test pins — moved UNCHANGED into `releaseTriggerNowForActor`, so
-    // §VI's settled card can reach the same path from the widget, whose
-    // identity does not travel by cookie. This test follows the body: reading
-    // the wrapper would anchor on a function that no longer transitions
-    // anything, and `at()` would fail loudly rather than pass vacuously.
-    const actions = read("packages/agents/src/trigger-service.ts");
-    const body = actions.slice(
-      at(actions, "export async function releaseTriggerNowForActor("),
+    // THE INTERACTIVE SITE THIS HALF PINNED IS GONE (cinatra#2972).
+    // `releaseTriggerNowForActor` — Run now — was the transition-then-enqueue
+    // caller in `trigger-service.ts`, and plan (A) §7.2 as amended 2026-08-25
+    // withdrew the control and its whole action path ("there is no Run now").
+    // The property is NOT dropped: the next test below pins it on the site that
+    // still has this shape, the trigger release job. What is removed here is an
+    // assertion over a function that no longer exists — which `at()` would fail
+    // on loudly, and which must not be re-pointed at a lookalike.
+    expect(read("packages/agents/src/trigger-service.ts")).not.toContain(
+      "releaseTriggerNowForActor",
     );
-    const enqueueAt = at(body, "enqueueAgentRun(");
-    const block = body.slice(enqueueAt);
-    expect(block).toContain("isScopeDenial(err)");
-    expect(block).toMatch(
-      /transitionRunStatus\(\s*args\.runId,\s*"queued",\s*"failed"/,
+    expect(read("packages/agents/src/run-actions.ts")).not.toContain(
+      "releaseTriggerNow",
     );
-    // It compensates with the authority already in hand — no new mint.
-    expect(block).toMatch(/authority,/);
-    // A benign lost CAS (another writer moved the run off `queued`) is not an
-    // error; anything else is loud, because nothing downstream repairs it.
-    expect(block).toContain("stale_from_status");
-    expect(block).toContain("console.error");
   });
 
   it("compensates on EVERY transition-then-enqueue site, not just the interactive one", () => {
@@ -407,22 +397,32 @@ describe("layer 2: shared dispatch guard", () => {
     expect(src).toContain('AGENT_TEMPLATE_SCOPE_DENIED');
   });
 
-  it("requires the DISPATCHING admin — not just the run owner — on releaseTriggerNow", () => {
-    // Read where the dispatch body LIVES, not where the server action is
-    // exported — see the note on the compensation test above (cinatra#2788 S9d
-    // moved the body into `releaseTriggerNowForActor` so the widget reaches the
-    // same guard). The admin re-check, the acting-user binding and the
-    // before-`markTriggerReleased` ordering all moved with it, unchanged.
-    const src = read("packages/agents/src/trigger-service.ts");
-    const body = src.slice(
-      at(src, "export async function releaseTriggerNowForActor("),
+  // WAS: "requires the DISPATCHING admin — not just the run owner — on
+  // releaseTriggerNow". That guard existed because Run now was the one
+  // interactive dispatch that started SOMEONE ELSE's run early. cinatra#2972
+  // removed the control, the server action and the service function together —
+  // plan (A) §7.2 as amended 2026-08-25, "there is no Run now" — so the
+  // strongest true statement left is that no surface can reach that dispatch at
+  // all. Pinned as an ABSENCE, deliberately: an admin-gated dispatch that is
+  // gone is safer than one that is guarded, and a re-introduction has to face
+  // this test.
+  it("no surface can force a schedule's gate open early — Run now is gone entirely", () => {
+    for (const rel of [
+      "packages/agents/src/trigger-service.ts",
+      "packages/agents/src/run-actions.ts",
+      "packages/agents/src/trigger-tab-client.tsx",
+      "packages/agents/src/schedule-proposal-card.tsx",
+      "src/lib/lifecycle/trigger-schedule-proposal-card.ts",
+    ]) {
+      const src = read(rel);
+      expect(src, `${rel} still reaches the withdrawn Run now`).not.toMatch(
+        /releaseTriggerNow(?:ForActor)?\s*\(/,
+      );
+    }
+    // The decide endpoint no longer even accepts the op.
+    expect(read("src/app/api/lifecycle-views/decide/route.ts")).not.toContain(
+      '"release"',
     );
-    const guardAt = body.indexOf("assertAgentRunDispatchAuthorized");
-    expect(guardAt).toBeGreaterThan(-1);
-    expect(body.slice(guardAt, guardAt + 400)).toContain("actingUserId: userId");
-    // Before markTriggerReleased: the gate flag is monotonic, so a later
-    // refusal could not undo it.
-    expect(guardAt).toBeLessThan(body.indexOf("markTriggerReleased("));
   });
 });
 

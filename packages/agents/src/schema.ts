@@ -1241,6 +1241,12 @@ export const agentRunTriggers = cinatraSchema.table("agent_run_triggers", {
   timezone:       text("timezone").notNull().default("UTC"),
   enabled:        boolean("enabled").notNull().default(true),
   releasedAt:     timestamp("released_at", { withTimezone: true }),
+  // cinatra#2972 — the recurring schedule's "has fired once" stamp. See the
+  // DDL leaf (src/lib/trigger-schema.ts) for why it is not `released_at`.
+  lastFiredAt:    timestamp("last_fired_at", { withTimezone: true }),
+  // cinatra#2972 — the stamp **Cancel schedule** writes. Deliberately not
+  // `enabled`, which the trigger MCP tool already writes for other reasons.
+  stoppedAt:      timestamp("stopped_at", { withTimezone: true }),
   jobSchedulerId: text("job_scheduler_id"),
   createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:      timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
