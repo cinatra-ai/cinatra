@@ -43,6 +43,7 @@ import {
   planMessages,
   readEnvFileValue,
   redactUrlCredentials,
+  WITHHELD_URL_VALUE,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
   resolvePublishedHostPort,
@@ -463,9 +464,17 @@ async function runNangoHealthPreflight() {
   // (cinatra#2913, round-5 finding N4): a hosted Nango URL is the shape most
   // likely to carry userinfo, and this line is printed on every `pnpm dev`
   // while that host is down.
+  //
+  // AND IT HANDLES THE FAIL-CLOSED ANSWER, because it calls the helper DIRECTLY
+  // rather than through `formatStatedUrlValue` (round-7 finding B2). A hosted
+  // URL the helper cannot structurally redact is named by its VARIABLE here,
+  // never by its value.
   if (!isLocalNangoUrl(rawUrl)) {
+    const shownNangoUrl = redactUrlCredentials(resolveNangoBaseUrl(rawUrl));
     console.warn(
-      `[dev-server] ⚠ Nango connector service at ${redactUrlCredentials(resolveNangoBaseUrl(rawUrl))} is not answering /health — connectors will fail until it recovers.`,
+      shownNangoUrl === WITHHELD_URL_VALUE
+        ? `[dev-server] ⚠ Nango connector service is not answering /health at the address NANGO_SERVER_URL states. Its value is not echoed here: this preflight cannot prove it carries no credential. Connectors will fail until it recovers.`
+        : `[dev-server] ⚠ Nango connector service at ${shownNangoUrl} is not answering /health — connectors will fail until it recovers.`,
     );
     return;
   }

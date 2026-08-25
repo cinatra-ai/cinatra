@@ -1094,6 +1094,13 @@ export function resolveComposeHostPortPlan({
         // Redacted: `origin` is interpolated into the duplicate-host-port
         // refusal/warning an operator reads, and an `ours` URL is still allowed
         // userinfo (cinatra#2913, round-5 finding N4).
+        //
+        // NEVER `WITHHELD_URL_VALUE` HERE, and that holds by construction rather
+        // than by luck: `ours` means `explicitLoopbackPort` resolved a loopback
+        // host and an explicit port out of the value, so it parsed AND it has an
+        // authority — the two shapes the redaction withholds are exactly the two
+        // that have none. Pinned as a property in the suite, so a widening of
+        // `ours` cannot quietly put a marker in this sentence.
         origin[spec.envVar] =
           `read from ${spec.urlVar}=${redactUrlCredentials(configured.url)}`;
         continue;
@@ -1469,6 +1476,21 @@ const URL_USERINFO_SPECIAL = /^(\s*[A-Za-z][A-Za-z0-9+.-]*:[/\\]*)([^/?#\\]*)@/;
 const urlScheme = (raw) => /^\s*([A-Za-z][A-Za-z0-9+.-]*):/.exec(raw)?.[1].toLowerCase();
 
 /**
+ * What a surface prints INSTEAD of a URL it cannot prove free of credentials.
+ *
+ * IT EXPLAINS ITSELF ON PURPOSE. `redactUrlCredentials` has callers that write
+ * their own sentence around its return value, and it does not know the variable
+ * name any of them would rather name. So the fail-closed value is readable on
+ * its own: a caller that simply interpolates it still prints something an
+ * operator can act on, and a caller added later cannot turn a forgotten branch
+ * back into a leak. Callers that DO know the variable name say so instead — see
+ * `formatStatedUrlValue`, `scripts/check-services.mjs` and
+ * `scripts/dev-server.mjs`.
+ */
+export const WITHHELD_URL_VALUE =
+  "<withheld: this value has no structure a credential could be redacted out of>";
+
+/**
  * Strip any userinfo out of a URL-shaped value before it reaches an operator.
  *
  * NO SURFACE HERE MAY PRINT A CREDENTIAL (cinatra#2913, round-5 finding N4).
@@ -1485,6 +1507,25 @@ const urlScheme = (raw) => /^\s*([A-Za-z][A-Za-z0-9+.-]*):/.exec(raw)?.[1].toLow
  * password in the username position, and there is no way to tell from the
  * string which half of a userinfo is which. The host, port, scheme and path
  * survive, and those are the parts an operator needs to see to fix the value.
+ *
+ * IT FAILS CLOSED, AND THAT IS THE WHOLE RULE (cinatra#2913, round-7 finding
+ * B2). A value is RETURNED only when this helper can PROVE it carries no
+ * userinfo. Two proofs exist and there is no third: the parser read an
+ * AUTHORITY and reported no username and no password, or the value holds no
+ * `@` at all. Failing both proofs, the textual rule redacts what it can
+ * structurally locate — and where it locates nothing, the value is not printed:
+ * `WITHHELD_URL_VALUE` goes out in its place.
+ *
+ * WITHOUT THAT LAST CLAUSE THE RULE HAD TWO HOLES, and both were reachable by a
+ * typo. WHATWG only looks for userinfo INSIDE an authority, so a value with no
+ * authority gets no opinion from it at all: `redis-user:pw@127.0.0.1:6379` — an
+ * operator who forgot the `//` — parses to an OPAQUE PATH of
+ * `pw@127.0.0.1:6379` with an empty username and an empty password, and the
+ * parser's "no credential" answer there is silence, not a clearance. The second
+ * hole was the unparseable value at a DIRECT call site: `formatStatedUrlValue`
+ * withheld it, but `scripts/check-services.mjs` and `scripts/dev-server.mjs`
+ * call this helper straight, and a value the textual rule could not match came
+ * back with only its whitespace scrubbed. One clause closes both.
  *
  * IT CUTS AT THE AUTHORITY'S LAST `@`, NOT ITS FIRST. WHATWG splits there, so
  * `redis://user:p@ss@host` is user `user`, password `p@ss`, host `host` — a `@`
@@ -1510,24 +1551,31 @@ const urlScheme = (raw) => /^\s*([A-Za-z][A-Za-z0-9+.-]*):/.exec(raw)?.[1].toLow
  * literal `://` never saw those and printed them whole, which is why the prefix
  * is `:[/\\]*` on the special side.
  *
- * A value with no `scheme:` at all is returned unchanged: there is no authority
- * in it, so there is no userinfo to find. Such a value never reaches an
- * operator through `formatStatedUrlValue`, which withholds it outright.
+ * A value with no `scheme:` and no `@` is returned unchanged: there is no
+ * authority in it, and no `@` means there is no userinfo to hide either. Such a
+ * value never reaches an operator through `formatStatedUrlValue`, which
+ * withholds it outright.
  *
  * @param {unknown} value
- * @returns {string}
+ * @returns {string} the value, its userinfo redacted, or `WITHHELD_URL_VALUE`
  */
 export function redactUrlCredentials(value) {
   const raw = String(value ?? "");
-  // THE PARSER ANSWERS FIRST, WHENEVER THERE IS A PARSER'S ANSWER TO HAVE. A
-  // value that parses and carries no username or password has no credential in
+  // THE PARSER ANSWERS FIRST, AND ONLY WHERE IT READ AN AUTHORITY. A value that
+  // parses WITH A HOST and carries no username or password has no credential in
   // it, whatever its `@` looks like — `http://127.0.0.1:3003/nango/@me` puts one
-  // in the path, and `file:user:pw@host` is a path too, because a `file:` URL
-  // may not carry credentials at all. Asking the parser is what keeps those
-  // printed exactly as the operator wrote them.
+  // in the path and `https://tunnel.example/@me` puts one in a handle, and both
+  // are printed exactly as the operator wrote them.
+  //
+  // `url.host &&` IS THE HALF THAT MAKES THAT A PROOF. WHATWG looks for userinfo
+  // inside an authority and nowhere else, so a host-less value never had its
+  // `@` examined: `redis-user:pw@127.0.0.1:6379` is one opaque path, username
+  // and password both empty, and taking that as a clearance printed the
+  // password whole. A host-less value therefore falls through to the textual
+  // rule, which either locates the userinfo or withholds the value.
   try {
     const url = new URL(raw);
-    if (!url.username && !url.password) return raw;
+    if (url.host && !url.username && !url.password) return raw;
   } catch {
     // Unparseable: there is no structure to consult, so the textual rule below
     // decides — and it FAILS CLOSED. It would rather hide a hostname than print
@@ -1553,11 +1601,26 @@ export function redactUrlCredentials(value) {
     .replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "")
     .replace(/[\t\n\r]/g, "");
   const scheme = urlScheme(scrubbed);
-  if (scheme === undefined) return scrubbed;
-  return scrubbed.replace(
-    SPECIAL_URL_SCHEMES.has(scheme) ? URL_USERINFO_SPECIAL : URL_USERINFO,
-    "$1***@",
-  );
+  const redacted =
+    scheme === undefined
+      ? scrubbed
+      : scrubbed.replace(
+          SPECIAL_URL_SCHEMES.has(scheme) ? URL_USERINFO_SPECIAL : URL_USERINFO,
+          "$1***@",
+        );
+  // A REDACTION THAT FIRED IS ITS OWN PROOF. Both patterns end at the LAST `@`
+  // before the first authority delimiter, so whatever `@` survives in the tail
+  // is one the delimiter already put in a path, a query or a fragment.
+  if (redacted !== scrubbed) return redacted;
+  // NOTHING WAS PROVED AND NOTHING WAS REDACTED, so nothing is printed. What
+  // reaches here is a value whose `@` no parser and no pattern could account
+  // for — an opaque path under a non-special scheme (`redis-user:pw@host`), or
+  // a value that parses as nothing and hides its userinfo behind a `?`: under a
+  // special scheme the `?` starts the query, so the credential lands in the
+  // PORT position, the parse fails, and both patterns stop before the `@`.
+  // There is no way to say which side of that `@` is the secret, so the value
+  // does not go out. An `@`-free value has nothing to hide and still does.
+  return scrubbed.includes("@") ? WITHHELD_URL_VALUE : scrubbed;
 }
 
 /**
@@ -1575,6 +1638,14 @@ export function redactUrlCredentials(value) {
  * part of the value. The operator has the file open; the variable name is what
  * they need to find the line.
  *
+ * A VALUE THE REDACTION WITHHELD IS TREATED THE SAME WAY, for the same reason
+ * (cinatra#2913, round-7 finding B2). `redis-user:pw@127.0.0.1:6379` parses, so
+ * the branch above lets it through — and `redactUrlCredentials` cannot locate
+ * the userinfo in it, because WHATWG filed the whole thing as an opaque path.
+ * Two withholding rules would be two rules to keep in step; this is one. The
+ * operator gets the variable's name either way, which is what they need to find
+ * the line.
+ *
  * @param {{ urlVar?: string, url?: unknown }} input
  * @returns {string}
  */
@@ -1585,7 +1656,8 @@ export function formatStatedUrlValue({ urlVar, url } = {}) {
   } catch {
     return String(urlVar);
   }
-  return `${urlVar}=${redactUrlCredentials(value)}`;
+  const shown = redactUrlCredentials(value);
+  return shown === WITHHELD_URL_VALUE ? String(urlVar) : `${urlVar}=${shown}`;
 }
 
 /**

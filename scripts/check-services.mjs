@@ -39,6 +39,7 @@ import {
   planMessages,
   readEnvFileValue,
   redactUrlCredentials,
+  WITHHELD_URL_VALUE,
   resolveComposeHostPortPlan,
   resolveComposeProjectName,
   resolvePublishedHostPort,
@@ -401,13 +402,31 @@ for (const r of results) {
 // admin UI (stored in the database), so report this as informational.
 const mcpPublicUrl =
   env.MCP_PUBLIC_BASE_URL?.trim() || env.APP_PUBLIC_URL?.trim() || "";
+// Which of the two fallbacks actually stated it, so the withheld branch below
+// can name the line the operator has to open.
+const mcpPublicUrlVar = env.MCP_PUBLIC_BASE_URL?.trim()
+  ? "MCP_PUBLIC_BASE_URL"
+  : "APP_PUBLIC_URL";
 console.log("");
 if (mcpPublicUrl) {
   // Redacted like every other stated URL this surface echoes (cinatra#2913,
   // round-5 finding N4). A tunnel URL is ordinarily credential-free, so this
   // usually prints unchanged — but the rule is "no surface here prints
   // userinfo", and a rule with an exception in it is not a rule.
-  console.log(`  ${green("✓")}  MCP public URL (env): ${redactUrlCredentials(mcpPublicUrl)}`);
+  //
+  // AND THE RULE HAS NO ESCAPE HATCH AT THIS CALL SITE EITHER (round-7 finding
+  // B2). This is one of the two lines that call the helper DIRECTLY rather than
+  // through `formatStatedUrlValue`, so it is this line's job to handle the
+  // fail-closed answer. It names the variable instead of the value, exactly as
+  // `formatStatedUrlValue` does, because the variable is what the operator
+  // needs to find the line.
+  const shownMcpUrl = redactUrlCredentials(mcpPublicUrl);
+  console.log(
+    shownMcpUrl === WITHHELD_URL_VALUE
+      ? `  ${green("✓")}  MCP public URL (env): stated in ${mcpPublicUrlVar}, and not echoed here — ` +
+        `this check cannot prove the value carries no credential.`
+      : `  ${green("✓")}  MCP public URL (env): ${shownMcpUrl}`,
+  );
 } else {
   console.log(
     `  ${yellow("○")}  MCP public URL: not set in the environment — the AI chat needs it.`,
@@ -478,8 +497,8 @@ if (!planRefused) {
     // instead, and judge nothing: there is no address of this checkout's here.
     // The SAME classification the row was shaped from — read, not recomputed,
     // so no ordering here can make the note and the row disagree.
-    const stated = statedByLabel.get(svc.label).stated;
-    if (stated.state === "unusable") {
+    const stated = statedByLabel.get(svc.label)?.stated;
+    if (stated?.state === "unusable") {
       unusableUrlNotes.push(
         formatUnusableServiceUrl({
           service: svc.label,

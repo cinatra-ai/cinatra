@@ -62,6 +62,7 @@ import {
   resolvePublishedHostPort,
   shouldSkipDevPreflight,
   unmanagedComposeServices,
+  WITHHELD_URL_VALUE,
 } from "../lib/dev-preflight.mjs";
 import {
   BUNDLED_DB_SERVICES,
@@ -1536,15 +1537,21 @@ describe("redactUrlCredentials / formatStatedUrlValue", () => {
     expect(redactUrlCredentials("/var/run/redis.sock")).toBe("/var/run/redis.sock");
   });
 
-  // A `file:` URL MAY NOT CARRY CREDENTIALS AT ALL, so its `user:pw@host` is a
-  // PATH and redacting it would hide path text for nothing. The parser is what
-  // knows that, which is why it is asked before the textual rule runs.
-  it("leaves a `file:` value alone, because its `@` can only be a path", () => {
+  // A `file:` URL MAY NOT CARRY CREDENTIALS AT ALL, so the PARSER files its
+  // `user:pw@host` as a path and reports no username and no password. That
+  // answer used to be taken as a clearance and the value printed whole — which
+  // is the round-7 hole, because the parser only looks for userinfo inside an
+  // AUTHORITY and this value has none. `file:` is special, so the textual rule
+  // CAN locate the userinfo, and it redacts rather than echoes. It over-hides a
+  // path text at worst; the parser's silence was a leak at best.
+  it("redacts a `file:` value, because the parser read no authority to clear it", () => {
     const stated = `file:${FAKE_USERINFO}@127.0.0.1`;
     const parsed = new URL(stated);
+    expect(parsed.host).toBe("");
     expect(parsed.username).toBe("");
     expect(parsed.password).toBe("");
-    expect(redactUrlCredentials(stated)).toBe(stated);
+    expect(redactUrlCredentials(stated)).toBe("file:***@127.0.0.1");
+    expect(redactUrlCredentials(stated)).not.toContain(FAKE_SECRET);
   });
 
   // …and the fallback still fails CLOSED: a value the parser cannot read at all
@@ -1594,12 +1601,73 @@ describe("redactUrlCredentials / formatStatedUrlValue", () => {
   });
 
   // …and a NON-special scheme does not: without `//` there is no authority at
-  // all, so there is nothing to redact and nothing to invent.
-  it("leaves a non-special scheme with no `//` alone, because it has no authority", () => {
+  // all, so there is nothing to LOCATE — which is not the same as nothing to
+  // hide, and this case used to say it was (cinatra#2913, round-7 finding B2).
+  //
+  // WHATWG puts the whole `user:password@host` into an OPAQUE PATH here and
+  // reports an empty username and an empty password, so both the parser test
+  // and the textual rule pass over it and the value went out verbatim. The
+  // parser's silence is not a clearance. Nothing can say which side of that `@`
+  // is the secret, so the value is WITHHELD.
+  it("withholds a non-special scheme with no `//`, whose `@` nothing can account for", () => {
     const stated = `redis:${FAKE_USERINFO}@127.0.0.1:6379`;
     const parsed = new URL(stated);
     expect(parsed.hostname).toBe("");
     expect(parsed.password).toBe("");
+    // The parser's own reading, measured: the credential is the PATH.
+    expect(parsed.pathname).toContain(FAKE_SECRET);
+    expect(redactUrlCredentials(stated)).toBe(WITHHELD_URL_VALUE);
+    expect(redactUrlCredentials(stated)).not.toContain(FAKE_SECRET);
+  });
+
+  // THE SAME RULE, ON THE SHAPE AN OPERATOR ACTUALLY TYPES: a scheme with a `-`
+  // in it and no `//` at all — someone who wrote the username where the scheme
+  // goes, or simply forgot the slashes. This is the value `formatUnusableServiceUrl`
+  // meets, because `classifyServiceUrl` files it `no-host`.
+  it("withholds a credential an operator put in an opaque path", () => {
+    const stated = `redis-user:${FAKE_SECRET}@127.0.0.1:6379`;
+    expect(new URL(stated).host).toBe("");
+    expect(redactUrlCredentials(stated)).toBe(WITHHELD_URL_VALUE);
+  });
+
+  // …AND THE UNPARSEABLE VALUE THE TEXTUAL RULE CANNOT MATCH EITHER. For a
+  // special scheme a `?` starts the query, so the authority is `u:pw`, the port
+  // is invalid and the value parses as nothing — and both userinfo patterns
+  // stop at that `?` without ever reaching the `@`. Two operator-facing lines
+  // call this helper DIRECTLY, so "unparseable values are withheld by
+  // `formatStatedUrlValue`" did not cover it.
+  it("withholds an unparseable value whose userinfo hides behind a `?`", () => {
+    const stated = `https://${FAKE_USERINFO}?x@tunnel.example`;
+    expect(() => new URL(stated)).toThrow();
+    expect(redactUrlCredentials(stated)).toBe(WITHHELD_URL_VALUE);
+    expect(redactUrlCredentials(stated)).not.toContain(FAKE_SECRET);
+  });
+
+  // THE BOUNDARY THE FAIL-CLOSED RULE BUYS THAT WITH, recorded rather than
+  // discovered later. A host-less value whose `@` really is ordinary path text
+  // is withheld too, because nothing here can tell it apart from the shape
+  // above. That is the trade the docblock states — it would rather hide a path
+  // than print a password — and no service variable this preflight reads is
+  // ever a `file:` URL.
+  it("withholds a host-less path `@` as well, which is the cost of failing closed", () => {
+    expect(redactUrlCredentials("file:///tmp/a@b")).toBe(WITHHELD_URL_VALUE);
+    // …while an `@` under a real authority still prints, which is what keeps
+    // the rule usable: this is the ordinary shape of a tunnel URL.
+    expect(redactUrlCredentials("https://tunnel.example/@me")).toBe("https://tunnel.example/@me");
+    expect(redactUrlCredentials("unix:///var/run/redis.sock")).toBe("unix:///var/run/redis.sock");
+  });
+
+  // THE OTHER BOUNDARY, and it is a limit of the DUTY rather than of the rule.
+  // This helper hides USERINFO. A secret an operator put in a QUERY PARAMETER
+  // is not userinfo: WHATWG parsed the authority, found none, and the `@` is in
+  // the query — the same reading the `?q=a@b` case above is pinned on. Hiding
+  // it would mean withholding every URL with a query string, and the value
+  // would still be in the file. Recorded so the property below is not read as
+  // a promise this module does not make.
+  it("does not hide a secret in a query parameter, which is not userinfo", () => {
+    const stated = `https://tunnel.example/?u=${FAKE_USERINFO}@x`;
+    expect(new URL(stated).username).toBe("");
+    expect(new URL(stated).search).toContain(FAKE_SECRET);
     expect(redactUrlCredentials(stated)).toBe(stated);
   });
 
@@ -1608,6 +1676,19 @@ describe("redactUrlCredentials / formatStatedUrlValue", () => {
       formatStatedUrlValue({ urlVar: "REDIS_URL", url: `redis://${FAKE_USERINFO} more@/0` }),
     ).toBe("REDIS_URL");
     expect(formatStatedUrlValue({ urlVar: "REDIS_URL", url: "not a url" })).toBe("REDIS_URL");
+  });
+
+  // ONE WITHHOLDING RULE, NOT TWO. A value that PARSES gets past the branch
+  // above, so the opaque-path credential arrived here and was echoed whole with
+  // a `REDIS_URL=` in front of it (cinatra#2913, round-7 finding B2). The
+  // marker never reaches an operator: the variable's name replaces it.
+  it("names the variable for a value the redaction withheld, exactly as for an unparseable one", () => {
+    const stated = `redis:${FAKE_USERINFO}@127.0.0.1:6379`;
+    expect(() => new URL(stated)).not.toThrow();
+    const shown = formatStatedUrlValue({ urlVar: "REDIS_URL", url: stated });
+    expect(shown).toBe("REDIS_URL");
+    expect(shown).not.toContain(FAKE_SECRET);
+    expect(shown).not.toContain(WITHHELD_URL_VALUE);
   });
 
   it("shows a parseable value, redacted", () => {
@@ -1663,6 +1744,77 @@ describe("redactUrlCredentials / formatStatedUrlValue", () => {
     }
   });
 
+  // THE BACKSTOP'S OWN BLIND SPOT, closed with a second property.
+  //
+  // The one above asserts that no PARSER-VISIBLE credential survives, and by
+  // the parser's definition the shapes below hold no credential at all: they
+  // have no authority, so `username` and `password` are empty and there is
+  // nothing for it to compare against. That is exactly the gap the round-7
+  // finding came through. So this property asserts on the RAW FIXTURE SECRET
+  // instead — the string an operator would lose — and it does not ask the
+  // parser anything. Every shape here is one WHATWG accepts or rejects in a way
+  // that hides the credential from the structural rule.
+  it("never leaves the fixture secret in the output, on any parser-blindspot shape", () => {
+    const shapes = [
+      // Opaque paths: no `//`, so a non-special scheme has no authority.
+      `redis:${FAKE_USERINFO}@127.0.0.1:6379`,
+      `rediss:${FAKE_USERINFO}@cache.example.invalid:6380`,
+      `redis-user:${FAKE_SECRET}@127.0.0.1:6379`,
+      `postgresql:${FAKE_USERINFO}@127.0.0.1:5434/postgres`,
+      `bolt:${FAKE_USERINFO}@127.0.0.1:7687`,
+      `neo4j+s:${FAKE_USERINFO}@graph.example.invalid`,
+      // Special scheme, no `//`: WHATWG calls it a path, the textual rule can
+      // still locate the userinfo, and either answer withholds the secret.
+      `file:${FAKE_USERINFO}@127.0.0.1`,
+      // Host-less values WHATWG accepts, with the credential in the path.
+      `redis:///${FAKE_USERINFO}@0`,
+      `unix:///${FAKE_USERINFO}@var/run/redis.sock`,
+      // A PROTOCOL-RELATIVE value: no `scheme:` at all, so `urlScheme` returns
+      // undefined and the old rule handed it straight back. An `@` with no
+      // scheme in front of it is not proof of anything either.
+      `//${FAKE_USERINFO}@127.0.0.1:6379`,
+      // Unparseable, with the userinfo behind a delimiter both patterns stop at.
+      `https://${FAKE_USERINFO}?x@tunnel.example`,
+      `http://${FAKE_USERINFO}#x@tunnel.example`,
+      `redis://${FAKE_USERINFO}?0@127.0.0.1:6379`,
+    ];
+    for (const stated of shapes) {
+      const label = JSON.stringify(stated).replaceAll(FAKE_SECRET, "<secret>");
+      const shown = redactUrlCredentials(stated);
+      expect(shown, `${label} leaked the fixture secret`).not.toContain(FAKE_SECRET);
+      // …and the same through the formatter both surfaces actually print with.
+      const line = formatStatedUrlValue({ urlVar: "REDIS_URL", url: stated });
+      expect(line, `${label} leaked through formatStatedUrlValue`).not.toContain(FAKE_SECRET);
+      expect(line, `${label} printed the marker at an operator`).not.toContain(
+        WITHHELD_URL_VALUE,
+      );
+    }
+  });
+
+  // THE OTHER SIDE OF FAILING CLOSED: the marker must never reach the ONE call
+  // site that does not handle it. `scripts/lib/dev-preflight.mjs` interpolates
+  // `redactUrlCredentials` straight into the duplicate-host-port sentence for an
+  // `ours` URL, which is safe only because an `ours` URL parsed AND has an
+  // authority. Pinned as a property so widening `ours` cannot break it quietly.
+  it("never withholds an `ours` URL, which one call site interpolates unguarded", () => {
+    const shapes = [
+      `redis://${FAKE_USERINFO}@127.0.0.1:6379/0`,
+      `redis://127.0.0.1:6379/0`,
+      `postgresql://${FAKE_USERINFO}@127.0.0.1:5434/postgres`,
+      `http://${FAKE_USERINFO}@127.0.0.1:3003`,
+      `http:${FAKE_USERINFO}@127.0.0.1:3003`,
+      `redis://${FAKE_USERINFO}@localhost:6379/0`,
+      `bolt://${FAKE_USERINFO}@127.0.0.1:7687`,
+    ];
+    for (const stated of shapes) {
+      const classified = classifyServiceUrl(stated);
+      expect(classified.state, `${JSON.stringify(stated)} is not \`ours\``).toBe("ours");
+      const shown = redactUrlCredentials(classified.url);
+      expect(shown, JSON.stringify(stated)).not.toBe(WITHHELD_URL_VALUE);
+      expect(shown, JSON.stringify(stated)).not.toContain(FAKE_SECRET);
+    }
+  });
+
   // The formatter the two surfaces actually print, on all four defect shapes.
   // The assertion is the same on every one: the secret is not in the sentence.
   it("never lets a credential into the unusable-URL line, on any defect shape", () => {
@@ -1671,6 +1823,8 @@ describe("redactUrlCredentials / formatStatedUrlValue", () => {
       `redis://${FAKE_USERINFO}@/0`, // host-less, so unparseable too
       `redis://${FAKE_USERINFO}@127.0.0.1:0/0`, // unusable-port
       `redsi://${FAKE_USERINFO}@127.0.0.1/0`, // no-known-port
+      `redis:${FAKE_USERINFO}@127.0.0.1:6379`, // no-host, credential in the opaque path
+      `redis-user:${FAKE_SECRET}@127.0.0.1:6379`, // no-host, and no `//` to key on
     ];
     for (const url of shapes) {
       const line = formatUnusableServiceUrl({
@@ -3782,7 +3936,7 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
    * shell variable is deleted, because a shell value outranks the file and the
    * whole point of these cases is what a LANE FILE resolves to.
    */
-  const runLauncher = (envLocal, { containerPorts } = {}) => {
+  const runLauncher = (envLocal, { containerPorts, shellEnv } = {}) => {
     rmSync(dockerLog, { force: true });
     writeFileSync(path.join(dir, ".env.local"), envLocal);
 
@@ -3811,6 +3965,12 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
       delete env[key];
     }
     for (const spec of PREFLIGHT_HOST_PORTS) delete env[spec.envVar];
+    // Stated in the SHELL, after the deletions. `runNangoHealthPreflight` reads
+    // NANGO_SERVER_URL from the REPO ROOT's `.env.local` (it heals against the
+    // repo root's compose files, so it reads that root's file), never from the
+    // fixture directory — so the shell is the only way a case can reach the
+    // launcher's remote-Nango branch without touching the real checkout.
+    if (shellEnv) Object.assign(env, shellEnv);
 
     const result = spawnSync(process.execPath, [DEV_SERVER], {
       cwd: dir,
@@ -4068,6 +4228,36 @@ describe("dev-server.mjs DB-drift preflight is scoped to the worktree's plan", (
     const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
     expect(out).not.toContain(FAKE_SECRET);
     expect(out).toContain("https://***@nango.example.invalid");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE PARSER'S BLIND SPOT, ON THE LAUNCHER (cinatra#2913, round-7 finding B2)
+  // -------------------------------------------------------------------------
+  //
+  // The Nango warning is the launcher's DIRECT call to `redactUrlCredentials`,
+  // so an unparseable value reached it unredacted — `formatStatedUrlValue`'s
+  // withholding rule is not on this path. `resolveNangoBaseUrl` only trims, and
+  // `isLocalNangoUrl` answers false for a value that does not parse, so this is
+  // the branch such a URL always takes.
+  it("never prints the password out of a NANGO_SERVER_URL it cannot redact", () => {
+    const result = runLauncher(laneEnv(`REDIS_URL=redis://127.0.0.1:${laneRedisPort}`), {
+      shellEnv: { NANGO_SERVER_URL: `https://${FAKE_USERINFO}?x@nango.example.invalid` },
+    });
+    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("at the address NANGO_SERVER_URL states");
+    expect(out).not.toContain(WITHHELD_URL_VALUE);
+  });
+
+  // …and the REDIS_URL half of the same finding, on the launcher's own
+  // stand-down line rather than on the checker's note.
+  it("never prints the password out of a REDIS_URL whose credential is in an opaque path", () => {
+    const result = runLauncher(
+      laneEnv(`REDIS_URL=redis:${FAKE_USERINFO}@127.0.0.1:${laneRedisPort}`),
+    );
+    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("REDIS_URL does not state a usable address for Redis");
   });
 
   // AND THE ROUND-3 PIN THAT COULD NOT SURVIVE THE ROUND-4 FIX, stated as a
@@ -5087,5 +5277,56 @@ describe("check-services.mjs, run against a fixture .env.local", () => {
       `REDIS_URL=rediss://${FAKE_USERINFO}@cache.example.invalid:6380`,
     ]);
     expect(out).not.toContain(FAKE_SECRET);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE PARSER'S BLIND SPOT, END TO END (cinatra#2913, round-7 finding B2)
+  // -------------------------------------------------------------------------
+  //
+  // The operator forgot the `//`. WHATWG then reads the whole
+  // `user:password@host:port` as one opaque path, reports no username and no
+  // password, and `classifyServiceUrl` files the value `no-host` — so it lands
+  // in `formatUnusableServiceUrl`, the line this surface prints for exactly
+  // this defect. Nothing redacted it and the note published the password.
+  it("never prints the password out of a REDIS_URL whose credential is in an opaque path", () => {
+    const out = run([
+      "COMPOSE_PROJECT_NAME=p2913lane",
+      `REDIS_URL=redis:${FAKE_USERINFO}@127.0.0.1:${closed.redis}`,
+    ]);
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("REDIS_URL does not state a usable address for Redis");
+    // The variable is named, and the value is not shown at all.
+    expect(out).not.toContain("REDIS_URL=redis:");
+  });
+
+  // …and the same shape with the `-` scheme an operator produces by putting the
+  // USERNAME where the scheme goes.
+  it("never prints the password out of a REDIS_URL whose scheme swallowed the username", () => {
+    const out = run([
+      "COMPOSE_PROJECT_NAME=p2913lane",
+      `REDIS_URL=redis-user:${FAKE_SECRET}@127.0.0.1:${closed.redis}`,
+    ]);
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("REDIS_URL does not state a usable address for Redis");
+  });
+
+  // THE DIRECT CALL SITE. The MCP public URL line calls `redactUrlCredentials`
+  // itself rather than going through `formatStatedUrlValue`, so the "an
+  // unparseable value is withheld" rule did not reach it: for a special scheme
+  // the `?` starts the query, the authority is `u:pw`, the port is invalid, and
+  // the value parses as nothing — so it came back with only its whitespace
+  // scrubbed and printed whole beside a green tick.
+  it("never prints the password out of an MCP_PUBLIC_BASE_URL it cannot redact", () => {
+    const out = run([`MCP_PUBLIC_BASE_URL=https://${FAKE_USERINFO}?x@tunnel.example.invalid`]);
+    expect(out).not.toContain(FAKE_SECRET);
+    expect(out).toContain("MCP public URL (env): stated in MCP_PUBLIC_BASE_URL");
+    expect(out).not.toContain(WITHHELD_URL_VALUE);
+  });
+
+  // …and the ordinary tunnel URL still prints, `@` and all: a rule that hid
+  // every public URL would be traded for one nobody could use.
+  it("still shows an ordinary MCP_PUBLIC_BASE_URL, including an `@` in its path", () => {
+    const out = run(["MCP_PUBLIC_BASE_URL=https://tunnel.example.invalid/@me"]);
+    expect(out).toContain("MCP public URL (env): https://tunnel.example.invalid/@me");
   });
 });
