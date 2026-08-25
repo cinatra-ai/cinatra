@@ -40,7 +40,7 @@
 // its source.
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(__dirname, "..", "..", "..", "..");
@@ -212,16 +212,26 @@ describe("the window is drawn only for a person the run would answer", () => {
     expect(watcher).toContain("templateId={templateId}");
   });
 
-  it("the field-assist route asks the run, not the platform tier, when a run is named", () => {
-    const route = read("src/app/api/agents/builder/[templateId]/hitl-assist/route.ts");
-    expect(route).toContain("canRespondInRunWindow(runId, templateId)");
-    // The administrator check survives ONLY for the pre-run screen that has no
-    // run to ask.
-    expect(route).toContain("requireAdminSession()");
-    // The LAST occurrence is the call itself; the earlier ones are the import
-    // and the comment that explains what it replaced.
-    const adminIdx = route.lastIndexOf("requireAdminSession()");
-    expect(route.slice(0, adminIdx)).toContain("if (runId) {");
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). W5b repaired the field-assist
+  // route so it asked the RUN's access instead of the platform tier, because
+  // that route was still the door the four form windows used. The route is now
+  // RETIRED with its four callers, so there is no door left to repair — the fill
+  // that replaced it takes the run's access through the same one helper, and
+  // there is no administrator check anywhere on the road.
+  it("the fill road asks the run's own access, and no platform tier at all", () => {
+    expect(
+      existsSync(
+        join(ROOT, "src/app/api/agents/builder/[templateId]/hitl-assist/route.ts"),
+      ),
+    ).toBe(false);
+    const turn = read("src/lib/lifecycle/run-window-turn.ts");
+    expect(turn).toContain('enforceRunAccess(runForCheck, actor, op, roleHints)');
+    expect(turn).not.toContain("requireAdminSession");
+    const fill = read("src/lib/lifecycle/bound-screen-fill.ts");
+    expect(fill).not.toContain("requireAdminSession");
+    // The fill resolves the card under the PERSON's own credential, through the
+    // read-only actor-checked resolver — never a looser read.
+    expect(fill).toContain("resolveBoundReference");
   });
 });
 

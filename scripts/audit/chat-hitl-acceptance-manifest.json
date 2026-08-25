@@ -568,7 +568,7 @@
     },
     {
      "file": "src/lib/lifecycle/__tests__/lifecycle-surface-matrix-conformance.test.ts",
-     "testName": "a widget delegation reaches its OWN content-editor primitive, the read-only pulls and the ONE lent action, and nothing else"
+     "testName": "a widget delegation reaches its OWN content-editor primitive, the read-only pulls, the ONE lent action and the fill, and nothing else"
     }
    ],
    "unitProofs": [

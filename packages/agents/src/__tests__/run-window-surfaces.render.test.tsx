@@ -108,7 +108,10 @@ vi.mock("lucide-react", () => {
 // and real-database tiers; here it only has to answer so the controller settles.
 vi.mock("../run-window-actions", () => ({
   loadRunWindowConversation: vi.fn(async () => []),
-  sendRunWindowTurn: vi.fn(async () => ({ ok: true, entries: [] })),
+  // THE OUTCOME'S REAL SHAPE (cinatra#2934, lifecycle-b W5c): the turn now
+  // reports the fills it placed and whether it PRESSED a control, and the one
+  // controller reads both. A mock that omits them lies about the contract.
+  sendRunWindowTurn: vi.fn(async () => ({ ok: true, entries: [], fills: [], acted: false })),
 }));
 
 vi.mock("../hitl-actions", () => ({
@@ -337,20 +340,17 @@ const SURFACES: Surface[] = [
  * carrying that behaviour through the change that made this window the run's
  * conversation.
  */
-describe("a form fill that fails is still said out loud", () => {
-  // The armed schedule's window does TWO jobs with one typed sentence: it puts
-  // the turn into the run's conversation, and it asks the assist route to fill
-  // this form's fields. When the second fails the fields are not filled, and a
-  // reader told nothing would read the run's own answer as if they had been.
-  //
-  // The line is the PLATFORM's, not the conversation's: nothing is written on
-  // the success path, the stored exchange stays the only record of what was
-  // asked and answered, and this is shown after it.
-  it("shows the platform's line when the assist call fails", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })),
-    );
+describe("the armed schedule's window keeps no second road", () => {
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). This window used to do TWO jobs
+  // with one typed sentence — put the turn into the run's conversation, and ask
+  // the field-assist route to fill this form's fields — and the two cases here
+  // pinned the platform's line about the second job failing and its silence
+  // when it succeeded. That route is retired with its four callers, so there is
+  // no second job to report on: the cases go with the call they were about, and
+  // what replaces them is the property the retirement is FOR.
+  it("sends what is typed on the run's own road and makes no call of its own", async () => {
+    const anyCall = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    vi.stubGlobal("fetch", anyCall);
     const { SchedulePromptWindow } = await import("../schedule-prompt-window");
     render(
       <SchedulePromptWindow
@@ -364,46 +364,14 @@ describe("a form fill that fails is still said out loud", () => {
     await act(async () => {
       await promptField.submit?.("reschedule to 9 on weekdays");
     });
-    const notice = await screen.findByText(/Could not fetch suggestions/i);
-    expect(notice).not.toBeNull();
-  });
-
-  it("writes no platform line when the assist call succeeds", async () => {
-    // The success path must add nothing: the stored exchange already carries
-    // the answer, and a second copy beside it is the parallel transcript this
-    // slice removed from every window.
-    //
-    // ASSERTING ABSENCE ALONE WOULD PROVE NOTHING — a window that never called
-    // the endpoint at all would pass it. So the call is watched: it must have
-    // been made, to the assist route, and it must have RESOLVED before the
-    // absence is read.
-    let resolved = false;
-    const assist = vi.fn(async (url: string) => {
-      expect(String(url)).toContain("/hitl-assist");
-      resolved = true;
-      return { ok: true, status: 200, json: async () => ({ message: "Done." }) };
-    });
-    vi.stubGlobal("fetch", assist);
-    const { SchedulePromptWindow } = await import("../schedule-prompt-window");
-    render(
-      <SchedulePromptWindow
-        templateId="tmpl-2933"
-        runId="run-2933"
-        canRespondInWindow={true}
-        readOnly={false}
-      />,
-    );
     await settle();
-    await act(async () => {
-      await promptField.submit?.("reschedule to 9 on weekdays");
-    });
-    await waitFor(() => expect(resolved).toBe(true));
-    await settle();
-    expect(assist).toHaveBeenCalled();
-    // Neither the failure line nor the endpoint's own words appear: the answer
-    // the reader sees is the STORED one.
+    // NOT "no fetch to the assist route" — no endpoint of this window's own at
+    // all. The run's exchange travels by server action, so a window that kept a
+    // private path would show up here whatever it called.
+    expect(anyCall).not.toHaveBeenCalled();
+    // And nothing is composed beside the stored exchange: the answer the reader
+    // sees is the run's own.
     expect(screen.queryByText(/Could not fetch suggestions/i)).toBeNull();
-    expect(screen.queryByText("Done.")).toBeNull();
   });
 });
 

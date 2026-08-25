@@ -219,6 +219,17 @@ export async function handleLentAction(
     readonly resolveActor?: typeof resolveBoundTurnActor;
     readonly submitReviewDecision?: SubmitReviewDecisionAction;
     readonly approveScreen?: ApproveReviewTaskInternal;
+    /** This message's own fills + its own attachments (cinatra#2934). */
+    readonly readFills?: (
+      runId: string,
+      ref: string,
+      messageId: string,
+    ) => Promise<{ ref: string; values: Record<string, unknown> }[]>;
+    readonly readAttachments?: (
+      runId: string,
+      messageId: string,
+    ) => Promise<readonly Record<string, unknown>[] | null>;
+    readonly buildPayload?: BuildChatGateSubmitPayload;
     readonly now?: () => Date;
   } = {},
 ): Promise<McpToolResult> {
@@ -295,26 +306,137 @@ export async function handleLentAction(
   // The HITL screen's Continue. `approveReviewTaskInternal` is the gate's own
   // actor-checked resume entry — the door the plan says the submit side already
   // has — and it enforces run execute + approveHitl against the run it resolves
-  // before any write. No values are passed: pressing Continue submits the form
-  // as it stands, and FILLING the form by asking is the plan's separate road
-  // (cinatra#2934).
+  // before any write.
+  //
+  // WHAT IS SENT IS WHAT THE SCREEN WAS SHOWN HOLDING (cinatra#2934, lifecycle-b
+  // W5c). The plan: "the assistant submits through the same checked, server-side
+  // action the button uses — one road for the press and for the ask — and the
+  // fields still show what was sent." So the values come from the FILL ROW this
+  // run recorded for THIS screen, read back here on the server, and the files
+  // attached beside the person's own message come from their own row: the model
+  // supplies neither, and neither is left behind by the press. A screen nobody
+  // filled submits exactly what it submitted before this slice — the form as it
+  // stands.
   const approve = deps.approveScreen ?? (await loadApproveScreen());
+  const readers = deps.readFills && deps.readAttachments
+    ? null
+    : await loadRunWindowFillReaders();
+  const readFills = deps.readFills ?? readers!.readRunWindowFillsForMessage;
+  const readAttachments =
+    deps.readAttachments ?? readers!.readRunWindowAttachmentsForMessage;
+  const fills = await readFills(bound.runId, parsed.data.ref, claims.messageId).catch(
+    () => [] as { ref: string; values: Record<string, unknown> }[],
+  );
+
+  // A PRESS SENDS WHAT THIS MESSAGE PLACED — and a message that placed nothing
+  // presses nothing (convergence round 1, finding 2).
+  //
+  // THE PLAN'S OWN SENTENCE IS WHY. "When you plainly ask, IN THE SAME MESSAGE,
+  // for it to be submitted, the assistant submits through the same checked,
+  // server-side action the button uses — one road for the press and for the ask
+  // — AND THE FIELDS STILL SHOW WHAT WAS SENT." The press the plan describes is
+  // the second half of a fill: the person said what the form should say and
+  // asked for it to go. A press with nothing placed in this message has no
+  // "what was sent" to show — the person's own browser edits are not on the
+  // server — and would resume a run on values nobody was shown.
+  //
+  // IT IS ALSO WHAT BOUNDS THE RESIDUAL. Whether a sentence ASKED for the press
+  // is the model's judgement, so text reaching the model — the run's own content
+  // included — can induce a call. Requiring a fill from the SAME message means
+  // an induced bare press does nothing at all, and the fill it would have to
+  // make first is itself visible to the person in their own fields.
+  //
+  // The person presses the screen's own button for everything else, which is
+  // what the refusal tells the assistant to say.
+  if (fills.length === 0) return refuseCardUnavailable();
+
+  const attachments = await readAttachments(bound.runId, claims.messageId).catch(
+    () => null,
+  );
+  const submitValues = await buildScreenSubmitValues({
+    reviewTaskId: bound.screenRef,
+    fieldName: bound.form.fieldName,
+    // THE SCREEN'S OWN CURRENT VALUES FIRST, then every fill this message placed
+    // in order (finding 4). A turn that filled the subject and then the body
+    // left BOTH in the fields, and a field the person never mentioned still
+    // holds what the screen already had — so what is sent is what the screen
+    // shows, not the last thing the assistant said.
+    current: bound.form.values,
+    fills: fills.map((f) => f.values),
+    attachments: attachments ?? [],
+    buildPayload: deps.buildPayload,
+  });
   try {
     await approve(
       bound.screenRef,
       actorCtx.actor.userId ?? frame.userId,
-      undefined,
+      submitValues,
       bound.form.fieldName,
       null,
       actorCtx.actor,
       actorCtx.roleHints,
     );
-    return say({ ok: true, outcome: { kind: "submitted" } });
+    return say({
+      ok: true,
+      outcome: { kind: "submitted", placed: Object.keys(Object.assign({}, ...fills.map((f) => f.values))) },
+    });
   } catch {
     // The gate's own refusal shape is not a message this surface may invent, and
     // the grant is already spent, so the honest answer is that nothing landed.
     return say({ ok: false, outcome: { kind: "error" }, message: LENT_ACTION_CARD_UNAVAILABLE });
   }
+}
+
+type BuildChatGateSubmitPayload = typeof import(
+  "@cinatra-ai/agents/hitl-gate-submit"
+)["buildChatGateSubmitPayload"];
+
+async function loadRunWindowFillReaders() {
+  return import("@cinatra-ai/agents/run-window-conversation-store");
+}
+
+async function loadBuildChatGateSubmitPayload(): Promise<BuildChatGateSubmitPayload> {
+  const mod = await import("@cinatra-ai/agents/hitl-gate-submit");
+  return mod.buildChatGateSubmitPayload;
+}
+
+/**
+ * The resume payload for a screen submitted by asking.
+ *
+ * It is the SAME pure builder the browser's own Continue uses — the setup-loop
+ * wrap, the grouped-setup merge and the WayFlow approve/userResponse envelope
+ * with its attachment wrap all come from there, so a submit that was asked for
+ * and a submit that was pressed produce the same shape. `undefined` when there
+ * is nothing to say: the gate's own default then applies, byte-identically to
+ * the press this road replaces for a screen nobody filled and nobody attached
+ * anything to.
+ */
+export async function buildScreenSubmitValues(input: {
+  readonly reviewTaskId: string;
+  readonly fieldName: string | undefined;
+  /** The screen's OWN current values — what the fields held before this turn. */
+  readonly current: Record<string, unknown>;
+  /** Every fill this message placed, oldest first. */
+  readonly fills: ReadonlyArray<Record<string, unknown>>;
+  readonly attachments: readonly Record<string, unknown>[];
+  readonly buildPayload?: BuildChatGateSubmitPayload;
+}): Promise<Record<string, unknown> | undefined> {
+  // WHAT THE SCREEN SHOWS: its own values, with every fill applied over them in
+  // the order they were placed.
+  const shown: Record<string, unknown> = { ...input.current };
+  for (const fill of input.fills) Object.assign(shown, fill);
+  if (Object.keys(shown).length === 0 && input.attachments.length === 0) {
+    return undefined;
+  }
+  const build = input.buildPayload ?? (await loadBuildChatGateSubmitPayload());
+  const { payload } = build({
+    reviewTaskId: input.reviewTaskId,
+    ...(input.fieldName ? { fieldName: input.fieldName } : {}),
+    value: shown,
+    buffered: {},
+    pendingAttachments: input.attachments as never,
+  });
+  return payload;
 }
 
 /** The review card's three buttons, as the decision core names them. */

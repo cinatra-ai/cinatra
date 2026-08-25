@@ -211,16 +211,28 @@ export async function resolveBoundReference(input: {
  * and cannot drift into a store call.
  *
  *   · a REVIEW lends its own three buttons — Comment, Approve, Reject;
- *   · a HITL SCREEN lends Submit, the button under its form;
+ *   · a HITL SCREEN lends Fill and Submit — the plan's "fill and submit where
+ *     fields wait" (cinatra#2934, lifecycle-b W5c). They are two different
+ *     roads and are kept apart everywhere: FILL places values in the fields in
+ *     front of the person and presses nothing, so it consumes no grant; SUBMIT
+ *     is the button under the form and takes the single-use grant, exactly as a
+ *     review's Comment does;
  *   · anything ABSENT lends nothing at all.
- *
- * Filling a form without submitting it is NOT here: it is the plan's own
- * separate road and is built by cinatra#2934.
  */
 export function controlsLentBy(
   resolution: BoundReferenceResolution,
-): readonly ("comment" | "approve" | "reject" | "submit")[] {
+): readonly LentCardControl[] {
   if (resolution.kind === "review") return ["comment", "approve", "reject"];
-  if (resolution.kind === "hitl_screen") return ["submit"];
+  if (resolution.kind === "hitl_screen") return ["fill", "submit"];
   return [];
 }
+
+/**
+ * What a card can lend.
+ *
+ * A superset of the GRANT vocabulary (`LentActionControl`): `fill` is a control
+ * the screen lends but no grant ever names, because filling presses nothing.
+ * Keeping the two vocabularies distinct is what stops a fill from ever being
+ * spendable as a press.
+ */
+export type LentCardControl = "comment" | "approve" | "reject" | "submit" | "fill";

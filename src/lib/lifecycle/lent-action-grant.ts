@@ -66,11 +66,15 @@ import {
  * are exactly what the card's own buttons offer". A control that no card draws
  * is not in this union, so a grant cannot name one.
  *
- * `fill` is deliberately ABSENT. Filling a form without submitting it is the
- * plan's own separate road ("it needs a mechanism of its own, because the
- * fields live in the page in front of you while the assistant works on the
- * server") and is built by cinatra#2934. Adding it here before that mechanism
- * exists would mint an authority nothing can honour.
+ * `fill` is deliberately ABSENT, and STAYS absent now that the fill road exists
+ * (cinatra#2934, lifecycle-b W5c). Filling a form presses nothing: it places
+ * values in the fields in front of the person and the person still presses the
+ * button. It is therefore not an authority a grant can spend, and giving it one
+ * would make "fill, then submit when asked" impossible in a single message —
+ * the grant is consumed by its first use, and the plan requires both halves of
+ * that sentence to work in the same message. The fill road reads the turn's
+ * grant to know the screen was bound (`matchLentActionGrantCard` below) and
+ * never spends it.
  */
 export const LENT_ACTION_CONTROLS = [
   "comment",
@@ -331,6 +335,33 @@ export function matchLentActionGrant(
   if (!constantTimeEquals(claims.userId, call.userId)) return false;
   if (!constantTimeEquals(claims.orgId, call.orgId)) return false;
   if (claims.control !== call.control) return false;
+  const fingerprint = lentActionCardFingerprint(call.cardRef);
+  if (!fingerprint) return false;
+  return constantTimeEquals(claims.cardRefFingerprint, fingerprint);
+}
+
+/**
+ * Does this grant belong to this person and THIS CARD — ignoring the control?
+ *
+ * THE ONE CALLER IS THE FILL ROAD (cinatra#2934), and the narrowing is
+ * deliberate rather than a convenience: a fill presses nothing, so the question
+ * it has to answer is "was this message sent with that screen bound", not "may
+ * this message press that button". It is a strictly WEAKER check than
+ * `matchLentActionGrant` and it is never used to authorize an effect on a card:
+ * the caller must not spend the grant, and the only thing it may do with a true
+ * answer is place values on a screen the person is looking at.
+ */
+export function matchLentActionGrantCard(
+  claims: LentActionGrantClaims,
+  call: {
+    readonly userId: string;
+    readonly orgId: string;
+    readonly cardRef: string;
+  },
+): boolean {
+  if (!isBounded(call.userId) || !isBounded(call.orgId)) return false;
+  if (!constantTimeEquals(claims.userId, call.userId)) return false;
+  if (!constantTimeEquals(claims.orgId, call.orgId)) return false;
   const fingerprint = lentActionCardFingerprint(call.cardRef);
   if (!fingerprint) return false;
   return constantTimeEquals(claims.cardRefFingerprint, fingerprint);

@@ -257,25 +257,37 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
   // here too. Standalone use (props.embeddedAsRenderer not set) ignores this
   // path entirely; the local handlePromptSubmit is the only setValue source.
   const aiSuggestions = props.aiSuggestions;
+  // ONE APPLICATION, TWO SOURCES (cinatra#2934, lifecycle-b W5c). The parent's
+  // `aiSuggestions` prop and this screen's own window write the same fields the
+  // same way, so a described change lands identically whichever road it took.
+  // No fork: the two callers share this function rather than each writing the
+  // form themselves.
+  const applyScheduleValues = useCallback(
+    (values: Record<string, unknown>) => {
+      const sv = setValue as (field: string, value: string) => void;
+      if (typeof values.triggerType === "string") {
+        setValue("triggerType", values.triggerType as FormValues["triggerType"]);
+      }
+      if (typeof values.scheduledAt === "string") {
+        // Normalize to YYYY-MM-DDTHH:mm (strip seconds/timezone that may be appended).
+        const normalized = values.scheduledAt.replace(" ", "T").substring(0, 16);
+        sv("scheduledAt", normalized);
+      }
+      if (typeof values.timezone === "string") {
+        sv("timezone", values.timezone);
+      }
+      if (typeof values.cronExpression === "string") {
+        sv("cronExpression", values.cronExpression);
+        const parsed = parseCronToRecurring(values.cronExpression);
+        if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
+      }
+    },
+    [setValue],
+  );
   useEffect(() => {
     if (!props.embeddedAsRenderer || !aiSuggestions) return;
-    const sv = setValue as (field: string, value: string) => void;
-    if (typeof aiSuggestions.triggerType === "string") {
-      setValue("triggerType", aiSuggestions.triggerType as FormValues["triggerType"]);
-    }
-    if (typeof aiSuggestions.scheduledAt === "string") {
-      const normalized = aiSuggestions.scheduledAt.replace(" ", "T").substring(0, 16);
-      sv("scheduledAt", normalized);
-    }
-    if (typeof aiSuggestions.timezone === "string") {
-      sv("timezone", aiSuggestions.timezone);
-    }
-    if (typeof aiSuggestions.cronExpression === "string") {
-      sv("cronExpression", aiSuggestions.cronExpression);
-      const parsed = parseCronToRecurring(aiSuggestions.cronExpression);
-      if (parsed) setRecurring(prev => ({ ...prev, ...parsed }));
-    }
-  }, [aiSuggestions, props.embeddedAsRenderer, setValue]);
+    applyScheduleValues(aiSuggestions);
+  }, [aiSuggestions, props.embeddedAsRenderer, applyScheduleValues]);
 
   // Initialize cronExpression on mount so it's valid before the user touches any recurring field.
   useEffect(() => {
@@ -285,67 +297,21 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
 
   const handlePromptSubmit = useCallback(async (prompt: string) => {
     if (!props.templateId) return;
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    void runWindow.send(prompt);
+    // THE FILL ROAD (cinatra#2934, lifecycle-b W5c). The plan: "The same lent
+    // fill control: the assistant fills the fields you can see with what you
+    // asked for, and you still press the screen's own button." The field-assist
+    // route and its second, hidden model are gone; the values come back from the
+    // run's own conversation with the assistant and are written into THIS form.
     setPromptPending(true);
     try {
-      const res = await fetch(
-        `/api/agents/builder/${encodeURIComponent(props.templateId)}/hitl-assist`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: ctrl.signal,
-          body: JSON.stringify({
-            prompt,
-            xRenderer: "trigger-config",
-            // cinatra#2933 - the run the screen belongs to, so the route asks
-            // the RUN's access instead of the platform tier.
-            ...(props.runId ? { runId: props.runId } : {}),
-            currentValue: {
-              triggerType: watch("triggerType"),
-              scheduledAt: (watch as (n: string) => string)("scheduledAt") ?? null,
-              timezone: watch("timezone"),
-              cronExpression: (watch as (n: string) => string)("cronExpression") ?? null,
-              now: new Date().toISOString(),
-            },
-            schemaProperties: ["triggerType", "scheduledAt", "timezone", "cronExpression"],
-            lastAssistantMessage:
-              [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
-          }),
-        },
-      );
-      if (!res.ok) throw new Error(`hitl-assist: ${res.status}`);
-      const json = (await res.json()) as {
-        suggestions?: Record<string, unknown>;
-        message?: string | null;
-      };
-      const suggestions = json.suggestions ?? {};
-      // Immediately call setValue() on RHF fields — no preview step (by design).
-      const sv = setValue as (field: string, value: string) => void;
-      if (typeof suggestions.triggerType === "string") setValue("triggerType", suggestions.triggerType as FormValues["triggerType"]);
-      if (typeof suggestions.scheduledAt === "string") {
-        // Normalize to YYYY-MM-DDTHH:mm (strip seconds/timezone that LLM may append).
-        const normalized = suggestions.scheduledAt.replace(" ", "T").substring(0, 16);
-        sv("scheduledAt", normalized);
-      }
-      if (typeof suggestions.timezone === "string") sv("timezone", suggestions.timezone);
-      if (typeof suggestions.cronExpression === "string") {
-        sv("cronExpression", suggestions.cronExpression);
-        // Also sync the recurring UI controls so the dropdowns reflect the new schedule.
-        const parsed = parseCronToRecurring(suggestions.cronExpression);
-        if (parsed) setRecurring((prev) => ({ ...prev, ...parsed }));
-      }
-      if (Object.keys(suggestions).length === 0) {
-        toast.error("No suggestions generated. Try describing the schedule you want, e.g. \"Every Monday at 9am\".");
-      }
-    } catch (err) {
-      console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
+      const effect = await runWindow.send(prompt);
+      // A turn that PRESSED writes no fields — see the note on the run page's
+      // own handler (cinatra#2934, convergence round 3).
+      if (effect.fill && !effect.acted) applyScheduleValues(effect.fill.values);
     } finally {
       setPromptPending(false);
     }
-  }, [props.templateId, runWindow, watch, setValue]);
+  }, [props.templateId, runWindow, applyScheduleValues]);
 
   function updateRecurring(patch: Partial<RecurringConfig>) {
     setValue("triggerType", "recurring");

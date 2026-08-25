@@ -40,6 +40,7 @@ import {
   controlsLentBy,
   resolveBoundReference,
   type BoundReferenceResolution,
+  type LentCardControl,
 } from "@/lib/lifecycle/bound-reference-resolver";
 import { mintLentActionGrant, type LentActionControl } from "@/lib/lifecycle/lent-action-grant";
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
@@ -54,6 +55,12 @@ import {
   // one answer across the product.
 } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { listOpenReviewGateCandidates } from "@cinatra-ai/agents/lifecycle-policy-store";
+import { readLatestDurableHitlGateArtifact } from "@cinatra-ai/agents/store";
+import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+// The id table is the pure, dependency-free, environment-neutral constants
+// module; importing the constant is what keeps this leaf and the gate emitter
+// spelling the same string.
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "@cinatra-ai/agents/agent-builder-ids";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 /** How many candidate refs one message may carry. A composer shows a handful of
@@ -72,7 +79,21 @@ export type BoundCardClaim = {
   readonly candidateRefs: readonly string[];
   /** The ref the reader explicitly pressed, or null. */
   readonly focusedRef: string | null;
+  /**
+   * RUNS whose waiting SCREEN the box sits under (cinatra#2934, lifecycle-b W5c).
+   *
+   * A waiting HITL screen has no card ref on any client — one is minted at gate
+   * emission only for the marked artifact-review gate — so a page cannot claim
+   * a screen the way it claims a review. It names the RUN instead, and the
+   * server mints the screen's own ref from the run's durable parked row under
+   * the reader's own access. The page therefore still decides nothing: it says
+   * which run its box sits under, which is the one thing it certainly knows.
+   */
+  readonly screenRunIds?: readonly string[];
 };
+
+/** How many runs one message may offer a waiting screen for. */
+export const MAX_BOUND_SCREEN_RUNS = 4;
 
 export type BoundCardBinding =
   /** Exactly one card is bound and these are the controls it lends. */
@@ -80,7 +101,7 @@ export type BoundCardBinding =
       readonly kind: "bound";
       readonly ref: string;
       readonly resolution: BoundReferenceResolution;
-      readonly controls: readonly LentActionControl[];
+      readonly controls: readonly LentCardControl[];
     }
   /** Several cards are open to this reader and none was picked. Nothing binds. */
   | { readonly kind: "ambiguous"; readonly count: number; readonly refusal: string }
@@ -198,6 +219,8 @@ export async function resolveBoundCard(input: {
   readonly countOpenCards?: (
     actorCtx: ReviewActorContext,
   ) => Promise<OpenCardCount>;
+  /** How a named run's waiting screen becomes a ref. Injectable for test. */
+  readonly mintScreenRef?: (runId: string) => Promise<string | null>;
 }): Promise<BoundCardBinding> {
   const resolve = input.resolve ?? resolveBoundReference;
   const seen = new Set<string>();
@@ -208,6 +231,21 @@ export async function resolveBoundCard(input: {
     seen.add(ref);
     candidates.push(ref);
     if (candidates.length >= MAX_BOUND_CANDIDATE_REFS) break;
+  }
+  // THE SERVER MINTS A WAITING SCREEN'S REF (cinatra#2934). The page named a
+  // run; the ref comes from the run's own durable parked row, here, and the
+  // resolve below re-checks it under the reader's access exactly like any other
+  // candidate — a run the reader may not answer produces a ref that resolves to
+  // `absent` and contributes nothing.
+  const mintScreenRef = input.mintScreenRef ?? mintParkedScreenRef;
+  const screenRuns = (input.claim.screenRunIds ?? []).filter(
+    (id) => typeof id === "string" && id.length > 0,
+  );
+  for (const runId of Array.from(new Set(screenRuns)).slice(0, MAX_BOUND_SCREEN_RUNS)) {
+    const ref = await mintScreenRef(runId).catch(() => null);
+    if (!ref || seen.has(ref)) continue;
+    seen.add(ref);
+    candidates.push(ref);
   }
   if (candidates.length === 0) return { kind: "none" };
 
@@ -252,6 +290,22 @@ export async function resolveBoundCard(input: {
       kind: "ambiguous",
       count: live.length,
       refusal: severalCardsWaitingRefusal(live.length),
+    };
+  }
+  // A LONE WAITING SCREEN BINDS ON ITS OWN, and the open-REVIEW count has no say
+  // in it (cinatra#2934, lifecycle-b W5c). The count below exists because the
+  // page could under-report how many REVIEWS were open to the reader; a screen
+  // is not claimed by the page at all — the server minted its ref from the run
+  // the box sits under — and the counter enumerates review gates only, so
+  // consulting it here would refuse every screen with "1 cards are waiting".
+  // With a review ALSO live the ordinary rule runs, because then two different
+  // things really are open and the person must pick.
+  if (chosen.resolution.kind === "hitl_screen") {
+    return {
+      kind: "bound",
+      ref: chosen.ref,
+      resolution: chosen.resolution,
+      controls: controlsLentBy(chosen.resolution),
     };
   }
   // NOTHING WAS PICKED, so a single card may bind on its own — but ONLY if the
@@ -372,17 +426,71 @@ export function primaryControlFor(
   resolution: BoundReferenceResolution,
 ): LentActionControl | null {
   if (resolution.kind === "review") return "comment";
-  // A WAITING SCREEN MINTS NOTHING YET (convergence round 1, finding 1). The handler
-  // implements `submit` — it is the substrate the later slices build on — but a
-  // SEND does not hand it out, because pressing Continue RESUMES A RUN and the
-  // decision that a sentence asked for that is exactly what cinatra#2853's typed
-  // actions per card kind exist to make. Until then the only authority a message
-  // carries is the one whose effect the review page's own box already has for a
-  // typed sentence: the person's words filed as their comment. Minting `submit`
-  // on the strength of "the model chose to call the tool" would put a run
-  // resumption behind text that can reach the model from the run's own content.
+  // A WAITING SCREEN NOW MINTS `submit` (cinatra#2934, lifecycle-b W5c), and
+  // W5a's reason for withholding it is answered rather than dropped.
+  //
+  // THE PLAN ASKS FOR IT IN SO MANY WORDS: "When you plainly ask, in the same
+  // message, for it to be submitted, the assistant submits through the same
+  // checked, server-side action the button uses — one road for the press and for
+  // the ask", and §6 requires "an agent's HITL screen is filled and, when asked
+  // in so many words, submitted by the assistant". W5a withheld it because its
+  // replacement — the fill road — did not exist, so a message could only ever
+  // have meant "submit"; with the fill road here, filling is what an ordinary
+  // "make it say X" reaches, and the press is the separate thing the person has
+  // to ask for.
+  //
+  // WHAT BOUNDS IT, exactly as it bounds a lent comment: the grant is minted
+  // only for a message the PERSON sent with that screen bound, it names one
+  // control, it lives two minutes, it is spent once, and the press runs the
+  // gate's own actor-checked resume entry — `execute` AND `approveHitl` against
+  // the responder — so no authority is added that the person does not have.
+  // WHAT IS SENT is the values the person's own screen was shown holding, read
+  // back on the server from the fill row; the model supplies none of it.
+  //
+  // THE RESIDUAL IS REAL AND IS NOT HIDDEN: whether a sentence ASKED for the
+  // press is the model's judgement, so text reaching the model — the run's own
+  // content included — can induce one. That is the same residual a lent comment
+  // already carries, and telling a question from a request is cinatra#2853's
+  // typed actions per card kind, which build on this substrate.
+  //
+  // WHAT BOUNDS IT HERE, structurally rather than by instruction (convergence
+  // round 1, finding 2): the handler REFUSES a press unless THIS MESSAGE also
+  // placed a fill on that screen. An induced bare press therefore does nothing,
+  // and the fill an induced press would have to make first appears in the
+  // person's own fields, in front of them, before anything is sent.
+  if (resolution.kind === "hitl_screen") return "submit";
   return null;
 }
+
+/**
+ * The screen a run is parked at, as a ref — minted here, on the server, from
+ * the run's own durable row.
+ *
+ * WHAT THE ROW IS, said exactly (convergence round 1, finding 6): the durable
+ * reader answers the screen the run LAST recorded, not proof that the run is
+ * parked there now. So this mints a ref for "the screen this run last recorded",
+ * and everything downstream re-checks: the resolver re-reads the row under the
+ * reader's own access, the fill demands an unspent grant and the run's respond
+ * access, and the gate's own resume entry re-checks the run before any effect.
+ *
+ * `null` when the reader answers nothing, for the artifact-review redirect
+ * screen (that moment is a REVIEW card and is bound as one), and whenever the
+ * codec cannot express a ref. It authorizes NOTHING.
+ */
+export async function mintParkedScreenRef(runId: string): Promise<string | null> {
+  // STATICALLY IMPORTED, deliberately. A dynamic `import("@cinatra-ai/agents/store")`
+  // is opaque to the org-write boundary analyser, which reads it as an
+  // unreviewed new caller of a module inside the write perimeter. The module is
+  // ALREADY in this file's graph — `bound-reference-resolver` imports the same
+  // reader statically — so naming it at the top costs nothing and keeps the
+  // boundary analysable, which is the point of the rule.
+  const screen = await readLatestDurableHitlGateArtifact(runId).catch(() => null);
+  if (!screen) return null;
+  if (screen.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) return null;
+  return encodeLifecycleGateRef({ runId, reviewTaskId: screen.reviewTaskId });
+}
+
+
 
 export async function issueTurnLentActionGrant(input: {
   readonly claim: BoundCardClaim | null | undefined;
@@ -405,7 +513,16 @@ export async function issueTurnLentActionGrant(input: {
   };
 }): Promise<TurnBoundCard> {
   const claim = input.claim;
-  if (!claim || claim.candidateRefs.length === 0) return NOT_BOUND;
+  // A CLAIM CAN CARRY NO REFS AND STILL BE A BINDING (cinatra#2934, convergence
+  // round 1, finding 1). The four windows outside the chat sit directly under
+  // the run's own waiting screen, which has NO ref on any client — they name the
+  // RUN and the server mints the ref. An early return on `candidateRefs` alone
+  // would have refused every one of them a grant, so both roads would have
+  // answered "not allowed" on the very screens this slice is for.
+  if (!claim) return NOT_BOUND;
+  if (claim.candidateRefs.length === 0 && (claim.screenRunIds ?? []).length === 0) {
+    return NOT_BOUND;
+  }
   const d = input.deps ?? {};
   const actorCtx = await (d.resolveActor ?? resolveBoundTurnActor)({
     userId: input.userId,
@@ -441,7 +558,13 @@ export async function issueTurnLentActionGrant(input: {
   // message lends nothing either — there is nothing to place.
   const words = input.messageText ?? "";
   if (words.trim().length === 0) return NOT_BOUND;
-  if (words.length > MAX_LENT_COMMENT_CHARS) return NOT_BOUND;
+  // THE LENGTH BOUND IS THE COMMENT'S, not the screen's (cinatra#2934). What
+  // lands on a REVIEW is the person's words, so a message the card's own path
+  // would refuse as too long must lend nothing rather than be quietly
+  // shortened. A SCREEN's submit sends the values its own fields were shown
+  // holding — the message is never placed anywhere — so the same bound there
+  // would take the fill road away from anyone who typed a long description.
+  if (control !== "submit" && words.length > MAX_LENT_COMMENT_CHARS) return NOT_BOUND;
 
   const minted = (d.mint ?? mintLentActionGrant)({
     userId: actorCtx.actor.userId ?? "",
@@ -468,14 +591,34 @@ export async function issueTurnLentActionGrant(input: {
   // is not handed out at all — better no grant than one that fails at the call.
   if (!recorded) return NOT_BOUND;
 
-  const what =
-    binding.resolution.kind === "review"
-      ? "a review the person is looking at"
-      : "the screen an agent is waiting on";
+  if (binding.resolution.kind === "hitl_screen") {
+    // TWO ROADS, NAMED APART (cinatra#2934). Filling is the ordinary thing a
+    // described change reaches and presses nothing; the press is the separate
+    // thing the person has to ask for in so many words.
+    return {
+      grant: minted.grant,
+      systemContext:
+        `\n\nBOUND SCREEN. This message was sent with the screen an agent is waiting on bound to ` +
+        `the prompt window, ref "${binding.ref}".\n` +
+        `· TO FILL ITS FIELDS — whenever the person describes what the form should say — call ` +
+        `\`lifecycle_bound_screen_fill\` with that ref and the values. This SUBMITS NOTHING: the ` +
+        `values appear in the fields in front of them and they press the screen's own button. ` +
+        `Fields the form does not declare are dropped; ask the person about anything you cannot ` +
+        `work out.\n` +
+        `· TO SUBMIT IT — ONLY when the person asks for that in so many words in this same ` +
+        `message — FILL IT FIRST, then call \`lifecycle_bound_card_decide\` with that ref and ` +
+        `control "${control}", ONCE. A press with nothing filled in this message is refused by ` +
+        `the server, so the order is not advice. What is sent is what their screen was shown ` +
+        `holding; you supply no values. A question about the screen is answered as a question ` +
+        `and presses nothing.\n` +
+        `Report what comes back and add nothing to it; where your sentence and the screen ` +
+        `disagree, the screen is right.`,
+    };
+  }
   return {
     grant: minted.grant,
     systemContext:
-      `\n\nBOUND CARD. This message was sent with ${what} bound to the prompt window. ` +
+      `\n\nBOUND CARD. This message was sent with a review the person is looking at bound to the prompt window. ` +
       `You may press exactly ONE control on it, ONCE, by calling \`lifecycle_bound_card_decide\` ` +
       `with ref "${binding.ref}" and control "${control}". You supply NO text: what lands on ` +
       "the card is the person's own message, held on the server. Do this only when the person " +

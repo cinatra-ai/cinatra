@@ -716,9 +716,15 @@ describe("a marked review gate never feeds the field-assist LLM path", () => {
     );
   });
 
-  it("strips the card ref out of the assist payload as defence in depth", () => {
-    expect(PANEL).toMatch(/currentValue: withoutLifecycleCardRef\(/);
-    expect(PANEL).toMatch(/function withoutLifecycleCardRef\(/);
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). The payload this case guarded is
+  // GONE: the panel no longer serializes the gate's values into a prompt for a
+  // second model, because the route that did it is retired. The rule it existed
+  // for is now satisfied by construction rather than by a strip — the panel
+  // builds no model-visible payload at all, so there is nothing for a ref to
+  // leak into.
+  it("builds no model-visible payload for the gate's values at all", () => {
+    expect(PANEL).not.toMatch(/currentValue:/);
+    expect(PANEL).not.toContain("hitl-assist");
   });
 
   it("reads the ref ONLY to address the card — never into a submitted payload", () => {

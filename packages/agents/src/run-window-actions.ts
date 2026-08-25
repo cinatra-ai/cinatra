@@ -30,22 +30,57 @@ export type RunWindowEntry = {
   content: string;
 };
 
+/**
+ * The values the assistant placed in a screen's fields, and the screen they
+ * belong to (cinatra#2934, lifecycle-b W5c). The window hands this to the screen
+ * it sits under; the screen writes the values into its own fields and nothing is
+ * submitted until the person presses the button.
+ */
+export type RunWindowFillEntry = { ref: string; values: Record<string, unknown> };
+
 export type RunWindowTurnOutcome =
-  | { ok: true; entries: RunWindowEntry[] }
+  | {
+      ok: true;
+      entries: RunWindowEntry[];
+      /** Every fill the run holds, oldest first. */
+      fills: RunWindowFillEntry[];
+      /** True when the turn actually pressed a control of the bound card. */
+      acted: boolean;
+    }
   | { ok: false; reason: "denied" | "failed"; message: string };
 
 /**
  * The window's numeric keys are POSITIONS in the stored order, so a re-read
  * after a reload produces the same keys as the turn that wrote the rows.
+ *
+ * A FILL ROW IS NOT A BUBBLE and is skipped here: the assistant's own answer is
+ * what the person reads, and a second synthesized "Field: value" line beside it
+ * would be the page talking over the conversation.
  */
 function toEntries(
-  rows: ReadonlyArray<{ role: "user" | "assistant"; text: string }>,
+  rows: ReadonlyArray<{
+    role: "user" | "assistant";
+    text: string;
+    fill?: { ref: string; values: Record<string, unknown> } | null;
+  }>,
 ): RunWindowEntry[] {
-  return rows.map((row, index) => ({
-    id: index + 1,
-    role: row.role,
-    content: row.text,
-  }));
+  return rows
+    .filter((row) => !row.fill)
+    .map((row, index) => ({
+      id: index + 1,
+      role: row.role,
+      content: row.text,
+    }));
+}
+
+function toFills(
+  rows: ReadonlyArray<{
+    fill?: { ref: string; values: Record<string, unknown> } | null;
+  }>,
+): RunWindowFillEntry[] {
+  const out: RunWindowFillEntry[] = [];
+  for (const row of rows) if (row.fill) out.push(row.fill);
+  return out;
 }
 
 /** Send one message from a window and get the whole exchange back. */
@@ -54,6 +89,9 @@ export async function sendRunWindowTurn(input: {
   surface: RunWindowSurface;
   prompt: string;
   boundCard?: { candidateRefs: string[]; focusedRef: string | null };
+  /** Files attached beside the message (cinatra#2934). Opaque refs, recorded
+   *  with the person's own row so the waiting agent still gets them. */
+  attachments?: readonly Record<string, unknown>[];
 }): Promise<RunWindowTurnOutcome> {
   try {
     // Inside the try on purpose: a module that fails to load is a failure of
@@ -61,7 +99,12 @@ export async function sendRunWindowTurn(input: {
     // failure rather than a rejected promise it has no handler for.
     const { runWindowTurn } = await impl();
     const result = await runWindowTurn(input);
-    return { ok: true, entries: toEntries(result.entries) };
+    return {
+      ok: true,
+      entries: toEntries(result.entries),
+      fills: toFills(result.entries),
+      acted: result.acted,
+    };
   } catch (err) {
     // Read by NAME rather than by `instanceof`: the class lives behind the same
     // dynamic import that may itself be what failed, and a refusal must be

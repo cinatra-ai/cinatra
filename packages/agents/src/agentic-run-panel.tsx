@@ -137,7 +137,7 @@ type AgenticRunPanelProps = {
   // (senderEmail, offeringCompanyWebsite, etc.) when creating campaigns.
   inputParams?: Record<string, unknown>;
   // Agent template ID for HITL renderers POSTing to
-  // /api/agents/builder/[templateId]/hitl-assist. Threaded into the
+  // the fill road (cinatra#2934). Threaded into the
   // FieldRendererContext below so renderers can read context.templateId
   // (parity with OrchestratorStepperPanel + HitlApprovalCard).
   templateId?: string;
@@ -1245,7 +1245,8 @@ export function AgenticRunPanel({
     return null;
   })();
 
-  // Bottom-of-page prompt handler. Posts to hitl-assist, applies the result to
+  // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and writes
+  // the fill that comes back into
   // the buffer (handleApply), and exposes the suggestion payload to the renderer
   // via aiSuggestions so it can sync local state without using `value` (which
   // re-references on every poll).
@@ -1269,58 +1270,33 @@ export function AgenticRunPanel({
     // never leaves. The panel above is already hidden for that gate; this is the
     // guard that does not depend on a visibility prop staying correct.
     if (xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) return;
-    // The one road: the message goes to the run's own conversation with the
-    // assistant. Not awaited — the field-assist fill below runs on the same
-    // press, and neither waits on the other.
-    void runWindow.send(prompt);
-    // HitlConversationPanel's internal handleSubmit clears the PromptField and
-    // opens the overlay.
+    // THE FILL ROAD (cinatra#2934, lifecycle-b W5c). The plan: "the assistant
+    // returns the filled values, the screen writes them into its own fields, and
+    // nothing is submitted until you press the button." One road: the message
+    // goes to the run's own conversation with the assistant, and what comes back
+    // is what THIS screen writes into ITS fields. The field-assist route and its
+    // second, hidden model are gone with this block — a message reaches one
+    // model now.
+    //
+    // THE FILES GO WITH IT. They are kept in `pendingAttachmentsRef` for the
+    // screen's own Continue exactly as before, AND travel with the message so a
+    // submit the person ASKS for does not leave them behind.
     setPromptPending(true);
     try {
-      const res = await fetch(
-        `/api/agents/builder/${encodeURIComponent(templateId)}/hitl-assist`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            xRenderer,
-            // cinatra#2933 - the run the screen belongs to, so the route asks
-            // the RUN's access instead of the platform tier.
-            runId,
-            // The gate's LIFECYCLE CARD REF is stripped before anything is sent
-            // (cinatra#2566). It is an opaque server-minted ticket, it is not a
-            // field a human edits, and the assist route serializes this object
-            // into an LLM prompt — so it has no business here even for a gate
-            // kind that is otherwise assistable.
-            currentValue: withoutLifecycleCardRef({
-              ...effectiveHitlContext.currentValues,
-              ...bufferedHitlValue,
-            }),
-            schemaProperties: Object.keys(
-              (effectiveHitlContext.inputSchema as { properties?: Record<string, unknown> })?.properties ?? {},
-            ),
-            // Last assistant reply so LLM can resolve references like "insert it"
-            lastAssistantMessage: [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
-          }),
-        },
+      const effect = await runWindow.send(
+        prompt,
+        attachments as readonly Record<string, unknown>[] | undefined,
       );
-      if (!res.ok) throw new Error(`hitl-assist: ${res.status}`);
-      const json = (await res.json()) as { suggestions?: Record<string, unknown> };
-      const suggestions = json.suggestions ?? {};
-      handleApply(suggestions);          // updates parent buffer
-      setAiSuggestions(suggestions);     // notifies renderers to sync local state
-      const schemaProps = ((effectiveHitlContext.inputSchema as { properties?: Record<string, { title?: string }> })?.properties) ?? {};
-      const entries = Object.entries(suggestions);
-      if (entries.length === 0) {
-        toast.error("No suggestions generated. Try being more specific, e.g. \"Fill in with sample values\".");
+      // A TURN THAT PRESSED WRITES NO FIELDS (cinatra#2934, convergence round 3).
+      // The fill and the press are two calls, and a fill can land after a press
+      // has already sent the form. Nothing is submitted by it — the press reads
+      // only what landed before it — but writing it into fields the run has
+      // moved past would show values that were never sent. "The card is the
+      // visible truth": a turn that pressed makes the screen re-read instead.
+      if (effect.fill && !effect.acted) {
+        handleApply(effect.fill.values);       // updates parent buffer
+        setAiSuggestions(effect.fill.values);  // renderers sync local state
       }
-      // The fill's own line is GONE, deliberately: the window's answer is the
-      // assistant's, and a second synthesized "Field: value" line beside it
-      // would be the page talking over the conversation.
-      void schemaProps;
-    } catch (err) {
-      console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
     } finally {
       setPromptPending(false);
     }
@@ -1503,6 +1479,10 @@ export function AgenticRunPanel({
       }
       conversation={runWindow.entries}
       promptPending={promptPending || runWindow.pending}
+      // THE KEY DOES NOT MOVE (cinatra#2934). The field-assist route it was
+      // named for is gone, but this string is where every reader's half-typed
+      // message is kept: renaming it would silently throw away the draft the
+      // plan requires to survive a reload.
       storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}
       onSubmit={handlePromptSubmit}
       resetSignal={currentXRenderer}

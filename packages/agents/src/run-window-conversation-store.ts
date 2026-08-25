@@ -84,8 +84,64 @@ export type RunWindowMessage = {
    * was recorded.
    */
   replyToSequence: number | null;
+  /**
+   * THE FILL, when this row is one (cinatra#2934, lifecycle-b W5c).
+   *
+   * The plan: "the assistant returns the filled values, the screen writes them
+   * into its own fields, and nothing is submitted until you press the button."
+   * The values live on the RUN, beside the conversation, because that is the
+   * only place both halves of the road can read them: the screen reads them to
+   * write them into its fields, and the SUBMIT — when the person asks for one —
+   * reads them back on the server so what is sent is what was shown, never what
+   * a model re-states at the press.
+   *
+   * A fill row is NOT a bubble: its `text` is empty and the reader that draws
+   * the conversation skips it. The assistant's own answer is what the person
+   * reads; a second synthesized "Field: value" line would be the page talking
+   * over the conversation.
+   */
+  fill: RunWindowFill | null;
+  /**
+   * The MESSAGE this row belongs to — the turn's own durable identity, which is
+   * also the identity the lent-action grant is minted against.
+   *
+   * Correlating by the RUN alone is not enough: two people, or two tabs, can be
+   * typing in the same run's windows at once, and a submit that read "the run's
+   * newest fill" could send another turn's values or another turn's file
+   * (convergence round 1, finding 5). `null` on a row written before this was
+   * recorded, which the readers treat as "not this message".
+   */
+  messageId: string | null;
+  /**
+   * The files attached beside the person's message, when this row is theirs.
+   *
+   * The plan: "A file attached beside your message travels with your answer to
+   * the waiting agent exactly as it does today. The new road must not swallow it
+   * into an ordinary chat message, and must not leave it behind when the answer
+   * is finally sent." Recorded HERE so the answer can carry them whether the
+   * person presses Continue in the browser or asks the assistant to submit.
+   */
+  attachments: readonly RunWindowAttachment[] | null;
   createdAt: Date;
 };
+
+/**
+ * One fill: the screen it is for, and the values placed in its fields.
+ *
+ * `ref` is the screen's own server-minted reference — the row is keyed to the
+ * screen, so a fill for a screen the run has moved past cannot be read back onto
+ * the next one.
+ */
+export type RunWindowFill = {
+  ref: string;
+  values: Record<string, unknown>;
+};
+
+/**
+ * One attachment reference, exactly as the upload route minted it. Stored
+ * opaquely: this module never reads inside it and never mints one.
+ */
+export type RunWindowAttachment = Record<string, unknown>;
 
 /** The JSON body persisted in `content_json` for a window row. */
 type RunWindowMessageBody = {
@@ -94,6 +150,9 @@ type RunWindowMessageBody = {
   surface: RunWindowSurface;
   text: string;
   replyToSequence?: number | null;
+  fill?: RunWindowFill | null;
+  attachments?: readonly RunWindowAttachment[] | null;
+  messageId?: string | null;
 };
 
 /**
@@ -124,6 +183,12 @@ export async function appendRunWindowMessage(input: {
   text: string;
   /** The message this answers, when this row is an answer. */
   replyToSequence?: number | null;
+  /** The values placed in a screen's fields, when this row is a fill. */
+  fill?: RunWindowFill | null;
+  /** The files attached beside a person's message. */
+  attachments?: readonly RunWindowAttachment[] | null;
+  /** The turn this row belongs to (cinatra#2934). */
+  messageId?: string | null;
 }): Promise<RunWindowMessage> {
   // The SURFACE is checked here rather than trusted from the type: a server
   // action's payload is whatever reached the process, and TypeScript checks
@@ -140,6 +205,11 @@ export async function appendRunWindowMessage(input: {
     ...(typeof input.replyToSequence === "number"
       ? { replyToSequence: input.replyToSequence }
       : {}),
+    ...(input.fill ? { fill: input.fill } : {}),
+    ...(input.attachments && input.attachments.length > 0
+      ? { attachments: input.attachments }
+      : {}),
+    ...(input.messageId ? { messageId: input.messageId } : {}),
   };
 
   let lastErr: unknown = null;
@@ -178,6 +248,9 @@ export async function appendRunWindowMessage(input: {
       surface: input.surface,
       text: input.text,
       replyToSequence: body.replyToSequence ?? null,
+      fill: body.fill ?? null,
+      attachments: body.attachments ?? null,
+      messageId: body.messageId ?? null,
       createdAt: new Date(),
     };
   }
@@ -229,10 +302,90 @@ export async function readRunWindowMessages(
       text: typeof body.text === "string" ? body.text : row.content,
       replyToSequence:
         typeof body.replyToSequence === "number" ? body.replyToSequence : null,
+      fill: readFillBody(body.fill),
+      attachments: readAttachmentsBody(body.attachments),
+      messageId: typeof body.messageId === "string" && body.messageId.length > 0
+        ? body.messageId
+        : null,
       createdAt: row.createdAt,
     });
   }
   return out;
+}
+
+/**
+ * A stored fill, read back defensively: the column is JSON written by an earlier
+ * version of this module as much as by this one, so a body that does not have
+ * the shape is treated as no fill at all rather than half-read.
+ */
+function readFillBody(value: unknown): RunWindowFill | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const { ref, values } = value as { ref?: unknown; values?: unknown };
+  if (typeof ref !== "string" || ref.length === 0) return null;
+  if (!values || typeof values !== "object" || Array.isArray(values)) return null;
+  return { ref, values: values as Record<string, unknown> };
+}
+
+/** Stored attachment refs, read back defensively for the same reason. */
+function readAttachmentsBody(value: unknown): readonly RunWindowAttachment[] | null {
+  if (!Array.isArray(value)) return null;
+  const out = value.filter(
+    (v): v is RunWindowAttachment =>
+      !!v && typeof v === "object" && !Array.isArray(v),
+  );
+  return out.length > 0 ? out : null;
+}
+
+/**
+ * EVERY fill THIS MESSAGE placed on one screen, oldest first.
+ *
+ * This is the reader the SUBMIT uses. Two properties matter and both are the
+ * reason it is keyed by the MESSAGE and returns a LIST:
+ *
+ *   · a submit must send what the person's own turn placed, not whatever the
+ *     run's newest fill happens to be — another tab, or another person typing
+ *     in the same run, must not have their values sent under this press
+ *     (convergence round 1, finding 5);
+ *   · a turn that filled twice — the subject, then the body — left BOTH in the
+ *     fields, so a submit that sent only the last one would send something the
+ *     person never saw (finding 4). The caller applies them in order over the
+ *     screen's own current values.
+ */
+export async function readRunWindowFillsForMessage(
+  runId: string,
+  ref: string,
+  messageId: string,
+): Promise<RunWindowFill[]> {
+  if (!messageId) return [];
+  const rows = await readRunWindowMessages(runId);
+  const out: RunWindowFill[] = [];
+  for (const row of rows) {
+    if (row.messageId !== messageId) continue;
+    if (row.fill && row.fill.ref === ref) out.push(row.fill);
+  }
+  return out;
+}
+
+/**
+ * The attachments the person put on THIS message, or `null`.
+ *
+ * Keyed by the message for the same reason as the fills above: a file attached
+ * beside one turn must not travel under another turn's press, and the file
+ * attached beside the message that ASKED for the press must not be left behind
+ * by it.
+ */
+export async function readRunWindowAttachmentsForMessage(
+  runId: string,
+  messageId: string,
+): Promise<readonly RunWindowAttachment[] | null> {
+  if (!messageId) return null;
+  const rows = await readRunWindowMessages(runId);
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const row = rows[i]!;
+    if (row.role !== "user" || row.messageId !== messageId) continue;
+    return row.attachments;
+  }
+  return null;
 }
 
 /**

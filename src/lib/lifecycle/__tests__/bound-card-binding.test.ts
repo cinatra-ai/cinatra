@@ -268,7 +268,12 @@ describe("what a SEND may lend today — convergence round 1, finding 1", () => 
     expect(primaryControlFor(review("a"))).toBe("comment");
   });
 
-  it("a waiting screen lends NOTHING yet — pressing Continue resumes a run", () => {
+  // AMENDED for cinatra#2934 (lifecycle-b W5c). W5a withheld `submit` because
+  // the fill road did not exist, so a typed message could only ever have meant
+  // "press it". The plan requires the press to be askable — "when asked in so
+  // many words, submitted by the assistant" — and with filling as the ordinary
+  // road, the press is the separate thing a person has to ask for.
+  it("a waiting screen lends its Submit for a typed message", () => {
     expect(
       primaryControlFor({
         kind: "hitl_screen",
@@ -277,7 +282,7 @@ describe("what a SEND may lend today — convergence round 1, finding 1", () => 
         xRenderer: "x",
         form: { schema: {}, values: {} },
       }),
-    ).toBeNull();
+    ).toBe("submit");
   });
 
   it("an absent binding lends nothing", () => {

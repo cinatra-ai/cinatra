@@ -211,3 +211,98 @@ describe("the run's window conversation is kept with the run", () => {
     expect(store.RUN_WINDOW_MESSAGE_TYPE).toBe("window");
   });
 });
+
+// ---------------------------------------------------------------------------
+// W5C ADDITIONS (cinatra#2934) — the fill and the files, kept with the run.
+//
+// The plan: "the assistant returns the filled values, the screen writes them
+// into its own fields" and "A file attached beside your message travels with
+// your answer to the waiting agent exactly as it does today … must not leave it
+// behind when the answer is finally sent." Both are stored HERE, on the run,
+// because that is the only place both halves of each road can read them: the
+// screen writes the values into its fields, and the submit reads back what was
+// shown and what was attached.
+// ---------------------------------------------------------------------------
+describe("the fill and the attached files are kept with the run too", () => {
+  it("stores a fill as a row of its own, with no text of its own", async () => {
+    await store.appendRunWindowMessage({
+      runId: "run-1",
+      role: "assistant",
+      surface: "run-page",
+      text: "",
+      fill: { ref: "ref-a", values: { subject: "Hello" } },
+    });
+    const rowsBack = await store.readRunWindowMessages("run-1");
+    expect(rowsBack).toHaveLength(1);
+    expect(rowsBack[0]?.text).toBe("");
+    expect(rowsBack[0]?.fill).toEqual({ ref: "ref-a", values: { subject: "Hello" } });
+  });
+
+  it("hands the submit THIS MESSAGE's fills for that screen, in order, and no others", async () => {
+    // Two turns on the same run — a second tab, or a second person. A submit
+    // must send what ITS OWN message placed, never the run's newest values.
+    await store.appendRunWindowMessage({
+      runId: "run-1", role: "assistant", surface: "run-page", text: "",
+      fill: { ref: "ref-a", values: { subject: "mine, first" } }, messageId: "turn-1",
+    });
+    await store.appendRunWindowMessage({
+      runId: "run-1", role: "assistant", surface: "run-page", text: "",
+      fill: { ref: "ref-b", values: { subject: "another screen" } }, messageId: "turn-1",
+    });
+    await store.appendRunWindowMessage({
+      runId: "run-1", role: "assistant", surface: "run-page", text: "",
+      fill: { ref: "ref-a", values: { body: "mine, second" } }, messageId: "turn-1",
+    });
+    await store.appendRunWindowMessage({
+      runId: "run-1", role: "assistant", surface: "run-page", text: "",
+      fill: { ref: "ref-a", values: { subject: "SOMEBODY ELSE'S" } }, messageId: "turn-2",
+    });
+    // BOTH of this message's fills, oldest first — a turn that filled twice left
+    // both in the fields.
+    expect(await store.readRunWindowFillsForMessage("run-1", "ref-a", "turn-1")).toEqual([
+      { ref: "ref-a", values: { subject: "mine, first" } },
+      { ref: "ref-a", values: { body: "mine, second" } },
+    ]);
+    // Another screen, another message, and a row written before message ids
+    // existed: none of them.
+    expect(await store.readRunWindowFillsForMessage("run-1", "ref-c", "turn-1")).toEqual([]);
+    expect(await store.readRunWindowFillsForMessage("run-1", "ref-a", "")).toEqual([]);
+  });
+
+  it("keeps the files on the person's own row, and reads back THIS message's", async () => {
+    await store.appendRunWindowMessage({
+      runId: "run-1", role: "user", surface: "run-page", text: "here is the brief",
+      attachments: [{ artifactId: "a1" }], messageId: "turn-1",
+    });
+    await store.appendRunWindowMessage({
+      runId: "run-1", role: "assistant", surface: "run-page", text: "Got it.",
+      messageId: "turn-1",
+    });
+    // A LATER turn's file must not travel under this message's press.
+    await store.appendRunWindowMessage({
+      runId: "run-1", role: "user", surface: "run-page", text: "and this one",
+      attachments: [{ artifactId: "b1" }], messageId: "turn-2",
+    });
+    expect(await store.readRunWindowAttachmentsForMessage("run-1", "turn-1")).toEqual([
+      { artifactId: "a1" },
+    ]);
+    expect(await store.readRunWindowAttachmentsForMessage("run-1", "turn-3")).toBeNull();
+    const rowsBack = await store.readRunWindowMessages("run-1");
+    expect(rowsBack[0]?.attachments).toEqual([{ artifactId: "a1" }]);
+    // The ANSWER carries none of its own — the files are the person's.
+    expect(rowsBack[1]?.attachments).toBeNull();
+  });
+
+  it("reads a malformed body as no fill and no files, rather than half-reading it", async () => {
+    await store.appendRunWindowMessage({
+      runId: "run-1", role: "assistant", surface: "run-page", text: "plain",
+    });
+    rows[0].contentJson = JSON.stringify({
+      messageType: "window", role: "assistant", surface: "run-page", text: "plain",
+      fill: { ref: "" }, attachments: "not an array",
+    });
+    const rowsBack = await store.readRunWindowMessages("run-1");
+    expect(rowsBack[0]?.fill).toBeNull();
+    expect(rowsBack[0]?.attachments).toBeNull();
+  });
+});

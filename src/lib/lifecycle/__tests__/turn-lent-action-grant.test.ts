@@ -112,7 +112,10 @@ describe("a bound review lends ONE control, with the person's own words", () => 
 });
 
 describe("what a send declines to lend", () => {
-  it("lends NOTHING for a waiting screen — pressing Continue resumes a run", async () => {
+  // AMENDED for cinatra#2934 (lifecycle-b W5c): a waiting screen now lends both
+  // of its roads, and the model is told them apart — filling is the ordinary
+  // one, pressing is the one that has to be asked for.
+  it("lends BOTH roads for a waiting screen, and names them apart", async () => {
     const out = await issue(
       {},
       deps({
@@ -130,7 +133,12 @@ describe("what a send declines to lend", () => {
         })),
       }),
     );
-    expect(out).toEqual({ grant: null, systemContext: "" });
+    expect(out.grant).not.toBeNull();
+    expect(out.systemContext).toContain("BOUND SCREEN");
+    expect(out.systemContext).toContain("lifecycle_bound_screen_fill");
+    expect(out.systemContext).toContain("SUBMITS NOTHING");
+    expect(out.systemContext).toContain("ONLY when the person asks for that in so many words");
+    expect(out.systemContext).toContain('control "submit"');
   });
 
   it("lends NOTHING for an empty message — there is nothing to place", async () => {

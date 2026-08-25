@@ -366,7 +366,6 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
           foot of the page agrees with the card above it. */}
       {surface.kind === "ready" ? (
         <ReviewPromptWindow
-          submitAction={submitAction}
           canComment={surface.permissions.canComment}
           runId={runId}
           boundCardRef={gateCardRef}

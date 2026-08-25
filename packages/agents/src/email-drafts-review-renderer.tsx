@@ -346,7 +346,7 @@ export function EmailDraftsReviewRenderer({
     }
   }, [aiSuggestions]);
 
-  // Publish effective draft data so the hitl-assist LLM sees current content.
+  // Publish effective draft data so the fill road's assistant sees current content.
   // Mirrors campaign-recipients-review-renderer's onHitlContextChange pattern.
   useEffect(() => {
     if (drafts.length === 0) return;

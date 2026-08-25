@@ -14,11 +14,10 @@
 // schedule tab, whose own drawing was a summary of the configuration rather than
 // the form; the run page's schedule STEP drew the scheduler and nothing under
 // it. The plan puts the window on the step. Rather than give the product a
-// second prompt window, this is the same panel (`HitlConversationPanel`), the
-// same endpoint and the same `xRenderer` that tab already sent, mounted where
-// the plan asks for it — and, since cinatra#3004, mounted by BOTH surfaces from
-// here, so the run detail's step and the run's schedule tab ask their questions
-// through one window.
+// second prompt window, this is the same panel (`HitlConversationPanel`),
+// mounted where the plan asks for it — and, since cinatra#3004, mounted by BOTH
+// surfaces from here, so the run detail's step and the run's schedule tab ask
+// their questions through one window.
 //
 // IT PORTALS INTO ITS OWN MOUNT, NOT INTO `<main>`. `HitlConversationPanel`
 // takes its portal target from the parent, and the retired tab handed it
@@ -28,25 +27,17 @@
 // immediately below the scheduler form. That is a composition decision, not a
 // change to the shared panel — no other surface moves.
 //
-// IT CHANGES NOTHING BY ITSELF. The assist endpoint answers in the panel; it
-// does not write the schedule. cinatra#2853 owns making a typed instruction act
-// on the card, and `schedule-proposal-card.tsx` already exports the act it will
-// call (`submitScheduleDecision` / `adjustAndConfirmSchedule`). This slice adds
-// the window the plan asks for and nothing behind it.
+// IT CHANGES NOTHING BY ITSELF. What is typed here goes into the run's own
+// conversation with the assistant and nowhere else; the schedule above it is
+// changed by the form's own controls. cinatra#2853 owns making a typed
+// instruction act on the card, and `schedule-proposal-card.tsx` already exports
+// the act it will call (`submitScheduleDecision` / `adjustAndConfirmSchedule`).
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 
-import {
-  HitlConversationPanel,
-  type HitlConversationEntry,
-} from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
 import { useRunWindowConversation } from "./use-run-window-conversation";
-
-/** The renderer id the assist endpoint is already tuned for on this subject.
- *  The same string the Trigger tab sends, so one prompt understands one
- *  schedule however the reader reached it. */
-const SCHEDULE_ASSIST_RENDERER = "trigger-tab";
 
 export function SchedulePromptWindow({
   templateId,
@@ -100,110 +91,38 @@ export function SchedulePromptWindow({
   // keeps no parallel copy it could show instead; the store is the state.
   const runWindow = useRunWindowConversation({ runId, surface: "armed-trigger" });
   const sendRunWindowTurn = runWindow.send;
-  /**
-   * THE PLATFORM'S OWN LINE ABOUT THE FORM FILL — not the conversation.
-   *
-   * The assist call below is a SECOND job beside the run's conversation: it
-   * fills THIS FORM's fields. When it fails, the fields are not filled, and a
-   * reader who is told nothing reads the run's own answer as if the form had
-   * been filled too. So the failure is still said out loud.
-   *
-   * It is NOT a parallel transcript, which is the thing this slice removed from
-   * every window: nothing is written here on the success path, the run's stored
-   * exchange is still the only record of what was asked and answered, and this
-   * line is shown after it. The review page's window already carries its
-   * platform outcome exactly this way.
-   */
-  const [outcomeLines, setOutcomeLines] = useState<HitlConversationEntry[]>([]);
-  // NEGATIVE, so a platform line can never take a stored entry's React key.
-  // The store's positions and the controller's optimistic ids are both positive
-  // and unbounded, so an offset — however large — is only PROBABLY disjoint;
-  // the sign is disjoint by construction.
-  const outcomeIdRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  // A FORM FILL IN FLIGHT WHEN THE SCHEDULE ENDS IS DROPPED (cinatra#3004).
-  // Withdrawing the window hides the panel; it does not stop the request the
-  // reader had already sent. Without this, a Cancel schedule landing mid-answer
-  // would leave a live call still trying to fill fields nobody can change any
-  // more. The abort's own path appends nothing and clears the pending flag in
-  // its `finally`, so nothing else has to be undone here.
-  //
-  // WHAT IS NOT DROPPED, stated rather than left to be discovered: the RUN's
-  // conversation turn (cinatra#2933). It is a stored turn — the whole point of
-  // the per-run window is that what was asked is still there after a reload and
-  // from the schedule's other host — so once it is accepted it stands, and a
-  // schedule ending afterwards does not reach back and unsay it. Only the form
-  // fill, which has become pointless, is cancelled.
-  useEffect(() => {
-    if (!readOnly) return;
-    abortRef.current?.abort();
-    abortRef.current = null;
-  }, [readOnly]);
-
   const handlePromptSubmit = useCallback(
     async (prompt: string) => {
-      if (!templateId) return;
-      abortRef.current?.abort();
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
-      // The run's own conversation carries what was typed and what came back.
-      // The assist call below still fills THIS FORM's fields, which is a
-      // different job and is retired by #2934 together with the fill.
-      void sendRunWindowTurn(prompt);
+      // ONE ROAD, AND ONLY ONE MODEL (cinatra#2934, lifecycle-b W5c). This box
+      // used to do a SECOND job beside the run's conversation: it asked the
+      // field-assist route to fill this form's fields, and that route ran a
+      // second, hidden model over the same sentence the assistant was already
+      // reading. The route is gone, and with it this window's private path —
+      // what is typed here reaches the run's own conversation and nothing else.
+      //
+      // WHAT WENT WITH IT, named rather than left to be noticed: the platform's
+      // own line about a failed fill, and the abort that dropped a fill still in
+      // flight when the schedule ended (cinatra#3004). Both existed for that
+      // second call. The RUN's turn is not one of them and never was: it is
+      // stored, so once it is accepted it stands, and a schedule ending
+      // afterwards does not reach back and unsay it.
+      //
+      // CHANGING THE ARMED SCHEDULE FROM THIS BOX still needs the scheduler
+      // form in its armed state. The plan: "On an armed schedule only the
+      // scheduler form is shown, in its different states, and the assistant
+      // fills that form's own fields — never a trigger configuration card."
+      // That form is the screens epic's own slice (cinatra#2788); the server
+      // rule that accepts the change (`updateRunTriggerScheduleForActor`)
+      // already exists, so the fill road reaches it the moment it is drawn
+      // under this window.
       setPromptPending(true);
       try {
-        const res = await fetch(
-          `/api/agents/builder/${encodeURIComponent(templateId)}/hitl-assist`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            signal: ctrl.signal,
-            body: JSON.stringify({
-              prompt,
-              xRenderer: SCHEDULE_ASSIST_RENDERER,
-              // cinatra#2933 -- the run the schedule belongs to, so the route
-              // asks the RUN's access rather than the platform tier.
-              ...(runId ? { runId } : {}),
-              schemaProperties: [
-                "triggerType",
-                "scheduledAt",
-                "timezone",
-                "cronExpression",
-              ],
-            }),
-          },
-        );
-        if (!res.ok) throw new Error(`hitl-assist: ${res.status}`);
-        // The answer the reader sees is the STORED one -- `runWindow.send`
-        // above re-reads the run's exchange when the turn lands. Appending the
-        // assist reply here as well would put a second, unstored copy of the
-        // answer on the screen, which is the parallel transcript this slice
-        // removed from every window.
-        void (await res.json());
-      } catch (err) {
-        // An ABORT is this component replacing its own in-flight question, not a
-        // failure the reader has to read about.
-        if (ctrl.signal.aborted) return;
-        console.warn(
-          "[schedule-prompt-window] assist failed",
-          err instanceof Error ? err.message : String(err),
-        );
-        setOutcomeLines((prev) => [
-          ...prev,
-          {
-            id: --outcomeIdRef.current,
-            role: "assistant",
-            content: "Could not fetch suggestions — please try again.",
-          },
-        ]);
+        await sendRunWindowTurn(prompt);
       } finally {
         setPromptPending(false);
       }
     },
-    [templateId, runId, sendRunWindowTurn],
+    [sendRunWindowTurn],
   );
 
   return (
@@ -227,7 +146,7 @@ export function SchedulePromptWindow({
           !!templateId &&
           !!mount
         }
-        conversation={[...runWindow.entries, ...outcomeLines]}
+        conversation={runWindow.entries}
         promptPending={promptPending || runWindow.pending}
         storageKey={`cinatra_schedule_assist_${templateId}_step`}
         onSubmit={handlePromptSubmit}
