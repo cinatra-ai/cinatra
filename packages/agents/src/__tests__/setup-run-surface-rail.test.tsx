@@ -25,16 +25,17 @@
 // run has not reached cannot be selected. Its row stays
 // on the rail, muted, so the series is visible; clicking it does nothing; the
 // scheduler stays open; the right column never shows an empty step surface."
-// Pinned below on the review step, which is the step this page can actually
-// read as still ahead.
+// Pinned below on the review step and — for a run that has not started, which
+// has reached neither — on the skills step beside it.
 //
 // THE SKILLS STEP IS DRIVEN ON THE PRODUCTION RENDERER, not on a stand-in: the
 // step opens the shipped `RecommendationHoldCard`, so the suite mounts THAT and
 // drives its authority through the same mocked action the card's own suite
-// uses. A held run proves the card opens in the run detail; a run whose skills
-// step the page never read proves the third answer stays a third answer — the
-// row is drawn plainly, it still opens, and nothing is invented in the card's
-// place.
+// uses. A held run proves the card opens in the run detail; a run that has not
+// started proves the closed row (muted, unselectable, its click a no-op); and a
+// run whose skills step the page never read proves the third answer stays a
+// third answer — the row is drawn plainly, it still opens, and nothing is
+// invented in the card's place.
 //
 // Run:
 //   cd packages/agents && npx vitest run src/__tests__/setup-run-surface-rail.test.tsx
@@ -51,6 +52,7 @@ import {
   isRunSurfaceStepSelectable,
   type RunSurfaceStep,
 } from "../run-surface-rail";
+import { setupStepReachedForRunStatus } from "../run-status";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -161,12 +163,20 @@ async function recommendationSurface() {
   );
 }
 
-/** The three setup steps as the setup run page composes them. `reached` is what
- *  the screen reads off the run, so the suite states it per case rather than
- *  hard-coding it: a run holding at its skills question HAS reached that step. */
+/** The three setup steps as the setup run page composes them.
+ *
+ *  `reached` FOR THE SKILLS STEP IS NOT HARD-CODED HERE. The suite hands in the
+ *  RUN STATUS and derives the answer through `setupStepReachedForRunStatus` —
+ *  the very function `TriggerScreen` passes `run.status` to — so a change that
+ *  stopped closing the row on a run that has not started fails these cases
+ *  instead of quietly agreeing with a literal typed into the harness. */
 async function setupSteps(
-  opts: { recommendationReached?: boolean } = {},
+  opts: { runStatus?: string; recommendationReached?: boolean } = {},
 ): Promise<RunSurfaceStep[]> {
+  const reached =
+    opts.recommendationReached !== undefined
+      ? opts.recommendationReached
+      : setupStepReachedForRunStatus(opts.runStatus);
   return [
     {
       key: "schedule",
@@ -176,7 +186,7 @@ async function setupSteps(
     {
       key: "recommendation",
       label: RUN_SURFACE_RAIL_LABELS.recommendation,
-      reached: opts.recommendationReached,
+      reached,
       surface: await recommendationSurface(),
     },
     {
@@ -188,7 +198,9 @@ async function setupSteps(
   ];
 }
 
-async function renderSetupSurface(opts: { recommendationReached?: boolean } = {}) {
+async function renderSetupSurface(
+  opts: { runStatus?: string; recommendationReached?: boolean } = {},
+) {
   return render(
     <RunSurfaceRail steps={await setupSteps(opts)} initialSelectedKey="schedule" />,
   );
@@ -232,7 +244,7 @@ describe("the setup run page draws the two-column run surface", () => {
   });
 
   it("says which steps are still ahead — and stays silent about the one it cannot read", async () => {
-    const { container } = await renderSetupSurface();
+    const { container } = await renderSetupSurface({ runStatus: "running" });
 
     expect(rows(container).map((r) => r.getAttribute("data-run-surface-rail-reached"))).toEqual([
       // the scheduler: the step this page IS; the skills step: unstated, because
@@ -303,30 +315,64 @@ describe("the setup run page draws the two-column run surface", () => {
     expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("false");
   });
 
-  it("draws NOTHING for a skills step whose reachedness the page never read — and still opens it", async () => {
-    // UNSTATED IS THE THIRD ANSWER, and closing the row on it would be a claim
-    // the page never made: this screen deliberately does not read the hold's
-    // park (the card is the one authority on that interaction, cinatra#2573),
-    // so the row is drawn plainly and stays openable. The card is the authority
-    // on whether it DRAWS; with no hold it renders no DOM at all, and this
-    // surface puts nothing in its place.
+  it("CLOSES the skills step on a run that has not started — the row stays, muted", async () => {
+    // THE RULING (cinatra#2970): a step the run has not reached cannot be
+    // selected; its row stays on the rail, muted; clicking it does nothing; the
+    // scheduler stays open; the right column never shows an empty step surface.
     //
-    // WHAT THIS PINS IS THE TRI-STATE RULE, NOT AN ENDORSED END STATE. A
-    // recommendation card that resolves to nothing still leaves the run detail
-    // with nothing in it, which the last clause of cinatra#2970 does not want.
-    // This
-    // rail cannot see that: a component element is a non-null surface however
-    // the component later resolves. Closing the gap needs the card's own
-    // resolved authority to reach the rail, which is a change to the one
-    // shipped recommendation renderer and is NOT in this change — it is carried
-    // as a named residual, not as behaviour anything here approves of.
-    const { container } = await renderSetupSurface();
+    // DRIVEN OFF A REAL RUN STATUS, through the same function the screen calls:
+    // `armed` is a run whose trigger is set and which has not started, so it has
+    // reached neither the recommendation nor the review.
+    //
+    // The park is still NOT read: the closed row comes from the run's status,
+    // never from a second reading of the hold the card alone owns
+    // (cinatra#2573). This is what retires the residual this suite used to
+    // carry — a row that opened a detail column with nothing in it.
+    const { container } = await renderSetupSurface({ runStatus: "armed" });
+
+    // Still a row, still named, still in the series — muted, not removed.
+    expect(rows(container).length).toBe(3);
+    expect(rows(container)[1].textContent).toBe("2Recommendation");
+    expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBe("false");
+    expect(rows(container)[1].getAttribute("aria-disabled")).toBe("true");
+    // The row's action NAMES the state instead of promising an open.
+    expect(rows(container)[1].getAttribute("data-action")).toBe(
+      "recommendation-step-unavailable",
+    );
+    expect(container.querySelector('[data-action="open-recommendation-step"]')).toBeNull();
+
+    // Clicking it does nothing: the scheduler stays open and the detail column
+    // never goes empty.
+    fireEvent.click(rows(container)[1]);
+    await waitFor(() => expect(rows(container)[0].getAttribute("data-run-surface-rail-selected")).toBe("true"));
+    expect(rows(container)[1].getAttribute("data-run-surface-rail-selected")).toBe("false");
+    const form = container.querySelector('[data-testid="scheduler-form"]')!;
+    expect(form).not.toBeNull();
+    expect(detailColumn(container)[0].contains(form)).toBe(true);
+    expect(holdCard(container)).toBeNull();
+    // And the card was never even asked: an unreached step opens nothing.
+    expect(holdStateMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves the skills step OPENABLE when the page states nothing about it", async () => {
+    // UNSTATED IS STILL THE THIRD ANSWER. `running` is past the pre-execution
+    // statuses, so the screen states nothing about the skills step, and an
+    // unstated step is drawn plainly and stays openable — the card is the
+    // authority on what is in it.
+    const { container } = await renderSetupSurface({ runStatus: "running" });
 
     expect(rows(container)[1].getAttribute("data-run-surface-rail-reached")).toBeNull();
     expect(rows(container)[1].hasAttribute("aria-disabled")).toBe(false);
     fireEvent.click(container.querySelector('[data-action="open-recommendation-step"]')!);
     await waitFor(() => expect(holdStateMock).toHaveBeenCalled());
 
+    // THE RESIDUAL THIS CHANGE DOES NOT CLOSE, PINNED SO IT STAYS VISIBLE. With
+    // no live hold the card renders no DOM at all, so an unstated row that IS
+    // opened still leaves the run detail empty. Closing that needs the card's
+    // own resolved authority to reach the rail — a change to the one shipped
+    // recommendation renderer, which the one-card rule (cinatra#2573) keeps out
+    // of this change. What the ruling asked for — the row of a run that has NOT
+    // STARTED — is closed above.
     expect(holdCard(container)).toBeNull();
     // The rail is untouched: the step is named, selected, and still a row.
     expect(rows(container).length).toBe(3);

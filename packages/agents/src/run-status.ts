@@ -44,6 +44,57 @@ export const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
   "stopped",
 ]);
 
+/**
+ * The run statuses a run holds BEFORE it has ever run (cinatra#2788, S9d).
+ *
+ * `armed` and `pending_trigger` are the schedule's own states — the trigger is
+ * set and the agent is waiting for it — and `pending_input` is the setup that
+ * precedes both. None of them can carry an execution record, so none of them
+ * has run progress to show.
+ *
+ * Lives here beside `TERMINAL_RUN_STATUSES`, the other run-status set, so the
+ * screens that ask the question and the tests that pin the answer can both read
+ * it without importing a screen's whole module graph.
+ */
+export const PRE_EXECUTION_RUN_STATUSES: ReadonlySet<string> = new Set<AgentRunStatus>([
+  "pending_input",
+  "pending_trigger",
+  "armed",
+]);
+
+/**
+ * HAS THE RUN REACHED ITS SETUP-FLOW STEPS BEYOND THE SCHEDULER? (cinatra#2970.)
+ *
+ * THE RULING: "a step the run has not reached cannot be selected; its row stays
+ * on the rail, muted; clicking it does nothing; the scheduler stays open; the
+ * right column never shows an empty step surface."
+ *
+ * A run still in `pending_input` / `pending_trigger` / `armed` HAS NOT STARTED,
+ * so it has reached neither the recommendation nor the review — the row closes.
+ *
+ * ANYWHERE ELSE THIS RETURNS `undefined`, WHICH IS NOT "NO". Unstated is the
+ * rail's third answer (`run-surface-rail.tsx`): the page has read nothing about
+ * the step, so it claims nothing and the row is drawn plainly. `true` is never
+ * returned, because the setup screen may NOT read the recommendation hold's
+ * park to assert the step WAS reached — the card is the one authority on that
+ * interaction (cinatra#2573) and the second read is pinned as retired.
+ *
+ * DELIBERATELY THE STATUS SET AND NOT AN EVIDENCE READ. The terminal statuses
+ * are ambiguous (`stopped` is what a CANCELLED schedule leaves behind,
+ * `completed` can be setup-success awaiting a trigger), so a run that reached
+ * the step and then died would be wrongly CLOSED by an evidence read that came
+ * back empty. Closing only on the three unambiguous pre-execution statuses
+ * never makes that claim. The consequence is named and accepted: a run that
+ * went `pending_input -> stopped` without ever running is left UNSTATED rather
+ * than closed.
+ */
+export function setupStepReachedForRunStatus(
+  runStatus: string | null | undefined,
+): boolean | undefined {
+  if (runStatus == null) return undefined;
+  return PRE_EXECUTION_RUN_STATUSES.has(runStatus) ? false : undefined;
+}
+
 // Derived from exhaustive grep of existing updateAgentRunStatus* callsites
 // Transition table includes cancel/reject edges from any live state so
 // user-cancel works consistently.

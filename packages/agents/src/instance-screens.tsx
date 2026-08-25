@@ -24,6 +24,10 @@ import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
 import { deriveRunHitlContext } from "./hitl-context";
+import {
+  PRE_EXECUTION_RUN_STATUSES,
+  setupStepReachedForRunStatus,
+} from "./run-status";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 // §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
@@ -243,20 +247,6 @@ export function screenHostsStepRail(params: {
 }): boolean {
   return !(params.panel === "stepper" && params.stepperStepCount > 0);
 }
-
-/**
- * The run statuses a run holds BEFORE it has ever run (cinatra#2788, S9d).
- *
- * `armed` and `pending_trigger` are the schedule's own states — the trigger is
- * set and the agent is waiting for it — and `pending_input` is the setup that
- * precedes both. None of them can carry an execution record, so none of them
- * has run progress to show.
- */
-const PRE_EXECUTION_RUN_STATUSES: ReadonlySet<string> = new Set([
-  "pending_input",
-  "pending_trigger",
-  "armed",
-]);
 
 /** The statuses that ARE an execution: the run fired and is in it, or died in it. */
 const EXECUTING_RUN_STATUSES: ReadonlySet<string> = new Set([
@@ -1480,12 +1470,16 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
   // plain run-scoped read behind the access door `readAgentRunById` already
   // cleared above, and it does not run for `/trigger` reached without a run.
   //
-  // THE SKILLS STEP IS DELIBERATELY UNMARKED. The one authority on that
+  // THE SKILLS STEP'S PARK IS STILL NEVER READ. The one authority on that
   // interaction is the card itself (cinatra#2573); a screen that read the hold's
   // park a second time to draw around it is exactly the parallel derivation the
   // one-renderer rule retired, and it is pinned as retired
-  // (`recommendation-hold-card.test.tsx`). So the row is drawn plainly and the
-  // page claims nothing about a step it has not read.
+  // (`recommendation-hold-card.test.tsx`).
+  //
+  // What the screen DOES read is the run's own status: a run that has not
+  // started has reached neither the recommendation nor the review, so that row
+  // is closed below off the pre-execution status set alone (cinatra#2970). Once
+  // the run has started the page claims nothing about the step it has not read.
   const setupReviewGates = run ? await listReviewGatesForRun(run.id) : [];
 
   // ── THE SCHEDULER STEP'S OWN SURFACE (cinatra#2970) ──────────────────────
@@ -1591,6 +1585,13 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         {
           key: "recommendation",
           label: RUN_SURFACE_RAIL_LABELS.recommendation,
+          // HAS THE RUN REACHED THIS STEP? (cinatra#2970, the ruling.) A run
+          // that has not started has reached neither this step nor the review,
+          // so its row closes instead of opening an empty run detail; anywhere
+          // else the answer stays UNSTATED and the row is drawn plainly. The
+          // whole table, and why the status set decides it rather than an
+          // evidence read, is on `setupStepReachedForRunStatus` (`run-status.ts`).
+          reached: setupStepReachedForRunStatus(run.status),
           // The ONE renderer of this interaction (cinatra#2573), on the host
           // this screen already declares. It is the authority on whether it
           // draws: with no live hold it resolves to nothing and renders no DOM

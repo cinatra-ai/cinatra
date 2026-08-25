@@ -23,6 +23,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { setupStepReachedForRunStatus, type AgentRunStatus } from "../run-status";
+
 const SCREEN_SRC = fs.readFileSync(
   path.join(__dirname, "..", "instance-screens.tsx"),
   "utf-8",
@@ -176,13 +178,96 @@ describe("the setup run page draws the run surface, not a single column", () => 
     expect(TRIGGER_SCREEN).toContain(
       "const setupReviewGates = run ? await listReviewGatesForRun(run.id) : [];",
     );
-    // And the skills step states NOTHING, because the screen may not read the
-    // hold's park to draw around it — the card is the one authority on it.
+    expect(TRIGGER_SCREEN).not.toContain("readRecommendationParkForRun");
+  });
+
+  it("asks the run's status whether the skills step was reached — one call, no second read", () => {
+    // The WIRING only. What the answer IS per status is the table below, which
+    // runs the real function instead of reading its source.
     const recommendation = SETUP_BRANCH.slice(
       SETUP_BRANCH.indexOf('key: "recommendation"'),
       SETUP_BRANCH.indexOf('key: "review"'),
     );
-    expect(recommendation).not.toContain("reached:");
+    expect(recommendation).toContain("reached: setupStepReachedForRunStatus(run.status),");
+    // Off the RUN's status, never off a second reading of the hold's park — the
+    // card is the one authority on that interaction (cinatra#2573).
     expect(TRIGGER_SCREEN).not.toContain("readRecommendationParkForRun");
+  });
+});
+
+describe("setupStepReachedForRunStatus — what the run's status says about a setup step", () => {
+  // THE RULING (cinatra#2970): "a step the run has not reached cannot be
+  // selected; its row stays on the rail, muted; clicking it does nothing; the
+  // scheduler stays open; the right column never shows an empty step surface."
+  //
+  // The whole status space is pinned, so a status ADDED later cannot quietly
+  // fall into the wrong column: `ALL_STATUSES` is the type's own list, and the
+  // last case fails if a member is missing from it.
+  // A `Record` KEYED BY THE TYPE, so a status added to `AgentRunStatus` later
+  // fails to COMPILE here until someone says which column it belongs in. A
+  // plain array would silently stay short.
+  const EXPECTED: Record<AgentRunStatus, false | undefined> = {
+    pending_input: false,
+    pending_trigger: false,
+    armed: false,
+    queued: undefined,
+    running: undefined,
+    pending_approval: undefined,
+    waiting_trigger: undefined,
+    completed: undefined,
+    failed: undefined,
+    stopped: undefined,
+  };
+  const ALL_STATUSES = Object.keys(EXPECTED) as AgentRunStatus[];
+  const NOT_STARTED = ALL_STATUSES.filter((s) => EXPECTED[s] === false);
+  const STARTED = ALL_STATUSES.filter((s) => EXPECTED[s] === undefined);
+
+  it("CLOSES the row on a run that has not started", () => {
+    // These three are unambiguous: none of them can carry an execution record,
+    // so the run has reached neither the recommendation nor the review.
+    for (const status of NOT_STARTED) {
+      expect(setupStepReachedForRunStatus(status)).toBe(false);
+    }
+  });
+
+  it("states NOTHING once the run has started — and never asserts `true`", () => {
+    // Unstated is the third answer, not "no": the page has read nothing about
+    // the step, so the row is drawn plainly and the card is the authority on
+    // what is in it. `true` would be the claim this screen cannot make.
+    for (const status of STARTED) {
+      expect(setupStepReachedForRunStatus(status)).toBeUndefined();
+    }
+  });
+
+  it("says nothing at all when there is no status to read", () => {
+    expect(setupStepReachedForRunStatus(null)).toBeUndefined();
+    expect(setupStepReachedForRunStatus(undefined)).toBeUndefined();
+  });
+
+  it("leaves a run that DIED BEFORE RUNNING unstated — the named, accepted residual", () => {
+    // `pending_input -> stopped` is a legal edge (`run-status.ts`), so a run can
+    // reach a terminal status without ever running. The terminal statuses are
+    // ambiguous — `stopped` is also what a CANCELLED schedule leaves behind and
+    // `completed` can be setup-success awaiting a trigger — so closing on them
+    // would sometimes close a step the run HAD reached. This function refuses
+    // to guess: it closes only on the three unambiguous pre-execution statuses.
+    // The consequence is recorded here rather than left for someone to find.
+    expect(setupStepReachedForRunStatus("stopped")).toBeUndefined();
+    expect(setupStepReachedForRunStatus("failed")).toBeUndefined();
+  });
+
+  it("puts EVERY run status in exactly one of the two columns", () => {
+    // The two columns are the whole space and they do not overlap.
+    expect(NOT_STARTED.length + STARTED.length).toBe(ALL_STATUSES.length);
+    expect(NOT_STARTED).toEqual(["pending_input", "pending_trigger", "armed"]);
+    for (const status of ALL_STATUSES) {
+      const answer = setupStepReachedForRunStatus(status);
+      // `true` is never an answer this screen gives.
+      expect(answer === false || answer === undefined).toBe(true);
+      expect(answer).toBe(EXPECTED[status]);
+    }
+    // An unknown string is not a run status the screen can read, and it must
+    // not be treated as "not started".
+    expect(setupStepReachedForRunStatus("not-a-status")).toBeUndefined();
   });
 });
