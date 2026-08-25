@@ -5,3 +5,10 @@
 == RUN AT THIS TREE ==
 [chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
   no findings.
+
+== CONTROL RUN, THIS LANE REMOVED ==
+# This lane's evidence/2790-s9f-host-parity directory moved aside and its
+# twenty-one records removed from scripts/ci/chat-hitl-capture-index.json
+# (75 -> 54), so the gate saw a repo this lane had never touched. EXIT 0.
+[chat-hitl-evidence-gate] ENFORCING on "HEAD" — the branch was created after the gate landed (2026-08-19T00:00:00.000Z)
+  no findings.

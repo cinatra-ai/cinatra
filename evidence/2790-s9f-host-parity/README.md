@@ -60,8 +60,8 @@ the shipped materializer standing in for the step. That was the one thing on
 this page that was stood in for, and it is stood in for no longer. The WayFlow
 runtime is up, a real model provider resolves, **the step executed and wrote its
 own output** — 5 695 bytes of markdown, `Connector Rollout Note` — and **the
-shipped sweeper opened the review on it by itself**. `R1`–`R4` are re-shot in
-place on that run.
+shipped sweeper opened the review on it by itself**. `R1`–`R4` were re-shot in
+place on that run; `R1` and `R3` have since been retired (below).
 
 **Beside the pictures there is now a clock.** `TIMELINE.md` and `timeline.json`
 carry the whole sequence with the exact database column or log line every
@@ -461,7 +461,11 @@ by a run failing on it rather than by guesswork.
 > SAME reading of the SAME run is recorded at page framing by `R2` and `R4`. The
 > two rows below are kept as the record of what was retired and why; their
 > pictures are gone, because a picture kept beside a retired record is the next
-> round's false evidence.
+> round's false evidence. **Their RECORDS are gone as of this commit too** —
+> removed from `capture-records.json` and `capture-results.json`, which until now
+> still carried the hashes of two files this tree does not hold. The two rows
+> below, and every grading row further down that cites `R1`/`R3`, are kept as the
+> retired reading and are not offered as live evidence.
 
 
 | Cell | Pixels | What is VISIBLY on screen |
@@ -471,7 +475,7 @@ by a run failing on it rather than by guesswork.
 | `R3__recommendation-card__page_gate_region__decided__dark` | 2096×52 | The same row, same run, same clip rectangle, in `dark`. |
 | `R4__recommendation-card__page_gate_region__decided__above-gate__dark` | 2880×3540 | The same page framing as `R2`, same run, in `dark`. |
 
-`R1` and `R3` share one clip rectangle — `{x:376, y:191, w:1048, h:26}` CSS px —
+`R1` and `R3` shared one clip rectangle — `{x:376, y:191, w:1048, h:26}` CSS px —
 measured once on the light pass, because shooting the locator twice gives widths
 that differ by a scrollbar. `R2` and `R4` are the same full-page framing at the
 same viewport. The order is measured, not eyeballed:
@@ -484,11 +488,13 @@ seconds, where the gate card itself lands in under twenty. A first pass of this
 round shot on the gate card alone and produced a page whose target was a row of
 grey bars, which reads as *“the run produced nothing”* — the opposite of what
 happened. The recorder waits for the island's own text now and records
-`reviewTargetResolved` on every cell; all four carry `true`.
+`reviewTargetResolved` on every cell; the two records this directory still
+holds, `R2` and `R4`, both carry `true`.
 
 ### What the pictures prove, and what the timeline proves
 
-**The pictures** (`R1`–`R4`) prove **placement and reading**: on the review page,
+**The pictures** (`R2` and `R4`; `R1`/`R3` proved the same reading before they
+were retired) prove **placement and reading**: on the review page,
 under `page_gate_region`, the recommendation row is drawn **above** the review
 gate card (`cardTop 191 < gateTop 233`, `domOrder: card-then-gate`) and it is
 drawn **decided** — one settled chip per kept skill, each naming its own outcome,
@@ -509,14 +515,16 @@ on this run, so the run's creation is anchored on
 `lifecycle_continuation_park.created_at` and on the artifact and gate rows.
 
 **What the PIXELS say, not the DOM.** Every one of the four cells was read back
-with the platform's own text recognizer straight off the committed PNG
-(`logs/pixel-readout.txt`). It returns, in reading order on `R2`: the three
+with the platform's own text recognizer straight off the PNG committed at the
+time (`logs/pixel-readout.txt`; the `R1` and `R3` PNGs it also read have since
+been retired). It returns, in reading order on `R2`: the three
 settled chips, then *“Review requested”* / *“Awaiting your decision”*, then the
 target panel, then `Comment` / `Reject` / `Approve`. No `Confirm`, no `Adjust`,
 no `Skip` appears anywhere in the row's pixels — which is the same claim the
 DOM's **0/0/0** affordance count makes, made a second way.
 
-Measured on all four cells, and carried in each record's `assertions`:
+Measured on all four cells when they were shot, and carried in the `assertions`
+of the two records this directory still holds — `R2` and `R4`:
 
 | Anchor | Scope | Count |
 |---|---|---|
@@ -528,7 +536,7 @@ Measured on all four cells, and carried in each record's `assertions`:
 | `[data-recommendation-chip]` | root | **3** |
 | `[data-skill-action="confirm"]` / `"adjust"` / `"skip"` | root | **0 / 0 / 0** |
 
-The card root carries, on all four: `data-lifecycle-card-state="decided"`,
+The card root carries, on both surviving records: `data-lifecycle-card-state="decided"`,
 `data-run-recommendation-settled="true"`,
 `data-run-recommendation-decision="confirmed"`,
 `data-lifecycle-card-host="page_gate_region"` — and **no** `data-can-decide`.
@@ -553,16 +561,16 @@ Against design §V (the ratified redraw the card renders, quoted verbatim in
 | 8 | §V — the **settled** row states each skill's own outcome with nothing to press | a decided reading on this host | `W3`/`H4`: state `decided`, 4 marked chips, **0/0/0** affordances | **PASS** |
 | 9 | Both palettes resolve | the same card in light and dark, both framings | `W1`/`W2` and `H1`/`H2` | **PASS** |
 | 10 | Plan §6.4 — *“the card settles in place showing what you chose, and the run card underneath advances”* | the row settling **where it was decided**, and the run advancing | `W3`/`H4` shot on the same frame instance with no reload (`settledInPlace: true`, `reloadedBeforeReading: false`); `agent_runs.status` `pending_input` → **`pending_approval`** | **PASS** |
-| 11 | Plan §6.3 item 4 — *“No mount on the review page.”* is closed | the card present on the review route under `page_gate_region` | `R1`–`R4`: `[data-lifecycle-card-host="page_gate_region"]`=2 (row + gate), card root=1 | **PASS** |
+| 11 | Plan §6.3 item 4 — *“No mount on the review page.”* is closed | the card present on the review route under `page_gate_region` | `R2`/`R4`: `[data-lifecycle-card-host="page_gate_region"]`=2 (row + gate), card root=1 | **PASS** |
 | 12 | Plan §6.4 item 6 — *“The same row appears on the run page, ahead of the steps it would authorize, and on the review page…”*, **above** the gate | the row ABOVE the review gate card | `cardAboveGate: true`, `cardTop 191 < gateTop 233`, `domOrder: card-then-gate`; visible in `R2`/`R4` and in the pixel read-out | **PASS** |
-| 13 | Plan §6.4 item 6 — *“…where it is mostly seen in its decided form.”* | a **decided** reading on the review page, produced by a real decision rather than staged | `R1`–`R4`: root `data-lifecycle-card-state="decided"`, `data-run-recommendation-settled="true"`; the decision itself was four presses on the run page (`logs/real-sequence.txt`), and the park read back `released` | **PASS** — this row read **NOT DELIVERED** on the previous evidence commit |
-| 14 | Plan §6.4 designed item 4 — *“the card settles in place showing what you chose”* | each kept skill's own outcome named on its own chip | `R1`/`R3`: `Confirmed` / `Adjusted` / `Confirmed`, matching `run_selected_skill_revisions` (`recommended_confirmed` / `user_adjusted` / `recommended_confirmed`) row for row | **PASS** |
-| 15 | The row on the review page is a **record**, not a control | **zero** decision affordances inside the card root, and no `data-can-decide` | `R1`–`R4`: `[data-skill-action]` confirm/adjust/skip = **0 / 0 / 0**; no `data-can-decide` attribute; the recognizer finds no `Confirm`/`Adjust`/`Skip` in the pixels | **PASS** |
+| 13 | Plan §6.4 item 6 — *“…where it is mostly seen in its decided form.”* | a **decided** reading on the review page, produced by a real decision rather than staged | `R2`/`R4`: root `data-lifecycle-card-state="decided"`, `data-run-recommendation-settled="true"`; the decision itself was four presses on the run page (`logs/real-sequence.txt`), and the park read back `released` | **PASS** — this row read **NOT DELIVERED** on the previous evidence commit |
+| 14 | Plan §6.4 designed item 4 — *“the card settles in place showing what you chose”* | each kept skill's own outcome named on its own chip | `R2`/`R4`, in each record's own `chips` read-out: `Confirmed` / `Adjusted` / `Confirmed`, matching `run_selected_skill_revisions` (`recommended_confirmed` / `user_adjusted` / `recommended_confirmed`) row for row | **PASS** |
+| 15 | The row on the review page is a **record**, not a control | **zero** decision affordances inside the card root, and no `data-can-decide` | `R2`/`R4`: `[data-skill-action]` confirm/adjust/skip = **0 / 0 / 0**; no `data-can-decide` attribute; the recognizer finds no `Confirm`/`Adjust`/`Skip` in the pixels | **PASS** |
 | 16 | The review card **beneath** is the decision still open | the gate card present and pending, with its decision floor | `R2`/`R4`: gate `state: "pending"`, `[data-conformance-id="review-decision-bar"]`=1, buttons `Comment` · `Reject` · `Approve`, drawn beneath the settled row | **PASS** |
-| 17 | Both palettes resolve on the review page | the same two framings in light and dark | `R1`/`R3` (one shared clip) and `R2`/`R4` (one page framing) | **PASS** |
+| 17 | Both palettes resolve on the review page | the same page framing in light and dark | `R2` and `R4`, both `framing: "page"`, `themeClass` ending `cinatra` and `dark` respectively; the retired `R1`/`R3` carried a second, card-root framing that this row no longer rests on | **PASS** |
 | 18 | The run's own **production** leg | the run produces, itself, the artifact its gate opens on | the WayFlow runtime up and healthy (`/.health` → `200`, `status: ok`, 29 agents); the dispatch accepted (`POST /agents/cinatra-ai/blog-draft-writer-agent/ 200 OK`); **the model call answered `200`** at `POST /api/llm-bridge`; the step reported `completed`; a `cinatra.representation` row with `created_by_run_id` = this run carrying 5 695 bytes of `text/markdown`; an `artifact_produced_outbox` row with `emitter=createSemanticArtifact`, `origin_kind=agent_produced`. **No materializer stood in for anything.** | **PASS** — this row read **NOT DELIVERED** on the previous evidence commit |
 | 19 | The **order**: the recommendation is decided BEFORE the step that uses it, and the step runs BEFORE the review exists | timestamps read from the database and the runtime log, not from a screen, each citing its source | `TIMELINE.md` / `timeline.json`: decisions `17:03:10.434846` (`run_selected_skill_revisions.selected_at`) → step `17:04:20.800435` (runtime status payload) → artifact `17:04:21.865797` (`representation.created_at`, `created_by_run_id` = this run) → gate `17:04:46.914590` (`artifact_review_gates.created_at`; sweeper line `scanned=1 gatesCreated=1`) → pictures `17:30:21` (`recordedAt`). The one column NOT trusted is named with its reason. | **PASS** — new row |
-| 20 | The gate card's **target** is the thing this run made | the target panel naming the run's own artifact and its revision | `R2`/`R4`: *Connector Rollout Note*, `Blog Post Artifact`, `revision 65128429-95e…`, `text/markdown`, `updated 2026-08-22T17:04:21.865Z` — the same revision id the durable row binds to this run; `reviewTargetResolved: true` on all four cells | **PASS** — new row |
+| 20 | The gate card's **target** is the thing this run made | the target panel naming the run's own artifact and its revision | `R2`/`R4`: *Connector Rollout Note*, `Blog Post Artifact`, `revision 65128429-95e…`, `text/markdown`, `updated 2026-08-22T17:04:21.865Z` — the same revision id the durable row binds to this run; `reviewTargetResolved: true` on both surviving records | **PASS** — new row |
 
 Rows 13–20 are the ones that changed. Row 18 is this round's: it read **NOT
 DELIVERED** on the previous evidence commit, against the same requirement,
@@ -629,11 +637,20 @@ gate's decision floor all resolve dark correctly around it.
 
 ## Registration in the capture index
 
-**All eleven of this lane's records are registered** in
+**All twenty-one of this lane's cells are registered** in
 `scripts/ci/chat-hitl-capture-index.json` — the seven widget cells and, since the
 merge-forward that brought `main`'s corrected `review_page` URL class onto this
-branch, the four review-page cells too. `validateCaptureIndex` over the whole
-file after this round's replacement: **50 records, 0 violations.**
+branch, the review-page cells too, together with the chat, rework and `R6` cells
+the later rounds added. `R1` and `R3` are not among them: they were retired with
+their pictures by the S9d merge-forward `c6fbe5a9`, and their records left
+`capture-records.json` and `capture-results.json` with this commit.
+`capture-records.json` now holds **nine** records; the four
+`capture-records*.json` files in this directory hold **23 entries covering 21
+distinct cells** — `R6` light and dark are recorded identically in both
+`capture-records-r6.json` and `capture-records-rework.json`. Every one of those
+21 cells resolves to a record in the index, and every lane record in the index
+resolves back to a cell in these files. `validateCaptureIndex` over the whole
+file: **75 records, 0 violations.**
 
 That URL class is the reason the four `R` cells were held out of the index on the
 first evidence commit in this lane, and it is worth keeping the history straight
@@ -645,15 +662,16 @@ the class; the merge landed it here; the records went in.
 
 **This round refreshed the digests, and only two of them moved.** `R2` and `R4`
 changed, because the page shows a different run and its target panel now names
-the artifact that run produced. `R1` and `R3` are **byte-identical to the
+the artifact that run produced. `R1` and `R3` were **byte-identical to the
 previous round's files** — the card root carries no run id, so the same three
-chips with the same three marks in the same clip rectangle hash the same. Their
-PROVENANCE changed completely all the same: the row they show was left behind by
-a run that executed and produced its own output, where the previous round's was
-left behind by a run that failed at its model call. Pixels cannot tell those
-apart. `capture-records.json`, `logs/run-execution-readback.json` and
-`TIMELINE.md` can, which is why the digests are stated as unchanged here instead
-of being left to look like fresh evidence.
+chips with the same three marks in the same clip rectangle hashed the same. Their
+PROVENANCE changed completely all the same: the row they showed was left behind
+by a run that executed and produced its own output, where the previous round's
+was left behind by a run that failed at its model call. Pixels cannot tell those
+apart. `logs/run-execution-readback.json` and `TIMELINE.md` can, which is why the
+digests were stated as unchanged rather than left to look like fresh evidence.
+Both cells have since been retired, and their records no longer sit in
+`capture-records.json`.
 
 ## Gates — real exits
 
@@ -664,12 +682,12 @@ is caused by it.
 | Gate | Exit | Findings |
 |---|---|---|
 | `scripts/ci/chat-hitl-evidence-gate.mjs` | **0** | **none** — `no findings.` |
-| `scripts/audit/chat-hitl-acceptance-gate.mjs` | **0** | **none** — *“manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 50 record(s). Anchor contract ratified at the manifest's design pin.”* |
+| `scripts/audit/chat-hitl-acceptance-gate.mjs` | **0** | **none** — *“manifest honest — 16 rows (10 MAPPED, 4 BUILT, 2 MISSING); every named proof exists in the tree. Capture index host-anchored — 75 record(s). Anchor contract ratified at the manifest's design pin.”* |
 
 **The isolation was measured, not asserted.** Each gate was re-run with this
-lane's `evidence/` directory moved aside **and** this lane's eleven indexed
-records removed from `scripts/ci/chat-hitl-capture-index.json` (50 → 39), so the
-run saw a repo this lane had never touched. Both control runs also exit **0**
+lane's `evidence/` directory moved aside **and** this lane's twenty-one indexed
+records removed from `scripts/ci/chat-hitl-capture-index.json` (75 → 54), so the
+run saw a repo with this lane's evidence and index records removed. Both control runs also exit **0**
 with **no findings**; the only difference in the output is the record count the
 acceptance gate prints. Both runs are appended verbatim to the same log files:
 `logs/gate-chat-hitl-evidence.txt`, `logs/gate-chat-hitl-acceptance.txt`.
@@ -691,8 +709,8 @@ than inheriting the old text.
   row citing the database column or the log line its timestamp was read from,
   and naming the one column that is deliberately NOT trusted.
 - `capture-records.json` — every record in the shape
-  `scripts/ci/lib/capture-record-contract.mjs` validates; all eleven are in the
-  canonical index, which validates clean (50 records, 0 violations).
+  `scripts/ci/lib/capture-record-contract.mjs` validates; all nine are in the
+  canonical index, which validates clean (75 records, 0 violations).
 - `capture-results.json` — the machine record beside the pixels: counts, the
   root's own `data-*` attributes, the per-chip DOM read-out, the card text, the
   wire, the decide outcome, `settleFacts`, the cookie jar, and the whole
@@ -803,8 +821,8 @@ verdict reads `owed (capture pending)` until the pictures exist.
 | `R5__recommendation-card__run_card__held` (+ `__dark`) | the run page | The same run held, on the run surface: the step rail on the left and the recommendation read in the run detail on the right, under that same rail. |
 | `R6__recommendation-card__run_card__decided` (+ `__dark`) | the run page | The same run after the decision: the settled chips in place and the run's own progress in the run detail, with **no skills button row inside the card**. |
 
-The run-page pair is numbered `R5`/`R6` because `R1`-`R4` in this directory are
-already the review-page cells; each name carries its host token, which is what
+The run-page pair is numbered `R5`/`R6` because `R1`-`R4` in this directory were
+taken by the review-page cells (`R2` and `R4` presented; `R1` and `R3` retired); each name carries its host token, which is what
 says which surface it is.
 
 ## Cells DELIVERED — the chat sequence
@@ -937,7 +955,7 @@ were written and are no longer: the plan page was republished and now reads
 caller anywhere”* where it used to read *“Recommendation and schedule-proposal
 decisions … the proposal actions have no UI caller anywhere”*. Both quotes are
 re-pinned to the page's current words; the sentence makes the same claim and the
-two cells' grading is unchanged. **All 79 `PLAN>` lines across all 19 cells are
+two cells' grading is unchanged. **All 73 `PLAN>` lines across all 21 cells are
 now verbatim substrings of the plan page again.**
 
 ## Honest notes on what the pictures show

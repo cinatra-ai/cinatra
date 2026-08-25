@@ -46,7 +46,7 @@ rewritten:
 | 10 | The run reached its terminal state | `17:04:22.009` | `cinatra.agent_runs.completed_at`, `status=completed`, `error` empty |
 | 11 | **THE SHIPPED SWEEPER OPENED THE REVIEW** | `17:04:46.914590` | `cinatra.artifact_review_gates.created_at`, `status=pending`; the sweep itself in the app log: `[lifecycle-review-orchestration] scanned=1 gatesCreated=1 noGate=0 notClassifiable=0 failed=0` |
 | 12 | The produced-artifact outbox row was processed | `17:04:47.249846` | `cinatra.artifact_produced_outbox.processed_at` |
-| 13 | **The review page was CAPTURED** — `R1`–`R4` | `17:30:21.550` … `17:30:22.839` | `capture-records.json` `recordedAt` on each of the four cells |
+| 13 | **The review page was CAPTURED** — `R2` and `R4` (the retired `R1`/`R3` were shot in the same pass) | `17:30:21.726` … `17:30:22.839` | `capture-records.json` `recordedAt` on both cells |
 
 ## What the order proves
 
@@ -55,7 +55,7 @@ the step that used those skills (row 8, `17:04:20`), which is earlier than the
 artifact that step wrote (row 9, `17:04:21`), which is earlier than the review
 gate the sweeper opened on it (row 11, `17:04:46`), which is earlier than the
 pictures (row 13).** Nothing on the review page was staged into its state: the
-decided row in `R1`–`R4` is the state a decision taken ninety-six seconds
+decided row in `R2`/`R4` is the state a decision taken ninety-six seconds
 earlier, on a different page, left behind — and the review page it sits on could
 not have existed before the step produced something for it to review.
 

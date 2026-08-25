@@ -9,12 +9,10 @@ Read it as a contract: a cell that shows something no quoted sentence sanctions
 does not belong here, and a sentence that sanctions something the cell does not
 show is a quote that should not have been used.
 
+`R1` and `R3` are RETIRED and are no longer walked here: the S9d merge-forward
+`c6fbe5a9` (cinatra#2788 into this branch) removed both pictures, and the same
+reading of the same run stays at page framing in `R2` and `R4`.
 
-CELL: R1__recommendation-card__page_gate_region__decided
-PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.
-PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the agentic run progress card appears; no skill inside it can be selected.
-PLAN> **The row is the whole card** — there is no separate heading plate and no second gate-level submit.
-PLAN> `LIFECYCLE_CARD_HOSTS` (:390-395) — `chat_thread`, `site_widget`, `run_card`, `page_gate_region`. In this page's words: the chat, the widget, the run page, the review page.
 
 CELL: R2__recommendation-card__page_gate_region__decided__above-gate
 PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.
@@ -22,12 +20,6 @@ PLAN> Once you have decided each one, the run starts with your selection, the ca
 PLAN> **No mount on the review page.**
 PLAN> **You decide** on the card: **Approve** or **Reject** (a note is optional on approve and expected on reject) settles it once and for all.
 PLAN> **The design's rule stands as ratified:** *every card appears in every one of the four channels* (design §IX, "Yes" in all sixteen cells) — same card, same states, same data, and the same actions its reader is authorized to take.
-
-CELL: R3__recommendation-card__page_gate_region__decided__dark
-PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.
-PLAN> Once you have decided each one, the run starts with your selection, the card settles in place showing what you chose, and the agentic run progress card appears; no skill inside it can be selected.
-PLAN> **The row is the whole card** — there is no separate heading plate and no second gate-level submit.
-PLAN> `LIFECYCLE_CARD_HOSTS` (:390-395) — `chat_thread`, `site_widget`, `run_card`, `page_gate_region`. In this page's words: the chat, the widget, the run page, the review page.
 
 CELL: R4__recommendation-card__page_gate_region__decided__above-gate__dark
 PLAN> The same row appears on the run page, ahead of the steps it would authorize, and on the review page, where it is mostly seen in its decided form.
@@ -213,8 +205,8 @@ this lane had to disclose a downstream failure at this point; this one has none 
 disclose.
 
 The run-page pair is numbered R5/R6 rather than R1/R2 because R1-R4 in this lane
-are already the REVIEW-PAGE cells; the host token in each name (`run_card`) says
-which surface it is.
+were taken by the REVIEW-PAGE cells (R2 and R4 walked above; R1 and R3 retired);
+the host token in each name (`run_card`) says which surface it is.
 
 Every `DRAWING-CHECK>` below was written by VIEWING the picture and comparing it
 to the plan sentence and the named drawing.

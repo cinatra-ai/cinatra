@@ -109,9 +109,9 @@
     },
     {
       "n": 13,
-      "event": "the review page CAPTURED \u2014 R1..R4",
-      "at": "2026-08-22T17:30:21.550Z .. 2026-08-22T17:30:22.839Z",
-      "source": "capture-records.json recordedAt on each of the four cells"
+      "event": "the review page CAPTURED \u2014 R2 and R4 (the retired R1/R3 were shot in the same pass)",
+      "at": "2026-08-22T17:30:21.726Z .. 2026-08-22T17:30:22.839Z",
+      "source": "capture-records.json recordedAt on both cells"
     }
   ],
   "whatTheOrderProves": [
