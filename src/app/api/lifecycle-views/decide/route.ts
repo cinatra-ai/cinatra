@@ -140,7 +140,7 @@ const reviewRequestSchema = z
 // one is handed to the canonical path that already owns it — this route
 // implements no scheduling logic of its own.
 //
-// FIVE OPERATIONS, ALL RE-AUTHORIZED SERVER-SIDE:
+// FOUR OPERATIONS, ALL RE-AUTHORIZED SERVER-SIDE:
 //
 //   confirm — `confirmTriggerScheduleProposal`, the one transaction that spends
 //             the proposal and creates the run. The token is re-verified against
@@ -154,11 +154,17 @@ const reviewRequestSchema = z
 //             released trigger and a one-off that has already fired, and hands
 //             the rest to the ONE `setRunTriggerForActor` — so a recurring change
 //             cancels the prior scheduler and takes effect on future ticks only.
-//   cancel  — `deleteRunTriggerForActor` (owner-or-admin), the canonical path.
-//   release — `releaseTriggerNowForActor` (admin + install-scope dispatch
-//             authority), the canonical path.
+//   cancel  — `stopRecurringTriggerForActor` (owner-or-admin), the canonical
+//             path. Plan (A) §7.2 as amended 2026-08-25: **Cancel schedule**
+//             "stops the recurring schedule and then makes the scheduler
+//             non-editable" — it never deletes it and never pauses the run
+//             (cinatra#2972).
 //
-// THE CLIENT NEVER NAMES A RUN. `save`, `cancel` and `release` act on the run the REF
+// `release` — Run now — WAS the fifth and is gone with its whole action path:
+// the same amendment says "there is no Run now". A body still asking for it is
+// refused by the schema below, before any actor is resolved.
+//
+// THE CLIENT NEVER NAMES A RUN. `save` and `cancel` act on the run the REF
 // resolves to, server-side, through the same resolver that drew the card. A body
 // carrying a run id would be a way to operate a trigger the card never showed.
 // ---------------------------------------------------------------------------
@@ -168,7 +174,7 @@ const scheduleRequestSchema = z
   .object({
     kind: z.literal("trigger_schedule_proposal"),
     ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
-    op: z.enum(["confirm", "adjust", "save", "cancel", "release"]),
+    op: z.enum(["confirm", "adjust", "save", "cancel"]),
     /** Present for `adjust` (re-propose) and `save` (re-arm an already-armed
      *  trigger — plan (A) §7.2's "Save changes"). Validated as §VI's closed
      *  selection vocabulary, which HAS no cron field, so a raw expression
@@ -264,9 +270,8 @@ export async function POST(request: Request): Promise<Response> {
       // A principal with no attributable user cannot hold or settle a proposal.
       userId: actorCtx.actor.userId ?? "",
       orgId: actorCtx.orgId,
-      // The role the ACTOR was resolved with. `releaseTriggerNowForActor`
-      // re-checks it, and then re-checks the install-scope dispatch authority
-      // on top — this route asserts nothing about admin standing itself.
+      // The role the ACTOR was resolved with. The canonical service re-checks
+      // it — this route asserts nothing about admin standing itself.
       role:
         actorCtx.roleHints?.platformRole === "platform_admin" ? "admin" : null,
     });
