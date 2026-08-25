@@ -22,7 +22,7 @@
 //   cd packages/agents && npx vitest run src/__tests__/schedule-step-prompt-window.test.tsx
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import type { TriggerScheduleProposalViewBody } from "@cinatra-ai/agent-ui-protocol/renderable-views/trigger-schedule-proposal-view";
 
@@ -103,6 +103,22 @@ const stepDetail = (c: HTMLElement) =>
 const promptWindow = (c: HTMLElement) =>
   c.querySelector('[data-conformance-id="schedule-prompt-window"]') as HTMLElement | null;
 
+/**
+ * HOW LONG THE WINDOW IS ALLOWED TO TAKE TO ARRIVE.
+ *
+ * The window is MEASURED into place, not predicted: `ScheduleRailStep` mounts it
+ * only after a `MutationObserver` has seen the card actually draw DOM. That is a
+ * chain — the card's resolve, the card's render, the observer, one more render —
+ * and on a loaded runner it outlasts `waitFor`'s one-second default while the
+ * placement it produces is perfectly correct. This package's `vitest.config.ts`
+ * already writes the same rule for the same reason: "give the import headroom so
+ * the gate measures behavior, not runner contention."
+ *
+ * It buys TIME, never a verdict: a window that never mounts, or that mounts in
+ * the wrong container or above the card, still fails.
+ */
+const WINDOW_ARRIVES = { timeout: 10_000 } as const;
+
 describe("the Schedule step stays clickable after a recurring fire", () => {
   it("the rail row is a live control, not a settled or muted reading", async () => {
     mockResolve();
@@ -136,11 +152,19 @@ describe("the prompt window shows BELOW the scheduler", () => {
   it("is mounted inside the schedule step's own detail, under the card", async () => {
     mockResolve();
     const { container } = mount();
-    await waitFor(() =>
+    // BOTH NODES, NOT JUST THE CARD. The window is drawn a commit AFTER the
+    // scheduler: `ScheduleRailStep` mounts it only once it has MEASURED that the
+    // card produced DOM (`useSchedulerDrawn`, a MutationObserver reading of the
+    // card host), so the card — or its option rows — being on screen does not yet
+    // mean the window is. Waiting for the card alone reads the window as absent
+    // on a loaded machine; what this point is about is where the window LANDS, so
+    // wait for the window itself and then read the placement.
+    await waitFor(() => {
       expect(
         container.querySelector('[data-conformance-id="schedule-option-rows"]'),
-      ).not.toBeNull(),
-    );
+      ).not.toBeNull();
+      expect(promptWindow(container)).not.toBeNull();
+    }, WINDOW_ARRIVES);
     const window_ = promptWindow(container);
     expect(window_).not.toBeNull();
     // IN THE RUN DETAIL COLUMN, not in the rail and not at the end of the page.
@@ -157,9 +181,13 @@ describe("the prompt window shows BELOW the scheduler", () => {
   it("BELOW, in document order — the card comes first", async () => {
     mockResolve();
     const { container } = mount();
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="schedule-proposal-card"]')).not.toBeNull(),
-    );
+    // The card, and then the window it is measured into — see above.
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-conformance-id="schedule-proposal-card"]'),
+      ).not.toBeNull();
+      expect(promptWindow(container)).not.toBeNull();
+    }, WINDOW_ARRIVES);
     const card = container.querySelector('[data-conformance-id="schedule-proposal-card"]')!;
     const window_ = promptWindow(container)!;
     // DOCUMENT_POSITION_FOLLOWING === 4: the window follows the card.
@@ -171,12 +199,13 @@ describe("the prompt window shows BELOW the scheduler", () => {
   it("carries the panel itself, not an empty mount", async () => {
     mockResolve();
     const { container } = mount();
-    await waitFor(() => expect(promptWindow(container)).not.toBeNull());
+    await waitFor(() => expect(promptWindow(container)).not.toBeNull(), WINDOW_ARRIVES);
     // `data-conv-open` is the shipped panel's own root attribute, so this is
     // the panel having PORTALLED INTO this mount rather than a div that merely
     // exists.
-    await waitFor(() =>
-      expect(promptWindow(container)!.querySelector("[data-conv-open]")).not.toBeNull(),
+    await waitFor(
+      () => expect(promptWindow(container)!.querySelector("[data-conv-open]")).not.toBeNull(),
+      WINDOW_ARRIVES,
     );
   });
 
@@ -188,6 +217,13 @@ describe("the prompt window shows BELOW the scheduler", () => {
         container.querySelector('[data-conformance-id="schedule-option-rows"]'),
       ).not.toBeNull(),
     );
+    // AN ABSENCE IS ONLY WORTH READING ONCE THE MOUNT HAS HAD ITS CHANCE. The
+    // scheduler is on screen, so `useSchedulerDrawn` has already flipped and a
+    // window this host meant to draw is scheduled. Flush what that flip
+    // scheduled before reading: without this, "no window yet" would also pass
+    // for a host that ignored `promptWindowTemplateId` and mounted one a commit
+    // later.
+    await act(async () => {});
     expect(promptWindow(container)).toBeNull();
   });
 
@@ -199,27 +235,39 @@ describe("the prompt window shows BELOW the scheduler", () => {
   // page's prompt window shows below the scheduler" — so no scheduler, no
   // window.
   it("is NOT drawn when the card resolves ABSENT and there is no scheduler to be below", async () => {
-    globalThis.fetch = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            kind: "trigger_schedule_proposal",
-            state: { state: "absent" },
-            body: null,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    ) as unknown as typeof fetch;
+    // THE ANSWER IS PROVED CONSUMED, NOT ASSUMED. `ScheduleProposalCard` draws no
+    // DOM while it is still resolving AND no DOM for `absent`, so "the card is
+    // not on screen" is already true before the answer arrives and by itself
+    // says nothing about what the card did with it — waiting for that emptiness
+    // would pass on the first paint of a card that had read nothing at all. So
+    // the stub SIGNALS the moment its body is read, and the readings are taken
+    // after that read and after React has committed what the read scheduled.
+    let answerRead!: () => void;
+    const answered = new Promise<void>((resolve) => {
+      answerRead = resolve;
+    });
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        answerRead();
+        return {
+          kind: "trigger_schedule_proposal",
+          state: { state: "absent" },
+          body: null,
+        };
+      },
+    })) as unknown as typeof fetch;
 
     const { container } = mount();
     // The step itself is still there — the rail row and its column are the
     // page's, not the card's.
     expect(stepDetail(container)).not.toBeNull();
-    await waitFor(() =>
-      expect(
-        container.querySelector('[data-conformance-id="schedule-proposal-card"]'),
-      ).toBeNull(),
-    );
+    await answered;
+    await act(async () => {});
+    expect(
+      container.querySelector('[data-conformance-id="schedule-proposal-card"]'),
+    ).toBeNull();
     expect(promptWindow(container)).toBeNull();
   });
 });
