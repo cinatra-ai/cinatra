@@ -422,7 +422,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "esbuild": "0.25.12",
-    "eslint": "10.7.0",
+    "eslint": "10.9.1",
     "eslint-config-next": "16.2.10",
     "jsdom": "^30.0.0",
     "knip": "6.17.1",
