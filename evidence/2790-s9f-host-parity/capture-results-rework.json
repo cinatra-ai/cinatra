@@ -1276,385 +1276,511 @@
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:02.932Z"
+      "at": "2026-08-24T23:51:04.305Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/list",
       "status": 200,
-      "at": "2026-08-23T23:38:02.936Z"
+      "at": "2026-08-24T23:51:04.310Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/autosave",
       "status": 200,
-      "at": "2026-08-23T23:38:03.042Z"
+      "at": "2026-08-24T23:51:04.396Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:03.342Z"
+      "at": "2026-08-24T23:51:04.758Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/list",
       "status": 200,
-      "at": "2026-08-23T23:38:03.352Z"
+      "at": "2026-08-24T23:51:04.773Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/autosave",
       "status": 200,
-      "at": "2026-08-23T23:38:03.380Z"
+      "at": "2026-08-24T23:51:04.787Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:04.802Z"
+      "at": "2026-08-24T23:51:09.326Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:13.383Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/list",
       "status": 200,
-      "at": "2026-08-23T23:38:04.873Z"
+      "at": "2026-08-24T23:51:13.426Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/autosave",
       "status": 200,
-      "at": "2026-08-23T23:38:04.921Z"
+      "at": "2026-08-24T23:51:13.472Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:09.622Z"
+      "at": "2026-08-24T23:51:18.374Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:14.640Z"
+      "at": "2026-08-24T23:51:23.458Z"
     },
     {
       "method": "POST",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:16.718Z"
+      "at": "2026-08-24T23:51:25.448Z"
     },
     {
       "method": "POST",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:16.851Z"
+      "at": "2026-08-24T23:51:25.552Z"
     },
     {
       "method": "POST",
       "path": "/api/assistants/chat/capabilities",
       "status": 200,
-      "at": "2026-08-23T23:38:16.931Z"
+      "at": "2026-08-24T23:51:25.700Z"
     },
     {
       "method": "POST",
       "path": "/api/assistants/chat",
       "status": 200,
-      "at": "2026-08-23T23:38:17.377Z"
+      "at": "2026-08-24T23:51:26.280Z"
     },
     {
       "method": "POST",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:21.368Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:38:24.436Z"
+      "at": "2026-08-24T23:51:40.509Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:25.158Z"
+      "at": "2026-08-24T23:51:44.061Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/list",
       "status": 200,
-      "at": "2026-08-23T23:38:25.195Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:38:25.299Z"
+      "at": "2026-08-24T23:51:44.105Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/autosave",
       "status": 200,
-      "at": "2026-08-23T23:38:25.385Z"
+      "at": "2026-08-24T23:51:44.214Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:38:27.853Z"
+      "at": "2026-08-24T23:51:44.297Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:38:30.087Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:38:30.872Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:38:33.839Z"
+      "at": "2026-08-24T23:51:46.643Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:38:35.044Z"
+      "at": "2026-08-24T23:51:48.981Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:38:36.864Z"
+      "at": "2026-08-24T23:51:49.646Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:38:40.145Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:38:40.245Z"
+      "at": "2026-08-24T23:51:52.664Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:39:01.330Z"
+      "at": "2026-08-24T23:51:53.940Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:01.446Z"
+      "at": "2026-08-24T23:51:55.675Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:51:59.042Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:51:59.109Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:20.021Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:20.114Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/autosave",
       "status": 200,
-      "at": "2026-08-23T23:39:01.607Z"
+      "at": "2026-08-24T23:52:20.231Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/list",
       "status": 200,
-      "at": "2026-08-23T23:39:01.611Z"
+      "at": "2026-08-24T23:52:20.236Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:03.993Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads",
-      "status": 200,
-      "at": "2026-08-23T23:39:06.183Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:06.983Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:09.985Z"
+      "at": "2026-08-24T23:52:22.653Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:39:11.178Z"
+      "at": "2026-08-24T23:52:24.956Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:13.017Z"
+      "at": "2026-08-24T23:52:25.660Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:16.221Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:16.331Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:18.994Z"
+      "at": "2026-08-24T23:52:28.656Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:39:21.504Z"
+      "at": "2026-08-24T23:52:29.943Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:22.471Z"
+      "at": "2026-08-24T23:52:31.639Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:24.983Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads",
-      "status": 200,
-      "at": "2026-08-23T23:39:26.177Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:27.999Z"
+      "at": "2026-08-24T23:52:34.667Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:39:31.312Z"
+      "at": "2026-08-24T23:52:35.198Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:31.399Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/list",
-      "status": 200,
-      "at": "2026-08-23T23:39:33.863Z"
+      "at": "2026-08-24T23:52:37.666Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:39:34.173Z"
+      "at": "2026-08-24T23:52:40.496Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:34.267Z"
+      "at": "2026-08-24T23:52:40.725Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:43.627Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:44.902Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:46.634Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:50.170Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:50.301Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:52:52.443Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:52:52.529Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/autosave",
       "status": 200,
-      "at": "2026-08-23T23:39:34.353Z"
+      "at": "2026-08-24T23:52:52.619Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/list",
       "status": 200,
-      "at": "2026-08-23T23:39:36.833Z"
+      "at": "2026-08-24T23:52:52.624Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:38.966Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:39.743Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:42.755Z"
+      "at": "2026-08-24T23:52:55.300Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:39:43.942Z"
+      "at": "2026-08-24T23:52:57.438Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:45.742Z"
+      "at": "2026-08-24T23:52:58.101Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:49.020Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:49.107Z"
-    },
-    {
-      "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
-      "status": 200,
-      "at": "2026-08-23T23:39:51.754Z"
+      "at": "2026-08-24T23:53:01.093Z"
     },
     {
       "method": "GET",
       "path": "/api/assistants/threads",
       "status": 200,
-      "at": "2026-08-23T23:39:53.966Z"
+      "at": "2026-08-24T23:53:02.410Z"
     },
     {
       "method": "GET",
-      "path": "/api/assistants/threads/bff702ae-f18b-4837-86a2-bcee578295e8",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
       "status": 200,
-      "at": "2026-08-23T23:39:54.745Z"
+      "at": "2026-08-24T23:53:04.118Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:07.510Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:07.622Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:10.111Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:12.419Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:13.119Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:16.090Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:17.624Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:19.101Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:22.152Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:22.643Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:25.122Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:27.426Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:28.104Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:31.162Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:32.446Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:34.273Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/list",
+      "status": 200,
+      "at": "2026-08-24T23:53:34.314Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:34.437Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/autosave",
+      "status": 200,
+      "at": "2026-08-24T23:53:34.527Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:36.916Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:39.134Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:39.833Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:42.858Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:44.110Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads/ef3a90dd-77fa-4246-bc5c-3d0f6baf3153",
+      "status": 200,
+      "at": "2026-08-24T23:53:45.832Z"
+    },
+    {
+      "method": "GET",
+      "path": "/api/assistants/threads",
+      "status": 200,
+      "at": "2026-08-24T23:53:49.284Z"
     }
   ],
   "pageErrors": []

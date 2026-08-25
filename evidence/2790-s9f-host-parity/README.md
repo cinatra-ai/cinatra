@@ -1213,8 +1213,10 @@ is checkable rather than promised, including what it does NOT settle:
 
 ## What the counters are, and what they are not
 
-Each record carries a `providerEvidence` block read from the app server's own log
-at the instant of its shutter. Five counters are NEGATIVE SCREENS —
+Each record carries a `providerEvidence` block taken at the instant of its
+shutter. Most of its fields are counts from the app server's own log; one field is
+a separate read of the server's PROCESS CHAIN, at the nearest ancestor of the
+listening process with a readable environment. Five counters are NEGATIVE SCREENS —
 `preRouterShortCircuits`, `preRouterAttempts`, `scriptedRuntimeLines`,
 `noProviderRefusals`, `mcpDependencyFailures` — and all five are zero on all eight
 cells. A screen is worth what a screen is worth: a hit proves a problem, a zero is

@@ -467,9 +467,10 @@ let evidenceBaseline = null;
  * Three things are enforced, and the last two are the ones a convergence review
  * asked for:
  *   · every must-be-zero screen is still zero;
- *   · the APP SERVER's own `CINATRA_TEST_LLM_PROVIDER` is absent, and was
- *     actually READ rather than merely unavailable — an unread value is a
- *     failure here, not a pass;
+ *   · `CINATRA_TEST_LLM_PROVIDER` is absent at the nearest readable ancestor in
+ *     the app server's process chain, and was actually READ rather than merely
+ *     unavailable — an unread value is a failure here, not a pass. Absence there
+ *     cannot exclude a variable injected into the listening process alone;
  *   · once the sequence is under way, the POSITIVE counter must have MOVED: a
  *     sequence in which this instance's own MCP surface is never posted to would
  *     leave `publicMcpCallbacks` flat, and a flat counter means the run under the
@@ -495,12 +496,12 @@ function assertRealChain(where, { requireMovement = false } = {}) {
   }
   if (ev.serverScriptedProviderEnv !== null) {
     throw new Error(
-      `the app server has CINATRA_TEST_LLM_PROVIDER=${ev.serverScriptedProviderEnv} — the scripted runtime is reachable and this sequence refuses to photograph it`,
+      `CINATRA_TEST_LLM_PROVIDER=${ev.serverScriptedProviderEnv} was found in the app server's process chain — the scripted runtime is reachable and this sequence refuses to photograph it`,
     );
   }
   if (ev.serverEnvReadFrom !== "process-table") {
     throw new Error(
-      `the app server's environment could not be read (${ev.serverEnvReadFrom}) — an unread switch is not an absent one`,
+      `no readable environment was found in the app server's process chain (${ev.serverEnvReadFrom}) — an unread switch is not an absent one`,
     );
   }
   if (requireMovement && !(ev.deltaSinceStart?.publicMcpCallbacks > 0)) {
