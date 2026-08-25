@@ -26,8 +26,12 @@
      "testName": "exactly one eligible gate binds on its own — #2566's single-gate case"
     },
     {
-     "file": "packages/chat/src/__tests__/inline-hitl-classify.test.ts",
-     "testName": "ONE review open and nothing else → the message is that review's comment"
+     "file": "src/lib/lifecycle/__tests__/bound-card-binding.test.ts",
+     "testName": "binds the single surviving card and reports what it lends"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/lent-action-mcp.test.ts",
+     "testName": "the typed words land VERBATIM — and they come from the ROW, not the model"
     }
    ],
    "integrationProofs": [
@@ -181,8 +185,8 @@
      "testName": "registration ORDER is not a tiebreak — the last one in does not win"
     },
     {
-     "file": "packages/chat/src/__tests__/inline-hitl-classify.test.ts",
-     "testName": "TWO reviews and no focus → REFUSED, and nothing is routed"
+     "file": "src/lib/lifecycle/__tests__/bound-card-binding.test.ts",
+     "testName": "a page claiming ONE card while TWO are really open still gets the refusal"
     },
     {
      "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
@@ -524,7 +528,7 @@
     },
     {
      "file": "src/lib/lifecycle/__tests__/lifecycle-surface-matrix-conformance.test.ts",
-     "testName": "a widget delegation reaches its OWN content-editor primitive plus the read-only pulls, and nothing else"
+     "testName": "a widget delegation reaches its OWN content-editor primitive, the read-only pulls and the ONE lent action, and nothing else"
     }
    ],
    "unitProofs": [

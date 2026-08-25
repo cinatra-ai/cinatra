@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
 import {
+  DELEGATED_WIDGET_BOUND_CARD_ACTION,
   DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
   carriesDelegatedWidgetDeniedVerb,
   delegatedWidgetAllowedToolNames,
@@ -139,13 +140,27 @@ describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
     ]);
   });
 
-  it.each(KINDS)("%s: the WHOLE declared set is the editor plus the reads", (kind) => {
-    // The complete contents, asserted as a set: an addition fails as loudly as
-    // a removal, so widening this policy cannot happen quietly.
-    expect(delegatedWidgetAllowedToolNames(kind)).toEqual(
-      [`${kind}_content_editor_run`, ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS].sort(),
-    );
-  });
+  it.each(KINDS)(
+    "%s: the WHOLE declared set is the editor, the reads and the ONE lent action",
+    (kind) => {
+      // The complete contents, asserted as a set: an addition fails as loudly as
+      // a removal, so widening this policy cannot happen quietly.
+      //
+      // AMENDED for cinatra#2932 (lifecycle-b W5a): exactly one entry is added —
+      // the lent action — and the assertion stays exhaustive, so the property
+      // this case exists for is intact. The widget has it for the epic's parity
+      // rule (a person does the same things inside a third-party application as
+      // in the app), and it can do nothing without the message's own
+      // server-minted, single-use grant.
+      expect(delegatedWidgetAllowedToolNames(kind)).toEqual(
+        [
+          `${kind}_content_editor_run`,
+          ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
+          DELEGATED_WIDGET_BOUND_CARD_ACTION,
+        ].sort(),
+      );
+    },
+  );
 
   it("kind-independence is deliberate: the pulls address no CMS instance", () => {
     // Stated as a test so the asymmetry with the editor primitive is a decision
