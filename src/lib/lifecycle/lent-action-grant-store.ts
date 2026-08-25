@@ -9,16 +9,16 @@
 //
 //   recordLentActionGrant — the send-time mint's row. Written once, beside the
 //                           minted grant, before the grant can reach a model.
-//   consumeLentActionGrant — the call-time spend. ONE atomic
-//                           `DELETE ... RETURNING`, so a replay finds nothing
-//                           rather than racing a flag, and two concurrent calls
-//                           of the same grant cannot both win.
+//   consumeLentActionGrant — the call-time spend. ONE atomic statement, so a
+//                           replay finds a spent row rather than racing a flag,
+//                           and two concurrent calls of the same grant cannot
+//                           both win.
 //
 // There is no "peek". A caller that could ask "is this grant still good?"
 // without spending it would have a way to probe the ledger, and every honest
 // caller wants to spend it anyway.
 //
-// THE SPEND IS BOUND TO THE PERSON, NOT ONLY TO THE `jti`. The DELETE names
+// THE SPEND IS BOUND TO THE PERSON, NOT ONLY TO THE `jti`. The statement names
 // (jti, user_id, org_id): a grant's identity alone must not be enough to spend
 // it, because the identity travels on a header and the person does not.
 //
@@ -108,8 +108,8 @@ export async function recordLentActionGrant(
 export type LentActionGrantSpend =
   /**
    * The grant was unspent and is now spent. This call may act, and it acts with
-   * `messageText` — the person's OWN words, read out of the row that was just
-   * deleted, never a tool argument (convergence round 1, finding 2).
+   * `messageText` — the person's OWN words, read out of the row the spend just
+   * tombstoned, never a tool argument (convergence round 1, finding 2).
    */
   | { readonly outcome: "consumed"; readonly messageText: string | null }
   /**
@@ -139,6 +139,27 @@ export type LentActionGrantSpend =
  * row's tombstone carries no message text — the retention the schema leaf
  * describes applies to UNSPENT rows only.
  *
+ * AND THEY ARE READ FROM THE PRE-STATEMENT SNAPSHOT, WHICH IS WHY THE SPEND IS A
+ * CTE (cinatra#2988). `RETURNING` evaluates against the tuple the UPDATE has
+ * just WRITTEN, so a plain `UPDATE ... SET message_text = NULL ... RETURNING
+ * message_text` hands back the NULL it wrote and the person's words are
+ * destroyed by the very statement that was supposed to deliver them. A
+ * data-modifying `WITH` fixes it without giving up atomicity: the sub-statement
+ * tombstones the row, and the outer SELECT reads the table under the snapshot
+ * taken BEFORE the statement ran — a data-modifying CTE and the query around it
+ * cannot see one another's effects — so the outer scan still holds the words.
+ *
+ * PORTABLE ON PURPOSE. Postgres 18 can say `RETURNING OLD.message_text`, which
+ * would read better; this deployment's supported majors start at 15
+ * (config/upgrade/upgrade-matrix.json), so the statement uses the idiom every
+ * one of them has.
+ *
+ * STILL EXACTLY ONE STATEMENT, so the concurrency property is unchanged: the
+ * UPDATE inside the CTE is what serializes, whichever of two concurrent spends
+ * the database orders first returns the single `spent` row, and the other
+ * matches nothing, joins nothing and is refused. Neither the words nor a second
+ * spend can escape through a gap, because there is still no gap.
+ *
  * A STORE FAILURE IS A REFUSAL. If the ledger cannot be reached, the grant is
  * not proven unspent, so the action does not fire. Failing open here would let
  * an outage turn a single-use authority into an unlimited one.
@@ -160,14 +181,20 @@ export async function consumeLentActionGrant(
     // The statement also names the CARD and the CONTROL, so the row itself
     // refuses a grant spent for anything other than what it was minted for —
     // defence in depth beneath the signature check, not a substitute for it.
+    const table = grantTable();
     const rows = await query<{ jti: string; message_text: string | null }>(
-      `UPDATE ${grantTable()}
-          SET spent_at = now(), message_text = NULL
-        WHERE jti = $1 AND user_id = $2 AND org_id = $3
-          AND card_ref_fp = $4 AND control = $5
-          AND spent_at IS NULL
-          AND expires_at > now()
-        RETURNING jti, message_text`,
+      `WITH spent AS (
+         UPDATE ${table}
+            SET spent_at = now(), message_text = NULL
+          WHERE jti = $1 AND user_id = $2 AND org_id = $3
+            AND card_ref_fp = $4 AND control = $5
+            AND spent_at IS NULL
+            AND expires_at > now()
+          RETURNING jti
+       )
+       SELECT spent.jti, prior.message_text
+         FROM spent
+         JOIN ${table} AS prior ON prior.jti = spent.jti`,
       [input.jti, input.userId, input.orgId, input.cardRefFingerprint, input.control],
     );
     const row = rows[0];

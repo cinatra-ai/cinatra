@@ -5,11 +5,22 @@
 //
 // The REAL store runs against an in-memory stand-in for the ledger table that
 // behaves the way Postgres does: an INSERT that loses to the unique index writes
-// nothing and returns no row, and a DELETE returns a row only when one was
-// really removed. Nothing about the mechanism is mocked — only the storage under
-// it — so what these cases prove is the ORDER, the KEY and the atomicity, which
-// is what single use IS. The same idioms are proved once for real against a live
-// Postgres in `lent-action-grant-store.integration.test.ts`.
+// nothing and returns no row, and a spend returns a row only when one was really
+// tombstoned. Nothing about the mechanism is mocked — only the storage under it —
+// so what these cases prove is the ORDER, the KEY and the atomicity, which is
+// what single use IS. The same idioms are proved once for real against a live
+// Postgres in `lent-action-grant-ledger.integration.test.ts`.
+//
+// A DOUBLE MAY NOT BE KINDER THAN THE DATABASE (cinatra#2988). This one used to
+// return the words it had read a line BEFORE it cleared them, which is what the
+// author meant the SQL to do rather than what the SQL did: Postgres evaluates
+// `RETURNING` against the tuple the UPDATE just wrote, so the shipped statement
+// answered every spend with `null` while these cases stayed green. The stand-in
+// now models that rule instead of the intention — it applies the tombstone
+// first and serves the returned words from the pre-statement snapshot ONLY when
+// the statement reads them through the snapshot-scanned alias. Restoring the old
+// `RETURNING jti, message_text` turns the two cases below that assert the
+// person's words back to RED, which is the property that was missing.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -81,12 +92,44 @@ const query = (async <T,>(text: string, values: readonly unknown[]): Promise<T[]
         r.expires_at > dbNow,
     );
     if (!row) return [] as T[];
-    const words = row.message_text;
+    // THE SNAPSHOT THE STATEMENT STARTED FROM. Postgres fixes a snapshot before
+    // the statement runs; a data-modifying `WITH` and the query around it cannot
+    // see one another's effects, so an outer scan of the table still holds the
+    // pre-update row while the sub-statement rewrites it.
+    const snapshot = { ...row };
     // The tombstone: the row stays (it is the message-id witness), spent and
     // wordless, exactly as the real statement leaves it.
     row.spent_at = dbNow;
     row.message_text = null;
-    return [{ jti: row.jti, message_text: words }] as unknown as T[];
+    // WHERE THE RETURNED WORDS COME FROM — the rule this double got wrong once
+    // and now models (cinatra#2988). `RETURNING` evaluates against the tuple the
+    // UPDATE has just WRITTEN, so a statement that reads `message_text` off its
+    // own target hands back the NULL it wrote, however plainly the surrounding
+    // code says otherwise. Only a read through the snapshot-scanned alias — the
+    // `prior` join of the CTE form — still carries the person's words. Serving
+    // the pre-update value unconditionally, as this double used to, is what let
+    // the unit tier pass a spend that the real database answered with `null`.
+    // Judged on STRUCTURE rather than on one alias spelling, and with comments
+    // stripped first so a statement cannot earn the words by MENTIONING them in
+    // prose: the returned words must NOT come from the UPDATE's own RETURNING
+    // list — that list is the post-update tuple — and must come from an outer
+    // SELECT, which Postgres always evaluates against the pre-statement
+    // snapshot. A correct statement that spells its alias differently still
+    // passes; a statement that reads the words off its own target still fails.
+    const sql = text
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/--[^\n]*/g, " ");
+    const updateReturning = /\bRETURNING\b([\s\S]*?)(?:\)|$)/i.exec(sql)?.[1] ?? "";
+    const outerSelect = /\)\s*SELECT\b([\s\S]*)$/i.exec(sql)?.[1] ?? "";
+    const readsSnapshot =
+      !/\bmessage_text\b/.test(updateReturning) &&
+      /\bmessage_text\b/.test(outerSelect);
+    return [
+      {
+        jti: row.jti,
+        message_text: readsSnapshot ? snapshot.message_text : row.message_text,
+      },
+    ] as unknown as T[];
   }
   if (text.includes("DELETE FROM") && text.includes("expires_at <= now()")) {
     ledger = ledger.filter((r) => r.expires_at > dbNow);

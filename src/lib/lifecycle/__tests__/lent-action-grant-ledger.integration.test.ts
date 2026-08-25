@@ -10,24 +10,62 @@
 //   · the BOOTSTRAP really creates the table and BOTH unique constraints;
 //   · `INSERT ... ON CONFLICT DO NOTHING RETURNING` really returns NO ROW when
 //     the (user_id, message_id) index rejects a second mint for one message;
-//   · `DELETE ... RETURNING` really serializes two CONCURRENT spends of one
-//     grant so exactly one wins — the property "consumed by its first use"
-//     rests on, and the one a read-then-write would lose;
+//   · the SPEND really serializes two CONCURRENT spends of one grant so exactly
+//     one wins — the property "consumed by its first use" rests on, and the one
+//     a read-then-write would lose;
+//   · the spend really hands back the person's OWN WORDS while leaving a
+//     wordless tombstone, which is a fact about how Postgres evaluates
+//     `RETURNING` and cannot be settled anywhere else;
 //   · `expires_at > now()` is evaluated at the DATABASE's clock, not the
 //     process's.
+//
+// IT DRIVES THE REAL STORE (cinatra#2988). This tier used to RETYPE the store's
+// statements into its own helpers below, with a comment promising they were the
+// same text. They were the same text — including the same defect — so the tier
+// reported on its own copy and the shipped spend went out returning `null` where
+// the person's words belonged. The helpers now call `recordLentActionGrant`,
+// `consumeLentActionGrant` and `sweepExpiredLentActionGrants` themselves, with
+// the live pool injected through the store's own query seam, which is what the
+// ledger next door has always done (`review-island-single-use.integration.test.ts`
+// imports the store's SQL rather than repeating it). A statement that drifts now
+// drifts in the one place both tiers read.
 //
 // SELF-SKIPS without `SUPABASE_DB_URL`, and THROWS instead of skipping inside
 // its own lane (`CINATRA_LENT_ACTION_GRANT_REALDB`), because a suite whose only
 // failure mode is "skipped" reports success by doing nothing.
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 
 import { lentActionGrantSchemaQueries } from "@/lib/lent-action-grant-schema";
 
+// The store reaches for the app's shared pool only through `defaultQuery`, which
+// this tier never uses — every call below injects the live scratch pool through
+// the seam instead. Stubbing the module keeps importing the store from opening a
+// second, unrelated connection on the way past.
+vi.mock("@cinatra-ai/agents/db", () => ({ agentBuilderPool: { query: vi.fn() } }));
+
+import {
+  consumeLentActionGrant,
+  recordLentActionGrant,
+  sweepExpiredLentActionGrants,
+} from "@/lib/lifecycle/lent-action-grant-store";
+import type { LentActionGrantQuery } from "@/lib/lifecycle/lent-action-grant-store";
+import type { LentActionGrantClaims } from "@/lib/lifecycle/lent-action-grant";
+
 const DSN = process.env.SUPABASE_DB_URL ?? "";
 const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra_x2932";
 const IN_LANE = process.env.CINATRA_LENT_ACTION_GRANT_REALDB === "1";
+
+// ONE SCHEMA, RESOLVED ONCE. Now that the helpers below drive the real store,
+// the store composes its own table name from `SUPABASE_SCHEMA` and falls back to
+// the PRODUCTION default `cinatra` when it is unset — while this file falls back
+// to the throwaway `cinatra_x2932`. The lane's config sets the variable, so the
+// two agree there; a run that reached this file with a DSN and no schema would
+// otherwise build one table and query another. Pinning it here makes the pair
+// agree by construction rather than by configuration, and keeps a tier that
+// exists to write rows from ever addressing the default schema.
+process.env.SUPABASE_SCHEMA = SCHEMA;
 
 if (IN_LANE && !DSN) {
   throw new Error(
@@ -39,10 +77,22 @@ const maybe = DSN ? describe : describe.skip;
 
 let pool: Pool;
 
-/** The store's own idioms, run against the real table. Deliberately the SAME
- *  statement text the store issues — a copy here that drifted would prove
- *  nothing about the store. */
+/** The table the DDL built, for the assertions that inspect rows DIRECTLY —
+ *  the ones that must look at the tombstone rather than take the store's word
+ *  for it. The store composes its own name from `SUPABASE_SCHEMA`, which this
+ *  lane's config pins to the same schema. */
 const table = () => `"${SCHEMA}"."lifecycle_lent_action_grants"`;
+
+/** The store's query seam, pointed at the scratch database. This is the whole
+ *  join between the two: every helper below is the SHIPPED function, and the
+ *  only thing this tier supplies is where the statements land. */
+const live: LentActionGrantQuery = async <T,>(
+  text: string,
+  values: readonly unknown[],
+): Promise<T[]> => {
+  const res = await pool.query(text, values as unknown[]);
+  return res.rows as T[];
+};
 
 async function record(row: {
   jti: string;
@@ -54,15 +104,21 @@ async function record(row: {
   text?: string | null;
   expiresAt: number;
 }): Promise<boolean> {
-  const res = await pool.query(
-    `INSERT INTO ${table()}
-       (jti, org_id, user_id, message_id, card_ref_fp, control, message_text, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8))
-     ON CONFLICT DO NOTHING
-     RETURNING jti`,
-    [row.jti, row.orgId, row.userId, row.messageId, row.fp, row.control, row.text ?? null, row.expiresAt],
+  return recordLentActionGrant(
+    {
+      jti: row.jti,
+      orgId: row.orgId,
+      userId: row.userId,
+      messageId: row.messageId,
+      cardRefFingerprint: row.fp,
+      // The fixtures below write their control as a plain string; the claims
+      // type names the four controls a card can lend.
+      control: row.control as LentActionGrantClaims["control"],
+      expiresAt: row.expiresAt,
+    },
+    row.text ?? null,
+    { query: live },
   );
-  return res.rows.length === 1;
 }
 
 async function spend(
@@ -72,17 +128,13 @@ async function spend(
   fp = "fp1",
   control = "comment",
 ): Promise<{ ok: boolean; text: string | null }> {
-  const res = await pool.query(
-    `UPDATE ${table()}
-        SET spent_at = now(), message_text = NULL
-      WHERE jti = $1 AND user_id = $2 AND org_id = $3
-        AND card_ref_fp = $4 AND control = $5
-        AND spent_at IS NULL
-        AND expires_at > now()
-      RETURNING jti, message_text`,
-    [jti, userId, orgId, fp, control],
+  const spent = await consumeLentActionGrant(
+    { jti, userId, orgId, cardRefFingerprint: fp, control },
+    { query: live },
   );
-  return { ok: res.rows.length === 1, text: res.rows[0]?.message_text ?? null };
+  return spent.outcome === "consumed"
+    ? { ok: true, text: spent.messageText }
+    : { ok: false, text: null };
 }
 
 const nowSec = () => Math.floor(Date.now() / 1000);
@@ -196,7 +248,7 @@ maybe("the lent-action grant ledger, on a real Postgres", () => {
     // what makes the sweep a housekeeping job rather than a correctness one.
     const rows = await pool.query(`SELECT jti FROM ${table()} WHERE jti = 'db-5'`);
     expect(rows.rows).toHaveLength(1);
-    await pool.query(`DELETE FROM ${table()} WHERE expires_at <= now()`);
+    await sweepExpiredLentActionGrants({ query: live });
     const after = await pool.query(`SELECT jti FROM ${table()} WHERE jti = 'db-5'`);
     expect(after.rows).toHaveLength(0);
   });
