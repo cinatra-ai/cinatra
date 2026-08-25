@@ -71,9 +71,8 @@ export async function resolveTriggerScheduleProposalCard(params: {
   ref: string;
   userId: string;
   orgId: string;
-  isAdmin: boolean;
 }): Promise<TriggerScheduleProposalCard> {
-  const { ref, userId, orgId, isAdmin } = params;
+  const { ref, userId, orgId } = params;
   if (!userId || !orgId) return ABSENT_PROPOSAL_CARD;
 
   try {
@@ -207,16 +206,43 @@ export async function resolveTriggerScheduleProposalCard(params: {
       // wrong: S2 mounts the shared step tree, which reads it authoritatively.
       gatedSteps: [],
       released: resolved.released,
+      // OMITTED UNLESS TRUE, for the reason `superseded` is (cinatra#2972).
+      ...(resolved.stopped ? { stopped: true as const } : {}),
       arming: resolved.arming,
       // "Save changes … re-arms the trigger" (plan (A) §7.2). The reading is
       // the resolver's — the same predicate the endpoint refuses on — so the
       // card never offers a control the server is already going to refuse.
       canSave: resolved.canSave,
-      // Cancel acts on a live, un-released, fully-installed schedule. While the
-      // install is still draining there is no scheduler to cancel yet.
-      canCancel: !resolved.released && !resolved.arming,
-      // "Run now", for an administrator only (§VI) — admin-only, by design.
-      canRelease: isAdmin && !resolved.released && !resolved.arming,
+      // CANCEL SCHEDULE IS THE RECURRING SCHEDULE'S CONTROL, AFTER ITS FIRST
+      // FIRE, AND NOTHING ELSE'S (cinatra#2972). Plan (A) §7.2 as amended
+      // 2026-08-25: "its one control is **Cancel schedule**, shown only for a
+      // recurring schedule that has fired once — it stops the recurring
+      // schedule and then makes the scheduler non-editable".
+      //
+      // It used to be "any schedule that has not been released and is not still
+      // arming", which put it on a one-off and on a recurring schedule that had
+      // never fired. Both are withdrawn: what the control does now is STOP a
+      // running schedule, and a schedule that has produced nothing has nothing
+      // to stop.
+      //
+      // An ALREADY-STOPPED schedule answers false, which is what leaves the
+      // card with no floor at all — "and then makes the scheduler
+      // non-editable".
+      // A COMPATIBILITY SHIM, READ BY NOBODY (cinatra#2972, codex round 2).
+      // The control is gone and no renderer consults this field; it is still
+      // EMITTED, as a constant false, so a stale client bundle whose `.strict()`
+      // settled schema still REQUIRES the key can go on parsing settled cards
+      // for the length of a rolling deploy. Dropping the emission would blank
+      // every settled schedule card on such a tab — a wider harm than one dead
+      // boolean on the wire — and emitting `false` cannot bring Run now back:
+      // there is no control, no confirm strip and no `release` op left to read
+      // it. Removable once no bundle predating this change can still be live.
+      canRelease: false,
+      canCancel:
+        resolved.triggerType === "recurring" &&
+        resolved.firedOnce &&
+        !resolved.stopped &&
+        !resolved.arming,
     };
     return { state: { state: "settled" }, view };
   } catch {
@@ -230,13 +256,14 @@ export { describeProposalSchedule };
 // ---------------------------------------------------------------------------
 // The card's DECISIONS (cinatra#2788, epic #2784 S9d).
 //
-// §VI's card operates five things. In a CONVERSATION: Confirm on the proposal
+// §VI's card operates four things. In a CONVERSATION: Confirm on the proposal
 // floor, and Save changes on the armed one — the two the plan puts there, and
 // the only two. On the RUN PAGE and the REVIEW PAGE, where §VI's card is the
-// SCHEDULE STEP in the rail, the same Save changes plus the two operations
-// Cancel schedule and Run now. Those two keep the data-action ids
-// `cancel-trigger-schedule` and `release-trigger-now`; only their labels
-// changed (PR #2939), so nothing on the wire moved. `adjust` is the re-propose the two Confirms compose with; it is
+// SCHEDULE STEP in the rail, the same Save changes plus the ONE operation
+// **Cancel schedule** (`cancel-trigger-schedule`), and only for a recurring
+// schedule that has fired once. **Run now** (`release-trigger-now`) is gone
+// with its whole action path — plan (A) §7.2 as amended 2026-08-25, "there is
+// no Run now" (cinatra#2972). `adjust` is the re-propose the two Confirms compose with; it is
 // no longer a control of its own, because the rows are editable as they stand.
 // Until this slice the confirm/adjust pair were cookie-bound server actions with
 // zero UI callers and the cancel/release pair existed only on the run page's
@@ -277,8 +304,10 @@ export type ScheduleDecisionOp =
    *  delegates to `updateRunTriggerScheduleForActor`, which delegates in turn to
    *  the one `setRunTriggerForActor`. */
   | "save"
-  | "cancel"
-  | "release";
+  /** STOP a recurring schedule that has fired — plan (A) §7.2's **Cancel
+   *  schedule**. It stops the schedule; it never deletes it and never pauses
+   *  the run (cinatra#2972). */
+  | "cancel";
 
 export type ScheduleDecisionOutcome =
   | { kind: "confirmed"; runId: string; alreadyConfirmed: boolean }
@@ -288,8 +317,9 @@ export type ScheduleDecisionOutcome =
   /** Save changes landed: the trigger is re-armed on the rows just saved, and
    *  the card re-resolves rather than drawing the new schedule optimistically. */
   | { kind: "saved"; runId: string }
+  /** The recurring schedule is stopped. The row stays and the card re-resolves
+   *  onto read-only rows with no floor. */
   | { kind: "cancelled" }
-  | { kind: "released" }
   | { kind: "not-permitted"; message: string }
   | { kind: "error"; message: string };
 
@@ -395,8 +425,8 @@ export async function decideTriggerScheduleProposal(params: {
         : { kind: "error", message: PROPOSAL_REFUSALS.invalid };
     }
 
-    // Save, Cancel and Release all act on the RUN the card settled into —
-    // resolved here, never named by the caller.
+    // Save and Cancel both act on the RUN the card settled into — resolved
+    // here, never named by the caller.
     const settled = await resolveSettledRunForReader(ref, { userId, orgId });
     if (!settled) return NOT_PERMITTED;
 
@@ -425,32 +455,24 @@ export async function decideTriggerScheduleProposal(params: {
         : { kind: "error", message: result.error };
     }
 
-    if (op === "cancel") {
-      const { deleteRunTriggerForActor } = await import(
-        "@cinatra-ai/agents/trigger-service"
-      );
-      const result = await deleteRunTriggerForActor(
-        { userId, role, source: "ui" },
-        { runId: settled },
-      );
-      // The service's own refusals are authorization refusals ("forbidden",
-      // "unauthorized") and are collapsed; anything else is state the reader
-      // can act on.
-      if (result.ok) return { kind: "cancelled" };
-      return result.error === "forbidden" || result.error === "unauthorized"
-        ? NOT_PERMITTED
-        : { kind: "error", message: result.error };
-    }
-
-    const { releaseTriggerNowForActor } = await import(
+    // CANCEL SCHEDULE STOPS, IT DOES NOT DELETE (cinatra#2972). Plan (A) §7.2
+    // as amended 2026-08-25: it "stops the recurring schedule and then makes
+    // the scheduler non-editable". `deleteRunTriggerForActor` — which this op
+    // used to call — removes the row AND flips an armed run to `stopped`, i.e.
+    // exactly the two things the amendment says this control never does. The
+    // Trigger tab's own Cancel trigger still calls that path; this one does not.
+    const { stopRecurringTriggerForActor } = await import(
       "@cinatra-ai/agents/trigger-service"
     );
-    const result = await releaseTriggerNowForActor(
+    const result = await stopRecurringTriggerForActor(
       { userId, role, source: "ui" },
       { runId: settled },
     );
-    if (result.ok) return { kind: "released" };
-    return result.error.startsWith("forbidden") || result.error === "unauthorized"
+    // The service's own refusals are authorization refusals ("forbidden",
+    // "unauthorized") and are collapsed; anything else is state the reader
+    // can act on.
+    if (result.ok) return { kind: "cancelled" };
+    return result.error === "forbidden" || result.error === "unauthorized"
       ? NOT_PERMITTED
       : { kind: "error", message: result.error };
   } catch {

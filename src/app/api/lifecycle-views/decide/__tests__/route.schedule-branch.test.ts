@@ -224,10 +224,16 @@ describe("what the body may and may not carry", () => {
 });
 
 describe("the actor is the route's, never the body's", () => {
-  it("a platform admin is passed as `admin`, so the release path's own re-check can run", async () => {
+  // cinatra#2972 CHANGED THE OP THESE TWO RIDE ON. They used to send `release`
+  // — Run now — which plan (A) §7.2 as amended 2026-08-25 withdrew along with
+  // its whole action path. The property they pin is about the ACTOR, not about
+  // that operation, so they now ride on `cancel`, the op the schedule step
+  // still has (**Cancel schedule**), and the actor is still re-derived by the
+  // route rather than taken from the body.
+  it("a platform admin is passed as `admin`, so the service's own re-check can run", async () => {
     resolveReviewActorContext.mockResolvedValue(ADMIN_ACTOR);
-    decideTriggerScheduleProposal.mockResolvedValue({ kind: "released" });
-    await POST(post({ kind: "trigger_schedule_proposal", ref: PROPOSAL_REF, op: "release" }));
+    decideTriggerScheduleProposal.mockResolvedValue({ kind: "cancelled" });
+    await POST(post({ kind: "trigger_schedule_proposal", ref: PROPOSAL_REF, op: "cancel" }));
     expect(decideTriggerScheduleProposal).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "u-admin", role: "admin" }),
     );
@@ -235,11 +241,22 @@ describe("the actor is the route's, never the body's", () => {
 
   it("a member is never passed as admin, whatever the body says", async () => {
     await POST(
-      post({ kind: "trigger_schedule_proposal", ref: PROPOSAL_REF, op: "release" }),
+      post({ kind: "trigger_schedule_proposal", ref: PROPOSAL_REF, op: "cancel" }),
     );
     expect(decideTriggerScheduleProposal).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "u-1", role: null }),
     );
+  });
+
+  // THE WITHDRAWN OP IS REFUSED BY THE SCHEMA, before any actor is resolved —
+  // the same 400 an invented op gets, which is the whole point of a closed
+  // enum (cinatra#2972).
+  it("`release` is no longer an operation at all — Run now cannot be asked for", async () => {
+    const res = await POST(
+      post({ kind: "trigger_schedule_proposal", ref: PROPOSAL_REF, op: "release" }),
+    );
+    expect(res.status).toBe(400);
+    expect(decideTriggerScheduleProposal).not.toHaveBeenCalled();
   });
 
   it("no identity at all is a 401 — the operation is never reached", async () => {

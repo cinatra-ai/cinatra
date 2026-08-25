@@ -1,0 +1,412 @@
+{
+  "$comment": [
+    "THE PER-SURFACE CONTROL COUNT, read off each pictured screen at the shutter.",
+    "`runNowControlsOnThisSurface` is document.querySelectorAll('[data-action=\"release-trigger-now\"]').length",
+    "on the whole screen, not inside the card — the claim is that the control is gone from the SURFACE.",
+    "Every row is 0, and this file aborts rather than writes if any row is not.",
+    "",
+    "`promptWindowGeometry` and `detailRightOfRail` are BOUNDING-BOX readings taken at the same",
+    "shutter: where the prompt window is PAINTED relative to the scheduler card, and where the",
+    "run detail column starts relative to the step rail. Document order is recorded too, on the",
+    "record, but it is not what 'below the scheduler' or 'to the right of the steps' claims."
+  ],
+  "runNowControlsAcrossEveryPicturedSurface": 0,
+  "surfaces": [
+    {
+      "cell": "F1__schedule-card__chat_thread__settled__one-off-fired",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/F1__schedule-card__chat_thread__settled__one-off-fired.png",
+      "sha256": "900ebabcec76f38dc1d7b6bedab4a681cb873582c7d291f69b62e5e7052a5bcd",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/chat/cinatra-ai/cinatra-assistant/3e036b86-d097-42b3-a50b-09e9e8ff6ea4",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": false,
+      "promptWindowOrder": null,
+      "railStepReachable": null,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T15:58:20.459Z",
+      "promptWindowGeometry": null,
+      "detailRightOfRail": null
+    },
+    {
+      "cell": "F1__schedule-card__chat_thread__settled__one-off-fired__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/F1__schedule-card__chat_thread__settled__one-off-fired__dark.png",
+      "sha256": "607f67b28cc0991fe2b5162e64609c631be2c329283f96b22479463bf89884cd",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/chat/cinatra-ai/cinatra-assistant/3e036b86-d097-42b3-a50b-09e9e8ff6ea4",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": false,
+      "promptWindowOrder": null,
+      "railStepReachable": null,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T15:58:38.478Z",
+      "promptWindowGeometry": null,
+      "detailRightOfRail": null
+    },
+    {
+      "cell": "F2__schedule-card__run_card__settled__one-off-fired",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/F2__schedule-card__run_card__settled__one-off-fired.png",
+      "sha256": "060bb5d3cc93aa425c168e024e57f6dbb313460339d3b12cb222167a3c03a659",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/8ee96e64-4dc6-494e-b47c-a4d8e6dc1391",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T15:58:57.167Z",
+      "promptWindowGeometry": {
+        "cardBottom": 562,
+        "promptTop": 562,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "F2__schedule-card__run_card__settled__one-off-fired__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/F2__schedule-card__run_card__settled__one-off-fired__dark.png",
+      "sha256": "c4fbace59e871f9a4cd97fffa949a6f3950f545e7a72d36054c18345776c33c4",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/8ee96e64-4dc6-494e-b47c-a4d8e6dc1391",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T15:59:13.379Z",
+      "promptWindowGeometry": {
+        "cardBottom": 562,
+        "promptTop": 562,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "G1__schedule-card__chat_thread__settled__recurring-fired",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/G1__schedule-card__chat_thread__settled__recurring-fired.png",
+      "sha256": "b4b1e5a5522ad4a8cf8bb4e05cfcdc08d2e29c847a0e62fb957d57014dd12ff0",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/chat/cinatra-ai/cinatra-assistant/fa516df8-bec8-45f8-80a1-7d8bd76e1a15",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": false,
+      "promptWindowOrder": null,
+      "railStepReachable": null,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:05:19.010Z",
+      "promptWindowGeometry": null,
+      "detailRightOfRail": null
+    },
+    {
+      "cell": "G1__schedule-card__chat_thread__settled__recurring-fired__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/G1__schedule-card__chat_thread__settled__recurring-fired__dark.png",
+      "sha256": "944048f95bbf8a31384ea3191cc97df1b9a771e4342f1ee7c14e13b4cd9398f5",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/chat/cinatra-ai/cinatra-assistant/fa516df8-bec8-45f8-80a1-7d8bd76e1a15",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": false,
+      "promptWindowOrder": null,
+      "railStepReachable": null,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:05:34.616Z",
+      "promptWindowGeometry": null,
+      "detailRightOfRail": null
+    },
+    {
+      "cell": "G2__schedule-card__run_card__settled__recurring-fired",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/G2__schedule-card__run_card__settled__recurring-fired.png",
+      "sha256": "d858a6d06809afb1abe36d9c8cafd67c03b2517c8bf05b045cf482373c136aef",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/e3d3661f-3789-437c-a4b2-71e366047acc",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:05:52.504Z",
+      "promptWindowGeometry": {
+        "cardBottom": 715,
+        "promptTop": 715,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "G2__schedule-card__run_card__settled__recurring-fired__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/G2__schedule-card__run_card__settled__recurring-fired__dark.png",
+      "sha256": "f402ad1824d4f5911ef09f3c79859623ff4f22b66d619236c305238437d4dc3f",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/e3d3661f-3789-437c-a4b2-71e366047acc",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:06:08.555Z",
+      "promptWindowGeometry": {
+        "cardBottom": 715,
+        "promptTop": 715,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "K1__schedule-card__run_card__settled__saved-change",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/K1__schedule-card__run_card__settled__saved-change.png",
+      "sha256": "60d27970cd66a7bcae9536792a0994fd09d153cfea3dc73be7a7802a3465196d",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/e3d3661f-3789-437c-a4b2-71e366047acc",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:06:42.490Z",
+      "promptWindowGeometry": {
+        "cardBottom": 715,
+        "promptTop": 715,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "K1__schedule-card__run_card__settled__saved-change__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/K1__schedule-card__run_card__settled__saved-change__dark.png",
+      "sha256": "5a88ee9f0244cb730470cd9015ba492d86dddb52f677625be7f77133541bf8e2",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/e3d3661f-3789-437c-a4b2-71e366047acc",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:06:58.506Z",
+      "promptWindowGeometry": {
+        "cardBottom": 715,
+        "promptTop": 715,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "K2__schedule-card__run_card__settled__change-applied",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/K2__schedule-card__run_card__settled__change-applied.png",
+      "sha256": "62779c64a2e0a3dbba8536e3d47bd4f20c8dc4cea0d90b728f2db986f8c006f5",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/e3d3661f-3789-437c-a4b2-71e366047acc",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:15:19.966Z",
+      "promptWindowGeometry": {
+        "cardBottom": 715,
+        "promptTop": 715,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "K2__schedule-card__run_card__settled__change-applied__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/K2__schedule-card__run_card__settled__change-applied__dark.png",
+      "sha256": "6e7f1f10427957e9ccb10081e1110a0df1e7f816ede09bf81c923456e552295f",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/e3d3661f-3789-437c-a4b2-71e366047acc",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:15:36.416Z",
+      "promptWindowGeometry": {
+        "cardBottom": 715,
+        "promptTop": 715,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "J1__schedule-card__run_card__settled__stopped",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/J1__schedule-card__run_card__settled__stopped.png",
+      "sha256": "eaea04dca777ce8f2e25dc7d141efe09f85e820646e0e19e3f3bd77291512c78",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/e3d3661f-3789-437c-a4b2-71e366047acc",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:16:26.944Z",
+      "promptWindowGeometry": {
+        "cardBottom": 658,
+        "promptTop": 658,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "J1__schedule-card__run_card__settled__stopped__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/J1__schedule-card__run_card__settled__stopped__dark.png",
+      "sha256": "37d971e61063e2eb15bc74eca280981fc8b9b81e79cc081e94dc99a14c0aeb2c",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/e3d3661f-3789-437c-a4b2-71e366047acc",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:16:42.918Z",
+      "promptWindowGeometry": {
+        "cardBottom": 658,
+        "promptTop": 658,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "J2__schedule-card__chat_thread__settled__stopped",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/J2__schedule-card__chat_thread__settled__stopped.png",
+      "sha256": "b0bfe53e3d887c0a228fa5c6559d0f76712f16b0ce18e83e163a02bd5ecdfbb3",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/chat/cinatra-ai/cinatra-assistant/fa516df8-bec8-45f8-80a1-7d8bd76e1a15",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": false,
+      "promptWindowOrder": null,
+      "railStepReachable": null,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:16:58.388Z",
+      "promptWindowGeometry": null,
+      "detailRightOfRail": null
+    },
+    {
+      "cell": "J2__schedule-card__chat_thread__settled__stopped__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/J2__schedule-card__chat_thread__settled__stopped__dark.png",
+      "sha256": "dd63fff34c9b7bfdb6e587e208a472f4ff69c5c5b5a28b2515d98acde63017a5",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/chat/cinatra-ai/cinatra-assistant/fa516df8-bec8-45f8-80a1-7d8bd76e1a15",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": false,
+      "promptWindowOrder": null,
+      "railStepReachable": null,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:17:15.775Z",
+      "promptWindowGeometry": null,
+      "detailRightOfRail": null
+    },
+    {
+      "cell": "S9d-C3__schedule-card__run_card__decided",
+      "theme": "light",
+      "screenshot": "evidence/2972-schedule-controls/captures/S9d-C3__schedule-card__run_card__decided.png",
+      "sha256": "f38260425b318bc4e6050edb14c3f92aaf5e6c176a31924cc21379f31d3aff72",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/433ab1ee-2707-4054-af41-8592d91294ab",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:27:28.976Z",
+      "promptWindowGeometry": {
+        "cardBottom": 619,
+        "promptTop": 619,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    },
+    {
+      "cell": "S9d-C3__schedule-card__run_card__decided__dark",
+      "theme": "dark",
+      "screenshot": "evidence/2972-schedule-controls/captures/S9d-C3__schedule-card__run_card__decided__dark.png",
+      "sha256": "4378036ebc41ccd62dda54126cd416f36c5a7864d23d88391c34a835381c28a9",
+      "pixels": "2880x2200",
+      "finalUrlPath": "/agents/cinatra-ai/company-discovery-agent/433ab1ee-2707-4054-af41-8592d91294ab",
+      "runNowControlsOnThisSurface": 0,
+      "promptWindowInDetailColumn": true,
+      "promptWindowOrder": "prompt-window-after-the-card",
+      "railStepReachable": true,
+      "agenticRunProgressOnThisSurface": 0,
+      "capturedAt": "2026-08-25T16:27:45.065Z",
+      "promptWindowGeometry": {
+        "cardBottom": 619,
+        "promptTop": 619,
+        "promptIsBelowTheCard": true,
+        "promptOverlapsTheCardHorizontally": true
+      },
+      "detailRightOfRail": {
+        "railRight": 561,
+        "detailLeft": 585,
+        "detailStartsRightOfTheRail": true
+      }
+    }
+  ]
+}

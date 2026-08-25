@@ -728,13 +728,38 @@ export type ProposalResolution =
       released: boolean;
       arming: boolean;
       /**
+       * HAS THIS SCHEDULE FIRED AT LEAST ONCE (cinatra#2972)?
+       *
+       * The two trigger families answer it from two different stamps, and they
+       * have to: a one-off's firing IS the gate opening (`releasedAt`), while a
+       * recurring schedule never opens its own run's gate — each tick starts a
+       * copy — so its firing is the tick's own stamp (`lastFiredAt`).
+       *
+       * Plan (A) §7.2 as amended 2026-08-25 keys **Cancel schedule** to it:
+       * "shown only for a recurring schedule that has fired once".
+       */
+      firedOnce: boolean;
+      /**
+       * THE SCHEDULE WAS STOPPED — **Cancel schedule** was pressed
+       * (cinatra#2972). The row is still there and still drawn; what it has
+       * lost is every control. Plan (A) §7.2: Cancel schedule "stops the
+       * recurring schedule and then makes the scheduler non-editable".
+       */
+      stopped: boolean;
+      /**
        * May **Save changes** re-arm from this card (plan (A) §7.2 step 6)?
        *
-       * The three refusals, and each is the server's rule read forward rather
-       * than a second policy: a RELEASED trigger has already opened its gate,
-       * one still ARMING has no scheduler to replace yet, and a ONE-OFF THAT
-       * HAS ALREADY FIRED is not a schedule any more — re-arming it would make
-       * a second run out of a card that says "change this one".
+       * The refusals, and each is the server's rule read forward rather than a
+       * second policy: a trigger still ARMING has no scheduler to replace yet, a
+       * STOPPED schedule is over, and a ONE-OFF (or an immediate) THAT HAS
+       * ALREADY FIRED is not a schedule any more — re-arming it would make a
+       * second run out of a card that says "change this one".
+       *
+       * A RECURRING SCHEDULE THAT HAS FIRED IS NOT REFUSED, and that is the
+       * change cinatra#2972 lands: plan (A) §7.2 as amended 2026-08-25 — "a run
+       * set to **Recurring** that has fired keeps its scheduler editable — the
+       * same rows and **Save changes**, and a change applies to its future
+       * runs".
        */
       canSave: boolean;
       /**
@@ -836,6 +861,15 @@ export async function resolveProposalForReader(
       released: !!trigger?.releasedAt,
       // "Arming…" rather than controls over a schedule still being installed.
       arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      // THE TWO FAMILIES, TWO STAMPS (cinatra#2972). The conversation's card and
+      // the page's step read one schedule, so both readings come off the same
+      // durable row here as they do on the run-addressed path.
+      firedOnce:
+        ((trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
+          (intent?.triggerType ?? "immediate")) === "recurring"
+          ? !!trigger?.lastFiredAt
+          : !!trigger?.releasedAt,
+      stopped: trigger?.stoppedAt != null,
       canSave: canSaveInstalled({
         triggerType:
           (trigger?.triggerType as "immediate" | "scheduled" | "recurring") ??
@@ -843,6 +877,7 @@ export async function resolveProposalForReader(
         scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
         released: !!trigger?.releasedAt,
         arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+        stopped: trigger?.stoppedAt != null,
       }),
       superseded,
     };
@@ -948,11 +983,18 @@ export async function resolveProposalForRun(
     }),
     released: !!trigger?.releasedAt,
     arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+    // THE TWO FAMILIES, TWO STAMPS (cinatra#2972). See `ProposalResolution`.
+    firedOnce:
+      triggerType === "recurring"
+        ? !!trigger?.lastFiredAt
+        : !!trigger?.releasedAt,
+    stopped: trigger?.stoppedAt != null,
     canSave: canSaveInstalled({
       triggerType,
       scheduledAt: trigger?.scheduledAt ?? intent?.scheduledAt ?? null,
       released: !!trigger?.releasedAt,
       arming: !!intent && intent.status !== "done" && intent.status !== "failed",
+      stopped: trigger?.stoppedAt != null,
     }),
     // NEVER superseded on this path, and structurally so rather than by
     // omission (cinatra#2859). `superseded` answers "this CARD is holding rows
@@ -1038,10 +1080,25 @@ export function canSaveInstalled(input: {
   scheduledAt: Date | null;
   released: boolean;
   arming: boolean;
+  /** The schedule was stopped by **Cancel schedule** (cinatra#2972). */
+  stopped: boolean;
 }): boolean {
-  if (input.released || input.arming) return false;
+  if (input.arming) return false;
+  // A STOPPED SCHEDULE IS OVER. Plan (A) §7.2: Cancel schedule "stops the
+  // recurring schedule and then makes the scheduler non-editable".
+  if (input.stopped) return false;
+  // A RECURRING SCHEDULE STAYS CHANGEABLE AFTER IT HAS FIRED (cinatra#2972).
+  // Plan (A) §7.2 as amended 2026-08-25: "a run set to **Recurring** that has
+  // fired keeps its scheduler editable … and a change applies to its future
+  // runs". `released` is not even consulted for it — a recurring schedule's own
+  // gate is never opened by a tick, so the stamp says nothing about it, and the
+  // ticks already fired are separate runs no change reaches back into.
+  if (input.triggerType === "recurring") return true;
   // A ONE-OFF THAT HAS FIRED IS NOT A SCHEDULE. Re-arming it would create a
-  // second run from a control whose whole promise is "change this one".
+  // second run from a control whose whole promise is "change this one". Plan (A)
+  // §7.2: "once a run set to **Run right after setup** or **Schedule for later**
+  // has fired, its schedule cannot be changed any more".
+  if (input.released) return false;
   if (input.triggerType === "scheduled") {
     return !!input.scheduledAt && input.scheduledAt.getTime() > Date.now();
   }
