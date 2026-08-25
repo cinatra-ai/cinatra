@@ -358,7 +358,7 @@ export function TriggerScreenClient(props: TriggerScreenClientProps) {
             <Label>When should this run?</Label>
             <div className="flex flex-col gap-2">
 
-              {/* Run now */}
+              {/* Run right after setup */}
               <Button
                 type="button"
                 variant="outline"

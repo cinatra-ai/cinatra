@@ -1030,6 +1030,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     rail={railNode}
                     detail={detailNode}
                     initialSelection={opensOnScheduleStep ? "schedule" : "detail"}
+                    // cinatra#2972 — "The run page's prompt window shows below
+                    // the scheduler" (plan (A) §7.2, amended 2026-08-25). The
+                    // review page passes none: the plan names the run page.
+                    promptWindowTemplateId={template.id}
                   />
                 );
               }
@@ -1503,7 +1507,6 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             agentId={agentId}
             runId={run.id}
             templateId={template.id}
-            isAdmin={isAdmin}
             trigger={{
               triggerType: trigger.triggerType as "scheduled" | "recurring",
               scheduledAt: trigger.scheduledAt

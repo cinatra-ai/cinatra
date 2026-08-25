@@ -39,8 +39,13 @@
 //              same form and nothing else — no summary box, no status label".
 //              On the run page and the review page — where this card IS the
 //              schedule step in the rail — the same body additionally carries
-//              the two operations: Cancel schedule, and Run now for an
-//              administrator.
+//              the ONE operation the plan leaves it: Cancel schedule, and only
+//              for a recurring schedule that has fired once (cinatra#2972).
+//              A ONE-OFF, AN IMMEDIATE, AND A STOPPED SCHEDULE DRAW NO FLOOR AT
+//              ALL: "once a run set to Run right after setup or Schedule for
+//              later has fired, its schedule cannot be changed any more", and
+//              Cancel schedule "stops the recurring schedule and then makes the
+//              scheduler non-editable" (§7.2, amended 2026-08-25).
 //   expired  → the held schedule's thirty minutes ran out with nobody pressing
 //              anything. It STAYS VISIBLE and EDITABLE, with Confirm to set the
 //              schedule again (plan (A) §7.2 step 2; §9.1 row 8). Not an error, and
@@ -63,11 +68,13 @@
 //      **Save changes**, which re-arms the trigger" (§7.2). The settled body
 //      therefore carries the armed SELECTIONS, read back from the installed row,
 //      and the rows are the same component in both phases.
-//   3. THE TWO OPERATIONS ARE NOT IN THE CONVERSATION. Cancel schedule, and Run
-//      now for an administrator, belong to the page's schedule step and not to
-//      the conversation (§7.2). That is the ONE thing this renderer reads its
-//      host for, and it reads it through a total map so a new host cannot be
-//      added without deciding the question.
+//   3. THE OPERATION IS NOT IN THE CONVERSATION. Cancel schedule belongs to the
+//      page's schedule step and not to the conversation (§7.2). That is the ONE
+//      thing this renderer reads its host for, and it reads it through a total
+//      map so a new host cannot be added without deciding the question.
+//   4. THERE IS NO RUN NOW (cinatra#2972). §7.2 as amended 2026-08-25 says so in
+//      those words. The control, its confirmation, its `release` op and the
+//      service behind it are all removed — not hidden behind a role.
 //
 //      THE READ-ONLY CHROME THAT USED TO RIDE WITH THEM IS GONE ENTIRELY
 //      (PR #2939): no Trigger configuration summary, no held-steps tree, no
@@ -202,17 +209,17 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
 };
 
 /**
- * Does THIS host draw the settled schedule's two operations — Cancel schedule,
- * and Run now for an administrator?
+ * Does THIS host draw the settled schedule's ONE operation — Cancel schedule?
  *
- * ONLY THE TWO PAGE HOSTS: §7.4's as-designed step 6 puts Cancel and Release on
+ * ONLY THE TWO PAGE HOSTS: §7.4's as-designed step 6 puts Cancel schedule on
  * the page and Save changes in the conversation, and on those two hosts this
  * card IS the page's schedule step (§7.2 step 5, §7.4 step 7), so they have
  * nowhere else to live.
  *
  * THE NAME IS HISTORICAL. This map once also gated a read-only chrome block —
  * the Trigger configuration summary and the held-steps tree — which PR #2939
- * removed from every host. What it gates now is the two operations alone.
+ * removed from every host, and a second operation, Run now, which cinatra#2972
+ * removed from the product. What it gates now is Cancel schedule alone.
  *
  * A TOTAL MAP, like `HOST_FRAME`, for the same reason: this is the one question
  * this renderer answers differently per host, so a new host cannot be added
@@ -238,7 +245,7 @@ const HOST_SHOWS_TRIGGER_CHROME: Record<LifecycleCardHost, boolean> = {
  *  (plan (A) §7.2) — but it is still the OP the server takes to re-propose, and
  *  an edited Confirm composes with it. `save` is plan §7.2's "Save changes,
  *  which re-arms the trigger": the armed card's own floor. */
-export type ScheduleDecisionOp = "confirm" | "adjust" | "save" | "cancel" | "release";
+export type ScheduleDecisionOp = "confirm" | "adjust" | "save" | "cancel";
 
 /** What the endpoint answers. `reproposed` carries the NEW ref: Adjust mints a
  *  fresh proposal and the card swaps to it, because a proposal is single-use. */
@@ -247,7 +254,6 @@ export type ScheduleDecisionOutcome =
   | { kind: "reproposed"; ref: string; expiresAt: number }
   | { kind: "saved"; runId: string }
   | { kind: "cancelled" }
-  | { kind: "released" }
   | { kind: "not-permitted"; message: string }
   | { kind: "error"; message: string };
 
@@ -388,8 +394,7 @@ export function ScheduleProposalCard({
       } else if (
         outcome.kind === "confirmed" ||
         outcome.kind === "saved" ||
-        outcome.kind === "cancelled" ||
-        outcome.kind === "released"
+        outcome.kind === "cancelled"
       ) {
         refresh();
       }
@@ -639,16 +644,17 @@ function SettledPhase({
   onDecide: (op: ScheduleDecisionOp, schedule?: ProposedSchedule) => Promise<ScheduleDecisionOutcome>;
 }): ReactElement {
   const [draft, setDraft] = useState<ProposedSchedule>(body.schedule);
-  const [pending, setPending] = useState<null | "save" | "cancel" | "release">(null);
-  const [confirming, setConfirming] = useState<null | "cancel" | "release">(null);
+  const [pending, setPending] = useState<null | "save" | "cancel">(null);
+  const [confirming, setConfirming] = useState<null | "cancel">(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   // The one host-dependent region, decided by a total map rather than by a
-  // condition someone can forget to extend. What it now gates is ONLY the two
-  // operations (Cancel schedule, Run now): the read-only summary box and the
-  // held-steps tree it used to gate were removed on the maintainer's reading of
-  // PR #2939 — plan (A) §7.2, "the schedule step … shows the same form and
-  // nothing else — no summary box, no status label".
+  // condition someone can forget to extend. What it now gates is the ONE
+  // operation Cancel schedule: the read-only summary box and the held-steps
+  // tree it used to gate were removed on the maintainer's reading of PR #2939,
+  // and Run now was withdrawn by cinatra#2972 — plan (A) §7.2, "the schedule
+  // step … shows the same form and nothing else — no summary box, no status
+  // label; its one control is **Cancel schedule** … there is no Run now".
   const showsChrome = HOST_SHOWS_TRIGGER_CHROME[host];
 
   const edited = useMemo(
@@ -656,43 +662,49 @@ function SettledPhase({
     [draft, body.schedule],
   );
 
-  // ONCE A ONE-OFF HAS FIRED IT CANNOT BE CHANGED (plan (A) §7.2, and §7.4
-  // as-designed step 4 in the same words). **Save changes** is defined for the
-  // changeable state only — "As long as the schedule has not fired, you can
-  // change it" — so a fired one-off draws no floor at all: not a disabled Save
-  // changes, and not Cancel schedule or Run now either. There is nothing left
-  // to change, cancel or release, and a control that exists only to refuse is
-  // the card offering what the plan withdrew. The rows simply stand.
+  // WHEN THE SCHEDULER STOPS BEING EDITABLE (plan (A) §7.2 and §7.4 as-designed
+  // step 6, both as amended 2026-08-25 — cinatra#2972).
   //
-  // HAS THIS ONE-OFF FIRED? Plan (A) §7.2 draws the line at firing — "once a
-  // one-off has fired it cannot be changed" — so the card reads exactly that
-  // and nothing broader.
+  // TWO WAYS IN, AND ONLY TWO:
   //
-  // `released` IS THE FIRING, and it is the only honest signal for it. The
-  // release job opens the gate through `markTriggerReleased`, which stamps
-  // `releasedAt`; the resolver reads `released` straight off that stamp. An
-  // administrator's **Run now** lands on the same stamp, and it means the same
-  // thing for a one-off: the single run this schedule existed for has been let
-  // go. Nothing on the card is inferred from a clock.
+  //   1. A run set to **Run right after setup** or **Schedule for later** HAS
+  //      FIRED. "once a run set to Run right after setup or Schedule for later
+  //      has fired, its schedule cannot be changed any more." `released` IS
+  //      that firing for both: the release job opens the gate through
+  //      `markTriggerReleased`, which stamps `releasedAt`, and the resolver
+  //      reads `released` straight off that stamp. Nothing is inferred from a
+  //      clock.
+  //   2. A RECURRING schedule was STOPPED with **Cancel schedule**. "it stops
+  //      the recurring schedule and then makes the scheduler non-editable."
+  //
+  // A FIRED RECURRING SCHEDULE IS NOT ONE OF THEM, and that is the change this
+  // issue lands: "a run set to **Recurring** that has fired keeps its scheduler
+  // editable — the same rows and **Save changes**, and a change applies to its
+  // future runs — and shows **Cancel schedule**." `released` is not even
+  // consulted for a recurring schedule: a tick opens the COPY's gate, never
+  // this run's, so the stamp says nothing about whether it has fired. Its
+  // firing is `canCancel`'s business, read server-side off the tick's own stamp.
+  //
+  // A FROZEN CARD DRAWS NO FLOOR AT ALL: not a disabled Save changes, and not a
+  // disabled Cancel schedule either. There is nothing left to change or stop,
+  // and a control that exists only to refuse is the card offering what the plan
+  // withdrew. The rows simply stand.
   //
   // WHAT THIS DELIBERATELY DOES NOT CATCH. A one-off whose moment has passed
   // while the release job has not drained yet has NOT fired — its gate is still
-  // shut, `Cancel schedule` still acts on a live job, and the server still
-  // authorizes it. The server does refuse a SAVE there (`canSaveInstalled`
-  // wants a future instant), so that card keeps the floor it has always had,
-  // with Save changes dead and Cancel live. Widening "fired" to cover it would
-  // take away an operation the server is still granting.
+  // shut and the server still authorizes what it authorized. The server does
+  // refuse a SAVE there (`canSaveInstalled` wants a future instant), so that
+  // card keeps its floor with Save changes dead. Widening "fired" to cover it
+  // would take away an operation the server is still granting.
   //
   // AND WHY `arming` IS NOT CONSULTED. The installer exposes the schedule to
   // the scheduler BEFORE it marks the intent done, so a near-term one-off can
   // fire while the intent still reads as arming. A rule that required `!arming`
   // would leave the floor standing on a schedule that had already run.
-  //
-  // ONLY A ONE-OFF. A released RECURRING trigger keeps its line and its whole
-  // floor: "a change to a recurring schedule applies to its future runs".
-  const fired = body.triggerType === "scheduled" && body.released;
+  const frozen =
+    (body.triggerType !== "recurring" && body.released) || body.stopped === true;
 
-  const act = async (op: "cancel" | "release") => {
+  const act = async (op: "cancel") => {
     setRefusal(null);
     setConfirming(null);
     setPending(op);
@@ -739,16 +751,16 @@ function SettledPhase({
       {/* The state the controls are withheld for, said out loud rather than
           drawn as dead buttons. Both hosts draw these: a reader in the
           conversation whose Save changes is disabled is owed the reason too.
-          NEITHER IS DRAWN ON A FIRED CARD. Both lines exist to explain a
-          withheld control, and a fired one-off has none left to explain — the
+          NEITHER IS DRAWN ON A FROZEN CARD. Both lines exist to explain a
+          withheld control, and a frozen card has none left to explain — the
           released/arming race can reach this card, and a status line standing
           over rows that simply stand is the label §7.2 removes. */}
-      {body.arming && !fired ? (
+      {body.arming && !frozen ? (
         <p data-conformance-id="schedule-arming" className="text-sm text-muted-foreground">
           Arming… the schedule is still being installed.
         </p>
       ) : null}
-      {body.released && !fired ? (
+      {body.released && !frozen ? (
         <p data-conformance-id="schedule-released" className="text-sm text-muted-foreground">
           Released — every held step is eligible now, so there is nothing left to
           cancel.
@@ -757,14 +769,15 @@ function SettledPhase({
 
       {/* THE SAME OPTION ROWS AS THE PROPOSAL — one component, drawing the armed
           selections the resolver read back off the installed row. */}
-      {/* A FIRED CARD HAS NO DRAFT. `draft` is the reader's local edit, and it
+      {/* A FROZEN CARD HAS NO DRAFT. `draft` is the reader's local edit, and it
           outlives a re-resolve because `SettledPhase` is not remounted — so a
-          one-off that fires under half-typed rows would otherwise stand there
-          read-only, showing times that were never armed. That is the same
-          dishonesty §7.2's "shows the schedule as it stands" rules out, so the
-          terminal card draws the server's schedule and only that. */}
+          one-off that fires, or a recurring schedule stopped, under half-typed
+          rows would otherwise stand there read-only, showing times that were
+          never armed. That is the same dishonesty §7.2's "shows the schedule as
+          it stands" rules out, so the terminal card draws the server's schedule
+          and only that. */}
       <ScheduleOptionRows
-        schedule={fired ? body.schedule : draft}
+        schedule={frozen ? body.schedule : draft}
         editable={body.canSave}
         onChange={(next) => {
           setSaved(false);
@@ -773,7 +786,7 @@ function SettledPhase({
         durationCopy={null}
       />
 
-      {fired ? null : (
+      {frozen ? null : (
         <div
           data-conformance-id="schedule-proposal-floor"
           className="flex flex-wrap items-center justify-end gap-2 border-t border-line pt-3"
@@ -806,54 +819,42 @@ function SettledPhase({
             <Check aria-hidden="true" className="size-3.5" />
             {pending === "save" ? "Saving…" : "Save changes"}
           </Button>
-          {/* CANCEL AND RELEASE ARE THE PAGE STEP'S, NOT THE CONVERSATION'S. */}
-          {showsChrome ? (
+          {/* CANCEL SCHEDULE IS THE PAGE STEP'S, NOT THE CONVERSATION'S — and
+              it is drawn only where the plan puts it: "shown only for a
+              recurring schedule that has fired once" (§7.2, amended
+              2026-08-25). `canCancel` IS that whole reading, resolved
+              server-side, so the control is ABSENT rather than disabled
+              wherever the plan does not put it — a one-off, a recurring
+              schedule that has not fired yet, and one already stopped. There is
+              no Run now beside it any more (cinatra#2972). */}
+          {showsChrome && body.canCancel ? (
             <Button
               type="button"
               variant="secondary"
               size="sm"
               data-action="cancel-trigger-schedule"
-              disabled={!body.canCancel || pending !== null}
+              disabled={pending !== null}
               onClick={() => setConfirming("cancel")}
             >
-              {pending === "cancel" ? "Cancelling…" : "Cancel schedule"}
-            </Button>
-          ) : null}
-          {showsChrome && body.canRelease ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              data-action="release-trigger-now"
-              disabled={pending !== null}
-              onClick={() => setConfirming("release")}
-            >
-              {pending === "release" ? "Releasing…" : "Run now"}
+              {pending === "cancel" ? "Stopping…" : "Cancel schedule"}
             </Button>
           ) : null}
         </div>
       )}
 
-      {!fired && confirming === "cancel" ? (
+      {/* THE WORDS SAY WHAT THE ACT NOW IS (cinatra#2972). The old copy — "The
+          run will stay paused" — described the DELETE this control used to
+          perform, and the plan withdrew both halves of it: Cancel schedule
+          "never deletes the schedule or pauses the run". */}
+      {!frozen && confirming === "cancel" ? (
         <ConfirmStrip
           conformanceId="schedule-cancel-confirm"
-          title="Cancel this schedule?"
-          description="The run will stay paused. You can set a new schedule from this step. Already-completed setup steps are preserved."
+          title="Stop this recurring schedule?"
+          description="No further runs will start from it. The runs it has already started are not affected, and this run is not changed. The schedule stays here, and you will not be able to change it afterwards."
           dismissLabel="Keep schedule"
           confirmLabel="Cancel schedule"
           onDismiss={() => setConfirming(null)}
           onConfirm={() => void act("cancel")}
-        />
-      ) : null}
-      {!fired && confirming === "release" ? (
-        <ConfirmStrip
-          conformanceId="schedule-release-confirm"
-          title="Run this schedule now?"
-          description="All side-effect steps will become eligible immediately, including any irreversible sends or publishes. This cannot be undone."
-          dismissLabel="Cancel"
-          confirmLabel="Run now"
-          onDismiss={() => setConfirming(null)}
-          onConfirm={() => void act("release")}
         />
       ) : null}
     </div>

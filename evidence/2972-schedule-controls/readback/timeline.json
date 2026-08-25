@@ -1,0 +1,376 @@
+{
+  "turnsRefusedOrUnanswered": 0,
+  "oneOff": {
+    "runId": "8ee96e64-4dc6-494e-b47c-a4d8e6dc1391",
+    "thread": "/chat/cinatra-ai/cinatra-assistant/3e036b86-d097-42b3-a50b-09e9e8ff6ea4"
+  },
+  "recurring": {
+    "runId": "e3d3661f-3789-437c-a4b2-71e366047acc",
+    "thread": "/chat/cinatra-ai/cinatra-assistant/fa516df8-bec8-45f8-80a1-7d8bd76e1a15"
+  },
+  "configured": {
+    "runId": "433ab1ee-2707-4054-af41-8592d91294ab",
+    "thread": "/chat/cinatra-ai/cinatra-assistant/498e9fc7-d1f2-4c8a-abca-faf91d203531"
+  },
+  "armedAt": "2026-08-25T15:52:59.475Z",
+  "steps": [
+    {
+      "step": "T0",
+      "what": "both schedules armed by Confirm on the card",
+      "observedAt": "2026-08-25T15:54:12.955Z",
+      "db": {
+        "oneOff": {
+          "run_id": "8ee96e64-4dc6-494e-b47c-a4d8e6dc1391",
+          "trigger_type": "scheduled",
+          "scheduled_at": "2026-08-25T15:58:00.000Z",
+          "cron_expression": null,
+          "timezone": "UTC",
+          "enabled": true,
+          "released_at": null,
+          "last_fired_at": null,
+          "stopped_at": null,
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:53:32.670Z",
+          "updated_at": "2026-08-25T15:53:32.717Z"
+        },
+        "recurring": {
+          "run_id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "trigger_type": "recurring",
+          "scheduled_at": null,
+          "cron_expression": "5 16 * * *",
+          "timezone": "UTC",
+          "enabled": true,
+          "released_at": null,
+          "last_fired_at": null,
+          "stopped_at": null,
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:54:12.530Z",
+          "updated_at": "2026-08-25T15:54:12.599Z"
+        }
+      }
+    },
+    {
+      "step": "T1",
+      "what": "the one-off came due on its own and the release job stamped released_at",
+      "observedAt": "2026-08-25T15:58:03.216Z",
+      "db": {
+        "trigger": {
+          "run_id": "8ee96e64-4dc6-494e-b47c-a4d8e6dc1391",
+          "trigger_type": "scheduled",
+          "scheduled_at": "2026-08-25T15:58:00.000Z",
+          "cron_expression": null,
+          "timezone": "UTC",
+          "enabled": true,
+          "released_at": "2026-08-25T15:58:00.056Z",
+          "last_fired_at": null,
+          "stopped_at": null,
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:53:32.670Z",
+          "updated_at": "2026-08-25T15:58:00.056Z"
+        },
+        "run": {
+          "id": "8ee96e64-4dc6-494e-b47c-a4d8e6dc1391",
+          "status": "failed",
+          "template_id": "f22350d3-024b-480e-98a8-a4078f66766e",
+          "created_at": "2026-08-25T15:53:32.639Z",
+          "completed_at": "2026-08-25T15:58:02.931Z"
+        }
+      }
+    },
+    {
+      "step": "T2",
+      "what": "the recurring schedule fired one real tick and the release job cloned a child run",
+      "observedAt": "2026-08-25T16:05:03.922Z",
+      "db": {
+        "trigger": {
+          "run_id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "trigger_type": "recurring",
+          "scheduled_at": null,
+          "cron_expression": "5 16 * * *",
+          "timezone": "UTC",
+          "enabled": true,
+          "released_at": null,
+          "last_fired_at": "2026-08-25T16:05:00.254Z",
+          "stopped_at": null,
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:54:12.530Z",
+          "updated_at": "2026-08-25T16:05:00.254Z"
+        },
+        "run": {
+          "id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "status": "armed",
+          "template_id": "f22350d3-024b-480e-98a8-a4078f66766e",
+          "created_at": "2026-08-25T15:54:12.516Z",
+          "completed_at": null
+        },
+        "clonesNamedByTheReleaseJob": [
+          "0f29f278-9452-4cec-a5e7-b9d5a8d8b416"
+        ],
+        "childCandidates": [
+          {
+            "id": "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+            "status": "failed",
+            "created_at": "2026-08-25T16:05:00.268Z"
+          }
+        ]
+      }
+    },
+    {
+      "step": "T3",
+      "what": "Save changes moved the fired schedule from 5 16 * * * to 15 16 * * *",
+      "observedAt": "2026-08-25T16:06:26.701Z",
+      "db": {
+        "cronBefore": "5 16 * * *",
+        "trigger": {
+          "run_id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "trigger_type": "recurring",
+          "scheduled_at": null,
+          "cron_expression": "15 16 * * *",
+          "timezone": "UTC",
+          "enabled": true,
+          "released_at": null,
+          "last_fired_at": "2026-08-25T16:05:00.254Z",
+          "stopped_at": null,
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:54:12.530Z",
+          "updated_at": "2026-08-25T16:06:24.744Z"
+        },
+        "run": {
+          "id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "status": "armed",
+          "template_id": "f22350d3-024b-480e-98a8-a4078f66766e",
+          "created_at": "2026-08-25T15:54:12.516Z",
+          "completed_at": null
+        }
+      }
+    },
+    {
+      "step": "T4",
+      "what": "the NEXT real tick fired at the SAVED time and the app cloned a second child run",
+      "observedAt": "2026-08-25T16:15:04.148Z",
+      "db": {
+        "trigger": {
+          "run_id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "trigger_type": "recurring",
+          "scheduled_at": null,
+          "cron_expression": "15 16 * * *",
+          "timezone": "UTC",
+          "enabled": true,
+          "released_at": null,
+          "last_fired_at": "2026-08-25T16:15:00.217Z",
+          "stopped_at": null,
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:54:12.530Z",
+          "updated_at": "2026-08-25T16:15:00.217Z"
+        },
+        "firstFire": "2026-08-25T16:05:00.254Z",
+        "secondFire": "2026-08-25T16:15:00.217Z",
+        "childCandidatesBefore": [
+          {
+            "id": "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+            "status": "failed",
+            "created_at": "2026-08-25T16:05:00.268Z"
+          }
+        ],
+        "childCandidatesAfter": [
+          {
+            "id": "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+            "status": "failed",
+            "created_at": "2026-08-25T16:05:00.268Z"
+          },
+          {
+            "id": "309be637-f31d-4760-a0e1-66bf1833352c",
+            "status": "failed",
+            "created_at": "2026-08-25T16:15:00.237Z"
+          }
+        ],
+        "clonesNamedByTheReleaseJob": [
+          "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+          "309be637-f31d-4760-a0e1-66bf1833352c"
+        ],
+        "run": {
+          "id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "status": "armed",
+          "template_id": "f22350d3-024b-480e-98a8-a4078f66766e",
+          "created_at": "2026-08-25T15:54:12.516Z",
+          "completed_at": null
+        }
+      }
+    },
+    {
+      "step": "T5",
+      "what": "re-armed to 25 16 * * * so the stop has a due instant inside this round (2026-08-25T16:25:00.000Z)",
+      "observedAt": "2026-08-25T16:15:54.573Z",
+      "db": {
+        "cronBefore": "15 16 * * *",
+        "trigger": {
+          "run_id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "trigger_type": "recurring",
+          "scheduled_at": null,
+          "cron_expression": "25 16 * * *",
+          "timezone": "UTC",
+          "enabled": true,
+          "released_at": null,
+          "last_fired_at": "2026-08-25T16:15:00.217Z",
+          "stopped_at": null,
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:54:12.530Z",
+          "updated_at": "2026-08-25T16:15:52.620Z"
+        },
+        "dueAt": "2026-08-25T16:25:00.000Z"
+      }
+    },
+    {
+      "step": "T6",
+      "what": "Cancel schedule stopped the recurring schedule: stopped_at stamped, enabled false, the scheduler id kept, the run's own status untouched",
+      "observedAt": "2026-08-25T16:16:11.166Z",
+      "db": {
+        "trigger": {
+          "run_id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "trigger_type": "recurring",
+          "scheduled_at": null,
+          "cron_expression": "25 16 * * *",
+          "timezone": "UTC",
+          "enabled": false,
+          "released_at": null,
+          "last_fired_at": "2026-08-25T16:15:00.217Z",
+          "stopped_at": "2026-08-25T16:16:09.197Z",
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:54:12.530Z",
+          "updated_at": "2026-08-25T16:16:09.197Z"
+        },
+        "run": {
+          "id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "status": "armed",
+          "template_id": "f22350d3-024b-480e-98a8-a4078f66766e",
+          "created_at": "2026-08-25T15:54:12.516Z",
+          "completed_at": null
+        },
+        "clonesNamedByTheReleaseJob": [
+          "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+          "309be637-f31d-4760-a0e1-66bf1833352c"
+        ],
+        "childCandidates": [
+          {
+            "id": "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+            "status": "failed",
+            "created_at": "2026-08-25T16:05:00.268Z"
+          },
+          {
+            "id": "309be637-f31d-4760-a0e1-66bf1833352c",
+            "status": "failed",
+            "created_at": "2026-08-25T16:15:00.237Z"
+          }
+        ],
+        "dueInstantStillAhead": "2026-08-25T16:25:00.000Z"
+      }
+    },
+    {
+      "step": "T7",
+      "what": "the stopped schedule's due instant came and went: nothing fired",
+      "observedAt": "2026-08-25T16:26:35.872Z",
+      "db": {
+        "dueAt": "2026-08-25T16:25:00.000Z",
+        "trigger": {
+          "run_id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "trigger_type": "recurring",
+          "scheduled_at": null,
+          "cron_expression": "25 16 * * *",
+          "timezone": "UTC",
+          "enabled": false,
+          "released_at": null,
+          "last_fired_at": "2026-08-25T16:15:00.217Z",
+          "stopped_at": "2026-08-25T16:16:09.197Z",
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T15:54:12.530Z",
+          "updated_at": "2026-08-25T16:16:09.197Z"
+        },
+        "run": {
+          "id": "e3d3661f-3789-437c-a4b2-71e366047acc",
+          "status": "armed",
+          "template_id": "f22350d3-024b-480e-98a8-a4078f66766e",
+          "created_at": "2026-08-25T15:54:12.516Z",
+          "completed_at": null
+        },
+        "lastFiredBeforeStop": "2026-08-25T16:15:00.217Z",
+        "lastFiredAfterDue": "2026-08-25T16:15:00.217Z",
+        "clonesBeforeStop": [
+          "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+          "309be637-f31d-4760-a0e1-66bf1833352c"
+        ],
+        "clonesAfterDue": [
+          "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+          "309be637-f31d-4760-a0e1-66bf1833352c"
+        ],
+        "childCandidatesBefore": 2,
+        "childCandidatesAfter": 2
+      }
+    },
+    {
+      "step": "T8",
+      "what": "a one-off armed for tomorrow — configured, and not run",
+      "observedAt": "2026-08-25T16:27:12.593Z",
+      "db": {
+        "trigger": {
+          "run_id": "433ab1ee-2707-4054-af41-8592d91294ab",
+          "trigger_type": "scheduled",
+          "scheduled_at": "2026-08-26T09:00:00.000Z",
+          "cron_expression": null,
+          "timezone": "UTC",
+          "enabled": true,
+          "released_at": null,
+          "last_fired_at": null,
+          "stopped_at": null,
+          "has_job_scheduler": true,
+          "created_at": "2026-08-25T16:27:12.275Z",
+          "updated_at": "2026-08-25T16:27:12.318Z"
+        },
+        "run": {
+          "id": "433ab1ee-2707-4054-af41-8592d91294ab",
+          "status": "armed",
+          "template_id": "f22350d3-024b-480e-98a8-a4078f66766e",
+          "created_at": "2026-08-25T16:27:12.240Z",
+          "completed_at": null
+        }
+      }
+    },
+    {
+      "step": "T9",
+      "what": "the round's own ledger window and the release job's parentage lines",
+      "observedAt": "2026-08-25T16:27:45.171Z",
+      "db": {
+        "usageSinceRoundStart": [
+          {
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "calls": 3,
+            "first_at": "2026-08-25T15:53:25.464Z",
+            "last_at": "2026-08-25T16:27:04.848Z"
+          }
+        ],
+        "clonesNamedByTheReleaseJob": [
+          "0f29f278-9452-4cec-a5e7-b9d5a8d8b416",
+          "309be637-f31d-4760-a0e1-66bf1833352c"
+        ],
+        "providerEvidence": {
+          "serverLog": "<the app server's own log>",
+          "at": "2026-08-25T16:27:45.075Z",
+          "preRouterShortCircuits": 0,
+          "preRouterAttempts": 0,
+          "scriptedRuntimeLines": 0,
+          "noProviderRefusals": 0,
+          "mcpDependencyFailures": 0,
+          "publicMcpCallbacks": 51,
+          "bridgeRunSelects": 0,
+          "triggerReleaseLines": 21,
+          "driverScriptedProviderEnv": null,
+          "serverScriptedProviderEnv": null,
+          "serverEnvReadFrom": "process-table",
+          "serverEnvReadOfPid": "21115",
+          "serverEnvHopsFromListener": 1,
+          "serverEnvTokensSeen": 16
+        }
+      }
+    }
+  ]
+}
