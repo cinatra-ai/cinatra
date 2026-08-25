@@ -31,6 +31,7 @@
 // nothing imports this module. S2 (#1218) cuts `/chat` over.
 // ---------------------------------------------------------------------------
 
+import { isRunStartToolName } from "../run-start-tool-names";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { renderableViewType, safeUrl } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -313,7 +314,8 @@ export function RenderableViewParts({
 // ---------------------------------------------------------------------------
 
 function isAgentRunPart(part: AssistantMessagePart): part is AssistantToolCallPart & { runId: string } {
-  return part.kind === "tool_call" && part.name === "agent_run" && typeof part.runId === "string";
+  // BOTH START DOORS (cinatra#2935, lifecycle-b W5d) — see the shared leaf.
+  return part.kind === "tool_call" && isRunStartToolName(part.name) && typeof part.runId === "string";
 }
 
 export function InteractiveParts({

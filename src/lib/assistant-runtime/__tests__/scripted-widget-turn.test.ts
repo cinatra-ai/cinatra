@@ -49,11 +49,6 @@ const resolveBoundDefaultAdapter = vi.fn(async () => {
 const stream = vi.fn((..._args: unknown[]) => Promise.resolve(undefined));
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
-vi.mock("@/app/api/chat/explicit-dispatch", () => ({
-  detectExplicitDispatchDirective: () => "",
-  detectExplicitDispatchPackage: () => null,
-}));
-vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({ serverSideExplicitDispatch: vi.fn() }));
 vi.mock("@/app/api/chat/chat-user-context", () => ({ buildChatUserContextSections: vi.fn(async () => []) }));
 vi.mock("@/app/api/chat/extension-confirmation", () => ({
   buildExtensionImplementationConfirmationPolicy: () => "",

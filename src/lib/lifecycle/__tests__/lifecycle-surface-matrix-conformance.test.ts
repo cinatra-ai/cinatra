@@ -73,6 +73,7 @@ import {
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import {
   DELEGATED_WIDGET_BOUND_CARD_ACTION,
+  DELEGATED_WIDGET_NAMED_AGENT_START,
   DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
   carriesDelegatedWidgetDeniedVerb,
   delegatedWidgetAllowedToolNames,
@@ -244,12 +245,29 @@ describe("BROKER exclusion, leg 3: the broker allowlist is TOTAL", () => {
     // all without the message's single-use grant.
     for (const kind of ["wordpress", "drupal"] as const) {
       const allowed = [...delegatedWidgetAllowedToolNames(kind)].sort();
+      // AMENDED AGAIN for cinatra#2935 (lifecycle-b W5d): exactly one MORE
+      // entry — the one narrowly scoped start that replaces the removed
+      // sentence-matcher, which was the widget's ONLY way to start an agent.
+      // The assertion stays TOTAL. Nothing is offered that the widget's own
+      // credential cannot do: the start resolves the person's LIVE standing at
+      // the call and runs `agent_run`'s own execute gate under it, so an agent
+      // they may not start is refused in the platform's own words.
       const expected = [
         `${kind}_content_editor_run`,
         ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
         DELEGATED_WIDGET_BOUND_CARD_ACTION,
+        DELEGATED_WIDGET_NAMED_AGENT_START,
       ].sort();
       expect(allowed, kind).toEqual(expected);
+    }
+  });
+
+  it("the widget still cannot reach `agent_run` itself — the start is a door, not a second one", () => {
+    // cinatra#2790's invariant, unchanged by the one widening above.
+    for (const kind of ["wordpress", "drupal"] as const) {
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run"), kind).toBe(false);
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run_get"), kind).toBe(false);
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run_resume"), kind).toBe(false);
     }
   });
 

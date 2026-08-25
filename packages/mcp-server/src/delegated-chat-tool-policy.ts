@@ -395,6 +395,16 @@ const DENIED_VERB_TOKENS = new Set<string>([
   "resume",
   "confirm",
   "arm",
+  // cinatra#2935 (lifecycle-b W5d) — the START class, added here for the same
+  // defense-in-depth reason and NOT because chat gains anything. Chat already
+  // reaches the road through `agent_run`, whose name carries no denied token;
+  // what this makes unreachable by construction is a FUTURE `*_start` primitive
+  // landing on this allowlist without an explicit, disclosed override. Nothing
+  // on this allowlist carries `start` as a whole token today, so it denies
+  // nothing that works. The widget's one narrow start (`agent_named_start`) is
+  // deliberately absent from chat: a second name for a road chat already has is
+  // a duplicate surface, not parity.
+  "start",
 ]);
 
 // Family prefixes that must never be reachable from chat regardless of verb.

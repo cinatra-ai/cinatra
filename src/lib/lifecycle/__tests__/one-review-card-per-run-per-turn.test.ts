@@ -124,6 +124,39 @@ describe("the predicate: does this turn draw the run card for this run", () => {
     }
   });
 
+  it("is true for a run the WIDGET's own start dispatched, in both shapes", () => {
+    // cinatra#2935, lifecycle-b W5d: `agent_named_start` reaches the same
+    // primitive and produces the same run, and the transcript mounts its card
+    // through the same closed set of names. A predicate that recognised only
+    // `agent_run` would answer "this turn draws no card" for such a run and the
+    // writer would inject a second review gate beside the one the card carries.
+    const durable = {
+      ...turnThatDrawsTheRunCard(),
+      parts: [{ type: "tool_call", id: DISPATCH_CALL, name: "agent_named_start" }],
+    };
+    expect(turnCarriesRunCardFor(durable, RUN_ID)).toBe(true);
+
+    const client = {
+      parts: [
+        { kind: "tool_call", id: DISPATCH_CALL, name: "agent_named_start", runId: RUN_ID },
+      ],
+    };
+    expect(turnCarriesRunCardFor(client, RUN_ID)).toBe(true);
+
+    // The negative control beside it: a name OUTSIDE the closed set still draws
+    // nothing, so the widening is an addition and not an open door.
+    expect(
+      turnCarriesRunCardFor(
+        {
+          parts: [
+            { kind: "tool_call", id: DISPATCH_CALL, name: "agent_run_get", runId: RUN_ID },
+          ],
+        },
+        RUN_ID,
+      ),
+    ).toBe(false);
+  });
+
   it("is FALSE when the pointer lands on a call that is not an agent_run", () => {
     // The projection pins the run id onto whatever call the pointer names; the
     // renderer mounts only on a call NAMED `agent_run`. A pointer at a

@@ -8,7 +8,7 @@
 // built from named fragments, and several of them change between two turns of the
 // same conversation:
 //
-//   · the explicit-dispatch directive — present only on the turn whose message
+//   · the bound-card fragment — present only on the turn whose message
 //     names an agent package, and it used to be the FIRST fragment, so a single
 //     "@vendor/slug" mention moved the divergence point to byte 0 and re-billed
 //     the whole prompt;
@@ -115,8 +115,6 @@ export type ChatSystemPromptFragments = {
   instanceFreezeState: string;
   /** Bounded, one-hour window of decided destructive-confirmation outcomes. */
   pendingConfirmationContext: string;
-  /** The deterministic pre-router's hard directive, or `""`. */
-  explicitDispatchDirective: string;
   /**
    * The BOUND CARD for this turn (cinatra#2932, lifecycle-b W5a), or `""`.
    *
@@ -184,7 +182,6 @@ export const CHAT_SYSTEM_VOLATILE_FRAGMENTS = [
   "userContext",
   "instanceFreezeState",
   "pendingConfirmationContext",
-  "explicitDispatchDirective",
   "boundCardContext",
   "conversationOnlyNotice",
 ] as const satisfies readonly (keyof ChatSystemPromptFragments)[];

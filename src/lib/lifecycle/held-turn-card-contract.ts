@@ -338,6 +338,23 @@ export type ChatThreadCarriageRow = {
    * transcript slot of THAT part is the position the card must render at.
    */
   triggerToolName: string | null;
+  /**
+   * FURTHER tool names whose durable result triggers the SAME render
+   * (cinatra#2935, lifecycle-b W5d).
+   *
+   * WHY A ROW CAN NOW HAVE MORE THAN ONE. Until this slice one tool started a
+   * run from a conversation on every host, so the primary name above was the
+   * whole answer. Removing the sentence-matcher gave the site widget its own
+   * narrowly scoped start (`agent_named_start`), because its closed allowlist
+   * deliberately does not hold `agent_run` (cinatra#2790). The RUN is the same
+   * run, parked at the same moment, drawn by the same owner — only the name on
+   * the durable part differs by host.
+   *
+   * The primary name stays primary: every violation message names it, so a
+   * failure still reads as "the turn carries no agent_run tool result". This
+   * list widens what SATISFIES the obligation, never what the obligation is.
+   */
+  alsoTriggeredBy?: readonly string[];
   /** The one component that draws this kind. */
   owner: string;
   /**
@@ -415,6 +432,10 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     deliveries: Object.freeze(["platform_injected"] as const),
     triggeringPart: "the durable agent_run tool result of the held dispatch turn",
     triggerToolName: "agent_run",
+    // cinatra#2935 (lifecycle-b W5d) — the widget's own narrow start. Same run,
+    // same moment, same owner; a different name on the durable part because the
+    // widget's closed allowlist does not hold `agent_run` (cinatra#2790).
+    alsoTriggeredBy: ["agent_named_start"],
     owner: "RecommendationHoldCard",
     // Read off the SHIPPED component: `RecommendationHoldCard` composes
     // `RunRecommendationChipRow`, whose root carries the conformance id and
@@ -563,6 +584,8 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     deliveries: Object.freeze(["platform_injected"] as const),
     triggeringPart: "the agent_hitl_screen INTERRUPT the paused run carries",
     triggerToolName: "agent_run",
+    // cinatra#2935 (lifecycle-b W5d) — see the recommendation_hold row above.
+    alsoTriggeredBy: ["agent_named_start"],
     owner: "AgentHitlScreenCard",
     // A conformance id of the card's OWN, deliberately NOT the ruled root
     // declaration: while the root declaration is owed (below), an owner anchor
@@ -965,8 +988,9 @@ export function durableTriggerPart(
   row: ChatThreadCarriageRow,
 ): Extract<ProjectedPart, { kind: "tool_result" }> | null {
   if (row.triggerToolName === null) return null;
+  const accepted = new Set<string>([row.triggerToolName, ...(row.alsoTriggeredBy ?? [])]);
   for (const part of projection.parts) {
-    if (part.kind !== "tool_result" || part.name !== row.triggerToolName) continue;
+    if (part.kind !== "tool_result" || !accepted.has(part.name)) continue;
     if (part.runId != null) return part;
     // The runId is IN the durable payload — read it from there rather than
     // making every caller pre-parse it.

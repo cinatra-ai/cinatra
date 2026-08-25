@@ -600,7 +600,12 @@ describe("published-reader audit", () => {
     ["A2A agent resolver", "packages/a2a/src/agent-resolver.ts"],
     ["A2A skill/server card", "packages/a2a/src/server.ts"],
     ["MCP tool registration", "packages/agents/src/mcp/agent-tools-registry.ts"],
-    ["chat explicit-dispatch input extraction", "src/app/api/chat/explicit-dispatch-server.ts"],
+    // cinatra#2935 (lifecycle-b W5d): the chat explicit-dispatch input
+    // extraction was a published reader and is GONE with the sentence-matcher
+    // it served. The row is struck rather than retargeted because its
+    // replacement reads no published templates at all: the widget's one narrow
+    // start hands a package NAME to `agent_run` and lets the primitive resolve
+    // it, which is the stronger property. The audit below pins that.
   ])(
     "%s reads published templates but never creates a run outside the guarded perimeter",
     (_label, file) => {
@@ -612,6 +617,20 @@ describe("published-reader audit", () => {
       expect(src).not.toMatch(/AGENT_BUILDER_EXECUTION/);
     },
   );
+
+  it("the widget's named start reads NO published templates and creates NO run itself", () => {
+    // cinatra#2935 (lifecycle-b W5d) — the replacement for the struck row above,
+    // asserted as the stronger property it actually has. The start resolves
+    // nothing and inserts nothing: it hands a package name to `agent_run`, whose
+    // own resolver, execute gate and coordinator launch do the work. So there is
+    // no published reader to audit here, and the run-creation fence still sees
+    // one producer.
+    const src = read("src/lib/lifecycle/named-agent-start-mcp.ts");
+    expect(src).not.toContain("readPublishedAgentTemplates");
+    expect(src).not.toMatch(/insert\(agentRuns\)/);
+    expect(src).not.toMatch(/AGENT_BUILDER_EXECUTION/);
+    expect(src).toMatch(/primitiveName: "agent_run"/);
+  });
 
   it("built-in assistants are draft + private, so no published reader can reach them", () => {
     const builtin = read("packages/agents/src/builtin-assistant-template.ts");

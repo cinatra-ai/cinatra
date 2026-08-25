@@ -39,11 +39,6 @@ import {
   isDelegatedChatMcpToolAllowed,
 } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 import type { ChatMcpCatalogState, ServableChatPrimitive } from "@cinatra-ai/llm";
-import {
-  detectExplicitDispatchDirective,
-  detectExplicitDispatchPackage,
-} from "@/app/api/chat/explicit-dispatch";
-import { serverSideExplicitDispatch } from "@/app/api/chat/explicit-dispatch-server";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
 import {
   ensureInstalledSkillsRegistered,
@@ -1392,75 +1387,33 @@ export async function runAssistantTurn(
       ? await buildPendingConfirmationContext({ orgId: sessionOrgId, userId })
       : "";
 
-  // Deterministic explicit-dispatch pre-router.
+  // THE PRE-MODEL DISPATCH READER IS GONE (cinatra#2935, lifecycle-b W5d).
   //
-  // SOFT layer (system-message directive): scans the latest user message
-  // for verb-anchored explicit `@cinatra-ai/<slug>` references and prepends
-  // a hard "OVERRIDES every other instruction" directive to the system
-  // message. Unit tests verify the directive, but provider behavior can still
-  // skip the expected tool call.
+  // From the plan (PLAN: Agents Lifecycle (B), section 4):
   //
-  // HARD layer (server-side dispatch, this section): when the regex matches,
-  // invoke `agent_run` server-side bypassing the LLM entirely, emit synthetic
-  // tool_call + tool_result + text SSE events, and early-return from the turn.
-  // The LLM never gets a chance to skip the tool. The chat-mcp e2e
-  // harness's `tool_call` listener fires immediately and the run is queued
-  // exactly as if the LLM had called it.
+  //   "The sentence-matcher that started an agent whenever it saw a verb next
+  //    to a package name | The conversation's assistant starts the agent
+  //    itself, and the run appears in the thread as its own card."
   //
-  // SKIPPED in conversation-only mode (cinatra#1875 AC#5): a no-native-MCP
-  // provider (Gemini) runs tool-less, and server-side `agent_run` dispatch IS a
-  // tool action — firing it would contradict the "no live actions" notice and
-  // let a tool-less turn perform a live dispatch. The directive/dispatch are both
-  // gated so the conversation-only turn is genuinely tool-free.
-  const explicitDispatchDirective = conversationOnly
-    ? ""
-    : detectExplicitDispatchDirective(messages);
-  const explicitDispatchPackage = conversationOnly
-    ? null
-    : detectExplicitDispatchPackage(messages);
-
-  if (explicitDispatchPackage) {
-    // Find the latest user message; the pre-router uses it as source material
-    // for input extraction so the agent's StartNode required inputs are
-    // pre-filled and the setup-loop HITL gate isn't surfaced to the user.
-    const lastUserMessage = [...messages]
-      .reverse()
-      .find((m) => m.role === "user");
-    const userPrompt =
-      typeof lastUserMessage?.content === "string" ? lastUserMessage.content : "";
-    const dispatchResult = await serverSideExplicitDispatch({
-      packageName: explicitDispatchPackage,
-      actor: actorContext,
-      send,
-      userPrompt,
-    });
-    if (dispatchResult.ok) {
-      // Run is queued + SSE events emitted. The e2e harness will pick up
-      // the synthetic tool_call/tool_result and continue polling
-      // /api/agents/runs/<runId> on its own. No LLM turn needed.
-      console.info(
-        `[assistant-runtime] explicit-dispatch pre-router HARD short-circuit: ${explicitDispatchPackage} → runId=${dispatchResult.runId}`,
-      );
-      return;
-    }
-    // Terminal failures (e.g. creation-flow preflight refusal) must NOT fall
-    // through to the LLM. The synthetic tool_result + text events already
-    // explained the gate to the user; an LLM turn would re-author the run
-    // despite the gate and bypass the chat-side preflight invariant.
-    // Early-return.
-    if ((dispatchResult as { terminal?: boolean }).terminal === true) {
-      console.warn(
-        `[assistant-runtime] explicit-dispatch pre-router TERMINAL failure for ${explicitDispatchPackage}: ${dispatchResult.error} — no LLM fallthrough`,
-      );
-      return;
-    }
-    // On non-terminal dispatch failure (e.g. unknown agent, registry miss),
-    // fall through to the regular LLM path — the synthetic tool_result
-    // already emitted carries the error, and the LLM can offer alternatives.
-    console.warn(
-      `[assistant-runtime] explicit-dispatch pre-router HARD attempt failed for ${explicitDispatchPackage}: ${dispatchResult.error} — falling through to LLM`,
-    );
-  }
+  //   "One consequence runs the other way: with the sentence-matcher gone,
+  //    starting an agent by naming it becomes something the assistant does —
+  //    an agent tag is addressed to the conversation's assistant, which starts
+  //    the agent; nothing dispatches before the model."
+  //
+  // What stood here was the verb-anchored regex and the hard server-side
+  // short-circuit it drove: a message carrying one of seven verbs beside a
+  // package reference created a run and returned from the turn BEFORE the
+  // model read a word of it. It was the arm the site widget passed too, so its
+  // removal repairs the chat page, the chat conversation and the third-party
+  // application in one act.
+  //
+  // The capability is not removed, it MOVED: the assistant calls `agent_run`
+  // itself (the primitive's own tool description asks for exactly that
+  // wording), the run appears in the thread as its own card through the
+  // ordinary tool-result carriage, and inside a third-party application the
+  // widget's assistant reaches the one narrowly scoped start
+  // (`agent_named_start`) its closed allowlist now names. Nothing dispatches
+  // before the model on any host.
 
   // Build chat-side resolver ports when any user message in this turn carries
   // attachments. Per-message resolution happens inside stream now,
@@ -1719,7 +1672,6 @@ export async function runAssistantTurn(
     // user-controlled content, never before it (finding 1).
     instanceFreezeState,
     pendingConfirmationContext,
-    explicitDispatchDirective,
     // cinatra#2932 — what this turn is bound to and the ONE control it may
     // press, or the platform's own refusal to relay. `""` when nothing is
     // bound, which is every ordinary turn. A conversation-only turn holds no

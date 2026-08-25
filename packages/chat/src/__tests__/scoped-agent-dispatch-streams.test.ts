@@ -35,7 +35,6 @@ import type { AssistantDeliveryLookup } from "../dispatch-planner";
 // client→server path against ONE literal. Reached by relative path because the
 // app is not a workspace dependency of @cinatra-ai/chat (same precedent as
 // packages/extensions/src/__tests__/canonical-types-source-validators.test.ts).
-import { detectExplicitDispatchPackage } from "../../../../src/app/api/chat/explicit-dispatch";
 
 const CINATRA_HOST_ID = "cin-host";
 /** The builtin's CANONICAL handle — the bare `cinatra` is only a reserved alias. */
@@ -140,85 +139,74 @@ describe("cinatra#2820 — the canonical scoped-agent-only form streams", () => 
   });
 });
 
-describe("cinatra#2820 — the seam: the literal the client streams is the literal the server dispatches", () => {
-  // The defect never lived in either half. `decideMessageRouting` and
-  // `detectExplicitDispatchPackage` were each correct in their own suite; the
-  // SEAM between them was broken, and no test spanned it. Both halves stay green
-  // through a regression that re-kills the canonical form — someone tidies
-  // `CANONICAL_PKG_RE` or `EXPLICIT_DISPATCH_VERB_RE`
-  // (`src/app/api/chat/explicit-dispatch.ts`) and neither suite knows the other
-  // exists. These arms tie ONE literal to both matchers, so that edit goes red.
+describe("cinatra#2935 (lifecycle-b W5d) — the turn always answers, and nothing dispatches before the model", () => {
+  // WHAT THIS BLOCK USED TO BE. A "seam" pair: the client's routing decision on
+  // one side, and the server's verb-anchored sentence-matcher
+  // (`detectExplicitDispatchPackage`) on the other, tied to ONE literal so a
+  // tidy-up of either regex went red. The matcher is GONE — it started an agent
+  // before the model read the message — so there is no second half to tie to.
+  //
+  // WHAT REPLACES IT, from the plan (section 4):
+  //
+  //   "The rule that ended a turn with no answer at all when a message named
+  //    only an agent | The turn always answers. You get a reply and the run's
+  //    card, never silence."
+  //
+  // So the property under test moved from "both halves agree about this
+  // literal" to "EVERY typed form reaches the assistant". These arms are RED on
+  // the base branch for the no-responder case, which is the one that answered
+  // with silence.
 
-  it("SEAM — the canonical form streams on the client AND dispatches on the server", async () => {
-    // Client half: the plan the client acts on is a STREAM dispatch — the plan
-    // that makes it POST at all. (This asserts the decision, not the socket.)
+  it("the canonical form streams — and no pre-model dispatcher is consulted", async () => {
     expect(resolveDispatchPlan(await route(AGENT_ONLY), undefined)).toMatchObject({
       kind: "stream",
     });
-    // Server half: the pre-router, reading the exact string the client streamed,
-    // resolves the packageName it must force `agent_run` on.
-    expect(detectExplicitDispatchPackage([{ role: "user", content: AGENT_ONLY }])).toBe(
-      AGENT_ONLY_PACKAGE,
-    );
   });
 
-  it("SEAM — the same message in ordinary capitalization crosses the seam too", async () => {
-    // The two matchers used to disagree on CASE: the client tokenizer carries
-    // `/gi` (`../mention-tokenizer` MENTION_RE) and lowercases vendor+slug, while
-    // the server matcher was lowercase-only. So a reader who typed the canonical
-    // form the way English capitalizes a sentence got the streaming path and NO
-    // dispatch — #2820's shape on a case variant. RED before the server
-    // lowercases (cinatra#2820 review).
+  it("the same message in ordinary capitalization streams too", async () => {
+    // The client tokenizer carries `/gi` (`../mention-tokenizer` MENTION_RE) and
+    // lowercases vendor+slug, so a reader who capitalizes the way English
+    // capitalizes a sentence takes the same road. This used to matter because
+    // the server matcher was lowercase-only and the pair disagreed; it matters
+    // now because the assistant reads the message either way.
     expect(AGENT_ONLY_MIXED_CASE.toLowerCase()).toBe(AGENT_ONLY.toLowerCase());
-
     expect(
       resolveDispatchPlan(await route(AGENT_ONLY_MIXED_CASE), undefined),
     ).toMatchObject({ kind: "stream" });
-    expect(
-      detectExplicitDispatchPackage([{ role: "user", content: AGENT_ONLY_MIXED_CASE }]),
-    ).toBe(AGENT_ONLY_PACKAGE);
   });
 
-  it("SEAM — the legacy underscore form crosses the seam in its own lowercase shape", async () => {
-    // No mention token at all, so the client streams by the no-mention default;
-    // the server maps `cinatra_<slug>` onto the canonical package.
+  it("the legacy underscore form streams by the no-mention default", async () => {
     const LEGACY = "use cinatra_contact-discovery-agent to find leads at Acme";
     expect(resolveDispatchPlan(await route(LEGACY), undefined)).toMatchObject({
       kind: "stream",
     });
-    expect(detectExplicitDispatchPackage([{ role: "user", content: LEGACY }])).toBe(
-      AGENT_ONLY_PACKAGE,
-    );
-    // ...and ONLY in that shape (cinatra#2912 review, NEW-1). This arm asserted
-    // the opposite for one round and pinned a widening as correct. The case fold
-    // exists to keep the server matcher in parity with the client tokenizer, and
-    // the tokenizer only ever lexes `@`-mentions — this form produces no mention
-    // token at all, as the arm above depends on. With no client behaviour to be
-    // in parity with, folding case here bought nothing and cost a great deal: it
-    // made ordinary SHOUTED identifiers the tree already ships (`CINATRA_THEME`,
-    // `CINATRA_ID`, `CINATRA_STATUS`) fire a hard pre-model agent dispatch. So a
-    // capitalized legacy ref carries no dispatch intent the server may act on.
-    expect(
-      detectExplicitDispatchPackage([
-        { role: "user", content: "Use Cinatra_Contact-Discovery-Agent to find leads at Acme" },
-      ]),
-    ).toBeNull();
-    expect(
-      detectExplicitDispatchPackage([
-        { role: "user", content: "Use CINATRA_THEME to change the look" },
-      ]),
-    ).toBeNull();
   });
 
-  it("SEAM — the honest no-responder is still on the CLIENT side of the seam", async () => {
-    // The guard that keeps the seam arms honest: a non-agent unresolved mention
-    // never POSTs, so the server matcher is not even consulted. Pins that the
-    // seam arms above prove routing, not merely that a regex matches a string.
+  it("RED ON BASE — an unresolved handle is answered instead of ending in silence", async () => {
+    // THE NO-ANSWER RULE, in one arm. `@chatgpt` is delisted, so it classifies
+    // unresolved; on the base branch the route decision returned
+    // `{ shouldCallLlm: false, isBroadcast: true }` and `resolveDispatchPlan`
+    // answered `{ kind: "none" }` — the client POSTed nothing at all and the
+    // person watched their message do nothing. Now the host assistant replies,
+    // exactly as it does for a message with no mention.
     const NO_RESPONDER = "@chatgpt what do you think?";
-    expect(resolveDispatchPlan(await route(NO_RESPONDER), undefined)).toEqual({ kind: "none" });
-    expect(
-      detectExplicitDispatchPackage([{ role: "user", content: NO_RESPONDER }]),
-    ).toBeNull();
+    expect(resolveDispatchPlan(await route(NO_RESPONDER), undefined)).toMatchObject({
+      kind: "stream",
+    });
+  });
+
+  it("RED ON BASE — a message that names ONLY an agent is answered, and in default layout", async () => {
+    // The plan's own sentence for this case: "You get a reply and the run's
+    // card, never silence." The reply is the host assistant's; the card comes
+    // from the `agent_run` tool result of the turn it then takes. Default
+    // layout matters for the second half — one mention token does not trip
+    // `shouldEnterSlackModeOnSend`, so message parts and the inline run card
+    // survive.
+    const r = await route(AGENT_ONLY);
+    expect(r.shouldCallLlm).toBe(true);
+    expect(r.hostAssistantUserId).toBe(CINATRA_HOST_ID);
+    expect(r.isBroadcast).toBeUndefined();
+    expect(r.hostRuntimeMention).toBeUndefined();
   });
 });
 
@@ -240,18 +228,21 @@ describe("cinatra#2820 — the guards that must survive the router change", () =
     ).toBe(true);
   });
 
-  it("GUARD — a NON-agent mention with no tagged participant is STILL the no-call plan", async () => {
-    // The classifier's legitimate no-responder case: a flat handle that resolves
-    // to nothing (a human tag, or a delisted `@chatgpt`). It must not start
-    // streaming just because the agent-dispatch case now does.
-    const r = await route("@chatgpt what do you think?");
-    expect(r).toEqual({ shouldCallLlm: false, isBroadcast: true });
-    expect(resolveDispatchPlan(r, undefined)).toEqual({ kind: "none" });
+  it("RED ON BASE — a NON-agent mention with no tagged participant is ANSWERED", async () => {
+    // AMENDED for cinatra#2935 (lifecycle-b W5d): these two arms guarded the
+    // no-call plan, which is the no-answer rule this slice removes. They are
+    // kept, pointed the other way, because the property worth guarding did not
+    // disappear — it INVERTED. An @-token that resolves to nothing must not
+    // hang, and it must not vanish either.
+    expect(resolveDispatchPlan(await route("@chatgpt hello"), undefined)).toMatchObject({
+      kind: "stream",
+    });
   });
 
-  it("GUARD — a human tag with no tagged participant is STILL the no-call plan", async () => {
-    const r = await route("@alice can you take a look?");
-    expect(r).toEqual({ shouldCallLlm: false, isBroadcast: true });
+  it("RED ON BASE — a human tag with no tagged participant is ANSWERED", async () => {
+    expect(resolveDispatchPlan(await route("@alice can you look?"), undefined)).toMatchObject({
+      kind: "stream",
+    });
   });
 
   it("GUARD — the legacy underscore slug form still streams (no mention token at all)", async () => {

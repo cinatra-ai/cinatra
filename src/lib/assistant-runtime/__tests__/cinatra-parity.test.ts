@@ -27,14 +27,6 @@ const CONFIRMATION_POLICY = "\n\nCONFIRMATION_POLICY";
 
 vi.mock("@/lib/register-host-connector-services", () => ({}));
 
-vi.mock("@/app/api/chat/explicit-dispatch", () => ({
-  // No explicit-dispatch directive/package on the plain covered path.
-  detectExplicitDispatchDirective: () => "",
-  detectExplicitDispatchPackage: () => null,
-}));
-vi.mock("@/app/api/chat/explicit-dispatch-server", () => ({
-  serverSideExplicitDispatch: vi.fn(),
-}));
 vi.mock("@/app/api/chat/chat-user-context", () => ({
   // The runtime wraps sections into "\n\nUser context:\n<...>"; return no
   // sections here so the wrapper is deterministic and formatting-rule only.

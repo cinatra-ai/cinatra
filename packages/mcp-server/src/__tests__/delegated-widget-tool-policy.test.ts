@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
 import {
   DELEGATED_WIDGET_BOUND_CARD_ACTION,
+  DELEGATED_WIDGET_NAMED_AGENT_START,
   DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
   carriesDelegatedWidgetDeniedVerb,
   delegatedWidgetAllowedToolNames,
@@ -141,7 +142,7 @@ describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
   });
 
   it.each(KINDS)(
-    "%s: the WHOLE declared set is the editor, the reads and the ONE lent action",
+    "%s: the WHOLE declared set is the editor, the reads, the ONE lent action and the ONE start",
     (kind) => {
       // The complete contents, asserted as a set: an addition fails as loudly as
       // a removal, so widening this policy cannot happen quietly.
@@ -152,13 +153,61 @@ describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
       // rule (a person does the same things inside a third-party application as
       // in the app), and it can do nothing without the message's own
       // server-minted, single-use grant.
+      //
+      // AMENDED AGAIN for cinatra#2935 (lifecycle-b W5d): exactly one MORE
+      // entry — the one narrow start, NAMED here rather than folded into a
+      // spread, because "the widget allowlist is byte-identical" was S9f's
+      // invariant (cinatra#2790) and this slice is the disclosed exception to
+      // it. THE PIN IS RE-TAKEN, not loosened: the assertion is still
+      // exhaustive, so a second addition fails as loudly as a removal.
       expect(delegatedWidgetAllowedToolNames(kind)).toEqual(
         [
           `${kind}_content_editor_run`,
           ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
           DELEGATED_WIDGET_BOUND_CARD_ACTION,
+          DELEGATED_WIDGET_NAMED_AGENT_START,
         ].sort(),
       );
+    },
+  );
+
+  it.each(KINDS)(
+    "%s: the ONE start is `agent_named_start`, and it is reachable",
+    (kind) => {
+      // The entry BY NAME (cinatra#2935 acceptance 3's counterpart: the widening
+      // is exactly one grant-gated start, named where it is enforced).
+      expect(DELEGATED_WIDGET_NAMED_AGENT_START).toBe("agent_named_start");
+      expect(isDelegatedWidgetMcpToolAllowed(kind, DELEGATED_WIDGET_NAMED_AGENT_START)).toBe(true);
+    },
+  );
+
+  it.each(KINDS)(
+    "%s: the start's own verb token is DENIED — the entry is an exception, not a hole",
+    (kind) => {
+      // `start` is on the backstop as of this slice, so the primitive reaches
+      // the widget ONLY through the exact-name exception above. The negative
+      // control: a differently-cased name is a DIFFERENT primitive and falls
+      // through to the backstop, and so does any other `*_start`.
+      expect(carriesDelegatedWidgetDeniedVerb("agent_named_start")).toBe(true);
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "Agent_Named_Start")).toBe(false);
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run_start")).toBe(false);
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "trigger_schedule_start")).toBe(false);
+    },
+  );
+
+  it.each(KINDS)(
+    "%s: `agent_run` itself stays OFF the widget allowlist (cinatra#2790)",
+    (kind) => {
+      // THE INVARIANT THIS SLICE DID NOT TOUCH. The chat allowlist holds
+      // `agent_run` with its template ids, timeouts and polling surface; the
+      // widget's closed set does not, and the one narrow start is deliberately
+      // not a second door onto it. Nothing is offered inside a third-party
+      // application that the widget's own credential cannot do — acceptance 4.
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run")).toBe(false);
+      expect(isDelegatedWidgetMcpToolAllowed(kind, "agent_run_get")).toBe(false);
+      expect(isDelegatedChatMcpToolAllowed("agent_run")).toBe(true);
+      // And chat does NOT get a second name for a road it already has.
+      expect(isDelegatedChatMcpToolAllowed("agent_named_start")).toBe(false);
     },
   );
 
