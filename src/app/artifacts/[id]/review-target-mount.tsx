@@ -74,54 +74,74 @@ export async function ReviewTargetMount({
   /** The host's generic floor node — rendered on EVERY non-mount state. */
   fallback: ReactNode;
 }): Promise<ReactNode> {
-  if (mount.kind === "build-map") {
-    // Defensive: the core always pairs a loadable mount with non-null props.
-    if (!props) return reviewFloor(mount.packageName, mount.slot, "no-representation", fallback);
-    return (
-      <ExtensionRendererSlot
-        generatedKey={mount.generatedKey}
-        packageName={mount.packageName}
-        slot={mount.slot}
-        props={props}
-        fallback={fallback}
-      />
-    );
-  }
-
-  if (mount.kind === "runtime") {
-    if (!props) return reviewFloor(mount.packageName, mount.slot, "no-representation", fallback);
-    // Bind the descriptor's exact tuple into the freshness preflight so the client
-    // loader re-confirms "still admitted" immediately before importing.
-    const preflight = runRuntimeRendererFreshnessPreflight.bind(null, mount.descriptor.tuple);
-    return (
-      <DynamicRendererLoader
-        descriptor={mount.descriptor}
-        props={props}
-        fallback={fallback}
-        preflight={preflight}
-      />
-    );
-  }
-
-  if (mount.kind === "form") {
-    // The pinned revision is the ONE the gate froze: it travels on the host-built
-    // props, which the preparation core built from the gate's pinned target, so
-    // this arm can never render the artifact's latest.
-    const revisionId = props?.representation?.revisionId ?? null;
-    if (!props || !revisionId) {
-      return reviewFloor(null, mount.slot, "no-representation", fallback);
-    }
-    if (mount.form === "markdown") {
+  // EXHAUSTIVE over the mount kinds and over the form arms. A trailing `return
+  // reviewFloor(...)` would silently draw a FUTURE kind as a floor, and a
+  // trailing plain-text return would silently draw a future arm as plain text —
+  // both are wrong answers that compile. The `never` assertions below turn
+  // either into a type error at the moment the kind is added.
+  switch (mount.kind) {
+    case "build-map": {
+      // Defensive: the core always pairs a loadable mount with non-null props.
+      if (!props) return reviewFloor(mount.packageName, mount.slot, "no-representation", fallback);
       return (
-        <MarkdownHandler artifactId={props.artifact.id} revisionId={revisionId} orgId={orgId} />
+        <ExtensionRendererSlot
+          generatedKey={mount.generatedKey}
+          packageName={mount.packageName}
+          slot={mount.slot}
+          props={props}
+          fallback={fallback}
+        />
       );
     }
-    return (
-      <PlainTextHandler artifactId={props.artifact.id} revisionId={revisionId} orgId={orgId} />
-    );
+    case "runtime": {
+      if (!props) return reviewFloor(mount.packageName, mount.slot, "no-representation", fallback);
+      // Bind the descriptor's exact tuple into the freshness preflight so the client
+      // loader re-confirms "still admitted" immediately before importing.
+      const preflight = runRuntimeRendererFreshnessPreflight.bind(null, mount.descriptor.tuple);
+      return (
+        <DynamicRendererLoader
+          descriptor={mount.descriptor}
+          props={props}
+          fallback={fallback}
+          preflight={preflight}
+        />
+      );
+    }
+    case "form": {
+      // The pinned revision is the ONE the gate froze: it travels on the host-built
+      // props, which the preparation core built from the gate's pinned target, so
+      // this arm can never render the artifact's latest.
+      const revisionId = props?.representation?.revisionId ?? null;
+      if (!props || !revisionId) {
+        return reviewFloor(null, mount.slot, "no-representation", fallback);
+      }
+      switch (mount.form) {
+        case "markdown":
+          return (
+            <MarkdownHandler artifactId={props.artifact.id} revisionId={revisionId} orgId={orgId} />
+          );
+        case "text":
+          return (
+            <PlainTextHandler artifactId={props.artifact.id} revisionId={revisionId} orgId={orgId} />
+          );
+        default:
+          return assertNeverMount(mount.form);
+      }
+    }
+    case "floor":
+      return reviewFloor(mount.packageName, mount.slot, mount.reason, fallback);
+    default:
+      return assertNeverMount(mount);
   }
+}
 
-  return reviewFloor(mount.packageName, mount.slot, mount.reason, fallback);
+/** Compile-time exhaustiveness for the mount kinds and the form arms. A new kind
+ * or arm makes this call a type error at the call site rather than shipping a
+ * silently wrong reading (a floor where a renderer was meant, or plain text
+ * where a new form was meant). At runtime — only reachable through malformed
+ * data that bypassed the type — it throws rather than drawing a guess. */
+function assertNeverMount(value: never): never {
+  throw new Error(`unhandled review target mount: ${JSON.stringify(value)}`);
 }
 
 /** A sanitized, telemetry-safe review floor: package + slot + reason ONLY, never

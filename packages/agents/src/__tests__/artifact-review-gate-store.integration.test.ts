@@ -428,6 +428,46 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     expect((await gateStore.readReviewGate(runId, reviewTaskId))?.status).toBe("resolved");
   });
 
+  // cinatra#2931 (epic #2926 W4) — the FORM RUNG's provenance is a real,
+  // committable value. The card now includes the host's own renderer for a
+  // declared text form, and records a target it rendered that way as
+  // `first-party` rather than as a floor. `renderer_kind` carries a CHECK: until
+  // W4 widened it, this exact commit raised on the audit INSERT and — because
+  // the audit write happens after the CAS inside ONE transaction — rolled the
+  // whole decision back, so a markdown draft the reviewer had read in full could
+  // not be approved, rejected or commented on. This asserts the row COMMITS and
+  // reads back as first-party, against the real bootstrap DDL.
+  it("APPROVE: a form-rendered target commits its FIRST-PARTY provenance (never a floor)", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const aForm = `art-${randomUUID()}`;
+    const targets: Target[] = [{ artifactId: aForm, representationRevisionId: "rev-md" }];
+    const emit = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+
+    const ports = makeDecidePorts({
+      provenance: {
+        // Exactly what `provenanceFromResolvedMount` returns for a form mount:
+        // no package name (the host rendered it) and no digest.
+        [aForm]: { kind: "first-party", packageName: null, digest: null },
+      },
+    });
+    const res = await submitReviewDecisionCore(
+      mkDecision({ runId, reviewTaskId, disposition: "approve", targets }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    // The gate actually resolved — the whole point: no rollback.
+    expect((await gateStore.readReviewGate(runId, reviewTaskId))?.status).toBe("resolved");
+
+    const audit = await gateStore.readGateAuditRows(emit.gateId);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].rendererKind).toBe("first-party");
+    expect(audit[0].rendererPackage).toBeNull();
+    expect(audit[0].rendererDigest).toBeNull();
+    expect(audit[0].representationRevisionId).toBe("rev-md");
+  });
+
   it("ROLLBACK: a mid-transaction persistence failure rolls back the CAS too (zero partial commit)", async () => {
     const { runId, reviewTaskId } = freshGateIds();
     const art = `art-${randomUUID()}`;
