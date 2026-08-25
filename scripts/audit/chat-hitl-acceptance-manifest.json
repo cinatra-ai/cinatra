@@ -99,7 +99,7 @@
   },
   {
    "criterion": "Propose → Confirm → scheduled fire; no-fire-without-confirm; token replay + concurrent double-Confirm return the original run; drain crash/retry idempotence incl. arm-before-expose and due-during-drain.",
-   "disposition": "MISSING",
+   "disposition": "MAPPED",
    "unitProofs": [
     {
      "file": "src/lib/__tests__/trigger-schedule-proposal-token.test.ts",
@@ -140,9 +140,49 @@
      "testName": "ORDERING IS ENFORCED BY THE DATABASE: an unarmed intent cannot be marked done — codex round-1 finding"
     }
    ],
-   "partial": true,
-   "gap": "UI PROOF MISSING. The named tests prove the TRANSACTION only: the mint and consume identity, arm-before-expose, single-use, replay, the concurrent double-Confirm, and drain reconciliation. Not one of them renders a card or presses a control, because there is no schedule-proposal card and no Confirm control to press: the kind still dispatches to the S1 shell, the client parses the state name and drops the proposal body the server already returns, and the confirm action has no user-interface caller anywhere in the tree. The criterion says Propose then Confirm then scheduled fire; what is proven starts one step after the reader. The absent cells are named exactly: the proposal card drawn in the assistant turn with its option rows and estimated duration; the Adjust/Confirm floor; the settled trigger-configuration summary after Confirm. The proven clauses keep their proofs above, so nothing already earned is thrown away.",
-   "note": "This row was MAPPED. It is flipped, not downgraded: the criterion is unchanged and the transaction proofs still stand. What changed is the claim about them. Mapping a reader-facing criterion onto tests that never draw a pixel is how a card that does not exist reads as accepted, and the acceptance round that ticked this box is the reason the two undrawn cards survived a program-wide review. The row goes green again when the card is drawn and a rendered proof carries Propose through Confirm to the armed trigger."
+   "e2eProofs": [
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C1__schedule-card__chat_thread__pending"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C1__schedule-card__chat_thread__pending__dark"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C2__schedule-card__chat_thread__decided"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C2__schedule-card__chat_thread__decided__dark"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C3__schedule-card__run_card__decided"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C3__schedule-card__run_card__decided__dark"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C5__schedule-card__chat_thread__pending__expired"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C5__schedule-card__chat_thread__pending__expired__dark"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C6__schedule-card__chat_thread__decided__after-fire"
+    },
+    {
+     "file": "evidence/2788-s9d-rework/README.md",
+     "testName": "S9d-C6__schedule-card__chat_thread__decided__after-fire__dark"
+    }
+   ],
+   "note": "RESTORED to MAPPED. cinatra#2788 (PR #2939, squash `c2eb50a75a619d61f507c17cd71617f6a99fc1af`, the S9d rework) shipped the card this row's gap said did not exist: packages/chat/src/renderable-views/registry.tsx now maps `trigger_schedule_proposal` to the drawn `ScheduleProposalCard` (`@cinatra-ai/agents/schedule-proposal-card`), with its own `[data-lifecycle-card=\"trigger_schedule_proposal\"]` root and a single decision control, `[data-action=\"confirm-schedule-proposal\"]`, present while undecided and gone once settled. The UI half of Propose → Confirm → scheduled fire is proven by the ten S9d-rework records in scripts/ci/chat-hitl-capture-index.json (evidence/2788-s9d-rework, driven through the shipped canonical recorder — the index's own header records they were validated at the audit tier before anything was written — and narrated round by round in evidence/2788-s9d-rework/README.md, 'Round 5'), cited above light and dark: S9d-C1 (chat_thread, pending — the stated one-off, rows editable, Confirm) and S9d-C2 (chat_thread, decided — the SAME card in the SAME thread after one Confirm, Save changes in Confirm's place) are the propose-then-confirm pair the criterion asks a reader to see; S9d-C3 is that run's own schedule step on the run page, decided; S9d-C5 is a second, untouched proposal whose shipped 30-minute window was allowed to actually run out, still on Confirm alone; S9d-C6 is the C1/C2 card after the one-off fired on its own tick — released by the runtime's own `[trigger-release]` job, not a press of Run now — with no Save changes offered any more. The transaction proofs above are unchanged and still stand; nothing already earned is re-proven or thrown away, and this flip only adds the UI proof that was missing. The earlier evidence/2788-s9d-schedule-card round is RETIRED and is not cited here: the capture index's own header records that the card it photographed no longer exists (the summary box, the held-steps block and the status label the rework removed)."
   },
   {
    "criterion": "Late stream subscription + reload re-render (decided gate shows resolved state); multiple concurrent gates require explicit composer focus.",
