@@ -18,9 +18,10 @@
 //   - regenerates every OTHER part of the body from the current bump, and
 //   - carries ONE marked block verbatim when — and only when — the fingerprint
 //     it recorded still matches the one this bump computes.
-// "Verbatim" is exact except for line endings: the GitHub API hands back a body
-// with CRLF, so the block is normalized to LF before it is carried. No character
-// of the acknowledgement text itself is added, dropped, or reordered.
+// "Verbatim" is exact except for line endings: the GitHub API can hand back a
+// body with either LF or CRLF (a browser-edited body often carries CRLF), so
+// the block is normalized to LF before it is carried. No character of the
+// acknowledgement text itself is added, dropped, or reordered.
 // A body with no valid block states, in prose, that a person must add the
 // acknowledgement inside the markers. The PR then stays red on
 // `skills-drift-gate`, truthfully, until that person judges.
