@@ -294,20 +294,30 @@ describe("the REAL manifest", () => {
 
   it("the design pin is the ratified drawing, and the drift is recorded rather than overwritten", () => {
     const m = manifest();
-    // cinatra#2893 moved the pin to the §V addition that draws the ZERO-CHIP
-    // SETTLED READING. The pin the rows were read against BEFORE that move is
-    // the one this file used to assert here, and it is not deleted: it becomes
-    // `previousPin`, and the pin before THAT keeps its place in `priorPins`. The
-    // whole point of the drift record is that a pin move leaves a trail, so the
-    // assertions walk the trail rather than only checking the head.
-    expect(m.specCommit).toContain("71398a49c1f8adfe6176ab0dda25486920fac958");
+    // design#132 (lifecycle-b W1) moved the pin to the drawing that makes the
+    // schedule ONE FORM in five readings. Every pin the rows were read against
+    // before this move is still here: the previous head becomes `previousPin`,
+    // and the head before THAT is APPENDED to `priorPins` rather than replacing
+    // what was already in it. The whole point of the drift record is that a pin
+    // move leaves a trail, so the assertions walk the WHOLE trail rather than
+    // only checking the head — a move that dropped an older pin on its way past
+    // would still satisfy a head-only check.
+    expect(m.specCommit).toContain("fe2182547d4a98125a0968824ffb0d45fb25a8e5");
     // An IMMUTABLE pin: a 40-character commit, never a branch name.
     expect(m.specCommit).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
-    expect(m.specCommitDrift.previousPin).toContain("92c1be7c6f864dec6382a9ef01e7b2e1c38aa871");
+    expect(m.specCommitDrift.previousPin).toContain("71398a49c1f8adfe6176ab0dda25486920fac958");
     expect(m.specCommitDrift.previousPin).toMatch(/^design@[0-9a-f]{40}\s\S+$/);
-    expect(m.specCommitDrift.priorPins.join("\n")).toContain(
+    for (const prior of [
       "6c20871b4108176c1d0193f19ecd2947f6c6355f",
-    );
+      "92c1be7c6f864dec6382a9ef01e7b2e1c38aa871",
+    ]) {
+      expect(m.specCommitDrift.priorPins.join("\n"), prior).toContain(prior);
+    }
+    // Nothing on the trail repeats: a pin that appears twice is a record that
+    // lost track of which move it belongs to.
+    const trail = [m.specCommit, m.specCommitDrift.previousPin, ...m.specCommitDrift.priorPins];
+    const commits = trail.map((entry) => entry.slice("design@".length, "design@".length + 40));
+    expect(new Set(commits).size, trail.join("\n")).toBe(commits.length);
     // No pin is ever its own predecessor: a "move" that recorded the same commit
     // on both sides would satisfy every check above and record nothing.
     expect(m.specCommitDrift.previousPin).not.toBe(m.specCommit);
@@ -315,7 +325,7 @@ describe("the REAL manifest", () => {
     // The move says what CHANGED between the two documents, not merely that one
     // happened, and it does not claim an approval it cannot see.
     expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
-    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-22/);
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-08-25/);
   });
 
   it("row 15 keeps the proofs it had — a flip withdraws a claim, not evidence", () => {
