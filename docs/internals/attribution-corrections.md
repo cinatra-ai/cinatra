@@ -223,3 +223,19 @@ Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
 Assisted-by: Claude Code (claude-fable-5)
 Correction-for: 770744b74613706220430b640ad4a73369f7ab86
 ```
+
+---
+
+## Correction for `3fa0807e4b493611f6fc1aa09fbdd07bae4147e7`
+
+```
+correction: truthful-attribution record for 3fa0807e4
+
+The record on 3fa0807e4 ("fix(chat): the canonical scoped-agent dispatch form streams (#2912)") asserted `Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)`, but no review by @groganz exists on PR #2912 — the fabrication flag was correct. The review actually performed is the bound APPROVAL by @groganz-bot at the merged head `31df9e974abda9a8c825adbc3ee5d302ad84a979` (round 6, submitted 2026-08-24T22:11:57Z), with every required context green at that head. The coordinator wrote the human-arm identity from the review request target instead of the approving login; the change itself is untouched — this corrects the RECORD only. The corrected record drops the fabricated human arm and carries the gate arm plus the bot review as performed; this correction lands via an owner-approved PR, and the owner's approval of THIS correction is the human ratification of that record.
+
+Gate-suite: cinatra-core@2026.08.3
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Claude Code (claude-fable-5)
+Correction-for: 3fa0807e4b493611f6fc1aa09fbdd07bae4147e7
+```
