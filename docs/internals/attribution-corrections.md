@@ -516,3 +516,46 @@ Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: 1a143160411e68bfba1a633d9ef39745ee8b3263
 ```
+
+---
+
+## Correction for `65e1de87e2deda9fe75f7aedd98da2ce4a45cfdc`
+
+```
+correction: verification record for 65e1de87e (fix(chat): a thread is bound to its assistant at creation, not repaired later (…)
+
+The record on 65e1de87e ("fix(chat): a thread is bound to its assistant at creation, not repaired
+later (#2650) (#2662)") carries `Gate-suite: cinatra-core@2026.08.1` with no `Accountable:` line
+beside it. The gate arm is a PAIR — a `Gate-suite` line without its `Accountable` line is a
+structural violation, so the record as written carries no valid machine arm at all.
+
+What was verified at the time is unchanged by any of this. PR #2662 was approved by @groganz at
+300d3a6fdedea14a05c2f9e1941c73722e06e032 on 2026-08-11T15:10:31Z — that login's latest non-dismissed
+review, APPROVED at the reviewed head, non-self (the pull request's author is @groganz-bot[bot]),
+and that login's repository permission is admin, which meets tier=maintainer. Both required contexts
+named by the suite concluded at that reviewed head: `source-leak-gate / source-leak-gate` success;
+`truthful-attribution-gate / truthful-attribution-gate` success. Separately, the suite committed at
+the merged sha reads cinatra-core@2026.08.1.
+
+The machine half is left out deliberately, and not because it was absent. The engine compares a
+`Gate-suite:` trailer against `.github/gate-suite.json` read at the sha the record sits on, so a
+correction can only restate a gate arm whose suite version is the same at the corrected commit and
+at the correction itself. Here those differ — cinatra-core@2026.08.1 then, cinatra-core@2026.08.3 at
+this correction — so restating the machine arm would red this record exactly as the 2026-08-13 batch
+was redded. The human arm is true in both readings and is what this record carries.
+
+The `Assisted-by` lines are this record's own assistants — carried over verbatim where the original
+lines were well-formed, repaired from the pull request's own commits where they were not — together
+with the agents that produced this correction, deduplicated on name and model id. No assistant the
+original record named is dropped, and none is invented; the lines added beyond the original set are
+the correcting agents, named as such.
+
+The merged change itself is untouched — this repairs the RECORD only. This correction is submitted
+for the maintainer's approval, and that approval on the correction pull request is the human
+ratification of the record it states.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 65e1de87e2deda9fe75f7aedd98da2ce4a45cfdc
+```
