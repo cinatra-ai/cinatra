@@ -261,10 +261,19 @@ describe("§III — renderer provenance is host-derived; the floor is never blan
     expect(MODEL).toMatch(/case "build-map":\s*\n\s*return "review-provenance-native"/);
     expect(MODEL).toMatch(/case "runtime":\s*\n\s*return "review-provenance-marketplace"/);
     expect(MODEL).toMatch(/case "floor":\s*\n\s*return "review-target-floor"/);
-    // cinatra#2931 W4: the form rung's first-party arm is a build-time renderer
-    // that ships in the host release, so it reads on §III's NATIVE axis — the
-    // three drawn tiers stay three.
-    expect(MODEL).toMatch(/case "form":\s*\n\s*return "review-provenance-native"/);
+  });
+
+  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): NO label at
+  // all above the reviewed work for the built-in markdown / plain-text
+  // rendering. §V's three drawn provenance regions belong to the two renderer
+  // tiers a PACKAGE supplies and to the floor; the host's own text rendering
+  // takes none of them and is given no fourth one. The strip is therefore
+  // OPTIONAL in the panel — rendered only when there is a provenance to state.
+  it("the form rung renders NO provenance region — the panel gates the whole strip", () => {
+    expect(MODEL).toMatch(/case "form":\s*\n\s*return null/);
+    const panel = stripComments(TARGET_PANEL);
+    // The strip exists only behind a null check on the resolved region id.
+    expect(panel).toMatch(/provenanceConformanceId !== null/);
   });
 
   it("a runtime provenance additionally shows its package identity (§III)", () => {

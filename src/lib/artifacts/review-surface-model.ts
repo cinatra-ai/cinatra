@@ -136,20 +136,24 @@ export type ReviewProvenanceConformanceId =
 /** The design conformance id for a target's provenance region, from its host
  * mount kind: a build-time renderer → the native chip, a runtime (marketplace-
  * installed) renderer → the marketplace chip, and any floor → the generic-floor
- * anchor (§III). */
+ * anchor (§III). `null` means the target has NO provenance region — the strip is
+ * not rendered at all.
+ *
+ * THE FORM RUNG HAS NO REGION (cinatra#2931 W4, the maintainer's answer of
+ * 2026-08-23). The three regions §V draws state which PACKAGE's renderer drew
+ * the work, or that nothing did. The host's own rendering of a declared text
+ * form is neither: there is no package to name, and the work did render. Rather
+ * than reuse a package tier that would name an extension that never ran, or
+ * invent a fourth strip the drawing does not carry, the reviewer is shown the
+ * draft with nothing above it. */
 export function reviewProvenanceConformanceId(
   mount: ReviewTargetMount,
-): ReviewProvenanceConformanceId {
+): ReviewProvenanceConformanceId | null {
   switch (mount.kind) {
     case "build-map":
       return "review-provenance-native";
-    // The FORM RUNG's first-party arm (plan (B) §5) is a build-time renderer
-    // that ships in the host release, so it reads on §III's NATIVE axis. It is
-    // deliberately not a fourth axis: §III draws three tiers and this slice
-    // redraws no screen — what changed is which tier a markdown draft lands on,
-    // not how many tiers there are.
     case "form":
-      return "review-provenance-native";
+      return null;
     case "runtime":
       return "review-provenance-marketplace";
     case "floor":
@@ -159,20 +163,18 @@ export function reviewProvenanceConformanceId(
 
 /** The provenance label shown beside the chip (§III). build-time / runtime carry
  * the extension chip; a runtime additionally shows its package identity; a floor
- * reads "Floor". Pure copy — no type keying. */
+ * reads "Floor". `null` for the form rung, which has no region to label at all
+ * (see `reviewProvenanceConformanceId`). Pure copy — no type keying. */
 export function reviewProvenanceLabel(mount: ReviewTargetMount): {
   kind: "build-time" | "runtime" | "floor";
   slot: string;
   packageName: string | null;
-} {
+} | null {
   switch (mount.kind) {
     case "build-map":
       return { kind: "build-time", slot: mount.slot, packageName: mount.packageName };
-    // The form rung reads as the build-time tier and names NO package, because
-    // there is none: the host itself renders the declared text form. A package
-    // name invented here would be a claim about an extension that never ran.
     case "form":
-      return { kind: "build-time", slot: mount.slot, packageName: null };
+      return null;
     case "runtime":
       return { kind: "runtime", slot: mount.slot, packageName: mount.packageName };
     case "floor":

@@ -60,18 +60,26 @@ describe("§III — provenance conformance id from the OPAQUE mount kind", () =>
     expect(reviewProvenanceConformanceId(buildMap)).toBe("review-provenance-native");
     expect(reviewProvenanceConformanceId(runtime)).toBe("review-provenance-marketplace");
     expect(reviewProvenanceConformanceId(floor)).toBe("review-target-floor");
-    // cinatra#2931 W4 — the form rung reads on the NATIVE axis (a build-time,
-    // host-shipped renderer), so §III keeps its three drawn tiers.
-    expect(reviewProvenanceConformanceId(form)).toBe("review-provenance-native");
+  });
+
+  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q1): the built-in
+  // markdown / plain-text rendering carries NO label above the reviewed work.
+  // §V of the pinned review spec draws a provenance strip for the two renderer
+  // tiers a PACKAGE supplies and for the floor; the host's own text rendering is
+  // none of those three, and it is not given a fourth strip — it is given none.
+  // The reviewer sees the draft, and nothing above the draft.
+  it("the form rung has NO provenance region at all — no fourth strip, no reused one", () => {
+    expect(reviewProvenanceConformanceId(form)).toBeNull();
   });
 
   it("provenance label kind + package identity for a runtime; 'Floor' for a floor", () => {
-    expect(reviewProvenanceLabel(buildMap).kind).toBe("build-time");
+    expect(reviewProvenanceLabel(buildMap)).toMatchObject({ kind: "build-time" });
     expect(reviewProvenanceLabel(runtime)).toMatchObject({ kind: "runtime", packageName: "@acme/support" });
-    expect(reviewProvenanceLabel(floor).kind).toBe("floor");
-    // The form rung names NO package: the host itself rendered the declared
-    // text form, and a package name here would claim an extension that never ran.
-    expect(reviewProvenanceLabel(form)).toMatchObject({ kind: "build-time", packageName: null });
+    expect(reviewProvenanceLabel(floor)).toMatchObject({ kind: "floor" });
+  });
+
+  it("the form rung has no provenance label to print", () => {
+    expect(reviewProvenanceLabel(form)).toBeNull();
   });
 });
 

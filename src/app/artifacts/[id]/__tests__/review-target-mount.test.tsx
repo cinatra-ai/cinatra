@@ -13,7 +13,7 @@ import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-pr
 import type { SerializedRuntimeRendererDescriptor } from "@/lib/artifacts/runtime-renderer-descriptor";
 import type { ReviewTargetMount as ReviewTargetMountDescriptor } from "@/lib/artifacts/artifact-review-preparation";
 
-import { ReviewTargetMount } from "../review-target-mount";
+import { ReviewTargetMount, reviewTargetFloorDiagnostic } from "../review-target-mount";
 import { ExtensionRendererSlot } from "../extension-renderer-slot";
 import { DynamicRendererLoader } from "../dynamic-renderer-loader";
 import { MarkdownHandler } from "../handlers/markdown-handler";
@@ -143,6 +143,35 @@ describe("ReviewTargetMount — mounts the host mount descriptor (no client rend
     const bare = { ...props(), representation: null };
     const el = (await ReviewTargetMount({ mount, props: bare, orgId: ORG, fallback: "FLOOR" })) as ReactElement;
     expect((el.props as Record<string, unknown>)["data-review-target-floor"]).toBe("no-representation");
+  });
+
+  // cinatra#2931 W4 — the maintainer's answer of 2026-08-23 (Q3): for a target
+  // with TRULY no renderer, the short technical line STAYS for now. The plan
+  // retires the fallback FACE (the sentence about renderers, the field table,
+  // the Preview / Download links) — not the honest one-line diagnostic that says
+  // the target could not be shown. This pins the line's exact wording and that
+  // it is the whole reading: the card passes no fallback node beneath it.
+  it("a target nothing renders keeps the short technical line, and nothing beneath it", async () => {
+    const mount: ReviewTargetMountDescriptor = {
+      kind: "floor",
+      slot: "detail",
+      packageName: null,
+      reason: "no-semantic-renderer",
+    };
+    const el = (await ReviewTargetMount({
+      mount,
+      props: props(),
+      orgId: ORG,
+      fallback: null,
+    })) as ReactElement;
+    expect((el.props as Record<string, unknown>)["data-review-target-floor"]).toBe(
+      "no-semantic-renderer",
+    );
+    expect(reviewTargetFloorDiagnostic(null, "detail", "no-semantic-renderer")).toBe(
+      'review target unavailable — slot "detail", reason "no-semantic-renderer"',
+    );
+    const kids = (el.props as { children: unknown[] }).children;
+    expect(kids[kids.length - 1]).toBeNull();
   });
 
   it("a loadable mount whose props are unexpectedly null → floor, never a blank/crash", async () => {

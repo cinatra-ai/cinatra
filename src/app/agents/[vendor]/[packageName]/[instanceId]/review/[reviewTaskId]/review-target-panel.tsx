@@ -23,9 +23,13 @@ import {
  * type-agnostic: it keys on the OPAQUE host mount kind only (G1-clean).
  *
  * Conformance anchors (design@5e5c53aff581c01f8b801c4a5e41e9c6f3f0b891): the panel is `review-target`; the
- * provenance region is `review-provenance-native` (build-time, the form rung's
- * first-party arm included), `review-provenance-marketplace` (runtime), or
- * `review-target-floor` (any floor) — the §III axis derived from the mount kind.
+ * provenance region is `review-provenance-native` (build-time), `review-
+ * provenance-marketplace` (runtime), or `review-target-floor` (any floor) — the
+ * §III axis derived from the mount kind — and there is NO region at all when the
+ * host itself rendered a declared text form (cinatra#2931 W4): the three drawn
+ * regions each state which package's renderer drew the work, or that nothing
+ * did, and neither reading is true of the host's own markdown / plain-text
+ * rendering. The reviewer gets the draft with nothing above it.
  *
  * THE FALLBACK FACE IS GONE (plan `PLAN: Agents Lifecycle (B)` §5). The panel
  * used to pass a generic "no type renderer resolved" card — a sentence, a table
@@ -89,33 +93,37 @@ export function ReviewTargetPanel({
         </p>
       </div>
 
-      {/* §III — renderer provenance chip. */}
-      <div
-        data-conformance-id={provenanceConformanceId}
-        className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
-      >
-        {provenance.kind === "floor" ? (
-          <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
-            Floor
+      {/* §III — renderer provenance chip. NOTHING is drawn above the reviewed
+          work when the host itself rendered a declared text form: that target
+          has no provenance region at all (cinatra#2931 W4). */}
+      {provenanceConformanceId !== null && provenance !== null ? (
+        <div
+          data-conformance-id={provenanceConformanceId}
+          className="flex flex-wrap items-center gap-2 border-b border-line bg-surface px-4 py-2"
+        >
+          {provenance.kind === "floor" ? (
+            <span className="inline-flex items-center rounded-full border border-line-strong px-2 py-0.5 text-badge-xs font-semibold text-muted-foreground">
+              Floor
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-badge-xs font-semibold text-blue">
+              {typeLabel}
+            </span>
+          )}
+          {provenance.kind === "runtime" && provenance.packageName ? (
+            <span className="inline-flex items-center rounded-full border border-line bg-surface-muted px-2 py-0.5 font-mono text-badge-2xs text-foreground">
+              {provenance.packageName}
+            </span>
+          ) : null}
+          <span className="font-mono text-badge-2xs tracking-tight text-muted-foreground">
+            {provenance.kind === "build-time"
+              ? `build-time · ${provenance.slot}`
+              : provenance.kind === "runtime"
+                ? `runtime · ${provenance.slot}`
+                : "structured data"}
           </span>
-        ) : (
-          <span className="inline-flex items-center rounded-full border border-blue/30 bg-blue/10 px-2 py-0.5 text-badge-xs font-semibold text-blue">
-            {typeLabel}
-          </span>
-        )}
-        {provenance.kind === "runtime" && provenance.packageName ? (
-          <span className="inline-flex items-center rounded-full border border-line bg-surface-muted px-2 py-0.5 font-mono text-badge-2xs text-foreground">
-            {provenance.packageName}
-          </span>
-        ) : null}
-        <span className="font-mono text-badge-2xs tracking-tight text-muted-foreground">
-          {provenance.kind === "build-time"
-            ? `build-time · ${provenance.slot}`
-            : provenance.kind === "runtime"
-              ? `runtime · ${provenance.slot}`
-              : "structured data"}
-        </span>
-      </div>
+        </div>
+      ) : null}
 
       {/* The representation slot — the type renderer mounts here, or the floor.
           S6: the PINNED before/after pair follows as non-decisional visual context. */}
