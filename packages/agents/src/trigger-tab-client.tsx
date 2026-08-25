@@ -34,7 +34,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowConversation } from "./use-run-window-conversation";
 import { deleteRunTrigger } from "./run-actions";
 import type { GatedStep } from "./trigger-infer-side-effects";
 
@@ -101,6 +102,11 @@ export type TriggerTabClientProps = {
   agentId: string;
   runId: string;
   templateId: string;
+  /**
+   * May this person type in the window? Server-derived from the RUN's access
+   * (`respondToHitl`) — cinatra#2933. Absent ⇒ shown.
+   */
+  canRespondInWindow?: boolean;
   trigger: {
     triggerType: "scheduled" | "recurring";
     scheduledAt: string | null; // ISO
@@ -128,8 +134,14 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
   // ---------------------------------------------------------------------------
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   const [promptPending, setPromptPending] = useState(false);
-  const [conversation, setConversation] = useState<HitlConversationEntry[]>([]);
-  const convIdRef = useRef(0);
+  // cinatra#2933 (lifecycle-b W5b) — THE PER-RUN CONVERSATION. What is typed
+  // here is kept with the run: read on mount, appended server-side per turn,
+  // present after a reload. The field-assist call below still fills the form's
+  // own fields and is retired by #2934 together with the fill that replaces it.
+  const runWindow = useRunWindowConversation({
+    runId: props.runId,
+    surface: "armed-trigger",
+  });
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -142,8 +154,7 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    const userId = ++convIdRef.current;
-    setConversation(prev => [...prev, { id: userId, role: "user", content: prompt }]);
+    void runWindow.send(prompt);
     setPromptPending(true);
     try {
       const res = await fetch(
@@ -155,6 +166,9 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
           body: JSON.stringify({
             prompt,
             xRenderer: "trigger-tab",
+            // cinatra#2933 - the run the screen belongs to, so the route asks
+            // the RUN's access instead of the platform tier.
+            runId: props.runId,
             currentValue: {
               triggerType: props.trigger.triggerType,
               scheduledAt: props.trigger.scheduledAt,
@@ -163,7 +177,7 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
             },
             schemaProperties: ["triggerType", "scheduledAt", "timezone", "cronExpression"],
             lastAssistantMessage:
-              [...conversation].reverse().find(m => m.role === "assistant")?.content ?? null,
+              [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
           }),
         },
       );
@@ -174,21 +188,13 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
       };
       // Cancel intent: AI replies in overlay; never call deleteRunTrigger here.
       // Reschedule intent: LLM fills trigger form inline; no direct DB write.
-      const assistantMsg = json.message?.trim() || "Done.";
-      setConversation(prev => [
-        ...prev,
-        { id: ++convIdRef.current, role: "assistant", content: assistantMsg },
-      ]);
+      void json;
     } catch (err) {
       console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
-      setConversation(prev => [
-        ...prev,
-        { id: ++convIdRef.current, role: "assistant", content: "Could not fetch suggestions — please try again." },
-      ]);
     } finally {
       setPromptPending(false);
     }
-  }, [props.templateId, props.trigger, conversation]);
+  }, [props.templateId, props.trigger, runWindow]);
 
   const onCancel = () => {
     startCancelTransition(async () => {
@@ -277,9 +283,13 @@ export function TriggerTabClient(props: TriggerTabClientProps) {
           resetSignal omitted — no renderer transitions on the trigger tab. */}
       <HitlConversationPanel
         portalTarget={portalTarget}
-        visible={!!props.templateId && !!portalTarget}
-        conversation={conversation}
-        promptPending={promptPending}
+        // cinatra#2933 — the tab used to show this box to EVERYONE and refuse
+        // anyone who was not a platform administrator. The run's access decides.
+        visible={
+          !!props.templateId && !!portalTarget && props.canRespondInWindow !== false
+        }
+        conversation={runWindow.entries}
+        promptPending={promptPending || runWindow.pending}
         storageKey={`cinatra_trigger_assist_${props.templateId}_tab`}
         onSubmit={handlePromptSubmit}
       />

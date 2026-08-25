@@ -53,6 +53,10 @@ import { removeRunOwner } from "./run-sharing-actions";
 import { RunAgentButton } from "./run-dialog";
 import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
+// cinatra#2933 (lifecycle-b W5b) — who may TYPE in a run's prompt window is the
+// run's own access, resolved on the server so no window is drawn for a person
+// whose message it would refuse.
+import { canRespondInRunWindow } from "@/lib/lifecycle/run-window-turn";
 import { TriggerStepWatcher } from "./trigger-step-watcher";
 import { type SerializedAgentRunMessage } from "./agentic-run-panel";
 import { AgentPageLayout, AgentPanelBody } from "./agent-page-layout";
@@ -619,6 +623,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       throw err;
     }
   }
+
+  // cinatra#2933 — the window's own access answer for this run. `true` with no
+  // run: there is nothing to ask, and the screen keeps the box it has today.
+  const canRespondInWindow = run ? await canRespondInRunWindow(run.id) : true;
 
   // Defensive: inputSchema is typed as Record<string, unknown> on the
   // template record; narrow it here for the summary render below.
@@ -1207,6 +1215,8 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     instanceId={instanceId}
                     templateId={template.id}
                     isAdmin={isAdmin}
+                    runId={run?.id ?? null}
+                    canRespondInWindow={canRespondInWindow}
                     inputParams={inputParams}
                     requiredFields={required}
                     properties={properties}
@@ -1240,6 +1250,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                 runDetailPanel === "stepper" ? (
                   <OrchestratorStepperPanel
                     runId={run.id}
+                    canRespondInWindow={canRespondInWindow}
                     initialStatus={run.status}
                     initialError={run.error ?? null}
                     agUiEnabled={run.agUiEnabled ?? null}
@@ -1681,6 +1692,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
     }
   }
 
+  // cinatra#2933 — the window's own access answer for this run. `true` with no
+  // run: there is nothing to ask, and the screen keeps the box it has today.
+  const canRespondInWindow = run ? await canRespondInRunWindow(run.id) : true;
+
   const inputSchema = (template.inputSchema ?? {}) as {
     properties?: Record<string, { title?: string } & Record<string, unknown>>;
     required?: string[];
@@ -1784,6 +1799,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             agentId={agentId}
             runId={run.id}
             templateId={template.id}
+            canRespondInWindow={canRespondInWindow}
             trigger={{
               triggerType: trigger.triggerType as "scheduled" | "recurring",
               scheduledAt: trigger.scheduledAt
@@ -1847,6 +1863,8 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             instanceId={instanceId}
             templateId={template.id}
             isAdmin={isAdmin}
+            runId={run?.id ?? null}
+            canRespondInWindow={canRespondInWindow}
             inputParams={inputParams}
             requiredFields={required}
             properties={properties}

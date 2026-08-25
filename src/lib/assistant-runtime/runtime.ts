@@ -978,6 +978,15 @@ export async function runAssistantTurn(
   // interim mode is SUPERSEDED by #1717 native-MCP activation when it fires.
   const conversationOnly = isConversationOnlyProvider(adapter.provider);
   const conversationOnlyNotice = conversationOnlyNoticeFor(conversationOnly);
+  // cinatra#2933 (lifecycle-b W5b) — the turn STATES its own capability, once,
+  // as soon as it is known. The plan: "A conversation whose model cannot
+  // operate anything lends nothing … The assistant says so plainly the moment
+  // it is asked to act … never a silent no-op." A caller that has to tell a
+  // person that cannot depend on the model volunteering it, and the only place
+  // that knows is here. Additive and inert: every existing sink ignores an
+  // event it does not name (the AG-UI adapter's `default` arm returns), so no
+  // existing surface changes.
+  send("turn_capability", { conversationOnly });
 
   // Tool array. Conversation-only providers (Gemini, AC#5) carry NO tools; every
   // MCP/skill assembly + the dead-ingress reachability probe is skipped for them.

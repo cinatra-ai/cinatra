@@ -66,7 +66,8 @@ import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
-import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowConversation } from "./use-run-window-conversation";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import {
   cancelOrchestratorAction,
@@ -214,6 +215,13 @@ export type OrchestratorStepperPanelProps = {
    *  `buildRunStepRail` and threaded down so THIS panel's rail carries the
    *  review deep links the retired page-level rail used to own. */
   railExtras?: readonly RunStepRailEntry[];
+  /**
+   * May this person type in the run's prompt window? SERVER-DERIVED from the
+   * RUN's own access (`respondToHitl`) — cinatra#2933, lifecycle-b W5b: "no
+   * window shown to a person whose message it would refuse." Absent ⇒ shown,
+   * which keeps every host that does not yet resolve it byte-identical.
+   */
+  canRespondInWindow?: boolean;
   /** Deep-link base for those rows: `/agents/<slug>/<runId>/review`. */
   reviewHrefBase?: string;
   /**
@@ -413,6 +421,7 @@ type InterruptCtx = NonNullable<
 function HitlApprovalCard({
   interruptContext,
   runId,
+  canRespondInWindow,
   inputParams,
   isLastStep,
   isFirstStep,
@@ -425,6 +434,8 @@ function HitlApprovalCard({
 }: {
   interruptContext: InterruptCtx;
   runId: string;
+  /** May this person type in the run's prompt window (cinatra#2933)? */
+  canRespondInWindow?: boolean;
   inputParams: Record<string, unknown> | undefined;
   isLastStep: boolean;
   isFirstStep: boolean;
@@ -552,7 +563,18 @@ function HitlApprovalCard({
   // Conversation history for the AI-assist portal — user prompts + assistant replies.
   // Conversation overlay open-state, refs, outside-click handler, auto-scroll,
   // and focus handler are owned by HitlConversationPanel.
-  const [conversation, setConversation] = useState<HitlConversationEntry[]>([]);
+  // cinatra#2933 (lifecycle-b W5b) — THE PER-RUN CONVERSATION.
+  //
+  // What is typed here is a conversation with the assistant about THIS RUN, and
+  // it is kept with the run: read on mount, appended server-side per turn, so it
+  // is there after a reload and can be read later beside the run. The exchange
+  // shown above the field is therefore the STORE's, never local state.
+  //
+  // The field-assist call below is untouched and still fills the form's own
+  // fields; retiring it — and the second model with it — belongs to #2934,
+  // which ships the fill mechanism that replaces it. Removing it here would
+  // take the fill away before its replacement exists.
+  const runWindow = useRunWindowConversation({ runId, surface: "step-by-step" });
   const convIdRef = useRef(0);
 
   useEffect(() => {
@@ -626,8 +648,7 @@ function HitlApprovalCard({
       ];
     }
     if (!templateId || !interruptContext.xRenderer) return;
-    const userId = ++convIdRef.current;
-    setConversation(prev => [...prev, { id: userId, role: "user", content: prompt }]);
+    void runWindow.send(prompt);
     // HitlConversationPanel's internal handleSubmit clears the PromptField and
     // opens the overlay.
     setPromptPending(true);
@@ -640,11 +661,14 @@ function HitlApprovalCard({
           body: JSON.stringify({
             prompt,
             xRenderer: interruptContext.xRenderer,
+            // cinatra#2933 - the run the screen belongs to, so the route asks
+            // the RUN's access instead of the platform tier.
+            runId,
             currentValue: { ...interruptContext.values, ...bufferedHitlValue, ...rendererHitlContext },
             schemaProperties: Object.keys(
               (interruptContext.schema as { properties?: Record<string, unknown> })?.properties ?? {},
             ),
-            lastAssistantMessage: [...conversation].reverse().find(m => m.role === "assistant")?.content ?? null,
+            lastAssistantMessage: [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
           }),
         },
       );
@@ -653,15 +677,11 @@ function HitlApprovalCard({
       const suggestions = json.suggestions ?? {};
       handleApply(suggestions);          // updates parent buffer
       setAiSuggestions(suggestions);     // notifies renderers to sync local state
-      if (Object.keys(suggestions).length > 0) {
-        const assistantMsg = json.message?.trim() || "Done.";
-        setConversation(prev => [...prev, { id: ++convIdRef.current, role: "assistant", content: assistantMsg }]);
-      } else {
+      if (Object.keys(suggestions).length === 0) {
         toast.error("No suggestions generated. Try being more specific, e.g. \"Fill in with sample values\".");
       }
     } catch (err) {
       console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
-      setConversation(prev => [...prev, { id: ++convIdRef.current, role: "assistant", content: "Could not fetch suggestions — please try again." }]);
     } finally {
       setPromptPending(false);
     }
@@ -989,9 +1009,15 @@ function HitlApprovalCard({
         had a renderer-change reset (no equivalent of agentic-run-panel.tsx:329). */}
     <HitlConversationPanel
       portalTarget={portalTarget}
-      visible={!isGenericObjectSchema && !!templateId && !!portalTarget}
-      conversation={conversation}
-      promptPending={promptPending}
+      visible={
+        !isGenericObjectSchema &&
+        // cinatra#2933 — the run's access decides who sees the box.
+        canRespondInWindow !== false &&
+        !!templateId &&
+        !!portalTarget
+      }
+      conversation={runWindow.entries}
+      promptPending={promptPending || runWindow.pending}
       storageKey={`cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`}
       onSubmit={handlePromptSubmit}
       // Opt in to paperclip attachments. Setup gates hide the paperclip because
@@ -1490,6 +1516,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     railExtras = EMPTY_RAIL_EXTRAS,
     reviewHrefBase = "",
     initialReviewGate,
+    canRespondInWindow,
   } = props;
 
   const router = useRouter();
@@ -2001,6 +2028,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     const isFirstHitlStep = currentStepNumber === 0;
     stageCard = (
       <HitlApprovalCard
+        canRespondInWindow={canRespondInWindow}
         interruptContext={effectiveInterruptContext}
         runId={runId}
         inputParams={inputParams}

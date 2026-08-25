@@ -57,6 +57,11 @@ type SetupCompletionWatcherProps = {
    * external run's output renders even after its AG-UI event log expired
    * (parity with RunScreen). Empty/undefined for internal runs.
    */
+  /**
+   * May this person type in the run's prompt window (cinatra#2933)? Resolved on
+   * the server from the RUN's access and forwarded to the panel unchanged.
+   */
+  canRespondInWindow?: boolean;
   initialStreamedText?: string;
   /**
    * Server-derived gate context for the first paint (see AgenticRunPanel's
@@ -89,6 +94,7 @@ export function SetupCompletionWatcher({
   runHasExecuted = false,
   triggerConfigured = false,
   initialStreamedText,
+  canRespondInWindow,
   initialHitlContext,
   initialReviewGate,
 }: SetupCompletionWatcherProps) {
@@ -217,6 +223,7 @@ export function SetupCompletionWatcher({
 
   return (
     <AgenticRunPanel
+      canRespondInWindow={canRespondInWindow}
       runId={runId}
       initialStatus={initialStatus}
       initialError={initialError}

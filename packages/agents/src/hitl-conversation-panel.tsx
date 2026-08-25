@@ -5,6 +5,14 @@ import { createPortal } from "react-dom";
 import { PromptField, type PromptFieldHandle } from "@cinatra-ai/sdk-ui";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 
+/**
+ * The window's offer, as the ratified drawing fixes it (design `fe2182547d4a`,
+ * `app-artifact-review.html` §VI and §IX; `app-lifecycle-cards.html` §X draws
+ * the same field). One string for every window until a drawing says otherwise.
+ */
+export const RUN_WINDOW_PLACEHOLDER =
+  "Ask Cinatra to suggest edits to the fields above…";
+
 export type HitlConversationEntry = {
   id: number;
   role: "user" | "assistant";
@@ -22,6 +30,18 @@ export type HitlConversationPanelProps = {
   promptPending: boolean;
   /** Storage key for PromptField persistence (template + xRenderer scoped). */
   storageKey: string;
+  /**
+   * What the field offers, per surface (cinatra#2933, lifecycle-b W5b).
+   *
+   * A PROP rather than a constant, because the five windows sit over five
+   * different things and the plan wants the box to say what it is for. It
+   * defaults to the ratified string so no window's pixels move without a
+   * drawing: `app-artifact-review.html` §IX at design `fe2182547d4a` fixes this
+   * window's "panel, its placeholder, its send control" as "exactly the window
+   * §VI already fixes", and says "nothing about it moves". The per-surface
+   * WORDING is therefore owed a drawing and is not invented here.
+   */
+  placeholder?: string;
   /** Async submit callback — parent drives the fetch + conversation
    *  update. The optional second argument carries pending paperclip
    *  attachments uploaded inside the panel; back-compat-by-default
@@ -58,6 +78,7 @@ export function HitlConversationPanel({
   conversation,
   promptPending,
   storageKey,
+  placeholder = RUN_WINDOW_PLACEHOLDER,
   onSubmit,
   resetSignal,
   enableAttachments,
@@ -226,7 +247,7 @@ export function HitlConversationPanel({
         <div onFocus={handleFocus} onClick={handleFocus}>
           <PromptField
             ref={promptFieldRef}
-            placeholder="Ask Cinatra to suggest edits to the fields above…"
+            placeholder={placeholder}
             rows={1}
             storageKey={storageKey}
             onSubmit={handleSubmit}

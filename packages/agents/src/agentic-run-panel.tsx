@@ -16,7 +16,8 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { StartNewRunButton, RunCompletionCard } from "./run-completion-affordances";
 import { resetAgentRun } from "./run-actions";
-import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
+import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowConversation } from "./use-run-window-conversation";
 import type { AgentRunMessageBody } from "./store";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -166,6 +167,14 @@ type AgenticRunPanelProps = {
   // Default "agent-detail" keeps the prompt under /agents/*; "chat" suppresses
   // the whole HitlConversationPanel.
   surface?: "chat" | "agent-detail";
+  /**
+   * May this person type in the run's prompt window? SERVER-DERIVED from the
+   * RUN's own access (`respondToHitl`) — cinatra#2933, lifecycle-b W5b: "no
+   * window shown to a person whose message it would refuse." Absent ⇒ shown,
+   * which keeps every host that does not yet resolve it byte-identical.
+   */
+  canRespondInWindow?: boolean;
+
   /**
    * SERVER-DERIVED gate context for the very first paint.
    *
@@ -385,6 +394,7 @@ export function AgenticRunPanel({
   initialStreamedText,
   onActiveGateChange,
   surface = "agent-detail",
+  canRespondInWindow,
   initialHitlContext,
   recommendationDecided,
   initialReviewGate,
@@ -475,7 +485,18 @@ export function AgenticRunPanel({
   // Conversation history for the AI-assist portal — user prompts + assistant replies.
   // HitlConversationPanel owns overlay open-state, refs, outside-click handler,
   // auto-scroll, and focus handling.
-  const [conversation, setConversation] = useState<HitlConversationEntry[]>([]);
+  // cinatra#2933 (lifecycle-b W5b) — THE PER-RUN CONVERSATION.
+  //
+  // What is typed here is a conversation with the assistant about THIS RUN, and
+  // it is kept with the run: read on mount, appended server-side per turn, so it
+  // is there after a reload and can be read later beside the run. The exchange
+  // shown above the field is therefore the STORE's, never local state.
+  //
+  // The field-assist call below is untouched and still fills the form's own
+  // fields; retiring it — and the second model with it — belongs to #2934,
+  // which ships the fill mechanism that replaces it. Removing it here would
+  // take the fill away before its replacement exists.
+  const runWindow = useRunWindowConversation({ runId, surface: "run-page" });
   const convIdRef = useRef(0);
   useEffect(() => {
     setPortalTarget(document.querySelector("main"));
@@ -933,9 +954,11 @@ export function AgenticRunPanel({
     currentXRenderer !== prevXRenderer
   ) {
     setPrevXRenderer(currentXRenderer);
-    setConversation([]);
-    // The conversation overlay close on renderer transition is driven by
-    // HitlConversationPanel via its `resetSignal={currentXRenderer}` prop.
+    // cinatra#2933 (lifecycle-b W5b): the exchange is NO LONGER cleared here.
+    // It is the RUN's conversation now — "kept per agent run" — so a run moving
+    // from one gate renderer to the next keeps what was said about it. Only the
+    // overlay closes, which HitlConversationPanel still does through its
+    // `resetSignal={currentXRenderer}` prop.
   }
 
   // The HITL suggestion buffer (`bufferedHitlValue`) is keyed by BOTH
@@ -1218,8 +1241,10 @@ export function AgenticRunPanel({
     // never leaves. The panel above is already hidden for that gate; this is the
     // guard that does not depend on a visibility prop staying correct.
     if (xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) return;
-    const userId = ++convIdRef.current;
-    setConversation(prev => [...prev, { id: userId, role: "user", content: prompt }]);
+    // The one road: the message goes to the run's own conversation with the
+    // assistant. Not awaited — the field-assist fill below runs on the same
+    // press, and neither waits on the other.
+    void runWindow.send(prompt);
     // HitlConversationPanel's internal handleSubmit clears the PromptField and
     // opens the overlay.
     setPromptPending(true);
@@ -1232,6 +1257,9 @@ export function AgenticRunPanel({
           body: JSON.stringify({
             prompt,
             xRenderer,
+            // cinatra#2933 - the run the screen belongs to, so the route asks
+            // the RUN's access instead of the platform tier.
+            runId,
             // The gate's LIFECYCLE CARD REF is stripped before anything is sent
             // (cinatra#2566). It is an opaque server-minted ticket, it is not a
             // field a human edits, and the assist route serializes this object
@@ -1245,7 +1273,7 @@ export function AgenticRunPanel({
               (effectiveHitlContext.inputSchema as { properties?: Record<string, unknown> })?.properties ?? {},
             ),
             // Last assistant reply so LLM can resolve references like "insert it"
-            lastAssistantMessage: [...conversation].reverse().find(m => m.role === "assistant")?.content ?? null,
+            lastAssistantMessage: [...runWindow.entries].reverse().find(m => m.role === "assistant")?.content ?? null,
           }),
         },
       );
@@ -1256,18 +1284,15 @@ export function AgenticRunPanel({
       setAiSuggestions(suggestions);     // notifies renderers to sync local state
       const schemaProps = ((effectiveHitlContext.inputSchema as { properties?: Record<string, { title?: string }> })?.properties) ?? {};
       const entries = Object.entries(suggestions);
-      if (entries.length > 0) {
-        const assistantMsg = entries.map(([k, v]) => {
-          const label = resolveFieldLabel(k, schemaProps[k]?.title);
-          return `${label}: "${String(v)}"`;
-        }).join("\n");
-        setConversation(prev => [...prev, { id: ++convIdRef.current, role: "assistant", content: assistantMsg }]);
-      } else {
+      if (entries.length === 0) {
         toast.error("No suggestions generated. Try being more specific, e.g. \"Fill in with sample values\".");
       }
+      // The fill's own line is GONE, deliberately: the window's answer is the
+      // assistant's, and a second synthesized "Field: value" line beside it
+      // would be the page talking over the conversation.
+      void schemaProps;
     } catch (err) {
       console.warn("[hitl-assist] failed", err instanceof Error ? err.message : String(err));
-      setConversation(prev => [...prev, { id: ++convIdRef.current, role: "assistant", content: "Could not fetch suggestions — please try again." }]);
     } finally {
       setPromptPending(false);
     }
@@ -1435,14 +1460,17 @@ export function AgenticRunPanel({
       // LLM-visible payload" rule the wire slice established.
       visible={
         surface !== "chat" &&
+        // cinatra#2933 — the run's access decides, not the platform tier: "no
+        // window shown to a person whose message it would refuse."
+        canRespondInWindow !== false &&
         isPendingApproval &&
         !!effectiveHitlContext?.xRenderer &&
         effectiveHitlContext.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID &&
         !!templateId &&
         !!portalTarget
       }
-      conversation={conversation}
-      promptPending={promptPending}
+      conversation={runWindow.entries}
+      promptPending={promptPending || runWindow.pending}
       storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}
       onSubmit={handlePromptSubmit}
       resetSignal={currentXRenderer}
