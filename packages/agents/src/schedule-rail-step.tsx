@@ -64,7 +64,8 @@ import {
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 import { ScheduleProposalCard } from "./schedule-proposal-card";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "./review-gate-card";
-import { RUN_SURFACE_RAIL_LABELS, RunSurfaceRailRow } from "./run-surface-rail";
+import { RunSurfaceRailRow } from "./run-surface-rail";
+import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
 
 /** The label the rail row carries. One word, in the plan's own vocabulary —
  *  "the schedule is a dedicated step in the step rail". Read from the run

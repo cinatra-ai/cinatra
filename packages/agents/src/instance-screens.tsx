@@ -66,11 +66,12 @@ import { ScheduleRailStep } from "./schedule-rail-step";
 // The two columns of the run surface — the step rail on the left, the selected
 // step's own surface on the right (cinatra#2970). The setup run page composes
 // the whole frame from here; the schedule step composes its row from it.
-import {
-  RUN_SURFACE_RAIL_LABELS,
-  RunSurfaceRail,
-  type RunSurfaceStep,
-} from "./run-surface-rail";
+import { RunSurfaceRail, type RunSurfaceStep } from "./run-surface-rail";
+// The labels come from a module with NO "use client" directive, deliberately:
+// this screen is a server component, and a constant imported from the rail's own
+// client module reaches it as a client reference whose `.schedule` reads
+// `undefined` rather than the label (cinatra#2970).
+import { RUN_SURFACE_RAIL_LABELS } from "./run-surface-rail-labels";
 import { readRunTriggerByRunId } from "./trigger-store";
 import type { GatedStep } from "./trigger-infer-side-effects";
 import cronstrue from "cronstrue";

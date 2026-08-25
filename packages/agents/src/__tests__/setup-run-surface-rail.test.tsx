@@ -47,11 +47,11 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { Button } from "@/components/ui/button";
 
 import {
-  RUN_SURFACE_RAIL_LABELS,
   RunSurfaceRail,
   isRunSurfaceStepSelectable,
   type RunSurfaceStep,
 } from "../run-surface-rail";
+import { RUN_SURFACE_RAIL_LABELS } from "../run-surface-rail-labels";
 import { setupStepReachedForRunStatus } from "../run-status";
 
 vi.mock("lucide-react", () => {

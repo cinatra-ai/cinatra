@@ -47,18 +47,13 @@ import { useState, type ReactElement, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-/**
- * The rail labels, transcribed from the ratified drawing's own rail rather than
- * chosen here: the drawing's rows read "Recommendation" and "Review", and plan
- * (A) §7.2 step 5 names the schedule's row "the schedule … a dedicated step in
- * the step rail". One source, so the setup rail and the schedule step cannot
- * drift into two vocabularies for the same row.
- */
-export const RUN_SURFACE_RAIL_LABELS = {
-  schedule: "Schedule",
-  recommendation: "Recommendation",
-  review: "Review",
-} as const;
+// THE RAIL'S LABELS ARE NOT DECLARED HERE. They live in
+// `run-surface-rail-labels.ts`, a module carrying no directive, because the
+// setup run page's SERVER component reads them: an export of THIS module reaches
+// the server graph as a client reference, and dotting into a reference yields
+// `undefined` rather than the label (cinatra#2970). Both sides import the same
+// plain value instead. The components stay here — a component is exactly what
+// the boundary is built to carry.
 
 /**
  * ONE RAIL ROW: the circle, the title, and the selected state.
