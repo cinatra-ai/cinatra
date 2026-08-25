@@ -125,6 +125,11 @@ export function fingerprintSkillLinkedPins(pins, universe = null) {
  * non-`found` kind, and the caller then demands a fresh judgment rather than
  * guessing which half of the body a person meant.
  *
+ * A block whose inner text is BLANK (empty once trimmed) is reported as
+ * `none`, not `found`: it is the empty pair this composer itself places for a
+ * person to write into, not a judgment. Reporting it as `found` would let a
+ * later refresh carry it forward and claim "written by a person" over nothing.
+ *
  * @returns {{kind: "none"}
  *          | {kind: "found", fingerprint: string, raw: string}
  *          | {kind: "malformed"} | {kind: "ambiguous"}}
@@ -144,6 +149,8 @@ export function extractAckBlock(body) {
   const start = begin.index;
   const stop = end.index + end[0].length;
   if (stop <= start) return { kind: "malformed" }; // closer before opener
+  const inner = text.slice(begin.index + begin[0].length, end.index);
+  if (inner.trim() === "") return { kind: "none" }; // empty pair, not a judgment
   return { kind: "found", fingerprint: begin[1], raw: text.slice(start, stop) };
 }
 
@@ -163,6 +170,21 @@ const ACK_INSTRUCTIONS = [
   "three acknowledgement forms documented in `.github/workflows/skills-drift-gate.yml`. This workflow",
   "preserves whatever sits between those markers across the branch's force-refreshes, byte for byte, and",
   "never writes, completes, or rewords it. Until a person writes it, `skills-drift-gate` fails — truthfully.",
+].join("\n");
+
+/**
+ * Prose for a bump with no skill-linked pins. No pin above asks for a
+ * judgment, but `skills-drift-gate` can still fail on a declared
+ * `primitives:`/`routes:`/`paths:` watch unrelated to these pins — the
+ * residual this composer cannot close (see the module header). So the marker
+ * pair is still placed, framed as conditional rather than demanded.
+ */
+const ACK_INSTRUCTIONS_NO_PINS = [
+  "`skills-drift-gate` can still fail this PR on a declared `primitives:` / `routes:` / `paths:` watch unrelated to",
+  "these pins. If it does, a person must record that judgment here. Write it between the two marker lines below, in",
+  "one of the three acknowledgement forms documented in `.github/workflows/skills-drift-gate.yml`. This workflow",
+  "preserves whatever sits between those markers across the branch's force-refreshes, byte for byte, and never",
+  "writes, completes, or rewords it.",
 ].join("\n");
 
 const PREAMBLE = [
@@ -215,7 +237,11 @@ export function composeBumpPrBody({ oldBody = "", pinChanges = "", skillLinked =
     // A block recorded against a NON-empty set no longer covers this bump; it is
     // dropped by the same rule as any other moved fingerprint. A block recorded
     // against the empty set still covers it and is carried.
-    if (carried) sections.push("", found.raw);
+    if (carried) {
+      sections.push("", found.raw);
+    } else {
+      sections.push("", ACK_INSTRUCTIONS_NO_PINS, "", emptyMarkerPair(fingerprint));
+    }
     return `${sections.join("\n").trimEnd()}\n`;
   }
 
@@ -272,6 +298,18 @@ function readOptional(path) {
   }
 }
 
+/**
+ * Read `--skill-linked`. Unlike `readOptional`, a path that WAS given but does
+ * not exist is a hard error: silently treating it as the empty set is the
+ * permissive direction — it reads as "nothing to judge" — and this is the one
+ * input the workflow's derivation step always produces before calling this
+ * composer, so a missing file means something upstream broke.
+ */
+function readSkillLinkedFile(path) {
+  if (!path) return "";
+  return readFileSync(path, "utf8");
+}
+
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i += 1) {
@@ -290,7 +328,7 @@ function main() {
     console.error("usage: dev-lock-bump-pr-body.mjs --pin-changes <md> [--old-body <md>] [--skill-linked <json>] [--out <md>]");
     process.exit(2);
   }
-  const skillLinkedRaw = readOptional(args["skill-linked"]).trim();
+  const skillLinkedRaw = readSkillLinkedFile(args["skill-linked"]).trim();
   let skillLinked = [];
   let universe = null;
   if (skillLinkedRaw) {

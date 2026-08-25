@@ -5,11 +5,18 @@
 // So the assertions are about what the composer must NEVER emit at least as
 // much as about what it must emit.
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   composeBumpPrBody,
   fingerprintSkillLinkedPins,
   extractAckBlock,
 } from "../dev-lock-bump-pr-body.mjs";
+
+const CLI_PATH = fileURLToPath(new URL("../dev-lock-bump-pr-body.mjs", import.meta.url));
 
 // FIXTURE NAMING: every `@cinatra-ai/example-*` package below is FICTIONAL,
 // deliberately. The skills gate intersects declared watch surfaces against the
@@ -97,13 +104,18 @@ describe("fingerprintSkillLinkedPins", () => {
 });
 
 describe("composeBumpPrBody", () => {
-  it("(a) no block + no skill-linked pins -> clean body, no acknowledgement demanded", () => {
+  it("(a) no block + no skill-linked pins -> marker pair still placed, judgment framed as conditional", () => {
     const body = composeBumpPrBody({ oldBody: "", pinChanges: PIN_CHANGES, skillLinked: [] });
     expect(body).toContain("## Pin changes");
     expect(body).toContain("@cinatra-ai/example-unwatched-connector");
-    // Nothing to judge: the body must not demand a human acknowledgement.
-    expect(body).not.toMatch(/a person must/i);
-    expect(body).not.toContain("<!-- cinatra:skills-ack");
+    // No pin above asks for a skill-linked judgment...
+    expect(body).toMatch(/asks for no judgment on that watch class/i);
+    // ...but the gate can still fail on an unrelated residual watch (declared
+    // primitives/routes/paths), so a person needs somewhere durable to write
+    // one if it does — the pair and the conditional instructions are placed.
+    expect(body).toContain("<!-- cinatra:skills-ack v1 fingerprint=");
+    expect(body).toContain("<!-- /cinatra:skills-ack -->");
+    expect(body).toMatch(/if it does, a person must record that judgment here/i);
     for (const token of ACK_TOKENS) expect(body).not.toContain(token);
   });
 
@@ -126,6 +138,8 @@ describe("composeBumpPrBody", () => {
     const body = composeBumpPrBody({ oldBody, pinChanges: PIN_CHANGES, skillLinked: SKILL_LINKED });
     expect(body).toContain(block);
     expect(body).toContain(human);
+    // A real, non-blank human judgment DOES get the carried-judgment sentence.
+    expect(body).toMatch(/written by a person/i);
     // Only the marked block survives; every other old-body edit is regenerated.
     expect(body).not.toContain("Stale preamble a human never wrote.");
     expect(body).not.toContain("- stale list");
@@ -227,13 +241,44 @@ describe("composeBumpPrBody", () => {
     expect(body).toMatch(/a person must/i);
   });
 
-  it("carries an empty marked block (the markers the automation placed) without inventing content", () => {
+  it("an empty marked block is NOT carried as a judgment across a refresh: no claim, instructions kept", () => {
     const fp = fingerprintSkillLinkedPins(SKILL_LINKED);
     const first = composeBumpPrBody({ oldBody: "", pinChanges: PIN_CHANGES, skillLinked: SKILL_LINKED });
     const second = composeBumpPrBody({ oldBody: first, pinChanges: PIN_CHANGES, skillLinked: SKILL_LINKED });
     expect(second).toContain(fp);
     expect(second.match(/<!-- cinatra:skills-ack/g)).toHaveLength(1);
     for (const token of ACK_TOKENS) expect(second).not.toContain(token);
+    // The empty pair must never read as a person's judgment...
+    expect(second).not.toMatch(/written by a person/i);
+    // ...and the instructions that tell a person what to do must survive.
+    expect(second).toMatch(/a person must record that judgment here/i);
+  });
+
+  it("a WHITESPACE-ONLY block also counts as blank, not a judgment", () => {
+    const fp = fingerprintSkillLinkedPins(SKILL_LINKED);
+    const oldBody = markedBlock(fp, "   \n\t  \n");
+    const body = composeBumpPrBody({ oldBody, pinChanges: PIN_CHANGES, skillLinked: SKILL_LINKED });
+    expect(body).not.toMatch(/written by a person/i);
+    expect(body).toMatch(/a person must record that judgment here/i);
+    expect(body.match(/<!-- cinatra:skills-ack/g)).toHaveLength(1);
+    for (const token of ACK_TOKENS) expect(body).not.toContain(token);
+  });
+
+  it("the no-skill-linked branch: a real judgment written into its marker pair carries on the next refresh", () => {
+    const opened = composeBumpPrBody({ oldBody: "", pinChanges: PIN_CHANGES, skillLinked: [] });
+    expect(opened).toMatch(/if it does, a person must record that judgment here/i);
+    const fpMatch = opened.match(/fingerprint=([0-9a-f]{64})/);
+    expect(fpMatch).not.toBeNull();
+    const human = "Skills-unaffected: no watched primitive, route, or path moved in this bump.";
+    const withJudgment = opened.replace(
+      /<!-- cinatra:skills-ack v1 fingerprint=[0-9a-f]{64} -->\n\n<!-- \/cinatra:skills-ack -->/,
+      markedBlock(fpMatch[1], human),
+    );
+    const refreshed = composeBumpPrBody({ oldBody: withJudgment, pinChanges: PIN_CHANGES, skillLinked: [] });
+    // The block a person wrote survives verbatim — it legitimately carries the
+    // token they wrote; only the AUTOMATION must never emit one itself.
+    expect(refreshed).toContain(human);
+    expect(refreshed.match(/<!-- cinatra:skills-ack/g)).toHaveLength(1);
   });
 
   it("always regenerates the pin list from the CURRENT bump, never the old body", () => {
@@ -273,5 +318,56 @@ describe("extractAckBlock", () => {
     const fp = "c".repeat(64);
     const body = `${markedBlock(fp, "one")}\n${markedBlock(fp, "two")}`;
     expect(extractAckBlock(body).kind).toBe("ambiguous");
+  });
+
+  it("reports NONE for a block whose inner text is BLANK — an empty pair is not a judgment", () => {
+    const fp = "d".repeat(64);
+    expect(extractAckBlock(markedBlock(fp, "")).kind).toBe("none");
+    // Whitespace-only content (spaces, tabs, blank lines) also counts as blank.
+    expect(extractAckBlock(markedBlock(fp, "   \n\t  \n  ")).kind).toBe("none");
+  });
+
+  it("still reports FOUND when inner text has real content around whitespace", () => {
+    const fp = "e".repeat(64);
+    const res = extractAckBlock(markedBlock(fp, "  Skills-unaffected: judged.  "));
+    expect(res.kind).toBe("found");
+    expect(res.fingerprint).toBe(fp);
+  });
+});
+
+describe("CLI: --skill-linked fails loud on a missing file", () => {
+  it("exits non-zero rather than silently defaulting to the empty (permissive) set", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dev-lock-bump-pr-body-"));
+    try {
+      const pinChangesPath = join(dir, "pin-changes.md");
+      writeFileSync(pinChangesPath, PIN_CHANGES);
+      const missingSkillLinkedPath = join(dir, "does-not-exist.json");
+      expect(() =>
+        execFileSync(
+          process.execPath,
+          [CLI_PATH, "--pin-changes", pinChangesPath, "--skill-linked", missingSkillLinkedPath],
+          { stdio: "pipe" },
+        ),
+      ).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a missing --old-body file is still permissive (empty body on a freshly opened PR)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "dev-lock-bump-pr-body-"));
+    try {
+      const pinChangesPath = join(dir, "pin-changes.md");
+      writeFileSync(pinChangesPath, PIN_CHANGES);
+      const missingOldBodyPath = join(dir, "does-not-exist.md");
+      const out = execFileSync(
+        process.execPath,
+        [CLI_PATH, "--pin-changes", pinChangesPath, "--old-body", missingOldBodyPath],
+        { stdio: "pipe", encoding: "utf8" },
+      );
+      expect(out).toContain("## Pin changes");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
