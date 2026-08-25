@@ -99,7 +99,7 @@ services:
       retries: 20
 
   nango-db:
-    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     # Upgrade track: HELD at postgres 17-alpine as a DELIBERATE VALIDATED HOLD
     # while the platform DB moved to 18 (see docs/internals/workflows/upgrade-track.md §3): this
     # store is app-coupled to Nango, whose upstream reference compose still
