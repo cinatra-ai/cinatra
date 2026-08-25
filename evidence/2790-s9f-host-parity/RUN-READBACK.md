@@ -392,3 +392,28 @@ own organization and user UUIDs do appear, in `logs/review-reshoot-sequence-stat
 and above, because "created by the lane's own signed-in person" is only checkable
 if the row it was read from is named; they identify a throwaway database that is
 dropped when the lane is torn down.
+
+## The seven widget cells: which run stands behind them today — none, and the database says so
+
+`H1`–`H4` and `W1`–`W3` are scripted-era history (README.md, first table). This
+round asked whether they could finally be re-shot from a run the widget itself
+starts, and measured the answer instead of arguing it. The turn is
+`logs/widget-content-edit-probe.txt`; what the database held after it:
+
+Every row below is the raw output of `drivers/21-content-edit-block-readback.mjs`,
+committed verbatim as `logs/content-edit-block-readback.txt`.
+
+| Question | Answer | Where it was read |
+|---|---|---|
+| Did the turn create a carrier run? | **No** — `carrier_runs=0` | `cinatra.agent_runs.source_type` in (`public_site_widget`, `content_editor_dispatch`) |
+| Every run in the lane, with its moment | two rows, both `agent_builder`, both `human_present=true`, both **`lifecycle_moment=NULL`**, both created `2026-08-20 05:25` — the cloned fixture's, five days before this probe | `cinatra.agent_runs.{status,source_type,human_present,lifecycle_moment,lifecycle_card_kind,lifecycle_card_ref,created_at}` |
+| Did any recommendation moment open? | **No** — `recommendation_parks=0` | `cinatra.lifecycle_continuation_park.checkpoint` |
+| Was the widget session real? | **Yes**, and the readback names the row rather than counting it: the live `cwu_` token, `client=wordpress`, `agent_slug=wordpress-content-editor`, `instance_id=s9f-r2-local-site`, `site_origin=http://127.0.0.1:5591`, minted at **`18:04:12.109` UTC** — 3.4 s before the turn was sent | `cinatra.widget_user_tokens.{jti,client,agent_slug,instance_id,site_origin,scope,created_at}` |
+| Did the CMS chrome announce the open post? | **Yes** — the parent page's own bridge record carries the CONTEXT message with `cms.instanceId=s9f-r2-local-site`, `resourceId=101`, `resourceType=post`, `status=draft`, and the frame accepted it | `window.__s9fBridgeLog`, captured by the probe and committed in `logs/widget-content-edit-probe.txt` (`BRIDGE ->` line) |
+| Which provider answered the turn? | `provider=openai`, `model=gpt-5.5`, `operation=stream`, `occurred_at` **`18:04:30.898` UTC** — inside the turn's window (sent `18:04:15.507` UTC, 15.7 s long) | `cinatra.usage_events` |
+
+So there is no run to read out for those seven cells, and none can be produced
+from the widget on this head. README.md names the two pieces of shipped code that
+each independently prevent it, with the line that decides in each — and names the
+third gate it does NOT claim, because the convergence round showed it does not
+hold.

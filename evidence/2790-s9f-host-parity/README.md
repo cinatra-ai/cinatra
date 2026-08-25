@@ -79,6 +79,131 @@ thing the rule forbids. The widget cells therefore stay as dated history, and
 what they are owed by — a widget-reachable way to reach a run's recommendation
 hold — is a product question for the slice that opens it, not a capture question.
 
+### Round 2 measured the OTHER route, and closed it: the widget cannot start its own carrier either
+
+The paragraph above conceded one thing to the re-shoot: that the widget CAN
+start the kind's own CMS content-editor carrier, and only an ARBITRARY agent is
+out of reach. **That concession was too generous, and this round measured it
+rather than reasoning about it.** The widget's conversation was asked, in the
+person's own words, for the one thing that carrier exists to do — a content edit
+on the post the CMS chrome says is open:
+
+> *“Please tighten the opening paragraph of this post and fix any typos - keep
+> the meaning, just make it read better.”*
+
+The turn is committed verbatim as `logs/widget-content-edit-probe.txt`
+(`drivers/20-widget-content-edit-probe.mjs`), on this lane, on the real provider,
+through the real embedded cross-site frame after its own hosted sign-in, with the
+hosted MCP connector reaching this instance's public MCP surface while the turn
+ran (`POST /api/mcp 200`, twice, in the app server's own log beneath the
+transcript). The CMS chrome announced the open post, and the announcement is in
+the evidence rather than in this sentence: the parent page's own bridge record,
+captured off `window.__s9fBridgeLog` after the turn, carries
+
+```
+BRIDGE -> {"type":"cinatra.embed.context",…,"session":{…,"assistant":"wordpress"},
+           "cms":{"instanceId":"s9f-r2-local-site","resourceId":"101",
+                  "resourceType":"post","status":"draft"}}
+```
+
+— the field NAMES being "the byte-level contract the CMS lanes MUST emit"
+(`src/lib/embed/bridge-protocol.ts:257`), though the three resource fields are
+themselves OPTIONAL in that schema (`:303`–`:305`). The frame accepted
+that context (it went on to draw the composer and run the turn), and the
+assistant answered:
+
+> *“Please paste the opening paragraph here, and I’ll tighten it while preserving
+> the meaning and fixing typos.”*
+
+It does not decline. It does not KNOW the post. **No `agent_runs` row was created
+for the turn** — the driver polled every 5 s for 360 s and printed `newRuns=[]`
+at every sampled step through `+350 s` — and the database says the same
+afterwards, in
+`logs/content-edit-block-readback.txt` (the raw output of
+`drivers/21-content-edit-block-readback.mjs`, so every row below is in a file a
+driver wrote):
+
+* every run in the lane: **two**, both the cloned fixture's from five days
+  earlier, both `agent_builder`, both `lifecycle_moment=NULL`;
+* `carrier_runs=0` — no run of `source_type` `public_site_widget` or
+  `content_editor_dispatch` exists;
+* `recommendation_parks=0` — no moment opened, for this run or any other;
+* the widget session, **row by row rather than counted**: the live `cwu_` token for
+  `client=wordpress`, `agent_slug=wordpress-content-editor`,
+  `instance_id=s9f-r2-local-site`, `site_origin=http://127.0.0.1:5591`, minted at
+  **`18:04:12.109` UTC** — 3.4 s before this turn was sent, so the conversation
+  that asked was a real, freshly signed-in widget session, and the readback names
+  the row rather than counting rows;
+* `provider=openai | model=gpt-5.5 | operation=stream`, `occurred_at`
+  **`18:04:30.898` UTC** — the platform's own metering row for this turn,
+  falling inside this turn's window (sent `18:04:15.507` UTC, 15.7 s long). That
+  is what binds the answer above to a REAL provider; the transcript alone does
+  not.
+
+The transcript shows what the assistant said. It does not show why the model
+answered that way, and neither does the code: what the code establishes is the
+thing that makes the answer unsurprising — that the carrier is **not on this
+surface's tool list at all**, so there was nothing there for any model to call.
+That is what is named below, with the line that decides in each, because "it did
+not work" is not a finding. **Two separate pieces of shipped code stand between
+this widget conversation and that card, and either ONE of them is enough:**
+
+1. **The carrier is deliberately not a model-visible tool.** The allowlist names
+   `wordpress_content_editor_run`, but the connector never registers it on the
+   MCP tool surface: `extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts:22`
+   states it "is NOT registered here", the relay lives in its own module for
+   exactly that reason (`src/mcp/relay.ts:11` — it "must NEVER be a
+   model-visible MCP tool"), and `src/__tests__/registry-omission.test.ts` is the standing
+   regression guard. A model on this surface therefore never sees the name; the
+   transcript above is consistent with that, and is not itself the proof of it.
+2. **The carrier's run is launched with NO present human, on purpose.** When the
+   carrier IS reached — from the CMS widget's own stream route — the dispatch
+   launches with `frame: null` (`src/lib/host-content-editor-dispatch.ts:353`)
+   and `dispatch.kind: "caller_dispatches"` (`:356`). `verifiedHumanPresence`
+   (`packages/agents/src/lifecycle-coordinator.ts:291`) needs a verified
+   interactive surface AND a resolvable owner, so it answers false; `parkOnCreate`
+   is then false (`:675`), the run is created `queued`, and the `if (humanPresent)`
+   branch (`:723`) — which holds `launchAgentRun`'s ONLY call to
+   `maybeHoldRunForRecommendation` (`:729`; the two other callers in the tree are
+   `run-dispatch-core.ts:217` and `trigger-service.ts:877`, and neither is on this
+   path) — is never entered. The file says why in its own header (cinatra#2929): a park would
+   hold the carrier "at a card nobody is shown while the person at the other end
+   of the widget waits for a reply that would never arrive inside its timeout",
+   Both of this file's launch call sites pass the same `frame: null` (`:353` for
+   the widget-override branch, `:450` for the install-identity one), so the
+   headlessness is the production code's, on either branch. Its sibling test
+   states the same property in words —
+   `src/lib/__tests__/content-editor-dispatch-launch-adapter.test.ts:114`,
+   *"Headless, so the coordinator creates it `queued` and parks nothing."*, with
+   the assertion itself on `:115` — though it sits in the case that passes NO
+   `actorOverride`; the
+   widget-override case (`:182`) pins the producer and the identity, not the
+   frame.
+3. **The hold second-gates on the same fact, on its own.**
+   `maybeHoldRunForRecommendation` returns `{held:false, reason:"headless"}` on
+   `run.humanPresent !== true` (`packages/agents/src/recommendation-hold.ts:655`)
+   — so even a caller that reached it around the coordinator's branch would be
+   answered `held:false` for this carrier.
+
+**What is NOT claimed, because it was checked and does not hold.** An earlier
+draft of this section argued a third gate: that `@cinatra-ai/wordpress-agent`
+declares no skills, so the candidate set would be empty even for a present human.
+That is wrong, and the convergence round caught it. The hold parks only when the
+checkpoint fires AND the scorer returns at least one candidate
+(`packages/agents/src/recommendation-hold.ts:17`), but the candidate set is not
+read from the manifest: `resolveRecommendationCandidateSkillIds`
+(`packages/agents/src/recommendation-hold.ts:557`) resolves it through
+`getAssignedSkillIdsForAgent` (`src/lib/agents-store.ts:997`), which unions
+direct agent matches, assigned skills, automatic matches and the global/system
+sets. An agent whose manifest names no skills can still have
+candidates. **The skills question is therefore open, not answered — and it never
+arises here, because the run never becomes human-present.**
+
+So the block is two closed doors, not one with a way around it: the carrier is
+unreachable from this widget surface, and the carrier's own run is headless by
+construction. The seven widget cells stay as dated history for the same reason
+round 1 gave, now with the obstacle measured on both routes instead of one.
+
 ## The headline, first
 
 **The widget mount works, the decision is taken inside the frame, and the row

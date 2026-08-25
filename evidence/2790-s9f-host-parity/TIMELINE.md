@@ -446,3 +446,28 @@ and for no other provider, written by the platform when it made a call. It carri
 no run id, so it binds a WINDOW rather than a step — and rows 4, 10 and the run's
 own columns are re-derivable from `logs/review-reshoot-db-readback.json`, which is
 the verbatim output of the committed readback driver rather than prose.
+
+## The widget content-edit probe (round 2) — the clock on the block
+
+The seven widget cells have no run behind them, and this round measured why
+rather than restating it. All times UTC on 2026-08-25, from the driver's own
+clock, the app server's own log and the committed readback; the database rows are
+in RUN-READBACK.md and `logs/content-edit-block-readback.txt`.
+
+| # | What happened | Time | Source |
+|---|---|---|---|
+| 1 | The frame ran its own hosted PKCE sign-in and left anonymous; its `cwu_` was minted | `18:04:12.109` | `cinatra.widget_user_tokens.created_at` in `logs/content-edit-block-readback.txt`, beside the probe log's `frame/init 200` / `frame/token 200` |
+| 2 | The CMS chrome announced the open post over the shipped bridge, and the frame accepted it | just before the turn | `window.__s9fBridgeLog`, captured by the probe — the `BRIDGE ->` CONTEXT line in `logs/widget-content-edit-probe.txt` |
+| 3 | The turn went through the widget's own composer | `18:04:15.507` | the driver's clock, printed in the log |
+| 4 | The hosted MCP connector reached this instance's public MCP surface, twice, adjacent to the turn in the server's own log | during the 15.7 s turn | the app server's own log, quoted in the probe log (`POST /api/mcp 200`) — adjacency, not an enumeration of the tools it found |
+| 5 | A REAL provider answered | `occurred_at 18:04:30.898` | `cinatra.usage_events` — `provider=openai`, `model=gpt-5.5`, `operation=stream`, in `logs/content-edit-block-readback.txt` |
+| 6 | The assistant answered — asking for the text rather than editing the post | end of the same 15.7 s | `POST /api/assistants/chat 200 in 15.7s`, app server log. This row does not say WHY it answered that way; README.md names what the code does establish — that the carrier is on no tool list this surface offers |
+| 7 | Liveness polled every 5 s for 360 s, printing a sampled `card=false newRuns=[]` line through `+350 s`: no card and no new run ever appeared | `+5 s` … `+350 s` | the probe's own polling lines |
+
+**The cold-ingress note, because it cost two turns.** The app's public-MCP
+reachability probe is a HEAD with a 2 500 ms budget
+(`packages/llm/src/mcp-access.ts`). The FIRST HEAD through the funnel compiles the
+route and takes ~3.2 s, so two earlier turns were refused with "the public MCP URL
+… is not reachable" before any model call was made. Warm, the same HEAD answers
+405 in ~0.29 s. Row 3 above is a warm turn; those two refused turns have no file
+of their own, and this note is the whole of what is claimed about them.
